@@ -2,12 +2,14 @@ import os
 import shutil
 
 import torch
+import torch.distributed.checkpoint as dcp
 from diffusers.optimization import get_scheduler
-from tqdm.auto import tqdm
+from loguru import logger
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
 
 from lightx2v_train.infer import build_inferencer
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
-from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, rank_zero_print, reduce_mean
+from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, reduce_mean
 from lightx2v_train.runtime.fsdp import apply_fsdp2
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
@@ -46,6 +48,8 @@ class LoraTrainer(BaseTrainer):
         self.save_total_limit = self.training_config["save_total_limit"]
 
         self.infer_every_iters = self.infer_config.get("infer_every_iters", None)
+        logging_config = self.config.get("logging", {})
+        self.train_log_every_iters = max(1, int(logging_config.get("train_log_every_iters", 10)))
 
         resume_config = self.config.get("resume", {})
         self.auto_resume = resume_config.get("auto_resume", False)
@@ -98,12 +102,9 @@ class LoraTrainer(BaseTrainer):
         self.model.load_lora_weights_for_resume(resume_ckpt_path)
         self.optimizer.load_state_dict(state["optimizer"])
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
-        rank_zero_print(f"Restored training state from {training_state_path}")
+        logger.info("Restored training state from {}", training_state_path)
 
     def _load_distributed_state(self, resume_ckpt_path):
-        import torch.distributed.checkpoint as dcp
-        from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
-
         dist_state_path = os.path.join(resume_ckpt_path, "dist_state")
         if not os.path.exists(dist_state_path):
             raise RuntimeError(f"FSDP2 resume requires dist_state/, but it was not found in {resume_ckpt_path}")
@@ -128,7 +129,7 @@ class LoraTrainer(BaseTrainer):
         )
 
         self.lr_scheduler.load_state_dict(trainer_state["lr_scheduler"])
-        rank_zero_print(f"Restored distributed training state from {resume_ckpt_path}")
+        logger.info("Restored distributed training state from {}", resume_ckpt_path)
 
     def _validate_checkpoint_metadata(self, state, state_path, resume_ckpt_path):
         checkpoint_world_size = state.get("world_size")
@@ -164,9 +165,9 @@ class LoraTrainer(BaseTrainer):
             return None, 0
         ckpt_path, current_iter = find_latest_checkpoint(self.output_train_dir)
         if ckpt_path is None:
-            rank_zero_print(f"Auto-resume enabled but no checkpoint found in '{self.output_train_dir}'. Starting from scratch.")
+            logger.info("Auto-resume enabled but no checkpoint found in '{}'. Starting from scratch.", self.output_train_dir)
         else:
-            rank_zero_print(f"Auto-resuming from checkpoint: {ckpt_path} (iteration {current_iter})")
+            logger.info("Auto-resuming from checkpoint: {} (iteration {})", ckpt_path, current_iter)
         return ckpt_path, current_iter
 
     def train(self):
@@ -184,7 +185,14 @@ class LoraTrainer(BaseTrainer):
         grad_accum_counter = 0
         running_loss = 0.0
 
-        progress = tqdm(total=max_train_iters, desc="Training iterations", initial=current_iter, disable=not is_main_process())
+        logger.info(
+            "[train] start iter={}/{} world_size={} grad_accum={} train_log_every_iters={}",
+            current_iter,
+            max_train_iters,
+            get_world_size(),
+            grad_accum_iters,
+            self.train_log_every_iters,
+        )
         if self.infer_every_iters:
             self.inferencer.set_data(self.dataloader_eval)
             if current_iter == 0:
@@ -215,8 +223,9 @@ class LoraTrainer(BaseTrainer):
 
                 current_iter += 1
                 display_loss = reduce_mean(running_loss)
-                progress.update(1)
-                progress.set_postfix(loss=display_loss, lr=self.lr_scheduler.get_last_lr()[0])
+                current_lr = self.lr_scheduler.get_last_lr()[0]
+                if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
+                    logger.info("[train] iter={}/{} loss={:.6f} lr={:.8f}", current_iter, max_train_iters, display_loss, current_lr)
                 running_loss = 0.0
 
                 if save_every_iters and current_iter % save_every_iters == 0:
@@ -230,7 +239,7 @@ class LoraTrainer(BaseTrainer):
 
             epoch += 1
 
-        progress.close()
+        logger.info("[train] finished iter={}/{}", current_iter, max_train_iters)
 
     def _set_gradient_sync(self, enabled):
         self.model.set_fsdp2_gradient_sync(enabled)
@@ -241,8 +250,10 @@ class LoraTrainer(BaseTrainer):
 
         self.inferencer.output_infer_dir = iter_output_dir
         os.makedirs(iter_output_dir, exist_ok=True)
+        logger.info("[train] running inference iter={} output_dir={}", current_iter, iter_output_dir)
         self.inferencer.infer()
         barrier()
+        logger.info("[train] finished inference iter={}", current_iter)
 
         self.model.set_lora_trainable()
 
@@ -251,6 +262,7 @@ class LoraTrainer(BaseTrainer):
             prune_checkpoints(self.output_train_dir, save_total_limit)
 
         save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
+        logger.info("[train] saving checkpoint iter={} path={}", iteration, save_dir)
         if is_main_process():
             os.makedirs(save_dir, exist_ok=True)
         barrier()
@@ -265,6 +277,7 @@ class LoraTrainer(BaseTrainer):
         if self.model.is_fsdp2_wrapped():
             self._save_distributed_state(save_dir, iteration)
             barrier()
+            logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
             return
 
         training_state = {
@@ -276,11 +289,9 @@ class LoraTrainer(BaseTrainer):
         if is_main_process():
             torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
         barrier()
+        logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
 
     def _save_distributed_state(self, save_dir, iteration):
-        import torch.distributed.checkpoint as dcp
-        from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
-
         dist_state_path = os.path.join(save_dir, "dist_state")
         if is_main_process():
             os.makedirs(dist_state_path, exist_ok=True)

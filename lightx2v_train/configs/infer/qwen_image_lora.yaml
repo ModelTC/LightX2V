@@ -44,3 +44,7 @@ inference:
     output_dir: ./output_infer/qwen_image_lora_test
     lora_config:
         path: /path/to/checkpoint-x/pytorch_lora_weights.safetensors
+
+logging:
+    rank_zero_only: true
+    infer_log_every_steps: 10

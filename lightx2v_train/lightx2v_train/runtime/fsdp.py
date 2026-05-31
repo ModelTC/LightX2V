@@ -1,7 +1,8 @@
 import torch
+from loguru import logger
 from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 
-from lightx2v_train.runtime.distributed import get_device_mesh, is_distributed, rank_zero_print
+from lightx2v_train.runtime.distributed import get_device_mesh, is_distributed
 from lightx2v_train.utils.utils import get_running_dtype
 
 
@@ -74,5 +75,11 @@ def apply_fsdp2(model, config):
     if fsdp_config.get("log_memory", True):
         after = _cuda_memory_gb()
         if before is not None and after is not None:
-            rank_zero_print(f"FSDP2 transformer sharded: allocated {before[0]:.2f} -> {after[0]:.2f} GiB, reserved {before[1]:.2f} -> {after[1]:.2f} GiB")
+            logger.info(
+                "FSDP2 transformer sharded: allocated {:.2f} -> {:.2f} GiB, reserved {:.2f} -> {:.2f} GiB",
+                before[0],
+                after[0],
+                before[1],
+                after[1],
+            )
     return model

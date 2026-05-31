@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 from lightx2v_train.runtime.distributed import is_distributed
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
@@ -46,7 +47,7 @@ class NativeImageInferencer(BaseInferencer):
                 if self.output_infer_dir is not None:
                     save_path = Path(self.output_infer_dir) / f"{i:05d}.png"
                     result.images[0].save(save_path)
-                    print(f"Saved to {save_path}")
+                    logger.info("Saved to {}", save_path)
                     saved_paths.append(str(save_path))
 
         if lora_path:

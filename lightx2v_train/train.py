@@ -2,7 +2,7 @@ import argparse
 
 from lightx2v_train.data import build_data
 from lightx2v_train.model_zoo import build_model
-from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config
+from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
 from lightx2v_train.trainers import build_trainer
 
 
@@ -16,6 +16,7 @@ def main():
     args = parse_args()
     config = load_config(args.config)
     init_distributed(config)
+    setup_logger(config)
 
     try:
         model = build_model(config)
