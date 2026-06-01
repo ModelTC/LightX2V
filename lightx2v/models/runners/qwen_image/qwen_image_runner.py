@@ -17,6 +17,8 @@ from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenIm
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
+
+# from lightx2v.utils.torch_trace_profiler import TorchTraceProfileContext
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -323,6 +325,9 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 self.model.scheduler.step_pre(step_index=step_index)
 
             with ProfilingContext4DebugL1("🚀 infer_main"):
+                # Example of torch trace profile:
+                # with TorchTraceProfileContext() as profile:
+                #    profile.run(self.model.infer, self.inputs)
                 self.model.infer(self.inputs)
 
             with ProfilingContext4DebugL1("step_post"):

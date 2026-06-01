@@ -449,43 +449,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             )
         return hidden_states
 
-    def _infer_calculating_profiled(
-        self,
-        blocks,
-        hidden_states,
-        encoder_hidden_states,
-        temb_img_silu,
-        temb_txt_silu,
-        image_rotary_emb,
-        modulate_index,
-        trace_path,
-    ):
-        import torch.profiler as torch_profiler
-        from torch.profiler import ProfilerActivity, schedule
-
-        my_schedule = schedule(wait=1, warmup=1, active=1, repeat=1)
-        with torch_profiler.profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-            schedule=my_schedule,
-            record_shapes=False,
-            profile_memory=False,
-            with_stack=False,
-        ) as prof:
-            for step in range(3):
-                for idx in range(len(blocks)):
-                    encoder_hidden_states, hidden_states = self.infer_block(
-                        block=blocks[idx],
-                        hidden_states=hidden_states,
-                        encoder_hidden_states=encoder_hidden_states,
-                        temb_img_silu=temb_img_silu,
-                        temb_txt_silu=temb_txt_silu,
-                        image_rotary_emb=image_rotary_emb,
-                        modulate_index=modulate_index,
-                    )
-                prof.step()
-        prof.export_chrome_trace(trace_path)
-        return hidden_states
-
     if magi_compile is not None:
 
         def _magi_config_patch(c):
@@ -562,7 +525,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         temb_img_silu = pre_infer_out.temb_img_silu
         temb_txt_silu = pre_infer_out.temb_txt_silu
         image_rotary_emb = pre_infer_out.image_rotary_emb
-        hidden_states = self.infer_func(
+        return self.infer_func(
             block_weights.blocks,
             hidden_states,
             encoder_hidden_states,
@@ -571,4 +534,3 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             image_rotary_emb,
             self.scheduler.modulate_index,
         )
-        return hidden_states
