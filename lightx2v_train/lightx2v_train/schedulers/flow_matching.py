@@ -3,6 +3,7 @@ import math
 import torch
 
 from lightx2v_train.runtime.distributed import get_device
+from lightx2v_train.schedulers.time_shift import build_time_shift_mu
 from lightx2v_train.utils.utils import get_running_dtype
 
 
@@ -25,23 +26,7 @@ class RectifiedFlowMatchingScheduler:
         self.do_time_shift = time_shift_settings.get("do_time_shift", False)
         self.time_shift_power = time_shift_settings.get("time_shift_power", 1.0)
         self.shift_type = time_shift_settings.get("shift_type", "linear")
-        self.dynamic_shift = time_shift_settings.get("dynamic_shift", False)
-        if self.dynamic_shift:
-            self.shift_mu_strategy = time_shift_settings.get("shift_mu_strategy", "linear")
-            if self.shift_mu_strategy == "linear":
-                self.shift_x1 = time_shift_settings["shift_x1"]
-                self.shift_x2 = time_shift_settings["shift_x2"]
-                self.shift_y1 = time_shift_settings["shift_y1"]
-                self.shift_y2 = time_shift_settings["shift_y2"]
-                self._mu_slope = (self.shift_y2 - self.shift_y1) / (self.shift_x2 - self.shift_x1)
-                self._mu_bias = self.shift_y1 - self._mu_slope * self.shift_x1
-            elif self.shift_mu_strategy == "flux2_empirical":
-                self.shift_mu_num_steps = time_shift_settings.get("shift_mu_num_steps", 50)
-            else:
-                raise ValueError(f"Unsupported shift_mu_strategy: {self.shift_mu_strategy}")
-            self.patch_size = time_shift_settings.get("patch_size", [2, 2])
-        else:
-            self.time_shift_mu = time_shift_settings.get("time_shift_mu", 5.0)
+        self.time_shift_mu = build_time_shift_mu(time_shift_settings)
 
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
 
@@ -51,34 +36,6 @@ class RectifiedFlowMatchingScheduler:
         self.infer_sigmas = None
         self.infer_timesteps = None
         self.num_inference_steps = None
-
-    @staticmethod
-    def _compute_flux2_empirical_mu(image_seq_len, num_steps):
-        a1, b1 = 8.73809524e-05, 1.89833333
-        a2, b2 = 0.00016927, 0.45666666
-
-        if image_seq_len > 4300:
-            return float(a2 * image_seq_len + b2)
-
-        m_200 = a2 * image_seq_len + b2
-        m_10 = a1 * image_seq_len + b1
-        a = (m_200 - m_10) / 190.0
-        b = m_200 - 200.0 * a
-        return float(a * num_steps + b)
-
-    def _get_time_shift_mu(self, latent_hw=None, num_steps=None):
-        if self.dynamic_shift:
-            if latent_hw is None:
-                raise ValueError("latent_hw=(H, W) must be provided when dynamic_shift=True")
-            h, w = latent_hw
-            image_seq_len = (h // self.patch_size[0]) * (w // self.patch_size[1])
-            if self.shift_mu_strategy == "flux2_empirical":
-                return self._compute_flux2_empirical_mu(
-                    image_seq_len=image_seq_len,
-                    num_steps=num_steps or self.shift_mu_num_steps,
-                )
-            return self._mu_slope * image_seq_len + self._mu_bias
-        return self.time_shift_mu
 
     def sample_timestep_or_sigma(self, num_samples, latent_hw=None):
         if self.timestep_distribution == "logitnormal":
@@ -95,7 +52,7 @@ class RectifiedFlowMatchingScheduler:
         return timestep_or_sigma.to(self.running_dtype)
 
     def time_shift(self, t, latent_hw=None, num_steps=None):
-        mu = self._get_time_shift_mu(latent_hw, num_steps=num_steps)
+        mu = self.time_shift_mu(latent_hw=latent_hw, num_steps=num_steps)
         if self.shift_type == "exponential":
             mu = math.exp(mu)
         return mu / (mu + (1 / t - 1) ** self.time_shift_power)
