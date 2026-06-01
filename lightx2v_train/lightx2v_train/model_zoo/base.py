@@ -75,6 +75,15 @@ class BaseModel:
     def fsdp2_shard_plan(self, fsdp_config):
         raise NotImplementedError(f"{self.__class__.__name__} must define fsdp2_shard_plan().")
 
+    def log_model_structure(self):
+        logger.info("[model] class={}", self.__class__.__name__)
+        text_encoder = getattr(getattr(self, "text_pipeline", None), "text_encoder", None)
+        if text_encoder is not None:
+            logger.info("[model] text_encoder structure:\n{}", text_encoder)
+        if self.vae is not None:
+            logger.info("[model] vae structure:\n{}", self.vae)
+        logger.info("[model] denoiser structure:\n{}", self.denoiser_module())
+
     def encode_to_latent(self, sample):
         raise NotImplementedError
 

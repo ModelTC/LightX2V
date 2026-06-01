@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 
-import numpy as np
 import torch
-from PIL import Image
 from diffusers import AutoencoderKL, LongCatImagePipeline
+from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.transformers import LongCatImageTransformer2DModel
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import prepare_pos_ids
 
@@ -36,6 +35,7 @@ class LongCatImageModel(BaseModel):
         self.transformer = LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
 
     def denoiser_module(self):
         return self.transformer
@@ -131,9 +131,7 @@ class LongCatImageModel(BaseModel):
         latent = latent / scale + shift
 
         image = self.vae.decode(latent).sample  # (B, C, H, W)
-        image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.permute(0, 2, 3, 1).float().cpu().numpy()
-        return [Image.fromarray((img * 255).round().astype(np.uint8)) for img in image]
+        return self.image_processor.postprocess(image, output_type="pil")
 
     def assemble_pipeline(self, scheduler=None):
         return LongCatImagePipeline(

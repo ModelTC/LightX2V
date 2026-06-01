@@ -67,6 +67,8 @@ class LoraTrainer(BaseTrainer):
             self.inferencer = build_inferencer(self.config)
             self.inferencer.set_model(self.model)
 
+        self.model.log_model_structure()
+
         self.trainable_params = list(self.model.trainable_parameters())
         self.optimizer = torch.optim.AdamW(
             self.trainable_params,

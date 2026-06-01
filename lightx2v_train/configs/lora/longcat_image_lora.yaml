@@ -79,5 +79,10 @@ inference:
     output_dir: ./output_infer/longcat_image_lora
     infer_every_iters: ${training.save_every_iters}
 
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+    infer_log_every_steps: 10
+
 resume:
     auto_resume: true
