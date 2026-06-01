@@ -16,6 +16,9 @@ def _torchaudio_decode_available() -> bool:
             import torchcodec  # noqa: F401
         except Exception:
             _TORCHAUDIO_DECODE_AVAILABLE = False
+        except Exception as e:
+            print(f"Error importing torchcodec: {e}")
+            _TORCHAUDIO_DECODE_AVAILABLE = False
         else:
             _TORCHAUDIO_DECODE_AVAILABLE = True
     return _TORCHAUDIO_DECODE_AVAILABLE

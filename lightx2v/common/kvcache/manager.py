@@ -265,11 +265,33 @@ class KVCacheManager:
 
         self.max_attention_size = self.kv_size if self.max_attention_size is None else self.max_attention_size
 
+        head_dim = self.config["dim"] // self.config["num_heads"]
+        buffer_sig = (
+            int(self.kv_size),
+            int(self.cache_num_heads),
+            int(self.config["num_layers"]),
+            int(head_dim),
+            str(self.dtype),
+            int(self.frame_seq_length),
+            bool(self.ar_config.get("kv_quant")),
+            bool(self.ar_config.get("kv_offload")),
+            self.config.get("infer_steps"),
+        )
+        if getattr(self, "self_attn_kv_cache", None) is not None and getattr(self, "_buffer_sig", None) == buffer_sig:
+            self._reset_pools()
+            logger.info(
+                "[KVCacheManager] reuse cached KV buffers (signature matched), skip realloc: kv_cache_size={}, num_output_frames={}",
+                self.kv_size,
+                self.num_output_frames,
+            )
+            return
+
         self.self_attn_kv_cache = self._create_self_attn_kv_cache()
         self.cross_attn_kv_cache = self._create_cross_attn_kv_cache()
         self.self_attn_kv_cache._init_kv_buffer()
         self.cross_attn_kv_cache._init_kv_buffer()
         self._create_matrix_action_kv_caches()
+        self._buffer_sig = buffer_sig
 
         logger.info(
             "[KVCacheManager] init: frame_seq_length={}, num_output_frames={}, kv_cache_size={}, max_attention_size={}, ws={}, local_attn_size={}, sink_size={}, kv_quant={}, kv_offload={}, sp_head_sharded_kv={}",
@@ -284,6 +306,13 @@ class KVCacheManager:
             bool(self.ar_config.get("kv_offload")),
             self.sp_head_sharded_kv,
         )
+
+    def _reset_pools(self) -> None:
+        """Reset metadata/state of existing pools while keeping allocated buffers resident."""
+        for attr in ("self_attn_kv_cache", "cross_attn_kv_cache", "action_keyboard_kv_cache", "action_mouse_kv_cache"):
+            pool = getattr(self, attr, None)
+            if pool is not None:
+                pool.reset()
 
     def _create_matrix_action_kv_caches(self) -> None:
         """Matrix Game action K/V: keyboard ``RollingKVCachePool``, mouse ``SpatialRollingKVCachePool``."""

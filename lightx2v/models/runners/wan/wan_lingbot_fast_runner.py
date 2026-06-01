@@ -55,13 +55,22 @@ class LingbotFastRunner(LingbotRunner):
     def init_scheduler(self):
         self.scheduler = WanSFScheduler(self.config)
 
+    @ProfilingContext4DebugL1("init kv cache manager")
     def init_kv_cache_manager(self):
-        self.model.kv_cache_manager = KVCacheManager(config=self.config, device=torch.device("cuda"), sp_group=self.model.seq_p_group)
-        self.model.kv_cache_manager._create_kv_caches(self.input_info.latent_shape)
-        self.model.transformer_infer.kv_cache_manager = self.model.kv_cache_manager
-        self.input_info.latent_shape = [self.input_info.latent_shape[0], self.model.kv_cache_manager.num_output_frames, self.input_info.latent_shape[2], self.input_info.latent_shape[3]]
-        self.scheduler.num_output_frames = self.model.kv_cache_manager.num_output_frames
-        self.scheduler.num_chunks = self.model.kv_cache_manager.num_output_frames // self.config.get("ar_config", {}).get("num_frame_per_chunk", 3)
+        kv_mgr = getattr(self.model, "kv_cache_manager", None)
+        if kv_mgr is None:
+            kv_mgr = KVCacheManager(config=self.config, device=torch.device("cuda"), sp_group=self.model.seq_p_group)
+            self.model.kv_cache_manager = kv_mgr
+        kv_mgr.ar_config = dict(self.config.get("ar_config", {}))
+        kv_mgr._create_kv_caches(self.input_info.latent_shape)
+        self.model.transformer_infer.kv_cache_manager = kv_mgr
+        self.input_info.latent_shape = [self.input_info.latent_shape[0], kv_mgr.num_output_frames, self.input_info.latent_shape[2], self.input_info.latent_shape[3]]
+        self.scheduler.num_output_frames = kv_mgr.num_output_frames
+        self.scheduler.num_chunks = kv_mgr.num_output_frames // self.config.get("ar_config", {}).get("num_frame_per_chunk", 3)
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            sp_group = getattr(self.model, "seq_p_group", None)
+            if sp_group is not None or torch.distributed.get_world_size() > 1:
+                torch.distributed.barrier(group=sp_group)
 
     def get_video_segment_num(self):
         self.video_segment_num = self.scheduler.num_chunks
@@ -98,7 +107,9 @@ class LingbotFastRunner(LingbotRunner):
         super().init_run()
 
     def end_run(self):
-        self.model.kv_cache_manager.save_calibration()
+        kv_mgr = getattr(getattr(self, "model", None), "kv_cache_manager", None)
+        if kv_mgr is not None:
+            kv_mgr.save_calibration()
         super().end_run()
 
     @ProfilingContext4DebugL2("Run DiT")
