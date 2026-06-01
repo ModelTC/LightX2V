@@ -22,12 +22,12 @@ class BaseKVCachePool:
         self._dtype = dtype
 
     def _init_kv_buffer(self):
-        self._k_buffer = torch.zeros(
+        self._k_buffer = torch.empty(
             (self._num_layers, self._cache_size, self._num_heads, self._head_dim),
             dtype=self._dtype,
             device=self._device,
         )
-        self._v_buffer = torch.zeros(
+        self._v_buffer = torch.empty(
             (self._num_layers, self._cache_size, self._num_heads, self._head_dim),
             dtype=self._dtype,
             device=self._device,
@@ -48,8 +48,7 @@ class BaseKVCachePool:
         self._v_buffer[layer_id, : v.shape[0]] = v
 
     def reset(self) -> None:
-        self._k_buffer.zero_()
-        self._v_buffer.zero_()
+        pass
 
     def sp_kvcache_attn_head_shard(
         self,

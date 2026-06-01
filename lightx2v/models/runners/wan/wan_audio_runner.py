@@ -1177,16 +1177,26 @@ class WanAudioARRunner(WanAudioRunner):
         is_last = segment_idx == self.video_segment_num - 1
         return self.vae_decoder.cached_decode_withflag(segment_latents.to(GET_DTYPE()), is_first, is_last)
 
+    @ProfilingContext4DebugL1("init kv cache manager")
     def init_kv_cache_manager(self):
         ref_latents = self.inputs["image_encoder_output"]["vae_encoder_out"]
-        self.model.kv_cache_manager = KVCacheManager(config=self.config, device=torch.device(AI_DEVICE), sp_group=self.model.seq_p_group)
-        self.model.kv_cache_manager.ar_config = dict(self.config.get("ar_config", {}))
         ref_num_frames = 0 if ref_latents is None else int(ref_latents.shape[1])
-        self.model.kv_cache_manager._create_kv_caches(self.input_info.latent_shape, ref_num_frames=ref_num_frames)
-        self.model.transformer_infer.kv_cache_manager = self.model.kv_cache_manager
+        kv_mgr = getattr(self.model, "kv_cache_manager", None)
+        if kv_mgr is None:
+            kv_mgr = KVCacheManager(config=self.config, device=torch.device(AI_DEVICE), sp_group=self.model.seq_p_group)
+            self.model.kv_cache_manager = kv_mgr
+        kv_mgr.ar_config = dict(self.config.get("ar_config", {}))
+        kv_mgr._create_kv_caches(self.input_info.latent_shape, ref_num_frames=ref_num_frames)
+        self.model.transformer_infer.kv_cache_manager = kv_mgr
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            sp_group = getattr(self.model, "seq_p_group", None)
+            if sp_group is not None or torch.distributed.get_world_size() > 1:
+                torch.distributed.barrier(group=sp_group)
 
     def end_run(self):
-        self.model.kv_cache_manager.save_calibration()
+        kv_mgr = getattr(getattr(self, "model", None), "kv_cache_manager", None)
+        if kv_mgr is not None:
+            kv_mgr.save_calibration()
         super().end_run()
 
     @ProfilingContext4DebugL2("Run DiT")

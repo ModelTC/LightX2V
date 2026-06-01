@@ -163,10 +163,10 @@ class RollingKVCachePool(BaseKVCachePool):
     def _init_kv_buffer_offload(self) -> None:
         """OffloadedStaticCache-style: CPU authority + one GPU staging layer."""
         L, N, H, D = self._num_layers, self._cache_size, self._num_heads, self._head_dim
-        self._k_cpu = torch.zeros(L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._v_cpu = torch.zeros(L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._k_gpu_buf = torch.zeros(N, H, D, dtype=self._dtype, device=self._device)
-        self._v_gpu_buf = torch.zeros(N, H, D, dtype=self._dtype, device=self._device)
+        self._k_cpu = torch.empty(L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
+        self._v_cpu = torch.empty(L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
+        self._k_gpu_buf = torch.empty(N, H, D, dtype=self._dtype, device=self._device)
+        self._v_gpu_buf = torch.empty(N, H, D, dtype=self._dtype, device=self._device)
         self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._init_ring_metadata()
@@ -382,17 +382,11 @@ class RollingKVCachePool(BaseKVCachePool):
 
     def reset(self) -> None:
         if not self._kv_offload:
-            self._k_buffer.zero_()
-            self._v_buffer.zero_()
             self._global_end.zero_()
             self._local_end.zero_()
             self._init_ring_metadata()
             return
         self.sync_all()
-        self._k_cpu.zero_()
-        self._v_cpu.zero_()
-        self._k_gpu_buf.zero_()
-        self._v_gpu_buf.zero_()
         self._global_end.zero_()
         self._local_end.zero_()
         self._init_ring_metadata()
@@ -463,18 +457,18 @@ class StepRollingKVCachePool(RollingKVCachePool):
             self._init_kv_buffer_offload_step()
             return
         S, L, N, H, D = self.num_steps, self._num_layers, self._cache_size, self._num_heads, self._head_dim
-        self._k_buffer = torch.zeros(S, L, N, H, D, dtype=self._dtype, device=self._device)
-        self._v_buffer = torch.zeros(S, L, N, H, D, dtype=self._dtype, device=self._device)
+        self._k_buffer = torch.empty(S, L, N, H, D, dtype=self._dtype, device=self._device)
+        self._v_buffer = torch.empty(S, L, N, H, D, dtype=self._dtype, device=self._device)
         self._global_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
         self._local_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
         self._init_ring_metadata()
 
     def _init_kv_buffer_offload_step(self) -> None:
         S, L, N, H, D = self.num_steps, self._num_layers, self._cache_size, self._num_heads, self._head_dim
-        self._k_cpu = torch.zeros(S, L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._v_cpu = torch.zeros(S, L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._k_gpu_buf = torch.zeros(N, H, D, dtype=self._dtype, device=self._device)
-        self._v_gpu_buf = torch.zeros(N, H, D, dtype=self._dtype, device=self._device)
+        self._k_cpu = torch.empty(S, L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
+        self._v_cpu = torch.empty(S, L, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
+        self._k_gpu_buf = torch.empty(N, H, D, dtype=self._dtype, device=self._device)
+        self._v_gpu_buf = torch.empty(N, H, D, dtype=self._dtype, device=self._device)
         self._global_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
         self._local_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
         self._init_ring_metadata()
@@ -533,18 +527,18 @@ class SpatialRollingKVCachePool(RollingKVCachePool):
             self._init_kv_buffer_offload_spatial()
             return
         L, S, N, H, D = self._num_layers, self._spatial_len, self._cache_size, self._num_heads, self._head_dim
-        self._k_buffer = torch.zeros(L, S, N, H, D, dtype=self._dtype, device=self._device)
-        self._v_buffer = torch.zeros(L, S, N, H, D, dtype=self._dtype, device=self._device)
+        self._k_buffer = torch.empty(L, S, N, H, D, dtype=self._dtype, device=self._device)
+        self._v_buffer = torch.empty(L, S, N, H, D, dtype=self._dtype, device=self._device)
         self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._init_ring_metadata()
 
     def _init_kv_buffer_offload_spatial(self) -> None:
         L, S, N, H, D = self._num_layers, self._spatial_len, self._cache_size, self._num_heads, self._head_dim
-        self._k_cpu = torch.zeros(L, S, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._v_cpu = torch.zeros(L, S, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
-        self._k_gpu_buf = torch.zeros(S, N, H, D, dtype=self._dtype, device=self._device)
-        self._v_gpu_buf = torch.zeros(S, N, H, D, dtype=self._dtype, device=self._device)
+        self._k_cpu = torch.empty(L, S, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
+        self._v_cpu = torch.empty(L, S, N, H, D, dtype=self._dtype, device="cpu").pin_memory()
+        self._k_gpu_buf = torch.empty(S, N, H, D, dtype=self._dtype, device=self._device)
+        self._v_gpu_buf = torch.empty(S, N, H, D, dtype=self._dtype, device=self._device)
         self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
         self._init_ring_metadata()

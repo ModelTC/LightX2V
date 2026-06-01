@@ -430,6 +430,159 @@ def unpack_and_dequant_cache_triton(
 
 
 @triton.jit
+def _kivi_dequant_ring_nhd_kernel(
+    code_ptr,
+    scale_ptr,
+    mn_ptr,
+    out_ptr,
+    total_rows: tl.constexpr,
+    total_t: tl.constexpr,
+    H: tl.constexpr,
+    D: tl.constexpr,
+    c_s0: tl.constexpr,
+    c_s1: tl.constexpr,
+    c_s2: tl.constexpr,
+    s_s0: tl.constexpr,
+    s_s1: tl.constexpr,
+    s_s2: tl.constexpr,
+    p0: tl.constexpr,
+    n0: tl.constexpr,
+    p1: tl.constexpr,
+    n1: tl.constexpr,
+    p2: tl.constexpr,
+    n2: tl.constexpr,
+    p3: tl.constexpr,
+    n3: tl.constexpr,
+    BITS: tl.constexpr,
+    FEAT_PER_INT: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_T: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_t = tl.program_id(1)
+
+    rows = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)  # H * D rows
+    toks = pid_t * BLOCK_T + tl.arange(0, BLOCK_T)  # logical output tokens
+
+    h = rows // D
+    d = rows - h * D
+
+    # Map contiguous logical output token -> physical token in ring chunks.
+    b0 = n0
+    b1 = n0 + n1
+    b2 = n0 + n1 + n2
+    phys = tl.where(
+        toks < b0,
+        p0 + toks,
+        tl.where(
+            toks < b1,
+            p1 + (toks - b0),
+            tl.where(toks < b2, p2 + (toks - b1), p3 + (toks - b2)),
+        ),
+    )
+
+    pack_col = phys // FEAT_PER_INT
+    shift = (phys - pack_col * FEAT_PER_INT) * BITS
+    group_col = phys // GROUP_SIZE
+
+    row_mask = rows < total_rows
+    tok_mask = toks < total_t
+    mask = row_mask[:, None] & tok_mask[None, :]
+
+    code_offsets = h[:, None] * c_s0 + d[:, None] * c_s1 + pack_col[None, :] * c_s2
+    packed = tl.load(code_ptr + code_offsets, mask=mask, other=0).to(tl.uint32)
+
+    qmask = (1 << BITS) - 1
+    q = ((packed >> shift[None, :]) & qmask).to(tl.float32)
+
+    scale_offsets = h[:, None] * s_s0 + d[:, None] * s_s1 + group_col[None, :] * s_s2
+    sc = tl.load(scale_ptr + scale_offsets, mask=mask, other=0.0).to(tl.float32)
+    z = tl.load(mn_ptr + scale_offsets, mask=mask, other=0.0).to(tl.float32)
+    val = q * sc + z
+
+    # out is [T, H, D], contiguous.
+    out_offsets = toks[None, :] * (H * D) + h[:, None] * D + d[:, None]
+    tl.store(out_ptr + out_offsets, val, mask=mask)
+
+
+def kivi_dequant_ring_nhd_triton(
+    code: torch.Tensor,
+    scale: torch.Tensor,
+    mn: torch.Tensor,
+    chunks: list[tuple[int, int]],
+    group_size: int,
+    bits: int,
+    dtype: torch.dtype = torch.float16,
+    block_m: int = 4,
+    block_t: int = 128,
+) -> torch.Tensor:
+    """Dequantize KIVI physical ring chunks directly into contiguous [T, H, D].
+
+    ``chunks`` are physical token ranges in logical order, e.g. [(p0, p1), ...].
+    This fuses per-chunk unpack+dequant and the following cat/scratch copy.
+    """
+    assert bits in (2, 4, 8), f"bits must be 2/4/8, got {bits}"
+    assert code.is_cuda and scale.is_cuda and mn.is_cuda
+    assert code.dtype == torch.int32, f"code must be int32, got {code.dtype}"
+    assert code.dim() == 3, f"code must be [H,D,P], got {tuple(code.shape)}"
+    assert scale.dim() == 3 and mn.dim() == 3
+    assert scale.shape == mn.shape
+    assert scale.shape[:2] == code.shape[:2]
+    if not chunks:
+        H, D = code.shape[:2]
+        return torch.empty(0, H, D, device=code.device, dtype=dtype)
+    if len(chunks) > 4:
+        raise ValueError(f"kivi_dequant_ring_nhd_triton supports at most 4 chunks, got {len(chunks)}")
+
+    H, D, _ = code.shape
+    feat_per_int = 32 // bits
+    total_t = sum(int(p1) - int(p0) for p0, p1 in chunks)
+    out = torch.empty(total_t, H, D, device=code.device, dtype=dtype)
+
+    padded = [(0, 0)] * 4
+    for i, (start, end) in enumerate(chunks):
+        n = int(end) - int(start)
+        if n < 0:
+            raise ValueError(f"invalid KIVI chunk ({start}, {end})")
+        padded[i] = (int(start), n)
+
+    total_rows = H * D
+    grid = (triton.cdiv(total_rows, block_m), triton.cdiv(total_t, block_t))
+    _kivi_dequant_ring_nhd_kernel[grid](
+        code,
+        scale,
+        mn,
+        out,
+        total_rows,
+        total_t,
+        H,
+        D,
+        code.stride(0),
+        code.stride(1),
+        code.stride(2),
+        scale.stride(0),
+        scale.stride(1),
+        scale.stride(2),
+        padded[0][0],
+        padded[0][1],
+        padded[1][0],
+        padded[1][1],
+        padded[2][0],
+        padded[2][1],
+        padded[3][0],
+        padded[3][1],
+        BITS=bits,
+        FEAT_PER_INT=feat_per_int,
+        GROUP_SIZE=group_size,
+        BLOCK_M=block_m,
+        BLOCK_T=block_t,
+        num_warps=4,
+    )
+    return out
+
+
+@triton.jit
 def fp4_dequantize_kernel(
     packed_ptr,
     scale_ptr,

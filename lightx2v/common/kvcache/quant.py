@@ -1692,15 +1692,13 @@ class KIVIQuantRollingKVCachePool(RollingKVCachePool):
         if not chunks:
             return torch.empty(0, H, D, device=self._device, dtype=self._dtype)
 
-        outs = []
-        for p0, p1 in chunks:
-            if which == "k":
-                outs.append(self._dequant_nhd(self._kivi_k_code(layer_id), self._kivi_k_scale(layer_id), self._kivi_k_mn(layer_id), p0, p1))
-            elif which == "v":
-                outs.append(self._dequant_nhd(self._kivi_v_code(layer_id), self._kivi_v_scale(layer_id), self._kivi_v_mn(layer_id), p0, p1))
-            else:
-                raise ValueError(f"invalid KIVI chunk kind: {which}")
-        return outs[0] if len(outs) == 1 else torch.cat(outs, dim=0).contiguous()
+        if which == "k":
+            code, scale, mn = self._kivi_k_code(layer_id), self._kivi_k_scale(layer_id), self._kivi_k_mn(layer_id)
+        elif which == "v":
+            code, scale, mn = self._kivi_v_code(layer_id), self._kivi_v_scale(layer_id), self._kivi_v_mn(layer_id)
+        else:
+            raise ValueError(f"invalid KIVI chunk kind: {which}")
+        return kivi_dequant_ring_nhd_triton(code, scale, mn, chunks, self._group_size, self._bits, dtype=self._dtype)
 
     def _update_recent_len_after_store(self, layer_id: int, end_idx: int) -> None:
         if not self._ring_is_active(layer_id):
