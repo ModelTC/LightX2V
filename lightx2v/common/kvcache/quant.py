@@ -5,14 +5,219 @@ import torch.distributed as dist
 from loguru import logger
 
 from .kernel import *
-from .offload import KVOffloadPlugin
 from .rolling import RollingKVCachePool
 from .utils import *
 
+try:
+    from fouroversix import quantize_to_fp4
+    from fouroversix.quantize.quantized_tensor import QuantizedTensor
+except ImportError:
+    QuantizedTensor = None
+    quantize_to_fp4 = None
 
-class SageQuantRollingKVCachePool(RollingKVCachePool):
+
+# =============================================================================
+# Generic token-ring helper for quantized rolling caches.
+#
+# Logical layout exposed to callers:
+#   [sink logical tokens][recent logical tokens]
+#
+# Physical layout in cache tensors:
+#   [sink fixed region][recent ring region]
+#
+# `roll_window()` is O(1): it updates head/len metadata and never moves the
+# kept window.  `k_cache()` / `v_cache()` materialize a contiguous logical range
+# by reading one or more physical chunks and concatenating them.
+# =============================================================================
+
+
+class _QuantTokenRingMixin:
+    def _ring_index(self, layer_id: int):
+        return int(layer_id)
+
+    def _init_ring_metadata(self, *shape: int) -> None:
+        self._ring_active = torch.zeros(*shape, dtype=torch.bool, device="cpu")
+        self._ring_sink_len = torch.zeros(*shape, dtype=torch.long, device="cpu")
+        self._ring_recent_head = torch.zeros(*shape, dtype=torch.long, device="cpu")
+        self._ring_recent_len = torch.zeros(*shape, dtype=torch.long, device="cpu")
+
+    def _ring_is_active(self, layer_id: int) -> bool:
+        return bool(self._ring_active[self._ring_index(layer_id)].item())
+
+    def _set_ring_active(self, layer_id: int, value: bool) -> None:
+        self._ring_active[self._ring_index(layer_id)] = bool(value)
+
+    def _get_sink_len(self, layer_id: int) -> int:
+        return int(self._ring_sink_len[self._ring_index(layer_id)].item())
+
+    def _set_sink_len(self, layer_id: int, value: int) -> None:
+        self._ring_sink_len[self._ring_index(layer_id)] = int(value)
+
+    def _get_recent_head(self, layer_id: int) -> int:
+        return int(self._ring_recent_head[self._ring_index(layer_id)].item())
+
+    def _set_recent_head(self, layer_id: int, value: int) -> None:
+        self._ring_recent_head[self._ring_index(layer_id)] = int(value)
+
+    def _get_recent_len(self, layer_id: int) -> int:
+        return int(self._ring_recent_len[self._ring_index(layer_id)].item())
+
+    def _set_recent_len(self, layer_id: int, value: int) -> None:
+        self._ring_recent_len[self._ring_index(layer_id)] = int(value)
+
+    def _zero_tensors(self, names: list[str]) -> None:
+        for name in names:
+            getattr(self, name).zero_()
+
+    def _reset_ring(self) -> None:
+        self._zero_tensors(["_ring_active", "_ring_sink_len", "_ring_recent_head", "_ring_recent_len"])
+
+    def _reset_ends(self) -> None:
+        self._zero_tensors(["_global_end", "_local_end"])
+
+    def _recent_capacity(self, layer_id: int) -> int:
+        return int(self._cache_size) - self._get_sink_len(layer_id)
+
+    def _recent_offset_to_physical_chunks(
+        self,
+        layer_id: int,
+        recent_offset: int,
+        length: int,
+    ) -> list[tuple[int, int]]:
+        if length <= 0:
+            return []
+        sink_len = self._get_sink_len(layer_id)
+        cap = self._recent_capacity(layer_id)
+        if cap <= 0:
+            raise RuntimeError("ring cache has no recent capacity")
+        head = self._get_recent_head(layer_id)
+        pos = (head + int(recent_offset)) % cap
+        first = min(int(length), cap - pos)
+        out = [(sink_len + pos, sink_len + pos + first)]
+        remain = int(length) - first
+        if remain > 0:
+            out.append((sink_len, sink_len + remain))
+        return out
+
+    def _logical_to_physical_chunks(
+        self,
+        layer_id: int,
+        start: int,
+        end: int,
+    ) -> list[tuple[int, int]]:
+        start = int(start)
+        end = int(end)
+        if end <= start:
+            return []
+        if not self._ring_is_active(layer_id):
+            return [(start, end)]
+
+        sink_len = self._get_sink_len(layer_id)
+        recent_len = self._get_recent_len(layer_id)
+        logical_end = sink_len + recent_len
+        if end > logical_end:
+            raise RuntimeError(f"ring read exceeds logical end: read=[{start},{end}), logical_end={logical_end}, sink={sink_len}, recent_len={recent_len}")
+
+        chunks: list[tuple[int, int]] = []
+        # Fixed sink: logical == physical.
+        s0, s1 = start, min(end, sink_len)
+        if s1 > s0:
+            chunks.append((s0, s1))
+
+        # Recent ring.
+        r0, r1 = max(start, sink_len), end
+        if r1 > r0:
+            chunks.extend(
+                self._recent_offset_to_physical_chunks(
+                    layer_id,
+                    recent_offset=r0 - sink_len,
+                    length=r1 - r0,
+                )
+            )
+        return chunks
+
+    def _logical_store_chunks(
+        self,
+        layer_id: int,
+        start: int,
+        end: int,
+    ) -> list[tuple[int, int]]:
+        # Store range uses the same mapping as read range.  If it extends the
+        # recent length, update recent metadata after physical stores.
+        return self._logical_to_physical_chunks_for_store(layer_id, start, end)
+
+    def _logical_to_physical_chunks_for_store(
+        self,
+        layer_id: int,
+        start: int,
+        end: int,
+    ) -> list[tuple[int, int]]:
+        start = int(start)
+        end = int(end)
+        if end <= start:
+            return []
+        if not self._ring_is_active(layer_id):
+            return [(start, end)]
+
+        sink_len = self._get_sink_len(layer_id)
+        chunks: list[tuple[int, int]] = []
+
+        if start < sink_len:
+            s1 = min(end, sink_len)
+            chunks.append((start, s1))
+            if s1 == end:
+                return chunks
+            start = sink_len
+
+        recent_offset = start - sink_len
+        length = end - start
+        chunks.extend(self._recent_offset_to_physical_chunks(layer_id, recent_offset, length))
+        self._set_recent_len(layer_id, max(self._get_recent_len(layer_id), recent_offset + length))
+        return chunks
+
+    def roll_window(self, layer_id: int, sink_tokens: int, num_evicted: int) -> None:
+        old_local_end = self.get_local_end(layer_id)
+        sink_tokens = int(sink_tokens)
+        num_evicted = int(num_evicted)
+        num_kept = old_local_end - num_evicted - sink_tokens
+        if num_kept <= 0:
+            self._set_ring_active(layer_id, True)
+            self._set_sink_len(layer_id, sink_tokens)
+            self._set_recent_head(layer_id, 0)
+            self._set_recent_len(layer_id, 0)
+            return
+
+        if not self._ring_is_active(layer_id):
+            self._set_ring_active(layer_id, True)
+            self._set_sink_len(layer_id, sink_tokens)
+            cap = self._recent_capacity(layer_id)
+            if num_kept > cap:
+                raise RuntimeError(f"ring kept tokens {num_kept} exceed recent capacity {cap}")
+            # Before first roll physical layout is contiguous:
+            # [sink][evicted][kept].  Recent ring starts after sink, so the
+            # kept range physical offset inside recent ring is num_evicted.
+            self._set_recent_head(layer_id, num_evicted % cap)
+            self._set_recent_len(layer_id, num_kept)
+            return
+
+        if sink_tokens != self._get_sink_len(layer_id):
+            raise RuntimeError(f"ring sink size changed: old={self._get_sink_len(layer_id)}, new={sink_tokens}")
+        cap = self._recent_capacity(layer_id)
+        recent_len = self._get_recent_len(layer_id)
+        if num_evicted > recent_len:
+            raise RuntimeError(f"ring evict exceeds recent length: evict={num_evicted}, recent_len={recent_len}")
+        self._set_recent_head(layer_id, (self._get_recent_head(layer_id) + num_evicted) % cap)
+        self._set_recent_len(layer_id, recent_len - num_evicted)
+
+
+# =============================================================================
+# SageQuant
+# =============================================================================
+
+
+class SageQuantRollingKVCachePool(_QuantTokenRingMixin, RollingKVCachePool):
     _BLKK = 128
-    _SCALES_PER_BLK = 4  # (BLKK // WARPK) * 4, WARPK=128
+    _SCALES_PER_BLK = 4
     _PERM_16_VAL = [0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15]
     _INV_PERM_16_VAL = [0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15]
 
@@ -29,69 +234,44 @@ class SageQuantRollingKVCachePool(RollingKVCachePool):
         calib_path: str = None,
         kv_offload: bool = False,
     ) -> None:
-        assert k_cache_type in ["int8"], f"Invalid k_cache_type: {k_cache_type}"
-        assert v_cache_type in ["fp8", "fp16"], f"Invalid v_cache_type: {v_cache_type}"
+        assert k_cache_type in ["int8"]
+        assert v_cache_type in ["fp8", "fp16"]
         self._k_cache_type = k_cache_type
         self._v_cache_type = v_cache_type
         self._calib_path = calib_path
         self.current_step: int = 0
         self._PERM_16 = torch.tensor(self._PERM_16_VAL, dtype=torch.long, device=device)
         self._INV_PERM_16 = torch.tensor(self._INV_PERM_16_VAL, dtype=torch.long, device=device)
-        self._load_calib()
+        self._load_calib(device=device)
         super().__init__(num_layers, cache_size, num_heads, head_dim, dtype, device, kv_offload=kv_offload)
 
     def _init_kv_buffer(self) -> None:
         if self._kv_offload:
             self._init_kv_buffer_offload()
             return
-        L = self._num_layers
-        N = self._cache_size
-        H = self._num_heads
-        D = self._head_dim
+        L, N, H, D = self._num_layers, self._cache_size, self._num_heads, self._head_dim
         self._k_buffer = torch.zeros(L, N, H, D, dtype=torch.int8, device=self._device)
-        self._v_buffer = torch.zeros(L, N, H, D, dtype=self._v_cache_type == "fp8" and torch.float8_e4m3fn or torch.float16, device=self._device)
-
-        self._global_end = torch.zeros(L, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=self._device)
+        v_dtype = torch.float8_e4m3fn if self._v_cache_type == "fp8" else torch.float16
+        self._v_buffer = torch.zeros(L, N, H, D, dtype=v_dtype, device=self._device)
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._init_ring_metadata(L)
 
     def _init_kv_buffer_offload(self) -> None:
-        L = self._num_layers
-        N = self._cache_size
-        H = self._num_heads
-        D = self._head_dim
+        L, N, H, D = self._num_layers, self._cache_size, self._num_heads, self._head_dim
+        v_dtype = torch.float8_e4m3fn if self._v_cache_type == "fp8" else torch.float16
         self._k_cpu = torch.zeros(L, N, H, D, dtype=torch.int8, device="cpu").pin_memory()
-        self._v_cpu = torch.zeros(L, N, H, D, dtype=self._v_cache_type == "fp8" and torch.float8_e4m3fn or torch.float16, device="cpu").pin_memory()
-        self._k_gpu_buf = torch.zeros(2, N, H, D, dtype=torch.int8, device=self._device)
-        self._v_gpu_buf = torch.zeros(2, N, H, D, dtype=self._v_cache_type == "fp8" and torch.float8_e4m3fn or torch.float16, device=self._device)
-        self._global_end = torch.zeros(L, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=self._device)
-
-        def _async_load(layer_id: int, buf: int) -> None:
-            self._k_gpu_buf[buf].copy_(self._k_cpu[layer_id], non_blocking=True)
-            self._v_gpu_buf[buf].view(torch.float8_e4m3fn).copy_(self._v_cpu[layer_id], non_blocking=True)
-
-        def _async_store(layer_id: int, buf: int, start: int, end: int) -> None:
-            self._k_cpu[layer_id, start:end].copy_(
-                self._k_gpu_buf[buf, start:end],
-                non_blocking=True,
-            )
-            v_gpu_slice_u8 = self._v_gpu_buf[buf, start:end].view(torch.float8_e4m3fn)
-            self._v_cpu[layer_id, start:end].copy_(v_gpu_slice_u8, non_blocking=True)
-
-        self._offload = KVOffloadPlugin(self._device, _async_load, _async_store)
-        gpu_mb = (self._k_gpu_buf.nbytes + self._v_gpu_buf.nbytes) / (1024 * 1024)
-        cpu_mb = (self._k_cpu.nbytes + self._v_cpu.nbytes) / (1024 * 1024)
-        logger.info(
-            "[SageQuantRollingKVCachePool+offload] GPU fixed buffer: {:.1f} MB, CPU pinned: {:.1f} MB (saved {:.1f} MB GPU)",
-            gpu_mb,
-            cpu_mb,
-            cpu_mb - gpu_mb,
-        )
-        return
+        self._v_cpu = torch.zeros(L, N, H, D, dtype=v_dtype, device="cpu").pin_memory()
+        self._k_gpu_buf = torch.zeros(N, H, D, dtype=torch.int8, device=self._device)
+        self._v_gpu_buf = torch.zeros(N, H, D, dtype=v_dtype, device=self._device)
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._init_ring_metadata(L)
+        self._init_offload_state((L,))
 
     def _load_calib(self, device=torch.device("cuda")) -> None:
         load_path = self._calib_path
-        if dist.is_available() and dist.is_initialized():
+        if dist.is_available() and dist.is_initialized() and self._calib_path is not None:
             rank = dist.get_rank()
             rank_path = ranked_calib_path(self._calib_path, rank)
             if os.path.exists(rank_path):
@@ -99,35 +279,36 @@ class SageQuantRollingKVCachePool(RollingKVCachePool):
         calib = torch.load(load_path, map_location=device, weights_only=True)
         self._calib_km = calib["km"].to(device=device, dtype=torch.float32)
         self._calib_v_scale = calib["v_scale"].to(device=device, dtype=torch.float32)
-        if "k_block_scale" not in calib:
-            raise RuntimeError(f"Calibration file {load_path!r} is missing 'k_block_scale'. Re-run calibration with CalibRollingKVCachePool.")
-        self._calib_k_block_scale = calib["k_block_scale"].to(
-            device=device,
-            dtype=torch.float32,
-        )
-        if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
-            if load_path == self._calib_path:
-                logger.warning(
-                    "Sage KV calibration: loaded shared file {!r} while world_size={}. "
-                    "k_block_scale is indexed by *local* rolling-buffer block id; with "
-                    "seq_parallel each rank uses a shorter buffer and a different sequence "
-                    "shard than a single-GPU run, so a single-GPU calib file is usually *not* "
-                    "applicable. Re-run calibrate with the same world_size / seq_p as "
-                    "inference (saves per-rank calib_kv.rankR.pt) or use unquantized KV to compare.",
-                    self._calib_path,
-                    dist.get_world_size(),
-                )
+        self._calib_k_block_scale = calib["k_block_scale"].to(device=device, dtype=torch.float32)
 
-    def _quant_key(
-        self,
-        k_smoothed: torch.Tensor,
-        preset_scale: torch.Tensor,
-        start_idx: int,
-        BLKK: int = 128,
-    ) -> torch.Tensor:
+    def _sage_k_storage(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._k_cpu[layer_id]
+        return self._k_buffer[layer_id]
+
+    def _sage_v_storage(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._v_cpu[layer_id]
+        return self._v_buffer[layer_id]
+
+    def _lookup_km(self, layer_id: int) -> torch.Tensor | None:
+        km_cal = self._calib_km
+        if km_cal.dim() == 5:
+            return km_cal[self.current_step, layer_id].unsqueeze(0)
+        return km_cal[layer_id].unsqueeze(0)
+
+    def _lookup_v_scale(self, layer_id: int) -> torch.Tensor:
+        vs_cal = self._calib_v_scale
+        if vs_cal.dim() == 4:
+            return vs_cal[self.current_step, layer_id]
+        return vs_cal[layer_id]
+
+    def _lookup_k_block_scale(self, layer_id: int, blk_start: int, num_blk: int) -> torch.Tensor:
+        return self._calib_k_block_scale[self.current_step, layer_id, blk_start : blk_start + num_blk]
+
+    def _quant_key(self, k_smoothed: torch.Tensor, preset_scale: torch.Tensor, start_idx: int, BLKK: int = 128) -> torch.Tensor:
         chunk_len, H, D = k_smoothed.shape
         num_blk = preset_scale.size(0)
-
         k_int8 = torch.empty_like(k_smoothed, dtype=torch.int8)
         preset_scale_c = preset_scale.contiguous()
         grid = (num_blk * 4, H, 1)
@@ -150,195 +331,113 @@ class SageQuantRollingKVCachePool(RollingKVCachePool):
         )
         return k_int8
 
-    def _lookup_km(self, layer_id: int) -> torch.Tensor | None:
-        """Return km of shape [1, 1, H, D] for the current (step, layer),
-        or None if K smoothing is disabled.
-
-        Supported calibration file shapes (newest → legacy):
-          [S, L, 1, H, D]  – per (step, layer)            ← preferred
-          [   L, 1, H, D]  – per (layer)                  ← legacy
-        """
-        km_cal = self._calib_km
-        if km_cal.dim() == 5:
-            return km_cal[self.current_step, layer_id].unsqueeze(0)
-        return km_cal[layer_id].unsqueeze(0)
-
-    def _lookup_v_scale(self, layer_id: int) -> torch.Tensor:
-        """Return v_scale of shape [H, D] for the current (step, layer).
-
-        Supported calibration file shapes (newest → legacy):
-          [S, L, H, D]  – per (step, layer)               ← preferred
-          [   L, H, D]  – per (layer)                     ← legacy
-        """
-        vs_cal = self._calib_v_scale
-        if vs_cal.dim() == 4:
-            return vs_cal[self.current_step, layer_id]
-        return vs_cal[layer_id]
-
-    def _lookup_k_block_scale(
-        self,
-        layer_id: int,
-        blk_start: int,
-        num_blk: int,
-    ) -> torch.Tensor:
-        """Return ``[num_blk, H, scales_per_blk]`` slice of the calibrated
-        k-block scale at the given absolute buffer block range.
-
-        Calibration file shape: ``[S, L, max_blks, H, scales_per_blk]``.
-        """
-        return self._calib_k_block_scale[
-            self.current_step,
-            layer_id,
-            blk_start : blk_start + num_blk,
-        ]
-
-    def store_kv(
-        self,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        start_idx: int,
-        end_idx: int,
-        layer_id: int,
-    ) -> None:
+    def _physical_store_kv(self, k: torch.Tensor, v: torch.Tensor, p0: int, p1: int, layer_id: int) -> None:
         km = self._lookup_km(layer_id)
         if km is not None:
-            km_lowp = km.to(k.dtype).squeeze(0)
-            k_smoothed = k - km_lowp
+            k_smoothed = k - km.to(k.dtype).squeeze(0)
         else:
             k_smoothed = k
-
-        blk_start = start_idx // self._BLKK
-        last_blk = (end_idx - 1) // self._BLKK
+        blk_start = p0 // self._BLKK
+        last_blk = (p1 - 1) // self._BLKK
         num_blk = last_blk - blk_start + 1
-
         preset_scale = self._lookup_k_block_scale(layer_id, blk_start, num_blk)
-        k_int8 = self._quant_key(k_smoothed, preset_scale, start_idx, self._BLKK)
+        k_int8 = self._quant_key(k_smoothed, preset_scale, p0, self._BLKK)
         v_scale = self._lookup_v_scale(layer_id)
         v_fp8 = quant_value_per_channel_fp8_static_scale_kernel(v, v_scale, fp8_max=448.0)
 
-        if not self._kv_offload:
-            self._k_buffer[layer_id, start_idx:end_idx] = k_int8
-            self._v_buffer[layer_id, start_idx:end_idx] = v_fp8
-            return
-        buf = self._offload.cur_buf
-        self._k_gpu_buf[buf, start_idx:end_idx] = k_int8
-        self._v_gpu_buf[buf, start_idx:end_idx] = v_fp8
-        self._mark_offload_dirty(start_idx, end_idx)
+        if self._kv_offload:
+            self._check_layer_loaded(layer_id)
+            self._k_gpu_buf[p0:p1].copy_(k_int8)
+            self._v_gpu_buf[p0:p1].copy_(v_fp8)
+            self._k_cpu[layer_id, p0:p1].copy_(k_int8, non_blocking=True)
+            self._v_cpu[layer_id, p0:p1].copy_(v_fp8, non_blocking=True)
+        else:
+            self._k_buffer[layer_id, p0:p1] = k_int8
+            self._v_buffer[layer_id, p0:p1] = v_fp8
 
-    def _gather_per_token_k_scale(
-        self,
-        layer_id: int,
-        start_pos: int,
-        num_tokens: int,
-    ) -> torch.Tensor:
-        positions = torch.arange(
-            start_pos,
-            start_pos + num_tokens,
-            device=self._device,
-        )
-        blk_idx = positions // self._BLKK
-        thread = (positions % self._BLKK // 2) % 4
-        return self._calib_k_block_scale[
-            self.current_step,
-            layer_id,
-            blk_idx,
-            :,
-            thread,
-        ]
+    def store_kv(self, k: torch.Tensor, v: torch.Tensor, start_idx: int, end_idx: int, layer_id: int) -> None:
+        length = int(end_idx) - int(start_idx)
+        if length <= 0:
+            return
+        chunks = self._logical_to_physical_chunks_for_store(layer_id, start_idx, end_idx)
+        off = 0
+        for p0, p1 in chunks:
+            n = p1 - p0
+            self._physical_store_kv(k[off : off + n].contiguous(), v[off : off + n].contiguous(), p0, p1, layer_id)
+            off += n
+        if self._kv_offload:
+            self._record_cpu_update(layer_id)
+
+    def _copy_layer_to_gpu(self, layer_id: int) -> None:
+        self._k_gpu_buf.copy_(self._k_cpu[layer_id], non_blocking=True)
+        self._v_gpu_buf.copy_(self._v_cpu[layer_id], non_blocking=True)
+
+    def _k_scale_for_physical_chunks(self, layer_id: int, chunks: list[tuple[int, int]]) -> torch.Tensor:
+        scales = []
+        for p0, p1 in chunks:
+            a0 = (p0 // self._BLKK) * self._BLKK
+            blk_s = a0 // self._BLKK
+            blk_e = (p1 + self._BLKK - 1) // self._BLKK
+            scales.append(self._calib_k_block_scale[self.current_step, layer_id, blk_s:blk_e])
+        if len(scales) == 1:
+            sc = scales[0]
+        else:
+            sc = torch.cat(scales, dim=0)
+        return sc.permute(1, 0, 2).reshape(1, self._num_heads, -1).contiguous()
+
+    def k_cache(self, layer_id: int, attn_start: int, local_end: int):
+        chunks = self._logical_to_physical_chunks(layer_id, attn_start, local_end)
+        if self._kv_offload:
+            self._check_layer_loaded(layer_id)
+            parts = [self._k_gpu_buf[p0:p1] for p0, p1 in chunks]
+            k_int8 = (parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)).unsqueeze(0).contiguous()
+            k_scale = self._k_scale_for_physical_chunks(layer_id, chunks)
+            return k_int8, k_scale
+
+        parts = [self._sage_k_storage(layer_id)[p0:p1] for p0, p1 in chunks]
+        k_int8 = (parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)).unsqueeze(0).contiguous()
+        k_scale = self._k_scale_for_physical_chunks(layer_id, chunks)
+        return k_int8, k_scale
 
     def _transpose_permute_v(self, v: torch.Tensor) -> torch.Tensor:
         kv_len, H, D = v.shape
         padded_len = (kv_len + 127) // 128 * 128
-
         if padded_len > kv_len:
             v_t = v.new_zeros(D, H, padded_len)
             v_t[:, :, :kv_len].copy_(v.permute(2, 1, 0))
         else:
             v_t = v.permute(2, 1, 0).contiguous()
-
         v_t = v_t.view(D, H, -1, 16)[:, :, :, self._PERM_16].contiguous()
-        v_t = v_t.view(1, D, H, padded_len)
-        return v_t
+        return v_t.view(1, D, H, padded_len)
 
-    def _roll_window_on_k_v(self, kb: torch.Tensor, vb: torch.Tensor, layer_id: int, sink_tokens: int, num_evicted: int) -> None:
-        num_kept = int(self._local_end[layer_id].item()) - num_evicted - sink_tokens
-        src_start = sink_tokens + num_evicted
-        src_end = src_start + num_kept
-        dst_start = sink_tokens
-        dst_end = dst_start + num_kept
-        if num_kept > 0:
-            x = kb[src_start:src_end].contiguous()  # [num_kept, H, D]
-            out = kb[dst_start:dst_end]
-            src_scale = self._gather_per_token_k_scale(layer_id, src_start, num_kept)
-            dst_scale = self._gather_per_token_k_scale(layer_id, dst_start, num_kept)
-            k_int8_roll_rescale_triton(x, out, src_scale, dst_scale, scale_eps=1e-5)
-        vb[dst_start:dst_end].copy_(vb[src_start:src_end].clone())
+    def v_cache(self, layer_id: int, attn_start: int, local_end: int):
+        chunks = self._logical_to_physical_chunks(layer_id, attn_start, local_end)
+        if self._kv_offload:
+            self._check_layer_loaded(layer_id)
+            parts = [self._v_gpu_buf[p0:p1] for p0, p1 in chunks]
+            v = parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
+        else:
+            parts = [self._sage_v_storage(layer_id)[p0:p1] for p0, p1 in chunks]
+            v = parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
+        return self._transpose_permute_v(v), self._lookup_v_scale(layer_id).unsqueeze(0).contiguous()
 
-    def roll_window(self, layer_id: int, sink_tokens: int, num_evicted: int) -> None:
-        if not self._kv_offload:
-            self._roll_window_on_k_v(
-                self._k_buffer[layer_id],
-                self._v_buffer[layer_id],
-                layer_id,
-                sink_tokens,
-                num_evicted,
-            )
-            return
-        num_kept = int(self._local_end[layer_id].item()) - num_evicted - sink_tokens
-        dst_s = sink_tokens
-        self._roll_window_on_k_v(
-            self._k_gpu_buf[self._offload.cur_buf],
-            self._v_gpu_buf[self._offload.cur_buf],
-            layer_id,
-            sink_tokens,
-            num_evicted,
-        )
-        self._mark_offload_dirty(dst_s, dst_s + num_kept)
-
-    def k_cache(
-        self,
-        layer_id: int,
-        attn_start: int,
-        local_end: int,
-    ):
-        BLK = self._BLKK
-        aligned_start = (attn_start // BLK) * BLK
-        buf = self._offload.cur_buf if self._kv_offload else None
-        kb = self._k_gpu_buf[buf] if self._kv_offload else self._k_buffer[layer_id]
-        k_int8 = kb[aligned_start:local_end].unsqueeze(0).contiguous()
-        blk_s = aligned_start // BLK
-        blk_e = (local_end + BLK - 1) // BLK
-        k_scale = self._calib_k_block_scale[self.current_step, layer_id, blk_s:blk_e].permute(1, 0, 2).reshape(1, self._num_heads, -1).contiguous()
-        return k_int8, k_scale
-
-    def v_cache(
-        self,
-        layer_id: int,
-        attn_start: int,
-        local_end: int,
-    ):
-        BLK = self._BLKK
-        aligned_start = (attn_start // BLK) * BLK
-        buf = self._offload.cur_buf if self._kv_offload else None
-        vb = self._v_gpu_buf[buf] if self._kv_offload else self._v_buffer[layer_id]
-        v_fp8 = vb[aligned_start:local_end]
-        v_fp8 = self._transpose_permute_v(v_fp8)
-        v_scale = self._lookup_v_scale(layer_id).unsqueeze(0).contiguous()
-        return v_fp8, v_scale
+    def reset(self) -> None:
+        if self._kv_offload:
+            self.sync_all()
+            self._zero_tensors(["_k_cpu", "_v_cpu", "_k_gpu_buf", "_v_gpu_buf"])
+            self._reset_offload_state()
+        else:
+            self._zero_tensors(["_k_buffer", "_v_buffer"])
+        self._reset_ends()
+        self._reset_ring()
 
 
-class TurboQuantRollingKVCachePool(RollingKVCachePool):
-    """Rolling KV cache using TurboQuant-style quantization.
+# =============================================================================
+# TurboQuant
+# =============================================================================
 
-    Aligned with ``/turboquant``: keys use TurboQuantProd ((key_bits - 1) MSE + QJL
-    residual), and values use group min–max quantization.
 
-    Pre-compute codebooks with :func:`export_turboquant_codebook_json` or set ``codebook_cache_dir`` and
-    ``export_missing_codebooks`` to generate missing JSON on first run (needs scipy).
-
-    ``k_cache`` / ``v_cache`` return **dequantized** tensors in ``self._dtype``.
-    """
-
+class TurboQuantRollingKVCachePool(_QuantTokenRingMixin, RollingKVCachePool):
     def __init__(
         self,
         num_layers: int,
@@ -363,26 +462,16 @@ class TurboQuantRollingKVCachePool(RollingKVCachePool):
         self._seed_base = int(seed)
         self._per_layer_compressors = bool(per_layer_compressors)
         self._n_layers = int(num_layers)
-        dev_str = str(device)
-
         self._value_group_size = int(value_group_size)
-
         if self._key_bits < 2:
-            raise ValueError("TurboQuantProd requires key_bits >= 2 (inner MSE uses key_bits - 1).")
+            raise ValueError("TurboQuantProd requires key_bits >= 2")
         if head_dim % self._value_group_size != 0:
-            raise ValueError(f"head_dim {head_dim} must divide value_group_size {self._value_group_size} for group value quant.")
+            raise ValueError(f"head_dim {head_dim} must divide value_group_size {self._value_group_size}")
 
-        device_t = torch.device(dev_str)
+        device_t = torch.device(str(device))
         inf_dtype = torch.float32
         nk_bits = self._key_bits - 1
-        cb_key = tq_fw_load_codebook_record(
-            head_dim,
-            nk_bits,
-            codebook_dir,
-            codebook_cache_dir,
-            export_missing_codebooks,
-        )
-
+        cb_key = tq_fw_load_codebook_record(head_dim, nk_bits, codebook_dir, codebook_cache_dir, export_missing_codebooks)
         self._inf_nk = tq_fw_packed_width(head_dim, nk_bits)
         self._inf_nqjl = (head_dim + 7) // 8
 
@@ -392,222 +481,174 @@ class TurboQuantRollingKVCachePool(RollingKVCachePool):
         if self._per_layer_compressors:
             self._k_inference_modules = [_make_k_mod(self._seed_base + lid * 7) for lid in range(self._n_layers)]
         else:
-            _km = _make_k_mod(self._seed_base)
-            self._k_inference_modules = [_km for _ in range(self._n_layers)]
+            km = _make_k_mod(self._seed_base)
+            self._k_inference_modules = [km for _ in range(self._n_layers)]
 
         self._inf_v_width = tq_value_group_packed_width(head_dim, self._value_bits)
         self._inf_v_n_groups = head_dim // self._value_group_size
-
         super().__init__(num_layers, cache_size, num_heads, head_dim, dtype, device, kv_offload=kv_offload)
 
     def _k_mod_inf(self, layer_id: int) -> torch.nn.Module:
-        assert self._k_inference_modules is not None
         return self._k_inference_modules[layer_id]
 
     def _init_kv_buffer(self) -> None:
         if self._kv_offload:
             self._init_kv_buffer_offload()
             return
-
-        L = self._num_layers
-        N = self._cache_size
-        H = self._num_heads
-
-        self._k_packed = torch.zeros(L, N, H, self._inf_nk, dtype=torch.uint8, device=self._device)
-        self._k_norms = torch.zeros(L, N, H, dtype=torch.float16, device=self._device)
-        self._k_qjl_packed = torch.zeros(L, N, H, self._inf_nqjl, dtype=torch.uint8, device=self._device)
-        self._k_res_norms = torch.zeros(L, N, H, dtype=torch.float16, device=self._device)
-        ng = self._inf_v_n_groups
-        self._v_group_data = torch.zeros(L, N, H, self._inf_v_width, dtype=torch.uint8, device=self._device)
-        self._v_group_scales = torch.zeros(L, N, H, ng, dtype=torch.float16, device=self._device)
-        self._v_group_zeros = torch.zeros(L, N, H, ng, dtype=torch.float16, device=self._device)
-
-        self._global_end = torch.zeros(L, dtype=torch.long, device=self._device)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=self._device)
-
-    def _init_kv_buffer_offload(self) -> None:
-        L = self._num_layers
-        N = self._cache_size
-        H = self._num_heads
-        nk = self._inf_nk
-        nqjl = self._inf_nqjl
-        vw = self._inf_v_width
+        L, N, H = self._num_layers, self._cache_size, self._num_heads
         ng = self._inf_v_n_groups
         d = self._device
+        self._k_packed = torch.zeros(L, N, H, self._inf_nk, dtype=torch.uint8, device=d)
+        self._k_norms = torch.zeros(L, N, H, dtype=torch.float16, device=d)
+        self._k_qjl_packed = torch.zeros(L, N, H, self._inf_nqjl, dtype=torch.uint8, device=d)
+        self._k_res_norms = torch.zeros(L, N, H, dtype=torch.float16, device=d)
+        self._v_group_data = torch.zeros(L, N, H, self._inf_v_width, dtype=torch.uint8, device=d)
+        self._v_group_scales = torch.zeros(L, N, H, ng, dtype=torch.float16, device=d)
+        self._v_group_zeros = torch.zeros(L, N, H, ng, dtype=torch.float16, device=d)
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._init_ring_metadata(L)
 
-        self._k_packed_cpu = torch.zeros(L, N, H, nk, dtype=torch.uint8, device="cpu").pin_memory()
+    def _init_kv_buffer_offload(self) -> None:
+        L, N, H = self._num_layers, self._cache_size, self._num_heads
+        ng = self._inf_v_n_groups
+        self._k_packed_cpu = torch.zeros(L, N, H, self._inf_nk, dtype=torch.uint8, device="cpu").pin_memory()
         self._k_norms_cpu = torch.zeros(L, N, H, dtype=torch.float16, device="cpu").pin_memory()
-        self._k_qjl_packed_cpu = torch.zeros(L, N, H, nqjl, dtype=torch.uint8, device="cpu").pin_memory()
+        self._k_qjl_packed_cpu = torch.zeros(L, N, H, self._inf_nqjl, dtype=torch.uint8, device="cpu").pin_memory()
         self._k_res_norms_cpu = torch.zeros(L, N, H, dtype=torch.float16, device="cpu").pin_memory()
-        self._v_group_data_cpu = torch.zeros(L, N, H, vw, dtype=torch.uint8, device="cpu").pin_memory()
+        self._v_group_data_cpu = torch.zeros(L, N, H, self._inf_v_width, dtype=torch.uint8, device="cpu").pin_memory()
         self._v_group_scales_cpu = torch.zeros(L, N, H, ng, dtype=torch.float16, device="cpu").pin_memory()
         self._v_group_zeros_cpu = torch.zeros(L, N, H, ng, dtype=torch.float16, device="cpu").pin_memory()
+        d = self._device
+        self._k_packed_gpu = torch.zeros(N, H, self._inf_nk, dtype=torch.uint8, device=d)
+        self._k_norms_gpu = torch.zeros(N, H, dtype=torch.float16, device=d)
+        self._k_qjl_packed_gpu = torch.zeros(N, H, self._inf_nqjl, dtype=torch.uint8, device=d)
+        self._k_res_norms_gpu = torch.zeros(N, H, dtype=torch.float16, device=d)
+        self._v_group_data_gpu = torch.zeros(N, H, self._inf_v_width, dtype=torch.uint8, device=d)
+        self._v_group_scales_gpu = torch.zeros(N, H, ng, dtype=torch.float16, device=d)
+        self._v_group_zeros_gpu = torch.zeros(N, H, ng, dtype=torch.float16, device=d)
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._init_ring_metadata(L)
+        self._init_offload_state((L,))
 
-        self._k_packed_gpu = torch.zeros(2, N, H, nk, dtype=torch.uint8, device=d)
-        self._k_norms_gpu = torch.zeros(2, N, H, dtype=torch.float16, device=d)
-        self._k_qjl_packed_gpu = torch.zeros(2, N, H, nqjl, dtype=torch.uint8, device=d)
-        self._k_res_norms_gpu = torch.zeros(2, N, H, dtype=torch.float16, device=d)
-        self._v_group_data_gpu = torch.zeros(2, N, H, vw, dtype=torch.uint8, device=d)
-        self._v_group_scales_gpu = torch.zeros(2, N, H, ng, dtype=torch.float16, device=d)
-        self._v_group_zeros_gpu = torch.zeros(2, N, H, ng, dtype=torch.float16, device=d)
-
-        self._global_end = torch.zeros(L, dtype=torch.long, device=d)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=d)
-
-        def _async_load(layer_id: int, buf: int) -> None:
-            self._k_packed_gpu[buf].copy_(self._k_packed_cpu[layer_id], non_blocking=True)
-            self._k_norms_gpu[buf].copy_(self._k_norms_cpu[layer_id], non_blocking=True)
-            self._k_qjl_packed_gpu[buf].copy_(self._k_qjl_packed_cpu[layer_id], non_blocking=True)
-            self._k_res_norms_gpu[buf].copy_(self._k_res_norms_cpu[layer_id], non_blocking=True)
-            self._v_group_data_gpu[buf].copy_(self._v_group_data_cpu[layer_id], non_blocking=True)
-            self._v_group_scales_gpu[buf].copy_(self._v_group_scales_cpu[layer_id], non_blocking=True)
-            self._v_group_zeros_gpu[buf].copy_(self._v_group_zeros_cpu[layer_id], non_blocking=True)
-
-        def _async_store(layer_id: int, buf: int, start: int, end: int) -> None:
-            self._k_packed_cpu[layer_id, start:end].copy_(self._k_packed_gpu[buf, start:end], non_blocking=True)
-            self._k_norms_cpu[layer_id, start:end].copy_(self._k_norms_gpu[buf, start:end], non_blocking=True)
-            self._k_qjl_packed_cpu[layer_id, start:end].copy_(self._k_qjl_packed_gpu[buf, start:end], non_blocking=True)
-            self._k_res_norms_cpu[layer_id, start:end].copy_(self._k_res_norms_gpu[buf, start:end], non_blocking=True)
-            self._v_group_data_cpu[layer_id, start:end].copy_(self._v_group_data_gpu[buf, start:end], non_blocking=True)
-            self._v_group_scales_cpu[layer_id, start:end].copy_(self._v_group_scales_gpu[buf, start:end], non_blocking=True)
-            self._v_group_zeros_cpu[layer_id, start:end].copy_(self._v_group_zeros_gpu[buf, start:end], non_blocking=True)
-
-        self._offload = KVOffloadPlugin(self._device, _async_load, _async_store)
-        gpu_mb = (
-            self._k_packed_gpu.nbytes
-            + self._k_norms_gpu.nbytes
-            + self._k_qjl_packed_gpu.nbytes
-            + self._k_res_norms_gpu.nbytes
-            + self._v_group_data_gpu.nbytes
-            + self._v_group_scales_gpu.nbytes
-            + self._v_group_zeros_gpu.nbytes
-        ) / (1024 * 1024)
-        cpu_mb = (
-            self._k_packed_cpu.nbytes
-            + self._k_norms_cpu.nbytes
-            + self._k_qjl_packed_cpu.nbytes
-            + self._k_res_norms_cpu.nbytes
-            + self._v_group_data_cpu.nbytes
-            + self._v_group_scales_cpu.nbytes
-            + self._v_group_zeros_cpu.nbytes
-        ) / (1024 * 1024)
-        logger.info(
-            "[TurboQuantRollingKVCachePool+offload] GPU fixed buffer: {:.1f} MB, CPU pinned: {:.1f} MB (saved {:.1f} MB GPU)",
-            gpu_mb,
-            cpu_mb,
-            cpu_mb - gpu_mb,
-        )
-
-    def _tq_k_packed(self, layer_id: int) -> torch.Tensor:
+    def _store_arrays(self, layer_id: int, p0: int, p1: int, tensors: dict[str, torch.Tensor]) -> None:
         if self._kv_offload:
-            return self._k_packed_gpu[self._offload.cur_buf]
-        return self._k_packed[layer_id]
+            self._check_layer_loaded(layer_id)
+            self._k_packed_gpu[p0:p1].copy_(tensors["mse"])
+            self._k_norms_gpu[p0:p1].copy_(tensors["norms"])
+            self._k_qjl_packed_gpu[p0:p1].copy_(tensors["qjl"])
+            self._k_res_norms_gpu[p0:p1].copy_(tensors["res"])
+            self._v_group_data_gpu[p0:p1].copy_(tensors["v_data"])
+            self._v_group_scales_gpu[p0:p1].copy_(tensors["v_scales"])
+            self._v_group_zeros_gpu[p0:p1].copy_(tensors["v_zeros"])
+            self._k_packed_cpu[layer_id, p0:p1].copy_(tensors["mse"], non_blocking=True)
+            self._k_norms_cpu[layer_id, p0:p1].copy_(tensors["norms"], non_blocking=True)
+            self._k_qjl_packed_cpu[layer_id, p0:p1].copy_(tensors["qjl"], non_blocking=True)
+            self._k_res_norms_cpu[layer_id, p0:p1].copy_(tensors["res"], non_blocking=True)
+            self._v_group_data_cpu[layer_id, p0:p1].copy_(tensors["v_data"], non_blocking=True)
+            self._v_group_scales_cpu[layer_id, p0:p1].copy_(tensors["v_scales"], non_blocking=True)
+            self._v_group_zeros_cpu[layer_id, p0:p1].copy_(tensors["v_zeros"], non_blocking=True)
+        else:
+            self._k_packed[layer_id, p0:p1].copy_(tensors["mse"])
+            self._k_norms[layer_id, p0:p1].copy_(tensors["norms"])
+            self._k_qjl_packed[layer_id, p0:p1].copy_(tensors["qjl"])
+            self._k_res_norms[layer_id, p0:p1].copy_(tensors["res"])
+            self._v_group_data[layer_id, p0:p1].copy_(tensors["v_data"])
+            self._v_group_scales[layer_id, p0:p1].copy_(tensors["v_scales"])
+            self._v_group_zeros[layer_id, p0:p1].copy_(tensors["v_zeros"])
 
-    def _tq_k_norms(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._k_norms_gpu[self._offload.cur_buf]
-        return self._k_norms[layer_id]
+    def _physical_store_kv(self, k: torch.Tensor, v: torch.Tensor, p0: int, p1: int, layer_id: int) -> None:
+        chunk_len = p1 - p0
+        k_bhsd = k.unsqueeze(0).transpose(1, 2).contiguous()
+        v_bhsd = v.unsqueeze(0).transpose(1, 2).contiguous()
+        with torch.no_grad():
+            ck = self._k_mod_inf(layer_id).compress_bhsd(k_bhsd)
+            cv = tq_group_quantize_values(v_bhsd, self._value_bits, self._value_group_size)
+        tensors = {
+            "mse": ck["mse_idx_bytes"][0].transpose(0, 1).contiguous(),
+            "norms": ck["vec_norms"][0].transpose(0, 1).contiguous(),
+            "qjl": ck["qjl_bytes"][0].transpose(0, 1).contiguous(),
+            "res": ck["residual_norms"][0].transpose(0, 1).contiguous(),
+            "v_data": cv["data"][0].transpose(0, 1).contiguous(),
+            "v_scales": cv["scales"][0].transpose(0, 1).contiguous(),
+            "v_zeros": cv["zeros"][0].transpose(0, 1).contiguous(),
+        }
+        self._store_arrays(layer_id, p0, p1, tensors)
 
-    def _tq_k_qjl_packed(self, layer_id: int) -> torch.Tensor:
+    def store_kv(self, k: torch.Tensor, v: torch.Tensor, start_idx: int, end_idx: int, layer_id: int) -> None:
+        chunks = self._logical_to_physical_chunks_for_store(layer_id, start_idx, end_idx)
+        off = 0
+        for p0, p1 in chunks:
+            n = p1 - p0
+            self._physical_store_kv(k[off : off + n], v[off : off + n], p0, p1, layer_id)
+            off += n
         if self._kv_offload:
-            return self._k_qjl_packed_gpu[self._offload.cur_buf]
-        return self._k_qjl_packed[layer_id]
+            self._record_cpu_update(layer_id)
 
-    def _tq_k_res_norms(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._k_res_norms_gpu[self._offload.cur_buf]
-        return self._k_res_norms[layer_id]
-
-    def _tq_v_group_data(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._v_group_data_gpu[self._offload.cur_buf]
-        return self._v_group_data[layer_id]
-
-    def _tq_v_group_scales(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._v_group_scales_gpu[self._offload.cur_buf]
-        return self._v_group_scales[layer_id]
-
-    def _tq_v_group_zeros(self, layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._v_group_zeros_gpu[self._offload.cur_buf]
-        return self._v_group_zeros[layer_id]
+    def _copy_layer_to_gpu(self, layer_id: int) -> None:
+        self._k_packed_gpu.copy_(self._k_packed_cpu[layer_id], non_blocking=True)
+        self._k_norms_gpu.copy_(self._k_norms_cpu[layer_id], non_blocking=True)
+        self._k_qjl_packed_gpu.copy_(self._k_qjl_packed_cpu[layer_id], non_blocking=True)
+        self._k_res_norms_gpu.copy_(self._k_res_norms_cpu[layer_id], non_blocking=True)
+        self._v_group_data_gpu.copy_(self._v_group_data_cpu[layer_id], non_blocking=True)
+        self._v_group_scales_gpu.copy_(self._v_group_scales_cpu[layer_id], non_blocking=True)
+        self._v_group_zeros_gpu.copy_(self._v_group_zeros_cpu[layer_id], non_blocking=True)
 
     @staticmethod
     def _sh_extra_to_bhs(extra_sh: torch.Tensor) -> torch.Tensor:
-        """(S, H, G) -> (1, H, S, G)."""
         return extra_sh.unsqueeze(0).permute(0, 2, 1, 3).contiguous()
 
-    def store_kv(
-        self,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        start_idx: int,
-        end_idx: int,
-        layer_id: int,
-    ) -> None:
-        chunk_len = int(end_idx - start_idx)
-        if chunk_len <= 0:
-            return
-        if k.size(0) != chunk_len or v.size(0) != chunk_len:
-            raise ValueError(f"TurboQuantRollingKVCachePool.store_kv: chunk_len={chunk_len}, k={k.size(0)}, v={v.size(0)}.")
-
-        k_bhsd = k.unsqueeze(0).transpose(1, 2).contiguous()  # [1, H, S, D]
-        v_bhsd = v.unsqueeze(0).transpose(1, 2).contiguous()
-
-        with torch.no_grad():
-            ck = self._k_mod_inf(layer_id).compress_bhsd(k_bhsd)
-
-        self._tq_k_packed(layer_id)[start_idx:end_idx].copy_(ck["mse_idx_bytes"][0].transpose(0, 1).contiguous())
-        self._tq_k_norms(layer_id)[start_idx:end_idx].copy_(ck["vec_norms"][0].transpose(0, 1).contiguous())
-        self._tq_k_qjl_packed(layer_id)[start_idx:end_idx].copy_(ck["qjl_bytes"][0].transpose(0, 1).contiguous())
-        self._tq_k_res_norms(layer_id)[start_idx:end_idx].copy_(ck["residual_norms"][0].transpose(0, 1).contiguous())
-
-        if ck["shape"][-1] != self._head_dim:
-            raise RuntimeError("TurboQuant inference key compress shape mismatch.")
-
-        with torch.no_grad():
-            cv = tq_group_quantize_values(v_bhsd, self._value_bits, self._value_group_size)
-        self._tq_v_group_data(layer_id)[start_idx:end_idx].copy_(cv["data"][0].transpose(0, 1).contiguous())
-        self._tq_v_group_scales(layer_id)[start_idx:end_idx].copy_(cv["scales"][0].transpose(0, 1).contiguous())
-        self._tq_v_group_zeros(layer_id)[start_idx:end_idx].copy_(cv["zeros"][0].transpose(0, 1).contiguous())
-
-        if self._kv_offload:
-            self._mark_offload_dirty(start_idx, end_idx)
-
-    def k_cache(self, layer_id: int, attn_start: int, local_end: int) -> torch.Tensor:
-        kv_len = local_end - attn_start
-        if kv_len <= 0:
-            return torch.empty(0, self._num_heads, self._head_dim, device=self._device, dtype=self._dtype)
-
-        packed = self._tq_k_packed(layer_id)[attn_start:local_end]
-        norms = self._tq_k_norms(layer_id)[attn_start:local_end]
+    def _decompress_k_from_arrays(self, layer_id: int, arrays: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> torch.Tensor:
+        packed, norms, qjl, res = arrays
+        kv_len = packed.size(0)
         idx_bytes = packed.unsqueeze(0).permute(0, 2, 1, 3).contiguous()
         norms_bhs = norms.unsqueeze(0).transpose(1, 2).contiguous()
-        B, H, S, D = 1, self._num_heads, kv_len, self._head_dim
-
-        qjl_bhs = self._sh_extra_to_bhs(self._tq_k_qjl_packed(layer_id)[attn_start:local_end])
-        res_bhs = self._tq_k_res_norms(layer_id)[attn_start:local_end].unsqueeze(0).transpose(1, 2).contiguous()
+        qjl_bhs = self._sh_extra_to_bhs(qjl)
+        res_bhs = res.unsqueeze(0).transpose(1, 2).contiguous()
         comp = {
             "mse_idx_bytes": idx_bytes,
             "qjl_bytes": qjl_bhs,
             "residual_norms": res_bhs,
             "vec_norms": norms_bhs,
-            "shape": (B, H, S, D),
+            "shape": (1, self._num_heads, kv_len, self._head_dim),
             "mse_bits": self._key_bits - 1,
         }
         with torch.no_grad():
-            out_bhsd = self._k_mod_inf(layer_id).decompress_bhsd(comp)
-        return out_bhsd[0].transpose(0, 1).to(dtype=self._dtype)
+            out = self._k_mod_inf(layer_id).decompress_bhsd(comp)
+        return out[0].transpose(0, 1).to(dtype=self._dtype)
 
-    def v_cache(self, layer_id: int, attn_start: int, local_end: int) -> torch.Tensor:
-        kv_len = local_end - attn_start
-        if kv_len <= 0:
-            return torch.empty(0, self._num_heads, self._head_dim, device=self._device, dtype=self._dtype)
+    def k_cache(self, layer_id: int, attn_start: int, local_end: int) -> torch.Tensor:
+        chunks = self._logical_to_physical_chunks(layer_id, attn_start, local_end)
+        if self._kv_offload:
+            self._check_layer_loaded(layer_id)
+            parts = []
+            for p0, p1 in chunks:
+                parts.append(
+                    (
+                        self._k_packed_gpu[p0:p1],
+                        self._k_norms_gpu[p0:p1],
+                        self._k_qjl_packed_gpu[p0:p1],
+                        self._k_res_norms_gpu[p0:p1],
+                    )
+                )
+            arrays = tuple(torch.cat([part[i] for part in parts], dim=0) for i in range(4)) if len(parts) > 1 else parts[0]
+            return self._decompress_k_from_arrays(layer_id, arrays)
 
-        data = self._tq_v_group_data(layer_id)[attn_start:local_end]
-        scales = self._tq_v_group_scales(layer_id)[attn_start:local_end]
-        zeros = self._tq_v_group_zeros(layer_id)[attn_start:local_end]
+        parts = []
+        for p0, p1 in chunks:
+            arrays = (
+                self._k_packed[layer_id, p0:p1],
+                self._k_norms[layer_id, p0:p1],
+                self._k_qjl_packed[layer_id, p0:p1],
+                self._k_res_norms[layer_id, p0:p1],
+            )
+            parts.append(self._decompress_k_from_arrays(layer_id, arrays))
+        return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0).contiguous()
+
+    def _decompress_v_from_arrays(self, arrays: tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> torch.Tensor:
+        data, scales, zeros = arrays
+        kv_len = data.size(0)
         comp = {
             "data": data.unsqueeze(0).permute(0, 2, 1, 3).contiguous(),
             "scales": scales.unsqueeze(0).transpose(1, 2).contiguous(),
@@ -617,66 +658,546 @@ class TurboQuantRollingKVCachePool(RollingKVCachePool):
             "shape": (1, self._num_heads, kv_len, self._head_dim),
         }
         with torch.no_grad():
-            out_bhsd = tq_group_dequantize_values(comp)
-        return out_bhsd[0].transpose(0, 1).to(dtype=self._dtype)
+            out = tq_group_dequantize_values(comp)
+        return out[0].transpose(0, 1).to(dtype=self._dtype)
 
-    def roll_window(
-        self,
-        layer_id: int,
-        sink_tokens: int,
-        num_evicted: int,
-    ) -> None:
-        num_kept = int(self._local_end[layer_id].item()) - num_evicted - sink_tokens
-        if num_kept <= 0:
-            return
-        src_start = sink_tokens + num_evicted
-        src_end = src_start + num_kept
-        dst_start = sink_tokens
-        dst_end = dst_start + num_kept
-
-        self._tq_k_packed(layer_id)[dst_start:dst_end].copy_(self._tq_k_packed(layer_id)[src_start:src_end].clone())
-        self._tq_k_norms(layer_id)[dst_start:dst_end].copy_(self._tq_k_norms(layer_id)[src_start:src_end].clone())
-        self._tq_k_qjl_packed(layer_id)[dst_start:dst_end].copy_(self._tq_k_qjl_packed(layer_id)[src_start:src_end].clone())
-        self._tq_k_res_norms(layer_id)[dst_start:dst_end].copy_(self._tq_k_res_norms(layer_id)[src_start:src_end].clone())
-        self._tq_v_group_data(layer_id)[dst_start:dst_end].copy_(self._tq_v_group_data(layer_id)[src_start:src_end].clone())
-        self._tq_v_group_scales(layer_id)[dst_start:dst_end].copy_(self._tq_v_group_scales(layer_id)[src_start:src_end].clone())
-        self._tq_v_group_zeros(layer_id)[dst_start:dst_end].copy_(self._tq_v_group_zeros(layer_id)[src_start:src_end].clone())
+    def v_cache(self, layer_id: int, attn_start: int, local_end: int) -> torch.Tensor:
+        chunks = self._logical_to_physical_chunks(layer_id, attn_start, local_end)
         if self._kv_offload:
-            self._mark_offload_dirty(dst_start, dst_end)
+            self._check_layer_loaded(layer_id)
+            parts = []
+            for p0, p1 in chunks:
+                parts.append(
+                    (
+                        self._v_group_data_gpu[p0:p1],
+                        self._v_group_scales_gpu[p0:p1],
+                        self._v_group_zeros_gpu[p0:p1],
+                    )
+                )
+            arrays = tuple(torch.cat([part[i] for part in parts], dim=0) for i in range(3)) if len(parts) > 1 else parts[0]
+            return self._decompress_v_from_arrays(arrays)
+
+        parts = []
+        for p0, p1 in chunks:
+            arrays = (
+                self._v_group_data[layer_id, p0:p1],
+                self._v_group_scales[layer_id, p0:p1],
+                self._v_group_zeros[layer_id, p0:p1],
+            )
+            parts.append(self._decompress_v_from_arrays(arrays))
+        return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0).contiguous()
 
     def reset(self) -> None:
         if self._kv_offload:
-            self._k_packed_cpu.zero_()
-            self._k_norms_cpu.zero_()
-            self._k_qjl_packed_cpu.zero_()
-            self._k_res_norms_cpu.zero_()
-            self._v_group_data_cpu.zero_()
-            self._v_group_scales_cpu.zero_()
-            self._v_group_zeros_cpu.zero_()
-            self._k_packed_gpu.zero_()
-            self._k_norms_gpu.zero_()
-            self._k_qjl_packed_gpu.zero_()
-            self._k_res_norms_gpu.zero_()
-            self._v_group_data_gpu.zero_()
-            self._v_group_scales_gpu.zero_()
-            self._v_group_zeros_gpu.zero_()
-            self._global_end.zero_()
-            self._local_end.zero_()
-            self._offload.reset_state()
+            self.sync_all()
+            self._zero_tensors(
+                [
+                    "_k_packed_cpu",
+                    "_k_norms_cpu",
+                    "_k_qjl_packed_cpu",
+                    "_k_res_norms_cpu",
+                    "_v_group_data_cpu",
+                    "_v_group_scales_cpu",
+                    "_v_group_zeros_cpu",
+                    "_k_packed_gpu",
+                    "_k_norms_gpu",
+                    "_k_qjl_packed_gpu",
+                    "_k_res_norms_gpu",
+                    "_v_group_data_gpu",
+                    "_v_group_scales_gpu",
+                    "_v_group_zeros_gpu",
+                ]
+            )
+            self._reset_offload_state()
+        else:
+            self._zero_tensors(
+                [
+                    "_k_packed",
+                    "_k_norms",
+                    "_k_qjl_packed",
+                    "_k_res_norms",
+                    "_v_group_data",
+                    "_v_group_scales",
+                    "_v_group_zeros",
+                ]
+            )
+        self._reset_ends()
+        self._reset_ring()
+
+
+class StepTurboQuantRollingKVCachePool(TurboQuantRollingKVCachePool):
+    def __init__(self, num_steps: int, *args, **kwargs) -> None:
+        self.num_steps = int(num_steps)
+        self._current_step = 0
+        super().__init__(*args, **kwargs)
+
+    @property
+    def current_step(self) -> int:
+        return self._current_step
+
+    @current_step.setter
+    def current_step(self, value: int) -> None:
+        value = int(value)
+        if value == self._current_step:
+            return
+        if getattr(self, "_kv_offload", False) and hasattr(self, "_prefetch_stream"):
+            self.sync_all()
+            self._reset_offload_state()
+        self._current_step = value
+
+    def _step(self) -> int:
+        return int(self._current_step)
+
+    def _ring_index(self, layer_id: int):
+        return (self._step(), int(layer_id))
+
+    def _init_kv_buffer(self) -> None:
+        if self._kv_offload:
+            # Use parent non-step allocation, then add step dimension manually.
+            T, L, N, H = self.num_steps, self._num_layers, self._cache_size, self._num_heads
+            ng = self._inf_v_n_groups
+            self._k_packed_cpu = torch.zeros(T, L, N, H, self._inf_nk, dtype=torch.uint8, device="cpu").pin_memory()
+            self._k_norms_cpu = torch.zeros(T, L, N, H, dtype=torch.float16, device="cpu").pin_memory()
+            self._k_qjl_packed_cpu = torch.zeros(T, L, N, H, self._inf_nqjl, dtype=torch.uint8, device="cpu").pin_memory()
+            self._k_res_norms_cpu = torch.zeros(T, L, N, H, dtype=torch.float16, device="cpu").pin_memory()
+            self._v_group_data_cpu = torch.zeros(T, L, N, H, self._inf_v_width, dtype=torch.uint8, device="cpu").pin_memory()
+            self._v_group_scales_cpu = torch.zeros(T, L, N, H, ng, dtype=torch.float16, device="cpu").pin_memory()
+            self._v_group_zeros_cpu = torch.zeros(T, L, N, H, ng, dtype=torch.float16, device="cpu").pin_memory()
+            d = self._device
+            self._k_packed_gpu = torch.zeros(N, H, self._inf_nk, dtype=torch.uint8, device=d)
+            self._k_norms_gpu = torch.zeros(N, H, dtype=torch.float16, device=d)
+            self._k_qjl_packed_gpu = torch.zeros(N, H, self._inf_nqjl, dtype=torch.uint8, device=d)
+            self._k_res_norms_gpu = torch.zeros(N, H, dtype=torch.float16, device=d)
+            self._v_group_data_gpu = torch.zeros(N, H, self._inf_v_width, dtype=torch.uint8, device=d)
+            self._v_group_scales_gpu = torch.zeros(N, H, ng, dtype=torch.float16, device=d)
+            self._v_group_zeros_gpu = torch.zeros(N, H, ng, dtype=torch.float16, device=d)
+            self._global_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+            self._local_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+            self._init_ring_metadata(T, L)
+            self._init_offload_state((T, L))
             return
 
-        self._k_packed.zero_()
-        self._k_norms.zero_()
-        self._k_qjl_packed.zero_()
-        self._k_res_norms.zero_()
-        self._v_group_data.zero_()
-        self._v_group_scales.zero_()
-        self._v_group_zeros.zero_()
-        self._global_end.zero_()
-        self._local_end.zero_()
+        T, L, N, H = self.num_steps, self._num_layers, self._cache_size, self._num_heads
+        ng = self._inf_v_n_groups
+        d = self._device
+        self._k_packed = torch.zeros(T, L, N, H, self._inf_nk, dtype=torch.uint8, device=d)
+        self._k_norms = torch.zeros(T, L, N, H, dtype=torch.float16, device=d)
+        self._k_qjl_packed = torch.zeros(T, L, N, H, self._inf_nqjl, dtype=torch.uint8, device=d)
+        self._k_res_norms = torch.zeros(T, L, N, H, dtype=torch.float16, device=d)
+        self._v_group_data = torch.zeros(T, L, N, H, self._inf_v_width, dtype=torch.uint8, device=d)
+        self._v_group_scales = torch.zeros(T, L, N, H, ng, dtype=torch.float16, device=d)
+        self._v_group_zeros = torch.zeros(T, L, N, H, ng, dtype=torch.float16, device=d)
+        self._global_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+        self._init_ring_metadata(T, L)
+
+    # Step-aware storage helpers.
+    def _store_arrays(self, layer_id: int, p0: int, p1: int, tensors: dict[str, torch.Tensor]) -> None:
+        s = self._step()
+        if self._kv_offload:
+            self._check_layer_loaded(layer_id)
+            self._k_packed_gpu[p0:p1].copy_(tensors["mse"])
+            self._k_norms_gpu[p0:p1].copy_(tensors["norms"])
+            self._k_qjl_packed_gpu[p0:p1].copy_(tensors["qjl"])
+            self._k_res_norms_gpu[p0:p1].copy_(tensors["res"])
+            self._v_group_data_gpu[p0:p1].copy_(tensors["v_data"])
+            self._v_group_scales_gpu[p0:p1].copy_(tensors["v_scales"])
+            self._v_group_zeros_gpu[p0:p1].copy_(tensors["v_zeros"])
+            self._k_packed_cpu[s, layer_id, p0:p1].copy_(tensors["mse"], non_blocking=True)
+            self._k_norms_cpu[s, layer_id, p0:p1].copy_(tensors["norms"], non_blocking=True)
+            self._k_qjl_packed_cpu[s, layer_id, p0:p1].copy_(tensors["qjl"], non_blocking=True)
+            self._k_res_norms_cpu[s, layer_id, p0:p1].copy_(tensors["res"], non_blocking=True)
+            self._v_group_data_cpu[s, layer_id, p0:p1].copy_(tensors["v_data"], non_blocking=True)
+            self._v_group_scales_cpu[s, layer_id, p0:p1].copy_(tensors["v_scales"], non_blocking=True)
+            self._v_group_zeros_cpu[s, layer_id, p0:p1].copy_(tensors["v_zeros"], non_blocking=True)
+        else:
+            self._k_packed[s, layer_id, p0:p1].copy_(tensors["mse"])
+            self._k_norms[s, layer_id, p0:p1].copy_(tensors["norms"])
+            self._k_qjl_packed[s, layer_id, p0:p1].copy_(tensors["qjl"])
+            self._k_res_norms[s, layer_id, p0:p1].copy_(tensors["res"])
+            self._v_group_data[s, layer_id, p0:p1].copy_(tensors["v_data"])
+            self._v_group_scales[s, layer_id, p0:p1].copy_(tensors["v_scales"])
+            self._v_group_zeros[s, layer_id, p0:p1].copy_(tensors["v_zeros"])
+
+    def _offload_index(self, layer_id: int) -> tuple[int, ...]:
+        return (self._step(), int(layer_id))
+
+    def _copy_layer_to_gpu(self, layer_id: int) -> None:
+        s = self._step()
+        self._k_packed_gpu.copy_(self._k_packed_cpu[s, layer_id], non_blocking=True)
+        self._k_norms_gpu.copy_(self._k_norms_cpu[s, layer_id], non_blocking=True)
+        self._k_qjl_packed_gpu.copy_(self._k_qjl_packed_cpu[s, layer_id], non_blocking=True)
+        self._k_res_norms_gpu.copy_(self._k_res_norms_cpu[s, layer_id], non_blocking=True)
+        self._v_group_data_gpu.copy_(self._v_group_data_cpu[s, layer_id], non_blocking=True)
+        self._v_group_scales_gpu.copy_(self._v_group_scales_cpu[s, layer_id], non_blocking=True)
+        self._v_group_zeros_gpu.copy_(self._v_group_zeros_cpu[s, layer_id], non_blocking=True)
+
+    def get_global_end(self, layer_id: int) -> int:
+        return int(self._global_end[self._step(), layer_id].item())
+
+    def get_local_end(self, layer_id: int) -> int:
+        return int(self._local_end[self._step(), layer_id].item())
+
+    def set_ends(self, layer_id: int, global_end: int, local_end: int) -> None:
+        s = self._step()
+        self._global_end[s, layer_id] = int(global_end)
+        self._local_end[s, layer_id] = int(local_end)
+
+
+# =============================================================================
+# LongLive FP4
+# =============================================================================
+
+
+class LongLiveQuantRollingKVCachePool(_QuantTokenRingMixin, RollingKVCachePool):
+    def __init__(
+        self,
+        num_layers: int,
+        cache_size: int,
+        num_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        *,
+        block_token_size: int | None = None,
+        scale_rule: str = "mse",
+        backend: str = "pytorch",
+        kv_offload: bool = False,
+    ) -> None:
+        self._block_token_size = int(block_token_size or cache_size)
+        if self._block_token_size <= 0:
+            raise ValueError(f"block_token_size must be positive, got {block_token_size}")
+        self._quant_config = build_fp4_quant_config(scale_rule=scale_rule, backend=backend)
+        self._dequant_backend = normalize_dequant_backend(backend)
+        n_alloc = cdiv(int(cache_size), self._block_token_size) * self._block_token_size
+        self._max_blocks = n_alloc // self._block_token_size
+        super().__init__(num_layers, n_alloc, num_heads, head_dim, dtype, device, kv_offload=kv_offload)
+
+    def _make_zero_block_qt(self) -> QuantizedTensor:
+        h, d, blk = self._num_heads, self._head_dim, self._block_token_size
+        zero = torch.zeros(blk * h, d, dtype=self._dtype, device=self._device)
+        return quantize_to_fp4(zero, self._quant_config)
+
+    @staticmethod
+    def _clone_qt_to(qt: QuantizedTensor, device: torch.device | str, *, pin_memory: bool = False) -> QuantizedTensor:
+        def clone_tensor(t: torch.Tensor | None) -> torch.Tensor | None:
+            if t is None:
+                return None
+            out = t.detach().to(device=device).clone()
+            return out.pin_memory() if pin_memory else out
+
+        return QuantizedTensor(
+            values=clone_tensor(qt.values),
+            scale_factors=clone_tensor(qt.scale_factors),
+            amax=clone_tensor(qt.amax),
+            dtype=qt.dtype,
+            original_shape=qt.original_shape,
+            scale_rule=qt.scale_rule,
+            padded_shape=qt.padded_shape,
+        )
+
+    @staticmethod
+    def _copy_qt(dst: QuantizedTensor, src: QuantizedTensor, *, non_blocking: bool = True) -> None:
+        dst.values.copy_(src.values, non_blocking=non_blocking)
+        dst.scale_factors.copy_(src.scale_factors, non_blocking=non_blocking)
+        if dst.amax is not None and src.amax is not None:
+            dst.amax.copy_(src.amax, non_blocking=non_blocking)
+
+    def _make_qt_blocks(
+        self,
+        zero_qt: QuantizedTensor,
+        shape: tuple[int, ...],
+        device: torch.device | str,
+        *,
+        pin_memory: bool = False,
+    ):
+        if len(shape) == 1:
+            return [self._clone_qt_to(zero_qt, device, pin_memory=pin_memory) for _ in range(shape[0])]
+        return [self._make_qt_blocks(zero_qt, shape[1:], device, pin_memory=pin_memory) for _ in range(shape[0])]
+
+    def _reset_qt_blocks(self, blocks, zero_qt: QuantizedTensor) -> None:
+        if not blocks:
+            return
+        if hasattr(blocks[0], "values"):
+            for block in blocks:
+                self._copy_qt(block, zero_qt, non_blocking=False)
+            return
+        for sub_blocks in blocks:
+            self._reset_qt_blocks(sub_blocks, zero_qt)
+
+    def _init_kv_buffer(self) -> None:
+        if self._kv_offload:
+            self._init_kv_buffer_offload()
+            return
+        zero_qt = self._make_zero_block_qt()
+        self._k_blocks = [[clone_quantized_tensor(zero_qt) for _ in range(self._max_blocks)] for _ in range(self._num_layers)]
+        self._v_blocks = [[clone_quantized_tensor(zero_qt) for _ in range(self._max_blocks)] for _ in range(self._num_layers)]
+        self._global_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
+        self._init_ring_metadata(self._num_layers)
+
+    def _init_kv_buffer_offload(self) -> None:
+        zero_qt = self._make_zero_block_qt()
+        self._k_blocks_cpu = self._make_qt_blocks(zero_qt, (self._num_layers, self._max_blocks), "cpu", pin_memory=True)
+        self._v_blocks_cpu = self._make_qt_blocks(zero_qt, (self._num_layers, self._max_blocks), "cpu", pin_memory=True)
+        self._k_blocks_gpu = self._make_qt_blocks(zero_qt, (self._max_blocks,), self._device)
+        self._v_blocks_gpu = self._make_qt_blocks(zero_qt, (self._max_blocks,), self._device)
+        self._global_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self._num_layers, dtype=torch.long, device="cpu")
+        self._init_ring_metadata(self._num_layers)
+        self._init_offload_state((self._num_layers,))
+
+    def _layer_k_blocks(self, layer_id: int):
+        if self._kv_offload:
+            return self._k_blocks_gpu
+        return self._k_blocks[layer_id]
+
+    def _layer_v_blocks(self, layer_id: int):
+        if self._kv_offload:
+            return self._v_blocks_gpu
+        return self._v_blocks[layer_id]
+
+    def _cpu_layer_k_blocks(self, layer_id: int):
+        return self._k_blocks_cpu[layer_id]
+
+    def _cpu_layer_v_blocks(self, layer_id: int):
+        return self._v_blocks_cpu[layer_id]
+
+    def _copy_layer_to_gpu(self, layer_id: int) -> None:
+        for dst, src in zip(self._k_blocks_gpu, self._cpu_layer_k_blocks(layer_id), strict=True):
+            self._copy_qt(dst, src)
+        for dst, src in zip(self._v_blocks_gpu, self._cpu_layer_v_blocks(layer_id), strict=True):
+            self._copy_qt(dst, src)
+
+    def _quantize_block(self, k_nhd: torch.Tensor, v_nhd: torch.Tensor):
+        blk, h, d = self._block_token_size, self._num_heads, self._head_dim
+        if k_nhd.shape[0] != blk:
+            raise ValueError(f"K block token count {k_nhd.shape[0]} != block_token_size {blk}")
+        k2d = k_smooth(k_nhd).reshape(blk * h, d).contiguous()
+        v2d = v_nhd.reshape(blk * h, d).contiguous()
+        return quantize_to_fp4(k2d, self._quant_config), quantize_to_fp4(v2d, self._quant_config)
+
+    def _dequant_token_range(self, blocks: list[QuantizedTensor], start: int, end: int) -> torch.Tensor:
+        return dequantize_token_range(
+            blocks,
+            start,
+            end,
+            cache_size=self._cache_size,
+            num_heads=self._num_heads,
+            head_dim=self._head_dim,
+            block_token_size=self._block_token_size,
+            dtype=self._dtype,
+            device=self._device,
+            backend=self._dequant_backend,
+        )
+
+    def _pad_nhd_to_blocks(self, k_nhd: torch.Tensor, v_nhd: torch.Tensor):
+        blk = self._block_token_size
+        t_len = k_nhd.size(0)
+        t_pad = cdiv(t_len, blk) * blk
+        if t_len == t_pad:
+            return k_nhd, v_nhd
+        pad = t_pad - t_len
+        return (
+            torch.cat((k_nhd, k_nhd.new_zeros(pad, *k_nhd.shape[1:])), dim=0),
+            torch.cat((v_nhd, v_nhd.new_zeros(pad, *v_nhd.shape[1:])), dim=0),
+        )
+
+    def _write_blocks_from_nhd(self, k_nhd: torch.Tensor, v_nhd: torch.Tensor, layer_id: int, physical_start: int) -> None:
+        blk = self._block_token_size
+        t_len = k_nhd.size(0)
+        if t_len % blk != 0:
+            raise RuntimeError(f"longlive_fp4 store length {t_len} is not a multiple of block_token_size {blk}")
+        b0 = physical_start // blk
+        if self._kv_offload:
+            self._check_layer_loaded(layer_id)
+        for i in range(t_len // blk):
+            bi = b0 + i
+            ts, te = i * blk, (i + 1) * blk
+            k_qt, v_qt = self._quantize_block(k_nhd[ts:te], v_nhd[ts:te])
+            self._copy_qt(self._layer_k_blocks(layer_id)[bi], k_qt)
+            self._copy_qt(self._layer_v_blocks(layer_id)[bi], v_qt)
+            if self._kv_offload:
+                self._copy_qt(self._cpu_layer_k_blocks(layer_id)[bi], k_qt)
+                self._copy_qt(self._cpu_layer_v_blocks(layer_id)[bi], v_qt)
+
+    def _physical_store_kv(self, k: torch.Tensor, v: torch.Tensor, p0: int, p1: int, layer_id: int) -> None:
+        blk = self._block_token_size
+        s0 = (p0 // blk) * blk
+        e1 = min(cdiv(p1, blk) * blk, self._cache_size)
+        parts_k, parts_v = [], []
+        if s0 < p0:
+            parts_k.append(self._dequant_token_range(self._layer_k_blocks(layer_id), s0, p0))
+            parts_v.append(self._dequant_token_range(self._layer_v_blocks(layer_id), s0, p0))
+        parts_k.append(k)
+        parts_v.append(v)
+        if p1 < e1:
+            parts_k.append(self._dequant_token_range(self._layer_k_blocks(layer_id), p1, e1))
+            parts_v.append(self._dequant_token_range(self._layer_v_blocks(layer_id), p1, e1))
+        k_cat, v_cat = self._pad_nhd_to_blocks(torch.cat(parts_k, dim=0), torch.cat(parts_v, dim=0))
+        self._write_blocks_from_nhd(k_cat, v_cat, layer_id, s0)
+
+    def store_kv(self, k: torch.Tensor, v: torch.Tensor, start_idx: int, end_idx: int, layer_id: int) -> None:
+        chunks = self._logical_to_physical_chunks_for_store(layer_id, start_idx, end_idx)
+        off = 0
+        for p0, p1 in chunks:
+            n = p1 - p0
+            self._physical_store_kv(k[off : off + n], v[off : off + n], p0, p1, layer_id)
+            off += n
+        if self._kv_offload:
+            self._record_cpu_update(layer_id)
+
+    def _read_chunks(self, layer_id: int, start: int, end: int, kind: str) -> torch.Tensor:
+        self._check_layer_loaded(layer_id)
+        chunks = self._logical_to_physical_chunks(layer_id, start, end)
+        blocks = self._layer_k_blocks(layer_id) if kind == "k" else self._layer_v_blocks(layer_id)
+        outs = [self._dequant_token_range(blocks, p0, p1) for p0, p1 in chunks]
+        if not outs:
+            return torch.empty(0, self._num_heads, self._head_dim, dtype=self._dtype, device=self._device)
+        return outs[0] if len(outs) == 1 else torch.cat(outs, dim=0).contiguous()
+
+    def k_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None):
+        if attn_start is None or local_end is None:
+            raise ValueError("longlive_fp4 k_cache requires attn_start and local_end")
+        return self._read_chunks(layer_id, attn_start, local_end, "k")
+
+    def v_cache(self, layer_id: int, attn_start: int | None = None, local_end: int | None = None):
+        if attn_start is None or local_end is None:
+            raise ValueError("longlive_fp4 v_cache requires attn_start and local_end")
+        return self._read_chunks(layer_id, attn_start, local_end, "v")
+
+    def reset(self) -> None:
+        zero_qt = self._make_zero_block_qt()
+        if self._kv_offload:
+            self.sync_all()
+            self._reset_qt_blocks(self._k_blocks_cpu, zero_qt)
+            self._reset_qt_blocks(self._v_blocks_cpu, zero_qt)
+            self._reset_qt_blocks(self._k_blocks_gpu, zero_qt)
+            self._reset_qt_blocks(self._v_blocks_gpu, zero_qt)
+            self._reset_offload_state()
+        else:
+            self._reset_qt_blocks(self._k_blocks, zero_qt)
+            self._reset_qt_blocks(self._v_blocks, zero_qt)
+        self._reset_ends()
+        self._reset_ring()
+
+
+class StepLongLiveQuantRollingKVCachePool(LongLiveQuantRollingKVCachePool):
+    def __init__(self, num_steps: int, *args, **kwargs) -> None:
+        self.num_steps = int(num_steps)
+        self._current_step = 0
+        super().__init__(*args, **kwargs)
+
+    @property
+    def current_step(self) -> int:
+        return self._current_step
+
+    @current_step.setter
+    def current_step(self, value: int) -> None:
+        value = int(value)
+        if value == self._current_step:
+            return
+        if self._kv_offload and hasattr(self, "_prefetch_stream"):
+            self.sync_all()
+            self._current_step = value
+            self._reset_offload_state()
+            return
+        self._current_step = value
+
+    def _step(self) -> int:
+        return int(self._current_step)
+
+    def _ring_index(self, layer_id: int):
+        return (self._step(), int(layer_id))
+
+    def _init_kv_buffer(self) -> None:
+        if self._kv_offload:
+            self._init_kv_buffer_offload()
+            return
+        zero_qt = self._make_zero_block_qt()
+        self._k_blocks = [[[clone_quantized_tensor(zero_qt) for _ in range(self._max_blocks)] for _ in range(self._num_layers)] for _ in range(self.num_steps)]
+        self._v_blocks = [[[clone_quantized_tensor(zero_qt) for _ in range(self._max_blocks)] for _ in range(self._num_layers)] for _ in range(self.num_steps)]
+        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._init_ring_metadata(self.num_steps, self._num_layers)
+
+    def _init_kv_buffer_offload(self) -> None:
+        zero_qt = self._make_zero_block_qt()
+        self._k_blocks_cpu = self._make_qt_blocks(
+            zero_qt,
+            (self.num_steps, self._num_layers, self._max_blocks),
+            "cpu",
+            pin_memory=True,
+        )
+        self._v_blocks_cpu = self._make_qt_blocks(
+            zero_qt,
+            (self.num_steps, self._num_layers, self._max_blocks),
+            "cpu",
+            pin_memory=True,
+        )
+        self._k_blocks_gpu = self._make_qt_blocks(zero_qt, (self._max_blocks,), self._device)
+        self._v_blocks_gpu = self._make_qt_blocks(zero_qt, (self._max_blocks,), self._device)
+        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._init_ring_metadata(self.num_steps, self._num_layers)
+        self._init_offload_state((self.num_steps, self._num_layers))
+
+    def _layer_k_blocks(self, layer_id: int):
+        if self._kv_offload:
+            return self._k_blocks_gpu
+        return self._k_blocks[self._step()][layer_id]
+
+    def _layer_v_blocks(self, layer_id: int):
+        if self._kv_offload:
+            return self._v_blocks_gpu
+        return self._v_blocks[self._step()][layer_id]
+
+    def _cpu_layer_k_blocks(self, layer_id: int):
+        return self._k_blocks_cpu[self._step()][layer_id]
+
+    def _cpu_layer_v_blocks(self, layer_id: int):
+        return self._v_blocks_cpu[self._step()][layer_id]
+
+    def _offload_index(self, layer_id: int) -> tuple[int, ...]:
+        return (self._step(), int(layer_id))
+
+    def get_global_end(self, layer_id: int) -> int:
+        return int(self._global_end[self._step(), layer_id].item())
+
+    def get_local_end(self, layer_id: int) -> int:
+        return int(self._local_end[self._step(), layer_id].item())
+
+    def set_ends(self, layer_id: int, global_end: int, local_end: int) -> None:
+        self._global_end[self._step(), layer_id] = int(global_end)
+        self._local_end[self._step(), layer_id] = int(local_end)
+
+
+# =============================================================================
+# KIVI classes are intentionally kept in their dedicated ring implementation.
+# For KIVI, use the previously generated kivi_quant_cache_ring_no_padding.py and
+# add offload there, because KIVI's packed [H,D,T/pack] layout needs its own
+# physical chunk materialization.
+# =============================================================================
 
 
 class KIVIQuantRollingKVCachePool(RollingKVCachePool):
+    """KIVI quantized rolling KV cache with recent-ring buffer and kv offload.
+
+    Logical layout exposed to callers is unchanged:
+        [0:local_end) == [fixed sink][recent logical window]
+
+    Physical layout after the first roll:
+        [fixed sink region][recent ring region]
+
+    Non-offload:
+        compressed KIVI payloads live on GPU.
+
+    Offload:
+        compressed KIVI payloads live in pinned CPU physical-ring layout, and a
+        single compressed GPU staging layer holds the layer currently being
+        computed.
+    """
+
     def __init__(
         self,
         num_layers: int,
@@ -693,40 +1214,49 @@ class KIVIQuantRollingKVCachePool(RollingKVCachePool):
         assert k_cache_type in ["int2", "int4", "int8"], f"Invalid k_cache_type: {k_cache_type}"
         assert v_cache_type in ["int2", "int4", "int8"], f"Invalid v_cache_type: {v_cache_type}"
         assert k_cache_type == v_cache_type, "k_cache_type and v_cache_type must be the same"
-        self._bits = int(k_cache_type[-1])
-        self._group_size = group_size
-        self._feats = 32 // self._bits
-        self._align = lcm(self._feats, group_size)
-        n_alloc = cdiv(int(cache_size), self._align) * self._align
-        self.current_step: int = 0
-        self._N_alloc = n_alloc
-        self._kivi_io_dtype = torch.float16
-        super().__init__(num_layers, n_alloc, num_heads, head_dim, dtype, device, kv_offload=kv_offload)
 
+        self._bits = int(k_cache_type[-1])
+        self._group_size = int(group_size)
+        self._feats = 32 // self._bits
+        self._align = lcm(self._feats, self._group_size)
+        self._N_alloc = cdiv(int(cache_size), self._align) * self._align
+        self._kivi_io_dtype = torch.float16
+        self.current_step: int = 0
+
+        super().__init__(num_layers, self._N_alloc, num_heads, head_dim, dtype, device, kv_offload=kv_offload)
+
+    # ------------------------------------------------------------------
+    # Shape helpers
+    # ------------------------------------------------------------------
     @staticmethod
     def _nhd_to_bhdt(nhd: torch.Tensor) -> torch.Tensor:
         return nhd.permute(1, 2, 0).contiguous().unsqueeze(0)
 
-    @staticmethod
-    def _slice_token_range(nhd: torch.Tensor, t0: int, t1: int) -> torch.Tensor:
-        return nhd[t0:t1, :, :].contiguous()
-
+    # ------------------------------------------------------------------
+    # Quant / dequant
+    # ------------------------------------------------------------------
     def _quant_nhd(
         self,
         nhd: torch.Tensor,
     ) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor], int, int]:
-        T = nhd.size(0)
+        T = int(nhd.size(0))
         if T == 0:
             raise ValueError("empty K/V chunk in KIVI store")
+
         T_pad = cdiv(T, self._align) * self._align
-        if nhd.size(0) < T_pad:
-            pad = nhd.new_zeros((T_pad - nhd.size(0),) + nhd.shape[1:])
+        if T < T_pad:
+            pad = nhd.new_zeros((T_pad - T,) + nhd.shape[1:])
             nhd = torch.cat((nhd, pad), dim=0)
-        elif nhd.size(0) > T_pad:
+        elif T > T_pad:
             nhd = nhd[:T_pad]
+
         t4 = self._nhd_to_bhdt(nhd.to(self._kivi_io_dtype))
-        trip = triton_quantize_and_pack_along_last_dim(t4, self._group_size, self._bits)
-        return (trip[0], trip[1], trip[2]), T, T_pad
+        code, scale, mn = triton_quantize_and_pack_along_last_dim(
+            t4,
+            self._group_size,
+            self._bits,
+        )
+        return (code, scale, mn), T, T_pad
 
     @staticmethod
     def _dequant_bhdn(
@@ -737,16 +1267,163 @@ class KIVIQuantRollingKVCachePool(RollingKVCachePool):
         bits: int,
         as_dtype: torch.dtype,
     ) -> torch.Tensor:
-        # code4 [1, H, D, n_packs], sc/mn [1, H, D, n_groups]
-        # Match kernel.test_vcache: last dim of scale/mn must be 1 to broadcast
-        # over the (num_groups, group_size) view inside unpack_and_dequant_cache.
-        out = unpack_and_dequant_cache(code4, sc.unsqueeze(-1), mn.unsqueeze(-1), group_size, bits)
-        return out.to(as_dtype).squeeze(0)  # [H, D, T]
+        out = unpack_and_dequant_cache_triton(
+            code4,
+            sc,
+            mn,
+            group_size,
+            bits,
+            dtype=as_dtype,
+        )
+        return out.squeeze(0)  # [H, D, T]
 
+    def _dequant_nhd(
+        self,
+        code: torch.Tensor,
+        sc: torch.Tensor,
+        mn: torch.Tensor,
+        attn_start: int,
+        local_end: int,
+    ) -> torch.Tensor:
+        H, D = self._num_heads, self._head_dim
+        if local_end <= attn_start:
+            return torch.empty(0, H, D, device=self._device, dtype=self._dtype)
+
+        m = self._align
+        t0 = (int(attn_start) // m) * m
+        t1 = min(cdiv(max(int(local_end), 0), m) * m, self._N_alloc)
+        if t1 <= t0:
+            return torch.empty(0, H, D, device=self._device, dtype=self._dtype)
+
+        fe, G = self._feats, self._group_size
+        p0, p1 = t0 // fe, t1 // fe
+        g0, g1 = t0 // G, t1 // G
+
+        c4 = code[:, :, p0:p1].unsqueeze(0)
+        out = self._dequant_bhdn(
+            c4,
+            sc[:, :, g0:g1].unsqueeze(0),
+            mn[:, :, g0:g1].unsqueeze(0),
+            self._group_size,
+            self._bits,
+            self._dtype,
+        )
+        nhd = out.permute(2, 0, 1)
+        o0 = max(int(attn_start), t0) - t0
+        o1 = o0 + (int(local_end) - max(int(attn_start), t0))
+        return nhd[o0:o1].contiguous()
+
+    # ------------------------------------------------------------------
+    # Ring metadata. Step subclass overrides _ring_index.
+    # ------------------------------------------------------------------
+    def _ring_shape(self):
+        return (self._num_layers,)
+
+    def _ring_index(self, layer_id: int):
+        return int(layer_id)
+
+    def _init_ring_metadata(self) -> None:
+        # These values are only consumed by Python control flow.  Keeping them
+        # on CUDA makes every ``.item()`` a device synchronization, which is
+        # very expensive in the offload path.
+        shape = self._ring_shape()
+        self._ring_active = torch.zeros(shape, dtype=torch.bool, device="cpu")
+        self._ring_sink_len = torch.zeros(shape, dtype=torch.long, device="cpu")
+        self._ring_recent_head = torch.zeros(shape, dtype=torch.long, device="cpu")
+        self._ring_recent_len = torch.zeros(shape, dtype=torch.long, device="cpu")
+
+    def _ring_is_active(self, layer_id: int) -> bool:
+        return bool(self._ring_active[self._ring_index(layer_id)].item())
+
+    def _set_ring_active(self, layer_id: int, value: bool) -> None:
+        self._ring_active[self._ring_index(layer_id)] = bool(value)
+
+    def _get_sink_len(self, layer_id: int) -> int:
+        return int(self._ring_sink_len[self._ring_index(layer_id)].item())
+
+    def _set_sink_len(self, layer_id: int, value: int) -> None:
+        self._ring_sink_len[self._ring_index(layer_id)] = int(value)
+
+    def _get_recent_head(self, layer_id: int) -> int:
+        return int(self._ring_recent_head[self._ring_index(layer_id)].item())
+
+    def _set_recent_head(self, layer_id: int, value: int) -> None:
+        self._ring_recent_head[self._ring_index(layer_id)] = int(value)
+
+    def _get_recent_len(self, layer_id: int) -> int:
+        return int(self._ring_recent_len[self._ring_index(layer_id)].item())
+
+    def _set_recent_len(self, layer_id: int, value: int) -> None:
+        self._ring_recent_len[self._ring_index(layer_id)] = int(value)
+
+    def _recent_capacity(self, layer_id: int) -> int:
+        cap = self._N_alloc - self._get_sink_len(layer_id)
+        if cap <= 0:
+            raise RuntimeError(f"invalid KIVI recent capacity: N_alloc={self._N_alloc}, sink={self._get_sink_len(layer_id)}")
+        return cap
+
+    # ------------------------------------------------------------------
+    # GPU compressed buffer accessors. Step subclass overrides.
+    # ------------------------------------------------------------------
+    def _kivi_k_code(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._k_code_gpu
+        return self._k_code[layer_id]
+
+    def _kivi_v_code(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._v_code_gpu
+        return self._v_code[layer_id]
+
+    def _kivi_k_scale(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._k_scale_gpu
+        return self._k_scale[layer_id]
+
+    def _kivi_k_mn(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._k_mn_gpu
+        return self._k_mn[layer_id]
+
+    def _kivi_v_scale(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._v_scale_gpu
+        return self._v_scale[layer_id]
+
+    def _kivi_v_mn(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._v_mn_gpu
+        return self._v_mn[layer_id]
+
+    # ------------------------------------------------------------------
+    # CPU compressed buffer accessors for offload. Step subclass overrides.
+    # ------------------------------------------------------------------
+    def _cpu_k_code(self, layer_id: int) -> torch.Tensor:
+        return self._k_code_cpu[layer_id]
+
+    def _cpu_v_code(self, layer_id: int) -> torch.Tensor:
+        return self._v_code_cpu[layer_id]
+
+    def _cpu_k_scale(self, layer_id: int) -> torch.Tensor:
+        return self._k_scale_cpu[layer_id]
+
+    def _cpu_k_mn(self, layer_id: int) -> torch.Tensor:
+        return self._k_mn_cpu[layer_id]
+
+    def _cpu_v_scale(self, layer_id: int) -> torch.Tensor:
+        return self._v_scale_cpu[layer_id]
+
+    def _cpu_v_mn(self, layer_id: int) -> torch.Tensor:
+        return self._v_mn_cpu[layer_id]
+
+    # ------------------------------------------------------------------
+    # Init / reset
+    # ------------------------------------------------------------------
     def _init_kv_buffer(self) -> None:
         if self._kv_offload:
             self._init_kv_buffer_offload()
             return
+
         L = self._num_layers
         N = self._N_alloc
         H, D = self._num_heads, self._head_dim
@@ -763,8 +1440,11 @@ class KIVIQuantRollingKVCachePool(RollingKVCachePool):
         self._k_mn = torch.zeros(L, H, D, n_groups, dtype=torch.float32, device=d)
         self._v_scale = torch.zeros(L, H, D, n_groups, dtype=torch.float32, device=d)
         self._v_mn = torch.zeros(L, H, D, n_groups, dtype=torch.float32, device=d)
-        self._global_end = torch.zeros(L, dtype=torch.long, device=d)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=d)
+        # End pointers are Python-side bookkeeping; keep them on CPU to avoid
+        # CUDA synchronizations from ``.item()`` in get_* methods.
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._init_ring_metadata()
 
     def _init_kv_buffer_offload(self) -> None:
         L = self._num_layers
@@ -777,280 +1457,37 @@ class KIVIQuantRollingKVCachePool(RollingKVCachePool):
         self._kivi_n_groups = n_groups
         d = self._device
 
+        # CPU keeps the authoritative compressed physical ring layout.
         self._k_code_cpu = torch.zeros(L, H, D, n_packs, dtype=torch.int32, device="cpu").pin_memory()
         self._v_code_cpu = torch.zeros(L, H, D, n_packs, dtype=torch.int32, device="cpu").pin_memory()
         self._k_scale_cpu = torch.zeros(L, H, D, n_groups, dtype=torch.float32, device="cpu").pin_memory()
         self._k_mn_cpu = torch.zeros(L, H, D, n_groups, dtype=torch.float32, device="cpu").pin_memory()
         self._v_scale_cpu = torch.zeros(L, H, D, n_groups, dtype=torch.float32, device="cpu").pin_memory()
         self._v_mn_cpu = torch.zeros(L, H, D, n_groups, dtype=torch.float32, device="cpu").pin_memory()
-        self._k_code_gpu = torch.zeros(2, H, D, n_packs, dtype=torch.int32, device=d)
-        self._v_code_gpu = torch.zeros(2, H, D, n_packs, dtype=torch.int32, device=d)
-        self._k_scale_gpu = torch.zeros(2, H, D, n_groups, dtype=torch.float32, device=d)
-        self._k_mn_gpu = torch.zeros(2, H, D, n_groups, dtype=torch.float32, device=d)
-        self._v_scale_gpu = torch.zeros(2, H, D, n_groups, dtype=torch.float32, device=d)
-        self._v_mn_gpu = torch.zeros(2, H, D, n_groups, dtype=torch.float32, device=d)
-        self._global_end = torch.zeros(L, dtype=torch.long, device=d)
-        self._local_end = torch.zeros(L, dtype=torch.long, device=d)
 
-        def _async_load(lid: int, buf: int) -> None:
-            self._k_code_gpu[buf].copy_(self._k_code_cpu[lid], non_blocking=True)
-            self._v_code_gpu[buf].copy_(self._v_code_cpu[lid], non_blocking=True)
-            self._k_scale_gpu[buf].copy_(self._k_scale_cpu[lid], non_blocking=True)
-            self._k_mn_gpu[buf].copy_(self._k_mn_cpu[lid], non_blocking=True)
-            self._v_scale_gpu[buf].copy_(self._v_scale_cpu[lid], non_blocking=True)
-            self._v_mn_gpu[buf].copy_(self._v_mn_cpu[lid], non_blocking=True)
+        self._k_code_gpu = torch.zeros(H, D, n_packs, dtype=torch.int32, device=d)
+        self._v_code_gpu = torch.zeros(H, D, n_packs, dtype=torch.int32, device=d)
+        self._k_scale_gpu = torch.zeros(H, D, n_groups, dtype=torch.float32, device=d)
+        self._k_mn_gpu = torch.zeros(H, D, n_groups, dtype=torch.float32, device=d)
+        self._v_scale_gpu = torch.zeros(H, D, n_groups, dtype=torch.float32, device=d)
+        self._v_mn_gpu = torch.zeros(H, D, n_groups, dtype=torch.float32, device=d)
 
-        def _async_store(lid: int, buf: int, t0: int, t1: int) -> None:
-            fe, G = self._feats, self._group_size
-            p0, p1 = t0 // fe, cdiv(t1, fe)
-            p1 = min(p1, self._kivi_n_packs)
-            g0, g1 = t0 // G, cdiv(t1, G)
-            g1 = min(g1, self._kivi_n_groups)
-            if p0 < p1:
-                self._k_code_cpu[lid, :, :, p0:p1].copy_(self._k_code_gpu[buf, :, :, p0:p1], non_blocking=True)
-                self._v_code_cpu[lid, :, :, p0:p1].copy_(self._v_code_gpu[buf, :, :, p0:p1], non_blocking=True)
-            if g0 < g1:
-                self._k_scale_cpu[lid, :, :, g0:g1].copy_(self._k_scale_gpu[buf, :, :, g0:g1], non_blocking=True)
-                self._k_mn_cpu[lid, :, :, g0:g1].copy_(self._k_mn_gpu[buf, :, :, g0:g1], non_blocking=True)
-                self._v_scale_cpu[lid, :, :, g0:g1].copy_(self._v_scale_gpu[buf, :, :, g0:g1], non_blocking=True)
-                self._v_mn_cpu[lid, :, :, g0:g1].copy_(self._v_mn_gpu[buf, :, :, g0:g1], non_blocking=True)
+        self._global_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(L, dtype=torch.long, device="cpu")
+        self._init_ring_metadata()
 
-        self._offload = KVOffloadPlugin(self._device, _async_load, _async_store)
+        self._init_offload_state((L,))
         gpu_mb = (self._k_code_gpu.nbytes + self._v_code_gpu.nbytes + self._k_scale_gpu.nbytes + self._k_mn_gpu.nbytes + self._v_scale_gpu.nbytes + self._v_mn_gpu.nbytes) / (1024 * 1024)
         cpu_mb = (self._k_code_cpu.nbytes + self._v_code_cpu.nbytes + self._k_scale_cpu.nbytes + self._k_mn_cpu.nbytes + self._v_scale_cpu.nbytes + self._v_mn_cpu.nbytes) / (1024 * 1024)
         logger.info(
-            "[KIVIQuantRollingKVCachePool+offload] GPU fixed buffer: {:.1f} MB, CPU pinned: {:.1f} MB (saved {:.1f} MB GPU)",
+            "[KIVIQuantRollingKVCachePool+ring+offload] GPU compressed staging layer: {:.1f} MB, CPU pinned: {:.1f} MB",
             gpu_mb,
             cpu_mb,
-            cpu_mb - gpu_mb,
         )
-
-    def _kivi_k_code(self, _layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._k_code_gpu[self._offload.cur_buf]
-        return self._k_code[_layer_id]
-
-    def _kivi_v_code(self, _layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._v_code_gpu[self._offload.cur_buf]
-        return self._v_code[_layer_id]
-
-    def _kivi_k_scale(self, _layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._k_scale_gpu[self._offload.cur_buf]
-        return self._k_scale[_layer_id]
-
-    def _kivi_k_mn(self, _layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._k_mn_gpu[self._offload.cur_buf]
-        return self._k_mn[_layer_id]
-
-    def _kivi_v_scale(self, _layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._v_scale_gpu[self._offload.cur_buf]
-        return self._v_scale[_layer_id]
-
-    def _kivi_v_mn(self, _layer_id: int) -> torch.Tensor:
-        if self._kv_offload:
-            return self._v_mn_gpu[self._offload.cur_buf]
-        return self._v_mn[_layer_id]
-
-    def _write_segment(
-        self,
-        code: torch.Tensor,
-        sc: torch.Tensor,
-        mn: torch.Tensor,
-        layer: int,
-        t_start: int,
-    ) -> None:
-        """Write quant outputs for a chunk placed at **token** ``t_start`` (0-based)."""
-        H, D = self._num_heads, self._head_dim
-        # code [1, H, D, n_pl], n_pl = T_pad / fe
-        b, h, d, np_l = code.shape
-        assert b == 1 and h == H and d == D
-        fe, G = self._feats, self._group_size
-        t_pad = code.shape[3] * fe
-        g_cnt = t_pad // G
-        t0, t1 = t_start, t_start + t_pad
-        p0, p1 = t0 // fe, t0 // fe + code.shape[3]
-        g0, g1 = t0 // G, t0 // G + g_cnt
-        if t1 > self._N_alloc:
-            raise RuntimeError("KIVI store overflow (increase max_attention or alignment)")
-        if p0 + code.shape[3] > self._kivi_n_packs:
-            raise RuntimeError("KIVI pack range overflow")
-        csl = code[0]
-        self._kivi_k_code(layer)[:, :, p0:p1] = csl
-        self._kivi_k_scale(layer)[:, :, g0:g1] = sc[0, :, :, :g_cnt]
-        self._kivi_k_mn(layer)[:, :, g0:g1] = mn[0, :, :, :g_cnt]
-
-    def _write_v_segment(
-        self,
-        code: torch.Tensor,
-        sc: torch.Tensor,
-        mn: torch.Tensor,
-        layer: int,
-        t_start: int,
-    ) -> None:
-        H, D = self._num_heads, self._head_dim
-        b, h, d, _np = code.shape
-        assert b == 1 and h == H and d == D
-        fe, G = self._feats, self._group_size
-        t_pad = code.shape[3] * fe
-        g_cnt = t_pad // G
-        t0, t1 = t_start, t_start + t_pad
-        p0, p1 = t0 // fe, t0 // fe + code.shape[3]
-        g0, g1 = t0 // G, t0 // G + g_cnt
-        if t1 > self._N_alloc:
-            raise RuntimeError("KIVI store overflow")
-        csl = code[0]
-        self._kivi_v_code(layer)[:, :, p0:p1] = csl
-        self._kivi_v_scale(layer)[:, :, g0:g1] = sc[0, :, :, :g_cnt]
-        self._kivi_v_mn(layer)[:, :, g0:g1] = mn[0, :, :, :g_cnt]
-
-    def store_kv(
-        self,
-        k: torch.Tensor,
-        v: torch.Tensor,
-        start_idx: int,
-        end_idx: int,
-        layer_id: int,
-    ) -> None:
-        m = self._align
-        Ls = end_idx - start_idx
-        if Ls == 0:
-            return
-        s0 = (start_idx // m) * m
-        lid = layer_id
-        d = self._kivi_io_dtype
-        parts_k = []
-        parts_v = []
-        if s0 < start_idx:
-            pk = self._dequant_nhd(
-                self._kivi_k_code(lid),
-                self._kivi_k_scale(lid).to(d),
-                self._kivi_k_mn(lid).to(d),
-                s0,
-                start_idx,
-            )
-            pv = self._dequant_nhd(
-                self._kivi_v_code(lid),
-                self._kivi_v_scale(lid).to(d),
-                self._kivi_v_mn(lid).to(d),
-                s0,
-                start_idx,
-            )
-            need = start_idx - s0
-            if pk.size(0) < need:
-                z = k.new_zeros(need - pk.size(0), *k.shape[1:], dtype=pk.dtype, device=pk.device)
-                pk = torch.cat((pk, z), dim=0)
-            if pv.size(0) < need:
-                z2 = v.new_zeros(need - pv.size(0), *v.shape[1:], dtype=pv.dtype, device=pv.device)
-                pv = torch.cat((pv, z2), dim=0)
-            parts_k.append(pk)
-            parts_v.append(pv)
-        parts_k.append(self._slice_token_range(k, 0, Ls))
-        parts_v.append(self._slice_token_range(v, 0, Ls))
-        k_cat = torch.cat(parts_k, dim=0)
-        v_cat = torch.cat(parts_v, dim=0)
-        (k_code, k_sc, k_mn), _, t_pad_k = self._quant_nhd(k_cat)
-        (v_code, v_sc, v_mn), _, t_pad_v = self._quant_nhd(v_cat)
-        if t_pad_k != t_pad_v:
-            raise RuntimeError("KIVI store: K/V padded length mismatch")
-        self._write_segment(k_code, k_sc, k_mn, layer_id, s0)
-        self._write_v_segment(v_code, v_sc, v_mn, layer_id, s0)
-        if self._kv_offload:
-            self._mark_offload_dirty(s0, s0 + t_pad_k)
-
-    def _dequant_nhd(
-        self,
-        code: torch.Tensor,
-        sc: torch.Tensor,
-        mn: torch.Tensor,
-        attn_start: int,
-        local_end: int,
-    ) -> torch.Tensor:
-        H, D = self._num_heads, self._head_dim
-        m = self._align
-        t0 = (attn_start // m) * m
-        t1 = min(cdiv(max(local_end, 0), m) * m, self._N_alloc)
-        if t1 <= t0 or local_end <= attn_start:
-            return torch.empty(0, H, D, device=self._device, dtype=self._dtype)
-        fe, G = self._feats, self._group_size
-        p0, p1 = t0 // fe, t1 // fe
-        g0, g1 = t0 // G, t1 // G
-        c4 = code[:, :, p0:p1].unsqueeze(0)
-        out = self._dequant_bhdn(c4, sc[:, :, g0:g1].unsqueeze(0), mn[:, :, g0:g1].unsqueeze(0), self._group_size, self._bits, self._dtype)
-        nhd = out.permute(2, 0, 1)
-        o0 = max(attn_start, t0) - t0
-        o1 = o0 + (local_end - max(attn_start, t0))
-        return nhd[o0:o1].contiguous()
-
-    def k_cache(self, layer_id: int, attn_start: int, local_end: int) -> torch.Tensor:
-        d = self._kivi_io_dtype
-        o = self._dequant_nhd(
-            self._kivi_k_code(layer_id),
-            self._kivi_k_scale(layer_id).to(d),
-            self._kivi_k_mn(layer_id).to(d),
-            attn_start,
-            local_end,
-        )
-        if self._dtype in (torch.bfloat16, torch.float32) and o.dtype != self._dtype:
-            return o.to(self._dtype)
-        return o
-
-    def v_cache(self, layer_id: int, attn_start: int, local_end: int) -> torch.Tensor:
-        d = self._kivi_io_dtype
-        o = self._dequant_nhd(
-            self._kivi_v_code(layer_id),
-            self._kivi_v_scale(layer_id).to(d),
-            self._kivi_v_mn(layer_id).to(d),
-            attn_start,
-            local_end,
-        )
-        if self._dtype in (torch.bfloat16, torch.float32) and o.dtype != self._dtype:
-            return o.to(self._dtype)
-        return o
-
-    def roll_window(
-        self,
-        layer_id: int,
-        sink_tokens: int,
-        num_evicted: int,
-    ) -> None:
-        num_kept = int(self._local_end[layer_id].item()) - num_evicted - sink_tokens
-        src_start = sink_tokens + num_evicted
-        dst_start = sink_tokens
-        if num_kept <= 0:
-            return
-        fe, G = self._feats, self._group_size
-        t0, t1 = int(src_start), int(src_start + num_kept)
-        d0, d1 = int(dst_start), int(dst_start + num_kept)
-        p0, p1 = t0 // fe, cdiv(t1, fe)
-        p2, p3 = d0 // fe, cdiv(d1, fe)
-        w = p1 - p0
-        if w != p3 - p2 or p0 + w > self._kivi_n_packs or p2 + w > self._kivi_n_packs:
-            raise RuntimeError("KIVI roll: pack range mismatch (internal alignment).")
-        g0, g1 = t0 // G, cdiv(t1, G)
-        h0, h1 = d0 // G, cdiv(d1, G)
-        w_g = g1 - g0
-        if w_g != h1 - h0 or g0 + w_g > self._kivi_n_groups or h0 + w_g > self._kivi_n_groups:
-            raise RuntimeError("KIVI roll: group range mismatch (internal alignment).")
-        lid = layer_id
-        kc, vc = self._kivi_k_code(lid), self._kivi_v_code(lid)
-        kc[:, :, p2 : p2 + w] = kc[:, :, p0 : p0 + w].clone()
-        vc[:, :, p2 : p2 + w] = vc[:, :, p0 : p0 + w].clone()
-        for tbuf in (
-            self._kivi_k_scale(lid),
-            self._kivi_k_mn(lid),
-            self._kivi_v_scale(lid),
-            self._kivi_v_mn(lid),
-        ):
-            tbuf[:, :, h0 : h0 + w_g] = tbuf[:, :, g0 : g0 + w_g].clone()
-        if self._kv_offload:
-            self._mark_offload_dirty(dst_start, dst_start + num_kept)
 
     def reset(self) -> None:
         if self._kv_offload:
+            self.sync_all()
             self._k_code_cpu.zero_()
             self._v_code_cpu.zero_()
             self._k_scale_cpu.zero_()
@@ -1065,8 +1502,10 @@ class KIVIQuantRollingKVCachePool(RollingKVCachePool):
             self._v_mn_gpu.zero_()
             self._global_end.zero_()
             self._local_end.zero_()
-            self._offload.reset_state()
+            self._init_ring_metadata()
+            self._reset_offload_state()
             return
+
         self._k_code.zero_()
         self._v_code.zero_()
         self._k_scale.zero_()
@@ -1075,3 +1514,487 @@ class KIVIQuantRollingKVCachePool(RollingKVCachePool):
         self._v_mn.zero_()
         self._global_end.zero_()
         self._local_end.zero_()
+        self._init_ring_metadata()
+
+    # ------------------------------------------------------------------
+    # Compressed physical range copy helpers for offload.
+    # ------------------------------------------------------------------
+    def _copy_cpu_to_gpu_physical(self, layer_id: int, start: int, end: int) -> None:
+        if end <= start:
+            return
+        fe, G = self._feats, self._group_size
+        p0, p1 = start // fe, end // fe
+        g0, g1 = start // G, end // G
+        self._k_code_gpu[:, :, p0:p1].copy_(self._cpu_k_code(layer_id)[:, :, p0:p1], non_blocking=True)
+        self._v_code_gpu[:, :, p0:p1].copy_(self._cpu_v_code(layer_id)[:, :, p0:p1], non_blocking=True)
+        self._k_scale_gpu[:, :, g0:g1].copy_(self._cpu_k_scale(layer_id)[:, :, g0:g1], non_blocking=True)
+        self._k_mn_gpu[:, :, g0:g1].copy_(self._cpu_k_mn(layer_id)[:, :, g0:g1], non_blocking=True)
+        self._v_scale_gpu[:, :, g0:g1].copy_(self._cpu_v_scale(layer_id)[:, :, g0:g1], non_blocking=True)
+        self._v_mn_gpu[:, :, g0:g1].copy_(self._cpu_v_mn(layer_id)[:, :, g0:g1], non_blocking=True)
+
+    def _copy_layer_to_gpu(self, layer_id: int) -> None:
+        self._copy_cpu_to_gpu_physical(layer_id, 0, self._N_alloc)
+
+    # ------------------------------------------------------------------
+    # Physical KIVI store. It preserves prefix/suffix inside touched aligned blocks.
+    # ------------------------------------------------------------------
+    def _write_k_segment(self, code: torch.Tensor, sc: torch.Tensor, mn: torch.Tensor, layer_id: int, physical_start: int) -> None:
+        H, D = self._num_heads, self._head_dim
+        b, h, d, n_pack = code.shape
+        assert b == 1 and h == H and d == D
+        fe, G = self._feats, self._group_size
+        t_pad = n_pack * fe
+        g_cnt = t_pad // G
+        p0 = physical_start // fe
+        p1 = p0 + n_pack
+        g0 = physical_start // G
+        g1 = g0 + g_cnt
+        if physical_start + t_pad > self._N_alloc:
+            raise RuntimeError("KIVI store overflow")
+        self._kivi_k_code(layer_id)[:, :, p0:p1] = code[0]
+        self._kivi_k_scale(layer_id)[:, :, g0:g1] = sc[0, :, :, :g_cnt]
+        self._kivi_k_mn(layer_id)[:, :, g0:g1] = mn[0, :, :, :g_cnt]
+        if self._kv_offload:
+            self._cpu_k_code(layer_id)[:, :, p0:p1].copy_(code[0], non_blocking=True)
+            self._cpu_k_scale(layer_id)[:, :, g0:g1].copy_(sc[0, :, :, :g_cnt], non_blocking=True)
+            self._cpu_k_mn(layer_id)[:, :, g0:g1].copy_(mn[0, :, :, :g_cnt], non_blocking=True)
+
+    def _write_v_segment(self, code: torch.Tensor, sc: torch.Tensor, mn: torch.Tensor, layer_id: int, physical_start: int) -> None:
+        H, D = self._num_heads, self._head_dim
+        b, h, d, n_pack = code.shape
+        assert b == 1 and h == H and d == D
+        fe, G = self._feats, self._group_size
+        t_pad = n_pack * fe
+        g_cnt = t_pad // G
+        p0 = physical_start // fe
+        p1 = p0 + n_pack
+        g0 = physical_start // G
+        g1 = g0 + g_cnt
+        if physical_start + t_pad > self._N_alloc:
+            raise RuntimeError("KIVI store overflow")
+        self._kivi_v_code(layer_id)[:, :, p0:p1] = code[0]
+        self._kivi_v_scale(layer_id)[:, :, g0:g1] = sc[0, :, :, :g_cnt]
+        self._kivi_v_mn(layer_id)[:, :, g0:g1] = mn[0, :, :, :g_cnt]
+        if self._kv_offload:
+            self._cpu_v_code(layer_id)[:, :, p0:p1].copy_(code[0], non_blocking=True)
+            self._cpu_v_scale(layer_id)[:, :, g0:g1].copy_(sc[0, :, :, :g_cnt], non_blocking=True)
+            self._cpu_v_mn(layer_id)[:, :, g0:g1].copy_(mn[0, :, :, :g_cnt], non_blocking=True)
+
+    def _physical_store_kv(
+        self,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        physical_start: int,
+        physical_end: int,
+        layer_id: int,
+    ) -> None:
+        length = int(physical_end) - int(physical_start)
+        if length <= 0:
+            return
+        if k.size(0) != length or v.size(0) != length:
+            raise ValueError(f"KIVI physical store length mismatch: length={length}, k={k.size(0)}, v={v.size(0)}")
+
+        A = self._align
+        s0 = (int(physical_start) // A) * A
+        e1 = min(cdiv(int(physical_end), A) * A, self._N_alloc)
+
+        self._check_layer_loaded(layer_id)
+
+        parts_k: list[torch.Tensor] = []
+        parts_v: list[torch.Tensor] = []
+
+        if s0 < physical_start:
+            parts_k.append(self._dequant_nhd(self._kivi_k_code(layer_id), self._kivi_k_scale(layer_id), self._kivi_k_mn(layer_id), s0, physical_start))
+            parts_v.append(self._dequant_nhd(self._kivi_v_code(layer_id), self._kivi_v_scale(layer_id), self._kivi_v_mn(layer_id), s0, physical_start))
+
+        parts_k.append(k.contiguous())
+        parts_v.append(v.contiguous())
+
+        if physical_end < e1:
+            parts_k.append(self._dequant_nhd(self._kivi_k_code(layer_id), self._kivi_k_scale(layer_id), self._kivi_k_mn(layer_id), physical_end, e1))
+            parts_v.append(self._dequant_nhd(self._kivi_v_code(layer_id), self._kivi_v_scale(layer_id), self._kivi_v_mn(layer_id), physical_end, e1))
+
+        k_cat = torch.cat(parts_k, dim=0)
+        v_cat = torch.cat(parts_v, dim=0)
+        expected = e1 - s0
+        if k_cat.size(0) != expected or v_cat.size(0) != expected:
+            raise RuntimeError(f"KIVI physical store preserved block length mismatch: expected={expected}, got k={k_cat.size(0)}, v={v_cat.size(0)}")
+
+        (k_code, k_sc, k_mn), _, t_pad_k = self._quant_nhd(k_cat)
+        (v_code, v_sc, v_mn), _, t_pad_v = self._quant_nhd(v_cat)
+        if t_pad_k != expected or t_pad_v != expected:
+            raise RuntimeError(f"KIVI physical store padding mismatch: expected={expected}, k_pad={t_pad_k}, v_pad={t_pad_v}")
+
+        self._write_k_segment(k_code, k_sc, k_mn, layer_id, s0)
+        self._write_v_segment(v_code, v_sc, v_mn, layer_id, s0)
+
+    # ------------------------------------------------------------------
+    # Ring mapping
+    # ------------------------------------------------------------------
+    def _recent_logical_to_physical_chunks(self, layer_id: int, recent_offset: int, length: int) -> list[tuple[int, int]]:
+        if length <= 0:
+            return []
+        sink_len = self._get_sink_len(layer_id)
+        cap = self._recent_capacity(layer_id)
+        head = self._get_recent_head(layer_id)
+        pos = (head + int(recent_offset)) % cap
+        first = min(int(length), cap - pos)
+        chunks = [(sink_len + pos, sink_len + pos + first)]
+        remain = int(length) - first
+        if remain > 0:
+            chunks.append((sink_len, sink_len + remain))
+        return chunks
+
+    def _cache_chunks_for_logical_range(
+        self,
+        layer_id: int,
+        attn_start: int,
+        local_end: int,
+        *,
+        strict: bool = True,
+    ) -> list[tuple[int, int]]:
+        attn_start = int(attn_start)
+        local_end = int(local_end)
+        if local_end <= attn_start:
+            return []
+
+        if not self._ring_is_active(layer_id):
+            if strict and local_end > self.get_local_end(layer_id):
+                raise RuntimeError(f"KIVI non-ring read exceeds local_end: read_end={local_end}, local_end={self.get_local_end(layer_id)}")
+            return [(attn_start, local_end)]
+
+        sink_len = self._get_sink_len(layer_id)
+        recent_len = self._get_recent_len(layer_id)
+        logical_end = sink_len + recent_len
+        if strict and local_end > logical_end:
+            raise RuntimeError(f"KIVI ring read exceeds logical cache end: read_end={local_end}, logical_end={logical_end}, sink={sink_len}, recent_len={recent_len}")
+
+        # For non-strict prefetch, clamp to existing logical tokens.
+        if not strict:
+            local_end = min(local_end, logical_end)
+            if local_end <= attn_start:
+                return []
+
+        chunks: list[tuple[int, int]] = []
+        s0 = attn_start
+        s1 = min(local_end, sink_len)
+        if s1 > s0:
+            chunks.append((s0, s1))
+
+        r0 = max(attn_start, sink_len)
+        r1 = local_end
+        if r1 > r0:
+            chunks.extend(self._recent_logical_to_physical_chunks(layer_id, recent_offset=r0 - sink_len, length=r1 - r0))
+        return chunks
+
+    def _dequant_physical_chunks(self, layer_id: int, chunks: list[tuple[int, int]], which: str) -> torch.Tensor:
+        H, D = self._num_heads, self._head_dim
+        if not chunks:
+            return torch.empty(0, H, D, device=self._device, dtype=self._dtype)
+
+        outs = []
+        for p0, p1 in chunks:
+            if which == "k":
+                outs.append(self._dequant_nhd(self._kivi_k_code(layer_id), self._kivi_k_scale(layer_id), self._kivi_k_mn(layer_id), p0, p1))
+            elif which == "v":
+                outs.append(self._dequant_nhd(self._kivi_v_code(layer_id), self._kivi_v_scale(layer_id), self._kivi_v_mn(layer_id), p0, p1))
+            else:
+                raise ValueError(f"invalid KIVI chunk kind: {which}")
+        return outs[0] if len(outs) == 1 else torch.cat(outs, dim=0).contiguous()
+
+    def _update_recent_len_after_store(self, layer_id: int, end_idx: int) -> None:
+        if not self._ring_is_active(layer_id):
+            return
+        sink_len = self._get_sink_len(layer_id)
+        if end_idx > sink_len:
+            new_len = max(self._get_recent_len(layer_id), int(end_idx) - sink_len)
+            cap = self._recent_capacity(layer_id)
+            if new_len > cap:
+                raise RuntimeError(f"KIVI recent ring overflow: len={new_len}, cap={cap}")
+            self._set_recent_len(layer_id, new_len)
+
+    # ------------------------------------------------------------------
+    # Public store/read API
+    # ------------------------------------------------------------------
+    def store_kv(self, k: torch.Tensor, v: torch.Tensor, start_idx: int, end_idx: int, layer_id: int) -> None:
+        start_idx = int(start_idx)
+        end_idx = int(end_idx)
+        length = end_idx - start_idx
+        if length <= 0:
+            return
+        if k.size(0) != length or v.size(0) != length:
+            raise ValueError(f"KIVI store length mismatch: length={length}, k={k.size(0)}, v={v.size(0)}")
+
+        if not self._ring_is_active(layer_id):
+            self._physical_store_kv(k, v, start_idx, end_idx, layer_id)
+            if self._kv_offload:
+                self._record_cpu_update(layer_id)
+            return
+
+        sink_len = self._get_sink_len(layer_id)
+        remaining_k = k
+        remaining_v = v
+        logical_start = start_idx
+        remaining = length
+
+        if logical_start < sink_len:
+            first = min(remaining, sink_len - logical_start)
+            self._physical_store_kv(remaining_k[:first], remaining_v[:first], logical_start, logical_start + first, layer_id)
+            logical_start += first
+            remaining_k = remaining_k[first:]
+            remaining_v = remaining_v[first:]
+            remaining -= first
+            if remaining == 0:
+                self._update_recent_len_after_store(layer_id, end_idx)
+                if self._kv_offload:
+                    self._record_cpu_update(layer_id)
+                return
+
+        recent_offset = logical_start - sink_len
+        chunks = self._recent_logical_to_physical_chunks(layer_id, recent_offset, remaining)
+        off = 0
+        for p0, p1 in chunks:
+            n = p1 - p0
+            self._physical_store_kv(remaining_k[off : off + n], remaining_v[off : off + n], p0, p1, layer_id)
+            off += n
+
+        self._update_recent_len_after_store(layer_id, end_idx)
+        if self._kv_offload:
+            self._record_cpu_update(layer_id)
+
+    def k_cache(self, layer_id: int, attn_start: int, local_end: int) -> torch.Tensor:
+        attn_start, local_end = int(attn_start), int(local_end)
+        self._check_layer_loaded(layer_id)
+        chunks = self._cache_chunks_for_logical_range(layer_id, attn_start, local_end, strict=True)
+        out = self._dequant_physical_chunks(layer_id, chunks, "k")
+        if self._dtype in (torch.bfloat16, torch.float32) and out.dtype != self._dtype:
+            return out.to(self._dtype)
+        return out
+
+    def v_cache(self, layer_id: int, attn_start: int, local_end: int) -> torch.Tensor:
+        attn_start, local_end = int(attn_start), int(local_end)
+        self._check_layer_loaded(layer_id)
+        chunks = self._cache_chunks_for_logical_range(layer_id, attn_start, local_end, strict=True)
+        out = self._dequant_physical_chunks(layer_id, chunks, "v")
+        if self._dtype in (torch.bfloat16, torch.float32) and out.dtype != self._dtype:
+            return out.to(self._dtype)
+        return out
+
+    def roll_window(self, layer_id: int, sink_tokens: int, num_evicted: int) -> None:
+        old_local_end = self.get_local_end(layer_id)
+        sink_tokens = int(sink_tokens)
+        num_evicted = int(num_evicted)
+        if num_evicted <= 0:
+            return
+        num_kept = old_local_end - num_evicted - sink_tokens
+        if num_kept <= 0:
+            self._set_ring_active(layer_id, True)
+            self._set_sink_len(layer_id, sink_tokens)
+            self._set_recent_head(layer_id, 0)
+            self._set_recent_len(layer_id, 0)
+            return
+
+        if sink_tokens < 0 or sink_tokens >= self._N_alloc:
+            raise RuntimeError(f"invalid sink_tokens={sink_tokens} for N_alloc={self._N_alloc}")
+
+        if not self._ring_is_active(layer_id):
+            self._set_ring_active(layer_id, True)
+            self._set_sink_len(layer_id, sink_tokens)
+            cap = self._recent_capacity(layer_id)
+            if num_kept > cap:
+                raise RuntimeError(f"KIVI ring kept tokens {num_kept} exceed recent capacity {cap}")
+            self._set_recent_head(layer_id, num_evicted % cap)
+            self._set_recent_len(layer_id, num_kept)
+            return
+
+        if sink_tokens != self._get_sink_len(layer_id):
+            raise RuntimeError(f"KIVI ring sink size changed after activation: old={self._get_sink_len(layer_id)}, new={sink_tokens}")
+        cap = self._recent_capacity(layer_id)
+        recent_len = self._get_recent_len(layer_id)
+        if num_evicted > recent_len:
+            raise RuntimeError(f"KIVI ring evict exceeds recent length: evict={num_evicted}, recent_len={recent_len}")
+        self._set_recent_head(layer_id, (self._get_recent_head(layer_id) + num_evicted) % cap)
+        self._set_recent_len(layer_id, recent_len - num_evicted)
+
+
+class StepKiviQuantRollingKVCachePool(KIVIQuantRollingKVCachePool):
+    """Step-isolated KIVI ring-buffer KV cache with kv offload."""
+
+    def __init__(
+        self,
+        num_steps: int,
+        num_layers: int,
+        cache_size: int,
+        num_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        k_cache_type: str = "int4",
+        v_cache_type: str = "int4",
+        group_size: int = 64,
+        kv_offload: bool = False,
+    ) -> None:
+        self.num_steps = int(num_steps)
+        self._current_step = 0
+        super().__init__(
+            num_layers=num_layers,
+            cache_size=cache_size,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            dtype=dtype,
+            device=device,
+            k_cache_type=k_cache_type,
+            v_cache_type=v_cache_type,
+            group_size=group_size,
+            kv_offload=kv_offload,
+        )
+
+    @property
+    def current_step(self) -> int:
+        return self._current_step
+
+    @current_step.setter
+    def current_step(self, value: int) -> None:
+        value = int(value)
+        if value == self._current_step:
+            return
+        if self._kv_offload and hasattr(self, "_prefetch_stream"):
+            self.sync_all()
+            self._current_step = value
+            self._reset_offload_state()
+            return
+        self._current_step = value
+
+    def _step(self) -> int:
+        return int(self._current_step)
+
+    def _ring_shape(self):
+        return (self.num_steps, self._num_layers)
+
+    def _ring_index(self, layer_id: int):
+        return (self._step(), int(layer_id))
+
+    def _init_kv_buffer(self) -> None:
+        if self._kv_offload:
+            self._init_kv_buffer_offload()
+            return
+
+        T, L = self.num_steps, self._num_layers
+        N = self._N_alloc
+        H, D = self._num_heads, self._head_dim
+        fe, G = self._feats, self._group_size
+        n_packs = N // fe
+        n_groups = N // G
+        self._kivi_n_packs = n_packs
+        self._kivi_n_groups = n_groups
+        d = self._device
+
+        self._k_code = torch.zeros(T, L, H, D, n_packs, dtype=torch.int32, device=d)
+        self._v_code = torch.zeros(T, L, H, D, n_packs, dtype=torch.int32, device=d)
+        self._k_scale = torch.zeros(T, L, H, D, n_groups, dtype=torch.float32, device=d)
+        self._k_mn = torch.zeros(T, L, H, D, n_groups, dtype=torch.float32, device=d)
+        self._v_scale = torch.zeros(T, L, H, D, n_groups, dtype=torch.float32, device=d)
+        self._v_mn = torch.zeros(T, L, H, D, n_groups, dtype=torch.float32, device=d)
+        self._global_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+        self._init_ring_metadata()
+
+    def _init_kv_buffer_offload(self) -> None:
+        T, L = self.num_steps, self._num_layers
+        N = self._N_alloc
+        H, D = self._num_heads, self._head_dim
+        fe, G = self._feats, self._group_size
+        n_packs = N // fe
+        n_groups = N // G
+        self._kivi_n_packs = n_packs
+        self._kivi_n_groups = n_groups
+        d = self._device
+
+        self._k_code_cpu = torch.zeros(T, L, H, D, n_packs, dtype=torch.int32, device="cpu").pin_memory()
+        self._v_code_cpu = torch.zeros(T, L, H, D, n_packs, dtype=torch.int32, device="cpu").pin_memory()
+        self._k_scale_cpu = torch.zeros(T, L, H, D, n_groups, dtype=torch.float32, device="cpu").pin_memory()
+        self._k_mn_cpu = torch.zeros(T, L, H, D, n_groups, dtype=torch.float32, device="cpu").pin_memory()
+        self._v_scale_cpu = torch.zeros(T, L, H, D, n_groups, dtype=torch.float32, device="cpu").pin_memory()
+        self._v_mn_cpu = torch.zeros(T, L, H, D, n_groups, dtype=torch.float32, device="cpu").pin_memory()
+
+        self._k_code_gpu = torch.zeros(H, D, n_packs, dtype=torch.int32, device=d)
+        self._v_code_gpu = torch.zeros(H, D, n_packs, dtype=torch.int32, device=d)
+        self._k_scale_gpu = torch.zeros(H, D, n_groups, dtype=torch.float32, device=d)
+        self._k_mn_gpu = torch.zeros(H, D, n_groups, dtype=torch.float32, device=d)
+        self._v_scale_gpu = torch.zeros(H, D, n_groups, dtype=torch.float32, device=d)
+        self._v_mn_gpu = torch.zeros(H, D, n_groups, dtype=torch.float32, device=d)
+
+        self._global_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(T, L, dtype=torch.long, device="cpu")
+        self._init_ring_metadata()
+        self._init_offload_state((T, L))
+
+        gpu_mb = (self._k_code_gpu.nbytes + self._v_code_gpu.nbytes + self._k_scale_gpu.nbytes + self._k_mn_gpu.nbytes + self._v_scale_gpu.nbytes + self._v_mn_gpu.nbytes) / (1024 * 1024)
+        cpu_mb = (self._k_code_cpu.nbytes + self._v_code_cpu.nbytes + self._k_scale_cpu.nbytes + self._k_mn_cpu.nbytes + self._v_scale_cpu.nbytes + self._v_mn_cpu.nbytes) / (1024 * 1024)
+        logger.info(
+            "[StepKiviQuantRollingKVCachePool+ring+offload] steps={}, GPU compressed staging layer: {:.1f} MB, CPU pinned: {:.1f} MB",
+            self.num_steps,
+            gpu_mb,
+            cpu_mb,
+        )
+
+    def _kivi_k_code(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._k_code_gpu
+        return self._k_code[self._step(), layer_id]
+
+    def _kivi_v_code(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._v_code_gpu
+        return self._v_code[self._step(), layer_id]
+
+    def _kivi_k_scale(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._k_scale_gpu
+        return self._k_scale[self._step(), layer_id]
+
+    def _kivi_k_mn(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._k_mn_gpu
+        return self._k_mn[self._step(), layer_id]
+
+    def _kivi_v_scale(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._v_scale_gpu
+        return self._v_scale[self._step(), layer_id]
+
+    def _kivi_v_mn(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._v_mn_gpu
+        return self._v_mn[self._step(), layer_id]
+
+    def _cpu_k_code(self, layer_id: int) -> torch.Tensor:
+        return self._k_code_cpu[self._step(), layer_id]
+
+    def _cpu_v_code(self, layer_id: int) -> torch.Tensor:
+        return self._v_code_cpu[self._step(), layer_id]
+
+    def _cpu_k_scale(self, layer_id: int) -> torch.Tensor:
+        return self._k_scale_cpu[self._step(), layer_id]
+
+    def _cpu_k_mn(self, layer_id: int) -> torch.Tensor:
+        return self._k_mn_cpu[self._step(), layer_id]
+
+    def _cpu_v_scale(self, layer_id: int) -> torch.Tensor:
+        return self._v_scale_cpu[self._step(), layer_id]
+
+    def _cpu_v_mn(self, layer_id: int) -> torch.Tensor:
+        return self._v_mn_cpu[self._step(), layer_id]
+
+    def _offload_index(self, layer_id: int) -> tuple[int, ...]:
+        return (self._step(), int(layer_id))
+
+    def get_global_end(self, layer_id: int) -> int:
+        return int(self._global_end[self._step(), layer_id].item())
+
+    def get_local_end(self, layer_id: int) -> int:
+        return int(self._local_end[self._step(), layer_id].item())
+
+    def set_ends(self, layer_id: int, global_end: int, local_end: int) -> None:
+        self._global_end[self._step(), layer_id] = int(global_end)
+        self._local_end[self._step(), layer_id] = int(local_end)

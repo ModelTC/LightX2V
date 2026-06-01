@@ -33,6 +33,7 @@ class BaseTaskRequest(DisaggOverrideRequest):
     use_prompt_enhancer: bool = Field(False, description="Whether to use prompt enhancer")
     negative_prompt: str = Field("", description="Negative prompt")
     image_path: str = Field("", description="Base64 encoded image or URL")
+    last_frame_path: str = Field("", description="Last frame image path (base64, or local path)")
     image_mask_path: str = Field("", description="Mask image path (supports URL, base64, or local path)")
     save_result_path: str = Field("", description="Save result path (optional, defaults to task_id, suffix auto-detected)")
     presigned_url: str = Field("", description="Optional presigned URL for uploading final sync result")

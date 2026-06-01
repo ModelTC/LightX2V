@@ -1,4 +1,5 @@
 import torch
+from loguru import logger
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -15,6 +16,7 @@ class WanScheduler4ChangingResolutionInterface:
 
 class WanScheduler4ChangingResolution:
     def __init__(self, config):
+        self.generator = None
         if "resolution_rate" not in config:
             config["resolution_rate"] = [0.75]
         if "changing_resolution_steps" not in config:
@@ -22,7 +24,10 @@ class WanScheduler4ChangingResolution:
         assert len(config["resolution_rate"]) == len(config["changing_resolution_steps"])
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
+        if self.generator is None:
+            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
         self.latents_list = []
         for i in range(len(self.config["resolution_rate"])):
             self.latents_list.append(

@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from loguru import logger
 
 from lightx2v.models.schedulers.wan.scheduler import WanScheduler
 
@@ -45,7 +46,10 @@ class MotusScheduler(WanScheduler):
         self.latents = self.video_latents.squeeze(0)
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.float32):
-        self.generator = torch.Generator(device=self.config.get("device", self.vae_encoder_out.device)).manual_seed(seed)
+        if self.generator is None:
+            self.generator = torch.Generator(device=self.config.get("device", self.vae_encoder_out.device)).manual_seed(seed)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
         self.latents = torch.randn(
             latent_shape[0],
             latent_shape[1],

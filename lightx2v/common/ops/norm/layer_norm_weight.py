@@ -10,6 +10,13 @@ from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER
 
 from .triton_ops import norm_infer
 
+try:
+    from magi_compiler import magi_register_custom_op
+except ImportError:
+    magi_register_custom_op = None
+
+from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
+
 
 class LNWeightTemplate(metaclass=ABCMeta):
     def __init__(
@@ -262,10 +269,8 @@ class LNWeight(LNWeightTemplate):
         )
 
     def apply(self, input_tensor):
-        output_tensor = norm_infer(
-            input_tensor,
-            (self._get_actual_weight()),
-            self._get_actual_bias(),
-            self.eps,
-        )
-        return output_tensor
+        w = self._get_actual_weight()
+        b = self._get_actual_bias()
+        if use_magi_custom_ops() and magi_register_custom_op is not None:
+            return torch.ops.lightx2v.triton_layer_norm(input_tensor, w, b, self.eps)
+        return norm_infer(input_tensor, w, b, self.eps)

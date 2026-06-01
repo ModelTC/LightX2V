@@ -2,13 +2,14 @@ import math
 
 import torch
 
+from lightx2v_train.runtime.distributed import get_device
 from lightx2v_train.utils.utils import get_running_dtype
 
 
 class RectifiedFlowMatchingScheduler:
     def __init__(self, config):
         self.config = config
-        self.device = torch.device("cuda")
+        self.device = get_device()
 
         scheduler_config = config["scheduler"]
         self.num_train_timesteps = scheduler_config.get("num_train_timesteps", 1000)

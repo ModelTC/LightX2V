@@ -1,6 +1,5 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import math
-import random
 
 import cv2
 import numpy as np
@@ -15,6 +14,8 @@ def get_mask_boxes(mask):
 
     """
     y_coords, x_coords = np.nonzero(mask)
+    if x_coords.size == 0:
+        return None
     x_min = x_coords.min()
     x_max = x_coords.max()
     y_min = y_coords.min()
@@ -23,8 +24,16 @@ def get_mask_boxes(mask):
     return bbox
 
 
+def skip_replace_frame_outputs(frame):
+    h, w = frame.shape[:2]
+    aug_mask = np.zeros((h, w), dtype=np.uint8)
+    return frame.copy(), aug_mask
+
+
 def get_aug_mask(body_mask, w_len=10, h_len=20):
     body_bbox = get_mask_boxes(body_mask)
+    if body_bbox is None:
+        return body_mask
 
     bbox_wh = body_bbox[2:4] - body_bbox[0:2]
     w_slice = np.int32(bbox_wh[0] / w_len)
@@ -33,7 +42,6 @@ def get_aug_mask(body_mask, w_len=10, h_len=20):
     for each_w in range(body_bbox[0], body_bbox[2], w_slice):
         w_start = min(each_w, body_bbox[2])
         w_end = min((each_w + w_slice), body_bbox[2])
-        # print(w_start, w_end)
         for each_h in range(body_bbox[1], body_bbox[3], h_slice):
             h_start = min(each_h, body_bbox[3])
             h_end = min((each_h + h_slice), body_bbox[3])
@@ -49,40 +57,6 @@ def get_mask_body_img(img_copy, hand_mask, k=7, iterations=1):
     mask_hand_img = img_copy * (1 - dilation[:, :, None])
 
     return mask_hand_img, dilation
-
-
-def get_face_bboxes(kp2ds, scale, image_shape, ratio_aug):
-    h, w = image_shape
-    kp2ds_face = kp2ds.copy()[23:91, :2]
-
-    min_x, min_y = np.min(kp2ds_face, axis=0)
-    max_x, max_y = np.max(kp2ds_face, axis=0)
-
-    initial_width = max_x - min_x
-    initial_height = max_y - min_y
-
-    initial_area = initial_width * initial_height
-
-    expanded_area = initial_area * scale
-
-    new_width = np.sqrt(expanded_area * (initial_width / initial_height))
-    new_height = np.sqrt(expanded_area * (initial_height / initial_width))
-
-    delta_width = (new_width - initial_width) / 2
-    delta_height = (new_height - initial_height) / 4
-
-    if ratio_aug:
-        if random.random() > 0.5:
-            delta_width += random.uniform(0, initial_width // 10)
-        else:
-            delta_height += random.uniform(0, initial_height // 10)
-
-    expanded_min_x = max(min_x - delta_width, 0)
-    expanded_max_x = min(max_x + delta_width, w)
-    expanded_min_y = max(min_y - 3 * delta_height, 0)
-    expanded_max_y = min(max_y + delta_height, h)
-
-    return [int(expanded_min_x), int(expanded_max_x), int(expanded_min_y), int(expanded_max_y)]
 
 
 def calculate_new_size(orig_w, orig_h, target_area, divisor=64):

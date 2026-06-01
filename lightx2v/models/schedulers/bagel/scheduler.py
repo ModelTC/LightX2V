@@ -1,18 +1,7 @@
-import random
-
-import numpy as np
 import torch
+from loguru import logger
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
-
-
-def set_seed(seed=42):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 
 def get_flattened_position_ids_extrapolate(img_h, img_w, patch_size, max_num_patches_per_side):
@@ -59,13 +48,18 @@ class BagelScheduler(BaseScheduler):
         self.dts = timesteps[:-1] - timesteps[1:]
         self.timesteps = timesteps[:-1]
 
-    def prepare_vae_latent(self, curr_kvlens, curr_rope, image_sizes, new_token_ids):
+    def prepare_vae_latent(self, curr_kvlens, curr_rope, image_sizes, new_token_ids, seed=None):
         packed_text_ids, packed_text_indexes = list(), list()
         packed_vae_position_ids, packed_vae_token_indexes, packed_init_noises = list(), list(), list()
         packed_position_ids, packed_seqlens, packed_indexes = list(), list(), list()
         packed_key_value_indexes = list()
 
         query_curr = curr = 0
+        seed = int(seed if seed is not None else self.config.get("seed", 42))
+        if self.generator is None:
+            self.generator = torch.Generator(device="cpu").manual_seed(seed)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
 
         for (H, W), curr_kvlen, curr_position_id in zip(image_sizes, curr_kvlens, curr_rope):
             packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
@@ -82,8 +76,7 @@ class BagelScheduler(BaseScheduler):
             h, w = H // self.latent_downsample, W // self.latent_downsample
             num_image_tokens = h * w
 
-            set_seed()
-            packed_init_noises.append(torch.randn(num_image_tokens, self.latent_channel * self.latent_patch_size**2))
+            packed_init_noises.append(torch.randn(num_image_tokens, self.latent_channel * self.latent_patch_size**2, generator=self.generator))
 
             packed_vae_token_indexes.extend(range(query_curr, query_curr + num_image_tokens))
             packed_indexes.extend(range(curr, curr + num_image_tokens))
@@ -148,7 +141,10 @@ class BagelScheduler(BaseScheduler):
         return generation_input
 
     def prepare(self):
-        self.generator = torch.Generator().manual_seed(42)
+        if self.generator is None:
+            self.generator = torch.Generator().manual_seed(42)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
         self.set_timesteps()
         self.generation_input = None
         self.generation_input_cfg_text = None

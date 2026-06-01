@@ -1,3 +1,5 @@
+import gc
+
 import torch
 from loguru import logger
 
@@ -6,6 +8,7 @@ from lightx2v.models.networks.wan.lingbot_fast_model import WanLingbotFastModel
 from lightx2v.models.runners.wan.wan_runner import LingbotRunner, WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.self_forcing.scheduler import WanSFScheduler
 from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -87,6 +90,9 @@ class LingbotFastRunner(LingbotRunner):
 
         return self.model.scheduler.stream_output
 
+    def decode_segment_latents(self, segment_idx: int, latents: torch.Tensor) -> torch.Tensor:
+        return self.run_vae_decoder(latents.detach().clone())
+
     def init_run(self):
         self.init_kv_cache_manager()
         super().init_run()
@@ -97,43 +103,58 @@ class LingbotFastRunner(LingbotRunner):
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self, total_steps=None):
-        """Collect all segment latents, then decode at once with normal VAE.
-
-        This matches the source code behavior in image2video_fast.py:
-            pred_latent_chunks = torch.cat(pred_latent_chunks, dim=1)
-            videos = self.vae.decode([pred_latent_chunks])
-        """
         self.init_run()
         if self.config.get("compile", False):
             self.model.select_graph_for_compile(self.input_info)
 
-        all_latents = []
-        for segment_idx in range(self.video_segment_num):
-            logger.info(f"start segment {segment_idx + 1}/{self.video_segment_num}")
-            with ProfilingContext4DebugL1(
-                f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
+        lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
+        if lazy_vae:
+            self.vae_decoder = self.load_vae_decoder()
+        vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=torch.device("cuda"), vae_decoder=self.vae_decoder)
+
+        with (
+            no_sync_profiling(enabled=vae_decoder.is_async),
+            ProfilingContext4DebugL1(
+                f"AR chunk total {self.video_segment_num} chunks",
                 recorder_mode=GET_RECORDER_MODE(),
                 metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
                 metrics_labels=["DefaultRunner"],
-            ):
-                self.check_stop()
-                self.init_run_segment(segment_idx)
-                latents = self.run_segment(segment_idx)
-                all_latents.append(latents)
+            ),
+        ):
+            try:
+                for segment_idx in range(self.video_segment_num):
+                    logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
+                    with ProfilingContext4DebugL1(
+                        f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
+                        recorder_mode=GET_RECORDER_MODE(),
+                        metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                        metrics_labels=["DefaultRunner"],
+                    ):
+                        self.check_stop()
+                        self.init_run_segment(segment_idx)
+                        latents = self.run_segment(segment_idx)
 
-                with ProfilingContext4DebugL1("step_pre_in_rerun"):
-                    self.model.scheduler.step_pre(
-                        seg_index=segment_idx,
-                        step_index=self.model.scheduler.infer_steps - 1,
-                        is_rerun=True,
-                    )
-                with ProfilingContext4DebugL1("infer_main_in_rerun"):
-                    self.model.infer(self.inputs)
+                        with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                            self.model.scheduler.step_pre(
+                                seg_index=segment_idx,
+                                step_index=self.model.scheduler.infer_steps - 1,
+                                is_rerun=True,
+                            )
+                        with ProfilingContext4DebugL1("infer_main_in_rerun"):
+                            self.model.infer(self.inputs)
 
-                torch.cuda.empty_cache()
+                    vae_decoder.submit(self.decode_segment_latents, segment_idx, latents)
+                    torch.cuda.empty_cache()
+                decoded_chunks = vae_decoder.finish()
+            finally:
+                if "vae_decoder" in locals():
+                    vae_decoder.finish()
+                if lazy_vae:
+                    del self.vae_decoder
+                    torch.cuda.empty_cache()
+                    gc.collect()
 
-        all_latents = torch.cat(all_latents, dim=1)
-        self.gen_video = self.run_vae_decoder(all_latents)
+        self.gen_video = torch.cat(decoded_chunks, dim=0)
         self.gen_video_final = self.gen_video
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()

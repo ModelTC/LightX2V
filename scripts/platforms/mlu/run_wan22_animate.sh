@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# System management interface: cnmon
+
 # set path firstly
 lightx2v_path=/root/LightX2V
 model_path=/root/models/Wan2.2-Animate-14B

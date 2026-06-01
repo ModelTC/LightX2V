@@ -1,0 +1,28 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 77,
+    "text_len": 512,
+    "target_height": 720,
+    "target_width": 1280,
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "adapter_attn_type": "flash_attn3",
+    "sample_shift": 5.0,
+    "sample_guide_scale": 1.0,
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "refert_num": 1,
+    "replace_flag": false,
+    "fps": 30,
+    "lora_configs": [
+        {
+        "path": "lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
+        "strength": 1.0
+        }
+    ],
+    "parallel": {
+        "seq_p_size": 2,
+        "seq_p_attn_type": "ulysses"
+    }
+}

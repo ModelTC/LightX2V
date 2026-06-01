@@ -5,18 +5,22 @@ from copy import deepcopy
 
 import torch
 from PIL import Image
+from loguru import logger
 from torch.nn import functional as F
 
-from lightx2v.models.networks.bagel.data_utils import add_special_tokens
+from lightx2v.models.networks.bagel.data_utils import add_special_tokens, patchify
 from lightx2v.models.networks.bagel.infer.post_infer import BagelPostInfer
 from lightx2v.models.networks.bagel.infer.pre_infer import BagelPreInfer
 from lightx2v.models.networks.bagel.infer.transformer_infer import BagelTransformerInfer
 from lightx2v.models.networks.bagel.model_io import BagelInputs, NaiveCache, cache_init
 from lightx2v.models.networks.bagel.modeling_utils import PositionEmbedding
 from lightx2v.models.networks.bagel.tokenization_qwen2 import Qwen2Tokenizer
+from lightx2v.models.networks.bagel.vision import load_bagel_vit_model
 from lightx2v.models.networks.bagel.weights.post_weights import Qwen2PostWeights
 from lightx2v.models.networks.bagel.weights.pre_weights import Qwen2PreWeights
 from lightx2v.models.networks.bagel.weights.transformer_weights import Qwen2TransformerWeights
+from lightx2v.models.runners.bagel.i2i_utils import pil_to_bagel_tensor, resize_pil_for_vit
+from lightx2v.models.runners.bagel.t2i_utils import validate_bagel_model_assets
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 
@@ -35,6 +39,7 @@ class BagelModel:
     def __init__(self, config):
         self.config = config
         self.model_path = config["model_path"]
+        self._validate_config()
         # init llm config
         llm_config = self.config["llm_config"]
         with self.config.temporarily_unlocked():
@@ -50,6 +55,7 @@ class BagelModel:
         self.text_temperature = config.get("text_temperature", 0.3)
         self.max_think_token_n = config.get("max_think_token_n", 1000)
         self.enable_taylorseer = False
+        self.enable_vision_context = config.get("task", "t2i") == "i2i"
 
         self.cpu_offload = config.get("cpu_offload", False)
         self.offload_granularity = self.config.get("offload_granularity", "block")
@@ -58,6 +64,9 @@ class BagelModel:
         self._init_weights()
         self._init_infer()
         self._init_modules()
+
+    def _validate_config(self):
+        validate_bagel_model_assets(self.config, self.model_path)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -79,6 +88,8 @@ class BagelModel:
         self.pre_weight.load(self.original_weight_dict)
         self.transformer_weights.load(self.original_weight_dict)
         self.post_weight.load(self.original_weight_dict)
+        if self.enable_vision_context:
+            self.vit_model = load_bagel_vit_model(self.config, self.original_weight_dict)
 
         del self.original_weight_dict
         torch.cuda.empty_cache()
@@ -88,7 +99,10 @@ class BagelModel:
         self.pre_weight = self.pre_weight_class(self.config)
         self.transformer_weights = self.transformer_weight_class(self.config, self.llm_config)
         self.post_weight = self.post_weight_class(self.config)
-        weight_dict = safetensors.torch.load_file(os.path.join(self.config["model_path"], "ema.safetensors"), device=AI_DEVICE)
+        weight_path = os.path.join(self.config["model_path"], "ema.safetensors")
+        if not os.path.exists(weight_path):
+            raise FileNotFoundError(f"BAGEL transformer weights not found: {weight_path}")
+        weight_dict = safetensors.torch.load_file(weight_path, device=AI_DEVICE)
         self._apply_weights(weight_dict)
 
     def _init_infer(self):
@@ -112,6 +126,12 @@ class BagelModel:
             self.max_latent_size = self.config["max_latent_size_update"]
             self.latent_pos_embed = PositionEmbedding(self.max_latent_size, self.hidden_size)
             self.frequency_embedding_size = 256
+
+        if self.enable_vision_context:
+            self.vit_patch_size = self.config["vit_config"]["patch_size"]
+            self.vit_max_num_patch_per_side = self.config["vit_max_num_patch_per_side"]
+            self.vit_hidden_size = self.config["vit_config"]["hidden_size"]
+            self.vit_pos_embed = PositionEmbedding(self.vit_max_num_patch_per_side, self.hidden_size)
 
     def init_gen_context(self):
         gen_context = {
@@ -259,16 +279,320 @@ class BagelModel:
 
         return gen_context
 
-    def gen_text(self):
-        assert NotImplementedError
+    def prepare_vit_images(self, curr_kvlens, curr_rope, images, new_token_ids):
+        packed_vit_token_indexes = list()
+        vit_token_seqlens, packed_vit_tokens, packed_vit_position_ids = list(), list(), list()
+        packed_text_ids, packed_text_indexes = list(), list()
+        packed_seqlens, packed_position_ids, packed_indexes = list(), list(), list()
+        packed_key_value_indexes = list()
+
+        query_curr = curr = 0
+        newlens, new_rope = list(), list()
+        for image, curr_kvlen, curr_position_id in zip(images, curr_kvlens, curr_rope):
+            packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
+            curr += curr_kvlen
+
+            packed_text_ids.append(new_token_ids["start_of_image"])
+            packed_text_indexes.append(query_curr)
+            packed_indexes.append(curr)
+            curr += 1
+            query_curr += 1
+
+            image_tensor = pil_to_bagel_tensor(resize_pil_for_vit(image))
+            vit_position_ids = self.scheduler.get_flattened_position_ids(
+                image_tensor.size(1),
+                image_tensor.size(2),
+                self.vit_patch_size,
+                max_num_patches_per_side=self.vit_max_num_patch_per_side,
+            )
+            vit_tokens = patchify(image_tensor, self.vit_patch_size)
+            packed_vit_tokens.append(vit_tokens)
+            num_img_tokens = vit_tokens.shape[0]
+            packed_vit_position_ids.append(vit_position_ids)
+            vit_token_seqlens.append(num_img_tokens)
+            packed_vit_token_indexes.extend(range(query_curr, query_curr + num_img_tokens))
+            packed_indexes.extend(range(curr, curr + num_img_tokens))
+            curr += num_img_tokens
+            query_curr += num_img_tokens
+
+            packed_text_ids.append(new_token_ids["end_of_image"])
+            packed_text_indexes.append(query_curr)
+            packed_indexes.append(curr)
+            curr += 1
+            query_curr += 1
+
+            packed_position_ids.extend([curr_position_id] * (num_img_tokens + 2))
+            packed_seqlens.append(num_img_tokens + 2)
+            newlens.append(curr_kvlen + num_img_tokens + 2)
+            new_rope.append(curr_position_id + 1)
+
+        generation_input = {
+            "packed_text_ids": torch.tensor(packed_text_ids, dtype=torch.long),
+            "packed_text_indexes": torch.tensor(packed_text_indexes, dtype=torch.long),
+            "vit_token_seqlens": torch.tensor(vit_token_seqlens, dtype=torch.int),
+            "packed_vit_tokens": torch.cat(packed_vit_tokens, dim=0),
+            "packed_vit_position_ids": torch.cat(packed_vit_position_ids, dim=0),
+            "packed_vit_token_indexes": torch.tensor(packed_vit_token_indexes, dtype=torch.long),
+            "packed_position_ids": torch.tensor(packed_position_ids, dtype=torch.long),
+            "packed_seqlens": torch.tensor(packed_seqlens, dtype=torch.int),
+            "packed_indexes": torch.tensor(packed_indexes, dtype=torch.long),
+            "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
+            "key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
+        }
+
+        return generation_input, newlens, new_rope
+
+    @torch.no_grad
+    def forward_cache_update_vit(
+        self,
+        past_key_values: NaiveCache,
+        packed_text_ids: torch.LongTensor,
+        packed_text_indexes: torch.LongTensor,
+        packed_vit_tokens: torch.Tensor,
+        packed_vit_token_indexes: torch.LongTensor,
+        packed_vit_position_ids: torch.LongTensor,
+        vit_token_seqlens: torch.IntTensor,
+        packed_position_ids: torch.LongTensor,
+        packed_seqlens: torch.IntTensor,
+        packed_indexes: torch.LongTensor,
+        packed_key_value_indexes: torch.LongTensor,
+        key_values_lens: torch.IntTensor,
+    ):
+        packed_text_embedding = self.pre_infer.embed_tokens(self.pre_weight, packed_text_ids)
+        packed_sequence = packed_text_embedding.new_zeros((int(packed_seqlens.sum().item()), self.hidden_size))
+        packed_sequence[packed_text_indexes.to(AI_DEVICE)] = packed_text_embedding
+
+        cu_seqlens = torch.nn.functional.pad(torch.cumsum(vit_token_seqlens, dim=0), (1, 0)).to(AI_DEVICE, dtype=torch.int32)
+        max_seqlen = torch.max(vit_token_seqlens).item()
+        packed_vit_token_embed = self.vit_model(
+            packed_pixel_values=packed_vit_tokens,
+            packed_flattened_position_ids=packed_vit_position_ids,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
+        )
+        packed_vit_token_embed = self.pre_infer.connector(self.pre_weight, packed_vit_token_embed)
+        pos_emb = self.vit_pos_embed(packed_vit_position_ids).to(AI_DEVICE).to(torch.bfloat16)
+        packed_vit_token_embed = packed_vit_token_embed + pos_emb
+        if packed_vit_token_embed.dtype != packed_sequence.dtype:
+            packed_vit_token_embed = packed_vit_token_embed.to(packed_sequence.dtype)
+        packed_sequence[packed_vit_token_indexes.to(AI_DEVICE)] = packed_vit_token_embed
+
+        extra_inputs = {}
+        if self.use_moe:
+            extra_inputs = {"mode": "und"}
+
+        output = self.forward_inference(
+            packed_query_sequence=packed_sequence,
+            query_lens=packed_seqlens,
+            packed_query_position_ids=packed_position_ids,
+            packed_query_indexes=packed_indexes,
+            past_key_values=past_key_values,
+            packed_key_value_indexes=packed_key_value_indexes,
+            key_values_lens=key_values_lens,
+            update_past_key_values=True,
+            is_causal=False,
+            **extra_inputs,
+        )
+        return output[1]
+
+    def prepare_vae_images(self, curr_kvlens, curr_rope, images, new_token_ids, timestep=0):
+        patchified_vae_latent_shapes, packed_vae_position_ids = list(), list()
+        packed_vae_token_indexes = list()
+        packed_text_ids, packed_text_indexes = list(), list()
+        packed_seqlens, packed_position_ids, packed_indexes = list(), list(), list()
+        packed_key_value_indexes = list()
+
+        query_curr = curr = 0
+        vae_image_tensors = list()
+        newlens, new_rope = list(), list()
+        for image, curr_kvlen, curr_position_id in zip(images, curr_kvlens, curr_rope):
+            packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))
+            curr += curr_kvlen
+
+            packed_text_ids.append(new_token_ids["start_of_image"])
+            packed_text_indexes.append(query_curr)
+            packed_indexes.append(curr)
+            curr += 1
+            query_curr += 1
+
+            image_tensor = pil_to_bagel_tensor(image)
+            vae_image_tensors.append(image_tensor)
+            vae_position_ids = self.scheduler.get_flattened_position_ids(
+                image_tensor.size(1),
+                image_tensor.size(2),
+                self.latent_downsample,
+                max_num_patches_per_side=self.max_latent_size,
+            )
+            packed_vae_position_ids.append(vae_position_ids)
+            height, width = image_tensor.shape[1:]
+            h = height // self.latent_downsample
+            w = width // self.latent_downsample
+            patchified_vae_latent_shapes.append((h, w))
+
+            num_img_tokens = w * h
+            packed_vae_token_indexes.extend(range(query_curr, query_curr + num_img_tokens))
+            packed_indexes.extend(range(curr, curr + num_img_tokens))
+            curr += num_img_tokens
+            query_curr += num_img_tokens
+
+            packed_text_ids.append(new_token_ids["end_of_image"])
+            packed_text_indexes.append(query_curr)
+            packed_indexes.append(curr)
+            curr += 1
+            query_curr += 1
+
+            packed_position_ids.extend([curr_position_id] * (num_img_tokens + 2))
+            packed_seqlens.append(num_img_tokens + 2)
+            newlens.append(curr_kvlen + num_img_tokens + 2)
+            new_rope.append(curr_position_id + 1)
+
+        image_sizes = [item.shape for item in vae_image_tensors]
+        max_image_size = [max(item) for item in list(zip(*image_sizes))]
+        padded_images = torch.zeros(size=(len(vae_image_tensors), *max_image_size))
+        for i, image_tensor in enumerate(vae_image_tensors):
+            padded_images[i, :, : image_tensor.shape[1], : image_tensor.shape[2]] = image_tensor
+
+        generation_input = {
+            "padded_images": padded_images,
+            "patchified_vae_latent_shapes": patchified_vae_latent_shapes,
+            "packed_vae_position_ids": torch.cat(packed_vae_position_ids, dim=0),
+            "packed_timesteps": torch.tensor([timestep]),
+            "packed_vae_token_indexes": torch.tensor(packed_vae_token_indexes, dtype=torch.long),
+            "packed_text_ids": torch.tensor(packed_text_ids, dtype=torch.long),
+            "packed_text_indexes": torch.tensor(packed_text_indexes, dtype=torch.long),
+            "packed_position_ids": torch.tensor(packed_position_ids, dtype=torch.long),
+            "packed_seqlens": torch.tensor(packed_seqlens, dtype=torch.int),
+            "packed_indexes": torch.tensor(packed_indexes, dtype=torch.long),
+            "packed_key_value_indexes": torch.tensor(packed_key_value_indexes, dtype=torch.long),
+            "key_values_lens": torch.tensor(curr_kvlens, dtype=torch.int),
+        }
+
+        return generation_input, newlens, new_rope
+
+    @torch.no_grad
+    def forward_cache_update_vae(
+        self,
+        vae_model,
+        past_key_values: NaiveCache,
+        padded_images: torch.Tensor,
+        patchified_vae_latent_shapes: list,
+        packed_vae_position_ids: torch.LongTensor,
+        packed_timesteps: torch.Tensor,
+        packed_vae_token_indexes: torch.LongTensor,
+        packed_text_ids: torch.LongTensor,
+        packed_text_indexes: torch.LongTensor,
+        packed_position_ids: torch.LongTensor,
+        packed_seqlens: torch.IntTensor,
+        packed_indexes: torch.LongTensor,
+        key_values_lens: torch.IntTensor,
+        packed_key_value_indexes: torch.Tensor,
+    ):
+        packed_text_embedding = self.pre_infer.embed_tokens(self.pre_weight, packed_text_ids)
+        packed_sequence = packed_text_embedding.new_zeros((int(packed_seqlens.sum().item()), self.hidden_size))
+        packed_sequence[packed_text_indexes.to(AI_DEVICE)] = packed_text_embedding
+
+        padded_images = padded_images.to(device=AI_DEVICE, dtype=torch.bfloat16)
+        padded_latent = vae_model.encode(padded_images)
+
+        p = self.latent_patch_size
+        packed_latent = list()
+        for latent, (h, w) in zip(padded_latent, patchified_vae_latent_shapes):
+            latent = latent[:, : h * p, : w * p].reshape(self.latent_channel, h, p, w, p)
+            latent = torch.einsum("chpwq->hwpqc", latent).reshape(-1, p * p * self.latent_channel)
+            packed_latent.append(latent)
+        packed_latent = torch.cat(packed_latent, dim=0)
+
+        packed_pos_embed = self.latent_pos_embed(packed_vae_position_ids).to(AI_DEVICE).to(torch.bfloat16)
+        packed_timestep_embeds = self.time_embedder(self.pre_weight, packed_timesteps)
+        packed_latent = self.vae2llm(packed_latent) + packed_timestep_embeds + packed_pos_embed
+        if packed_latent.dtype != packed_sequence.dtype:
+            packed_latent = packed_latent.to(packed_sequence.dtype)
+        packed_sequence[packed_vae_token_indexes.to(AI_DEVICE)] = packed_latent
+
+        extra_inputs = {}
+        if self.use_moe:
+            extra_inputs = {
+                "mode": "gen",
+                "packed_vae_token_indexes": packed_vae_token_indexes,
+                "packed_text_indexes": packed_text_indexes,
+            }
+
+        output = self.forward_inference(
+            packed_query_sequence=packed_sequence,
+            query_lens=packed_seqlens,
+            packed_query_position_ids=packed_position_ids,
+            packed_query_indexes=packed_indexes,
+            past_key_values=past_key_values,
+            key_values_lens=key_values_lens,
+            packed_key_value_indexes=packed_key_value_indexes,
+            update_past_key_values=True,
+            is_causal=False,
+            **extra_inputs,
+        )
+        return output[1]
 
     @torch.no_grad()
-    def prepare_inputs(self, input_info, scheduler):
-        gen_context = self.transformer_infer.gen_context
-        cfg_text_context = self.transformer_infer.cfg_text_context
-        cfg_img_context = self.transformer_infer.cfg_img_context
+    def update_context_image(self, image, gen_context, vae_model, vae=True, vit=True):
+        if not (vae or vit):
+            raise ValueError("BAGEL image context update requires at least one of VAE or ViT.")
 
-        input_lists = [input_info.prompt]
+        past_key_values = gen_context["past_key_values"]
+        kv_lens = gen_context["kv_lens"]
+        ropes = gen_context["ropes"]
+
+        if vae:
+            if vae_model is None:
+                raise ValueError("BAGEL I2I requires a VAE model to encode image context.")
+            generation_input, kv_lens, ropes = self.prepare_vae_images(
+                curr_kvlens=kv_lens,
+                curr_rope=ropes,
+                images=[image],
+                new_token_ids=self.new_token_ids,
+            )
+            past_key_values = self.forward_cache_update_vae(vae_model, past_key_values, **generation_input)
+
+        if vit:
+            if not hasattr(self, "vit_model"):
+                raise ValueError("BAGEL I2I requires ViT weights (`vit_model.*`) from ema.safetensors.")
+            generation_input, kv_lens, ropes = self.prepare_vit_images(
+                curr_kvlens=kv_lens,
+                curr_rope=ropes,
+                images=[image],
+                new_token_ids=self.new_token_ids,
+            )
+            past_key_values = self.forward_cache_update_vit(past_key_values, **generation_input)
+
+        gen_context["kv_lens"] = kv_lens
+        gen_context["ropes"] = ropes
+        gen_context["past_key_values"] = past_key_values
+        return gen_context
+
+    def gen_text(self, *args, **kwargs):
+        raise NotImplementedError("BAGEL gen_text is not implemented in LightX2V.")
+
+    @torch.no_grad()
+    def prepare_inputs(self, input_info, scheduler, vae_model=None):
+        self.set_scheduler(scheduler)
+        gen_context = self.init_gen_context()
+        cfg_text_context = deepcopy(gen_context)
+        cfg_img_context = deepcopy(gen_context)
+        self.transformer_infer.gen_context = gen_context
+        self.transformer_infer.cfg_text_context = cfg_text_context
+        self.transformer_infer.cfg_img_context = cfg_img_context
+
+        image_shape = tuple(input_info.image_shapes) if input_info.image_shapes else (1024, 1024)
+        if len(image_shape) != 2:
+            raise ValueError(f"BAGEL image_shapes must be a 2D image shape (H, W), got: {input_info.image_shapes}")
+
+        task = self.config.get("task", "t2i")
+        input_lists = []
+        if task == "i2i":
+            input_image = getattr(input_info, "input_image", None)
+            if input_image is None:
+                raise ValueError("BAGEL I2I requires `input_image` prepared by BagelRunner.")
+            input_lists.append(input_image)
+        input_lists.append(input_info.prompt)
+
         output_list = []
         with torch.autocast(device_type="cuda", enabled=True, dtype=torch.bfloat16):
             if self.think:
@@ -279,20 +603,20 @@ class BagelModel:
                 gen_context = self.update_context_text(system_prompt, gen_context)
                 cfg_img_context = self.update_context_text(system_prompt, cfg_img_context)
             for input_term in input_lists:
-                if isinstance(input_term, str):  # True
+                if isinstance(input_term, str):
                     cfg_text_context = deepcopy(gen_context)
                     gen_context = self.update_context_text(input_term, gen_context)
                     cfg_img_context = self.update_context_text(input_term, cfg_img_context)
                 elif isinstance(input_term, Image.Image):
-                    assert NotImplementedError
+                    gen_context = self.update_context_image(input_term, gen_context, vae_model=vae_model, vae=not self.understanding_output, vit=True)
+                    image_shape = input_term.size[::-1]
+                    cfg_text_context = deepcopy(gen_context)
                 else:
                     raise ValueError(f"Unsupported input type: {type(input_term)}")
 
             max_think_token_n = 1000
             if self.understanding_output:
-                assert NotImplementedError
-                gen_text = self.gen_text(gen_context, do_sample=self.do_sample, temperature=self.text_temperature, max_length=max_think_token_n)
-                output_list.append(gen_text)
+                raise NotImplementedError("BAGEL visual understanding output is not implemented in LightX2V.")
             else:
                 if self.think:
                     gen_text = self.gen_text(gen_context, do_sample=self.do_sample, temperature=self.text_temperature, max_length=max_think_token_n)
@@ -307,8 +631,9 @@ class BagelModel:
         generation_input = scheduler.prepare_vae_latent(
             curr_kvlens=kv_lens,
             curr_rope=ropes,
-            image_sizes=[(1024, 1024)],
+            image_sizes=[image_shape],
             new_token_ids=self.new_token_ids,
+            seed=input_info.seed,
         )
 
         # text cfg
@@ -318,7 +643,7 @@ class BagelModel:
         generation_input_cfg_text = scheduler.prepare_vae_latent_cfg(
             curr_kvlens=kv_lens_cfg,
             curr_rope=ropes_cfg,
-            image_sizes=[(1024, 1024)],
+            image_sizes=[image_shape],
         )
 
         # img cfg
@@ -328,7 +653,7 @@ class BagelModel:
         generation_input_cfg_img = scheduler.prepare_vae_latent_cfg(
             curr_kvlens=kv_lens_cfg,
             curr_rope=ropes_cfg,
-            image_sizes=[(1024, 1024)],
+            image_sizes=[image_shape],
         )
 
         scheduler.generation_input = generation_input
@@ -363,6 +688,8 @@ class BagelModel:
             cfg_text_past_key_values=cfg_text_past_key_values,
             cfg_img_past_key_values=cfg_img_past_key_values,
         )
+        if output_list:
+            logger.info(f"BAGEL thinking/text output is not returned by LightX2V BAGEL image generation: {output_list}")
         return bagel_inputs, scheduler
 
     @staticmethod
@@ -460,8 +787,8 @@ class BagelModel:
 
         if cfg_text_scale > 1.0:
             if self.enable_taylorseer:
-                self.cache_dic = inputs.model_pred_text_cache_dic
-                self.current = inputs.model_pred_text_current
+                self.scheduler.cache_dic = inputs.model_pred_text_cache_dic
+                self.scheduler.current = inputs.model_pred_text_current
 
             cfg_text_output = self.forward_inference(
                 packed_query_sequence=packed_sequence,
@@ -480,8 +807,8 @@ class BagelModel:
 
         if cfg_img_scale > 1.0:
             if self.enable_taylorseer:
-                self.cache_dic = inputs.model_pred_text_cache_dic
-                self.current = inputs.model_pred_text_current
+                self.scheduler.cache_dic = inputs.model_pred_img_cache_dic
+                self.scheduler.current = inputs.model_pred_img_current
 
             cfg_img_output = self.forward_inference(
                 packed_query_sequence=packed_sequence,
@@ -525,7 +852,7 @@ class BagelModel:
                     norm_v_t = torch.norm(v_t, dim=-1, keepdim=True)
                     norm_v_t_ = torch.norm(v_t_, dim=-1, keepdim=True)
                 else:
-                    raise NotImplementedError(f"{self.inference_hyper['cfg_renorm_min']} is not suppoprted")
+                    raise NotImplementedError(f"cfg_renorm_type={self.inference_hyper['cfg_renorm_type']!r} is not supported")
                 scale = (norm_v_t / (norm_v_t_ + 1e-8)).clamp(min=self.inference_hyper["cfg_renorm_min"], max=1.0)
                 v_t = v_t_ * scale
         else:
