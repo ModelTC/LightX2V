@@ -46,6 +46,11 @@ TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
       "alpha, Tensor? bias) -> ()");
   m.impl("cutlass_scaled_mxfp8_mm_sm120", torch::kCUDA, &cutlass_scaled_mxfp8_mm_sm120);
 
+  m.def(
+      "dequantize_kv_cache_fp4(Tensor[] values, Tensor[] scale_factors, Tensor[] amax, "
+      "int num_heads, int block_token_size, int dtype_code, float e2m1_max, float e4m3_max) -> Tensor");
+  m.impl("dequantize_kv_cache_fp4", torch::kCUDA, &dequantize_kv_cache_fp4_cuda);
+
 }
 
 REGISTER_EXTENSION(common_ops)

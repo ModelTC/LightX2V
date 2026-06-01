@@ -1,0 +1,12 @@
+{
+    "infer_steps": 50,
+    "guidance_scale": 5.0,
+    "enable_rembg": true,
+    "enable_pbar": true,
+    "box_v": 1.01,
+    "mc_level": 0.0,
+    "num_chunks": 8000,
+    "octree_resolution": 384,
+    "attn_type": "torch_sdpa",
+    "rms_norm_type": "torch"
+}

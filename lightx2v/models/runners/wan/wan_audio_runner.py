@@ -15,13 +15,16 @@ from PIL import Image, ImageCms, ImageOps
 from einops import rearrange
 from loguru import logger
 
-from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter
+from lightx2v.common.kvcache import KVCacheManager
+from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter, CausalAudioSlidingProcessor
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
-from lightx2v.models.networks.wan.audio_model import WanAudioModel
+from lightx2v.models.networks.wan.audio_model import WanAudioARModel, WanAudioModel
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
-from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler
+from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler, WanAudioARScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
+from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import UNSET
 from lightx2v.utils.profiler import *
@@ -181,7 +184,7 @@ class AudioProcessor:
         self.audio_frame_rate = audio_sr // target_fps
 
     def load_audio(self, audio_path: str):
-        audio_array, ori_sr = ta.load(audio_path)
+        audio_array, ori_sr = load_audio_file(audio_path)
         audio_array = ta.functional.resample(audio_array.mean(0), orig_freq=ori_sr, new_freq=self.audio_sr)
         return audio_array
 
@@ -398,7 +401,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         latent_h = patched_h * self.config["patch_size"][1]
         latent_w = patched_w * self.config["patch_size"][2]
 
-        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None:
+        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None and self.input_info.target_video_length > 0:
             target_video_length = self.input_info.target_video_length
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, target_video_length)
         else:
@@ -517,7 +520,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         """Prepare previous latents for conditioning"""
         dtype = GET_DTYPE()
         tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
-        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None:
+        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None and self.input_info.target_video_length > 0:
             target_video_length = self.input_info.target_video_length
         else:
             target_video_length = self.config["target_video_length"]
@@ -846,7 +849,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.audio_adapter = self.load_audio_adapter()
 
     def get_latent_shape_with_lat_hw(self, latent_h, latent_w, target_video_length=None):
-        target_video_length = target_video_length if target_video_length is not None else self.config["target_video_length"]
+        target_video_length = target_video_length if target_video_length is not None and target_video_length > 0 else self.config["target_video_length"]
         latent_shape = [
             self.config.get("num_channels_latents", 16),
             (target_video_length - 1) // self.config["vae_stride"][0] + 1,
@@ -973,3 +976,292 @@ class Wan22AudioRunner(WanAudioRunner):
         vae_encoder = self.load_vae_encoder()
         vae_decoder = self.load_vae_decoder()
         return vae_encoder, vae_decoder
+
+
+@RUNNER_REGISTER("seko_talk_ar")
+class WanAudioARRunner(WanAudioRunner):
+    def __init__(self, config):
+        super().__init__(config)
+        self.audio_sliding_processor = CausalAudioSlidingProcessor(
+            audio_window=self.config.get("audio_window", 1.0),
+            look_ahead=self.config.get("look_ahead", 0.0),
+            audio_feat_window_neighbor_frame=self.config.get("audio_feat_window_neighbor_frame", 0),
+            video_fps=self.config.get("target_fps", 16),
+            audio_sr=self.config.get("audio_sr", 16000),
+            audio_feat_fps=self.config.get("audio_feat_fps", 50),
+        )
+
+    def init_scheduler(self):
+        self.scheduler = WanAudioARScheduler(self.config)
+
+    def load_transformer(self):
+        wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
+        lora_configs = self.config.get("lora_configs")
+        if not lora_configs:
+            model = WanAudioARModel(**wan_model_kwargs)
+        else:
+            model = build_wan_model_with_lora(WanAudioARModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
+        return model
+
+    def load_audio_adapter(self):
+        audio_adapter_offload = self.config.get("audio_adapter_cpu_offload", self.config.get("cpu_offload", False))
+        device = torch.device("cpu") if audio_adapter_offload else torch.device(AI_DEVICE)
+        self.config.setdefault("audio_num_tokens", self.config.get("num_audio_tokens", 32))
+        projection_dim = self.config.get("audio_projection_dim", self.config.get("audio_feature_dim", 1024))
+        audio_adapter = AudioAdapter(
+            attention_head_dim=self.config["dim"] // self.config["num_heads"],
+            num_attention_heads=self.config["num_heads"],
+            base_num_layers=self.config["num_layers"],
+            interval=1,
+            audio_feature_dim=self.config.get("audio_feature_dim", 1024),
+            num_tokens=self.config["audio_num_tokens"],
+            time_freq_dim=256,
+            projection_transformer_layers=self.config.get("projection_transformer_layers", 4),
+            mlp_dims=(1024, 1024, self.config["audio_num_tokens"] * projection_dim),
+            quantized=self.config.get("adapter_quantized", False),
+            quant_scheme=self.config.get("adapter_quant_scheme", None),
+            cpu_offload=audio_adapter_offload,
+            causal_projection=True,
+            projection_dim=projection_dim,
+        )
+        audio_adapter.to(device)
+        if not self.config.get("dummy_model", False):
+            load_from_rank0 = self.config.get("load_from_rank0", False)
+            weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=load_from_rank0)
+            audio_adapter.load_state_dict(weights_dict, strict=False)
+        else:
+            logger.info("[DummyModel] Skipping causal audio adapter weight loading, using random init")
+        return audio_adapter.to(dtype=GET_DTYPE())
+
+    def read_image_input(self, img_path):
+        if isinstance(img_path, Image.Image):
+            ref_img = img_path
+        else:
+            ref_img = load_image(img_path)
+
+        input_target_shape = getattr(self.input_info, "target_shape", None)
+        if input_target_shape is not None and input_target_shape is not UNSET and len(input_target_shape) >= 2:
+            target_h = int(input_target_shape[0] or self.config.get("target_height", 480))
+            target_w = int(input_target_shape[1] or self.config.get("target_width", 832))
+        else:
+            target_h = int(self.config.get("target_height", 480))
+            target_w = int(self.config.get("target_width", 832))
+        target_shape = [target_h, target_w]
+
+        ref_img = torch.from_numpy(np.array(ref_img))
+        if ref_img.ndim == 2:
+            ref_img = ref_img.unsqueeze(-1).expand(-1, -1, 3)
+        ref_img = rearrange(ref_img[..., :3], "H W C -> 1 C H W").contiguous().to(AI_DEVICE)
+        ref_img = isotropic_crop_resize(ref_img, (target_h, target_w))
+        ref_img = (ref_img - 127.5) / 127.5
+
+        latent_h = target_h // self.config["vae_stride"][1]
+        latent_w = target_w // self.config["vae_stride"][2]
+        target_video_length = getattr(self.input_info, "target_video_length", None)
+        if target_video_length is not None and target_video_length is not UNSET and target_video_length > 0:
+            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, target_video_length)
+        else:
+            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
+
+        logger.info(f"[wan_audio_ar] image resize target_h: {target_h}, target_w: {target_w}, latent_h: {latent_h}, latent_w: {latent_w}")
+        return ref_img, latent_shape, target_shape
+
+    def read_audio_input(self, audio_path):
+        audio_sr = self.config.get("audio_sr", 16000)
+        target_fps = self.config.get("target_fps", 16)
+        self._audio_processor = AudioProcessor(audio_sr, target_fps)
+
+        if not isinstance(audio_path, str):
+            return [], 0, None, 0
+
+        audio_files, mask_files = self.get_audio_files_from_audio_path(audio_path)
+        if len(audio_files) == 1:
+            audio_array = self._audio_processor.load_audio(audio_files[0]).unsqueeze(0)
+        else:
+            audio_array = self._audio_processor.load_multi_person_audio(audio_files)
+
+        audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_input_audio_len.observe(audio_len)
+
+        expected_frames = min(max(1, int(self.video_duration * target_fps)), audio_len)
+        if expected_frames < int(self.video_duration * target_fps):
+            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={self.video_duration}")
+
+        audio_segments = [AudioSegment(audio_array, 0, expected_frames)]
+
+        if mask_files is not None:
+            mask_latents = [self.process_single_mask(mask_file) for mask_file in mask_files]
+            mask_latents = torch.cat(mask_latents, dim=0)
+        else:
+            mask_latents = None
+
+        return audio_segments, expected_frames, mask_latents, len(audio_files)
+
+    def init_run(self):
+        self.gen_video_final = None
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
+        self.scheduler.set_audio_adapter(self.audio_adapter)
+        self.va_controller = VAController(self)
+        if self.input_info.return_result_tensor:
+            self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.target_shape[0], self.input_info.target_shape[1], 3), dtype=torch.float32, device="cpu")
+            self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
+        else:
+            self.cut_audio_final = None
+
+    def get_video_segment_num(self):
+        self.video_segment_num = self.model.scheduler.num_chunks
+
+    def _encode_audio_for_ar(self):
+        self.audio_segment = self.inputs["audio_segments"][0]
+        self.segment = self.audio_segment
+        torch.manual_seed(self.input_info.seed)
+        if (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)) and not hasattr(self, "audio_encoder"):
+            self.audio_encoder = self.load_audio_encoder()
+
+        features_list = []
+        for i in range(self.audio_segment.audio_array.shape[0]):
+            feat = self.audio_encoder.infer_causal(self.audio_segment.audio_array[i], self.audio_sliding_processor)
+            feat = self.audio_adapter.forward_audio_proj(feat, feat.shape[1])
+            features_list.append(feat.squeeze(0))
+        self.inputs["audio_encoder_output"] = torch.stack(features_list, dim=0)
+        self.inputs["previmg_encoder_output"] = {"prev_latents": None, "prev_mask": None, "prev_len": 0}
+
+    def init_run_segment(self, segment_idx):
+        self.segment_idx = segment_idx
+
+    @ProfilingContext4DebugL1(
+        "Prefill reference kv",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_prefill_reference_kv_duration,
+        metrics_labels=["WanAudioARRunner"],
+    )
+    def prefill_reference_kv(self):
+        ref_latents = self.inputs["image_encoder_output"]["vae_encoder_out"]
+        ref_frames = 1 if ref_latents is None else int(ref_latents.shape[1])
+        self.inputs["_ar_ref_prefill"] = True
+        try:
+            for step_index in range(self.model.scheduler.infer_steps):
+                self.model.kv_cache_manager.current_step = step_index
+                self.model.scheduler.step_pre_ref(step_index, ref_frames)
+                self.model.infer(self.inputs)
+        finally:
+            self.inputs.pop("_ar_ref_prefill", None)
+
+    def run_segment(self, segment_idx=0):
+        infer_steps = self.model.scheduler.infer_steps
+        chunk_size = int(self.model.scheduler.chunk_size)
+        start = segment_idx * chunk_size
+        end = start + chunk_size
+        self.model.scheduler.set_timesteps(infer_steps, device=AI_DEVICE)
+        xt = self.model.scheduler.noise[:, start:end].to(AI_DEVICE)
+        for step_index in range(infer_steps):
+            logger.info(f"==> chunk: {segment_idx + 1} / {self.video_segment_num}, step_index: {step_index + 1} / {infer_steps}")
+            self.model.kv_cache_manager.current_step = step_index
+            with ProfilingContext4DebugL1("step_pre"):
+                self.model.scheduler.step_pre(segment_idx, step_index, xt)
+            with ProfilingContext4DebugL1("🚀 infer_main"):
+                self.model.infer(self.inputs)
+            with ProfilingContext4DebugL1("step_post"):
+                xt = self.model.scheduler.step_post(xt)
+            if self.progress_callback:
+                current_step = (segment_idx * infer_steps) + step_index + 1
+                total_all_steps = self.video_segment_num * infer_steps
+                self.progress_callback((current_step / total_all_steps) * 100, 100)
+        return xt
+
+    def decode_segment_latents(self, segment_idx: int, segment_latents: torch.Tensor) -> torch.Tensor:
+        is_first = segment_idx == 0
+        is_last = segment_idx == self.video_segment_num - 1
+        return self.vae_decoder.cached_decode_withflag(segment_latents.to(GET_DTYPE()), is_first, is_last)
+
+    @ProfilingContext4DebugL1("init kv cache manager")
+    def init_kv_cache_manager(self):
+        ref_latents = self.inputs["image_encoder_output"]["vae_encoder_out"]
+        ref_num_frames = 0 if ref_latents is None else int(ref_latents.shape[1])
+        kv_mgr = getattr(self.model, "kv_cache_manager", None)
+        if kv_mgr is None:
+            kv_mgr = KVCacheManager(config=self.config, device=torch.device(AI_DEVICE), sp_group=self.model.seq_p_group)
+            self.model.kv_cache_manager = kv_mgr
+        kv_mgr.ar_config = dict(self.config.get("ar_config", {}))
+        kv_mgr._create_kv_caches(self.input_info.latent_shape, ref_num_frames=ref_num_frames)
+        self.model.transformer_infer.kv_cache_manager = kv_mgr
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            sp_group = getattr(self.model, "seq_p_group", None)
+            if sp_group is not None or torch.distributed.get_world_size() > 1:
+                torch.distributed.barrier(group=sp_group)
+
+    def end_run(self):
+        kv_mgr = getattr(getattr(self, "model", None), "kv_cache_manager", None)
+        if kv_mgr is not None:
+            kv_mgr.save_calibration()
+        super().end_run()
+
+    @ProfilingContext4DebugL2("Run DiT")
+    def run_main(self):
+        try:
+            self.init_run()
+            if self.config.get("compile", False) and hasattr(self.model, "comple"):
+                self.model.select_graph_for_compile(self.input_info)
+            logger.info("start ar audio generation")
+            self.check_stop()
+            self._encode_audio_for_ar()
+            latent_shape = list(self.input_info.latent_shape)
+            latent_shape[1] = self.inputs["audio_encoder_output"].shape[1]
+            latent_shape[1] = (latent_shape[1] // self.config["ar_config"]["num_frame_per_chunk"]) * self.config["ar_config"]["num_frame_per_chunk"]
+            self.input_info.latent_shape = latent_shape
+            self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
+            self.get_video_segment_num()
+            self.init_kv_cache_manager()
+            self.prefill_reference_kv()
+            segment_videos = []
+            lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
+            if lazy_vae:
+                self.vae_decoder = self.load_vae_decoder()
+            vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=AI_DEVICE, vae_decoder=self.vae_decoder)
+
+            with (
+                no_sync_profiling(enabled=vae_decoder.is_async),
+                ProfilingContext4DebugL1(
+                    f"AR chunk total {self.video_segment_num} chunks",
+                    recorder_mode=GET_RECORDER_MODE(),
+                    metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                    metrics_labels=["WanAudioARRunner"],
+                ),
+            ):
+                try:
+                    for segment_idx in range(self.video_segment_num):
+                        logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
+
+                        with ProfilingContext4DebugL1(
+                            f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
+                            recorder_mode=GET_RECORDER_MODE(),
+                            metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                            metrics_labels=["WanAudioARRunner"],
+                        ):
+                            self.check_stop()
+                            self.init_run_segment(segment_idx)
+                            segment_latents = self.run_segment(segment_idx)
+
+                        vae_decoder.submit(self.decode_segment_latents, segment_idx, segment_latents)
+                    segment_videos = vae_decoder.finish()
+                finally:
+                    if "vae_decoder" in locals():
+                        vae_decoder.finish()
+                    if lazy_vae:
+                        del self.vae_decoder
+                        torch.cuda.empty_cache()
+                        gc.collect()
+
+            self.gen_video = torch.cat(segment_videos, dim=2)
+            self.check_stop()
+            self.end_run_segment(0)
+            result = self.process_images_after_vae_decoder()
+            self.end_run()
+            return result
+        finally:
+            if getattr(self, "va_controller", None) is not None:
+                self.va_controller.clear()
+                self.va_controller = None

@@ -4,6 +4,7 @@ import os
 
 import numpy as np
 import torch
+from loguru import logger
 
 try:
     from diffusers.pipelines.flux2.pipeline_flux2 import compute_empirical_mu
@@ -14,6 +15,11 @@ except ImportError:
     retrieve_timesteps = None
     FlowMatchEulerDiscreteScheduler = None
 
+from lightx2v.models.schedulers.fls_enhance import (
+    apply_scheduler_fls_enhancement,
+    init_scheduler_fls,
+    reset_scheduler_fls_state,
+)
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -73,10 +79,14 @@ class Flux2Scheduler(BaseScheduler):
         self.infer_steps = config.get("infer_steps", 50)
         self.sigmas = None
         self.timesteps = None
+        init_scheduler_fls(self)
 
     def prepare(self, input_info):
         self.input_info = input_info
-        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
+        if self.generator is None:
+            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
 
         if hasattr(input_info, "latent_image_ids"):
             self.latent_image_ids = input_info.latent_image_ids
@@ -89,6 +99,8 @@ class Flux2Scheduler(BaseScheduler):
             self.txt_ids = None
 
         self.latents = randn_tensor(input_info.latent_shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
+
+        reset_scheduler_fls_state(self)
 
         self.set_timesteps()
 
@@ -118,6 +130,13 @@ class Flux2Scheduler(BaseScheduler):
     def step_post(self):
         t = self.timesteps[self.step_index]
         latents = self.scheduler.step(self.noise_pred, t, self.latents, return_dict=False)[0]
+        latents = apply_scheduler_fls_enhancement(
+            self,
+            latents,
+            self.noise_pred,
+            layout="seq",
+            latent_image_ids=self.latent_image_ids,
+        )
         self.latents = latents
 
     def _encode_image(self, image):

@@ -37,7 +37,7 @@ def get_default_config():
 
 def set_args2config(args):
     config = get_default_config()
-    config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS})
+    config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS and v is not None})
 
     # Snapshot worldmirror-specific CLI flags so they can win over JSON
     # defaults after auto_calc_config merges the JSON in. See the
@@ -80,6 +80,9 @@ def auto_calc_config(config):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    elif config["model_cls"] == "hunyuan3d":
+        # Hunyuan3D shape loads hunyuan3d-dit-v2-1/config.yaml + checkpoint in the runner.
+        pass
     elif config["model_cls"] == "worldmirror":
         # WorldMirror weights live under {model_path}/{subfolder}/, with a config.json
         # alongside model.safetensors. The runner loads this config directly; here we

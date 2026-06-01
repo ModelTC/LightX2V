@@ -54,6 +54,7 @@ HuggingFace: https://huggingface.co/lightx2v
    步数蒸馏 <method_tutorials/step_distill.md>
    自回归蒸馏 <method_tutorials/autoregressive_distill.md>
    视频帧插值 <method_tutorials/video_frame_interpolation.md>
+   PyTorch Trace Profiling <method_tutorials/torch_profiling.md>
 
 .. toctree::
    :maxdepth: 1

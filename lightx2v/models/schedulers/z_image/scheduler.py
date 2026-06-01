@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
+from loguru import logger
 from torch import nn
 from torch.nn import functional as F
 
@@ -373,6 +374,7 @@ class ZImageScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
+        self.generator = None
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(os.path.join(config["model_path"], "scheduler"))
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
             self.scheduler_config = json.load(f)
@@ -518,7 +520,10 @@ class ZImageScheduler(BaseScheduler):
         self.num_warmup_steps = num_warmup_steps
 
     def prepare(self, input_info):
-        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
+        if self.generator is None:
+            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
+        else:
+            logger.info(f"Generator is not None, using existing generator for latents")
         self.prepare_latents(input_info)
         self.set_timesteps()
 

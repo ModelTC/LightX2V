@@ -1,11 +1,11 @@
 import json
 import os
 
-os.environ["PROFILING_DEBUG_LEVEL"] = "2"
-os.environ["DTYPE"] = "BF16"
-os.environ["SENSITIVE_LAYER_DTYPE"] = "None"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ.setdefault("PROFILING_DEBUG_LEVEL", "2")
+os.environ.setdefault("DTYPE", "BF16")
+os.environ.setdefault("SENSITIVE_LAYER_DTYPE", "None")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import torch
 import torch.distributed as dist
 from loguru import logger
@@ -98,6 +98,7 @@ class LightX2VPipeline:
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
             "seko_talk",
+            "seko_talk_ar",
             "wan2.2_moe",
             "wan2.2_moe_audio",
             "wan2.2_audio",
@@ -328,6 +329,7 @@ class LightX2VPipeline:
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
             "seko_talk",
+            "seko_talk_ar",
             "wan2.2_moe",
             "wan2.2",
             "wan2.2_matrix_game3",

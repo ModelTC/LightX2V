@@ -19,12 +19,12 @@
 **LightX2V** 是一个先进的轻量级图像视频生成推理框架，专为提供高效、高性能的图像视频生成解决方案而设计。该统一平台集成了多种前沿的图像视频生成技术，支持文本生成视频(T2V)和图像生成视频(I2V)，文本生图片(T2I)，图像编辑(I2I)等多样化生成任务。**X2V 表示将不同的输入模态(X，如文本或图像)转换为视觉输出(Vision)**。
 
 > 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI视频生成平台，提供LTX2.3 / Wan 2.2 / SekoTalk / Qwen-Image / SeedVR2等多个模型多种任务的免费体验使用。
->
-> **Try it online:** No install required — **[LightX2V Online Service](https://x2v.light-ai.top/login)**. A free, lightweight AI video platform with **LTX 2.3**, **Wan 2.2**, **SekoTalk**, **Qwen-Image**, **SeedVR2**, and more models and tasks.
+
+> 🤗 **HuggingFace 模型仓库: [LightX2V HuggingFace](https://huggingface.co/lightx2v)**
+
+> 📝 **更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)**
 
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
-
-> 🌐 更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)
 
 ## 🧾 社区代码贡献指南
 
@@ -47,6 +47,8 @@ pre-commit run --all-files
 - [hufangjian2017](https://github.com/hufangjian2017)
 
 ## :fire: 最新动态
+
+- **2026年5月29日：** 🚀 我们推出了一个极其高效的 Wan 2.2 14B 变体：[面向 Blackwell 架构的 NVFP4 量化感知步数蒸馏与稀疏注意力模型](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse)。在单张 RTX 5090 显卡上可实现超过 50 倍的加速。
 
 - **2026年4月30日：** 🚀 支持 天数智芯 的部署，感谢天数智芯团队。
 
