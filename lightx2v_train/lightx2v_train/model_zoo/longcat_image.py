@@ -36,6 +36,9 @@ class LongCatImageModel(BaseModel):
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+        attention_backend = self.config["model"].get("attention_backend", None)
+        if attention_backend is not None:
+            self.transformer.set_attention_backend(attention_backend)
 
     def denoiser_module(self):
         return self.transformer

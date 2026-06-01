@@ -2,6 +2,7 @@ model:
     name: longcat_image
     pretrained_model_name_or_path: /data/nvme1/models/meituan-longcat/LongCat-Image
     max_sequence_length: 1024
+    attention_backend: _native_flash
     running_dtype: bf16
 
 data:

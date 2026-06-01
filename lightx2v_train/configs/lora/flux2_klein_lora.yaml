@@ -1,6 +1,6 @@
 model:
     name: flux2_klein
-    pretrained_model_name_or_path: /mnt/miaohua/wangshankun/LightX2V/FLUX.2-klein-base-9B
+    pretrained_model_name_or_path: /data/nvme1/models/FLUX.2-Klein-9B
     max_sequence_length: 512
     text_encoder_out_layers: [9, 18, 27]
     running_dtype: bf16
@@ -14,13 +14,13 @@ data:
         shuffle: true
         # examples: https://github.com/ModelTC/LightX2V_train_data_examples
         data_path:
-            - /mnt/miaohua/wangshankun/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/train.jsonl
     val:
         name: image_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /mnt/miaohua/wangshankun/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000
@@ -41,7 +41,7 @@ scheduler:
 
 training:
     method: lora
-    max_train_iters: 100
+    max_train_iters: 3000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
     max_grad_norm: 1.0
