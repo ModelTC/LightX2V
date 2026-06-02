@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from lightx2v.models.networks.wan.infer.module_io import GridOutput
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
-from lightx2v.models.networks.wan.infer.s2v.casual_audio import apply_casual_audio_encoder, mm_weight_fp32
+from lightx2v.models.networks.wan.infer.s2v.causal_audio_encoder import apply_causal_audio_encoder, mm_weight_fp32
 from lightx2v.models.networks.wan.infer.s2v.framepack import inject_motion_tokens
 from lightx2v.models.networks.wan.infer.s2v.module_io import WanS2VPreInferModuleOutput
 from lightx2v.models.networks.wan.infer.s2v.rope import rope_precompute
@@ -83,8 +83,8 @@ class WanS2VPreInfer(WanPreInfer):
         mf0, mf1 = motion_frames
         audio_input = torch.cat([audio_input[..., 0:1].repeat(1, 1, 1, mf0), audio_input], dim=-1)
 
-        audio_emb_res = apply_casual_audio_encoder(
-            weights.casual_audio_encoder,
+        audio_emb_res = apply_causal_audio_encoder(
+            weights.causal_audio_encoder,
             audio_input,
             self.config.get("num_audio_token", 4),
             self.config.get("enable_adain", False),

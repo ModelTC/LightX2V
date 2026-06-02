@@ -19,7 +19,7 @@ class WanS2VModel(WanModel):
             {
                 "cond_encoder",
                 "trainable_cond_mask",
-                "casual_audio_encoder",
+                "causal_audio_encoder",
                 "frame_packer",
                 "audio_injector",
             }

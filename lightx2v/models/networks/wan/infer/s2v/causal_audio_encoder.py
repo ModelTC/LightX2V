@@ -16,7 +16,7 @@ def mm_weight_fp32(linear, input_2d):
     return torch.mm(inp, weight)
 
 
-def _sync_casual_audio_weights(module, enc_w):
+def _sync_causal_audio_weights(module, enc_w):
     module.weights.data.copy_(enc_w.weights.tensor.to(module.weights.dtype))
     dst, src = module.encoder, enc_w.encoder
     dst.conv1_local.conv.weight.data.copy_(src.conv1_local_weight.tensor)
@@ -48,7 +48,7 @@ def _get_causal_audio_module(enc_w, audio_dim, out_dim, num_layers, num_token, e
     return _MODULE_CACHE[key]
 
 
-def apply_casual_audio_encoder(
+def apply_causal_audio_encoder(
     encoder_weights,
     features,
     num_heads,
@@ -59,5 +59,5 @@ def apply_casual_audio_encoder(
 ):
     num_layers = encoder_weights.weights.tensor.shape[1]
     module = _get_causal_audio_module(encoder_weights, audio_dim, out_dim, num_layers, num_heads, enable_adain)
-    _sync_casual_audio_weights(module, encoder_weights)
+    _sync_causal_audio_weights(module, encoder_weights)
     return module(features)

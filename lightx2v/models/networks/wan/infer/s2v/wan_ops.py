@@ -9,7 +9,7 @@ except ImportError:
 
 def mm_weight_fp32_nd(linear, x):
     """FP32 linear on [..., in_dim], matching nn.Linear on 3D [B, L, C]."""
-    from lightx2v.models.networks.wan.infer.s2v.casual_audio import mm_weight_fp32
+    from lightx2v.models.networks.wan.infer.s2v.causal_audio_encoder import mm_weight_fp32
 
     shape = x.shape
     out = mm_weight_fp32(linear, x.reshape(-1, shape[-1]))

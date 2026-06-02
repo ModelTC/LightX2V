@@ -19,13 +19,14 @@ class WanS2VPreWeights(WanPreWeights):
             "trainable_cond_mask",
             EMBEDDING_WEIGHT_REGISTER["Default"]("trainable_cond_mask.weight"),
         )
-        self._register_casual_audio_encoder(config)
+        self._register_causal_audio_encoder(config)
         if config.get("enable_framepack", False):
             self._register_frame_packer()
 
-    def _register_casual_audio_encoder(self, config):
+    def _register_causal_audio_encoder(self, config):
         enc = WeightModule()
         encoder = WeightModule()
+        # key的命名语义上应该是 causal, 但是 Wan2.2 官方的 key 是 casual, 这里为了兼容性, 保留原始的 key 名称
         enc.add_module(
             "weights",
             TENSOR_REGISTER["Default"]("casual_audio_encoder.weights"),
@@ -75,7 +76,7 @@ class WanS2VPreWeights(WanPreWeights):
             TENSOR_REGISTER["Default"]("casual_audio_encoder.encoder.padding_tokens"),
         )
         enc.add_module("encoder", encoder)
-        self.add_module("casual_audio_encoder", enc)
+        self.add_module("causal_audio_encoder", enc)
 
     def _register_frame_packer(self):
         fp = WeightModule()
