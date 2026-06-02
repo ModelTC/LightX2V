@@ -4,7 +4,6 @@ import os
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
@@ -145,24 +144,18 @@ class Flux2BaseRunner(DefaultRunner):
         packed_h = height // multiple_of
         packed_w = width // multiple_of
 
-        resample = getattr(Image, "Resampling", Image).BILINEAR
-        mask = Image.open(inpaint_mask_path).convert("L").resize((packed_w, packed_h), resample)
+        mask = Image.open(inpaint_mask_path).convert("RGB").resize((packed_w, packed_h))
         mask = torch.from_numpy(np.array(mask, dtype=np.float32) / 255.0)
-        mask = mask.view(1, 1, packed_h, packed_w)
+        mask = mask.permute(2, 0, 1).unsqueeze(0)
+        mask = mask.mean(dim=1, keepdim=True)
 
         blur_size = getattr(self.input_info, "inpaint_blur_size", None)
         blur_sigma = getattr(self.input_info, "inpaint_blur_sigma", None)
-        if blur_size is not None and blur_sigma is not None and blur_size > 0:
-            kernel_size = blur_size * 2 + 1
-            radius = torch.arange(kernel_size, dtype=mask.dtype) - blur_size
-            kernel_1d = torch.exp(-(radius**2) / (2 * blur_sigma**2))
-            kernel_1d = kernel_1d / kernel_1d.sum()
-            kernel_x = kernel_1d.view(1, 1, 1, kernel_size)
-            kernel_y = kernel_1d.view(1, 1, kernel_size, 1)
-            mask = F.pad(mask, (blur_size, blur_size, 0, 0), mode="reflect")
-            mask = F.conv2d(mask, kernel_x)
-            mask = F.pad(mask, (0, 0, blur_size, blur_size), mode="reflect")
-            mask = F.conv2d(mask, kernel_y)
+        if blur_size is not None and blur_sigma is not None:
+            from torchvision.transforms import GaussianBlur
+
+            blur = GaussianBlur(kernel_size=blur_size * 2 + 1, sigma=blur_sigma)
+            mask = blur(mask)
 
         return mask.clamp(0, 1).view(1, packed_h * packed_w, 1).to(AI_DEVICE)
 
