@@ -13,7 +13,7 @@ python -m lightx2v.infer \
 --model_cls lingbot_world_fast \
 --task i2v \
 --model_path $model_path \
---config_json /data/nvme4/gushiqiao/new/LightX2V/configs/lingbot_fast/lingbot_fast_i2v_kv_turboquant.json \
+--config_json /data/nvme4/gushiqiao/new/LightX2V/configs/lingbot_fast/lingbot_fast_i2v.json \
 --prompt "A serene lakeside scene with a lone tree standing in calm water, surrounded by distant snow-capped mountains under a bright blue sky with drifting white clouds — gentle ripples reflect the tree and sky, creating a tranquil, meditative atmosphere." \
 --negative_prompt "" \
 --image_path /data/nvme4/gushiqiao/lingbot-world/examples/03/image.jpg \

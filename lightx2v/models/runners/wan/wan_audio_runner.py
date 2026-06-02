@@ -1193,12 +1193,6 @@ class WanAudioARRunner(WanAudioRunner):
             if sp_group is not None or torch.distributed.get_world_size() > 1:
                 torch.distributed.barrier(group=sp_group)
 
-    def end_run(self):
-        kv_mgr = getattr(getattr(self, "model", None), "kv_cache_manager", None)
-        if kv_mgr is not None:
-            kv_mgr.save_calibration()
-        super().end_run()
-
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         try:
