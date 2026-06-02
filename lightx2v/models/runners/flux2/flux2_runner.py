@@ -2,7 +2,9 @@ import gc
 import math
 import os
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
@@ -121,13 +123,48 @@ class Flux2BaseRunner(DefaultRunner):
             if index == 0:
                 self.input_info.target_shape = (image_height, image_width)
 
+        inpaint_mask = self._prepare_inpaint_mask()
+
         torch_device_module.empty_cache()
         gc.collect()
 
         return {
             "text_encoder_output": text_encoder_output,
-            "image_encoder_output": {"image_tensor": condition_images},
+            "image_encoder_output": {"image_tensor": condition_images, "inpaint_mask": inpaint_mask},
         }
+
+    def _prepare_inpaint_mask(self):
+        inpaint_mask_path = getattr(self.input_info, "inpaint_mask_path", "")
+        if not inpaint_mask_path:
+            return None
+
+        from PIL import Image
+
+        height, width = self.input_info.target_shape
+        multiple_of = self.config.get("vae_scale_factor", 8) * 2
+        packed_h = height // multiple_of
+        packed_w = width // multiple_of
+
+        resample = getattr(Image, "Resampling", Image).BILINEAR
+        mask = Image.open(inpaint_mask_path).convert("L").resize((packed_w, packed_h), resample)
+        mask = torch.from_numpy(np.array(mask, dtype=np.float32) / 255.0)
+        mask = mask.view(1, 1, packed_h, packed_w)
+
+        blur_size = getattr(self.input_info, "inpaint_blur_size", None)
+        blur_sigma = getattr(self.input_info, "inpaint_blur_sigma", None)
+        if blur_size is not None and blur_sigma is not None and blur_size > 0:
+            kernel_size = blur_size * 2 + 1
+            radius = torch.arange(kernel_size, dtype=mask.dtype) - blur_size
+            kernel_1d = torch.exp(-(radius**2) / (2 * blur_sigma**2))
+            kernel_1d = kernel_1d / kernel_1d.sum()
+            kernel_x = kernel_1d.view(1, 1, 1, kernel_size)
+            kernel_y = kernel_1d.view(1, 1, kernel_size, 1)
+            mask = F.pad(mask, (blur_size, blur_size, 0, 0), mode="reflect")
+            mask = F.conv2d(mask, kernel_x)
+            mask = F.pad(mask, (0, 0, blur_size, blur_size), mode="reflect")
+            mask = F.conv2d(mask, kernel_y)
+
+        return mask.clamp(0, 1).view(1, packed_h * packed_w, 1).to(AI_DEVICE)
 
     def _prepare_text_ids(self, x):
         B, L, _ = x.shape
@@ -162,9 +199,11 @@ class Flux2BaseRunner(DefaultRunner):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
 
-        input_image_tensor = self.inputs["image_encoder_output"]["image_tensor"]
+        image_encoder_output = self.inputs["image_encoder_output"]
+        input_image_tensor = image_encoder_output["image_tensor"]
+        inpaint_mask = image_encoder_output.get("inpaint_mask")
 
-        self.model.scheduler.prepare_i2i(self.input_info, input_image_tensor, self.vae)
+        self.model.scheduler.prepare_i2i(self.input_info, input_image_tensor, self.vae, inpaint_mask=inpaint_mask)
 
         latents, generator = self.run(total_steps)
         return latents, generator
