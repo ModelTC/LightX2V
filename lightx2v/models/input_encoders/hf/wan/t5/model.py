@@ -866,7 +866,6 @@ class T5EncoderModel:
 
         with torch.no_grad():
             context = self.model(ids, mask)
-
         return [u[:v] for u, v in zip(context, seq_lens)]
 
 

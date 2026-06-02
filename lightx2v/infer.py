@@ -24,6 +24,7 @@ from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # n
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_s2v_runner import WanS2VRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_vace_runner import Wan22MoeVaceRunner, WanVaceRunner  # noqa: F401
 from lightx2v.models.runners.worldmirror.worldmirror_runner import WorldMirrorRunner  # noqa: F401
@@ -74,6 +75,7 @@ def main():
             "qwen_image",
             "longcat_image",
             "wan2.2_animate",
+            "wan2.2_s2v",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
             "hunyuan3d",
@@ -142,8 +144,8 @@ def main():
     parser.add_argument(
         "--src_pose_path",
         type=str,
-        default=None,
-        help="The file of the source pose. Default None.",
+        default="",
+        help="Pose driving video for Wan s2v / animate (e.g. examples/pose.mp4).",
     )
     parser.add_argument(
         "--src_face_path",

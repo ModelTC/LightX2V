@@ -83,6 +83,17 @@ def auto_calc_config(config):
     elif config["model_cls"] == "hunyuan3d":
         # Hunyuan3D shape loads hunyuan3d-dit-v2-1/config.yaml + checkpoint in the runner.
         pass
+    elif config["model_cls"] == "wan2.2_s2v":
+        config_path = os.path.join(config["model_path"], "config.json")
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        config.setdefault("text_dim", 4096)
+        config.setdefault("patch_size", (1, 2, 2))
+        config.setdefault("window_size", (-1, -1))
+        config.setdefault("qk_norm", True)
+        config.setdefault("cross_attn_norm", True)
     elif config["model_cls"] == "worldmirror":
         # WorldMirror weights live under {model_path}/{subfolder}/, with a config.json
         # alongside model.safetensors. The runner loads this config directly; here we

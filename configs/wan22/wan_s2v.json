@@ -1,0 +1,22 @@
+{
+    "infer_steps": 40,
+    "num_repeat": null,
+    "num_train_timesteps": 1000,
+    "target_fps": 16,
+    "target_video_length": 81,
+    "infer_frames": 80,
+    "motion_frames": 73,
+    "drop_first_motion": true,
+    "max_area": 720896,
+    "text_len": 512,
+    "sample_shift": 3,
+    "sample_guide_scale": 4.5,
+    "enable_cfg": true,
+    "cpu_offload": false,
+    "convert_model_dtype": true,
+    "use_image_encoder": false,
+    "vae_dtype": "torch.float32",
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3"
+}
