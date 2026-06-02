@@ -335,6 +335,109 @@ def apply_rotary_embedding(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
     return output
 
 
+@triton.jit
+def _audio_cache_rope_kernel(
+    out_ptr,
+    x_ptr,
+    freqs_real_ptr,
+    h: tl.constexpr,
+    w: tl.constexpr,
+    token_start,
+    ref_tokens: tl.constexpr,
+    local_per_frame: tl.constexpr,
+    world_size: tl.constexpr,
+    rank: tl.constexpr,
+    num_heads: tl.constexpr,
+    head_dim: tl.constexpr,
+    t_dim: tl.constexpr,
+    h_dim: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    row_idx = tl.program_id(0)
+    token_head_idx = row_idx // num_heads
+    head_idx = row_idx - token_head_idx * num_heads
+    token_idx = token_start + token_head_idx
+
+    half_head_dim: tl.constexpr = head_dim // 2
+    col_offsets = tl.arange(0, BLOCK_SIZE)
+    mask = col_offsets < half_head_dim
+
+    x_row_ptr = x_ptr + (token_head_idx * num_heads + head_idx) * head_dim
+    out_row_ptr = out_ptr + (token_head_idx * num_heads + head_idx) * head_dim
+    x_real = tl.load(x_row_ptr + col_offsets * 2, mask=mask, other=0.0)
+    x_imag = tl.load(x_row_ptr + col_offsets * 2 + 1, mask=mask, other=0.0)
+
+    hw: tl.constexpr = h * w
+    padded_hw: tl.constexpr = ((hw + world_size - 1) // world_size) * world_size
+    spatial_chunk: tl.constexpr = padded_hw // world_size
+    is_ref = token_idx < ref_tokens
+    gen_idx = tl.maximum(token_idx - ref_tokens, 0)
+    frame_idx = gen_idx // local_per_frame
+    ref_spatial_idx = token_idx % local_per_frame
+    gen_spatial_idx = gen_idx % local_per_frame
+    local_spatial_idx = tl.where(is_ref, ref_spatial_idx, gen_spatial_idx)
+    spatial_idx = rank * spatial_chunk + local_spatial_idx
+    spatial_valid = spatial_idx < hw
+    y = spatial_idx // w
+    z = spatial_idx - y * w
+
+    is_temporal = col_offsets < t_dim
+    is_h = (col_offsets >= t_dim) & (col_offsets < t_dim + h_dim)
+    freq_row = tl.where(is_temporal, frame_idx, tl.where(is_h, y, z))
+    freq_col = col_offsets
+    freq_offset = (freq_row * half_head_dim + freq_col) * 2
+    load_mask = mask & (~is_temporal | ~is_ref) & (is_temporal | spatial_valid)
+    cos_vals = tl.load(freqs_real_ptr + freq_offset, mask=load_mask, other=1.0)
+    sin_vals = tl.load(freqs_real_ptr + freq_offset + 1, mask=load_mask, other=0.0)
+
+    out_real = x_real.to(tl.float32) * cos_vals.to(tl.float32) - x_imag.to(tl.float32) * sin_vals.to(tl.float32)
+    out_imag = x_real.to(tl.float32) * sin_vals.to(tl.float32) + x_imag.to(tl.float32) * cos_vals.to(tl.float32)
+    tl.store(out_row_ptr + col_offsets * 2, out_real, mask=mask)
+    tl.store(out_row_ptr + col_offsets * 2 + 1, out_imag, mask=mask)
+
+
+def apply_audio_cache_rope(
+    x: torch.Tensor,
+    freqs: torch.Tensor,
+    *,
+    h: int,
+    w: int,
+    token_start: int,
+    ref_tokens: int,
+    local_per_frame: int,
+    world_size: int = 1,
+    rank: int = 0,
+) -> torch.Tensor:
+    seq_len, num_heads, head_dim = x.shape
+    c = head_dim // 2
+    t_dim = c - 2 * (c // 3)
+    h_dim = c // 3
+    x_contig = x.contiguous()
+    out = torch.empty_like(x_contig)
+    freqs_real = torch.view_as_real(freqs.to(device=x.device))
+    block_size = triton.next_power_of_2(c)
+    _audio_cache_rope_kernel[(seq_len * num_heads,)](
+        out,
+        x_contig,
+        freqs_real,
+        h,
+        w,
+        int(token_start),
+        int(ref_tokens),
+        int(local_per_frame),
+        int(world_size),
+        int(rank),
+        num_heads,
+        head_dim,
+        t_dim,
+        h_dim,
+        BLOCK_SIZE=block_size,
+        num_warps=1,
+        num_stages=2,
+    )
+    return out
+
+
 # RMSNorm-fp32
 def maybe_contiguous_lastdim(x):
     return x.contiguous() if x is not None and x.stride(-1) != 1 else x

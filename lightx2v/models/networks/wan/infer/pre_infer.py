@@ -75,8 +75,7 @@ class WanPreInfer:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
                 seqlen = cos_sin.shape[0]
-                multiple = world_size * f
-                padding_size = (multiple - (seqlen % multiple)) % multiple
+                padding_size = (world_size - (seqlen % world_size)) % world_size
                 if padding_size > 0:
                     cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
                 cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
@@ -86,8 +85,7 @@ class WanPreInfer:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
                 seqlen = cos_sin.shape[0]
-                multiple = world_size * f
-                padding_size = (multiple - (seqlen % multiple)) % multiple
+                padding_size = (world_size - (seqlen % world_size)) % world_size
                 if padding_size > 0:
                     cos_sin = F.pad(cos_sin, (0, 0, 0, 0, 0, padding_size))
                 cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]

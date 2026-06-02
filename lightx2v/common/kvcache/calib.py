@@ -63,6 +63,12 @@ class CalibRollingKVCachePool(RollingKVCachePool):
         )
         self._capture_flag = torch.zeros(S, L, dtype=torch.bool, device=self._device)
 
+    def _calib_k_buffer(self, layer_id: int) -> torch.Tensor:
+        return self._k_buffer[layer_id]
+
+    def _calib_v_buffer(self, layer_id: int) -> torch.Tensor:
+        return self._v_buffer[layer_id]
+
     def _quant_key(self, k: torch.Tensor, km: torch.Tensor | None = None, BLKK: int = 128, WARPK: int = 128):
         """Run sage's per_thread int8 K-quantisation kernel on ``k``.
 
@@ -141,7 +147,7 @@ class CalibRollingKVCachePool(RollingKVCachePool):
         aligned_start = (attn_start // BLK) * BLK
         step, layer = self.current_step, layer_id
 
-        k_full = self._k_buffer[layer_id, aligned_start:local_end]  # [kv_len_a, H, D] bf16
+        k_full = self._calib_k_buffer(layer_id)[aligned_start:local_end]  # [kv_len_a, H, D] bf16
         kv_len_a = k_full.size(0)
         if kv_len_a == 0:
             return
@@ -155,7 +161,7 @@ class CalibRollingKVCachePool(RollingKVCachePool):
             self._capture_turboquant_marginals(layer_id, k_full)
             return
 
-        v_full = self._v_buffer[layer_id, aligned_start:local_end]  # [kv_len_a, H, D] bf16
+        v_full = self._calib_v_buffer(layer_id)[aligned_start:local_end]  # [kv_len_a, H, D] bf16
 
         # ---- km (bf16 mean to match sage) ----
         km_lowp = k_full.mean(dim=0, keepdim=True)  # bf16 [1, H, D]
@@ -214,3 +220,100 @@ class CalibRollingKVCachePool(RollingKVCachePool):
         self._v_channel_max.zero_()
         self._k_block_scale_calib.zero_()
         self._capture_flag.zero_()
+
+
+class StepCalibRollingKVCachePool(CalibRollingKVCachePool):
+    """Step-isolated calibration pool for step-dependent reference K/V."""
+
+    def _step(self) -> int:
+        return int(self.current_step)
+
+    def _init_kv_buffer(self) -> None:
+        S = self._num_steps
+        L, N, H, D = self._num_layers, self._cache_size, self._num_heads, self._head_dim
+        self._k_buffer = torch.zeros(S, L, N, H, D, dtype=self._dtype, device=self._device)
+        self._v_buffer = torch.zeros(S, L, N, H, D, dtype=self._dtype, device=self._device)
+        self._global_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(S, L, dtype=torch.long, device="cpu")
+        self._captured_window_size = torch.zeros(S, L, dtype=torch.long, device="cpu")
+
+        if self._turboquant_calibrate:
+            self._tq_hist_k = torch.zeros(4096, dtype=torch.int64, device=self._device)
+            return
+
+        BLK = self._BLKK
+        max_blks = (self._cache_size + BLK - 1) // BLK
+        self._km = torch.zeros(S, L, 1, H, D, dtype=torch.float32, device=self._device)
+        self._v_channel_max = torch.zeros(S, L, H, D, dtype=torch.float32, device=self._device)
+        self._k_block_scale_calib = torch.zeros(
+            S,
+            L,
+            max_blks,
+            H,
+            self._SCALES_PER_BLK,
+            dtype=torch.float32,
+            device=self._device,
+        )
+        self._capture_flag = torch.zeros(S, L, dtype=torch.bool, device=self._device)
+
+    def _calib_k_buffer(self, layer_id: int) -> torch.Tensor:
+        return self._k_buffer[self._step(), layer_id]
+
+    def _calib_v_buffer(self, layer_id: int) -> torch.Tensor:
+        return self._v_buffer[self._step(), layer_id]
+
+    def store_kv(
+        self,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        start_idx: int,
+        end_idx: int,
+        layer_id: int,
+    ) -> None:
+        self._calib_k_buffer(layer_id)[start_idx:end_idx] = k
+        self._calib_v_buffer(layer_id)[start_idx:end_idx] = v
+
+    def k_cache(
+        self,
+        layer_id: int,
+        attn_start: int | None = None,
+        local_end: int | None = None,
+    ) -> torch.Tensor:
+        kb = self._calib_k_buffer(layer_id)
+        if attn_start is None and local_end is None:
+            return kb
+        return kb[attn_start:local_end]
+
+    def v_cache(
+        self,
+        layer_id: int,
+        attn_start: int | None = None,
+        local_end: int | None = None,
+    ) -> torch.Tensor:
+        vb = self._calib_v_buffer(layer_id)
+        if attn_start is None and local_end is None:
+            return vb
+        return vb[attn_start:local_end]
+
+    def get_global_end(self, layer_id: int) -> int:
+        return int(self._global_end[self._step(), layer_id].item())
+
+    def get_local_end(self, layer_id: int) -> int:
+        return int(self._local_end[self._step(), layer_id].item())
+
+    def set_ends(self, layer_id: int, global_end: int, local_end: int) -> None:
+        step = self._step()
+        self._global_end[step, layer_id] = global_end
+        self._local_end[step, layer_id] = local_end
+
+    def roll_window(self, layer_id: int, sink_tokens: int, num_evicted: int) -> None:
+        num_kept = self.get_local_end(layer_id) - num_evicted - sink_tokens
+        if num_kept <= 0:
+            return
+        src_start = sink_tokens + num_evicted
+        src_end = src_start + num_kept
+        dst_start = sink_tokens
+        dst_end = dst_start + num_kept
+        kb, vb = self._calib_k_buffer(layer_id), self._calib_v_buffer(layer_id)
+        kb[dst_start:dst_end].copy_(kb[src_start:src_end].clone())
+        vb[dst_start:dst_end].copy_(vb[src_start:src_end].clone())

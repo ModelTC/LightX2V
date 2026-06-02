@@ -54,6 +54,22 @@ class QwenImageModel(BaseModel):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
         return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
 
+    def denoiser_module(self):
+        return self.transformer
+
+    def fsdp2_shard_plan(self, fsdp_config):
+        reshard_config = fsdp_config["reshard_after_forward"]
+        return [
+            {
+                "modules": self.transformer.transformer_blocks,
+                "reshard_after_forward": reshard_config["block_reshard"],
+            },
+            {
+                "module": self.transformer,
+                "reshard_after_forward": reshard_config["root_reshard"],
+            },
+        ]
+
     def encode_to_latent(self, sample):
         image = sample["target_image"].to(device=self.device, dtype=self.running_dtype)
         pixel_values = image.unsqueeze(2)

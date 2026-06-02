@@ -8,6 +8,11 @@ import triton  # type: ignore
 import triton.language as tl  # type: ignore
 from torch import Tensor
 
+try:
+    from magi_compiler import magi_register_custom_op
+except ImportError:
+    magi_register_custom_op = None
+
 
 @triton.autotune(
     configs=[
@@ -859,6 +864,25 @@ def norm_infer(
         num_warps=num_warps,
     )
     return out
+
+
+if magi_register_custom_op is not None:
+
+    @magi_register_custom_op(
+        "lightx2v::triton_layer_norm",
+        infer_output_meta_fn=["x"],
+        is_subgraph_boundary=True,
+    )
+    def _triton_layer_norm_custom_op(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps: float) -> torch.Tensor:
+        return norm_infer(x, weight, bias, eps, is_rms_norm=False)
+
+    @magi_register_custom_op(
+        "lightx2v::rms_norm",
+        infer_output_meta_fn=["x"],
+        is_subgraph_boundary=True,
+    )
+    def _rms_norm_custom_op(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+        return rms_norm_kernel(x, weight, eps)
 
 
 def rms_norm_fn(

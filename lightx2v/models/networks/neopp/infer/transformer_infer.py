@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 # from flashinfer.activation import silu_and_mul as flashinfer_silu_and_mul
 try:
@@ -13,6 +14,7 @@ except ImportError:
     magi_compile = None
     magi_register_custom_op = None
 
+from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
 from lightx2v.utils.profiler import *
@@ -83,6 +85,15 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             self.seq_p_group = None
         self.kv_cache = KVCacheManager()
 
+        # MagiCompiler enable/disable switch
+        self.use_magi_compile = config.get("use_magi_compile", False)
+        if self.use_magi_compile and magi_compile is None:
+            logger.warning("use_magi_compile=True but magi_compiler is not available, using eager mode")
+            self.use_magi_compile = False
+        if self.use_magi_compile:
+            configure_dynamo_for_magi_compile()
+            logger.info("Using Magi Compile (per-layer decoder, split at kv_update)")
+
     @torch.no_grad()
     def infer(self, weights, pre_infer_out, inputs):
         pass_key = "cond" if self.scheduler.infer_condition else "uncond"
@@ -96,7 +107,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         hidden_states = self._fm_head(weights.fm_head, hidden_states)
         return hidden_states.unsqueeze(0)
 
-    def _infer_without_offload_impl(self, blocks, hidden_states, cos_sin, past_key_values):
+    def infer_without_offload(self, blocks, hidden_states, cos_sin, past_key_values):
         seq_len_q = hidden_states.shape[0]
         kvcache_len = past_key_values.shape[2]
         seq_len_k = kvcache_len + seq_len_q
@@ -106,40 +117,70 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         self.kv_cache.clear()
         self.kv_cache.prepare(past_key_values, seq_len_q)
 
-        self._cu_seqlens_q = torch.tensor([0, seq_len_q], dtype=torch.int32)
-        self._cu_seqlens_k = torch.tensor([0, seq_len_k], dtype=torch.int32)
-        self._max_seqlen_q = seq_len_q
-        self._max_seqlen_k = seq_len_k
-        self._kvcache_len = kvcache_len
-
+        kv_buf = self.kv_cache._kv_buf
+        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
         for layer_idx, block_weight in enumerate(blocks):
-            hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin)
+            if self.use_magi_compile:
+                hidden_states = self._decoder_layer_magi(
+                    block_weight,
+                    layer_idx,
+                    hidden_states,
+                    cos_t,
+                    sin_t,
+                    cos_h,
+                    sin_h,
+                    cos_w,
+                    sin_w,
+                    kv_buf,
+                )
+            else:
+                hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
         return hidden_states
 
     if magi_compile is not None:
 
-        @magi_compile(
-            dynamic_arg_dims={"hidden_states": 0, "past_key_values": 2},
-            config_patch=lambda c: c.model_copy(
+        def _magi_config_patch(c):
+            return c.model_copy(
                 update={
-                    "enable_inductor_max_autotune": True,
-                    "disable_cache": True,  # Avoid pickle errors with custom op registrations
+                    "disable_cache": True,
                 }
-            ),
-        )
-        def infer_without_offload(self, blocks, hidden_states, cos_sin, past_key_values):
-            return self._infer_without_offload_impl(blocks, hidden_states, cos_sin, past_key_values)
-    else:
+            )
 
-        def infer_without_offload(self, blocks, hidden_states, cos_sin, past_key_values):
-            return self._infer_without_offload_impl(blocks, hidden_states, cos_sin, past_key_values)
+        @magi_compile(
+            dynamic_arg_dims={
+                "hidden_states": 0,
+                "kv_buf": 2,
+                "cos_t": 1,
+                "sin_t": 1,
+                "cos_h": 1,
+                "sin_h": 1,
+                "cos_w": 1,
+                "sin_w": 1,
+            },
+            config_patch=_magi_config_patch,
+        )
+        def _decoder_layer_magi(
+            self,
+            block_weight,
+            layer_idx,
+            hidden_states,
+            cos_t,
+            sin_t,
+            cos_h,
+            sin_h,
+            cos_w,
+            sin_w,
+            kv_buf,
+        ):
+            cos_sin = (cos_t, sin_t, cos_h, sin_h, cos_w, sin_w)
+            return self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
 
     # @ProfilingContext4DebugL1("Decoder Layer")
-    def _decoder_layer(self, block_weight, layer_idx, hidden_states, cos_sin):
+    def _decoder_layer(self, block_weight, layer_idx, hidden_states, cos_sin, kv_buf=None):
         residual = hidden_states
         hidden_states = block_weight.input_layernorm_mot_gen.apply(hidden_states)
 
-        hidden_states = self._self_attn(block_weight.self_attn, layer_idx, hidden_states, cos_sin)
+        hidden_states = self._self_attn(block_weight.self_attn, layer_idx, hidden_states, cos_sin, kv_buf)
         hidden_states = residual + hidden_states
 
         residual = hidden_states
@@ -150,7 +191,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         return hidden_states
 
     # @ProfilingContext4DebugL1("Self Attn")
-    def _self_attn(self, attn_w, layer_idx, hidden_states, cos_sin):
+    def _self_attn(self, attn_w, layer_idx, hidden_states, cos_sin, kv_buf=None):
         query_states = attn_w.q_proj_mot_gen.apply(hidden_states)
         query_states = query_states.view(-1, self.num_heads, self.head_dim)  # [seq, num_heads, head_dim]
 
@@ -167,9 +208,12 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         value_states = attn_w.v_proj_mot_gen.apply(hidden_states)
         value_states = value_states.view(-1, self.num_kv_heads, self.head_dim)  # [seq, num_kv_heads, head_dim]
 
+        if kv_buf is None:
+            kv_buf = self.kv_cache._kv_buf
+
         # Custom op: forces MagiCompiler to split the FX graph at this op,
         # isolating the slice-scatter from the surrounding compiled regions.
-        key_states, value_states = torch.ops.neopp.kv_update(self.kv_cache._kv_buf, layer_idx, key_states, value_states)
+        key_states, value_states = torch.ops.neopp.kv_update(kv_buf, layer_idx, key_states, value_states)
 
         attn_output = self._compute_attn(attn_w, query_states, key_states, value_states)
 
@@ -254,10 +298,10 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
                 q=query_states,
                 k=key_states,
                 v=value_states,
-                cu_seqlens_q=self._cu_seqlens_q,
-                cu_seqlens_kv=self._cu_seqlens_k,
-                max_seqlen_q=self._max_seqlen_q,
-                max_seqlen_kv=self._max_seqlen_k,
+                cu_seqlens_q=torch.tensor([0, seq_len_q], dtype=torch.int32),
+                cu_seqlens_kv=torch.tensor([0, seq_len_k], dtype=torch.int32),
+                max_seqlen_q=seq_len_q,
+                max_seqlen_kv=seq_len_k,
             )
         return attn_output
 

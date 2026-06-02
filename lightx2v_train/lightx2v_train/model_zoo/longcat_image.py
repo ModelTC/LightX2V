@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 
-import numpy as np
 import torch
-from PIL import Image
 from diffusers import AutoencoderKL, LongCatImagePipeline
+from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.transformers import LongCatImageTransformer2DModel
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import prepare_pos_ids
 
@@ -34,7 +33,32 @@ class LongCatImageModel(BaseModel):
         ).to(self.device)
         self.vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
         self.transformer = LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        self.text_pipeline.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+        attention_backend = self.config["model"].get("attention_backend", None)
+        if attention_backend is not None:
+            self.transformer.set_attention_backend(attention_backend)
+
+    def denoiser_module(self):
+        return self.transformer
+
+    def fsdp2_shard_plan(self, fsdp_config):
+        reshard_config = fsdp_config["reshard_after_forward"]
+        return [
+            {
+                "modules": self.transformer.transformer_blocks,
+                "reshard_after_forward": reshard_config["block_reshard"],
+            },
+            {
+                "modules": self.transformer.single_transformer_blocks,
+                "reshard_after_forward": reshard_config["block_reshard"],
+            },
+            {
+                "module": self.transformer,
+                "reshard_after_forward": reshard_config["root_reshard"],
+            },
+        ]
 
     @property
     def vae_scale_factor(self):
@@ -50,15 +74,14 @@ class LongCatImageModel(BaseModel):
     def encode_condition(self, sample):
         prompt = sample["prompt"]
         if self.config.get("enable_prompt_rewrite_training", False):
-            prompt = self.text_pipeline.rewrite_prompt(prompt, self.device)
+            prompt = self.text_pipeline.rewire_prompt(prompt, self.device)
         prompt_embed, text_ids = self.text_pipeline.encode_prompt(
             prompt=prompt,
-            device=self.device,
             num_images_per_prompt=1,
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
 
-    def prepare_denoiser_input(self, noisy_latent, sample, condition):
+    def prepare_denoiser_input(self, noisy_latent):
         n = noisy_latent.shape[0]
         h, w = noisy_latent.shape[2], noisy_latent.shape[3]
         packed = LongCatImagePipeline._pack_latents(noisy_latent, n, noisy_latent.shape[1], h, w)
@@ -111,15 +134,26 @@ class LongCatImageModel(BaseModel):
         latent = latent / scale + shift
 
         image = self.vae.decode(latent).sample  # (B, C, H, W)
-        image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.permute(0, 2, 3, 1).float().cpu().numpy()
-        return [Image.fromarray((img * 255).round().astype(np.uint8)) for img in image]
+        return self.image_processor.postprocess(image, output_type="pil")
 
     def assemble_pipeline(self, scheduler=None):
         return LongCatImagePipeline(
             tokenizer=self.text_pipeline.tokenizer,
             text_encoder=self.text_pipeline.text_encoder,
+            text_processor=self.text_pipeline.text_processor,
             vae=self.vae,
             transformer=self.transformer,
             scheduler=scheduler or self.text_pipeline.scheduler,
         ).to(self.device)
+
+    def get_pipeline_infer_kwargs(self, infer_config):
+        enable_cfg = infer_config.get("enable_cfg", False)
+        return {
+            "height": infer_config.get("height", infer_config.get("default_height", 1024)),
+            "width": infer_config.get("width", infer_config.get("default_width", 1024)),
+            "num_inference_steps": infer_config.get("num_inference_steps", 50),
+            "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0) if enable_cfg else 1.0,
+            "enable_cfg_renorm": infer_config.get("enable_cfg_renorm", True),
+            "cfg_renorm_min": infer_config.get("cfg_renorm_min", 0.0),
+            "enable_prompt_rewrite": infer_config.get("enable_prompt_rewrite", True),
+        }

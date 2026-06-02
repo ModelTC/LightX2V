@@ -1,0 +1,18 @@
+{
+    "model_cls": "flux2_klein",
+    "task": "t2i",
+    "infer_steps": 4,
+    "sample_guide_scale": 1.0,
+    "vae_scale_factor": 16,
+    "feature_caching": "None",
+    "enable_cfg": false,
+    "patch_size": 2,
+    "tokenizer_max_length": 512,
+    "rope_type": "flashinfer",
+    "fls": {
+        "enable": true,
+        "fovea_strength": 10,
+        "sharpness": 3,
+        "mask_inertia": 0.99
+    }
+}

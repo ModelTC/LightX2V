@@ -90,6 +90,7 @@ set(SOURCES
     "csrc/gemm/mxfp4_scaled_mm_kernels_sm120.cu"
     "csrc/gemm/mxfp6_mxfp8_scaled_mm_kernels_sm120.cu"
     "csrc/gemm/mxfp8_scaled_mm_kernels_sm120.cu"
+    "csrc/kvcache/kv_dequant_cuda.cu"
     "csrc/common_extension.cc"
 )
 

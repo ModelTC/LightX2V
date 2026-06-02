@@ -40,7 +40,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         self.arch = get_cuda_arch(torch.cuda.current_device())
         self.topk = 1 - self.sparsity_ratio
         if self.operator == "triton":
-            self.BLKQ, self.BLKK = 128, 128
+            self.BLKQ, self.BLKK = 64, 64
             self.apply_func = self.apply_triton
         elif self.operator == "triton_ar":  # triton for AR models
             self.BLKQ, self.BLKK = 128, 128
