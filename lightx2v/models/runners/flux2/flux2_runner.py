@@ -107,22 +107,32 @@ class Flux2BaseRunner(DefaultRunner):
             input_image = [input_image]
 
         condition_images = []
+        max_image_area = self.config.get("max_image_area", 1024 * 1024)
+        inpaint_mask_path = getattr(self.input_info, "inpaint_mask_path", "")
+        inpaint_mask_image = Image.open(inpaint_mask_path).convert("RGB") if inpaint_mask_path else None
+        processed_inpaint_mask = None
         for index, img in enumerate(input_image):
             image_processor.check_image_input(img)
             image_width, image_height = img.size
-            if image_width * image_height > 1024 * 1024:
-                img = image_processor._resize_to_target_area(img, 1024 * 1024)
+            if index == 0 and inpaint_mask_image is not None and inpaint_mask_image.size != img.size:
+                inpaint_mask_image = inpaint_mask_image.resize(img.size)
+            if max_image_area is not None and max_image_area > 0 and image_width * image_height > max_image_area:
+                img = image_processor._resize_to_target_area(img, max_image_area)
+                if index == 0 and inpaint_mask_image is not None:
+                    inpaint_mask_image = image_processor._resize_to_target_area(inpaint_mask_image, max_image_area)
                 image_width, image_height = img.size
 
             multiple_of = vae_scale_factor * 2
             image_width = (image_width // multiple_of) * multiple_of
             image_height = (image_height // multiple_of) * multiple_of
+            if index == 0 and inpaint_mask_image is not None:
+                processed_inpaint_mask = image_processor.resize(inpaint_mask_image, image_height, image_width, resize_mode="crop")
             img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
             condition_images.append(img.to(AI_DEVICE))
             if index == 0:
                 self.input_info.target_shape = (image_height, image_width)
 
-        inpaint_mask = self._prepare_inpaint_mask()
+        inpaint_mask = self._prepare_inpaint_mask(processed_inpaint_mask)
 
         torch_device_module.empty_cache()
         gc.collect()
@@ -132,19 +142,16 @@ class Flux2BaseRunner(DefaultRunner):
             "image_encoder_output": {"image_tensor": condition_images, "inpaint_mask": inpaint_mask},
         }
 
-    def _prepare_inpaint_mask(self):
-        inpaint_mask_path = getattr(self.input_info, "inpaint_mask_path", "")
-        if not inpaint_mask_path:
+    def _prepare_inpaint_mask(self, inpaint_mask):
+        if inpaint_mask is None:
             return None
-
-        from PIL import Image
 
         height, width = self.input_info.target_shape
         multiple_of = self.config.get("vae_scale_factor", 8) * 2
         packed_h = height // multiple_of
         packed_w = width // multiple_of
 
-        mask = Image.open(inpaint_mask_path).convert("RGB").resize((packed_w, packed_h))
+        mask = inpaint_mask.convert("RGB").resize((packed_w, packed_h))
         mask = torch.from_numpy(np.array(mask, dtype=np.float32) / 255.0)
         mask = mask.permute(2, 0, 1).unsqueeze(0)
         mask = mask.mean(dim=1, keepdim=True)
