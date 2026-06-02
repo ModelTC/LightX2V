@@ -104,6 +104,7 @@ class LightX2VPipeline:
             "wan2.2_audio",
             "wan2.2_moe_distill",
             "wan2.2_animate",
+            "wan2.2_s2v",
         ]:
             self.vae_stride = (4, 8, 8)
             if self.model_cls.startswith("wan2.2"):
@@ -337,6 +338,7 @@ class LightX2VPipeline:
             "wan2.2_audio",
             "wan2.2_moe_distill",
             "wan2.2_animate",
+            "wan2.2_s2v",
         ]:
             self.t5_cpu_offload = text_encoder_offload
             self.clip_encoder_offload = image_encoder_offload

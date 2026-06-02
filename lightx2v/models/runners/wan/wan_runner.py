@@ -166,6 +166,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             lazy_load=self.config.get("t5_lazy_load", False),
             dummy_model=self.config.get("dummy_model", False),
         )
+
         text_encoders = [text_encoder]
         return text_encoders
 
@@ -190,11 +191,14 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "parallel": self.get_vae_parallel(),
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
-            "dtype": GET_DTYPE(),
             "load_from_rank0": self.config.get("load_from_rank0", False),
             "use_lightvae": self.config.get("use_lightvae", False),
             "dummy_model": self.config.get("dummy_model", False),
         }
+        if self.config.get("vae_dtype", None):
+            if self.config.get("vae_dtype") == "torch.float32":
+                vae_config["dtype"] = torch.float32
+
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
             return None
         else:
@@ -215,7 +219,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "use_lightvae": self.config.get("use_lightvae", False),
-            "dtype": GET_DTYPE(),
+            "dtype": torch.float32,
             "load_from_rank0": self.config.get("load_from_rank0", False),
             "dummy_model": self.config.get("dummy_model", False),
         }
