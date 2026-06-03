@@ -108,9 +108,6 @@ def main():
         default="",
         help="The path to input image file(s) for image-to-video (i2v) or image-to-audio-video (i2av) task. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
-    parser.add_argument("--inpaint_mask_path", type=str, default="", help="The path to inpaint mask image for image-to-image inpaint/edit task")
-    parser.add_argument("--inpaint_blur_size", type=int, default=None, help="Optional Gaussian blur radius for inpaint mask")
-    parser.add_argument("--inpaint_blur_sigma", type=float, default=None, help="Optional Gaussian blur sigma for inpaint mask")
     parser.add_argument("--state_path", type=str, default="", help="The path to input robot state file for Motus i2v inference.")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument(

@@ -108,33 +108,53 @@ class Flux2BaseRunner(DefaultRunner):
 
         condition_images = []
         max_image_area = self.config.get("max_image_area", 1024 * 1024)
-        inpaint_mask_path = getattr(self.input_info, "inpaint_mask_path", "")
-        inpaint_mask_image = Image.open(inpaint_mask_path).convert("RGB") if inpaint_mask_path else None
-        processed_inpaint_mask = None
-        for index, img in enumerate(input_image):
-            image_processor.check_image_input(img)
-            image_width, image_height = img.size
-            if index == 0 and inpaint_mask_image is not None and inpaint_mask_image.size != img.size:
-                inpaint_mask_image = inpaint_mask_image.resize(img.size)
-            if max_image_area is not None and max_image_area > 0 and image_width * image_height > max_image_area:
-                img = image_processor._resize_to_target_area(img, max_image_area)
-                if index == 0 and inpaint_mask_image is not None:
-                    inpaint_mask_image = image_processor._resize_to_target_area(inpaint_mask_image, max_image_area)
+        inpaint_mask = None
+        inpaint_mask_enabled = self.config.get("inpaint_mask_enabled", False)
+        if inpaint_mask_enabled:
+            main_pil_before_area_resize = None
+            main_area_resized = False
+            for index, img in enumerate(input_image):
+                image_processor.check_image_input(img)
+                if index == 0:
+                    main_pil_before_area_resize = img
+                    image_width, image_height = img.size
+                    if max_image_area is not None and max_image_area > 0 and image_width * image_height > max_image_area:
+                        img = image_processor._resize_to_target_area(img, max_image_area)
+                        main_area_resized = True
+                        image_width, image_height = img.size
+
+                    multiple_of = vae_scale_factor * 2
+                    image_width = (image_width // multiple_of) * multiple_of
+                    image_height = (image_height // multiple_of) * multiple_of
+                    img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
+                    self.input_info.target_shape = (image_height, image_width)
+                    condition_images.append(img.to(AI_DEVICE))
+                    condition_images.append(img.to(AI_DEVICE))
+                elif index == 1:
+                    mask_image = img.convert("RGB")
+                    if main_pil_before_area_resize is not None and mask_image.size != main_pil_before_area_resize.size:
+                        mask_image = mask_image.resize(main_pil_before_area_resize.size)
+                    if main_area_resized:
+                        mask_image = image_processor._resize_to_target_area(mask_image, max_image_area)
+                    image_height, image_width = self.input_info.target_shape
+                    cropped_mask = image_processor.resize(mask_image, image_height, image_width, resize_mode="crop")
+                    inpaint_mask = self._prepare_inpaint_mask(cropped_mask)
+        else:
+            for index, img in enumerate(input_image):
+                image_processor.check_image_input(img)
                 image_width, image_height = img.size
+                if max_image_area is not None and max_image_area > 0 and image_width * image_height > max_image_area:
+                    img = image_processor._resize_to_target_area(img, max_image_area)
+                    image_width, image_height = img.size
 
-            multiple_of = vae_scale_factor * 2
-            image_width = (image_width // multiple_of) * multiple_of
-            image_height = (image_height // multiple_of) * multiple_of
-            img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
-            if index == 0 and inpaint_mask_image is not None:
-                processed_inpaint_mask = image_processor.resize(inpaint_mask_image, image_height, image_width, resize_mode="crop")
-                condition_images.append(img.to(AI_DEVICE))#Add img to condition_images for inpaint_mask
-            
-            condition_images.append(img.to(AI_DEVICE))
-            if index == 0:
-                self.input_info.target_shape = (image_height, image_width)
-
-        inpaint_mask = self._prepare_inpaint_mask(processed_inpaint_mask)
+                multiple_of = vae_scale_factor * 2
+                image_width = (image_width // multiple_of) * multiple_of
+                image_height = (image_height // multiple_of) * multiple_of
+                img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
+                condition_images.append(img.to(AI_DEVICE))
+                if index == 0:
+                    self.input_info.target_shape = (image_height, image_width)
+        
 
         torch_device_module.empty_cache()
         gc.collect()
@@ -144,16 +164,19 @@ class Flux2BaseRunner(DefaultRunner):
             "image_encoder_output": {"image_tensor": condition_images, "inpaint_mask": inpaint_mask},
         }
 
-    def _prepare_inpaint_mask(self, inpaint_mask):
-        if inpaint_mask is None:
+    def _prepare_inpaint_mask(self, mask):
+        if mask is None:
             return None
+
+        from PIL import Image
 
         height, width = self.input_info.target_shape
         multiple_of = self.config.get("vae_scale_factor", 8) * 2
         packed_h = height // multiple_of
         packed_w = width // multiple_of
 
-        mask = inpaint_mask.convert("RGB").resize((packed_w, packed_h))
+        resample = getattr(Image, "Resampling", Image).BILINEAR
+        mask = mask.convert("RGB").resize((packed_w, packed_h), resample)
         mask = torch.from_numpy(np.array(mask, dtype=np.float32) / 255.0)
         mask = mask.permute(2, 0, 1).unsqueeze(0)
         mask = mask.mean(dim=1, keepdim=True)
@@ -162,7 +185,6 @@ class Flux2BaseRunner(DefaultRunner):
         blur_sigma = getattr(self.input_info, "inpaint_blur_sigma", None)
         if blur_size is not None and blur_sigma is not None:
             from torchvision.transforms import GaussianBlur
-
             blur = GaussianBlur(kernel_size=blur_size * 2 + 1, sigma=blur_sigma)
             mask = blur(mask)
 
