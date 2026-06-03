@@ -5,7 +5,7 @@ lightx2v_path=/data/nvme1/wushuo/LightX2V
 hidream_o1_image_path=/data/nvme1/wushuo/HiDream-O1-Image
 model_path=/data/nvme1/wushuo/hf_models/HiDream-O1-Image
 
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=0
 
 # keep the same effective inputs/outputs as HiDream-O1-Image/hidream_o1_image_i2i_layout.sh
 prompt="City council members pose with relaxed smiles on a sunlit terrace, warm approachable mood, golden hour, cinematic soft glow."

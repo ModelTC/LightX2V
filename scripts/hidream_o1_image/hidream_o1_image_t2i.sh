@@ -4,7 +4,7 @@
 lightx2v_path=/data/nvme1/wushuo/LightX2V
 model_path=/data/nvme1/wushuo/hf_models/HiDream-O1-Image
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
