@@ -194,10 +194,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "load_from_rank0": self.config.get("load_from_rank0", False),
             "use_lightvae": self.config.get("use_lightvae", False),
             "dummy_model": self.config.get("dummy_model", False),
+            "dtype": GET_DTYPE() if not self.config.get("vae_dtype", None) else self.config["vae_dtype"]
         }
-        if self.config.get("vae_dtype", None):
-            if self.config.get("vae_dtype") == "torch.float32":
-                vae_config["dtype"] = torch.float32
 
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
             return None
@@ -219,7 +217,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "use_lightvae": self.config.get("use_lightvae", False),
-            "dtype": torch.float32,
+            "dtype": GET_DTYPE() if not self.config.get("vae_dtype", None) else self.config["vae_dtype"],
             "load_from_rank0": self.config.get("load_from_rank0", False),
             "dummy_model": self.config.get("dummy_model", False),
         }
