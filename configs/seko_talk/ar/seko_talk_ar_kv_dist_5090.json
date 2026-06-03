@@ -17,11 +17,13 @@
     "offload_granularity": "block",
     "use_31_block": true,
     "dit_quantized": true,
-    "dit_quantized_ckpt": "/models/seko-distill-ar/converted_fp8.safetensors",
+    "dit_quantized_ckpt": "/SekoTalk-Distill-AR/converted_fp8.safetensors",
     "dit_quant_scheme": "fp8-sgl",
+    "audio_encoder_cpu_offload": true,
+    "audio_adapter_cpu_offload": true,
     "adapter_quantized": true,
     "adapter_quant_scheme": "fp8",
-    "adapter_model_path": "/models/seko-distill-ar/-audio_adapter_fp8.pt",
+    "adapter_model_path": "/SekoTalk-Distill-AR/-audio_adapter_fp8.pt",
     "audio_feature_dim": 1024,
     "audio_projection_dim": 1024,
     "audio_num_tokens": 32,
@@ -30,18 +32,22 @@
     "look_ahead": 0.0,
     "audio_feat_window_neighbor_frame": 0,
     "audio_feat_fps": 50,
+    "t5_quantized": true,
+    "t5_quant_scheme": "fp8-sgl",
+    "t5_cpu_offload": true,
+    "clip_cpu_offload": true,
+    "clip_quantized": false,
+    "parallel": {
+        "seq_p_size": 8,
+        "seq_p_fp8_comm": true,
+        "seq_p_attn_type": "ulysses"
+    },
     "ar_config": {
-        "num_frame_per_chunk": 1,
+        "num_frame_per_chunk": 20,
         "step_kv_cache": true,
         "sink_size": 2,
         "local_attn_size": 21,
-        "kv_offload": true,
-        "async_vae_decode": true,
-        "kv_quant": {
-            "quant_scheme": "kivi",
-            "k_cache_type": "int4",
-            "v_cache_type": "int4",
-            "group_size": 64
-        }
+        "kv_offload": false,
+        "async_vae_decode": true
     }
 }
