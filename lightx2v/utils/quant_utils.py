@@ -1,11 +1,28 @@
 import torch
 from loguru import logger
 
-try:
-    from qtorch.quant import float_quantize
-except Exception:
-    logger.warning("qtorch not found, please install qtorch.Please install qtorch (pip install qtorch).")
-    float_quantize = None
+
+def _load_float_quantize():
+    """Lazy import of qtorch.float_quantize.
+
+    qtorch triggers a JIT C++ extension build on import, which blocks
+    ComfyUI startup. Defer it until the first call site that needs it
+    (only the online fp8 weight-quant path uses float_quantize).
+    """
+    global float_quantize
+    if float_quantize is _UNLOADED:
+        try:
+            from qtorch.quant import float_quantize as _fq
+
+            float_quantize = _fq
+        except Exception:
+            logger.warning("qtorch not found, please install qtorch (pip install qtorch).")
+            float_quantize = None
+    return float_quantize
+
+
+_UNLOADED = object()
+float_quantize = _UNLOADED
 
 try:
     from vllm import _custom_ops as ops
@@ -161,7 +178,7 @@ class FloatQuantizer(BaseQuantizer):
         scaled_tensor = tensor / scales + zeros
         scaled_tensor = torch.clip(scaled_tensor, self.qmin.cuda(), self.qmax.cuda())
         org_dtype = scaled_tensor.dtype
-        q_tensor = float_quantize(scaled_tensor.float(), self.e_bits, self.m_bits, rounding="nearest")
+        q_tensor = _load_float_quantize()(scaled_tensor.float(), self.e_bits, self.m_bits, rounding="nearest")
         q_tensor.to(org_dtype)
         return q_tensor
 
