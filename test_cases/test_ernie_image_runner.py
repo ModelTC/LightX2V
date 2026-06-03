@@ -196,6 +196,17 @@ class ErnieImageRunnerTest(unittest.TestCase):
         self.assertIs(latent_result, latents)
         self.assertEqual(len(fake_vae.decode_calls), 1)
 
+    def test_vae_wrapper_preserves_latent_dtype_after_bn_restore(self):
+        from lightx2v.models.video_encoders.hf.ernie_image.vae import AutoencoderKLErnieImageVAE
+
+        fake_vae = FakeVAE()
+        wrapper = AutoencoderKLErnieImageVAE({}, fake_vae)
+        latents = torch.zeros(1, 128, 4, 4, dtype=torch.bfloat16)
+
+        wrapper.decode(latents, output_type="pt")
+
+        self.assertEqual(fake_vae.decode_calls[0][0].dtype, torch.bfloat16)
+
     def test_vae_wrapper_delegates_diffusers_cpu_offload_to_pipeline_hooks(self):
         from lightx2v.models.video_encoders.hf.ernie_image.vae import AutoencoderKLErnieImageVAE
 
@@ -396,6 +407,14 @@ class ErnieImageRunnerTest(unittest.TestCase):
         self.assertFalse(runner.vae.manage_cpu_offload)
         self.assertIsInstance(runner.scheduler, ErnieImageScheduler)
         self.assertIs(runner.scheduler.scheduler, runner.components.scheduler)
+
+    def test_lazy_load_without_cpu_offload_raises_value_error(self):
+        from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner
+
+        runner = ErnieImageRunner(make_config(lazy_load=True, cpu_offload=False))
+
+        with self.assertRaisesRegex(ValueError, "lazy_load requires cpu_offload"):
+            runner.init_modules()
 
     def test_builtin_16_by_9_shape_is_allowed(self):
         from lightx2v.models.runners.ernie_image.ernie_image_runner import resolve_ernie_image_shape

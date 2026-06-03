@@ -97,7 +97,8 @@ class ErnieImageRunner(BaseRunner):
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             self.load_model()
         elif self.config.get("lazy_load", False):
-            assert self.config.get("cpu_offload", False), "ERNIE-Image lazy_load requires cpu_offload."
+            if not self.config.get("cpu_offload", False):
+                raise ValueError("ERNIE-Image lazy_load requires cpu_offload.")
 
         if hasattr(self.config, "lock"):
             self.config.lock()

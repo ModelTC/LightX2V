@@ -47,8 +47,8 @@ class AutoencoderKLErnieImageVAE:
                 self._move_model_to(latents.device)
 
             device = latents.device
-            bn_mean = self.model.bn.running_mean.view(1, -1, 1, 1).to(device)
-            bn_std = torch.sqrt(self.model.bn.running_var.view(1, -1, 1, 1).to(device) + 1e-5)
+            bn_mean = self.model.bn.running_mean.view(1, -1, 1, 1).to(device=device, dtype=latents.dtype)
+            bn_std = torch.sqrt(self.model.bn.running_var.view(1, -1, 1, 1).to(device=device, dtype=latents.dtype) + 1e-5)
             latents = latents * bn_std + bn_mean
             latents = self.unpatchify_latents(latents)
 

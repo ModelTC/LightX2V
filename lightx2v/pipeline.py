@@ -136,7 +136,7 @@ class LightX2VPipeline:
                 self.prompt_template_encode_start_idx = 34
         elif self.model_cls in ["z_image"]:
             self.model_cls = "z_image"
-        elif model_cls in ["ernie_image", "ernie-image", "ernie-image-turbo", "ERNIE-Image"]:
+        elif self.model_cls in ["ernie_image", "ernie-image", "ernie-image-turbo", "ERNIE-Image"]:
             self.model_cls = "ernie_image"
         elif self.model_cls in ["flux2_klein"]:
             self.model_cls = "flux2_klein"
