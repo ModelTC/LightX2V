@@ -1,6 +1,3 @@
-import json
-import os
-
 import torch
 import torch.distributed as dist
 from loguru import logger
@@ -8,16 +5,7 @@ from loguru import logger
 from lightx2v.utils.envs import GET_DTYPE
 
 from .base import BaseKVCachePool
-from .calib import CalibRollingKVCachePool, StepCalibRollingKVCachePool
-from .quant import (
-    KIVIQuantRollingKVCachePool,
-    LongLiveQuantRollingKVCachePool,
-    SageQuantRollingKVCachePool,
-    StepKiviQuantRollingKVCachePool,
-    StepLongLiveQuantRollingKVCachePool,
-    StepTurboQuantRollingKVCachePool,
-    TurboQuantRollingKVCachePool,
-)
+from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
 from .rolling import RollingKVCachePool, SpatialRollingKVCachePool, StepRollingKVCachePool
 from .utils import *
 
@@ -51,29 +39,6 @@ def _step_fp_kwargs(config, ar_config, _kv_quant):
     }
 
 
-def _sage_kwargs(_config, ar_config, kv_quant):
-    return {
-        "k_cache_type": kv_quant.get("k_cache_type", "int8"),
-        "v_cache_type": kv_quant.get("v_cache_type", "fp8"),
-        "calib_path": kv_quant.get("calib_path", None),
-        "kv_offload": ar_config.get("kv_offload", False),
-    }
-
-
-def _turboquant_kwargs(_config, ar_config, kv_quant):
-    return {
-        "key_bits": kv_quant.get("key_bits", 3),
-        "value_bits": kv_quant.get("value_bits", 2),
-        "seed": kv_quant.get("turboquant_seed", kv_quant.get("seed", 42)),
-        "per_layer_compressors": kv_quant.get("per_layer_compressors", True),
-        "kv_offload": ar_config.get("kv_offload", False),
-        "codebook_dir": kv_quant.get("codebook_dir"),
-        "codebook_cache_dir": kv_quant.get("codebook_cache_dir"),
-        "export_missing_codebooks": kv_quant.get("export_missing_codebooks", False),
-        "value_group_size": kv_quant.get("value_group_size", 32),
-    }
-
-
 def _kivi_kwargs(_config, ar_config, kv_quant):
     return {
         "k_cache_type": kv_quant.get("k_cache_type", "int4"),
@@ -89,42 +54,6 @@ def _step_kivi_kwargs(config, ar_config, kv_quant):
     return kwargs
 
 
-def _step_turboquant_kwargs(config, ar_config, kv_quant):
-    kwargs = _turboquant_kwargs(config, ar_config, kv_quant)
-    kwargs["num_steps"] = config.get("infer_steps", ar_config.get("cache_step", 1))
-    return kwargs
-
-
-def _longlive_fp4_kwargs(_config, ar_config, kv_quant, *, frame_seq_length: int | None = None):
-    block_token_size = kv_quant.get("block_token_size")
-    if block_token_size is None and frame_seq_length is not None:
-        block_token_size = frame_seq_length * ar_config.get("num_frame_per_chunk", 1)
-    return {
-        "block_token_size": block_token_size,
-        "scale_rule": kv_quant.get("scale_rule", "mse"),
-        "backend": kv_quant.get("backend", "pytorch"),
-        "kv_offload": ar_config.get("kv_offload", False),
-    }
-
-
-def _step_longlive_fp4_kwargs(config, ar_config, kv_quant, *, frame_seq_length: int | None = None):
-    kwargs = _longlive_fp4_kwargs(config, ar_config, kv_quant, frame_seq_length=frame_seq_length)
-    kwargs["num_steps"] = config.get("infer_steps", ar_config.get("cache_step", 1))
-    return kwargs
-
-
-def _calib_kwargs(config, _ar_config, kv_quant):
-    kwargs = {"num_steps": config.get("infer_steps", 1)}
-    if kv_quant.get("quant_scheme") == "turboquant":
-        kwargs.update(
-            turboquant_calibrate=True,
-            key_bits=kv_quant.get("key_bits", 3),
-            turboquant_seed=kv_quant.get("turboquant_seed", kv_quant.get("seed", 42)),
-            per_layer_compressors=kv_quant.get("per_layer_compressors", True),
-        )
-    return kwargs
-
-
 def _get_self_attn_kv_cache_entry(scheme: str, step: bool):
     entry = SELF_ATTN_KV_CACHE_REGISTRY.get((scheme, bool(step)))
     if entry is None:
@@ -134,20 +63,8 @@ def _get_self_attn_kv_cache_entry(scheme: str, step: bool):
 
 register_self_attn_kv_cache("fp", RollingKVCachePool, kwargs_builder=_fp_kwargs)
 register_self_attn_kv_cache("fp", StepRollingKVCachePool, step=True, kwargs_builder=_step_fp_kwargs)
-register_self_attn_kv_cache("calib", CalibRollingKVCachePool, kwargs_builder=_calib_kwargs)
-register_self_attn_kv_cache("calib", StepCalibRollingKVCachePool, step=True, kwargs_builder=_calib_kwargs)
-register_self_attn_kv_cache("sage", SageQuantRollingKVCachePool, kwargs_builder=_sage_kwargs)
-register_self_attn_kv_cache("turboquant", TurboQuantRollingKVCachePool, kwargs_builder=_turboquant_kwargs)
-register_self_attn_kv_cache("turboquant", StepTurboQuantRollingKVCachePool, step=True, kwargs_builder=_step_turboquant_kwargs)
 register_self_attn_kv_cache("kivi", KIVIQuantRollingKVCachePool, kwargs_builder=_kivi_kwargs)
 register_self_attn_kv_cache("kivi", StepKiviQuantRollingKVCachePool, step=True, kwargs_builder=_step_kivi_kwargs)
-register_self_attn_kv_cache("longlive_fp4", LongLiveQuantRollingKVCachePool, kwargs_builder=_longlive_fp4_kwargs)
-register_self_attn_kv_cache(
-    "longlive_fp4",
-    StepLongLiveQuantRollingKVCachePool,
-    step=True,
-    kwargs_builder=_step_longlive_fp4_kwargs,
-)
 
 
 def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device, *, frame_seq_length: int | None = None, num_heads: int | None = None):
@@ -158,25 +75,17 @@ def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device, *, frame
         scheme = "fp"
         step = ar_config.get("step_kv_cache", False)
     else:
-        quant_scheme = kv_quant.get("quant_scheme", "sage")
-        registered_schemes = {registered_scheme for registered_scheme, _step in SELF_ATTN_KV_CACHE_REGISTRY if registered_scheme not in {"fp", "calib"}}
-        if config.get("parallel"):
-            assert quant_scheme in {"kivi", "longlive_fp4"}, f"Invalid quant_scheme: {quant_scheme} for parallel inference"
-        assert quant_scheme in registered_schemes, f"Invalid quant_scheme: {quant_scheme}"
+        quant_scheme = kv_quant.get("quant_scheme", "kivi")
+        if quant_scheme != "kivi":
+            raise NotImplementedError(f"Only quant_scheme='kivi' is supported, got {quant_scheme!r}.")
         if kv_quant.get("calibrate", False):
-            scheme = "calib"
-            step = ar_config.get("step_kv_cache", False)
+            raise NotImplementedError("KV calibration caches were removed; only KIVI inference cache is supported.")
         else:
             scheme = quant_scheme
             step = ar_config.get("step_kv_cache", False)
-            if step and scheme == "sage":
-                raise NotImplementedError("step_kv_cache does not support quant_scheme='sage'. Use step_kv_cache with quant_scheme='kivi', or disable step_kv_cache for sage.")
 
     cache_cls, kwargs_builder = _get_self_attn_kv_cache_entry(scheme, step)
-    extra = {}
-    if scheme == "longlive_fp4":
-        extra["frame_seq_length"] = frame_seq_length
-    return cache_cls(**common, **kwargs_builder(config, ar_config, kv_quant or {}, **extra))
+    return cache_cls(**common, **kwargs_builder(config, ar_config, kv_quant or {}))
 
 
 class KVCacheManager:
@@ -342,7 +251,6 @@ class KVCacheManager:
             self.action_keyboard_kv_cache._init_kv_buffer()
 
         if ac.get("enable_mouse", False):
-            kv_offload = bool(self.ar_config.get("kv_offload", False))
             self.action_mouse_kv_cache = SpatialRollingKVCachePool(
                 spatial_len=self.frame_seq_length,
                 num_layers=num_layers,
@@ -351,70 +259,6 @@ class KVCacheManager:
                 head_dim=head_dim,
                 dtype=self.dtype,
                 device=self.device,
-                kv_offload=kv_offload,
+                kv_offload=False,
             )
             self.action_mouse_kv_cache._init_kv_buffer()
-
-    def save_calibration(self) -> None:
-        """Auto-save calibration if running in calibrate mode with calib_path."""
-        kv_quant = self.ar_config.get("kv_quant")
-        if not kv_quant or not isinstance(kv_quant, dict):
-            return
-        if not kv_quant.get("calibrate", False):
-            return
-        output_path = kv_quant.get("calib_path", "calib_kv.pt")
-        pool = self.self_attn_kv_cache
-        if not isinstance(pool, CalibRollingKVCachePool):
-            return
-        calib = pool.export_calibration()
-        hk = calib.pop("_turboquant_hist_k", None)
-
-        rank = 0
-        world_size = 1
-        pg = None
-        if dist.is_available() and dist.is_initialized():
-            if self.sp_group is not None:
-                rank = dist.get_rank(self.sp_group)
-                world_size = dist.get_world_size(self.sp_group)
-                pg = self.sp_group
-            else:
-                rank = dist.get_rank()
-                world_size = dist.get_world_size()
-
-        if hk is not None:
-            hk_acc = hk.to(device=self.device, dtype=torch.int64)
-            if world_size > 1:
-                dist.all_reduce(hk_acc, op=dist.ReduceOp.SUM, group=pg)
-            if rank == 0:
-                out_dir = kv_quant.get("codebook_dir")
-                if not out_dir:
-                    out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
-                os.makedirs(out_dir, exist_ok=True)
-                head_dim = self.config["dim"] // self.config["num_heads"]
-                books = build_turboquant_codebooks_from_calib_histograms(
-                    hk_acc.cpu(),
-                    head_dim=head_dim,
-                    key_bits=kv_quant.get("key_bits", 3),
-                )
-                for fname, cb_dict in books.items():
-                    fpath = os.path.join(out_dir, fname)
-                    with open(fpath, "w", encoding="utf-8") as f:
-                        json.dump(cb_dict, f, indent=2)
-                    logger.info("[KVCacheManager] TurboQuant empirical codebook written {!r}", fpath)
-
-        if not calib:
-            return
-
-        save_path = output_path
-        if world_size > 1:
-            save_path = ranked_calib_path(output_path, rank)
-        torch.save(calib, save_path)
-        logger.info(
-            "[KVCacheManager] calibration saved to {} (rank {}/{}) — km {}, v_scale {}, k_block_scale {}",
-            save_path,
-            rank,
-            world_size,
-            list(calib["km"].shape),
-            list(calib["v_scale"].shape),
-            list(calib["k_block_scale"].shape),
-        )

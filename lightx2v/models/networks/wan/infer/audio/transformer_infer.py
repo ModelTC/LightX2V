@@ -298,8 +298,20 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             else:
                 start_frame = segment_idx * frames
                 q_rope, k_rope = self._apply_rope_sp(q, k, grid_sizes, freqs, start_frame)
-                k_to_store = all2all_seq2head(k_rope, group=self.seq_p_group)
-                v_to_store = all2all_seq2head(v, group=self.seq_p_group)
+                use_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
+                use_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
+                k_to_store = all2all_seq2head(
+                    k_rope,
+                    group=self.seq_p_group,
+                    use_fp8_comm=use_fp8_comm,
+                    use_fp4_comm=use_fp4_comm,
+                )
+                v_to_store = all2all_seq2head(
+                    v,
+                    group=self.seq_p_group,
+                    use_fp8_comm=use_fp8_comm,
+                    use_fp4_comm=use_fp4_comm,
+                )
                 kv_cache.store_kv(k_to_store, v_to_store, local_start_idx, local_end_idx, self.block_idx)
         else:
             kv_cache.store_kv(k, v, local_start_idx, local_end_idx, self.block_idx)
