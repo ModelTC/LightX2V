@@ -125,9 +125,11 @@ class Flux2BaseRunner(DefaultRunner):
             multiple_of = vae_scale_factor * 2
             image_width = (image_width // multiple_of) * multiple_of
             image_height = (image_height // multiple_of) * multiple_of
+            img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
             if index == 0 and inpaint_mask_image is not None:
                 processed_inpaint_mask = image_processor.resize(inpaint_mask_image, image_height, image_width, resize_mode="crop")
-            img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
+                condition_images.append(img.to(AI_DEVICE))#Add img to condition_images for inpaint_mask
+            
             condition_images.append(img.to(AI_DEVICE))
             if index == 0:
                 self.input_info.target_shape = (image_height, image_width)
