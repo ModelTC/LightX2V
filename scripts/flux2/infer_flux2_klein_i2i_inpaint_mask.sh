@@ -1,16 +1,15 @@
 #!/bin/bash
-lightx2v_path=/home/wangshankun/LightX2V
-model_path="/mnt/miaohua/wangshankun/HF/hub/models--black-forest-labs--FLUX.2-klein-4B/snapshots/ppt_260529_30e"
+lightx2v_path=
+model_path="/FLUX.2-klein-4B/snapshots/ppt_260529_30e"
 export CUDA_VISIBLE_DEVICES=5
 
 source ${lightx2v_path}/scripts/base/base.sh
 
-python -m debugpy --listen 0.0.0.0:15678 -m lightx2v.infer \
+python  -m lightx2v.infer \
     --model_cls flux2_klein \
-    --seed 0 \
     --task i2i \
     --model_path $model_path \
     --prompt "remove the masked foreground object and keep the background unchanged" \
-    --image_path "${lightx2v_path}/assets/inputs/ppt/edit" \
+    --image_path "${lightx2v_path}/assets/inputs/inpaint_mask" \
     --save_result_path "${lightx2v_path}/save_results/flux2_klein_i2i_inpaint_mask.png" \
     --config_json "${lightx2v_path}/configs/flux2/flux2_klein_i2i_inpaint_mask.json"

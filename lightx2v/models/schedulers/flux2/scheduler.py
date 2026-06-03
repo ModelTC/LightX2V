@@ -224,11 +224,6 @@ class Flux2Scheduler(BaseScheduler):
                 self.input_latents = ref_img_latent
                 self.latents = (1 - self.sigmas[0]) * ref_img_latent + self.sigmas[0] * self.latents
 
-        if len(image_latents) == 0:
-            if self.inpaint_mask is not None and self.input_latents is None:
-                logger.warning("Flux2 inpaint_mask_path is set, but no reference image latent is available; mask blending will be skipped.")
-            return
-
         image_latent_ids = self._prepare_image_ids(image_latents, scale=10)
 
         packed = self._pack_latents(image_latents).squeeze(0)
