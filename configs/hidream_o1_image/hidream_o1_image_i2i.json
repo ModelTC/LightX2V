@@ -1,0 +1,11 @@
+{
+    "hidream_model_type": "full",
+    "infer_steps": 50,
+    "guidance_scale": 5.0,
+    "shift": 3.0,
+    "scheduler_name": "default",
+    "target_height": 2048,
+    "target_width": 2048,
+    "keep_original_aspect": true,
+    "torch_dtype": "bfloat16"
+}
