@@ -334,6 +334,12 @@ We sincerely thank all the model repositories and research communities that insp
 - [FastVideo](https://github.com/hao-ai-lab/FastVideo)
 - [Mooncake](https://github.com/kvcache-ai/Mooncake)
 
+We also thank the cloud inference platforms supporting the wider ecosystem:
+
+<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v"><img src="assets/atlas-cloud-logo.png" alt="Atlas Cloud" width="120"></a>
+
+- [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v) — a full-modal AI inference platform whose hosted API serves the Wan / Seedance / Kling model families that LightX2V also supports, for teams that prefer a managed API over self-hosting.
+
 ## 🌟 Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ModelTC/lightx2v&type=Timeline)](https://star-history.com/#ModelTC/lightx2v&Timeline)

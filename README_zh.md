@@ -334,6 +334,12 @@ pipe.generate(
 - [FastVideo](https://github.com/hao-ai-lab/FastVideo)
 - [Mooncake](https://github.com/kvcache-ai/Mooncake)
 
+同时感谢支持生态发展的云端推理平台：
+
+<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v"><img src="assets/atlas-cloud-logo.png" alt="Atlas Cloud" width="120"></a>
+
+- [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v) —— 全模态 AI 推理平台，其托管 API 提供 LightX2V 同样支持的 Wan / Seedance / Kling 等模型系列，适合希望使用托管 API 而非自建部署的团队。
+
 ## 🌟 Star 历史
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ModelTC/lightx2v&type=Timeline)](https://star-history.com/#ModelTC/lightx2v&Timeline)
