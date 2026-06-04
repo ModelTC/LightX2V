@@ -12,6 +12,7 @@ from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2S
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -360,7 +361,7 @@ class Flux2BaseRunner(DefaultRunner):
         latents, generator = self.run_dit()
         images = self.run_vae_decoder(latents)
 
-        if not input_info.return_result_tensor:
+        if not input_info.return_result_tensor and is_main_process():
             image = images[0]
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")

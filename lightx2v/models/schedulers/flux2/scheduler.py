@@ -131,7 +131,7 @@ class Flux2Scheduler(BaseScheduler):
         t = self.timesteps[self.step_index]
         noise_pred = self.noise_pred
         if getattr(self, "inpaint_mask", None) is not None and getattr(self, "input_latents", None) is not None:
-            sigma = self._get_sigma(t).to(device=self.latents.device, dtype=self.latents.dtype)
+            sigma = self.scheduler.sigmas[self.step_index].to(device=self.latents.device, dtype=self.latents.dtype)
             expected_noise_pred = (self.latents - self.input_latents) / sigma.clamp(min=1e-6)
             noise_pred = expected_noise_pred * (1 - self.inpaint_mask) + noise_pred * self.inpaint_mask
             self.noise_pred = noise_pred
@@ -145,11 +145,6 @@ class Flux2Scheduler(BaseScheduler):
             latent_image_ids=self.latent_image_ids,
         )
         self.latents = latents
-
-    def _get_sigma(self, timestep):
-        scheduler_timesteps = self.scheduler.timesteps.to(device=timestep.device)
-        timestep_id = torch.argmin((scheduler_timesteps - timestep).abs())
-        return self.scheduler.sigmas.to(device=timestep.device)[timestep_id]
 
     def _encode_image(self, image):
         image = image.to(device=AI_DEVICE, dtype=GET_DTYPE())
