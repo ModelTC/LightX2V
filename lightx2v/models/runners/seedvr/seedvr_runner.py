@@ -262,7 +262,7 @@ class SeedVRRunner(DefaultRunner):
 
         # color fix
         input = rearrange(self._input[:, None], "c t h w -> t c h w") if self._input.ndim == 3 else rearrange(self._input, "c t h w -> t c h w")
-        sample = wavelet_reconstruction(sample.to("cpu"), input[: sample.size(0)].to("cpu"))
+        sample = wavelet_reconstruction(sample, input[: sample.size(0)].to(sample.device))
         sample = rearrange(sample[:, None], "t c h w -> c t h w") if sample.ndim == 3 else rearrange(sample, "t c h w -> c t h w")
         sample = sample[None, :]
 
