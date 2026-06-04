@@ -38,8 +38,11 @@ class SeedVRRunner(DefaultRunner):
         model_path_base = config.get("model_path", "ByteDance-Seed/SeedVR2-3B")
         if self.config.get("dit_quantized_ckpt", None):
             self.model_path = self.config.get("dit_quantized_ckpt")
+        elif self.config.get("dit_original_ckpt", None):
+            self.model_path = self.config.get("dit_original_ckpt")
         else:
-            self.model_path = os.path.join(model_path_base, "seedvr2_ema_3b.pth")
+            model_size = self.config.get("model_size", "3b")
+            self.model_path = os.path.join(model_path_base, f"seedvr2_ema_{model_size}.pth")
         self.vae_path = os.path.join(model_path_base, "ema_vae.pth")
         self.pos_emb_path = os.path.join(model_path_base, "pos_emb.pt")
         self.neg_emb_path = os.path.join(model_path_base, "neg_emb.pt")

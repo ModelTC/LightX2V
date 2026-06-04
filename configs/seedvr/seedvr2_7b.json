@@ -1,0 +1,12 @@
+{
+  "target_video_length": 81,
+  "target_height": 1080,
+  "target_width": 1920,
+  "infer_steps": 1,
+  "fps": 16,
+  "model_size": "7b",
+  "dit_original_ckpt": "/path/to/ByteDance-Seed/SeedVR2-7B/seedvr2_ema_7b.pth",
+  "use_tiling_vae": true,
+  "cpu_offload": true,
+  "offload_granularity": "model"
+}

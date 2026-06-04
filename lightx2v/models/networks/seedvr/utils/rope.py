@@ -59,6 +59,33 @@ class RotaryEmbedding3d(RotaryEmbeddingBase):
         return q, k
 
 
+class NaRotaryEmbedding3d(RotaryEmbedding3d):
+    def forward(
+        self,
+        q: torch.FloatTensor,
+        k: torch.FloatTensor,
+        shape: torch.LongTensor,
+        cache: Cache,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+        freqs = cache("rope_freqs_3d", lambda: self.get_freqs(shape))
+        if freqs.device != q.device:
+            freqs = freqs.to(device=q.device, dtype=q.dtype)
+        q = rearrange(q, "L h d -> h L d")
+        k = rearrange(k, "L h d -> h L d")
+        q = apply_rotary_emb(freqs, q.float()).to(q.dtype)
+        k = apply_rotary_emb(freqs, k.float()).to(k.dtype)
+        q = rearrange(q, "h L d -> L h d")
+        k = rearrange(k, "h L d -> L h d")
+        return q, k
+
+    def get_freqs(self, shape: torch.LongTensor) -> torch.Tensor:
+        freq_list = []
+        for f, h, w in shape.tolist():
+            freqs = self.get_axial_freqs(f, h, w)
+            freq_list.append(freqs.view(-1, freqs.size(-1)))
+        return torch.cat(freq_list, dim=0)
+
+
 class MMRotaryEmbeddingBase(RotaryEmbeddingBase):
     def __init__(self, dim: int, rope_dim: int):
         super().__init__(dim, rope_dim)
@@ -139,6 +166,8 @@ def get_na_rope(rope_type: Optional[str], dim: int):
         return None
     if rope_type == "torch":
         return None
+    if rope_type == "rope3d":
+        return NaRotaryEmbedding3d(dim=dim)
     if rope_type == "mmrope3d":
         return NaMMRotaryEmbedding3d(dim=dim)
     raise NotImplementedError(f"{rope_type} is not supported.")
