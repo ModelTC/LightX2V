@@ -188,16 +188,18 @@ class BaseModel:
             self.denoiser_module().delete_adapters(adapter_name)
             self._infer_lora_adapter_name = None
 
-    def save_lora_weights(self, save_dir, adapter_name=None):
+    def save_lora_weights(self, save_dir, adapter_name=None, weights_subdir=None):
         peft_state_dict = self._get_lora_state_dict_for_save(adapter_name=adapter_name)
         if not is_main_process():
             return
 
+        output_dir = os.path.join(save_dir, weights_subdir) if weights_subdir else save_dir
+        os.makedirs(output_dir, exist_ok=True)
         lora_state_dict = convert_state_dict_to_diffusers(peft_state_dict)
         if hasattr(self.pipeline_cls, "save_lora_weights"):
-            self.pipeline_cls.save_lora_weights(save_dir, lora_state_dict, safe_serialization=True)
+            self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True)
         else:
-            save_file(lora_state_dict, f"{save_dir}/pytorch_lora_weights.safetensors")
+            save_file(lora_state_dict, os.path.join(output_dir, "pytorch_lora_weights.safetensors"))
 
     def _get_lora_state_dict_for_save(self, adapter_name=None):
         denoiser = self.denoiser_module()
@@ -208,7 +210,7 @@ class BaseModel:
         options = StateDictOptions(
             full_state_dict=True,
             cpu_offload=True,
-            ignore_frozen_params=True,
+            ignore_frozen_params=False,
             strict=False,
         )
         state_dict, _ = get_state_dict(denoiser, (), options=options)
@@ -216,8 +218,9 @@ class BaseModel:
             return {}
         return get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
 
-    def load_lora_weights_for_resume(self, lora_path, adapter_name=None):
-        raw = load_file(os.path.join(lora_path, "pytorch_lora_weights.safetensors"))
+    def load_lora_weights_for_resume(self, lora_path, adapter_name=None, weights_subdir=None):
+        weights_dir = os.path.join(lora_path, weights_subdir) if weights_subdir else lora_path
+        raw = load_file(os.path.join(weights_dir, "pytorch_lora_weights.safetensors"))
         peft_state_dict = {}
         for key, value in raw.items():
             new_key = key.removeprefix("transformer.")

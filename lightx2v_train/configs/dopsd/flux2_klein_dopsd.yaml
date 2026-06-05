@@ -17,6 +17,7 @@ data:
     val:
         name: image_dataset
         num_workers: 4
+        target_area: 1048576
         shuffle: false
         data_path:
             - /data/nvme7/LightX2V_train_data_examples/dataset_v1/val.jsonl
@@ -34,36 +35,34 @@ scheduler:
         time_shift_power: 1.0
         dynamic_shift: true
         shift_mu_strategy: flux2_empirical
-        # train_lora_9b.sh: --num-training-steps 4
         shift_mu_num_steps: 4
         patch_size: [1, 1]
 
 training:
     method: dopsd
-    # train_lora_9b.sh: --max-train-steps 200
-    max_train_iters: 90
-    # train_lora_9b.sh: --gradient-accumulation-steps 1
+    max_train_iters: 4000
     gradient_accumulation_iters: 1
-    # train_lora_9b.sh: --enable-gc
     gradient_checkpointing: true
-    # arguments.py: --max-grad-norm 1.0
     max_grad_norm: 1.0
     lr_scheduler: constant
-    lr_warmup_iters: 0
-    # train_lora_9b.sh: --checkpoint-steps 200
-    save_every_iters: 30
-    save_total_limit: 10
+    lr_warmup_iters: 10
+    save_every_iters: 200
+    save_total_limit: 20
     dopsd:
-        # train_lora_9b.sh: --num-training-steps 4
         num_training_steps: 4
-        # train_lora_9b.sh: --ema-decay 0.9999
         ema_decay: 0.9999
+        ema_decay_warmup: 0.999
+        ema_decay_warmup_iters: 200
+        # early-step loss weighting: t0, t1, t2, t3
+        step_loss_weights: [8.0, 4.0, 2.0, 1.0]
         # teacher edit branch only; student uses dataset prompt (T2I)
         edit_sys_prompt: "The output must be exactly the same as the reference image."
+        # teacher prompt: false = only edit_sys_prompt (reference image carries content)
+        # true = "{dataset_prompt} {edit_sys_prompt}" (original D-OPSD default)
+        teacher_use_dataset_prompt: false
         # save student/teacher x0 trajectory grid during training (not at infer)
-        trajectory_every_iters: 30
+        trajectory_every_iters: ${training.save_every_iters}
     lora:
-        # train_lora_9b.sh: --lora-rank 64 --lora-alpha 128
         rank: 64
         alpha: 128
         target_modules:
@@ -77,12 +76,12 @@ training:
             - to_add_out
             - to_qkv_mlp_proj
     optimizer:
-        learning_rate: 0.00002
+        learning_rate: 0.00005
         adam_beta1: 0.9
         adam_beta2: 0.999
         weight_decay: 0.0
         adam_epsilon: 0.00000001
-    output_dir: ./output_train/dopsd_editcontext_ema0.9999_onpolicy_4steptrain_9b_corgi_bsz1_lora_lr2e-5
+    output_dir: ./output_train/dopsd_editcontext_ema0.9999_onpolicy_4steptrain_9b_corgi_bsz1_lora_lr5e-5_earlyw
 
 inference:
     method: image_infer
@@ -92,8 +91,8 @@ inference:
     num_inference_steps: 4
     enable_cfg: false
     cfg_guidance_scale: 1.0
-    seed: 30
-    output_dir: ./output_infer/dopsd_editcontext_ema0.9999_onpolicy_4steptrain_9b_corgi_bsz1_lora_lr2e-5
+    seed: 42
+    output_dir: ./output_infer/dopsd_editcontext_ema0.9999_onpolicy_4steptrain_9b_corgi_bsz1_lora_lr5e-5_earlyw
     infer_every_iters: ${training.save_every_iters}
 
 logging:
