@@ -26,6 +26,36 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
+def _get_read_video():
+    """Return ``read_video`` with a 3-level fallback chain.
+
+    torchvision moved ``read_video`` between releases; the last-resort PyAV
+    fallback handles environments where torchvision isn't installed at all.
+    """
+    try:
+        from torchvision.io import read_video
+    except ImportError:
+        try:
+            from torchvision.io.video import read_video
+        except ImportError:
+            import av
+
+            def read_video(filename, start_pts=0, end_pts=None, pts_unit="pts", output_format="THWC"):
+                container = av.open(filename)
+                stream = container.streams.video[0]
+                fps = float(stream.average_rate)
+                frames = []
+                for frame in container.decode(video=0):
+                    img = frame.to_ndarray(format="rgb24")  # H W C
+                    frames.append(img)
+                container.close()
+                video = torch.from_numpy(np.stack(frames))  # T H W C
+                if output_format == "TCHW":
+                    video = video.permute(0, 3, 1, 2)
+                return video, torch.zeros(0), {"video_fps": fps}
+    return read_video
+
+
 @RUNNER_REGISTER("seedvr2")
 class SeedVRRunner(DefaultRunner):
     """Runner for SeedVR video super-resolution model."""
@@ -127,10 +157,7 @@ class SeedVRRunner(DefaultRunner):
         return segments
 
     def _read_video_segment(self, video_path, start_idx, end_idx):
-        try:
-            from torchvision.io import read_video
-        except ImportError:
-            from torchvision.io.video import read_video
+        read_video = _get_read_video()
 
         total_len = max(end_idx - start_idx, 0)
         if total_len == 0:
@@ -367,10 +394,7 @@ class SeedVRRunner(DefaultRunner):
         # Check video_path first (priority for SR task)
         if "video_path" in self.input_info.__dataclass_fields__ and self.input_info.video_path:
             video_path = self.input_info.video_path
-            try:
-                from torchvision.io import read_video
-            except ImportError:
-                from torchvision.io.video import read_video
+            read_video = _get_read_video()
 
             if getattr(self, "_sr_segment", None) is not None:
                 start_idx, end_idx = self._sr_segment
