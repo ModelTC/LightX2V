@@ -53,6 +53,7 @@ def _get_read_video():
                 if output_format == "TCHW":
                     video = video.permute(0, 3, 1, 2)
                 return video, torch.zeros(0), {"video_fps": fps}
+
     return read_video
 
 
