@@ -127,7 +127,10 @@ class SeedVRRunner(DefaultRunner):
         return segments
 
     def _read_video_segment(self, video_path, start_idx, end_idx):
-        from torchvision.io import read_video
+        try:
+            from torchvision.io import read_video
+        except ImportError:
+            from torchvision.io.video import read_video
 
         total_len = max(end_idx - start_idx, 0)
         if total_len == 0:
@@ -364,7 +367,10 @@ class SeedVRRunner(DefaultRunner):
         # Check video_path first (priority for SR task)
         if "video_path" in self.input_info.__dataclass_fields__ and self.input_info.video_path:
             video_path = self.input_info.video_path
-            from torchvision.io import read_video
+            try:
+                from torchvision.io import read_video
+            except ImportError:
+                from torchvision.io.video import read_video
 
             if getattr(self, "_sr_segment", None) is not None:
                 start_idx, end_idx = self._sr_segment
