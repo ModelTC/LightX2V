@@ -16,14 +16,28 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import get_optimal_patched_size_with_sp, isotropic_crop_resize, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
+from lightx2v.utils.utils import fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
-def resize_image(img, resolution, bucket_shape=None):
-    assert resolution in ["480p", "540p", "720p"]
+def resize_image(img, resize_mode="adaptive", resolution="480p", bucket_shape=None, fixed_area=None, fixed_shape=None):
+    """Resize input image for i2v / flf2v.
+
+    Supports the same six modes as wan_audio_runner.resize_image (adaptive,
+    keep_ratio_fixed_area, fixed_min_area, fixed_max_area, fixed_shape,
+    fixed_min_side). Previously only `adaptive` was supported here, and any
+    other mode left `latent_shape` unpopulated downstream, blowing up
+    `WanRunner.run_vae_encoder` with an IndexError.
+    """
+    assert resize_mode in ("adaptive", "keep_ratio_fixed_area", "fixed_min_area", "fixed_max_area", "fixed_shape", "fixed_min_side")
+
+    if resize_mode == "fixed_shape":
+        assert fixed_shape is not None, "fixed_shape mode requires `fixed_shape` arg"
+        logger.info(f"fixed_shape_resize fixed_height: {fixed_shape[0]}, fixed_width: {fixed_shape[1]}")
+        return fixed_shape_resize(img, fixed_shape[0], fixed_shape[1])
+
     if bucket_shape is None:
         bucket_config = {
             0.667: np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64),
@@ -31,25 +45,41 @@ def resize_image(img, resolution, bucket_shape=None):
             1.000: np.array([[480, 480], [576, 576], [960, 960]], dtype=np.int64),
         }
     else:
-        bucket_config = {}
-        for ratio, resolutions in bucket_shape.items():
-            bucket_config[float(ratio)] = np.array(resolutions, dtype=np.int64)
+        bucket_config = {float(ratio): np.array(resolutions, dtype=np.int64) for ratio, resolutions in bucket_shape.items()}
+
     ori_height = img.shape[-2]
     ori_weight = img.shape[-1]
     ori_ratio = ori_height / ori_weight
-
-    aspect_ratios = np.array(np.array(list(bucket_config.keys())))
+    aspect_ratios = np.array(list(bucket_config.keys()))
     closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
     closet_ratio = aspect_ratios[closet_aspect_idx]
-    if resolution == "480p":
+
+    if resize_mode == "adaptive":
+        # Default-runner historical behaviour: tier is chosen by config["resolution"].
+        assert resolution in ("480p", "540p", "720p"), f"adaptive mode requires resolution in 480p/540p/720p; got {resolution}"
+        tier_idx = {"480p": 0, "540p": 1, "720p": 2}[resolution]
+        target_h, target_w = bucket_config[closet_ratio][tier_idx]
+    elif resize_mode == "keep_ratio_fixed_area":
+        area_in_pixels = 720 * 1280 if fixed_area == "720p" else 480 * 832
+        target_h = round(np.sqrt(area_in_pixels * ori_ratio))
+        target_w = round(np.sqrt(area_in_pixels / ori_ratio))
+    elif resize_mode == "fixed_min_area":
         target_h, target_w = bucket_config[closet_ratio][0]
-    elif resolution == "540p":
-        target_h, target_w = bucket_config[closet_ratio][1]
-    elif resolution == "720p":
-        target_h, target_w = bucket_config[closet_ratio][2]
+    elif resize_mode == "fixed_max_area":
+        target_h, target_w = bucket_config[closet_ratio][-1]
+    elif resize_mode == "fixed_min_side":
+        if fixed_area not in ("480p", "720p"):
+            logger.warning(f"fixed_min_side: fixed_area is not '480p' or '720p', using default 480p (got {fixed_area})")
+        min_side = 720 if fixed_area == "720p" else 480
+        if ori_ratio < 1.0:
+            target_h = min_side
+            target_w = round(target_h / ori_ratio)
+        else:
+            target_w = min_side
+            target_h = round(target_w * ori_ratio)
 
     cropped_img = isotropic_crop_resize(img, (target_h, target_w))
-    logger.info(f"resize_image: {img.shape} -> {cropped_img.shape}, target_h: {target_h}, target_w: {target_w}")
+    logger.info(f"resize_image: {img.shape} -> {cropped_img.shape}, resize_mode: {resize_mode}, target_h: {target_h}, target_w: {target_w}")
     return cropped_img, target_h, target_w
 
 
@@ -258,8 +288,18 @@ class DefaultRunner(BaseRunner):
         img = TF.to_tensor(img_ori).sub_(0.5).div_(0.5).unsqueeze(0).to(self.init_device)
         self.input_info.original_size = img_ori.size
 
-        if self.config.get("resize_mode", None) == "adaptive":
-            img, h, w = resize_image(img, self.config.get("resolution", "480p"), self.config.get("bucket_shape", None))
+        resize_mode = self.config.get("resize_mode", None)
+        # Treat empty string the same as missing — InputInfo dataclasses default
+        # `resize_mode` to "", which used to silently skip the resize branch.
+        if resize_mode:
+            img, h, w = resize_image(
+                img,
+                resize_mode=resize_mode,
+                resolution=self.config.get("resolution", "480p"),
+                bucket_shape=self.config.get("bucket_shape", None),
+                fixed_area=self.config.get("fixed_area", None),
+                fixed_shape=self.config.get("fixed_shape", None),
+            )
             logger.info(f"resize_image target_h: {h}, target_w: {w}")
             patched_h = h // self.config["vae_stride"][1] // self.config["patch_size"][1]
             patched_w = w // self.config["vae_stride"][2] // self.config["patch_size"][2]
@@ -275,8 +315,10 @@ class DefaultRunner(BaseRunner):
             logger.info(f"target_h: {target_shape[0]}, target_w: {target_shape[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
 
             img = torch.nn.functional.interpolate(img, size=(target_shape[0], target_shape[1]), mode="bicubic")
-            self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
-            self.input_info.target_shape = target_shape  # Important: set target_shape in input_info
+            # Must populate both before run_vae_encoder; its else-branch reads
+            # `input_info.latent_shape` unconditionally when resize_mode is set.
+            self.input_info.latent_shape = latent_shape
+            self.input_info.target_shape = target_shape
 
         return img, img_ori
 
