@@ -48,7 +48,7 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
-- **2026年5月29日：** 🚀 我们推出了一个极其高效的 Wan 2.2 14B 变体：[面向 Blackwell 架构的 NVFP4 量化感知步数蒸馏与稀疏注意力模型](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse)。在单张 RTX 5090 显卡上可实现超过 50 倍的加速。
+- **2026年5月29日：** 🚀 我们推出了一个极其高效的 Wan 2.2 14B 变体 (T2V and I2V)：[面向 Blackwell 架构的 NVFP4 量化感知步数蒸馏与稀疏注意力模型](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse)。在单张 RTX 5090 显卡上可实现超过 50 倍的加速。
 
 - **2026年4月30日：** 🚀 支持 天数智芯 的部署，感谢天数智芯团队。
 
