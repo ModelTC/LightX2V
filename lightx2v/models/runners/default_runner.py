@@ -61,8 +61,8 @@ def resize_image(img, resize_mode="adaptive", resolution="480p", bucket_shape=No
         target_h, target_w = bucket_config[closet_ratio][tier_idx]
     elif resize_mode == "keep_ratio_fixed_area":
         area_in_pixels = 720 * 1280 if fixed_area == "720p" else 480 * 832
-        target_h = round(np.sqrt(area_in_pixels * ori_ratio))
-        target_w = round(np.sqrt(area_in_pixels / ori_ratio))
+        target_h = max(1, round(np.sqrt(area_in_pixels * ori_ratio)))
+        target_w = max(1, round(np.sqrt(area_in_pixels / ori_ratio)))
     elif resize_mode == "fixed_min_area":
         target_h, target_w = bucket_config[closet_ratio][0]
     elif resize_mode == "fixed_max_area":
