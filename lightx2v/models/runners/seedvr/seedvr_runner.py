@@ -41,14 +41,23 @@ def _get_read_video():
             import av
 
             def read_video(filename, start_pts=0, end_pts=None, pts_unit="pts", output_format="THWC"):
-                container = av.open(filename)
-                stream = container.streams.video[0]
-                fps = float(stream.average_rate)
-                frames = []
-                for frame in container.decode(video=0):
-                    img = frame.to_ndarray(format="rgb24")  # H W C
-                    frames.append(img)
-                container.close()
+                                container = av.open(filename)
+                                try:
+                                    if not container.streams.video:
+                                        raise ValueError(f"No video stream found in {filename}")
+                                    stream = container.streams.video[0]
+                                    try:
+                                        fps = float(stream.average_rate) if stream.average_rate else 0.0
+                                    except ZeroDivisionError:
+                                        fps = 0.0
+                                    frames = []
+                                    for frame in container.decode(video=0):
+                                        img = frame.to_ndarray(format="rgb24")
+                                        frames.append(img)
+                                    if not frames:
+                                        raise ValueError(f"No frames decoded from {filename}")
+                                finally:
+                                    container.close()
                 video = torch.from_numpy(np.stack(frames))  # T H W C
                 if output_format == "TCHW":
                     video = video.permute(0, 3, 1, 2)
