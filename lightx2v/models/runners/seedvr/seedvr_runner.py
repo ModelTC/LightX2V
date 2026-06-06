@@ -9,7 +9,11 @@ SeedVR is a video super-resolution model that uses:
 
 import gc
 import os
+import shutil
+import subprocess
+import tempfile
 
+import imageio_ffmpeg as ffmpeg
 import numpy as np
 import torch
 from einops import rearrange
@@ -23,6 +27,7 @@ from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstru
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -41,23 +46,23 @@ def _get_read_video():
             import av
 
             def read_video(filename, start_pts=0, end_pts=None, pts_unit="pts", output_format="THWC"):
-                                container = av.open(filename)
-                                try:
-                                    if not container.streams.video:
-                                        raise ValueError(f"No video stream found in {filename}")
-                                    stream = container.streams.video[0]
-                                    try:
-                                        fps = float(stream.average_rate) if stream.average_rate else 0.0
-                                    except ZeroDivisionError:
-                                        fps = 0.0
-                                    frames = []
-                                    for frame in container.decode(video=0):
-                                        img = frame.to_ndarray(format="rgb24")
-                                        frames.append(img)
-                                    if not frames:
-                                        raise ValueError(f"No frames decoded from {filename}")
-                                finally:
-                                    container.close()
+                container = av.open(filename)
+                try:
+                    if not container.streams.video:
+                        raise ValueError(f"No video stream found in {filename}")
+                    stream = container.streams.video[0]
+                    try:
+                        fps = float(stream.average_rate) if stream.average_rate else 0.0
+                    except ZeroDivisionError:
+                        fps = 0.0
+                    frames = []
+                    for frame in container.decode(video=0):
+                        img = frame.to_ndarray(format="rgb24")
+                        frames.append(img)
+                    if not frames:
+                        raise ValueError(f"No frames decoded from {filename}")
+                finally:
+                    container.close()
                 video = torch.from_numpy(np.stack(frames))  # T H W C
                 if output_format == "TCHW":
                     video = video.permute(0, 3, 1, 2)
@@ -212,6 +217,44 @@ class SeedVRRunner(DefaultRunner):
         self.end_run()
         self.input_info = cached_input_info
         return raw_video
+
+    def _save_sr_segment_video(self, raw_video, output_path, fps):
+        video = wan_vae_to_comfy(raw_video).float().clamp(0.0, 1.0)
+        save_to_video(video, output_path, fps=fps, method="ffmpeg")
+        del video
+
+    def _concat_sr_segment_videos(self, segment_paths, output_path):
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        if len(segment_paths) == 1:
+            shutil.move(segment_paths[0], output_path)
+            return
+
+        concat_path = os.path.join(os.path.dirname(output_path) or ".", f".{os.path.basename(output_path)}.concat.txt")
+        try:
+            with open(concat_path, "w", encoding="utf-8") as f:
+                for path in segment_paths:
+                    escaped = os.path.abspath(path).replace("\\", "\\\\").replace("'", "\\'")
+                    f.write(f"file '{escaped}'\n")
+
+            command = [
+                ffmpeg.get_ffmpeg_exe(),
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_path,
+                "-c",
+                "copy",
+                output_path,
+            ]
+            process = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+            if process.returncode != 0:
+                raise RuntimeError(f"FFmpeg concat failed: {process.stderr.strip()}")
+        finally:
+            if os.path.exists(concat_path):
+                os.remove(concat_path)
 
     def _cut_videos(self, videos, sp_size):
         t = videos.size(1)
@@ -499,12 +542,20 @@ class SeedVRRunner(DefaultRunner):
         segments = self._build_sr_segments(total_frames, seg_len, overlap)
         logger.info(f"[SeedVRRunner] SR segmenting: total_frames={total_frames}, seg_len={seg_len}, overlap={overlap}, segments={len(segments)}")
 
-        raw_segments = []
         original_save_path = self.input_info.save_result_path
         original_return_tensor = self.input_info.return_result_tensor
+        file_output = bool(original_save_path) and not bool(original_return_tensor)
+        raw_segments = [] if not file_output else None
+        segment_paths = []
+        tmp_dir = None
         try:
-            self.input_info.save_result_path = ""
-            self.input_info.return_result_tensor = True
+            if file_output:
+                output_dir = os.path.dirname(original_save_path) or "."
+                os.makedirs(output_dir, exist_ok=True)
+                tmp_dir = tempfile.mkdtemp(prefix=f".{os.path.basename(original_save_path)}.segments.", dir=output_dir)
+            else:
+                self.input_info.save_result_path = ""
+                self.input_info.return_result_tensor = True
 
             for idx, (start_idx, end_idx) in enumerate(segments):
                 logger.info(f"[SeedVRRunner] Processing segment {idx + 1}/{len(segments)}: frames {start_idx}:{end_idx}")
@@ -513,12 +564,33 @@ class SeedVRRunner(DefaultRunner):
                 raw = self._run_sr_single_segment()
                 if overlap > 0 and idx > 0 and raw is not None:
                     raw = raw[:, :, overlap:, :, :]
-                raw_segments.append(raw)
+
+                if file_output:
+                    segment_path = os.path.join(tmp_dir, f"segment_{idx:05d}.mp4")
+                    self._save_sr_segment_video(raw, segment_path, fps=self.config.get("fps", 16))
+                    segment_paths.append(segment_path)
+                    del raw
+                    self.gen_video = None
+                    self.gen_video_final = None
+                    self._input = None
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                else:
+                    raw_segments.append(raw)
+
+            if file_output:
+                if not segment_paths:
+                    raise RuntimeError("SeedVR produced no video segments to save.")
+                self._concat_sr_segment_videos(segment_paths, original_save_path)
+                logger.info(f"✅ Video saved successfully to: {original_save_path} ✅")
+                return {"video": None, "save_result_path": original_save_path}
         finally:
             # Critical: restore per-request output mode even when cancelled/interrupted.
             self._sr_segment = None
             self.input_info.save_result_path = original_save_path
             self.input_info.return_result_tensor = original_return_tensor
+            if tmp_dir is not None and os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
         self.gen_video_final = torch.cat(raw_segments, dim=2)
         gen_video_final = self.process_images_after_vae_decoder()
