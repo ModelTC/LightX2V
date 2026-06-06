@@ -305,6 +305,9 @@ class SeedVRRunner(DefaultRunner):
         return None
 
     def load_vae_encoder(self):
+        vae_causal_slice_size = int(self.config.get("vae_causal_slice_size", 4))
+        vae_memory_limit_gb = float(self.config.get("vae_memory_limit_gb", 0.5))
+        vae_memory_limit = None if vae_memory_limit_gb <= 0 else vae_memory_limit_gb
         vae = attn_video_vae_v3_s8_c16_t4_inflation_sd3_init(
             device=AI_DEVICE,
             dtype=GET_DTYPE(),
@@ -314,10 +317,18 @@ class SeedVRRunner(DefaultRunner):
             strict=False,
             cpu_offload=self.config.get("cpu_offload", False),
             use_tiling=self.config.get("use_tiling_vae", False),
+            tile_size=int(self.config.get("vae_tile_size", 512)),
+            tile_overlap=int(self.config.get("vae_tile_overlap", 64)),
         )
         vae.requires_grad_(False).eval()
-        vae.set_causal_slicing(split_size=4, memory_device="same")
-        vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
+        vae.set_causal_slicing(split_size=vae_causal_slice_size if vae_causal_slice_size > 0 else None, memory_device="same")
+        vae.set_memory_limit(conv_max_mem=vae_memory_limit, norm_max_mem=vae_memory_limit)
+        logger.info(
+            f"[SeedVRRunner] VAE config: tiling={self.config.get('use_tiling_vae', False)}, "
+            f"tile={self.config.get('vae_tile_size', 512)}, overlap={self.config.get('vae_tile_overlap', 64)}, "
+            f"causal_slice={vae_causal_slice_size if vae_causal_slice_size > 0 else 'off'}, "
+            f"memory_limit={vae_memory_limit_gb if vae_memory_limit_gb > 0 else 'off'}GiB"
+        )
         return vae
 
     def load_vae_decoder(self):
@@ -340,9 +351,14 @@ class SeedVRRunner(DefaultRunner):
         if self._ori_length < sample.shape[0]:
             sample = sample[: self._ori_length]
 
-        # color fix
-        input = rearrange(self._input[:, None], "c t h w -> t c h w") if self._input.ndim == 3 else rearrange(self._input, "c t h w -> t c h w")
-        sample = wavelet_reconstruction(sample.to("cpu"), input[: sample.size(0)].to("cpu"))
+        color_fix = str(self.config.get("color_fix", "cpu")).lower()
+        if color_fix not in ("cpu", "gpu", "off"):
+            logger.warning(f"[SeedVRRunner] Unknown color_fix={color_fix}; fallback to cpu")
+            color_fix = "cpu"
+        if color_fix != "off":
+            input = rearrange(self._input[:, None], "c t h w -> t c h w") if self._input.ndim == 3 else rearrange(self._input, "c t h w -> t c h w")
+            fix_device = torch.device("cpu") if color_fix == "cpu" else sample.device
+            sample = wavelet_reconstruction(sample.to(fix_device), input[: sample.size(0)].to(fix_device))
         sample = rearrange(sample[:, None], "t c h w -> c t h w") if sample.ndim == 3 else rearrange(sample, "t c h w -> c t h w")
         sample = sample[None, :]
 
