@@ -301,8 +301,8 @@ class DefaultRunner(BaseRunner):
                 fixed_shape=self.config.get("fixed_shape", None),
             )
             logger.info(f"resize_image target_h: {h}, target_w: {w}")
-            patched_h = h // self.config["vae_stride"][1] // self.config["patch_size"][1]
-            patched_w = w // self.config["vae_stride"][2] // self.config["patch_size"][2]
+            patched_h = max(1, h // self.config["vae_stride"][1] // self.config["patch_size"][1])
+            patched_w = max(1, w // self.config["vae_stride"][2] // self.config["patch_size"][2])
 
             patched_h, patched_w = get_optimal_patched_size_with_sp(patched_h, patched_w, 1)
 
