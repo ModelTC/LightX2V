@@ -48,7 +48,7 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
-- **May 29, 2026:** 🚀 We introduce an extremely efficient Wan 2.2 14B variant: [NVFP4 Quantization-Aware Step Distillation with Sparse Attention for Blackwell Architecture](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse). On a single RTX 5090 GPU, it achieves over 50× speedup.
+- **May 29, 2026:** 🚀 We introduce an extremely efficient Wan 2.2 14B variant (T2V and I2V): [NVFP4 Quantization-Aware Step Distillation with Sparse Attention for Blackwell Architecture](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse). On a single RTX 5090 GPU, it achieves over 50× speedup.
 
 - **April 30, 2026:** 🚀 We now support deployment on iluvatar. Thanks to the iluvatar team.
 
