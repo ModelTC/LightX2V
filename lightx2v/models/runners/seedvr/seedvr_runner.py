@@ -16,6 +16,7 @@ import tempfile
 import imageio_ffmpeg as ffmpeg
 import numpy as np
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 from loguru import logger
 from torch import Tensor
@@ -345,6 +346,27 @@ class SeedVRRunner(DefaultRunner):
         vae_decoder = vae_encoder
         return vae_encoder, vae_decoder
 
+    def _restore_target_size(self, sample):
+        target_height = int(self.config.get("target_height", sample.shape[-2]) or sample.shape[-2])
+        target_width = int(self.config.get("target_width", sample.shape[-1]) or sample.shape[-1])
+        if target_height <= 0 or target_width <= 0:
+            return sample
+
+        height, width = sample.shape[-2:]
+        if (height, width) == (target_height, target_width):
+            return sample
+
+        if height >= target_height and width >= target_width:
+            top = (height - target_height) // 2
+            left = (width - target_width) // 2
+            logger.info(f"[SeedVRRunner] center crop SR output from {width}x{height} to {target_width}x{target_height}")
+            return sample[..., top : top + target_height, left : left + target_width]
+
+        logger.info(f"[SeedVRRunner] resize SR output from {width}x{height} to {target_width}x{target_height}")
+        dtype = sample.dtype
+        device = sample.device
+        return F.interpolate(sample.float(), size=(target_height, target_width), mode="bilinear", align_corners=False).to(device=device, dtype=dtype)
+
     def run_vae_decoder(self, latents):
         samples = self.vae_decoder.vae_decode(latents)
         sample = [(rearrange(video[:, None], "c t h w -> t c h w") if video.ndim == 3 else rearrange(video, "c t h w -> t c h w")) for video in samples][0]
@@ -359,6 +381,7 @@ class SeedVRRunner(DefaultRunner):
             input = rearrange(self._input[:, None], "c t h w -> t c h w") if self._input.ndim == 3 else rearrange(self._input, "c t h w -> t c h w")
             fix_device = torch.device("cpu") if color_fix == "cpu" else sample.device
             sample = wavelet_reconstruction(sample.to(fix_device), input[: sample.size(0)].to(fix_device))
+        sample = self._restore_target_size(sample)
         sample = rearrange(sample[:, None], "t c h w -> c t h w") if sample.ndim == 3 else rearrange(sample, "t c h w -> c t h w")
         sample = sample[None, :]
 
