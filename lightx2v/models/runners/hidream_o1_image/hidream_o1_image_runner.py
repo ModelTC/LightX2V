@@ -92,6 +92,7 @@ class HidreamO1ImageRunner(DefaultRunner):
                 "scheduler_name": self.config.get("scheduler_name", "default"),
                 "noise_scale_start": float(self.config.get("noise_scale_start", 8.0)),
                 "noise_scale_end": float(self.config.get("noise_scale_end", 8.0)),
+                "noise_clip_std": float(self.config.get("noise_clip_std", 0.0)),
             }
         if model_type == "dev":
             return {
@@ -99,9 +100,10 @@ class HidreamO1ImageRunner(DefaultRunner):
                 "guidance_scale": float(self.config.get("guidance_scale", 0.0)),
                 "shift": float(self.config.get("shift", 1.0)),
                 "timesteps_list": self.config.get("timesteps_list", self.default_timesteps),
-                "scheduler_name": self.config.get("scheduler_name", "default"),
+                "scheduler_name": self.config.get("scheduler_name", "flash"),
                 "noise_scale_start": float(self.config.get("noise_scale_start", 7.5)),
                 "noise_scale_end": float(self.config.get("noise_scale_end", 7.5)),
+                "noise_clip_std": float(self.config.get("noise_clip_std", 2.5)),
             }
         raise ValueError(f"Unsupported HiDream hidream_model_type: {model_type}")
 
