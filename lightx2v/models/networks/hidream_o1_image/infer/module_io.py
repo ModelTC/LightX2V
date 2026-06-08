@@ -6,8 +6,8 @@ import torch
 @dataclass
 class HidreamPreInferOutput:
     inputs_embeds: torch.Tensor
-    position_ids: torch.Tensor
-    token_types: torch.Tensor
+    rope_cos_sin: tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    idx_ar: torch.Tensor
     vinput_mask: torch.Tensor
     visual_pos_masks: torch.Tensor | None = None
     deepstack_visual_embeds: list[torch.Tensor] | None = None
