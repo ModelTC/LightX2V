@@ -140,6 +140,68 @@ class WanMxfp8FuseForwardingTest(unittest.TestCase):
         infer.infer_block_with_kvcache(block, torch.zeros(4, 8), pre_infer_out)
         self.assertIs(seen["gate"], gate)
 
+    def test_lingbot_forwards_c_gate_msa(self):
+        ensure_lightx2v_pipeline_stub()
+        ensure_local_lightx2v_kernel()
+        lingbot = import_module("lightx2v.models.networks.wan.infer.lingbot.transformer_infer")
+
+        infer = lingbot.WanLingbotTransformerInfer(make_config())
+        gate = torch.ones(1, 8)
+        infer.pre_process = lambda modulation, embed0: (gate, gate, gate, gate, gate, gate)
+        infer.infer_self_attn = lambda *args, **kwargs: torch.zeros(1, 8)
+        infer.infer_cross_attn = lambda *args, **kwargs: (torch.zeros(1, 8), torch.zeros(1, 8))
+        seen = {}
+
+        def fake_infer_ffn(phase, x, attn_out, c_shift, c_scale, c_gate=None):
+            seen["gate"] = c_gate
+            return torch.zeros_like(x)
+
+        infer.infer_ffn = fake_infer_ffn
+        infer.post_process = lambda x, y, c_gate, pre_infer_out=None: x
+
+        block = SimpleNamespace(compute_phases=[SimpleNamespace(modulation=None), SimpleNamespace(), SimpleNamespace()])
+        pre_infer_out = SimpleNamespace(
+            x=torch.zeros(1, 8),
+            embed0=torch.zeros(1, 6, 8),
+            context=torch.zeros(1, 8),
+            conditional_dict={},
+            adapter_args={"hints": []},
+        )
+        infer.infer_block(block, torch.zeros(1, 8), pre_infer_out)
+        self.assertIs(seen["gate"], gate)
+
+    def test_audio_forwards_c_gate_msa(self):
+        ensure_lightx2v_pipeline_stub()
+        ensure_local_lightx2v_kernel()
+        audio = import_module("lightx2v.models.networks.wan.infer.audio.transformer_infer")
+
+        infer = audio.WanAudioARTransformerInfer(make_config())
+        gate = torch.ones(1, 8)
+        infer.pre_process = lambda modulation, embed0: (gate, gate, gate, gate, gate, gate)
+        infer.infer_self_attn_with_kvcache = lambda *args, **kwargs: torch.zeros(1, 8)
+        infer.infer_cross_attn_with_kvcache = lambda *args, **kwargs: (torch.zeros(1, 8), torch.zeros(1, 8))
+        seen = {}
+
+        def fake_infer_ffn(phase, x, attn_out, c_shift, c_scale, c_gate=None):
+            seen["gate"] = c_gate
+            return torch.zeros_like(x)
+
+        infer.infer_ffn = fake_infer_ffn
+        infer.post_process = lambda x, y, c_gate, pre_infer_out=None: x
+
+        block = SimpleNamespace(compute_phases=[SimpleNamespace(modulation=None), SimpleNamespace(), SimpleNamespace(), SimpleNamespace()])
+        pre_infer_out = SimpleNamespace(
+            x=torch.zeros(1, 8),
+            embed0=torch.zeros(1, 6, 8),
+            grid_sizes=SimpleNamespace(tensor=torch.ones(1, 3, dtype=torch.int32)),
+            seq_lens=torch.ones(1, dtype=torch.int32),
+            freqs=torch.zeros(1),
+            context=torch.zeros(1, 8),
+            adapter_args={"audio_encoder_output": None},
+        )
+        infer.infer_block_with_kvcache(block, torch.zeros(1, 8), pre_infer_out)
+        self.assertIs(seen["gate"], gate)
+
     def test_feature_caching_variants_forward_c_gate_msa(self):
         ensure_lightx2v_pipeline_stub()
         ensure_local_lightx2v_kernel()

@@ -117,6 +117,15 @@ def _mxfp8_modulate_param(param: torch.Tensor, m: int, n: int, name: str):
 
 
 def scaled_mxfp8_modulate_quant(input: torch.Tensor, scale: torch.Tensor, shift: torch.Tensor):
+    """Fuse Wan AdaLN modulation with MXFP8 quantization.
+
+    This is a narrow Wan transformer helper, not a generic modulate op. It
+    expects a 2D BF16 activation shaped ``(M, N)`` and applies the fixed Wan
+    AdaLN formula ``input * (1 + scale) + shift`` before quantization. ``scale``
+    and ``shift`` may be either per-channel ``(N,)`` tensors or per-element
+    ``(M, N)`` tensors. It does not cover 4D/per-frame modulation, smooth-norm
+    variants, or other model-specific modulation layouts.
+    """
     m, n = input.shape
     block_size = 32
     device = input.device

@@ -217,7 +217,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             block.compute_phases[0], pre_infer_out.grid_sizes.tensor, x, pre_infer_out.seq_lens, pre_infer_out.freqs, shift_msa, scale_msa, pre_infer_out.adapter_args.get("is_ref_prefill", False)
         )
         x, attn_out = self.infer_cross_attn_with_kvcache(block.compute_phases[1], x, pre_infer_out.context, y_out, gate_msa)
-        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
+        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
 
         if pre_infer_out.adapter_args.get("audio_encoder_output") is None:
