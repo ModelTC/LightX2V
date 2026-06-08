@@ -46,7 +46,7 @@ infer
   -> executes DiT math with those weights
 ```
 
-Do not put model math in runner. Do not put checkpoint mapping in infer. Do not call the upstream repo from runner/model to get a result. The result should come from LightX2V-native modules.
+Do not put model path in runner. Do not put checkpoint mapping in infer. Do not call the upstream repo from runner/model to get a result. The result should come from LightX2V-native modules.
 
 Native means:
 
@@ -702,7 +702,7 @@ For a model similar to LingBot-VA, use this order:
 Fast checks after every change:
 
 ```bash
-cd /data/nvme4/gushiqiao/new/LightX2V
+cd <LightX2V repo root>
 python3 -m py_compile <changed python files>
 bash -n <changed scripts>
 python3 -m json.tool <changed configs>

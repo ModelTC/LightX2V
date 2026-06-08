@@ -32,8 +32,3 @@ save_results/*
 lightx2v_train/output_train/*
 lightx2v_train/output_infer/*
 .gitnexus
-.claude
-.codex
-.cursor
-CLAUDE.md
-AGENTS.md
