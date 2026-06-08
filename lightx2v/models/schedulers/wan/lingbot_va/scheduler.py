@@ -96,11 +96,16 @@ class LingbotVAFlowMatchScheduler(BaseScheduler):
         self.noise_pred = None
 
     def step(self, model_output, timestep, sample, return_dict=False):
-        if isinstance(timestep, torch.Tensor):
-            timestep_ref = timestep.detach().to(device=self.timesteps.device, dtype=self.timesteps.dtype)
+        step_index = getattr(self, "step_index", None)
+        if step_index is not None:
+            timestep_id = step_index
         else:
-            timestep_ref = torch.tensor(timestep, device=self.timesteps.device, dtype=self.timesteps.dtype)
-        timestep_id = torch.argmin((self.timesteps - timestep_ref).abs())
+            if isinstance(timestep, torch.Tensor):
+                timestep_ref = timestep.detach().to(device=self.timesteps.device, dtype=self.timesteps.dtype)
+            else:
+                timestep_ref = torch.tensor(timestep, device=self.timesteps.device, dtype=self.timesteps.dtype)
+            timestep_id = int(torch.argmin((self.timesteps - timestep_ref).abs()).item())
+
         sigma = self.sigmas[timestep_id].to(sample.device, sample.dtype)
         if timestep_id + 1 >= len(self.timesteps):
             sigma_next = torch.zeros((), device=sample.device, dtype=sample.dtype)
