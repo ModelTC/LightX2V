@@ -13,5 +13,6 @@
     "torch_dtype": "bfloat16",
     "enable_cfg": false,
     "rms_norm_type": "one-pass",
-    "attn_type": "flash_attn3"
+    "attn_type": "flash_attn3",
+    "rope_type": "flashinfer"
 }

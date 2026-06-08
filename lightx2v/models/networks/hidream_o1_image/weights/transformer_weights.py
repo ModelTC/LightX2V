@@ -14,17 +14,15 @@ class HidreamO1ImageTransformerWeights(WeightModule):
         self.attn_type = config["attn_type"]
         self.blocks_num = int(config.get("num_hidden_layers", config.get("num_layers", 0)))
         self.device = AI_DEVICE
-        self.rotary_emb = None
         self.blocks = WeightModuleList(HidreamO1ImageDecoderBlockWeights(i, config, self.mm_type, self.rms_norm_type, self.attn_type) for i in range(self.blocks_num))
         self.add_module("blocks", self.blocks)
         self.add_module("norm", RMS_WEIGHT_REGISTER[self.rms_norm_type]("model.language_model.norm.weight", eps=config.get("rms_norm_eps", 1e-6)))
 
-    def configure_model(self, text_config, rotary_emb, device):
+    def configure_model(self, text_config, device):
         self.blocks_num = text_config.num_hidden_layers
         if len(self.blocks) != self.blocks_num:
             self.blocks = WeightModuleList(HidreamO1ImageDecoderBlockWeights(i, self.config, self.mm_type, self.rms_norm_type, self.attn_type) for i in range(self.blocks_num))
             self.add_module("blocks", self.blocks)
-        self.rotary_emb = rotary_emb
         for block_weight in self.blocks:
             block_weight.configure(text_config)
         self.device = device
@@ -33,16 +31,12 @@ class HidreamO1ImageTransformerWeights(WeightModule):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cpu"):
                 module.to_cpu(non_blocking=non_blocking)
-        if self.rotary_emb is not None:
-            self.rotary_emb.to("cpu")
         self.device = "cpu"
 
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):
                 module.to_cuda(non_blocking=non_blocking)
-        if self.rotary_emb is not None:
-            self.rotary_emb.to(AI_DEVICE)
         self.device = AI_DEVICE
 
 

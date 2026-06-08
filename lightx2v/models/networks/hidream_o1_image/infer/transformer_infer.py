@@ -1,12 +1,20 @@
 import torch
 
 from lightx2v.models.networks.hidream_o1_image.infer.module_io import HidreamTransformerInferOutput
-from lightx2v.models.networks.hidream_o1_image.qwen3_vl import apply_rotary_pos_emb
+from lightx2v.models.networks.hidream_o1_image.infer.rope import apply_hidream_rope_with_flashinfer, apply_hidream_rope_with_torch
 
 
 class HidreamO1ImageTransformerInfer:
     def __init__(self, config):
         self.config = config
+        rope_type = config.get("rope_type", "flashinfer")
+        rope_funcs = {
+            "flashinfer": apply_hidream_rope_with_flashinfer,
+            "torch": apply_hidream_rope_with_torch,
+        }
+        if rope_type not in rope_funcs:
+            raise ValueError(f"Unsupported HiDream rope_type={rope_type!r}. Supported values: {sorted(rope_funcs)}")
+        self.apply_rope_func = rope_funcs[rope_type]
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -14,15 +22,11 @@ class HidreamO1ImageTransformerInfer:
     def infer(self, block_weights, pre_infer_out, dtype):
         device = block_weights.device
         device_type = torch.device(device).type
-        position_ids = pre_infer_out.position_ids.to(device)
-        token_types = pre_infer_out.token_types.to(device)
 
         with torch.autocast(device_type, dtype=dtype, cache_enabled=False):
-            position_embeddings = self._position_embeddings(block_weights, pre_infer_out.inputs_embeds, position_ids)
             hidden_states = pre_infer_out.inputs_embeds
-            idx_ar = torch.nonzero(~token_types[0].bool(), as_tuple=False).squeeze(-1)
             for layer_idx, decoder_block in enumerate(block_weights.blocks):
-                hidden_states = self._infer_decoder_block(decoder_block, hidden_states, position_embeddings, idx_ar)
+                hidden_states = self._infer_decoder_block(decoder_block, hidden_states, pre_infer_out.rope_cos_sin, pre_infer_out.idx_ar)
                 if pre_infer_out.deepstack_visual_embeds is not None and pre_infer_out.visual_pos_masks is not None and layer_idx < len(pre_infer_out.deepstack_visual_embeds):
                     hidden_states = self._deepstack_process(
                         hidden_states,
@@ -36,17 +40,10 @@ class HidreamO1ImageTransformerInfer:
             tgt_image_len=pre_infer_out.tgt_image_len,
         )
 
-    def _position_embeddings(self, block_weights, inputs_embeds, position_ids):
-        if position_ids.ndim == 2:
-            position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
-        elif position_ids.ndim == 3 and position_ids.shape[0] == 4:
-            position_ids = position_ids[1:]
-        return block_weights.rotary_emb(inputs_embeds, position_ids)
-
-    def _infer_decoder_block(self, weights, hidden_states, position_embeddings, idx_ar):
+    def _infer_decoder_block(self, weights, hidden_states, rope_cos_sin, idx_ar):
         residual = hidden_states
         normed = weights.input_layernorm.apply(hidden_states)
-        attn_output = self._infer_self_attn(weights, normed, position_embeddings, idx_ar)
+        attn_output = self._infer_self_attn(weights, normed, rope_cos_sin, idx_ar)
         hidden_states = residual + attn_output
 
         residual = hidden_states
@@ -61,7 +58,7 @@ class HidreamO1ImageTransformerInfer:
         hidden_states[visual_pos_masks, :] = hidden_states[visual_pos_masks, :].clone() + visual_embeds
         return hidden_states
 
-    def _infer_self_attn(self, weights, hidden_states, position_embeddings, idx_ar):
+    def _infer_self_attn(self, weights, hidden_states, rope_cos_sin, idx_ar):
         batch, seq_len, _ = hidden_states.shape
         flat_hidden = hidden_states.reshape(-1, hidden_states.shape[-1])
         q = weights.q_proj.apply(flat_hidden).reshape(batch, seq_len, weights.heads, weights.head_dim)
@@ -70,12 +67,7 @@ class HidreamO1ImageTransformerInfer:
         q = weights.q_norm.apply(q)
         k = weights.k_norm.apply(k)
 
-        cos, sin = position_embeddings
-        q_rope = q.transpose(1, 2)
-        k_rope = k.transpose(1, 2)
-        q_rope, k_rope = apply_rotary_pos_emb(q_rope, k_rope, cos, sin)
-        q = q_rope.transpose(1, 2).contiguous()
-        k = k_rope.transpose(1, 2).contiguous()
+        q, k = self.apply_rope_func(q, k, rope_cos_sin)
 
         attn_output = self._two_pass_attn(weights, q, k, v, idx_ar)
         attn_output = attn_output.reshape(-1, attn_output.shape[-1])

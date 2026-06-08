@@ -8,7 +8,6 @@ from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.hidream_o1_image.infer.post_infer import HidreamO1ImagePostInfer
 from lightx2v.models.networks.hidream_o1_image.infer.pre_infer import HidreamO1ImagePreInfer
 from lightx2v.models.networks.hidream_o1_image.infer.transformer_infer import HidreamO1ImageTransformerInfer
-from lightx2v.models.networks.hidream_o1_image.qwen3_vl import Qwen3VLTextRotaryEmbedding
 from lightx2v.models.networks.hidream_o1_image.weights.post_weights import HidreamO1ImagePostWeights
 from lightx2v.models.networks.hidream_o1_image.weights.pre_weights import HidreamO1ImagePreWeights
 from lightx2v.models.networks.hidream_o1_image.weights.transformer_weights import HidreamO1ImageTransformerWeights
@@ -53,9 +52,8 @@ class HidreamO1ImageModel(BaseTransformerModel):
         return self.qwen_config
 
     def _configure_weight_structure(self):
-        rotary_emb = Qwen3VLTextRotaryEmbedding(config=self.qwen_config.text_config).to(self.device)
         self.pre_weight.configure_model(self.qwen_config)
-        self.transformer_weights.configure_model(self.qwen_config.text_config, rotary_emb, self.device)
+        self.transformer_weights.configure_model(self.qwen_config.text_config, self.device)
 
     def _init_infer_class(self):
         self.pre_infer_class = HidreamO1ImagePreInfer
@@ -68,7 +66,8 @@ class HidreamO1ImageModel(BaseTransformerModel):
         self.post_infer = self.post_infer_class(self.config)
 
     @torch.no_grad()
-    def _infer_cond_uncond(self, sample, z_in, t_pixeldit, precomputed_image_embeds=None, precomputed_deepstack_image_embeds=None):
+    def _infer_cond_uncond(self, sample, z_in, t_pixeldit, precomputed_image_embeds=None, precomputed_deepstack_image_embeds=None, infer_condition=True):
+        self.scheduler.infer_condition = infer_condition
         pre_out = self.pre_infer.infer(
             self.pre_weight,
             sample,
@@ -86,13 +85,14 @@ class HidreamO1ImageModel(BaseTransformerModel):
             self._cached_image_embeds = image_embeds.detach()
             self._cached_deepstack_image_embeds = [item.detach() for item in deepstack_image_embeds]
 
-    def _infer_velocity(self, sample, z_in, t_pixeldit, latents, sigma):
+    def _infer_velocity(self, sample, z_in, t_pixeldit, latents, sigma, infer_condition=True):
         x_pred, image_embeds, deepstack_image_embeds = self._infer_cond_uncond(
             sample,
             z_in,
             t_pixeldit,
             precomputed_image_embeds=self._cached_image_embeds,
             precomputed_deepstack_image_embeds=self._cached_deepstack_image_embeds,
+            infer_condition=infer_condition,
         )
         self._cache_condition_image_embeds(image_embeds, deepstack_image_embeds)
         return (x_pred.to(dtype=torch.float32) - latents.to(dtype=torch.float32)) / sigma
@@ -108,6 +108,7 @@ class HidreamO1ImageModel(BaseTransformerModel):
         if self.scheduler.step_index == 0:
             self._cached_image_embeds = None
             self._cached_deepstack_image_embeds = None
+            self.pre_infer.clear_cache()
 
         z_in = latents
         if "ref_patches" in inputs:
@@ -124,9 +125,9 @@ class HidreamO1ImageModel(BaseTransformerModel):
                 cfg_p_rank = dist.get_rank(cfg_p_group)
 
                 if cfg_p_rank == 0:
-                    v_pred = self._infer_velocity(samples[0], z_in, t_pixeldit, latents, sigma)
+                    v_pred = self._infer_velocity(samples[0], z_in, t_pixeldit, latents, sigma, infer_condition=True)
                 else:
-                    v_pred = self._infer_velocity(samples[1], z_in, t_pixeldit, latents, sigma)
+                    v_pred = self._infer_velocity(samples[1], z_in, t_pixeldit, latents, sigma, infer_condition=False)
 
                 v_pred_list = [torch.zeros_like(v_pred) for _ in range(2)]
                 dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
@@ -134,13 +135,13 @@ class HidreamO1ImageModel(BaseTransformerModel):
                 v_uncond = v_pred_list[1]  # cfg_p_rank == 1
             else:
                 # ==================== CFG Processing ====================
-                v_cond = self._infer_velocity(samples[0], z_in, t_pixeldit, latents, sigma)
-                v_uncond = self._infer_velocity(samples[1], z_in, t_pixeldit, latents, sigma)
+                v_cond = self._infer_velocity(samples[0], z_in, t_pixeldit, latents, sigma, infer_condition=True)
+                v_uncond = self._infer_velocity(samples[1], z_in, t_pixeldit, latents, sigma, infer_condition=False)
 
             v_guided = v_uncond + cfg["guidance_scale"] * (v_cond - v_uncond)
         else:
             # ==================== No CFG Processing ====================
-            v_cond = self._infer_velocity(samples[0], z_in, t_pixeldit, latents, sigma)
+            v_cond = self._infer_velocity(samples[0], z_in, t_pixeldit, latents, sigma, infer_condition=True)
             v_guided = v_cond
 
         self.scheduler.noise_pred = -v_guided
