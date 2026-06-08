@@ -264,6 +264,25 @@ class I2AVInputInfo:
 
 
 @dataclass
+class I2VAInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    save_action_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
+
+
+@dataclass
 class V2AVInputInfo:
     """LTX-2.3 IC-LoRA video-to-audio-video.
 
@@ -417,6 +436,7 @@ task_dict = {
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,
+    "i2va": I2VAInputInfo,
     "v2av": V2AVInputInfo,
     "ltx2_s2v": LTX2S2VInputInfo,
     "worldplay_i2v": WorldPlayI2VInputInfo,

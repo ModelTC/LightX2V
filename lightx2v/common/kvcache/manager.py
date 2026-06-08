@@ -5,6 +5,7 @@ from loguru import logger
 from lightx2v.utils.envs import GET_DTYPE
 
 from .base import BaseKVCachePool
+from .fifo import FIFOKVCachePool
 from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
 from .rolling import RollingKVCachePool, SpatialRollingKVCachePool, StepRollingKVCachePool
 from .utils import *
@@ -54,6 +55,10 @@ def _step_kivi_kwargs(config, ar_config, kv_quant):
     return kwargs
 
 
+def _fifo_kwargs(_config, _ar_config, _kv_quant):
+    return {}
+
+
 def _get_self_attn_kv_cache_entry(scheme: str, step: bool):
     entry = SELF_ATTN_KV_CACHE_REGISTRY.get((scheme, bool(step)))
     if entry is None:
@@ -65,6 +70,7 @@ register_self_attn_kv_cache("fp", RollingKVCachePool, kwargs_builder=_fp_kwargs)
 register_self_attn_kv_cache("fp", StepRollingKVCachePool, step=True, kwargs_builder=_step_fp_kwargs)
 register_self_attn_kv_cache("kivi", KIVIQuantRollingKVCachePool, kwargs_builder=_kivi_kwargs)
 register_self_attn_kv_cache("kivi", StepKiviQuantRollingKVCachePool, step=True, kwargs_builder=_step_kivi_kwargs)
+register_self_attn_kv_cache("fifo", FIFOKVCachePool, kwargs_builder=_fifo_kwargs)
 
 
 def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device, *, frame_seq_length: int | None = None, num_heads: int | None = None):
@@ -72,7 +78,7 @@ def build_self_attn_kv_cache(config, ar_config, kv_size, dtype, device, *, frame
     common = _kv_cache_common_kwargs(config, kv_size, dtype, device, num_heads=num_heads)
 
     if not kv_quant:
-        scheme = "fp"
+        scheme = ar_config.get("kv_cache_scheme", "fp")
         step = ar_config.get("step_kv_cache", False)
     else:
         quant_scheme = kv_quant.get("quant_scheme", "kivi")
@@ -100,6 +106,8 @@ class KVCacheManager:
         self.dtype = GET_DTYPE()
         self.device = device
         self.sp_group = sp_group
+        self.self_attn_kv_cache = None
+        self.self_attn_kv_caches = {}
 
     @property
     def current_step(self) -> int:
@@ -123,6 +131,51 @@ class KVCacheManager:
         )
         cache.sp_head_sharded = bool(getattr(self, "sp_head_sharded_kv", False))
         return cache
+
+    def create_self_attn_kv_cache(
+        self,
+        cache_name,
+        kv_size: int,
+        *,
+        kv_cache_scheme: str | None = None,
+        step_kv_cache: bool | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        missing = object()
+        old_kv_size = getattr(self, "kv_size", missing)
+        old_dtype = self.dtype
+        old_scheme = self.ar_config.get("kv_cache_scheme")
+        old_step = self.ar_config.get("step_kv_cache")
+        try:
+            self.kv_size = int(kv_size)
+            self.dtype = self.dtype if dtype is None else dtype
+            if kv_cache_scheme is not None:
+                self.ar_config["kv_cache_scheme"] = kv_cache_scheme
+            if step_kv_cache is not None:
+                self.ar_config["step_kv_cache"] = step_kv_cache
+            cache = self._create_self_attn_kv_cache()
+        finally:
+            if old_kv_size is missing:
+                delattr(self, "kv_size")
+            else:
+                self.kv_size = old_kv_size
+            self.dtype = old_dtype
+            if old_scheme is None:
+                self.ar_config.pop("kv_cache_scheme", None)
+            else:
+                self.ar_config["kv_cache_scheme"] = old_scheme
+            if old_step is None:
+                self.ar_config.pop("step_kv_cache", None)
+            else:
+                self.ar_config["step_kv_cache"] = old_step
+        self.self_attn_kv_caches[cache_name] = cache
+        self.self_attn_kv_cache = cache
+        return cache
+
+    def get_self_attn_kv_cache(self, cache_name=None):
+        if cache_name is None:
+            return self.self_attn_kv_cache
+        return self.self_attn_kv_caches.get(cache_name)
 
     def _create_cross_attn_kv_cache(self):
         return BaseKVCachePool(

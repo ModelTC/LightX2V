@@ -22,6 +22,7 @@ from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVARunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
@@ -94,11 +95,14 @@ def main():
             "motus",
             "lingbot_world_fast",
             "worldmirror",
+            "lingbot_va",
         ],
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "v2av", "ltx2_s2v", "sr", "recon", "i23d"], default="t2v")
+    parser.add_argument(
+        "--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "i2va", "v2av", "ltx2_s2v", "sr", "recon", "i23d"], default="t2v"
+    )
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
@@ -200,7 +204,7 @@ def main():
     parser.add_argument("--wm_ckpt_path", type=str, default=None, help="(worldmirror/recon) Optional .ckpt/.safetensors (pair with --wm_config_path).")
 
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
-    parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus.")
+    parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus or LingBot-VA.")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
