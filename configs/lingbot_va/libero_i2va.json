@@ -1,0 +1,52 @@
+{
+  "vae_stride": [4, 16, 16],
+  "patch_size": [1, 2, 2],
+  "in_dim": 48,
+  "out_dim": 48,
+  "dim": 3072,
+  "num_heads": 24,
+  "num_layers": 30,
+  "freq_dim": 256,
+  "text_len": 512,
+  "env_type": "none",
+  "obs_cam_keys": [
+    "observation.images.agentview_rgb",
+    "observation.images.eye_in_hand_rgb"
+  ],
+  "used_action_channel_ids": [0, 1, 2, 3, 4, 5, 6],
+  "inverse_used_action_channel_ids": [0, 1, 2, 3, 4, 5, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
+  "action_norm_method": "quantiles",
+  "norm_stat": {
+    "q01": [-0.6589285731315613, -0.84375, -0.9375, -0.12107142806053162, -0.15964286029338837, -0.26571428775787354, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "q99": [0.8999999761581421, 0.8544642925262451, 0.9375, 0.17142857611179352, 0.1842857152223587, 0.34392857551574707, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  },
+  "use_image_encoder": false,
+  "video_exec_step": -1,
+  "action_dim": 30,
+  "target_height": 128,
+  "target_width": 128,
+  "target_fps": 10,
+  "cpu_offload": false,
+  "self_attn_1_type": "torch_sdpa",
+  "cross_attn_1_type": "torch_sdpa",
+  "rms_norm_type": "torch",
+  "sample_guide_scale": 5.0,
+  "action_sample_guide_scale": 1.0,
+  "enable_cfg": true,
+  "enable_action_cfg": false,
+  "cfg_parallel": false,
+  "infer_steps": 20,
+  "action_infer_steps": 50,
+  "sample_shift": 5.0,
+  "action_sample_shift": 0.05,
+  "t5_original_ckpt": "/data/nvme5/gushiqiao/models/SekoTalk-Distill-AR/models_t5_umt5-xxl-enc-bf16.pth",
+  "dit_original_ckpt": "/data/nvme5/gushiqiao/models/lingbot-va-posttrain-libero-long/x2v/lingbot-va-posttrain-libero-long-x2v.safetensors",
+  "ar_config": {
+    "num_frame_per_chunk": 4,
+    "num_action_per_frame": 4,
+    "num_chunks": 10,
+    "kv_cache_scheme": "fifo",
+    "step_kv_cache": false,
+    "local_attn_size": 30
+  }
+}
