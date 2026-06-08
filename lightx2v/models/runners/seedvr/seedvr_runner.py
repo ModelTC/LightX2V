@@ -28,8 +28,7 @@ from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstru
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import save_to_video, wan_vae_to_comfy
-from lightx2v.utils.utils import mux_audio_from_video
+from lightx2v.utils.utils import mux_audio_from_video, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
