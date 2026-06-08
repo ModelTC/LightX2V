@@ -72,6 +72,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         else:
             self.apply_rope_func = rope_func
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
+        self.mxfp8_fuse_enable = self.config.get("mxfp8_fuse_enable", True)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
@@ -91,7 +92,7 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         self.cos_sin = None
 
-        self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability()
+        self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
 
     def _probe_mxfp8_fuse_availability(self):
         """Probe once whether MXFP8 fused ops can run on this device.
@@ -115,7 +116,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         return True
 
     def _use_mxfp8_quant_fuse(self):
-        return self._mxfp8_fuse_available
+        return self.mxfp8_fuse_enable and self._mxfp8_fuse_available
 
     def _ensure_mxfp8_quant_fuse_ready(self, phase, *tensors, module_names=(), required_module_attrs=("weight", "weight_scale", "alpha")):
         if not self._use_mxfp8_quant_fuse():
@@ -235,14 +236,28 @@ class WanTransformerInfer(BaseTransformerInfer):
         )
 
     def _infer_ffn_with_mxfp8_quant_fuse(self, phase, norm2_out, residual, c_gate_msa=None, c_scale_msa=None, c_shift_msa=None):
+        """Run the fused MXFP8 FFN path and update residual in place.
+
+        The fused residual-gate kernel writes the FFN contribution directly
+        into ``residual``. Returning ``None`` signals ``post_process`` to skip
+        the usual ``x + y * gate`` accumulation.
+        """
         self._ensure_mxfp8_quant_ffn_ready(phase, norm2_out, residual, c_gate_msa, c_scale_msa, c_shift_msa)
         if c_scale_msa is not None and c_shift_msa is not None and self._can_use_mxfp8_modulate_quant(norm2_out, c_scale_msa, c_shift_msa):
             norm2_quant, norm2_scale = scaled_mxfp8_modulate_quant(norm2_out, c_scale_msa, c_shift_msa)
             y = self._mxfp8_apply_quantized(phase.ffn_0, norm2_quant, norm2_scale)
         else:
+            norm2_quant = None
+            norm2_scale = None
             y = self._mxfp8_apply(phase.ffn_0, norm2_out)
         y_quant, y_scale = scaled_mxfp8_gelu_quant(y)
         self._mxfp8_apply_residual_gate_quantized(phase.ffn_2, y_quant, y_scale, residual, c_gate_msa.squeeze())
+        if self.clean_cuda_cache:
+            del norm2_out
+            del y, y_quant, y_scale
+            if norm2_quant is not None:
+                del norm2_quant, norm2_scale
+            torch_device_module.empty_cache()
         return None
 
     @torch.no_grad()

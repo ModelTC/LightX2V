@@ -488,6 +488,7 @@ constexpr auto SF_DTYPE = at::ScalarType::Float8_e8m0fnu;
 namespace lightx2v_mxfp8_fused {
 
 constexpr int kFusedThreads = 256;
+using pack_128b_t = uint4;
 
 struct Mxfp8GemmMeta {
   int64_t m;
@@ -628,35 +629,160 @@ void check_mxfp8_residual_gate(
   }
 }
 
-__global__ void mxfp8_residual_gate_bf16_kernel(
+__global__ void mxfp8_residual_gate_2d_bf16_kernel(
     __nv_bfloat16* residual,
     __nv_bfloat16 const* ffn_out,
     __nv_bfloat16 const* gate,
-    int64_t total,
-    int64_t cols,
-    bool gate_per_element) {
+    int64_t total) {
   int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  int64_t stride = static_cast<int64_t>(blockDim.x) * gridDim.x;
-  for (; idx < total; idx += stride) {
-    int64_t gate_idx = gate_per_element ? idx : idx % cols;
-    float product = __bfloat162float(ffn_out[idx]) * __bfloat162float(gate[gate_idx]);
+  if (idx < total) {
+    float product = __bfloat162float(ffn_out[idx]) * __bfloat162float(gate[idx]);
     float sum = __bfloat162float(residual[idx]) + product;
     residual[idx] = __float2bfloat16(sum);
   }
 }
 
-void launch_mxfp8_residual_gate(torch::Tensor& residual, torch::Tensor const& ffn_out, torch::Tensor const& gate, cudaStream_t stream) {
+__device__ inline __nv_bfloat162 float2_to_bfloat162_rn(float2 v) {
+  return __halves2bfloat162(__float2bfloat16(v.x), __float2bfloat16(v.y));
+}
+
+__global__ void mxfp8_residual_gate_2d_bf16x2_kernel(
+    __nv_bfloat16* residual,
+    __nv_bfloat16 const* ffn_out,
+    __nv_bfloat16 const* gate,
+    int64_t num_pairs) {
+  int64_t pair_idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (pair_idx >= num_pairs) {
+    return;
+  }
+
+  auto residual_vec = reinterpret_cast<__nv_bfloat162*>(residual);
+  auto ffn_out_vec = reinterpret_cast<__nv_bfloat162 const*>(ffn_out);
+  auto gate_vec = reinterpret_cast<__nv_bfloat162 const*>(gate);
+
+  float2 residual_f = __bfloat1622float2(residual_vec[pair_idx]);
+  float2 ffn_out_f = __bfloat1622float2(ffn_out_vec[pair_idx]);
+  float2 gate_f = __bfloat1622float2(gate_vec[pair_idx]);
+  float2 out;
+  out.x = residual_f.x + ffn_out_f.x * gate_f.x;
+  out.y = residual_f.y + ffn_out_f.y * gate_f.y;
+  residual_vec[pair_idx] = float2_to_bfloat162_rn(out);
+}
+
+__global__ void mxfp8_residual_gate_2d_bf16x8_kernel(
+    __nv_bfloat16* residual,
+    __nv_bfloat16 const* ffn_out,
+    __nv_bfloat16 const* gate,
+    int64_t num_packs) {
+  int64_t pack_idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (pack_idx >= num_packs) {
+    return;
+  }
+
+  auto residual_pack = reinterpret_cast<pack_128b_t*>(residual);
+  auto ffn_out_pack = reinterpret_cast<pack_128b_t const*>(ffn_out);
+  auto gate_pack = reinterpret_cast<pack_128b_t const*>(gate);
+
+  pack_128b_t residual_reg = residual_pack[pack_idx];
+  pack_128b_t ffn_out_reg = ffn_out_pack[pack_idx];
+  pack_128b_t gate_reg = gate_pack[pack_idx];
+  pack_128b_t out_reg;
+
+  auto residual_vec = reinterpret_cast<__nv_bfloat162*>(&residual_reg);
+  auto ffn_out_vec = reinterpret_cast<__nv_bfloat162*>(&ffn_out_reg);
+  auto gate_vec = reinterpret_cast<__nv_bfloat162*>(&gate_reg);
+  auto out_vec = reinterpret_cast<__nv_bfloat162*>(&out_reg);
+
+#pragma unroll
+  for (int i = 0; i < 4; ++i) {
+    float2 residual_f = __bfloat1622float2(residual_vec[i]);
+    float2 ffn_out_f = __bfloat1622float2(ffn_out_vec[i]);
+    float2 gate_f = __bfloat1622float2(gate_vec[i]);
+    float2 out;
+    out.x = residual_f.x + ffn_out_f.x * gate_f.x;
+    out.y = residual_f.y + ffn_out_f.y * gate_f.y;
+    out_vec[i] = float2_to_bfloat162_rn(out);
+  }
+
+  residual_pack[pack_idx] = out_reg;
+}
+
+inline bool is_aligned_16(void const* ptr) {
+  return reinterpret_cast<uintptr_t>(ptr) % 16 == 0;
+}
+
+inline bool is_aligned_4(void const* ptr) {
+  return reinterpret_cast<uintptr_t>(ptr) % 4 == 0;
+}
+
+void launch_mxfp8_residual_gate_2d(torch::Tensor& residual, torch::Tensor const& ffn_out, torch::Tensor const& gate, cudaStream_t stream) {
+  TORCH_CHECK(gate.dim() == 2, "2D residual gate fallback expects a per-element 2D gate");
   int64_t total = residual.numel();
-  int64_t cols = residual.sizes()[1];
-  bool gate_per_element = gate.dim() == 2;
+  auto* residual_ptr = reinterpret_cast<__nv_bfloat16*>(residual.data_ptr<at::BFloat16>());
+  auto const* ffn_out_ptr = reinterpret_cast<__nv_bfloat16 const*>(ffn_out.data_ptr<at::BFloat16>());
+  auto const* gate_ptr = reinterpret_cast<__nv_bfloat16 const*>(gate.data_ptr<at::BFloat16>());
+
+  if (is_aligned_16(residual_ptr) && is_aligned_16(ffn_out_ptr) && is_aligned_16(gate_ptr) && total >= 8) {
+    int64_t num_packs = total / 8;
+    if (num_packs > 0) {
+      int blocks = static_cast<int>((num_packs + kFusedThreads - 1) / kFusedThreads);
+      mxfp8_residual_gate_2d_bf16x8_kernel<<<blocks, kFusedThreads, 0, stream>>>(
+          residual_ptr,
+          ffn_out_ptr,
+          gate_ptr,
+          num_packs);
+      int64_t processed = num_packs * 8;
+      int64_t rem = total - processed;
+      if (rem >= 2) {
+        int64_t num_pairs = rem / 2;
+        blocks = static_cast<int>((num_pairs + kFusedThreads - 1) / kFusedThreads);
+        mxfp8_residual_gate_2d_bf16x2_kernel<<<blocks, kFusedThreads, 0, stream>>>(
+            residual_ptr + processed,
+            ffn_out_ptr + processed,
+            gate_ptr + processed,
+            num_pairs);
+        processed += num_pairs * 2;
+        rem = total - processed;
+      }
+      if (rem > 0) {
+        mxfp8_residual_gate_2d_bf16_kernel<<<1, 1, 0, stream>>>(
+            residual_ptr + processed,
+            ffn_out_ptr + processed,
+            gate_ptr + processed,
+            rem);
+      }
+      C10_CUDA_KERNEL_LAUNCH_CHECK();
+      return;
+    }
+  }
+
+  if (is_aligned_4(residual_ptr) && is_aligned_4(ffn_out_ptr) && is_aligned_4(gate_ptr) && total >= 2) {
+    int64_t num_pairs = total / 2;
+    int blocks = static_cast<int>((num_pairs + kFusedThreads - 1) / kFusedThreads);
+    mxfp8_residual_gate_2d_bf16x2_kernel<<<blocks, kFusedThreads, 0, stream>>>(
+        residual_ptr,
+        ffn_out_ptr,
+        gate_ptr,
+        num_pairs);
+    int64_t processed = num_pairs * 2;
+    int64_t rem = total - processed;
+    if (rem > 0) {
+      mxfp8_residual_gate_2d_bf16_kernel<<<1, 1, 0, stream>>>(
+          residual_ptr + processed,
+          ffn_out_ptr + processed,
+          gate_ptr + processed,
+          rem);
+    }
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return;
+  }
+
   int blocks = static_cast<int>((total + kFusedThreads - 1) / kFusedThreads);
-  mxfp8_residual_gate_bf16_kernel<<<blocks, kFusedThreads, 0, stream>>>(
-      reinterpret_cast<__nv_bfloat16*>(residual.data_ptr<at::BFloat16>()),
-      reinterpret_cast<__nv_bfloat16 const*>(ffn_out.data_ptr<at::BFloat16>()),
-      reinterpret_cast<__nv_bfloat16 const*>(gate.data_ptr<at::BFloat16>()),
-      total,
-      cols,
-      gate_per_element);
+  mxfp8_residual_gate_2d_bf16_kernel<<<blocks, kFusedThreads, 0, stream>>>(
+      residual_ptr,
+      ffn_out_ptr,
+      gate_ptr,
+      total);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -703,5 +829,5 @@ void cutlass_scaled_mxfp8_mm_residual_gate_sm120(
   cutlass_scaled_mxfp8_mm_sm120(ffn_out, A, B, A_sf, B_sf, alpha, bias);
   at::cuda::CUDAGuard device_guard{(char)A.get_device()};
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream(A.get_device());
-  lightx2v_mxfp8_fused::launch_mxfp8_residual_gate(residual, ffn_out, gate, stream);
+  lightx2v_mxfp8_fused::launch_mxfp8_residual_gate_2d(residual, ffn_out, gate, stream);
 }
