@@ -1,6 +1,7 @@
 import os
 
 import torch
+import torch.distributed as dist
 from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
@@ -80,6 +81,22 @@ class HidreamO1ImageModel(BaseTransformerModel):
         x_pred = self.post_infer.infer(self.post_weight, transformer_out)
         return x_pred, pre_out.cond_image_embeds, pre_out.cond_deepstack_image_embeds
 
+    def _cache_condition_image_embeds(self, image_embeds, deepstack_image_embeds):
+        if image_embeds is not None and deepstack_image_embeds is not None and self._cached_image_embeds is None:
+            self._cached_image_embeds = image_embeds.detach()
+            self._cached_deepstack_image_embeds = [item.detach() for item in deepstack_image_embeds]
+
+    def _infer_velocity(self, sample, z_in, t_pixeldit, latents, sigma):
+        x_pred, image_embeds, deepstack_image_embeds = self._infer_cond_uncond(
+            sample,
+            z_in,
+            t_pixeldit,
+            precomputed_image_embeds=self._cached_image_embeds,
+            precomputed_deepstack_image_embeds=self._cached_deepstack_image_embeds,
+        )
+        self._cache_condition_image_embeds(image_embeds, deepstack_image_embeds)
+        return (x_pred.to(dtype=torch.float32) - latents.to(dtype=torch.float32)) / sigma
+
     @torch.no_grad()
     def infer(self, inputs):
         cfg = inputs["generation_config"]
@@ -92,37 +109,40 @@ class HidreamO1ImageModel(BaseTransformerModel):
             self._cached_image_embeds = None
             self._cached_deepstack_image_embeds = None
 
-        z_in = latents.clone()
+        z_in = latents
         if "ref_patches" in inputs:
             z_in = torch.cat([z_in, inputs["ref_patches"].to(latents.device, latents.dtype)], dim=1)
 
-        x_pred_cond, image_embeds, deepstack_image_embeds = self._infer_cond_uncond(
-            samples[0],
-            z_in,
-            t_pixeldit,
-            precomputed_image_embeds=self._cached_image_embeds,
-            precomputed_deepstack_image_embeds=self._cached_deepstack_image_embeds,
-        )
-        if image_embeds is not None and deepstack_image_embeds is not None and self._cached_image_embeds is None:
-            self._cached_image_embeds = image_embeds.detach()
-            self._cached_deepstack_image_embeds = [item.detach() for item in deepstack_image_embeds]
+        if cfg["enable_cfg"]:
+            if len(samples) < 2:
+                raise ValueError("HiDream enable_cfg=True requires both conditional and unconditional samples.")
 
-        v_cond = (x_pred_cond.to(dtype=torch.float32) - latents.to(dtype=torch.float32)) / sigma
-        if len(samples) > 1:
-            x_pred_uncond, image_embeds, deepstack_image_embeds = self._infer_cond_uncond(
-                samples[1],
-                z_in,
-                t_pixeldit,
-                precomputed_image_embeds=self._cached_image_embeds,
-                precomputed_deepstack_image_embeds=self._cached_deepstack_image_embeds,
-            )
-            if image_embeds is not None and deepstack_image_embeds is not None and self._cached_image_embeds is None:
-                self._cached_image_embeds = image_embeds.detach()
-                self._cached_deepstack_image_embeds = [item.detach() for item in deepstack_image_embeds]
-            v_uncond = (x_pred_uncond.to(dtype=torch.float32) - latents.to(dtype=torch.float32)) / sigma
+            if self.config.get("cfg_parallel", False):
+                # ==================== CFG Parallel Processing ====================
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+                cfg_p_rank = dist.get_rank(cfg_p_group)
+
+                if cfg_p_rank == 0:
+                    v_pred = self._infer_velocity(samples[0], z_in, t_pixeldit, latents, sigma)
+                else:
+                    v_pred = self._infer_velocity(samples[1], z_in, t_pixeldit, latents, sigma)
+
+                v_pred_list = [torch.zeros_like(v_pred) for _ in range(2)]
+                dist.all_gather(v_pred_list, v_pred, group=cfg_p_group)
+                v_cond = v_pred_list[0]  # cfg_p_rank == 0
+                v_uncond = v_pred_list[1]  # cfg_p_rank == 1
+            else:
+                # ==================== CFG Processing ====================
+                v_cond = self._infer_velocity(samples[0], z_in, t_pixeldit, latents, sigma)
+                v_uncond = self._infer_velocity(samples[1], z_in, t_pixeldit, latents, sigma)
+
             v_guided = v_uncond + cfg["guidance_scale"] * (v_cond - v_uncond)
         else:
+            # ==================== No CFG Processing ====================
+            v_cond = self._infer_velocity(samples[0], z_in, t_pixeldit, latents, sigma)
             v_guided = v_cond
+
         self.scheduler.noise_pred = -v_guided
 
     @torch.no_grad()

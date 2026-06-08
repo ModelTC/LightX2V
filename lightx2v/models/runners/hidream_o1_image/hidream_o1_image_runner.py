@@ -2,7 +2,6 @@ import gc
 import os
 
 import torch
-import tqdm
 from loguru import logger
 from transformers import AutoProcessor
 
@@ -54,6 +53,7 @@ class HidreamO1ImageRunner(DefaultRunner):
         logger.info(f"Initializing HiDream-O1-Image {task} runner...")
         self.load_model()
         self.run_input_encoder = self._run_input_encoder_local_t2i if task == "t2i" else self._run_input_encoder_local_i2i
+        self.run_dit = self._run_dit_local
         self.config.lock()
 
     @ProfilingContext4DebugL2("Load HiDream-O1-Image model")
@@ -84,9 +84,11 @@ class HidreamO1ImageRunner(DefaultRunner):
     def _resolve_generation_config(self):
         model_type = self.config.get("hidream_model_type", "full")
         if model_type == "full":
+            guidance_scale = float(self.config.get("guidance_scale", 5.0))
             return {
                 "num_inference_steps": int(self.config.get("infer_steps", self.config.get("num_inference_steps", 50))),
-                "guidance_scale": float(self.config.get("guidance_scale", 5.0)),
+                "guidance_scale": guidance_scale,
+                "enable_cfg": self.config["enable_cfg"],
                 "shift": float(self.config.get("shift", 3.0)),
                 "timesteps_list": None,
                 "scheduler_name": self.config.get("scheduler_name", "default"),
@@ -95,9 +97,11 @@ class HidreamO1ImageRunner(DefaultRunner):
                 "noise_clip_std": float(self.config.get("noise_clip_std", 0.0)),
             }
         if model_type == "dev":
+            guidance_scale = float(self.config.get("guidance_scale", 0.0))
             return {
                 "num_inference_steps": int(self.config.get("infer_steps", self.config.get("num_inference_steps", 28))),
-                "guidance_scale": float(self.config.get("guidance_scale", 0.0)),
+                "guidance_scale": guidance_scale,
+                "enable_cfg": self.config["enable_cfg"],
                 "shift": float(self.config.get("shift", 1.0)),
                 "timesteps_list": self.config.get("timesteps_list", self.default_timesteps),
                 "scheduler_name": self.config.get("scheduler_name", "flash"),
@@ -130,7 +134,7 @@ class HidreamO1ImageRunner(DefaultRunner):
                 device,
             )
         ]
-        if generation_config["guidance_scale"] > 1.0:
+        if generation_config["enable_cfg"]:
             samples.append(
                 self._sample_to_device(
                     build_t2i_text_sample(
@@ -181,7 +185,7 @@ class HidreamO1ImageRunner(DefaultRunner):
             model_config=self.model.model_config,
             device=self.model.device,
             dtype=self.dtype,
-            guidance_scale=generation_config["guidance_scale"],
+            enable_cfg=generation_config["enable_cfg"],
         )
         for sample in inputs["samples"]:
             sample["tgt_image_len"] = inputs["tgt_image_len"]
@@ -206,29 +210,41 @@ class HidreamO1ImageRunner(DefaultRunner):
             return int(self.input_info.target_shape[1])
         return int(self.config.get(target_key, self.config.get(config_key, default)))
 
-    def init_run(self):
-        self.scheduler.prepare(self.inputs)
+    @ProfilingContext4DebugL2("Run DiT")
+    def _run_dit_local(self, total_steps=None):
+        self.model.scheduler.prepare(self.inputs)
+        latents = self.run(total_steps)
+        return latents
 
-    def run_segment(self, segment_idx=0):
-        for step_idx in tqdm.trange(self.scheduler.infer_steps, desc="Generating"):
-            self.scheduler.step_pre(step_idx)
-            self.model.infer(self.inputs)
-            self.scheduler.step_post()
-        return self.scheduler.latents
+    def run(self, total_steps=None):
+        if total_steps is None:
+            total_steps = self.model.scheduler.infer_steps
+
+        for step_index in range(total_steps):
+            logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+
+            with ProfilingContext4DebugL1("step_pre"):
+                self.model.scheduler.step_pre(step_index=step_index)
+
+            with ProfilingContext4DebugL1("🚀 infer_main"):
+                self.model.infer(self.inputs)
+
+            with ProfilingContext4DebugL1("step_post"):
+                self.model.scheduler.step_post()
+
+            if self.progress_callback:
+                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+
+        return self.model.scheduler.latents
 
     def run_vae_decoder(self, latents):
         return self.scheduler.decode()
 
     @ProfilingContext4DebugL2("Run HiDream main")
     def run_main(self):
-        self.init_run()
-        latents = self.run_segment(0)
+        latents = self.run_dit()
         self.gen_image = self.run_vae_decoder(latents)
-        self.end_run_segment(0)
         return self.gen_image
-
-    def end_run_segment(self, segment_idx=None):
-        self.gen_video_final = self.gen_image
 
     @ProfilingContext4DebugL1(
         "RUN HiDream pipeline",
