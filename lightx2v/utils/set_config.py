@@ -83,6 +83,8 @@ def auto_calc_config(config):
     elif config["model_cls"] == "hunyuan3d":
         # Hunyuan3D shape loads hunyuan3d-dit-v2-1/config.yaml + checkpoint in the runner.
         pass
+    elif config["model_cls"] == "hidream_o1_image":
+        pass
     elif config["model_cls"] == "wan2.2_s2v":
         config_path = os.path.join(config["model_path"], "config.json")
         if os.path.exists(config_path):
