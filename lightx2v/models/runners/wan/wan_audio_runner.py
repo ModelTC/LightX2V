@@ -3,6 +3,7 @@ import io
 import json
 import os
 import warnings
+from copy import copy
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -326,7 +327,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
             tvl = ii.target_video_length
             if tvl is not None and tvl is not UNSET and tvl > 0:
                 target_video_length = tvl
-        audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, target_video_length, self.prev_frame_length)
+        if self.config.get("model_cls") == "seko_talk_ar":
+            audio_start, audio_end = self._audio_processor.get_audio_range(0, expected_frames)
+            audio_segments = [AudioSegment(audio_array[:, audio_start:audio_end], 0, expected_frames)]
+        else:
+            audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, target_video_length, self.prev_frame_length)
 
         # Mask latent for multi-person s2v
         if mask_files is not None:
@@ -980,8 +985,15 @@ class Wan22AudioRunner(WanAudioRunner):
 
 @RUNNER_REGISTER("seko_talk_ar")
 class WanAudioARRunner(WanAudioRunner):
+    @dataclass(frozen=True)
+    class PromptTravelSegment:
+        start_frame: int
+        text: str
+
     def __init__(self, config):
         super().__init__(config)
+        self.prompt_travel_segments = None
+        self.prompt_travel_text_encoder_outputs = None
         self.audio_sliding_processor = CausalAudioSlidingProcessor(
             audio_window=self.config.get("audio_window", 1.0),
             look_ahead=self.config.get("look_ahead", 0.0),
@@ -1066,37 +1078,120 @@ class WanAudioARRunner(WanAudioRunner):
         logger.info(f"[wan_audio_ar] image resize target_h: {target_h}, target_w: {target_w}, latent_h: {latent_h}, latent_w: {latent_w}")
         return ref_img, latent_shape, target_shape
 
-    def read_audio_input(self, audio_path):
-        audio_sr = self.config.get("audio_sr", 16000)
-        target_fps = self.config.get("target_fps", 16)
-        self._audio_processor = AudioProcessor(audio_sr, target_fps)
+    def _get_prompt_travel_source(self):
+        return self.config.get("prompt_travel")
 
-        if not isinstance(audio_path, str):
-            return [], 0, None, 0
+    def _parse_prompt_travel_segments(self, source):
+        if not isinstance(source, dict):
+            raise ValueError("prompt_travel config must be a dict")
+        texts = source.get("prompt_travel_text") or source.get("prompt_travel_texts")
+        starts = source.get("prompt_travel_start_frames") or source.get("prompt_travel_start_frame")
 
-        audio_files, mask_files = self.get_audio_files_from_audio_path(audio_path)
-        if len(audio_files) == 1:
-            audio_array = self._audio_processor.load_audio(audio_files[0]).unsqueeze(0)
+        if texts is None and "prompt_travel_segments" in source:
+            raw_segments = source["prompt_travel_segments"]
+            if isinstance(raw_segments, str):
+                raw_segments = json.loads(raw_segments)
+            texts = [seg["text"] for seg in raw_segments]
+            starts = [seg["start_frame"] for seg in raw_segments]
+
+        if not isinstance(texts, list) or not isinstance(starts, list):
+            raise ValueError("Prompt travel requires prompt_travel_text and prompt_travel_start_frames lists")
+        if len(texts) != len(starts):
+            raise ValueError("prompt_travel_text and prompt_travel_start_frames must have the same length")
+        if not texts:
+            raise ValueError("Prompt travel requires at least one segment")
+
+        segments = [self.PromptTravelSegment(start_frame=int(start), text=str(text)) for start, text in zip(starts, texts)]
+        segments.sort(key=lambda seg: seg.start_frame)
+
+        if segments[0].start_frame != 0:
+            logger.warning("Prompt travel first start_frame is not 0; frames before it will use the first prompt")
+        for prev, cur in zip(segments, segments[1:]):
+            if cur.start_frame <= prev.start_frame:
+                raise ValueError("prompt_travel_start_frames must be strictly increasing")
+        return segments
+
+    @staticmethod
+    def _select_prompt_travel_index(segments, frame_idx):
+        selected = 0
+        for idx, segment in enumerate(segments):
+            if frame_idx >= segment.start_frame:
+                selected = idx
+            else:
+                break
+        return selected
+
+    def _encode_prompt_travel_segments(self, input_info, source):
+        segments = self._parse_prompt_travel_segments(source)
+        encoded = []
+        for segment in segments:
+            temp_input = copy(input_info)
+            temp_input.prompt = segment.text
+            encoded.append(self.run_text_encoder(temp_input))
+        logger.info(f"Prompt travel enabled with {len(segments)} prompt segments")
+        return segments, encoded
+
+    def _prepare_prompt_travel(self, input_info):
+        source = self._get_prompt_travel_source()
+        if not source or self.prompt_travel_text_encoder_outputs is not None:
+            return
+        self.prompt_travel_segments, self.prompt_travel_text_encoder_outputs = self._encode_prompt_travel_segments(input_info, source)
+
+    def _apply_prompt_travel_for_frame(self, frame_idx):
+        if not self.prompt_travel_text_encoder_outputs:
+            return
+        prompt_idx = self._select_prompt_travel_index(self.prompt_travel_segments, int(frame_idx))
+        self.inputs["text_encoder_output"] = self.prompt_travel_text_encoder_outputs[prompt_idx]
+        self.input_info.prompt = self.prompt_travel_segments[prompt_idx].text
+        logger.info(f"Prompt travel frame={frame_idx}: applying segment {prompt_idx}, start_frame={self.prompt_travel_segments[prompt_idx].start_frame}")
+
+    def _validate_prompt_travel_schedule(self):
+        if not self.prompt_travel_segments:
+            return
+        t_compress = int(self.config["vae_stride"][0])
+        chunk_size = int(self.model.scheduler.chunk_size)
+        latent_length = int(self.input_info.latent_shape[1])
+        for segment in self.prompt_travel_segments:
+            if segment.start_frame % t_compress != 0:
+                raise ValueError(f"prompt travel start_frame {segment.start_frame} must be divisible by {t_compress}")
+            start_latent = segment.start_frame // t_compress
+            if start_latent % chunk_size != 0:
+                raise ValueError(f"prompt travel start_frame {segment.start_frame} does not align to chunk_size {chunk_size}")
+            if start_latent >= latent_length:
+                raise ValueError(f"prompt travel start_frame {segment.start_frame} is outside latent length {latent_length}")
+
+    @ProfilingContext4DebugL2("Run Encoders")
+    def _run_input_encoder_local_s2v(self):
+        img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
+        if self.config.get("f2v_process", False):
+            self.ref_img = img
+        self.input_info.latent_shape = latent_shape
+        self.input_info.target_shape = target_shape
+        clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
+        vae_encode_out = self.run_vae_encoder(img)
+
+        audio_segments, expected_frames, person_mask_latens, audio_num = self.read_audio_input(self.input_info.audio_path)
+        self.input_info.audio_num = audio_num
+        self.input_info.with_mask = person_mask_latens is not None
+
+        if self._get_prompt_travel_source():
+            self._prepare_prompt_travel(self.input_info)
+            text_encoder_output = self.prompt_travel_text_encoder_outputs[0]
         else:
-            audio_array = self._audio_processor.load_multi_person_audio(audio_files)
+            text_encoder_output = self.run_text_encoder(self.input_info)
 
-        audio_len = int(audio_array.shape[1] / audio_sr * target_fps)
-        if GET_RECORDER_MODE():
-            monitor_cli.lightx2v_input_audio_len.observe(audio_len)
-
-        expected_frames = min(max(1, int(self.video_duration * target_fps)), audio_len)
-        if expected_frames < int(self.video_duration * target_fps):
-            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={self.video_duration}")
-
-        audio_segments = [AudioSegment(audio_array, 0, expected_frames)]
-
-        if mask_files is not None:
-            mask_latents = [self.process_single_mask(mask_file) for mask_file in mask_files]
-            mask_latents = torch.cat(mask_latents, dim=0)
-        else:
-            mask_latents = None
-
-        return audio_segments, expected_frames, mask_latents, len(audio_files)
+        torch.cuda.empty_cache()
+        gc.collect()
+        return {
+            "text_encoder_output": text_encoder_output,
+            "image_encoder_output": {
+                "clip_encoder_out": clip_encoder_out,
+                "vae_encoder_out": vae_encode_out,
+            },
+            "audio_segments": audio_segments,
+            "expected_frames": expected_frames,
+            "person_mask_latens": person_mask_latens,
+        }
 
     def init_run(self):
         self.gen_video_final = None
@@ -1208,6 +1303,7 @@ class WanAudioARRunner(WanAudioRunner):
             self.input_info.latent_shape = latent_shape
             self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
             self.get_video_segment_num()
+            self._validate_prompt_travel_schedule()
             self.init_kv_cache_manager()
             self.prefill_reference_kv()
             segment_videos = []
@@ -1228,6 +1324,9 @@ class WanAudioARRunner(WanAudioRunner):
                 try:
                     for segment_idx in range(self.video_segment_num):
                         logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
+                        chunk_size = int(self.model.scheduler.chunk_size)
+                        frame_idx = segment_idx * chunk_size * int(self.config["vae_stride"][0])
+                        self._apply_prompt_travel_for_frame(frame_idx)
 
                         with ProfilingContext4DebugL1(
                             f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
