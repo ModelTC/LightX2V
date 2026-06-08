@@ -2,6 +2,8 @@
 
 # set path and first
 lightx2v_path=/path/to/LightX2V
+
+# Use the 3B model repo because the official 7B repo is missing pos_emb.pt and neg_emb.pt (e.g. https://huggingface.co/ByteDance-Seed/SeedVR2-3B/blob/main/pos_emb.pt); specify the 7B DiT checkpoint via dit_original_ckpt in configs/seedvr/seedvr2_7b.json.
 model_path=/path/to/ByteDance-Seed/SeedVR2-3B
 
 video_path=/path/to/test.mp4
