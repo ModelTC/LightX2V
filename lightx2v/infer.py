@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
 
 # from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
@@ -21,6 +22,7 @@ from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVARunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
@@ -73,6 +75,7 @@ def main():
             "wan2.2_moe_distill",
             "wan2.2_moe_vace",
             "qwen_image",
+            "hidream_o1_image",
             "longcat_image",
             "wan2.2_animate",
             "wan2.2_s2v",
@@ -92,11 +95,14 @@ def main():
             "motus",
             "lingbot_world_fast",
             "worldmirror",
+            "lingbot_va",
         ],
         default="wan2.1",
     )
 
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "v2av", "ltx2_s2v", "sr", "recon", "i23d"], default="t2v")
+    parser.add_argument(
+        "--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "i2va", "v2av", "ltx2_s2v", "sr", "recon", "i23d"], default="t2v"
+    )
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
@@ -198,11 +204,22 @@ def main():
     parser.add_argument("--wm_ckpt_path", type=str, default=None, help="(worldmirror/recon) Optional .ckpt/.safetensors (pair with --wm_config_path).")
 
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
-    parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus.")
+    parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus or LingBot-VA.")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
     parser.add_argument("--aspect_ratio", type=str, default="")
+    parser.add_argument(
+        "--keep_original_aspect",
+        action="store_true",
+        help="(i2i) When exactly one reference image is provided, preserve its aspect ratio with max_size=2048.",
+    )
+    parser.add_argument(
+        "--layout_bboxes",
+        type=str,
+        default="",
+        help="(i2i) Layout boxes as a JSON string or JSON file path for HiDream layout-conditioned editing.",
+    )
     parser.add_argument(
         "--video_path",
         type=str,

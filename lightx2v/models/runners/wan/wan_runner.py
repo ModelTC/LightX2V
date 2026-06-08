@@ -864,7 +864,7 @@ class Wan22DenseRunner(WanRunner):
         }
 
     def load_vae_encoder(self):
-        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
+        if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v", "i2va"]:
             return None
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))

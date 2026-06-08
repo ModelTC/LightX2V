@@ -9,9 +9,14 @@ SeedVR is a video super-resolution model that uses:
 
 import gc
 import os
+import shutil
+import subprocess
+import tempfile
 
+import imageio_ffmpeg as ffmpeg
 import numpy as np
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 from loguru import logger
 from torch import Tensor
@@ -23,7 +28,48 @@ from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstru
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import mux_audio_from_video, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+def _get_read_video():
+    """Return ``read_video`` with a 3-level fallback chain.
+
+    torchvision moved ``read_video`` between releases; the last-resort PyAV
+    fallback handles environments where torchvision isn't installed at all.
+    """
+    try:
+        from torchvision.io import read_video
+    except ImportError:
+        try:
+            from torchvision.io.video import read_video
+        except ImportError:
+            import av
+
+            def read_video(filename, start_pts=0, end_pts=None, pts_unit="pts", output_format="THWC"):
+                container = av.open(filename)
+                try:
+                    if not container.streams.video:
+                        raise ValueError(f"No video stream found in {filename}")
+                    stream = container.streams.video[0]
+                    try:
+                        fps = float(stream.average_rate) if stream.average_rate else 0.0
+                    except ZeroDivisionError:
+                        fps = 0.0
+                    frames = []
+                    for frame in container.decode(video=0):
+                        img = frame.to_ndarray(format="rgb24")
+                        frames.append(img)
+                    if not frames:
+                        raise ValueError(f"No frames decoded from {filename}")
+                finally:
+                    container.close()
+                video = torch.from_numpy(np.stack(frames))  # T H W C
+                if output_format == "TCHW":
+                    video = video.permute(0, 3, 1, 2)
+                return video, torch.zeros(0), {"video_fps": fps}
+
+    return read_video
 
 
 @RUNNER_REGISTER("seedvr2")
@@ -130,7 +176,7 @@ class SeedVRRunner(DefaultRunner):
         return segments
 
     def _read_video_segment(self, video_path, start_idx, end_idx):
-        from torchvision.io import read_video
+        read_video = _get_read_video()
 
         total_len = max(end_idx - start_idx, 0)
         if total_len == 0:
@@ -175,6 +221,44 @@ class SeedVRRunner(DefaultRunner):
         self.end_run()
         self.input_info = cached_input_info
         return raw_video
+
+    def _save_sr_segment_video(self, raw_video, output_path, fps):
+        video = wan_vae_to_comfy(raw_video).float().clamp(0.0, 1.0)
+        save_to_video(video, output_path, fps=fps, method="ffmpeg")
+        del video
+
+    def _concat_sr_segment_videos(self, segment_paths, output_path):
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        if len(segment_paths) == 1:
+            shutil.move(segment_paths[0], output_path)
+            return
+
+        concat_path = os.path.join(os.path.dirname(output_path) or ".", f".{os.path.basename(output_path)}.concat.txt")
+        try:
+            with open(concat_path, "w", encoding="utf-8") as f:
+                for path in segment_paths:
+                    escaped = os.path.abspath(path).replace("\\", "\\\\").replace("'", "\\'")
+                    f.write(f"file '{escaped}'\n")
+
+            command = [
+                ffmpeg.get_ffmpeg_exe(),
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_path,
+                "-c",
+                "copy",
+                output_path,
+            ]
+            process = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
+            if process.returncode != 0:
+                raise RuntimeError(f"FFmpeg concat failed: {process.stderr.strip()}")
+        finally:
+            if os.path.exists(concat_path):
+                os.remove(concat_path)
 
     def _cut_videos(self, videos, sp_size):
         t = videos.size(1)
@@ -225,6 +309,9 @@ class SeedVRRunner(DefaultRunner):
         return None
 
     def load_vae_encoder(self):
+        vae_causal_slice_size = int(self.config.get("vae_causal_slice_size", 4))
+        vae_memory_limit_gb = float(self.config.get("vae_memory_limit_gb", 0.5))
+        vae_memory_limit = None if vae_memory_limit_gb <= 0 else vae_memory_limit_gb
         vae = attn_video_vae_v3_s8_c16_t4_inflation_sd3_init(
             device=AI_DEVICE,
             dtype=GET_DTYPE(),
@@ -234,10 +321,18 @@ class SeedVRRunner(DefaultRunner):
             strict=False,
             cpu_offload=self.config.get("cpu_offload", False),
             use_tiling=self.config.get("use_tiling_vae", False),
+            tile_size=int(self.config.get("vae_tile_size", 512)),
+            tile_overlap=int(self.config.get("vae_tile_overlap", 64)),
         )
         vae.requires_grad_(False).eval()
-        vae.set_causal_slicing(split_size=4, memory_device="same")
-        vae.set_memory_limit(conv_max_mem=0.5, norm_max_mem=0.5)
+        vae.set_causal_slicing(split_size=vae_causal_slice_size if vae_causal_slice_size > 0 else None, memory_device="same")
+        vae.set_memory_limit(conv_max_mem=vae_memory_limit, norm_max_mem=vae_memory_limit)
+        logger.info(
+            f"[SeedVRRunner] VAE config: tiling={self.config.get('use_tiling_vae', False)}, "
+            f"tile={self.config.get('vae_tile_size', 512)}, overlap={self.config.get('vae_tile_overlap', 64)}, "
+            f"causal_slice={vae_causal_slice_size if vae_causal_slice_size > 0 else 'off'}, "
+            f"memory_limit={vae_memory_limit_gb if vae_memory_limit_gb > 0 else 'off'}GiB"
+        )
         return vae
 
     def load_vae_decoder(self):
@@ -254,15 +349,44 @@ class SeedVRRunner(DefaultRunner):
         vae_decoder = vae_encoder
         return vae_encoder, vae_decoder
 
+    def _restore_target_size(self, sample):
+        if self.config.get("resize_mode") == "adaptive":
+            return sample
+        target_height = int(self.config.get("target_height", sample.shape[-2]) or sample.shape[-2])
+        target_width = int(self.config.get("target_width", sample.shape[-1]) or sample.shape[-1])
+        if target_height <= 0 or target_width <= 0:
+            return sample
+
+        height, width = sample.shape[-2:]
+        if (height, width) == (target_height, target_width):
+            return sample
+
+        if height >= target_height and width >= target_width:
+            top = (height - target_height) // 2
+            left = (width - target_width) // 2
+            logger.info(f"[SeedVRRunner] center crop SR output from {width}x{height} to {target_width}x{target_height}")
+            return sample[..., top : top + target_height, left : left + target_width]
+
+        logger.info(f"[SeedVRRunner] resize SR output from {width}x{height} to {target_width}x{target_height}")
+        dtype = sample.dtype
+        device = sample.device
+        return F.interpolate(sample.float(), size=(target_height, target_width), mode="bilinear", align_corners=False).to(device=device, dtype=dtype)
+
     def run_vae_decoder(self, latents):
         samples = self.vae_decoder.vae_decode(latents)
         sample = [(rearrange(video[:, None], "c t h w -> t c h w") if video.ndim == 3 else rearrange(video, "c t h w -> t c h w")) for video in samples][0]
         if self._ori_length < sample.shape[0]:
             sample = sample[: self._ori_length]
 
-        # color fix
-        input = rearrange(self._input[:, None], "c t h w -> t c h w") if self._input.ndim == 3 else rearrange(self._input, "c t h w -> t c h w")
-        sample = wavelet_reconstruction(sample, input[: sample.size(0)].to(sample.device))
+        color_fix = str(self.config.get("color_fix", "cpu")).lower()
+        if color_fix not in ("cpu", "gpu", "off"):
+            logger.warning(f"[SeedVRRunner] Unknown color_fix={color_fix}; fallback to cpu")
+            color_fix = "cpu"
+        if color_fix != "off":
+            input = rearrange(self._input[:, None], "c t h w -> t c h w") if self._input.ndim == 3 else rearrange(self._input, "c t h w -> t c h w")
+            fix_device = torch.device("cpu") if color_fix == "cpu" else sample.device
+            sample = wavelet_reconstruction(sample.to(fix_device), input[: sample.size(0)].to(fix_device))
+        sample = self._restore_target_size(sample)
         sample = rearrange(sample[:, None], "t c h w -> c t h w") if sample.ndim == 3 else rearrange(sample, "t c h w -> c t h w")
         sample = sample[None, :]
 
@@ -367,7 +491,7 @@ class SeedVRRunner(DefaultRunner):
         # Check video_path first (priority for SR task)
         if "video_path" in self.input_info.__dataclass_fields__ and self.input_info.video_path:
             video_path = self.input_info.video_path
-            from torchvision.io import read_video
+            read_video = _get_read_video()
 
             if getattr(self, "_sr_segment", None) is not None:
                 start_idx, end_idx = self._sr_segment
@@ -462,12 +586,20 @@ class SeedVRRunner(DefaultRunner):
         segments = self._build_sr_segments(total_frames, seg_len, overlap)
         logger.info(f"[SeedVRRunner] SR segmenting: total_frames={total_frames}, seg_len={seg_len}, overlap={overlap}, segments={len(segments)}")
 
-        raw_segments = []
         original_save_path = self.input_info.save_result_path
         original_return_tensor = self.input_info.return_result_tensor
+        file_output = bool(original_save_path) and not bool(original_return_tensor)
+        raw_segments = [] if not file_output else None
+        segment_paths = []
+        tmp_dir = None
         try:
-            self.input_info.save_result_path = ""
-            self.input_info.return_result_tensor = True
+            if file_output:
+                output_dir = os.path.dirname(original_save_path) or "."
+                os.makedirs(output_dir, exist_ok=True)
+                tmp_dir = tempfile.mkdtemp(prefix=f".{os.path.basename(original_save_path)}.segments.", dir=output_dir)
+            else:
+                self.input_info.save_result_path = ""
+                self.input_info.return_result_tensor = True
 
             for idx, (start_idx, end_idx) in enumerate(segments):
                 logger.info(f"[SeedVRRunner] Processing segment {idx + 1}/{len(segments)}: frames {start_idx}:{end_idx}")
@@ -476,12 +608,36 @@ class SeedVRRunner(DefaultRunner):
                 raw = self._run_sr_single_segment()
                 if overlap > 0 and idx > 0 and raw is not None:
                     raw = raw[:, :, overlap:, :, :]
-                raw_segments.append(raw)
+
+                if file_output:
+                    segment_path = os.path.join(tmp_dir, f"segment_{idx:05d}.mp4")
+                    self._save_sr_segment_video(raw, segment_path, fps=self.config.get("fps", 16))
+                    segment_paths.append(segment_path)
+                    del raw
+                    self.gen_video = None
+                    self.gen_video_final = None
+                    self._input = None
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                else:
+                    raw_segments.append(raw)
+
+            if file_output:
+                if not segment_paths:
+                    raise RuntimeError("SeedVR produced no video segments to save.")
+                self._concat_sr_segment_videos(segment_paths, original_save_path)
+                input_video_path = getattr(self.input_info, "video_path", "")
+                if input_video_path:
+                    mux_audio_from_video(input_video_path, original_save_path)
+                logger.info(f"✅ Video saved successfully to: {original_save_path} ✅")
+                return {"video": None, "save_result_path": original_save_path}
         finally:
             # Critical: restore per-request output mode even when cancelled/interrupted.
             self._sr_segment = None
             self.input_info.save_result_path = original_save_path
             self.input_info.return_result_tensor = original_return_tensor
+            if tmp_dir is not None and os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
         self.gen_video_final = torch.cat(raw_segments, dim=2)
         gen_video_final = self.process_images_after_vae_decoder()

@@ -48,7 +48,7 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
-- **May 29, 2026:** 🚀 We introduce an extremely efficient Wan 2.2 14B variant: [NVFP4 Quantization-Aware Step Distillation with Sparse Attention for Blackwell Architecture](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse). On a single RTX 5090 GPU, it achieves over 50× speedup.
+- **May 29, 2026:** 🚀 We introduce an extremely efficient Wan 2.2 14B variant (T2V and I2V): [NVFP4 Quantization-Aware Step Distillation with Sparse Attention for Blackwell Architecture](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse). On a single RTX 5090 GPU, it achieves over 50× speedup.
 
 - **April 30, 2026:** 🚀 We now support deployment on iluvatar. Thanks to the iluvatar team.
 
@@ -333,6 +333,12 @@ We sincerely thank all the model repositories and research communities that insp
 - [xDiT](https://github.com/xdit-project/xDiT)
 - [FastVideo](https://github.com/hao-ai-lab/FastVideo)
 - [Mooncake](https://github.com/kvcache-ai/Mooncake)
+
+We also thank the cloud inference platforms supporting the wider ecosystem:
+
+<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v"><img src="assets/atlas-cloud-logo.png" alt="Atlas Cloud" width="120"></a>
+
+- [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v) — a full-modal AI inference platform whose hosted API serves the Wan / Seedance / Kling model families that LightX2V also supports, for teams that prefer a managed API over self-hosting.
 
 ## 🌟 Star History
 
