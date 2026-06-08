@@ -29,6 +29,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video, wan_vae_to_comfy
+from lightx2v.utils.utils import mux_audio_from_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -347,6 +348,8 @@ class SeedVRRunner(DefaultRunner):
         return vae_encoder, vae_decoder
 
     def _restore_target_size(self, sample):
+        if self.config.get("resize_mode") == "adaptive":
+            return sample
         target_height = int(self.config.get("target_height", sample.shape[-2]) or sample.shape[-2])
         target_width = int(self.config.get("target_width", sample.shape[-1]) or sample.shape[-1])
         if target_height <= 0 or target_width <= 0:
@@ -621,6 +624,9 @@ class SeedVRRunner(DefaultRunner):
                 if not segment_paths:
                     raise RuntimeError("SeedVR produced no video segments to save.")
                 self._concat_sr_segment_videos(segment_paths, original_save_path)
+                input_video_path = getattr(self.input_info, "video_path", "")
+                if input_video_path:
+                    mux_audio_from_video(input_video_path, original_save_path)
                 logger.info(f"✅ Video saved successfully to: {original_save_path} ✅")
                 return {"video": None, "save_result_path": original_save_path}
         finally:
