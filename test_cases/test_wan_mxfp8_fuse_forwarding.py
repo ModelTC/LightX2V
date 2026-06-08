@@ -1,10 +1,10 @@
 import os
 import sys
+import types
 import unittest
 from importlib import import_module
-from types import SimpleNamespace
-import types
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
