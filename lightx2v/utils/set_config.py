@@ -205,6 +205,8 @@ def auto_calc_config(config):
                 config["vae_scale_factor"] = 2 ** len(vae_config["temperal_downsample"])
             elif "block_out_channels" in vae_config:
                 config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
+            if config["model_cls"] in ["ernie_image", "ernie_image_turbo"]:
+                config["vae_scale_factor"] = 2 ** len(vae_config["block_out_channels"])
 
     return config
 
