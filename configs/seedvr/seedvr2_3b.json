@@ -6,5 +6,7 @@
   "fps": 16,
   "use_tiling_vae": true,
   "cpu_offload": true,
-  "offload_granularity": "model"
+  "offload_granularity": "model",
+  "resize_mode": "adaptive",
+  "color_fix": "gpu"
 }

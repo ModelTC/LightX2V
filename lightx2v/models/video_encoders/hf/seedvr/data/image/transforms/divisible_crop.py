@@ -20,8 +20,18 @@ class DivisibleCrop:
         else:
             raise NotImplementedError
 
-        cropped_height = height - (height % self.height_factor)
-        cropped_width = width - (width % self.width_factor)
+        pad_height = (-height) % self.height_factor
+        pad_width = (-width) % self.width_factor
+        if pad_height == 0 and pad_width == 0:
+            return image
 
-        image = TVF.center_crop(img=image, output_size=(cropped_height, cropped_width))
+        pad_top = pad_height // 2
+        pad_bottom = pad_height - pad_top
+        pad_left = pad_width // 2
+        pad_right = pad_width - pad_left
+        image = TVF.pad(
+            img=image,
+            padding=[pad_left, pad_top, pad_right, pad_bottom],
+            padding_mode="edge",
+        )
         return image
