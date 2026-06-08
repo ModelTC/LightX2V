@@ -51,12 +51,22 @@ class LingbotVATransformerInfer(WanTransformerInfer):
             v = cache.v_cache(self.block_idx)
 
         kv_len = k.shape[0]
+        if not hasattr(self, "_cu_seqlens_cache"):
+            self._cu_seqlens_cache = {}
+        cache_key = (query_len, kv_len, q.device)
+        if cache_key not in self._cu_seqlens_cache:
+            self._cu_seqlens_cache[cache_key] = (
+                torch.tensor([0, query_len], device=q.device, dtype=torch.int32),
+                torch.tensor([0, kv_len], device=k.device, dtype=torch.int32),
+            )
+        cu_seqlens_q, cu_seqlens_kv = self._cu_seqlens_cache[cache_key]
+
         attn_out = phase.self_attn_1.apply(
             q=q,
             k=k,
             v=v,
-            cu_seqlens_q=torch.tensor([0, query_len], device=q.device, dtype=torch.int32),
-            cu_seqlens_kv=torch.tensor([0, kv_len], device=k.device, dtype=torch.int32),
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_kv=cu_seqlens_kv,
             max_seqlen_q=query_len,
             max_seqlen_kv=kv_len,
         )
