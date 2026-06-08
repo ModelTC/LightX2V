@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
 
 # from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
@@ -56,7 +57,46 @@ def main():
         "--model_cls",
         type=str,
         required=True,
-        help="Registered runner/model class name.",
+        choices=[
+            "wan2.1",
+            "wan2.1_distill",
+            "wan2.1_mean_flow_distill",
+            "wan2.1_vace",
+            "wan2.1_sf",
+            "wan2.1_sf_mtxg2",
+            "seko_talk",
+            "seko_talk_ar",
+            "wan2.2_moe",
+            "lingbot_world",
+            "wan2.2",
+            "wan2.2_matrix_game3",
+            "wan2.2_moe_audio",
+            "wan2.2_audio",
+            "wan2.2_moe_distill",
+            "wan2.2_moe_vace",
+            "qwen_image",
+            "hidream_o1_image",
+            "longcat_image",
+            "wan2.2_animate",
+            "wan2.2_s2v",
+            "hunyuan_video_1.5",
+            "hunyuan_video_1.5_distill",
+            "hunyuan3d",
+            "worldplay_distill",
+            "worldplay_ar",
+            "worldplay_bi",
+            "z_image",
+            "flux2_klein",
+            "flux2_dev",
+            "ltx2",
+            "bagel",
+            "seedvr2",
+            "neopp",
+            "motus",
+            "lingbot_world_fast",
+            "worldmirror",
+            "lingbot_va"
+        ],
         default="wan2.1",
     )
 
@@ -169,6 +209,17 @@ def main():
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
     parser.add_argument("--aspect_ratio", type=str, default="")
+    parser.add_argument(
+        "--keep_original_aspect",
+        action="store_true",
+        help="(i2i) When exactly one reference image is provided, preserve its aspect ratio with max_size=2048.",
+    )
+    parser.add_argument(
+        "--layout_bboxes",
+        type=str,
+        default="",
+        help="(i2i) Layout boxes as a JSON string or JSON file path for HiDream layout-conditioned editing.",
+    )
     parser.add_argument(
         "--video_path",
         type=str,

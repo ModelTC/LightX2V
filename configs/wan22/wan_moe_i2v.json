@@ -12,7 +12,7 @@
         3.5
     ],
     "sample_shift": 5.0,
-    "enable_cfg": false,
+    "enable_cfg": true,
     "cpu_offload": false,
     "offload_granularity": "model",
     "boundary": 0.900,

@@ -1,0 +1,38 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "sla_attn",
+    "sla_attn_setting": {
+        "sparsity_ratio": 0.8,
+        "operator": "triton"
+    },
+    "cross_attn_1_type": "sage_attn2",
+    "cross_attn_2_type": "sage_attn2",
+    "sample_guide_scale": [
+        3.5,
+        3.5
+    ],
+    "sample_shift": 7.0,
+    "enable_cfg": false,
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "t5_cpu_offload": true,
+    "vae_cpu_offload": true,
+    "use_image_encoder": false,
+    "boundary_step_index": 2,
+    "denoising_step_list": [
+        1000,
+        750,
+        500,
+        250
+    ],
+    "dit_quantized": true,
+    "dit_quant_scheme": "nvfp4",
+    "high_noise_quantized_ckpt": "path to i2v high_nvfp4.safetensors",
+    "low_noise_quantized_ckpt": "path to i2v low_nvfp4.safetensors",
+    "high_noise_original_ckpt": null,
+    "low_noise_original_ckpt": null
+}

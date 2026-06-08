@@ -211,8 +211,12 @@ class I2IInputInfo:
     prompt: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    inpaint_blur_size: Optional[int] = None
+    inpaint_blur_sigma: Optional[float] = None
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
+    keep_original_aspect: bool = field(default_factory=lambda: False)
+    layout_bboxes: str = field(default_factory=str)
     # shape related
     resize_mode: str = field(default_factory=str)
     target_shape: list = field(default_factory=list)
