@@ -2,6 +2,7 @@ import einops
 import numpy as np
 import torch
 from PIL import Image
+from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 
 from lightx2v.models.networks.hidream_o1_image.utils import PATCH_SIZE
 from lightx2v.models.schedulers.hidream_o1_image.fm_solvers_unipc import FlowUniPCMultistepScheduler
@@ -9,10 +10,74 @@ from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
+class FlashFlowMatchEulerDiscreteScheduler:
+    """Minimal HiDream flash scheduler, matching the official inference recipe."""
+
+    def __init__(self, num_train_timesteps=1000, shift=1.0, use_dynamic_shifting=False):
+        if use_dynamic_shifting:
+            raise ValueError("HiDream flash scheduler does not use dynamic shifting in LightX2V.")
+        self.num_train_timesteps = num_train_timesteps
+        self.shift = shift
+        self.timesteps = None
+        self.sigmas = None
+        self.num_inference_steps = None
+        self._step_index = None
+
+    def set_timesteps(self, num_inference_steps, device=None):
+        timesteps = np.linspace(self.num_train_timesteps, 1, num_inference_steps, dtype=np.float32)
+        sigmas = timesteps / self.num_train_timesteps
+        sigmas = self.shift * sigmas / (1 + (self.shift - 1) * sigmas)
+        sigmas = torch.from_numpy(sigmas).to(dtype=torch.float32, device=device)
+        self.timesteps = sigmas * self.num_train_timesteps
+        self.sigmas = torch.cat([sigmas, torch.zeros(1, device=sigmas.device)])
+        self.num_inference_steps = num_inference_steps
+        self._step_index = None
+
+    def index_for_timestep(self, timestep):
+        indices = (self.timesteps == timestep.to(self.timesteps.device)).nonzero()
+        pos = 1 if len(indices) > 1 else 0
+        return indices[pos].item()
+
+    def _init_step_index(self, timestep):
+        self._step_index = self.index_for_timestep(timestep)
+
+    def step(self, model_output, timestep, sample, s_noise=1.0, noise_clip_std=0.0, generator=None, return_dict=True):
+        if self._step_index is None:
+            self._init_step_index(timestep)
+
+        sigma = self.sigmas[self._step_index]
+        sample = sample.to(torch.float32)
+        denoised = sample - model_output * sigma
+
+        if self._step_index < self.num_inference_steps:
+            sigma_next = self.sigmas[self._step_index + 1]
+            noise = torch.randn(
+                model_output.shape,
+                generator=generator,
+                device=model_output.device,
+                dtype=denoised.dtype,
+            )
+            if noise_clip_std > 0:
+                clip_val = noise_clip_std * noise.std().item()
+                noise = noise.clamp(min=-clip_val, max=clip_val)
+            sample = sigma_next * noise * s_noise + (1.0 - sigma_next) * denoised
+
+        self._step_index += 1
+        sample = sample.to(model_output.dtype)
+        if not return_dict:
+            return (sample,)
+        return {"prev_sample": sample}
+
+
 def build_scheduler(num_inference_steps, timesteps_list, shift, device, scheduler_name="default"):
-    if scheduler_name != "default":
-        raise ValueError(f"HiDream-O1-Image currently keeps only scheduler_name='default', got {scheduler_name!r}")
-    sched = FlowUniPCMultistepScheduler(use_dynamic_shifting=False, shift=shift)
+    if scheduler_name == "flash":
+        sched = FlashFlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=shift, use_dynamic_shifting=False)
+    elif scheduler_name == "flow_match":
+        sched = FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000, shift=shift)
+    elif scheduler_name == "default":
+        sched = FlowUniPCMultistepScheduler(use_dynamic_shifting=False, shift=shift)
+    else:
+        raise ValueError(f"Unknown HiDream-O1-Image scheduler_name={scheduler_name!r}")
     sched.set_timesteps(num_inference_steps, device=device)
     if timesteps_list is not None:
         sched.timesteps = torch.tensor(timesteps_list, device=device, dtype=torch.long)
@@ -86,16 +151,26 @@ class HidreamO1ImageScheduler(BaseScheduler):
         super().step_pre(step_index)
         self.current_timestep = self.timesteps[self.step_index]
         self.current_t_pixeldit = 1.0 - self.current_timestep.float() / 1000.0
-        self.current_sigma = (self.current_timestep.float() / 1000.0).to(dtype=torch.float32).clamp_min(1e-6)
+        self.current_sigma = (self.current_timestep.float() / 1000.0).to(dtype=torch.float32).clamp_min(0.001)
         self.noise_pred = None
 
     def step_post(self):
-        self.latents = self.sched.step(
-            self.noise_pred.float(),
-            self.current_timestep.to(dtype=torch.float32),
-            self.latents.float(),
-            return_dict=False,
-        )[0].to(self.dtype)
+        if self.generation_config["scheduler_name"] == "flash":
+            self.latents = self.sched.step(
+                self.noise_pred.float(),
+                self.current_timestep.to(dtype=torch.float32),
+                self.latents.float(),
+                s_noise=self.noise_scale_schedule[self.step_index],
+                noise_clip_std=self.generation_config["noise_clip_std"],
+                return_dict=False,
+            )[0].to(self.dtype)
+        else:
+            self.latents = self.sched.step(
+                self.noise_pred.float(),
+                self.current_timestep.to(dtype=torch.float32),
+                self.latents.float(),
+                return_dict=False,
+            )[0].to(self.dtype)
 
     def decode(self):
         img = (self.latents + 1) / 2
