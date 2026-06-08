@@ -8,5 +8,7 @@
   "dit_original_ckpt": "/path/to/ByteDance-Seed/SeedVR2-7B/seedvr2_ema_7b.pth",
   "use_tiling_vae": true,
   "cpu_offload": true,
-  "offload_granularity": "model"
+  "offload_granularity": "model",
+  "resize_mode": "adaptive",
+  "color_fix": "gpu"
 }
