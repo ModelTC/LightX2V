@@ -1,12 +1,13 @@
 import os
 
 import torch
+from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.hidream_o1_image.infer.post_infer import HidreamO1ImagePostInfer
 from lightx2v.models.networks.hidream_o1_image.infer.pre_infer import HidreamO1ImagePreInfer
 from lightx2v.models.networks.hidream_o1_image.infer.transformer_infer import HidreamO1ImageTransformerInfer
-from lightx2v.models.networks.hidream_o1_image.qwen3_vl import Qwen3VLConfig, Qwen3VLTextRotaryEmbedding
+from lightx2v.models.networks.hidream_o1_image.qwen3_vl import Qwen3VLTextRotaryEmbedding
 from lightx2v.models.networks.hidream_o1_image.weights.post_weights import HidreamO1ImagePostWeights
 from lightx2v.models.networks.hidream_o1_image.weights.pre_weights import HidreamO1ImagePreWeights
 from lightx2v.models.networks.hidream_o1_image.weights.transformer_weights import HidreamO1ImageTransformerWeights
