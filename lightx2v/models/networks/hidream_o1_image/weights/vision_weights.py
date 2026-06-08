@@ -8,7 +8,7 @@ class HidreamO1ImageVisionWeights(WeightModule):
         self.config = config
         self.mm_type = config.get("mm_type", config.get("dit_quant_scheme", "Default"))
         self.ln_type = config.get("ln_type", "torch")
-        self.attn_type = config.get("hidream_vision_attn_type", config.get("hidream_attn_type", "torch_sdpa"))
+        self.attn_type = config["attn_type"]
         self.blocks = WeightModuleList([])
         self.deepstack_merger_list = WeightModuleList([])
 

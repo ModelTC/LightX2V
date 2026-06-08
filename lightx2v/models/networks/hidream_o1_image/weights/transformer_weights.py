@@ -10,8 +10,8 @@ class HidreamO1ImageTransformerWeights(WeightModule):
         super().__init__()
         self.config = config
         self.mm_type = config.get("mm_type", config.get("dit_quant_scheme", "Default"))
-        self.rms_norm_type = config.get("rms_norm_type", "torch")
-        self.attn_type = config.get("hidream_attn_type", "torch_sdpa")
+        self.rms_norm_type = config.get("rms_norm_type", "one-pass")
+        self.attn_type = config["attn_type"]
         self.blocks_num = int(config.get("num_hidden_layers", config.get("num_layers", 0)))
         self.device = AI_DEVICE
         self.rotary_emb = None

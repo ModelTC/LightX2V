@@ -56,7 +56,7 @@ def build_i2i_samples(
     model_config,
     device,
     dtype,
-    guidance_scale,
+    enable_cfg,
 ):
     height, width, preresized_ref_pil = _resolve_target_size(height, width, ref_image_paths, keep_original_aspect)
 
@@ -140,7 +140,7 @@ def build_i2i_samples(
 
     samples = []
     captions = [prompt]
-    if guidance_scale > 1.0:
+    if enable_cfg:
         captions.append(" ")
 
     boi_token = getattr(tokenizer, "boi_token", "<|boi_token|>")

@@ -48,6 +48,8 @@ class FlashAttn2Weight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        causal = kwargs.get("causal", False)
+        softmax_scale = kwargs.get("softmax_scale", None)
         if len(q.shape) == 3:
             bs = 1
         elif len(q.shape) == 4:
@@ -59,7 +61,7 @@ class FlashAttn2Weight(AttnWeightTemplate):
                 q = q.unsqueeze(0)
                 k = k.unsqueeze(0)
                 v = v.unsqueeze(0)
-            x = flash_attn_func_v2(q, k, v).reshape(total_seqlen, -1)
+            x = flash_attn_func_v2(q, k, v, softmax_scale=softmax_scale, causal=causal).reshape(total_seqlen, -1)
         else:
             if cu_seqlens_q.is_cpu:
                 cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
@@ -77,6 +79,8 @@ class FlashAttn2Weight(AttnWeightTemplate):
                 cu_seqlens_kv,
                 max_seqlen_q,
                 max_seqlen_kv,
+                softmax_scale=softmax_scale,
+                causal=causal,
             ).reshape(total_seqlen, -1)
 
         return x
@@ -98,6 +102,8 @@ class FlashAttn3Weight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        causal = kwargs.get("causal", False)
+        softmax_scale = kwargs.get("softmax_scale", None)
         if len(q.shape) == 3:
             bs = 1
         elif len(q.shape) == 4:
@@ -109,7 +115,7 @@ class FlashAttn3Weight(AttnWeightTemplate):
                 q = q.unsqueeze(0)
                 k = k.unsqueeze(0)
                 v = v.unsqueeze(0)
-            x = flash_attn_func_v3(q, k, v).reshape(total_seqlen, -1)
+            x = flash_attn_func_v3(q, k, v, softmax_scale=softmax_scale, causal=causal).reshape(total_seqlen, -1)
         else:
             if cu_seqlens_q.is_cpu:
                 cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
@@ -127,6 +133,8 @@ class FlashAttn3Weight(AttnWeightTemplate):
                 cu_seqlens_kv,
                 max_seqlen_q,
                 max_seqlen_kv,
+                softmax_scale=softmax_scale,
+                causal=causal,
             ).reshape(total_seqlen, -1)
 
         return x
