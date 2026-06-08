@@ -78,6 +78,7 @@ class LingbotVAFlowMatchScheduler(BaseScheduler):
 
     def step_pre(self, step_index):
         super().step_pre(step_index)
+        self.step_index = int(step_index)
         self.current_timestep = self.loop_timesteps[step_index]
         self.last_step = step_index == len(self.loop_timesteps) - 1
         if self.loop_inputs is not None and self.step_input_builder is not None:
@@ -96,16 +97,7 @@ class LingbotVAFlowMatchScheduler(BaseScheduler):
         self.noise_pred = None
 
     def step(self, model_output, timestep, sample, return_dict=False):
-        step_index = getattr(self, "step_index", None)
-        if step_index is not None:
-            timestep_id = step_index
-        else:
-            if isinstance(timestep, torch.Tensor):
-                timestep_ref = timestep.detach().to(device=self.timesteps.device, dtype=self.timesteps.dtype)
-            else:
-                timestep_ref = torch.tensor(timestep, device=self.timesteps.device, dtype=self.timesteps.dtype)
-            timestep_id = int(torch.argmin((self.timesteps - timestep_ref).abs()).item())
-
+        timestep_id = self.step_index
         sigma = self.sigmas[timestep_id].to(sample.device, sample.dtype)
         if timestep_id + 1 >= len(self.timesteps):
             sigma_next = torch.zeros((), device=sample.device, dtype=sample.dtype)

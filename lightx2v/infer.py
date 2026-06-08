@@ -95,7 +95,7 @@ def main():
             "motus",
             "lingbot_world_fast",
             "worldmirror",
-            "lingbot_va"
+            "lingbot_va",
         ],
         default="wan2.1",
     )
