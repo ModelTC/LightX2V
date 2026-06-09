@@ -1,0 +1,21 @@
+{
+    "hidream_model_type": "dev",
+    "infer_steps": 28,
+    "guidance_scale": 0.0,
+    "shift": 1.0,
+    "scheduler_name": "flash",
+    "noise_scale_start": 7.5,
+    "noise_scale_end": 7.5,
+    "noise_clip_std": 2.5,
+    "target_height": 2048,
+    "target_width": 2048,
+    "keep_original_aspect": false,
+    "torch_dtype": "bfloat16",
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "attn_type": "mlu_flash_attn",
+    "rope_type": "torch",
+    "ln_type": "torch",
+    "layer_norm_type": "torch",
+    "rms_norm_type": "mlu_rms_norm"
+}
