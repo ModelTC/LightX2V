@@ -45,6 +45,7 @@ pre-commit run --all-files
 - [ziyanxzy](https://github.com/ziyanxzy)
 - [Tyr0727](https://github.com/Tyr0727)
 - [hufangjian2017](https://github.com/hufangjian2017)
+- [Fatemanx](https://github.com/Fatemanx)
 
 ## :fire: 最新动态
 
