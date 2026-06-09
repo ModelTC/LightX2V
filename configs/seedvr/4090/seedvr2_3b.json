@@ -9,5 +9,7 @@
   "offload_granularity": "model",
   "dit_quantized_ckpt": "path/to/seedvr2_ema_3b_fp8.safetensors",
   "dit_quant_scheme": "fp8-q8f",
-  "dit_quantized": true
+  "dit_quantized": true,
+  "resize_mode": "adaptive",
+  "color_fix": "gpu"
 }

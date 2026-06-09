@@ -1491,6 +1491,8 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         freeze_encoder: bool,
         cpu_offload: bool = False,
         use_tiling: bool = False,
+        tile_size: Union[int, Tuple[int, int]] = 512,
+        tile_overlap: Union[int, Tuple[int, int]] = 64,
         **kwargs,
     ):
         self.spatial_downsample_factor = spatial_downsample_factor
@@ -1499,6 +1501,14 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
         self.cpu_offload = cpu_offload
         super().__init__(*args, **kwargs)
         self.use_tiling = use_tiling
+        self.tile_size = self._as_pair(tile_size)
+        self.tile_overlap = self._as_pair(tile_overlap)
+
+    @staticmethod
+    def _as_pair(value: Union[int, Tuple[int, int]]) -> Tuple[int, int]:
+        if isinstance(value, tuple):
+            return int(value[0]), int(value[1])
+        return int(value), int(value)
 
     def forward(self, x: torch.FloatTensor) -> CausalAutoencoderOutput:
         with torch.no_grad() if self.freeze_encoder else nullcontext():
@@ -1572,10 +1582,10 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
                 if hasattr(self, "preprocess"):
                     sample = self.preprocess(sample)
                 if use_sample:
-                    latent = self.encode(sample, tiled=self.use_tiling).latent
+                    latent = self.encode(sample, tiled=self.use_tiling, tile_size=self.tile_size, tile_overlap=self.tile_overlap).latent
                 else:
                     # Deterministic vae encode, only used for i2v inference (optionally)
-                    latent = self.encode(sample, tiled=self.use_tiling).posterior.mode().squeeze(2)
+                    latent = self.encode(sample, tiled=self.use_tiling, tile_size=self.tile_size, tile_overlap=self.tile_overlap).posterior.mode().squeeze(2)
                 latent = latent.unsqueeze(2) if latent.ndim == 4 else latent
                 latent = rearrange(latent, "b c ... -> b ... c")
                 latent = (latent - shift) * scale
@@ -1614,7 +1624,7 @@ class VideoAutoencoderKLWrapper(VideoAutoencoderKL):
                 latent = latent / scale + shift
                 latent = rearrange(latent, "b ... c -> b c ...")
                 latent = latent.squeeze(2)
-                sample = self.decode(latent, tiled=self.use_tiling).sample
+                sample = self.decode(latent, tiled=self.use_tiling, tile_size=self.tile_size, tile_overlap=self.tile_overlap).sample
                 if hasattr(self, "postprocess"):
                     sample = self.postprocess(sample)
                 samples.append(sample)
@@ -1642,6 +1652,8 @@ def attn_video_vae_v3_s8_c16_t4_inflation_sd3_init(
     strict: bool = True,
     cpu_offload: bool = False,
     use_tiling: bool = False,
+    tile_size: Union[int, Tuple[int, int]] = 512,
+    tile_overlap: Union[int, Tuple[int, int]] = 64,
 ) -> VideoAutoencoderKLWrapper:
     """Example: initialize VideoAutoencoderKLWrapper with SD3 inflation config params."""
     model = VideoAutoencoderKLWrapper(
@@ -1673,6 +1685,8 @@ def attn_video_vae_v3_s8_c16_t4_inflation_sd3_init(
         freeze_encoder=False,
         cpu_offload=cpu_offload,
         use_tiling=use_tiling,
+        tile_size=tile_size,
+        tile_overlap=tile_overlap,
     )
 
     if weights_path is not None:
