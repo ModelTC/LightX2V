@@ -213,7 +213,6 @@ def main():
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
-    parser.add_argument("--video_duration", type=float, default=None, help="The maximum generated video duration in seconds for audio-driven video tasks.")
     parser.add_argument("--aspect_ratio", type=str, default="")
     parser.add_argument(
         "--keep_original_aspect",
