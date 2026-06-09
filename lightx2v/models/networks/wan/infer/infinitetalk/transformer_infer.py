@@ -1,8 +1,9 @@
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
-from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import GET_DTYPE
 
 
@@ -40,8 +41,11 @@ class RotaryPositionalEmbedding1D:
         return (x_float * cos + rotate_half(x_float) * sin).type_as(x)
 
 
-class WanInfiniteTalkTransformerInfer(WanTransformerInfer):
+class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
     def __init__(self, config):
+        offload_granularity = config.get("offload_granularity", "block")
+        if config.get("cpu_offload", False) and offload_granularity not in {"block", "model"}:
+            raise NotImplementedError(f"InfiniteTalk currently supports block/model offload, not {offload_granularity} offload.")
         super().__init__(config)
         self.phases_num = 4
         self.rope_1d = RotaryPositionalEmbedding1D(self.head_dim)
@@ -57,6 +61,25 @@ class WanInfiniteTalkTransformerInfer(WanTransformerInfer):
         super().reset_infer_states()
         self.audio_attn_cu_seqlens_q = None
         self.audio_attn_cu_seqlens_kv = None
+
+    def _seq_parallel_token_count(self, pre_infer_out):
+        grid_t, grid_h, grid_w = pre_infer_out.grid_sizes.tuple
+        return int(grid_t * grid_h * grid_w)
+
+    def _seq_parallel_gather_tokens(self, x):
+        gathered = [torch.empty_like(x) for _ in range(dist.get_world_size(self.seq_p_group))]
+        dist.all_gather(gathered, x, group=self.seq_p_group)
+        return torch.cat(gathered, dim=0)
+
+    def _seq_parallel_chunk_tokens(self, x, local_len):
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        padded_len = local_len * world_size
+        if x.shape[0] < padded_len:
+            pad_shape = list(x.shape)
+            pad_shape[0] = padded_len - x.shape[0]
+            x = torch.cat([x, x.new_zeros(pad_shape)], dim=0)
+        return torch.chunk(x, world_size, dim=0)[cur_rank]
 
     def infer_block(self, block, x, pre_infer_out):
         shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.pre_process(
@@ -78,7 +101,14 @@ class WanInfiniteTalkTransformerInfer(WanTransformerInfer):
             gate_msa,
         )
         x.add_(attn_out)
-        audio_out = self.infer_audio_cross_attn(block.compute_phases[2], x, pre_infer_out, x_ref_attn_map)
+        if self.config["seq_parallel"]:
+            local_len = x.shape[0]
+            token_count = self._seq_parallel_token_count(pre_infer_out)
+            full_x = self._seq_parallel_gather_tokens(x)[:token_count]
+            audio_out = self.infer_audio_cross_attn(block.compute_phases[2], full_x, pre_infer_out, x_ref_attn_map)
+            audio_out = self._seq_parallel_chunk_tokens(audio_out, local_len)
+        else:
+            audio_out = self.infer_audio_cross_attn(block.compute_phases[2], x, pre_infer_out, x_ref_attn_map)
         y = self.infer_ffn(block.compute_phases[3], x, audio_out, c_shift_msa, c_scale_msa, c_gate_msa)
         return self.post_process(x, y, c_gate_msa, pre_infer_out)
 
@@ -95,22 +125,47 @@ class WanInfiniteTalkTransformerInfer(WanTransformerInfer):
         x_ref_attn_map = None
         ref_target_masks = pre_infer_out.adapter_args.get("ref_target_masks")
         if pre_infer_out.adapter_args.get("human_num", 1) > 1 and ref_target_masks is not None:
-            x_ref_attn_map = self._get_attn_map_with_target(q.unsqueeze(0), k.unsqueeze(0), pre_infer_out.grid_sizes.tuple, ref_target_masks)
+            if self.config["seq_parallel"]:
+                token_count = self._seq_parallel_token_count(pre_infer_out)
+                map_q = self._seq_parallel_gather_tokens(q)[:token_count]
+                map_k = self._seq_parallel_gather_tokens(k)[:token_count]
+            else:
+                map_q, map_k = q, k
+            x_ref_attn_map = self._get_attn_map_with_target(map_q.unsqueeze(0), map_k.unsqueeze(0), pre_infer_out.grid_sizes.tuple, ref_target_masks)
 
         img_qkv_len = q.shape[0]
         if self.self_attn_cu_seqlens_qkv is None:
             self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
-        attn_out = phase.self_attn_1.apply(
-            q=q,
-            k=k,
-            v=v,
-            cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
-            cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
-            max_seqlen_q=img_qkv_len,
-            max_seqlen_kv=img_qkv_len,
-            block_idx=self.block_idx,
-            scheduler=self.scheduler,
-        )
+        attn_running_args = {
+            "block_idx": self.block_idx,
+            "scheduler": self.scheduler,
+        }
+        if self.config["seq_parallel"]:
+            attn_out = phase.self_attn_1_parallel.apply(
+                q=q,
+                k=k,
+                v=v,
+                slice_qkv_len=img_qkv_len,
+                cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
+                attention_module=phase.self_attn_1,
+                seq_p_group=self.seq_p_group,
+                use_fp8_comm=self.seq_p_fp8_comm,
+                use_fp4_comm=self.seq_p_fp4_comm,
+                use_tensor_fusion=self.seq_p_tensor_fusion,
+                enable_head_parallel=self.enable_head_parallel,
+                **attn_running_args,
+            )
+        else:
+            attn_out = phase.self_attn_1.apply(
+                q=q,
+                k=k,
+                v=v,
+                cu_seqlens_q=self.self_attn_cu_seqlens_qkv,
+                cu_seqlens_kv=self.self_attn_cu_seqlens_qkv,
+                max_seqlen_q=img_qkv_len,
+                max_seqlen_kv=img_qkv_len,
+                **attn_running_args,
+            )
         y = phase.self_attn_o.apply(attn_out)
         return y, x_ref_attn_map
 

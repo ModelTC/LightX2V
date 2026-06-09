@@ -24,6 +24,8 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+torch_device_module = getattr(torch, AI_DEVICE)
+
 try:
     import librosa
 except ImportError:
@@ -133,6 +135,38 @@ class InfiniteTalkRunner(WanRunner):
             raise ValueError("InfiniteTalk requires audio_encoder_path in config.")
         device = self.config.get("wav2vec_device", "cpu")
         return InfiniteTalkAudioEncoder(audio_encoder_path, device=device, fps=self.target_fps, sample_rate=self.audio_sample_rate)
+
+    @ProfilingContext4DebugL1(
+        "Run Text Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_text_encode_duration,
+        metrics_labels=["InfiniteTalkRunner"],
+    )
+    def run_text_encoder(self, input_info):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
+
+        prompt = input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else input_info.prompt
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
+
+        context = self.text_encoders[0].infer([prompt])
+        context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
+        if self.config.get("enable_cfg", False):
+            context_null = self.text_encoders[0].infer([input_info.negative_prompt])
+            context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
+        else:
+            context_null = None
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.text_encoders[0]
+            torch_device_module.empty_cache()
+            gc.collect()
+
+        return {
+            "context": context,
+            "context_null": context_null,
+        }
 
     def _load_input_data(self):
         cfg_input = self.config.get("infinitetalk_input", None)
@@ -399,17 +433,16 @@ class InfiniteTalkRunner(WanRunner):
         return torch.concat(audio_embs, dim=0).to(AI_DEVICE, GET_DTYPE())
 
     def _build_vae_encoder_out(self, cond_image, frame_num):
-        latent_h = self.target_h // self.config["vae_stride"][1]
-        latent_w = self.target_w // self.config["vae_stride"][2]
+        video_frames = torch.zeros(1, cond_image.shape[1], frame_num - cond_image.shape[2], self.target_h, self.target_w, device=AI_DEVICE)
+        padding_frames = torch.concat([cond_image, video_frames], dim=2)
+        y = self.vae_encoder.encode(padding_frames.to(GET_DTYPE())).to(GET_DTYPE())
+
+        latent_h, latent_w = y.shape[-2:]
         msk = torch.ones(1, frame_num, latent_h, latent_w, device=AI_DEVICE)
         msk[:, 1:] = 0
         msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
         msk = msk.view(1, msk.shape[1] // 4, 4, latent_h, latent_w)
         msk = msk.transpose(1, 2).to(GET_DTYPE())[0]
-
-        video_frames = torch.zeros(1, cond_image.shape[1], frame_num - cond_image.shape[2], self.target_h, self.target_w, device=AI_DEVICE)
-        padding_frames = torch.concat([cond_image, video_frames], dim=2)
-        y = self.vae_encoder.encode(padding_frames.to(GET_DTYPE())).to(GET_DTYPE())
         return torch.concat([msk, y], dim=0)
 
     def _build_clip_context(self, cond_image):
