@@ -1,6 +1,6 @@
 ---
 name: lightx2v-native-model-porting
-description: Use this skill when adding native LightX2V support for a new model or task: understand an upstream inference repo, map it onto LightX2V runner/model/weight/infer/scheduler/input-encoder/VAE conventions, convert or load weights, add configs and scripts, implement CFG/KV cache/offload without batch dimensions, and verify output parity with the upstream pipeline.
+description: Use this skill when adding native LightX2V support for a new model or task: understand an upstream inference repo, map it onto LightX2V runner/model/weight/infer/scheduler/input-encoder/VAE conventions, convert or load weights, add configs and Wan-style scripts without hard-coded paths, implement CFG/KV cache/block-model offload/SP/CFG-parallel without batch dimensions, and verify output parity with the upstream pipeline.
 ---
 
 # LightX2V Native Model Porting
@@ -47,6 +47,8 @@ infer
 ```
 
 Do not put model path in runner. Do not put checkpoint mapping in infer. Do not call the upstream repo from runner/model to get a result. The result should come from LightX2V-native modules.
+
+Treat base inference as the first milestone, not the finish line. When a model family supports block/model offload, sequence parallel, or CFG parallel, the new model should support the corresponding LightX2V modes too unless there is a specific architectural blocker documented in the final report.
 
 Native means:
 
@@ -258,6 +260,7 @@ Model responsibilities:
 - implement `infer(inputs)` and `_infer_cond_uncond(...)` when CFG is needed
 - set `scheduler.noise_pred`
 - manage model-level offload if inherited family already does
+- support inherited block/model offload, sequence parallel, and CFG parallel paths after the serial inference path is correct
 - expose cache helpers only if they are generic and aligned with manager APIs
 
 Keep scheduler stepping out of model. Keep weight loading out of runner.
@@ -322,15 +325,46 @@ Rules:
 - If the model has multiple modalities, separate CFG flags when useful:
   - `enable_cfg` for video/image branch
   - `enable_action_cfg` for action branch
-- If a modality has `scale == 1` or `enable_*_cfg == false`, do not run its uncond branch.
+- If a modality has optional CFG, use explicit booleans such as `enable_text_cfg`, `enable_audio_cfg`, or `enable_action_cfg` to choose branches. Do not use `scale == 1` as the only signal for whether a branch should run.
+- If a modality has `enable_*_cfg == false`, do not run its uncond/drop branch.
 - If any branch uses CFG and the model also uses KV cache, create cond/uncond caches only for branches that need separate histories; reuse the cond cache for non-CFG branches when that preserves history and avoids duplicate compute.
 - `cfg_parallel` should only be enabled if the existing distributed CFG path is implemented and tested.
 - Store branch-local controls in inputs when useful:
   - `enable_cfg`
+  - `enable_text_cfg`
+  - `enable_audio_cfg`
   - `guide_scale`
   - `action_mode`
   - `cache_name`
   - `update_cache`
+
+## Offload And Parallel Support
+
+After the single-device serial path matches upstream, add the same execution modes that the base family supports. For Wan-derived models, this normally means block/model offload, sequence parallel (`sp`/`seq_parallel`), and CFG parallel (`cfg_parallel`).
+
+Rules:
+
+- Reuse the base family offload and distributed machinery before adding model-private code.
+- For Wan-derived transformer infer, prefer inheriting or composing with existing Wan offload infer classes such as `WanOffloadTransformerInfer` when the phase order is compatible.
+- Implement block offload for every custom weight/block phase introduced by the new model:
+  - create matching CUDA block buffers such as `offload_block_cuda_buffers`
+  - create lazy CPU-side buffers when the base weight class uses them
+  - move non-block weights through the existing `non_block_weights_to_cuda/cpu` hooks
+- Support model-level offload when the parent model already provides `to_cuda`/`to_cpu` style movement. Do not special-case devices in runner hot loops.
+- Reject phase offload clearly if the new model has a custom phase order and phase offload has not been mapped yet. Do not silently reuse Wan phase offload for a different phase graph.
+- For sequence parallel:
+  - reuse existing process groups and helpers such as `seq_p_group`, sequence chunking, all-gather, and parallel attention ops
+  - use the base self-attention parallel kernel when tensor layout matches
+  - if a custom module needs the full token grid, gather full tokens for that module and chunk the result back to the local rank
+  - for custom reference maps or multi-human masks, gather `q/k` before computing a full attention map when local chunks are insufficient
+- For CFG parallel:
+  - keep CFG branch orchestration in `model.infer`, not runner
+  - keep DiT internals unbatched; distribute branches across ranks instead of concatenating a batch dimension
+  - build an explicit branch list, for example `cond`, `drop_text`, `drop_audio`, `uncond`
+  - support the actual branch count needed by the model, including 2-branch and 3-branch CFG
+  - gather branch predictions and combine them with the same formula as serial CFG
+  - make text/audio encoders produce every embedding needed by each rank; do not assume Wan's default rank0 prompt / rank1 negative split is enough for multi-branch CFG
+- Keep serial, offload, SP, CFG parallel, and combined modes numerically aligned with the same seed/config whenever practical.
 
 ## Scheduler
 
@@ -484,6 +518,10 @@ Example `ar_config` fields:
 
 Configs should contain model/run defaults that are stable for a profile. Scripts should contain per-run values.
 
+Do not hard-code local model roots, upstream source roots, adapter paths, audio paths, or sample inputs inside Python. Prefer existing CLI/config fields and set machine-specific values in the bash script or the selected config profile.
+
+Do not add extra input JSON dependency files for a new model unless the existing LightX2V workflow already requires them. Keep structured model defaults in `configs/<family>/*.json`, and put per-run arguments in bash/CLI. A script can pass a JSON-valued config path, but it should not require a second model-private `input_json` just to provide prompt/audio/image paths that LightX2V already accepts.
+
 Do not add a model-local `_apply_default_config()` that silently fills many fields. Put required stable values in JSON, or inherit existing global defaults intentionally. If a field is required for correctness, fail early with a clear error instead of hiding it behind a private defaults function.
 
 Prefer LightX2V naming:
@@ -500,6 +538,18 @@ Prefer LightX2V naming:
 - `ar_config.local_attn_size`
 - `ar_config.kv_cache_scheme`
 - `ar_config.step_kv_cache`
+
+Reuse existing path fields before inventing new ones:
+
+- `model_path`
+- `dit_original_ckpt`
+- `dit_quantized_ckpt`
+- `adapter_model_path`
+- `audio_encoder_path`
+- `vae_original_ckpt`
+- `t5_original_ckpt`
+
+Do not create parallel model-specific path fields such as `<model>_model_root`, `<model>_source_root`, `<model>_single_ckpt`, or `<model>_multi_ckpt` if `adapter_model_path`, `audio_encoder_path`, or the existing DiT/VAE/T5 checkpoint fields already express the same thing. If a model has multiple variants, pick the variant in the config or script by assigning the existing field to the desired checkpoint.
 
 Avoid old/upstream names in JSON:
 
@@ -521,6 +571,7 @@ Do not put these in model JSON when scripts/CLI should own them:
 - `task`
 - `prompt`
 - `negative_prompt`
+- `sample_neg_prompt` when it duplicates `negative_prompt`
 - input paths
 - output paths
 - CUDA device selection
@@ -534,6 +585,12 @@ Use `config_json` for stable profile config and bash for:
 - `--negative_prompt`
 - `--image_path` / `--video_path` / `--audio_path`
 - `--save_result_path`
+
+When choosing config vs bash:
+
+- Put architecture and stable profile fields in JSON: resolution, fps, attention types, latent/audio dimensions, scheduler shift, offload/parallel capability flags, and model variant defaults.
+- Put run-local fields in bash/CLI: prompt, negative prompt, image/video/audio path, save path, visible devices, model class, task, and checkpoint path overrides that vary by machine or experiment.
+- Before adding a new argparse/config name, search for an existing equivalent and reuse it. For example, use `adapter_model_path` for model adapters and `audio_encoder_path` for audio encoders instead of adding model-specific aliases.
 
 For profiles copied from upstream names, keep filename compatibility if useful, but keep internal LightX2V semantics clear. Example: upstream may call a config `robotwin_i2av` while its actual `infer_mode` is `i2va`; in LightX2V the script can use `robotwin_i2av.json` while still passing `--task i2va`.
 
@@ -569,6 +626,7 @@ Rules:
 - Always source `scripts/base/base.sh`.
 - Use absolute config paths based on `${lightx2v_path}`.
 - Keep model path and device near the top.
+- Keep adapter/audio encoder/checkpoint overrides near the top and pass them through existing variable names such as `adapter_model_path` and `audio_encoder_path`.
 - Keep per-run prompt/input/output in bash, not JSON.
 - Validate scripts with `bash -n`.
 - Follow existing Wan-style script formatting when adding Wan-derived models.
@@ -599,6 +657,10 @@ Before declaring parity, compare with upstream:
 - scheduler type
 - timesteps/sigmas/shift
 - CFG scale and CFG execution style
+- explicit CFG branch-enable flags such as `enable_text_cfg`, `enable_audio_cfg`, and `enable_action_cfg`
+- CFG parallel branch count and branch combination formula
+- block/model offload behavior if the base family supports it
+- sequence parallel behavior if the base family supports it
 - action CFG if any
 - prompt and negative prompt
 - text embedding length and null prompt
@@ -652,27 +714,39 @@ For a model similar to LingBot-VA, use this order:
    - Use inherited Wan `infer_ffn`, cross attention, modulation, offload, and feature-cache code when compatible.
    - Add model-specific self-attention only when KV cache or token layout differs.
 
-7. Build scheduler:
+7. Build offload and parallel paths:
+   - Add block offload buffers and movement hooks for every custom block/weight phase.
+   - Support model offload when the parent Wan model supports it.
+   - Implement sequence parallel with existing Wan distributed helpers and gather/chunk custom full-token modules explicitly.
+   - Implement CFG parallel with explicit branch lists and prediction gather/combine logic.
+   - Ensure text/audio encoders provide all embeddings required by CFG-parallel ranks.
+   - Reject unsupported phase offload clearly if the model-specific phase order has not been mapped.
+
+8. Build scheduler:
    - Reuse existing scheduler only if solver semantics match.
    - Otherwise inherit `BaseScheduler`.
    - Put latent/action random initialization in scheduler prepare, not runner.
    - Use `step_pre -> model.infer -> step_post`.
 
-8. Build KV cache:
+9. Build KV cache:
    - Add cache pool under `common/kvcache` if algorithm is new.
    - Register scheme with `KVCacheManager`.
    - Create caches in runner, not infer.
    - Use cache names for cond/uncond histories only when needed.
 
-9. Build config/script:
+10. Build config/script:
    - Keep stable profile fields in JSON.
    - Keep `model_cls`, `task`, prompt, input paths, output path, and CUDA device in bash/CLI.
    - Use LightX2V field names, not upstream aliases.
+   - Reuse existing path variables such as `dit_original_ckpt`, `dit_quantized_ckpt`, `adapter_model_path`, and `audio_encoder_path`.
+   - Do not add a second input JSON file for values already covered by config or bash args.
+   - Do not hard-code local model roots or upstream source roots in Python.
 
-10. Verify:
+11. Verify:
     - Compile Python.
     - Validate JSON and bash syntax.
     - Run smallest available inference.
+    - Smoke-test block/model offload, sequence parallel, and CFG parallel when hardware is available.
     - Compare source output length, action shape, and qualitative result.
 
 ## Common Pitfalls
@@ -681,6 +755,13 @@ For a model similar to LingBot-VA, use this order:
 - Loading `transformer/config.json` assumed but `set_config.py` never merges it for this `model_cls`.
 - Keeping upstream batch dimension in DiT internals.
 - Batched CFG via `torch.cat` instead of serial CFG.
+- Letting a model "support" only the local serial path while skipping base-family block offload, model offload, sequence parallel, or CFG parallel.
+- Controlling CFG branch count by `scale == 1` instead of explicit `enable_*_cfg` flags.
+- Assuming a 2-branch Wan CFG-parallel path is correct for a model that needs 3 branches such as cond/drop-text/uncond.
+- Assuming Wan text encoder rank splitting produces every context needed by custom CFG-parallel branches.
+- Forgetting offload buffers or CPU lazy buffers for custom block classes.
+- Reusing Wan phase offload when the new model has a different phase order.
+- Chunking tensors for sequence parallel and then reshaping them as if each rank still owns the full spatial/temporal token grid.
 - Reimplementing T5/VAE that already exists.
 - Calling diffusers/transformers model modules directly in native DiT inference.
 - Importing a third-party pipeline/model and hiding it behind a LightX2V runner instead of rebuilding the structure with LightX2V ops.
@@ -689,11 +770,14 @@ For a model similar to LingBot-VA, use this order:
 - Using `.item()`, CPU tensor comparisons, or `argmin` in scheduler hot path.
 - Putting image paths and save defaults in config instead of `InputInfo`.
 - Hard-coding `train_out`.
+- Hard-coding adapter, audio encoder, model root, or upstream source-root paths in Python.
+- Creating new model-specific path fields when `dit_original_ckpt`, `dit_quantized_ckpt`, `adapter_model_path`, or `audio_encoder_path` already fit.
+- Adding a separate input JSON file for prompt/audio/image/save values that belong in bash/CLI or config.
 - Creating model-private KV cache instead of using `KVCacheManager`.
 - Duplicating base Wan/Qwen infer code when inheritance would work.
 - Treating upstream config names as semantics; inspect the actual fields.
 - Keeping `image_path`, `save_result_path`, `save_action_path`, or prompt defaults in config after the runner already receives `InputInfo`.
-- Creating cond/uncond caches for every branch when a branch has CFG disabled or scale 1.
+- Creating cond/uncond caches for every branch when a branch has explicit CFG disabled.
 - Running uncond action inference when `enable_action_cfg` is false.
 - Letting scheduler search timesteps by tensor comparison every step instead of using `step_index`.
 
@@ -717,5 +801,8 @@ Run inference when weights and inputs are available. Confirm:
 - no unwanted batch dimension appears in debug shapes
 - no unexpected diffusers/transformers runtime model dependency
 - results are visually/numerically close to upstream with the same seed/config
+- block/model offload mode completes and produces the same shape/duration as local mode
+- CFG parallel returns the same branch-combined prediction shape and comparable output as serial CFG
+- sequence parallel preserves token counts and reconstructs full-output shapes after all-gather/chunk operations
 
 Report skipped checks clearly.
