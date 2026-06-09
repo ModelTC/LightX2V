@@ -94,6 +94,7 @@ class TaskManager:
             task.end_time = datetime.now()
             task.save_result_path = save_result_path
             task.result_png = result_png
+            task.message = None
 
             self.completed_tasks += 1
             self._emit_queue_metrics_unlocked()
@@ -231,7 +232,7 @@ class TaskManager:
             self.max_queue_size = max_queue_size
             self._emit_queue_metrics_unlocked()
 
-    def _cleanup_old_tasks(self, keep_count: int = 1000):
+    def _cleanup_old_tasks(self, keep_count: int = 50):
         if len(self._tasks) <= keep_count:
             return
 
