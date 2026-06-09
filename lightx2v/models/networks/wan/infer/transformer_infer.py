@@ -7,6 +7,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+from .mxfp8_fuse import WanMxfp8FuseMixin, scaled_mxfp8_modulate_quant
 from .triton_ops import fuse_scale_shift_kernel
 from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
 
@@ -17,7 +18,7 @@ def modulate(x, scale, shift):
     return x * (1 + scale.squeeze()) + shift.squeeze()
 
 
-class WanTransformerInfer(BaseTransformerInfer):
+class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
         self.task = config["task"]
@@ -56,6 +57,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         else:
             self.apply_rope_func = rope_func
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
+        self.mxfp8_fuse_enable = self.config.get("mxfp8_fuse_enable", True)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
@@ -74,6 +76,8 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
+
+        self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
 
     @torch.no_grad()
     def reset_post_adapter_states(self):
@@ -149,7 +153,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             y_out,
             gate_msa,
         )
-        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
+        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
         if hasattr(block.compute_phases[2], "after_proj"):
             pre_infer_out.adapter_args["hints"].append(block.compute_phases[2].after_proj.apply(x))
@@ -175,6 +179,8 @@ class WanTransformerInfer(BaseTransformerInfer):
 
     def infer_self_attn(self, phase, x, shift_msa, scale_msa):
         cos_sin = self.cos_sin
+        norm1_quant = None
+        norm1_scale = None
         if hasattr(phase, "smooth_norm1_weight"):
             norm1_weight = (1 + scale_msa.squeeze()) * phase.smooth_norm1_weight.tensor
             norm1_bias = shift_msa.squeeze() * phase.smooth_norm1_bias.tensor
@@ -186,15 +192,31 @@ class WanTransformerInfer(BaseTransformerInfer):
             norm1_out = phase.norm1.apply(x)
             if self.sensitive_layer_dtype != self.infer_dtype:
                 norm1_out = norm1_out.to(self.sensitive_layer_dtype)
-            norm1_out = self.modulate_func(norm1_out, scale=scale_msa, shift=shift_msa).squeeze()
+            if self._use_mxfp8_quant_fuse():
+                self._ensure_mxfp8_quant_fuse_ready(
+                    phase,
+                    norm1_out,
+                    scale_msa,
+                    shift_msa,
+                    module_names=("self_attn_q", "self_attn_k", "self_attn_v"),
+                )
+            if self._can_reuse_self_attn_mxfp8_quant(phase, norm1_out, scale_msa, shift_msa):
+                norm1_quant, norm1_scale = scaled_mxfp8_modulate_quant(norm1_out, scale_msa, shift_msa)
+            else:
+                norm1_out = self.modulate_func(norm1_out, scale=scale_msa, shift=shift_msa).squeeze()
 
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm1_out = norm1_out.to(self.infer_dtype)
 
         s, n, d = *norm1_out.shape[:1], self.num_heads, self.head_dim
-        q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
-        k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
-        v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
+        if norm1_quant is not None:
+            q = phase.self_attn_norm_q.apply(self._mxfp8_apply_quantized(phase.self_attn_q, norm1_quant, norm1_scale)).view(s, n, d)
+            k = phase.self_attn_norm_k.apply(self._mxfp8_apply_quantized(phase.self_attn_k, norm1_quant, norm1_scale)).view(s, n, d)
+            v = self._mxfp8_apply_quantized(phase.self_attn_v, norm1_quant, norm1_scale).view(s, n, d)
+        else:
+            q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
+            k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
+            v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
         q, k = self.apply_rope_func(q, k, cos_sin)
         img_qkv_len = q.shape[0]
         if self.self_attn_cu_seqlens_qkv is None:
@@ -202,6 +224,8 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         if self.clean_cuda_cache:
             del norm1_out, shift_msa, scale_msa
+            if norm1_quant is not None:
+                del norm1_quant, norm1_scale
             torch_device_module.empty_cache()
 
         attn_running_args = {
@@ -310,13 +334,15 @@ class WanTransformerInfer(BaseTransformerInfer):
             torch_device_module.empty_cache()
         return x, attn_out
 
-    def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa):
+    def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa=None):
         x.add_(attn_out)
 
         if self.clean_cuda_cache:
             del attn_out
             torch_device_module.empty_cache()
 
+        mxfp8_modulate_scale = None
+        mxfp8_modulate_shift = None
         if hasattr(phase, "smooth_norm2_weight"):
             norm2_weight = (1 + c_scale_msa.squeeze()) * phase.smooth_norm2_weight.tensor
             norm2_bias = c_shift_msa.squeeze() * phase.smooth_norm2_bias.tensor
@@ -328,10 +354,26 @@ class WanTransformerInfer(BaseTransformerInfer):
             norm2_out = phase.norm2.apply(x)
             if self.sensitive_layer_dtype != self.infer_dtype:
                 norm2_out = norm2_out.to(self.sensitive_layer_dtype)
-            norm2_out = self.modulate_func(norm2_out, scale=c_scale_msa, shift=c_shift_msa).squeeze()
+            if self._use_mxfp8_quant_fuse():
+                self._ensure_mxfp8_quant_ffn_ready(phase, norm2_out, x, c_gate_msa, c_scale_msa, c_shift_msa)
+            if self._can_use_mxfp8_modulate_quant(norm2_out, c_scale_msa, c_shift_msa):
+                mxfp8_modulate_scale = c_scale_msa
+                mxfp8_modulate_shift = c_shift_msa
+            else:
+                norm2_out = self.modulate_func(norm2_out, scale=c_scale_msa, shift=c_shift_msa).squeeze()
 
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm2_out = norm2_out.to(self.infer_dtype)
+
+        if self._use_mxfp8_quant_fuse():
+            return self._infer_ffn_with_mxfp8_quant_fuse(
+                phase,
+                norm2_out,
+                x,
+                c_gate_msa,
+                c_scale_msa=mxfp8_modulate_scale,
+                c_shift_msa=mxfp8_modulate_shift,
+            )
 
         y = phase.ffn_0.apply(norm2_out)
         if self.clean_cuda_cache:
@@ -345,6 +387,8 @@ class WanTransformerInfer(BaseTransformerInfer):
         return y
 
     def post_process(self, x, y, c_gate_msa, pre_infer_out=None):
+        if y is None:
+            return x
         if self.sensitive_layer_dtype != self.infer_dtype:
             x = x.to(self.sensitive_layer_dtype) + y.to(self.sensitive_layer_dtype) * c_gate_msa.squeeze()
         else:

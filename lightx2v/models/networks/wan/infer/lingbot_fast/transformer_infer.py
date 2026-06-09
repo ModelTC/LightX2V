@@ -37,7 +37,7 @@ class WanLingbotFastTransformerInfer(WanSFTransformerInfer):
             conditional_dict=pre_infer_out.conditional_dict,
         )
 
-        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
+        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
 
         if self.has_post_adapter:

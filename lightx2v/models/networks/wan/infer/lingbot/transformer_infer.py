@@ -30,7 +30,7 @@ class WanLingbotTransformerInfer(WanTransformerInfer):
             block=block,
             conditional_dict=pre_infer_out.conditional_dict,
         )
-        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
+        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
         if hasattr(block.compute_phases[2], "after_proj"):
             pre_infer_out.adapter_args["hints"].append(block.compute_phases[2].after_proj.apply(x))

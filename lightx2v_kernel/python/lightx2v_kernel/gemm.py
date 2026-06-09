@@ -94,6 +94,52 @@ def scaled_mxfp8_quant(input: torch.Tensor):
     return output, output_scale
 
 
+def scaled_mxfp8_gelu_quant(input: torch.Tensor):
+    m, n = input.shape
+    block_size = 32
+    device = input.device
+
+    output = torch.empty((m, n), device=device, dtype=torch.uint8)
+    output_scale = torch.empty(((m + 128 - 1) // 128 * 128, (n // block_size + 4 - 1) // 4), device=device, dtype=torch.int32)
+
+    torch.ops.lightx2v_kernel.scaled_mxfp8_gelu_quant_sm120.default(output, input, output_scale)
+    output_scale = output_scale.view(torch.float8_e8m0fnu)
+    return output, output_scale
+
+
+def _mxfp8_modulate_param(param: torch.Tensor, m: int, n: int, name: str):
+    param = param.squeeze()
+    if param.numel() == n:
+        return param.reshape(n).contiguous()
+    if param.numel() == m * n:
+        return param.reshape(m, n).contiguous()
+    raise ValueError(f"{name} must have numel {n} or {m * n}, got shape={tuple(param.shape)}")
+
+
+def scaled_mxfp8_modulate_quant(input: torch.Tensor, scale: torch.Tensor, shift: torch.Tensor):
+    """Fuse Wan AdaLN modulation with MXFP8 quantization.
+
+    This is a narrow Wan transformer helper, not a generic modulate op. It
+    expects a 2D BF16 activation shaped ``(M, N)`` and applies the fixed Wan
+    AdaLN formula ``input * (1 + scale) + shift`` before quantization. ``scale``
+    and ``shift`` may be either per-channel ``(N,)`` tensors or per-element
+    ``(M, N)`` tensors. It does not cover 4D/per-frame modulation, smooth-norm
+    variants, or other model-specific modulation layouts.
+    """
+    m, n = input.shape
+    block_size = 32
+    device = input.device
+
+    output = torch.empty((m, n), device=device, dtype=torch.uint8)
+    output_scale = torch.empty(((m + 128 - 1) // 128 * 128, (n // block_size + 4 - 1) // 4), device=device, dtype=torch.int32)
+    scale = _mxfp8_modulate_param(scale, m, n, "scale")
+    shift = _mxfp8_modulate_param(shift, m, n, "shift")
+
+    torch.ops.lightx2v_kernel.scaled_mxfp8_modulate_quant_sm120.default(output, input, scale, shift, output_scale)
+    output_scale = output_scale.view(torch.float8_e8m0fnu)
+    return output, output_scale
+
+
 def cutlass_scaled_mxfp4_mm(mat_a, mat_b, scales_a, scales_b, alpha, bias=None):
     m, n = mat_a.shape[0], mat_b.shape[0]
     out = torch.empty((m, n), dtype=torch.bfloat16, device=mat_a.device)
@@ -113,3 +159,16 @@ def cutlass_scaled_mxfp8_mm(mat_a, mat_b, scales_a, scales_b, alpha, bias=None):
     out = torch.empty((m, n), dtype=torch.bfloat16, device=mat_a.device)
     torch.ops.lightx2v_kernel.cutlass_scaled_mxfp8_mm_sm120.default(out, mat_a, mat_b, scales_a, scales_b, alpha, bias)
     return out
+
+
+def cutlass_scaled_mxfp8_mm_residual_gate(mat_a, mat_b, scales_a, scales_b, alpha, residual, gate, bias=None):
+    """Fused residual update for Wan FFN.
+
+    A 1D gate uses the CUTLASS epilogue contract and applies gate/residual to
+    the GEMM accumulator before the final BF16 store. A 2D gate is a fallback
+    compatibility path and may differ by BF16 rounding at the GEMM boundary.
+    """
+    torch.ops.lightx2v_kernel.cutlass_scaled_mxfp8_mm_residual_gate_sm120.default(
+        residual, mat_a, mat_b, scales_a, scales_b, alpha, bias, gate.contiguous()
+    )
+    return residual
