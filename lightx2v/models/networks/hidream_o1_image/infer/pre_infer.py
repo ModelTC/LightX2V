@@ -1,6 +1,7 @@
 import math
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.models.networks.hidream_o1_image.infer.module_io import HidreamPreInferOutput
@@ -18,6 +19,11 @@ class HidreamO1ImagePreInfer:
         self._rope_cache = {}
         self._idx_ar_cache = {}
         self._rope_positions_cache = {}
+        self._seq_p_rope_cache = {}
+        if self.config["seq_parallel"]:
+            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -26,6 +32,7 @@ class HidreamO1ImagePreInfer:
         self._rope_cache.clear()
         self._idx_ar_cache.clear()
         self._rope_positions_cache.clear()
+        self._seq_p_rope_cache.clear()
 
     def infer(self, weights, sample, z_in, t_pixeldit, precomputed_image_embeds=None, precomputed_deepstack_image_embeds=None):
         input_ids = sample["input_ids"]
@@ -100,17 +107,27 @@ class HidreamO1ImagePreInfer:
 
         rope_cos_sin = self._prepare_rope_cos_sin(sample["position_ids"], inputs_embeds)
         idx_ar = self._idx_ar(token_types)
+        idx_gen = self._idx_gen(token_types)
+        rope_cos_sin_ar = None
+        rope_cos_sin_gen = None
+        seq_p_padding_size = 0
+        if self.seq_p_group is not None:
+            rope_cos_sin_ar, rope_cos_sin_gen, seq_p_padding_size = self._prepare_seq_parallel_rope(rope_cos_sin, idx_ar, idx_gen)
 
         return HidreamPreInferOutput(
             inputs_embeds=inputs_embeds,
             rope_cos_sin=rope_cos_sin,
             idx_ar=idx_ar,
+            idx_gen=idx_gen,
             vinput_mask=sample["vinput_mask"],
             visual_pos_masks=visual_pos_masks,
             deepstack_visual_embeds=deepstack_visual_embeds,
             cond_image_embeds=cond_image_embeds,
             cond_deepstack_image_embeds=cond_deepstack_image_embeds,
             tgt_image_len=sample.get("tgt_image_len"),
+            rope_cos_sin_ar=rope_cos_sin_ar,
+            rope_cos_sin_gen=rope_cos_sin_gen,
+            seq_p_padding_size=seq_p_padding_size,
         )
 
     def _timestep_embedding(self, t, dim, max_period=10000):
@@ -151,6 +168,49 @@ class HidreamO1ImagePreInfer:
             idx_ar = torch.nonzero(~token_types[0].bool(), as_tuple=False).squeeze(-1)
             self._idx_ar_cache[cache_key] = idx_ar
         return idx_ar
+
+    def _idx_gen(self, token_types):
+        return torch.nonzero(token_types[0].bool(), as_tuple=False).squeeze(-1)
+
+    def _prepare_seq_parallel_rope(self, rope_cos_sin, idx_ar, idx_gen):
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        padding_size = (world_size - (idx_gen.shape[0] % world_size)) % world_size
+        rope_cos_sin_ar = self._slice_rope(rope_cos_sin, idx_ar)
+        rope_cos_sin_gen = self._slice_rope(rope_cos_sin, idx_gen, padding_size, world_size, cur_rank)
+        return rope_cos_sin_ar, rope_cos_sin_gen, padding_size
+
+    def _slice_rope(self, rope_cos_sin, idx, padding_size=0, world_size=None, cur_rank=None):
+        cos, sin = rope_cos_sin[:2]
+        pass_key = self._cfg_pass_key()
+        cache_key = (
+            pass_key,
+            cos.data_ptr(),
+            sin.data_ptr(),
+            tuple(cos.shape),
+            tuple(sin.shape),
+            idx.data_ptr(),
+            tuple(idx.shape),
+            padding_size,
+            world_size,
+            cur_rank,
+        )
+        cached = self._seq_p_rope_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        cos = cos[:, idx].contiguous()
+        sin = sin[:, idx].contiguous()
+        if padding_size > 0:
+            cos = F.pad(cos, (0, 0, 0, padding_size))
+            sin = F.pad(sin, (0, 0, 0, padding_size))
+        if world_size is not None:
+            cos = torch.chunk(cos, world_size, dim=1)[cur_rank].contiguous()
+            sin = torch.chunk(sin, world_size, dim=1)[cur_rank].contiguous()
+        positions = torch.arange(cos.shape[1], device=cos.device, dtype=torch.long)
+        rope_slice = (cos, sin, positions)
+        self._seq_p_rope_cache[cache_key] = rope_slice
+        return rope_slice
 
     def _cfg_pass_key(self):
         return "cond" if self.scheduler.infer_condition else "uncond"
