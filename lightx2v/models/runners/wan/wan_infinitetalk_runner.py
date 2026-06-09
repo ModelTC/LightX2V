@@ -2,6 +2,7 @@ import gc
 import math
 import os
 import subprocess
+import tempfile
 
 import imageio_ffmpeg as ffmpeg
 import numpy as np
@@ -281,17 +282,23 @@ class InfiniteTalkRunner(WanRunner):
         return new_speech1, new_speech2, new_speech1 + new_speech2
 
     def _write_sum_audio(self, input_data, audio_arrays):
-        audio_dir = self.config.get("audio_save_dir", os.path.join(os.getcwd(), "save_results", "infinitetalk_audio"))
-        stem = os.path.splitext(os.path.basename(input_data["cond_video"]))[0]
-        audio_dir = os.path.join(audio_dir, stem)
-        os.makedirs(audio_dir, exist_ok=True)
-        audio_path = os.path.join(audio_dir, "sum_all.wav")
         if sf is not None:
+            fd, audio_path = tempfile.mkstemp(prefix="infinitetalk_sum_", suffix=".wav")
+            os.close(fd)
             sf.write(audio_path, audio_arrays, self.audio_sample_rate)
             self.video_audio_path = audio_path
         else:
             logger.warning("soundfile is unavailable; generated video will be saved without muxed audio.")
             self.video_audio_path = None
+
+    def _remove_video_audio_path(self):
+        audio_path = self.video_audio_path
+        self.video_audio_path = None
+        if audio_path and os.path.isfile(audio_path):
+            try:
+                os.remove(audio_path)
+            except OSError as exc:
+                logger.warning(f"Failed to remove temporary audio file {audio_path}: {exc}")
 
     def _load_or_encode_audio(self, audio_path_or_array):
         if isinstance(audio_path_or_array, np.ndarray):
@@ -621,7 +628,10 @@ class InfiniteTalkRunner(WanRunner):
             os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
             save_to_video(self.gen_video_final, out_path, fps=self.target_fps, method="ffmpeg")
             if self.video_audio_path and os.path.isfile(self.video_audio_path):
-                self._mux_audio(out_path, self.video_audio_path)
+                try:
+                    self._mux_audio(out_path, self.video_audio_path)
+                finally:
+                    self._remove_video_audio_path()
             logger.info(f"Video saved to {out_path}")
         return {"video": None}
 
@@ -652,6 +662,7 @@ class InfiniteTalkRunner(WanRunner):
                 os.remove(tmp_path)
 
     def end_run(self):
+        self._remove_video_audio_path()
         if hasattr(self, "inputs"):
             del self.inputs
         torch.cuda.empty_cache()
