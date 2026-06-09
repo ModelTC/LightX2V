@@ -17,6 +17,7 @@ class HidreamO1ImageTransformerWeights(WeightModule):
         self.blocks = WeightModuleList(HidreamO1ImageDecoderBlockWeights(i, config, self.mm_type, self.rms_norm_type, self.attn_type) for i in range(self.blocks_num))
         self.add_module("blocks", self.blocks)
         self.add_module("norm", RMS_WEIGHT_REGISTER[self.rms_norm_type]("model.language_model.norm.weight", eps=config.get("rms_norm_eps", 1e-6)))
+        self.add_module("final_linear", MM_WEIGHT_REGISTER[self.mm_type]("model.final_layer2.linear.weight", "model.final_layer2.linear.bias"))
 
     def configure_model(self, text_config, device):
         self.blocks_num = text_config.num_hidden_layers
@@ -62,6 +63,8 @@ class HidreamO1ImageDecoderBlockWeights(WeightModule):
         self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.mlp.up_proj.weight", None))
         self.add_module("down_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.mlp.down_proj.weight", None))
         self.add_module("attn", ATTN_WEIGHT_REGISTER[attn_type]())
+        if config["seq_parallel"]:
+            self.add_module("attn_parallel", ATTN_WEIGHT_REGISTER[config["parallel"].get("seq_p_attn_type", "ulysses")]())
 
     def configure(self, text_config):
         self.head_dim = getattr(text_config, "head_dim", text_config.hidden_size // text_config.num_attention_heads)

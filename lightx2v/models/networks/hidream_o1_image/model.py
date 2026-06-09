@@ -2,6 +2,7 @@ import os
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
@@ -76,7 +77,11 @@ class HidreamO1ImageModel(BaseTransformerModel):
             precomputed_image_embeds=precomputed_image_embeds,
             precomputed_deepstack_image_embeds=precomputed_deepstack_image_embeds,
         )
+        if self.config["seq_parallel"]:
+            pre_out = self._seq_parallel_pre_process(pre_out)
         transformer_out = self.transformer_infer.infer(self.transformer_weights, pre_out, self.dtype)
+        if self.config["seq_parallel"]:
+            transformer_out = self._seq_parallel_post_process(transformer_out)
         x_pred = self.post_infer.infer(self.post_weight, transformer_out)
         return x_pred, pre_out.cond_image_embeds, pre_out.cond_deepstack_image_embeds
 
@@ -148,8 +153,38 @@ class HidreamO1ImageModel(BaseTransformerModel):
 
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
+        if pre_infer_out.deepstack_visual_embeds is not None:
+            raise NotImplementedError("HiDream seq_parallel does not support deepstack visual embeds yet.")
+
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        hidden_gen = pre_infer_out.inputs_embeds[:, pre_infer_out.idx_gen].contiguous()
+        padding_size = pre_infer_out.seq_p_padding_size
+        if padding_size > 0:
+            hidden_gen = F.pad(hidden_gen, (0, 0, 0, padding_size))
+
+        pre_infer_out.inputs_embeds_ar = pre_infer_out.inputs_embeds[:, pre_infer_out.idx_ar].contiguous()
+        pre_infer_out.inputs_embeds_gen = torch.chunk(hidden_gen, world_size, dim=1)[cur_rank].contiguous()
+
+        vinput_mask_gen = pre_infer_out.vinput_mask.to(pre_infer_out.inputs_embeds.device)[:, pre_infer_out.idx_gen]
+        if padding_size > 0:
+            vinput_mask_gen = F.pad(vinput_mask_gen, (0, padding_size), value=False)
+        pre_infer_out.vinput_mask_gen = torch.chunk(vinput_mask_gen, world_size, dim=1)[cur_rank].contiguous()
+        pre_infer_out.seq_p_padding_size = padding_size
         return pre_infer_out
 
     @torch.no_grad()
-    def _seq_parallel_post_process(self, x):
-        return x
+    def _seq_parallel_post_process(self, transformer_out):
+        world_size = dist.get_world_size(self.seq_p_group)
+        local_len = torch.tensor([transformer_out.hidden_states.shape[1]], device=transformer_out.hidden_states.device, dtype=torch.long)
+        gathered_lens = [torch.empty_like(local_len) for _ in range(world_size)]
+        dist.all_gather(gathered_lens, local_len, group=self.seq_p_group)
+        max_len = int(torch.stack(gathered_lens).max().item())
+
+        x = transformer_out.hidden_states
+        if x.shape[1] < max_len:
+            x = F.pad(x, (0, 0, 0, max_len - x.shape[1]))
+        gathered_x = [torch.empty_like(x) for _ in range(world_size)]
+        dist.all_gather(gathered_x, x, group=self.seq_p_group)
+        transformer_out.hidden_states = torch.cat([item[:, : int(length.item())] for item, length in zip(gathered_x, gathered_lens)], dim=1)
+        return transformer_out
