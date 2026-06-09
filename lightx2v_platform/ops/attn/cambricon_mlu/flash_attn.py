@@ -49,7 +49,10 @@ class MluFlashAttnWeight(AttnWeightTemplate):
                     v = v.reshape(-1, v.shape[-2], v.shape[-1])
 
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
-        softmax_scale = 1 / math.sqrt(q.shape[-1])
+        softmax_scale = kwds.get("softmax_scale", None)
+        if softmax_scale is None:
+            softmax_scale = 1 / math.sqrt(q.shape[-1])
+        causal = kwds.get("causal", False)
         compute_dtype = torch.bfloat16 if q.dtype == torch.bfloat16 else torch.half
         x = tmo.flash_attention(
             q=q,
@@ -62,7 +65,7 @@ class MluFlashAttnWeight(AttnWeightTemplate):
             softmax_scale=softmax_scale,
             return_lse=False,
             out_dtype=q.dtype,
-            is_causal=False,
+            is_causal=causal,
             out=None,
             alibi_slope=None,
             attn_bias=None,
