@@ -3,12 +3,12 @@ import io
 import json
 import os
 import warnings
-from copy import copy
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 import torchaudio as ta
 import torchvision.transforms.functional as TF
@@ -989,6 +989,7 @@ class WanAudioARRunner(WanAudioRunner):
     class PromptTravelSegment:
         start_frame: int
         text: str
+        start_latent: int
 
     def __init__(self, config):
         super().__init__(config)
@@ -1078,22 +1079,12 @@ class WanAudioARRunner(WanAudioRunner):
         logger.info(f"[wan_audio_ar] image resize target_h: {target_h}, target_w: {target_w}, latent_h: {latent_h}, latent_w: {latent_w}")
         return ref_img, latent_shape, target_shape
 
-    def _get_prompt_travel_source(self):
-        return self.config.get("prompt_travel")
-
-    def _parse_prompt_travel_segments(self, source):
-        if not isinstance(source, dict):
+    def _parse_prompt_travel_segments(self):
+        prompt_travel = self.config.get("prompt_travel")
+        if not isinstance(prompt_travel, dict):
             raise ValueError("prompt_travel config must be a dict")
-        texts = source.get("prompt_travel_text") or source.get("prompt_travel_texts")
-        starts = source.get("prompt_travel_start_frames") or source.get("prompt_travel_start_frame")
-
-        if texts is None and "prompt_travel_segments" in source:
-            raw_segments = source["prompt_travel_segments"]
-            if isinstance(raw_segments, str):
-                raw_segments = json.loads(raw_segments)
-            texts = [seg["text"] for seg in raw_segments]
-            starts = [seg["start_frame"] for seg in raw_segments]
-
+        texts = prompt_travel.get("prompt_travel_text")
+        starts = prompt_travel.get("prompt_travel_start_frames")
         if not isinstance(texts, list) or not isinstance(starts, list):
             raise ValueError("Prompt travel requires prompt_travel_text and prompt_travel_start_frames lists")
         if len(texts) != len(starts):
@@ -1101,64 +1092,118 @@ class WanAudioARRunner(WanAudioRunner):
         if not texts:
             raise ValueError("Prompt travel requires at least one segment")
 
-        segments = [self.PromptTravelSegment(start_frame=int(start), text=str(text)) for start, text in zip(starts, texts)]
-        segments.sort(key=lambda seg: seg.start_frame)
+        t_compress = int(self.config["vae_stride"][0])
+        segments = []
+        prev_start_frame = None
+        for idx, (text, start_frame) in enumerate(zip(texts, starts)):
+            if not isinstance(text, str) or text == "":
+                raise ValueError("each prompt travel segment requires non-empty text")
+            if not isinstance(start_frame, int) or start_frame < 0:
+                raise ValueError("each prompt travel segment requires a non-negative integer start_frame")
+            if idx > 0 and start_frame <= prev_start_frame:
+                raise ValueError("prompt_travel_start_frames must be strictly increasing")
+            start_latent = start_frame // t_compress
+            segments.append(self.PromptTravelSegment(start_frame=start_frame, text=text, start_latent=start_latent))
+            prev_start_frame = start_frame
 
         if segments[0].start_frame != 0:
-            logger.warning("Prompt travel first start_frame is not 0; frames before it will use the first prompt")
-        for prev, cur in zip(segments, segments[1:]):
-            if cur.start_frame <= prev.start_frame:
-                raise ValueError("prompt_travel_start_frames must be strictly increasing")
+            raise ValueError("the first prompt travel segment must start at frame 0")
         return segments
 
     @staticmethod
-    def _select_prompt_travel_index(segments, frame_idx):
+    def _select_prompt_travel_index(segments, latent_idx):
         selected = 0
         for idx, segment in enumerate(segments):
-            if frame_idx >= segment.start_frame:
-                selected = idx
-            else:
+            if latent_idx < segment.start_latent:
                 break
+            selected = idx
         return selected
 
-    def _encode_prompt_travel_segments(self, input_info, source):
-        segments = self._parse_prompt_travel_segments(source)
-        encoded = []
-        for segment in segments:
-            temp_input = copy(input_info)
-            temp_input.prompt = segment.text
-            encoded.append(self.run_text_encoder(temp_input))
-        logger.info(f"Prompt travel enabled with {len(segments)} prompt segments")
+    def _pad_text_encoder_outputs(self, contexts):
+        return torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in contexts])
+
+    def _infer_texts_one_by_one(self, texts):
+        padded_contexts = []
+        for text in texts:
+            padded_contexts.append(self._pad_text_encoder_outputs(self.text_encoders[0].infer([text]))[0])
+        return torch.stack(padded_contexts)
+
+    def _encode_prompt_travel_segments(self, input_info):
+        segments = self._parse_prompt_travel_segments()
+        prompts = [segment.text for segment in segments]
+        start_latents = torch.tensor([segment.start_latent for segment in segments], dtype=torch.long)
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
+
+        if GET_RECORDER_MODE():
+            for prompt in prompts:
+                monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
+
+        neg_prompt = input_info.negative_prompt
+        if self.config.get("enable_cfg", False) and self.config.get("cfg_parallel", False):
+            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+            cfg_p_rank = dist.get_rank(cfg_p_group)
+            if cfg_p_rank == 0:
+                context = self._infer_texts_one_by_one(prompts)
+                encoded = [{"context": context[idx : idx + 1]} for idx in range(len(segments))]
+            else:
+                context_null = self._pad_text_encoder_outputs(self.text_encoders[0].infer([neg_prompt]))
+                encoded = [{"context_null": context_null} for _ in segments]
+        else:
+            context = self._infer_texts_one_by_one(prompts)
+            context_null = None
+            if self.config.get("enable_cfg", False):
+                context_null = self._pad_text_encoder_outputs(self.text_encoders[0].infer([neg_prompt]))
+            encoded = [{"context": context[idx : idx + 1], "context_null": context_null} for idx in range(len(segments))]
+
+        for idx, text_encoder_output in enumerate(encoded):
+            text_encoder_output["prompt_travel_start_latents"] = start_latents
+            text_encoder_output["prompt_travel_index"] = idx
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.text_encoders[0]
+            torch_device_module.empty_cache()
+            gc.collect()
+
+        logger.info(f"Prompt travel enabled with {len(segments)} prompt segments, start_latents={start_latents.tolist()}")
         return segments, encoded
 
     def _prepare_prompt_travel(self, input_info):
-        source = self._get_prompt_travel_source()
-        if not source or self.prompt_travel_text_encoder_outputs is not None:
+        self.prompt_travel_segments = None
+        self.prompt_travel_text_encoder_outputs = None
+        if not self.config.get("prompt_travel"):
             return
-        self.prompt_travel_segments, self.prompt_travel_text_encoder_outputs = self._encode_prompt_travel_segments(input_info, source)
+        self.prompt_travel_segments, self.prompt_travel_text_encoder_outputs = self._encode_prompt_travel_segments(input_info)
 
-    def _apply_prompt_travel_for_frame(self, frame_idx):
+    def _apply_prompt_travel_for_latent(self, latent_idx):
         if not self.prompt_travel_text_encoder_outputs:
             return
-        prompt_idx = self._select_prompt_travel_index(self.prompt_travel_segments, int(frame_idx))
+        latent_idx = int(latent_idx)
+        prompt_idx = self._select_prompt_travel_index(self.prompt_travel_segments, latent_idx)
         self.inputs["text_encoder_output"] = self.prompt_travel_text_encoder_outputs[prompt_idx]
         self.input_info.prompt = self.prompt_travel_segments[prompt_idx].text
-        logger.info(f"Prompt travel frame={frame_idx}: applying segment {prompt_idx}, start_frame={self.prompt_travel_segments[prompt_idx].start_frame}")
+        logger.info(
+            f"Prompt travel latent={latent_idx}: applying segment {prompt_idx}, "
+            f"start_frame={self.prompt_travel_segments[prompt_idx].start_frame}, "
+            f"start_latent={self.prompt_travel_segments[prompt_idx].start_latent}"
+        )
 
     def _validate_prompt_travel_schedule(self):
         if not self.prompt_travel_segments:
             return
-        t_compress = int(self.config["vae_stride"][0])
-        chunk_size = int(self.model.scheduler.chunk_size)
         latent_length = int(self.input_info.latent_shape[1])
+        if self.prompt_travel_segments[0].start_latent != 0:
+            raise ValueError("invalid prompt travel schedule: the first start_latent must be 0")
+        prev_start_latent = -1
         for segment in self.prompt_travel_segments:
-            if segment.start_frame % t_compress != 0:
-                raise ValueError(f"prompt travel start_frame {segment.start_frame} must be divisible by {t_compress}")
-            start_latent = segment.start_frame // t_compress
-            if start_latent % chunk_size != 0:
-                raise ValueError(f"prompt travel start_frame {segment.start_frame} does not align to chunk_size {chunk_size}")
-            if start_latent >= latent_length:
+            if segment.start_latent < prev_start_latent:
+                raise ValueError("invalid prompt travel schedule: start_latents must be non-decreasing")
+            if segment.start_latent == prev_start_latent:
+                logger.warning(f"Prompt travel segment at frame {segment.start_frame} maps to duplicate latent {segment.start_latent}; the later segment will be selected at that latent.")
+            if segment.start_latent >= latent_length:
                 raise ValueError(f"prompt travel start_frame {segment.start_frame} is outside latent length {latent_length}")
+            prev_start_latent = segment.start_latent
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_s2v(self):
@@ -1174,9 +1219,10 @@ class WanAudioARRunner(WanAudioRunner):
         self.input_info.audio_num = audio_num
         self.input_info.with_mask = person_mask_latens is not None
 
-        if self._get_prompt_travel_source():
+        if self.config.get("prompt_travel"):
             self._prepare_prompt_travel(self.input_info)
             text_encoder_output = self.prompt_travel_text_encoder_outputs[0]
+            self.input_info.prompt = self.prompt_travel_segments[0].text
         else:
             text_encoder_output = self.run_text_encoder(self.input_info)
 
@@ -1325,8 +1371,8 @@ class WanAudioARRunner(WanAudioRunner):
                     for segment_idx in range(self.video_segment_num):
                         logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
                         chunk_size = int(self.model.scheduler.chunk_size)
-                        frame_idx = segment_idx * chunk_size * int(self.config["vae_stride"][0])
-                        self._apply_prompt_travel_for_frame(frame_idx)
+                        chunk_start_latent = segment_idx * chunk_size
+                        self._apply_prompt_travel_for_latent(chunk_start_latent)
 
                         with ProfilingContext4DebugL1(
                             f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
