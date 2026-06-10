@@ -193,6 +193,8 @@ class DefaultRunner(BaseRunner):
             self.input_info.audio_path = inputs.get("audio_path", "")
         if "video_path" in self.input_info.__dataclass_fields__:
             self.input_info.video_path = inputs.get("video_path", "")
+        if "src_video" in self.input_info.__dataclass_fields__:
+            self.input_info.src_video = inputs.get("src_video", "")
         self.input_info.save_result_path = inputs.get("save_result_path", "")
 
     def set_config(self, config_modify):

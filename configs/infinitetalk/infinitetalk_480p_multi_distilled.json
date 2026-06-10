@@ -3,7 +3,7 @@
     "target_video_length": 81,
     "motion_frame": 9,
     "target_fps": 25,
-    "video_duration": 40,
+    "video_duration": 300,
     "infinitetalk_mode": "multi",
     "audio_type": "para",
     "infinitetalk_size": "infinitetalk-480",
