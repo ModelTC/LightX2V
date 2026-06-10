@@ -106,6 +106,8 @@ class InfiniteTalkRunner(WanRunner):
         self.audio_sample_rate = int(self.config.get("audio_sample_rate", 16000))
         self.target_fps = int(self.config.get("target_fps", 25))
         self.video_audio_path = None
+        self.cond_video_temp_path = None
+        self.cond_video_duration = None
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
@@ -188,9 +190,10 @@ class InfiniteTalkRunner(WanRunner):
                 else:
                     cond_audio = {}
 
+            cond_video = getattr(self.input_info, "src_video", "") or getattr(self.input_info, "image_path", "") or self.config.get("cond_video", "") or self.config.get("image_path", "")
             data = {
                 "prompt": getattr(self.input_info, "prompt", "") or self.config.get("prompt", ""),
-                "cond_video": getattr(self.input_info, "image_path", "") or self.config.get("cond_video", "") or self.config.get("image_path", ""),
+                "cond_video": cond_video,
                 "cond_audio": cond_audio,
             }
             if self.config.get("audio_type", None):
@@ -198,10 +201,14 @@ class InfiniteTalkRunner(WanRunner):
             if self.config.get("bbox", None):
                 data["bbox"] = self.config["bbox"]
 
+        input_cond_video = getattr(self.input_info, "src_video", "") or getattr(self.input_info, "image_path", "")
+        if input_cond_video:
+            data["cond_video"] = input_cond_video
+
         if not data.get("prompt"):
             raise ValueError("InfiniteTalk requires prompt from --prompt or config infinitetalk_input/prompt.")
         if not data.get("cond_video"):
-            raise ValueError("InfiniteTalk requires cond_video from --image_path or config.")
+            raise ValueError("InfiniteTalk requires cond_video from --src_video, --image_path, or config.")
         if not data.get("cond_audio"):
             raise ValueError("InfiniteTalk requires cond_audio from --audio_path or config.")
 
@@ -300,12 +307,78 @@ class InfiniteTalkRunner(WanRunner):
             except OSError as exc:
                 logger.warning(f"Failed to remove temporary audio file {audio_path}: {exc}")
 
+    def _remove_cond_video_temp_path(self):
+        cond_video_temp_path = self.cond_video_temp_path
+        self.cond_video_temp_path = None
+        if cond_video_temp_path and os.path.isfile(cond_video_temp_path):
+            try:
+                os.remove(cond_video_temp_path)
+            except OSError as exc:
+                logger.warning(f"Failed to remove temporary cond_video file {cond_video_temp_path}: {exc}")
+
     def _load_or_encode_audio(self, audio_path_or_array):
         if isinstance(audio_path_or_array, np.ndarray):
             return self.audio_encoder.infer(audio_path_or_array)
         if str(audio_path_or_array).endswith((".pt", ".pth")):
             return torch.load(audio_path_or_array, map_location="cpu")
         return self.audio_encoder.infer(self._audio_prepare_single(audio_path_or_array))
+
+    @staticmethod
+    def _get_video_codec(video_path):
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=codec_name",
+                    "-of",
+                    "default=nw=1:nk=1",
+                    video_path,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return result.stdout.strip()
+        except Exception as exc:
+            logger.warning(f"Failed to probe video codec for {video_path}: {exc}")
+            return ""
+
+    def _prepare_cond_video_path(self, cond_video):
+        if not _is_video(cond_video):
+            return cond_video
+
+        codec = self._get_video_codec(cond_video)
+        if codec != "av1":
+            return cond_video
+
+        fd, output_video_path = tempfile.mkstemp(prefix="infinitetalk_input_h264_", suffix=".mp4")
+        os.close(fd)
+        cmd = [
+            ffmpeg.get_ffmpeg_exe(),
+            "-y",
+            "-i",
+            cond_video,
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "copy",
+            output_video_path,
+        ]
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            if os.path.exists(output_video_path):
+                os.remove(output_video_path)
+            raise
+        self.cond_video_temp_path = output_video_path
+        logger.info(f"Converted AV1 cond_video to H.264: {output_video_path}")
+        return output_video_path
 
     def _prepare_audio_embeddings(self, input_data):
         cond_audio = input_data["cond_audio"]
@@ -332,6 +405,20 @@ class InfiniteTalkRunner(WanRunner):
         del vr
         gc.collect()
         return Image.fromarray(frame)
+
+    def _get_cond_video_duration(self, video_path):
+        if not _is_video(video_path):
+            return None
+        if VideoReader is None:
+            raise ImportError("decord is required for InfiniteTalk video cond_video inputs.")
+        vr = VideoReader(video_path, ctx=cpu(0))
+        frame_count = len(vr)
+        fps = float(vr.get_avg_fps() or self.target_fps)
+        del vr
+        gc.collect()
+        if frame_count <= 0 or fps <= 0:
+            return None
+        return frame_count / fps
 
     @staticmethod
     def _resize_and_centercrop(cond_image, target_size):
@@ -414,7 +501,9 @@ class InfiniteTalkRunner(WanRunner):
         self.input_info.prompt = input_data["prompt"]
 
         self.input_data = input_data
-        self.cond_file_path = input_data["cond_video"]
+        self.cond_file_path = self._prepare_cond_video_path(input_data["cond_video"])
+        logger.info(f"InfiniteTalk cond_video: {input_data['cond_video']}")
+        self.cond_video_duration = self._get_cond_video_duration(self.cond_file_path)
         first_image = self._extract_specific_frame(self.cond_file_path, 0)
         self.src_h, self.src_w, self.target_h, self.target_w = self._select_target_size(first_image)
 
@@ -479,17 +568,29 @@ class InfiniteTalkRunner(WanRunner):
         if audio_frames <= 0:
             raise ValueError("InfiniteTalk audio embeddings must be non-empty.")
 
-        video_duration = self._resolve_video_duration()
-        if video_duration is None:
+        audio_duration = audio_frames / self.target_fps
+        max_video_duration = self._resolve_video_duration()
+
+        if self.cond_video_duration is not None:
+            final_duration = min(audio_duration, self.cond_video_duration)
+            if max_video_duration is not None:
+                final_duration = min(final_duration, max_video_duration)
+            expected_frames = max(1, int(final_duration * self.target_fps))
+            logger.info(
+                f"InfiniteTalk duration resolved from audio/ref video/config: "
+                f"audio={audio_duration:.3f}s, ref_video={self.cond_video_duration:.3f}s, "
+                f"config_video_duration={max_video_duration}, final={expected_frames / self.target_fps:.3f}s"
+            )
+            return expected_frames
+
+        if max_video_duration is None:
             requested_frames = audio_frames
         else:
-            requested_frames = max(1, int(video_duration * self.target_fps))
+            requested_frames = max(1, int(max_video_duration * self.target_fps))
 
         expected_frames = min(requested_frames, audio_frames)
         if expected_frames < requested_frames:
-            logger.warning(
-                f"Input video_duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_frames / self.target_fps}, video_duration={video_duration}"
-            )
+            logger.warning(f"Input video_duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_duration}, video_duration={max_video_duration}")
         return expected_frames
 
     def _segment_start_frame(self, segment_idx):
@@ -663,6 +764,7 @@ class InfiniteTalkRunner(WanRunner):
 
     def end_run(self):
         self._remove_video_audio_path()
+        self._remove_cond_video_temp_path()
         if hasattr(self, "inputs"):
             del self.inputs
         torch.cuda.empty_cache()
@@ -678,9 +780,11 @@ class InfiniteTalkRunner(WanRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
-        self.inputs = self.run_input_encoder()
-        result = self.run_main()
-        self.end_run()
+        try:
+            self.inputs = self.run_input_encoder()
+            result = self.run_main()
+        finally:
+            self.end_run()
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
         return result
