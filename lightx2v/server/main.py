@@ -47,6 +47,11 @@ def run_server(args):
         task_manager.set_max_queue_size(server_config.max_queue_size)
         logger.info(f"Task queue size set to {server_config.max_queue_size}")
 
+        if hasattr(args, "history_limit") and args.history_limit is not None:
+            server_config.history_limit = int(args.history_limit)
+        task_manager.set_history_limit(server_config.history_limit)
+        logger.info(f"Task history limit set to {server_config.history_limit}")
+
         if not server_config.validate():
             raise RuntimeError("Invalid server configuration")
 

@@ -1,9 +1,8 @@
 import asyncio
-import gc
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import torch
 from loguru import logger
@@ -111,10 +110,9 @@ class TorchrunInferenceWorker:
         if self.world_size > 1:
             self.dist_manager.barrier()
 
-        result: Optional[Dict[str, Any]] = None
         if self.rank == 0:
             if has_error:
-                result = {
+                return {
                     "task_id": task_data.get("task_id", "unknown"),
                     "status": "failed",
                     "error": error_msg,
@@ -135,14 +133,9 @@ class TorchrunInferenceWorker:
                     logger.info(f"Task {task_data.get('task_id')} encode result_png cost {encode_elapsed_ms:.2f} ms")
                     if png:
                         out["result_png"] = png
-                result = out
-
-        pipeline_return = None
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        return result
+                return out
+        else:
+            return None
 
     def switch_lora(self, lora_name: str, lora_strength: float):
         try:
