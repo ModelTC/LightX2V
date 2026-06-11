@@ -7,6 +7,9 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
+import lightx2v_platform  # noqa: F401
+from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
+
 
 class DistributedManager:
     def __init__(self):
@@ -19,27 +22,32 @@ class DistributedManager:
 
     CHUNK_SIZE = 1024 * 1024
 
+    def _get_platform_device(self):
+        platform = os.getenv("PLATFORM", "cuda")
+        platform_device = PLATFORM_DEVICE_REGISTER.get(platform, None)
+        if platform_device is None:
+            available_platforms = list(PLATFORM_DEVICE_REGISTER.keys())
+            raise RuntimeError(f"Unsupported PLATFORM: {platform}. Available PLATFORM: {available_platforms}")
+        return platform_device
+
     def init_process_group(self) -> bool:
         try:
             self.rank = int(os.environ.get("LOCAL_RANK", 0))
             self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+            platform_device = self._get_platform_device()
 
             if self.world_size > 1:
-                backend = "nccl" if torch.cuda.is_available() else "gloo"
-                dist.init_process_group(backend=backend, init_method="env://")
+                platform_device.init_parallel_env()
+                backend = dist.get_backend()
                 logger.info(f"Setup backend: {backend}")
 
                 task_timeout = timedelta(days=30)
                 self.task_pg = dist.new_group(backend="gloo", timeout=task_timeout)
                 logger.info("Created gloo process group for task distribution with 30-day timeout")
 
-                if torch.cuda.is_available():
-                    torch.cuda.set_device(self.rank)
-                    self.device = f"cuda:{self.rank}"
-                else:
-                    self.device = "cpu"
+                self.device = f"{platform_device.get_device()}:{self.rank}"
             else:
-                self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+                self.device = f"{platform_device.get_device()}:0"
 
             self.is_initialized = True
             logger.info(f"Rank {self.rank}/{self.world_size - 1} distributed environment initialized successfully")
