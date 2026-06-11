@@ -40,6 +40,7 @@ class TaskManager:
 
         self._tasks: OrderedDict[str, TaskInfo] = OrderedDict()
         self._lock = threading.RLock()
+        self._task_available = threading.Condition(self._lock)
 
         self._processing_lock = threading.Lock()
         self._current_processing_task: Optional[str] = None
@@ -50,7 +51,7 @@ class TaskManager:
         self._emit_queue_metrics_unlocked()
 
     def create_task(self, message: Any) -> str:
-        with self._lock:
+        with self._task_available:
             if hasattr(message, "task_id") and message.task_id in self._tasks:
                 raise RuntimeError(f"Task ID {message.task_id} already exists")
 
@@ -66,6 +67,7 @@ class TaskManager:
 
             self._cleanup_old_tasks()
             self._emit_queue_metrics_unlocked()
+            self._task_available.notify()
 
             return task_id
 
@@ -202,9 +204,20 @@ class TaskManager:
 
     def get_next_pending_task(self) -> Optional[str]:
         with self._lock:
-            for task_id, task in self._tasks.items():
-                if task.status == TaskStatus.PENDING:
-                    return task_id
+            return self._get_next_pending_task_unlocked()
+
+    def wait_for_next_pending_task(self, timeout: Optional[float] = None) -> Optional[str]:
+        with self._task_available:
+            task_id = self._get_next_pending_task_unlocked()
+            if task_id:
+                return task_id
+            self._task_available.wait(timeout=timeout)
+            return self._get_next_pending_task_unlocked()
+
+    def _get_next_pending_task_unlocked(self) -> Optional[str]:
+        for task_id, task in self._tasks.items():
+            if task.status == TaskStatus.PENDING:
+                return task_id
         return None
 
     def get_service_status(self) -> Dict[str, Any]:

@@ -262,7 +262,7 @@ class HidreamO1ImageRunner(DefaultRunner):
         save_result_path = self.inputs.get("save_result_path")
         if self.input_info.return_result_tensor:
             self.end_run()
-            return {"image": image}
+            return {"images": [image]}
         if save_result_path:
             os.makedirs(os.path.dirname(os.path.abspath(save_result_path)), exist_ok=True)
             image.save(save_result_path)
@@ -271,7 +271,7 @@ class HidreamO1ImageRunner(DefaultRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
         self.end_run()
-        return {"image": None}
+        return {"images": None}
 
     def end_run(self):
         if hasattr(self, "scheduler") and self.scheduler is not None:

@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -13,6 +14,8 @@ from ..services import DistributedInferenceService
 from ..task_manager import TaskStatus, task_manager
 from .deps import ServiceContainer, get_services
 from .router import create_api_router
+
+TASK_PROCESSING_IDLE_WAIT_TIMEOUT_SECONDS = 0.2
 
 
 class ApiServer:
@@ -85,10 +88,9 @@ class ApiServer:
         loop = asyncio.get_event_loop()
 
         while not self.stop_processing.is_set():
-            task_id = task_manager.get_next_pending_task()
+            task_id = task_manager.wait_for_next_pending_task(timeout=TASK_PROCESSING_IDLE_WAIT_TIMEOUT_SECONDS)
 
             if task_id is None:
-                time.sleep(1)
                 continue
 
             task_info = task_manager.get_task(task_id)
@@ -112,6 +114,8 @@ class ApiServer:
             return
 
         try:
+            pending_elapsed_ms = (datetime.now() - task_info.start_time).total_seconds() * 1000
+            logger.info(f"Task {task_id} scheduler pending wait {pending_elapsed_ms:.2f} ms")
             task_manager.start_task(task_id)
 
             if task_info.stop_event.is_set():
