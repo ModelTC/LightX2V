@@ -24,6 +24,8 @@
 
 > 📝 **更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)**
 
+> 🌟 **开发者新手入门教程: [LightX2V 开发者快速入门教程](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
+
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
 
 ## 🧾 社区代码贡献指南
