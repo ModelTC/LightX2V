@@ -24,6 +24,8 @@
 
 > 📝 **More content is available on our [LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)**
 
+> 🌟 **Developer Newbie Guide: [LightX2V Developer Quick Start Guide](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
+
 > 👋 **Join our WeChat group! LightX2V Robot WeChat ID: random42seed**
 
 ## 🧾 Community Code Contribution Guidelines
