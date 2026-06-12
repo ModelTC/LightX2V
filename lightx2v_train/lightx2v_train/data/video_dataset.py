@@ -144,7 +144,7 @@ class WanT2VVideoDataset(torch.utils.data.Dataset):
                 video = row.get(self.video_column, "")
                 prompt = row.get(self.prompt_column, "")
                 video_path = self._resolve_video_path(metadata_path, video)
-                if self.skip_missing and (video_path is None or not video_path.exists()):
+                if self.skip_missing and (video_path is None or not video_path.is_file()):
                     continue
 
                 samples.append(
