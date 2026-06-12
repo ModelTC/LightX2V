@@ -134,6 +134,20 @@ def auto_calc_config(config):
                 config["config_path"] = wm_config
             if wm_ckpt:
                 config["ckpt_path"] = wm_ckpt
+    elif config["model_cls"] == "dreamzero":
+        config_path = os.path.join(config["model_path"], "config.json")
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+            action_head_config = model_config.get("action_head_cfg", {}).get("config", {})
+            diffusion_model_config = action_head_config.get("diffusion_model_cfg", {})
+            config.update(action_head_config)
+            config.update(diffusion_model_config)
+            if "num_frames" in config:
+                config["target_video_length"] = config["num_frames"]
+            if "out_dim" in config:
+                config["num_channels_latents"] = config["out_dim"]
     elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:

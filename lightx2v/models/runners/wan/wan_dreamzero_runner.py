@@ -52,6 +52,10 @@ class WanDreamZeroRunner(WanRunner):
             model_type="dreamzero",
         )
 
+    def _resolve_wan_ckpt_file(self, filename):
+        wan_ckpt_dir = self.config["wan_ckpt_dir"]
+        return os.path.join(os.path.expanduser(str(wan_ckpt_dir)), filename)
+
     def _load_dreamzero_component_state_dict(self, prefix, target_dtype=None):
         ckpt_path = self.config.get("dit_original_ckpt") or self.config["model_path"]
         index_path = os.path.join(ckpt_path, "model.safetensors.index.json")
@@ -111,7 +115,7 @@ class WanDreamZeroRunner(WanRunner):
         clip_offload = self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False))
         clip_device = torch.device("cpu") if clip_offload else torch.device(AI_DEVICE)
         clip_model_name = "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth"
-        clip_original_ckpt = find_torch_model_path(self.config, "clip_original_ckpt", clip_model_name)
+        clip_original_ckpt = self._resolve_wan_ckpt_file(clip_model_name)
         image_encoder = CLIPModel(
             dtype=torch.bfloat16,
             device=clip_device,
@@ -132,8 +136,8 @@ class WanDreamZeroRunner(WanRunner):
         t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload"))
         t5_device = torch.device("cpu") if t5_offload else torch.device(AI_DEVICE)
         t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
-        t5_original_ckpt = find_torch_model_path(self.config, "t5_original_ckpt", t5_model_name)
-        tokenizer_path = self.config.get("t5_tokenizer_path") or os.path.join(os.path.dirname(t5_original_ckpt), "google/umt5-xxl")
+        t5_original_ckpt = self._resolve_wan_ckpt_file(t5_model_name)
+        tokenizer_path = self._resolve_wan_ckpt_file("google/umt5-xxl")
 
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
@@ -158,7 +162,7 @@ class WanDreamZeroRunner(WanRunner):
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         vae_device = torch.device("cpu") if vae_offload else torch.device(AI_DEVICE)
         vae_config = {
-            "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
+            "vae_path": self._resolve_wan_ckpt_file(self.vae_name),
             "device": vae_device,
             "parallel": self.get_vae_parallel(),
             "use_tiling": self.config.get("use_tiling_vae", False),
@@ -182,7 +186,7 @@ class WanDreamZeroRunner(WanRunner):
             tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
             return self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
         vae_config = {
-            "vae_path": find_torch_model_path(self.config, "vae_path", self.vae_name),
+            "vae_path": self._resolve_wan_ckpt_file(self.vae_name),
             "device": vae_device,
             "parallel": self.get_vae_parallel(),
             "use_tiling": self.config.get("use_tiling_vae", False),
