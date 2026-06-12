@@ -177,10 +177,10 @@ class WanT2VVideoDataset(torch.utils.data.Dataset):
             yield from csv.DictReader(handle)
 
     def _resolve_video_path(self, metadata_path, video):
-        if video is None:
+        if not video or not str(video).strip():
             return None
 
-        video_path = Path(str(video))
+        video_path = Path(str(video).strip())
         if video_path.is_absolute():
             candidates = [video_path]
         else:
@@ -193,7 +193,7 @@ class WanT2VVideoDataset(torch.utils.data.Dataset):
                 candidates.extend([self.video_root / video_path, self.video_root / video_path.name])
 
         for candidate in candidates:
-            if candidate.exists():
+            if candidate.is_file():
                 return candidate
         return candidates[0]
 
