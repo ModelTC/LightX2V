@@ -1,0 +1,39 @@
+{
+  "infer_steps": 16,
+  "action_infer_steps": 16,
+  "target_height": 352,
+  "target_width": 640,
+  "view_crop_scale": 0.95,
+  "target_fps": 5,
+  "wan_ckpt_dir": "/data/nvme0/models/Wan-AI/Wan2.1-I2V-14B-480P",
+  "text_len": 512,
+  "sample_shift": 5.0,
+  "action_sample_shift": 5.0,
+  "sample_guide_scale": 5.0,
+  "enable_cfg": true,
+  "self_attn_1_type": "dreamzero_fa2",
+  "cross_attn_1_type": "dreamzero_cross_fa",
+  "cross_attn_2_type": "dreamzero_cross_fa",
+  "rms_norm_type": "torch",
+  "negative_prompt": "Vibrant colors, overexposed, static, blurry details, text, subtitles, style, artwork, painting, image, still, grayscale, dull, worst quality, low quality, JPEG artifacts, ugly, mutilated, extra fingers, bad hands, bad face, deformed, disfigured, mutated limbs, fused fingers, stagnant image, cluttered background, three legs, many people in the background, walking backwards.",
+  "num_chunks": 15,
+  "dit_step_mask": [true, true, true, false, false, false, true, false, false, false, true, false, false, true, true, true],
+  "obs_cam_keys": [
+    "video.exterior_image_1_left",
+    "video.exterior_image_2_left",
+    "video.wrist_image_left"
+  ],
+  "obs_cam_aliases": {
+    "video.exterior_image_1_left": "exterior_image_1_left",
+    "video.exterior_image_2_left": "exterior_image_2_left",
+    "video.wrist_image_left": "wrist_image_left"
+  },
+  "state_norm_stat": {
+    "q01": [-0.8875624465942383, -0.8370916676521302, -0.8531151509284973, -2.7690773010253906, -1.7587936305999756, 1.2168634271621703, -1.9968851804733276, 0.0],
+    "q99": [0.9182539391517639, 1.4385825252532958, 0.7427385020256034, -0.4551836943626404, 1.6720541000366205, 3.4903993225097656, 2.202882013320923, 0.9911894202232361]
+  },
+  "action_norm_stat": {
+    "q01": [-0.38003855660557745, -0.5707337207347155, -0.372395026339218, -0.6040825617313386, -0.6068239034712315, -0.5480175018310547, -0.6911450639367104, 0.0],
+    "q99": [0.3752444635331633, 0.7254459694772959, 0.36863212004303936, 0.6473039162158969, 0.5972681645303966, 0.6584498655796054, 0.7103942874073983, 1.0]
+  }
+}

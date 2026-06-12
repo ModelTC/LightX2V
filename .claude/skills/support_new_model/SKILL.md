@@ -5,8 +5,6 @@ description: Use this skill when adding native LightX2V support for a new model 
 
 # LightX2V Native Model Porting
 
-Default LightX2V root: `/data/nvme4/gushiqiao/new/LightX2V`.
-
 Goal: build a **native LightX2V runner** whose output matches the upstream model inference. Do not wrap the upstream repo at runtime unless the user explicitly asks for a temporary bridge.
 
 Hard rule: do **not** depend on diffusers/transformers/third-party model or pipeline classes to execute the core model. Rebuild the model structure with LightX2V's data structures and ops (`weights`, `infer`, `common/ops/mm`, norm, attention, conv, scheduler, KV cache), or reuse an existing LightX2V implementation that already does so.
@@ -603,7 +601,7 @@ Follow existing LightX2V scripts:
 ```bash
 #!/bin/bash
 
-lightx2v_path=/data/nvme4/gushiqiao/new/LightX2V
+lightx2v_path=/path/to/LightX2V
 model_path=/path/to/model
 
 export CUDA_VISIBLE_DEVICES=0
@@ -676,6 +674,44 @@ Before declaring parity, compare with upstream:
 
 Do not equate "runs without crashing" with "matches upstream."
 
+## Numerical Alignment Workflow
+
+When the model runs but output quality does not match upstream, debug with a staged parity ladder before changing high-level sampling logic. Save compact `.pt` fixtures for shared inputs and compare max/mean absolute differences at each boundary.
+
+Recommended order:
+
+1. Preprocessing and encoder inputs:
+   - Compare raw inputs after every resize/crop/pad/normalize/layout step.
+   - Compare prompt formatting, negative prompt handling, text/audio/image/video/control embeddings, VAE latents, and any task-specific conditioning tensors.
+   - For image/video outputs, create contact sheets or frame grids when useful. A localized visual failure often points to input layout, conditioning, or a branch-specific block path rather than the whole sampler.
+
+2. Scheduler and noise:
+   - Compare every initial random tensor with the same seed and dtype.
+   - Compare timesteps, sigmas, shift, CFG scale, and any step-skipping mask.
+   - Compare one scheduler step numerically before running the whole denoise loop.
+
+3. `pre_infer` boundary:
+   - Compare DiT input tokens, timestep embeddings/modulation, conditioning context, positional encodings, modality-specific tokens, grid sizes, masks, and sequence lengths.
+   - Treat exact or near-exact `pre_infer` parity as a strong signal that remaining errors live in transformer blocks or cache semantics.
+
+4. Single-block transformer parity:
+   - Run the first representative upstream block and the matching LightX2V block on the same saved `pre_infer` tensors.
+   - Compare intermediate tensors in the upstream execution order: normalization, modulation, projections, positional encoding application, attention outputs, adapter/control branches if any, MLP/FFN outputs, and final residuals.
+   - Compare every distinct execution branch the model can take, such as prefill vs decode, cache update vs no-update, conditional vs unconditional, first chunk vs later chunks, or modality-present vs modality-absent.
+   - Keep shape comparisons explicit. Squeezing or broadcasting mistakes can create false differences, especially when upstream keeps a singleton batch dimension and LightX2V removes it.
+
+5. Full-DiT parity:
+   - After block 0 is close, compare every block output or at least final DiT predictions.
+   - If full-DiT differs but single-block formulas are close, check the actual `infer_block()` return path, cache update path, and per-block weight loading path. A hand-expanded formula can hide a bug in the implemented method.
+   - Ensure residual/skip-connection structure matches upstream exactly. Do not drop intermediate branch outputs that upstream adds back later.
+
+6. End-to-end visual parity:
+   - Run the smallest smoke inference and then a longer inference that exercises cache/offload/chunking/branching when the model has those features.
+   - Generate sparse-frame contact sheets for image/video models, or equivalent compact artifacts for other modalities.
+   - Check modality-specific quality, output length, FPS or sample rate, auxiliary output shape, and any task-specific postprocess result.
+
+Prefer numeric evidence over intuition. If a symptom looks like "bad VAE" or "bad scheduler", prove or eliminate that boundary with saved tensors before rewriting unrelated code.
+
 ## Wan-Derived Porting Checklist
 
 For a model similar to LingBot-VA, use this order:
@@ -746,8 +782,9 @@ For a model similar to LingBot-VA, use this order:
     - Compile Python.
     - Validate JSON and bash syntax.
     - Run smallest available inference.
+    - Compare preprocessing, scheduler, `pre_infer`, at least block 0, and final DiT predictions against upstream.
     - Smoke-test block/model offload, sequence parallel, and CFG parallel when hardware is available.
-    - Compare source output length, action shape, and qualitative result.
+    - Compare source output length, auxiliary output shapes when applicable, compact visual artifacts, and qualitative result.
 
 ## Common Pitfalls
 
@@ -766,6 +803,10 @@ For a model similar to LingBot-VA, use this order:
 - Calling diffusers/transformers model modules directly in native DiT inference.
 - Importing a third-party pipeline/model and hiding it behind a LightX2V runner instead of rebuilding the structure with LightX2V ops.
 - Mixing `float32` and `bfloat16` in norm/MM without deliberate casts.
+- Missing one residual/skip add in translated transformer blocks.
+- Trusting a manually expanded debug formula while the real `infer_block()` return path still differs.
+- Comparing tensors with incompatible singleton dimensions and accidentally broadcasting a fake difference.
+- Checking only one execution branch while prefill/decode, cache/no-cache, cond/uncond, or modality-present/modality-absent branches differ.
 - Repeated `.to(device).to(dtype)` in hot loops.
 - Using `.item()`, CPU tensor comparisons, or `argmin` in scheduler hot path.
 - Putting image paths and save defaults in config instead of `InputInfo`.
@@ -801,6 +842,8 @@ Run inference when weights and inputs are available. Confirm:
 - no unwanted batch dimension appears in debug shapes
 - no unexpected diffusers/transformers runtime model dependency
 - results are visually/numerically close to upstream with the same seed/config
+- saved intermediate tensors show close parity at preprocessing, scheduler, `pre_infer`, block 0, and full DiT boundaries when upstream is available
+- sparse-frame contact sheets or equivalent artifacts show every expected region, view, or modality is stable and in the correct location
 - block/model offload mode completes and produces the same shape/duration as local mode
 - CFG parallel returns the same branch-combined prediction shape and comparable output as serial CFG
 - sequence parallel preserves token counts and reconstructs full-output shapes after all-gather/chunk operations
