@@ -58,10 +58,16 @@ class RectifiedFlowMatchingScheduler:
         return mu / (mu + (1 / t - 1) ** self.time_shift_power)
 
     def add_noise(self, latent, noise, sigmas):
+        sigmas = self._expand_to_ndim(sigmas, latent.ndim)
         return (1.0 - sigmas) * latent + sigmas * noise
 
     def build_train_gt(self, latent, noise):
         return noise - latent
+
+    def _expand_to_ndim(self, values, ndim):
+        if values.ndim == 0:
+            values = values.reshape(1)
+        return values.reshape(values.shape[0], *([1] * (ndim - 1)))
 
     # ==============================
     # The following methods are for inference only
