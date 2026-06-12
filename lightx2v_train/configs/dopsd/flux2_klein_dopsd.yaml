@@ -1,6 +1,6 @@
 model:
     name: flux2_klein
-    pretrained_model_name_or_path: /data/nvme1/models/FLUX.2-Klein-9B
+    pretrained_model_name_or_path: /data/nvme7/HF/hub/models--black-forest-labs--FLUX.2-klein-9B/snapshots/92196c8e11f7b6cf2b7493e037d8c5345c559216
     max_sequence_length: 512
     text_encoder_out_layers: [9, 18, 27]
     running_dtype: bf16
@@ -8,16 +8,16 @@ model:
 data:
     train:
         name: image_dataset
-        num_workers: 8
-        prompt_dropout_rate: 0.1
-        target_area: 1048576 # 1024 * 1024
+        num_workers: 4
+        prompt_dropout_rate: 0.0
+        target_area: 1048576
         shuffle: true
-        # examples: https://github.com/ModelTC/LightX2V_train_data_examples
         data_path:
             - /data/nvme7/LightX2V_train_data_examples/dataset_v1/train.jsonl
     val:
         name: image_dataset
-        num_workers: 8
+        num_workers: 4
+        target_area: 1048576
         shuffle: false
         data_path:
             - /data/nvme7/LightX2V_train_data_examples/dataset_v1/val.jsonl
@@ -36,22 +36,35 @@ scheduler:
         dynamic_shift: true
         shift_mu_strategy: flux2_empirical
         shift_mu_num_steps: 4
-        # Flux2 latents are already 2x2-patchified before scheduler shift length calculation.
-        patch_size: [1, 1] # [H, W]
+        patch_size: [1, 1]
 
 training:
-    method: lora
-    max_train_iters: 3000
+    method: dopsd
+    max_train_iters: 4000
     gradient_accumulation_iters: 1
-    gradient_checkpointing: false
+    gradient_checkpointing: true
     max_grad_norm: 1.0
     lr_scheduler: constant
     lr_warmup_iters: 10
     save_every_iters: 200
-    save_total_limit: 10
+    save_total_limit: 20
+    dopsd:
+        num_training_steps: 4
+        ema_decay: 0.9999
+        ema_decay_warmup: 0.999
+        ema_decay_warmup_iters: 200
+        # early-step loss weighting: t0, t1, t2, t3
+        step_loss_weights: [8.0, 4.0, 2.0, 1.0]
+        # teacher edit branch only; student uses dataset prompt (T2I)
+        edit_sys_prompt: "The output must be exactly the same as the reference image."
+        # teacher prompt: false = only edit_sys_prompt (reference image carries content)
+        # true = "{dataset_prompt} {edit_sys_prompt}" (original D-OPSD default)
+        teacher_use_dataset_prompt: false
+        # save student/teacher x0 trajectory grid during training (not at infer)
+        trajectory_every_iters: ${training.save_every_iters}
     lora:
-        rank: 16
-        alpha: 32
+        rank: 64
+        alpha: 128
         target_modules:
             - to_q
             - to_k
@@ -63,12 +76,12 @@ training:
             - to_add_out
             - to_qkv_mlp_proj
     optimizer:
-        learning_rate: 0.0001
+        learning_rate: 0.00005
         adam_beta1: 0.9
         adam_beta2: 0.999
-        weight_decay: 0.01
+        weight_decay: 0.0
         adam_epsilon: 0.00000001
-    output_dir: ./output_train/flux2_klein_lora
+    output_dir: ./output_train/dopsd_editcontext_ema0.9999_onpolicy_4steptrain_9b_corgi_bsz1_lora_lr5e-5_earlyw
 
 inference:
     method: image_infer
@@ -79,7 +92,7 @@ inference:
     enable_cfg: false
     cfg_guidance_scale: 1.0
     seed: 42
-    output_dir: ./output_infer/flux2_klein_lora
+    output_dir: ./output_infer/dopsd_editcontext_ema0.9999_onpolicy_4steptrain_9b_corgi_bsz1_lora_lr5e-5_earlyw
     infer_every_iters: ${training.save_every_iters}
 
 logging:

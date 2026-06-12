@@ -36,6 +36,64 @@ class BaseModel:
         )
         self.denoiser_module().add_adapter(lora_config)
 
+    def add_dual_lora(
+        self,
+        rank,
+        alpha,
+        target_modules,
+        student_adapter="student",
+        teacher_adapter="teacher",
+        init_teacher_from_student=True,
+    ):
+        lora_config = LoraConfig(
+            r=rank,
+            lora_alpha=alpha,
+            init_lora_weights="gaussian",
+            target_modules=target_modules,
+        )
+        denoiser = self.denoiser_module()
+        denoiser.requires_grad_(False)
+        denoiser.add_adapter(lora_config, adapter_name=student_adapter)
+        denoiser.add_adapter(lora_config, adapter_name=teacher_adapter)
+        denoiser.set_adapter(student_adapter)
+        if init_teacher_from_student:
+            self.copy_lora_adapter_weights(student_adapter, teacher_adapter)
+
+    @torch.no_grad()
+    def copy_lora_adapter_weights(self, src_adapter, dst_adapter):
+        named_params = dict(self.denoiser_module().named_parameters())
+        for name, param in named_params.items():
+            if src_adapter not in name:
+                continue
+            dst_name = name.replace(src_adapter, dst_adapter)
+            if dst_name in named_params:
+                named_params[dst_name].data.copy_(param.data)
+
+    def set_active_adapter(self, adapter_name):
+        self.denoiser_module().set_adapter(adapter_name)
+
+    def set_dual_lora_trainable(self, student_adapter="student", teacher_adapter="teacher"):
+        denoiser = self.denoiser_module()
+        denoiser.requires_grad_(False)
+        denoiser.train()
+        for name, param in denoiser.named_parameters():
+            if student_adapter in name and "lora" in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+
+    @torch.no_grad()
+    def ema_update_lora_adapter(self, src_adapter="student", dst_adapter="teacher", ema_decay=0.999):
+        named_params = dict(self.denoiser_module().named_parameters())
+        for name, src_param in named_params.items():
+            if src_adapter not in name:
+                continue
+            dst_name = name.replace(src_adapter, dst_adapter)
+            if dst_name not in named_params:
+                continue
+            dst_param = named_params[dst_name]
+            dst_param.data.mul_(ema_decay).add_(src_param.data, alpha=1.0 - ema_decay)
+
     def set_lora_trainable(self):
         denoiser = self.denoiser_module()
         denoiser.requires_grad_(False)
@@ -130,35 +188,39 @@ class BaseModel:
             self.denoiser_module().delete_adapters(adapter_name)
             self._infer_lora_adapter_name = None
 
-    def save_lora_weights(self, save_dir):
-        peft_state_dict = self._get_lora_state_dict_for_save()
+    def save_lora_weights(self, save_dir, adapter_name=None, weights_subdir=None):
+        peft_state_dict = self._get_lora_state_dict_for_save(adapter_name=adapter_name)
         if not is_main_process():
             return
 
+        output_dir = os.path.join(save_dir, weights_subdir) if weights_subdir else save_dir
+        os.makedirs(output_dir, exist_ok=True)
         lora_state_dict = convert_state_dict_to_diffusers(peft_state_dict)
         if hasattr(self.pipeline_cls, "save_lora_weights"):
-            self.pipeline_cls.save_lora_weights(save_dir, lora_state_dict, safe_serialization=True)
+            self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True)
         else:
-            save_file(lora_state_dict, f"{save_dir}/pytorch_lora_weights.safetensors")
+            save_file(lora_state_dict, os.path.join(output_dir, "pytorch_lora_weights.safetensors"))
 
-    def _get_lora_state_dict_for_save(self):
+    def _get_lora_state_dict_for_save(self, adapter_name=None):
         denoiser = self.denoiser_module()
+        peft_kwargs = {} if adapter_name is None else {"adapter_name": adapter_name}
         if not is_fsdp2_module(denoiser):
-            return get_peft_model_state_dict(denoiser)
+            return get_peft_model_state_dict(denoiser, **peft_kwargs)
 
         options = StateDictOptions(
             full_state_dict=True,
             cpu_offload=True,
-            ignore_frozen_params=True,
+            ignore_frozen_params=False,
             strict=False,
         )
         state_dict, _ = get_state_dict(denoiser, (), options=options)
         if not is_main_process():
             return {}
-        return get_peft_model_state_dict(denoiser, state_dict=state_dict)
+        return get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
 
-    def load_lora_weights_for_resume(self, lora_path):
-        raw = load_file(os.path.join(lora_path, "pytorch_lora_weights.safetensors"))
+    def load_lora_weights_for_resume(self, lora_path, adapter_name=None, weights_subdir=None):
+        weights_dir = os.path.join(lora_path, weights_subdir) if weights_subdir else lora_path
+        raw = load_file(os.path.join(weights_dir, "pytorch_lora_weights.safetensors"))
         peft_state_dict = {}
         for key, value in raw.items():
             new_key = key.removeprefix("transformer.")
@@ -166,7 +228,8 @@ class BaseModel:
             new_key = new_key.replace(".lora.up.weight", ".lora_B.weight")
             peft_state_dict[new_key] = value
 
-        incompatible = set_peft_model_state_dict(self.denoiser_module(), peft_state_dict)
+        load_kwargs = {} if adapter_name is None else {"adapter_name": adapter_name}
+        incompatible = set_peft_model_state_dict(self.denoiser_module(), peft_state_dict, **load_kwargs)
         if incompatible and incompatible.unexpected_keys:
             logger.warning("Unexpected keys when resuming LoRA: {}", incompatible.unexpected_keys)
 
