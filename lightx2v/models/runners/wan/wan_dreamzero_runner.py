@@ -458,7 +458,7 @@ class WanDreamZeroRunner(WanRunner):
             "current_start_frame": start_frame,
             "update_cache": True,
             "cache_name": self.cache_name,
-            "enable_cfg": self.use_cfg,
+            "enable_cfg": self.enable_cfg,
             "guide_scale": self.config["sample_guide_scale"],
         }
         self.model.infer(inputs)
@@ -477,7 +477,7 @@ class WanDreamZeroRunner(WanRunner):
             "current_start_frame": self.current_start_frame,
             "update_cache": False,
             "cache_name": self.cache_name,
-            "enable_cfg": self.use_cfg,
+            "enable_cfg": self.enable_cfg,
             "guide_scale": self.config["sample_guide_scale"],
         }
 
@@ -497,7 +497,7 @@ class WanDreamZeroRunner(WanRunner):
         self.gen_video_final = None
         self.current_start_frame = 0
         self.last_chunk_started_new_segment = False
-        self.use_cfg = self.config.get("enable_cfg", False)
+        self.enable_cfg = self.config.get("enable_cfg", False)
         self.num_frame_per_block = int(self.config.get("num_frame_per_block", 2))
         self.action_horizon = int(self.config.get("action_horizon", 24))
         self.action_dim = int(self.config.get("action_dim", 32))
@@ -517,7 +517,7 @@ class WanDreamZeroRunner(WanRunner):
         self.negative_prompt_embeds = text_encoder_output.get("context_null")
         if self.negative_prompt_embeds is not None:
             self.negative_prompt_embeds = self.negative_prompt_embeds.to(AI_DEVICE).to(GET_DTYPE())
-        elif self.use_cfg:
+        elif self.enable_cfg:
             raise ValueError("DreamZero CFG is enabled but text_encoder_output does not include context_null.")
 
     def _frame_schedule(self):
