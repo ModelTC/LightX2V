@@ -1,3 +1,6 @@
+import math
+
+
 class StaticTimeShiftMu:
     def __init__(self, time_shift_settings):
         self.mu = time_shift_settings.get("time_shift_mu", 5.0)
@@ -60,6 +63,32 @@ class Flux2EmpiricalTimeShiftMu:
         return float(a * num_steps + b)
 
 
+class WanVideoDynamicTimeShiftMu:
+    def __init__(self, time_shift_settings):
+        self.base_shift = time_shift_settings.get("base_shift", 3.0)
+        self.max_shift = time_shift_settings.get("max_shift", 5.0)
+        self.vae_scale_factor_spatial = time_shift_settings.get("vae_scale_factor_spatial", 8)
+        self.base_resolution = time_shift_settings.get("base_resolution", [480, 832])
+        self.max_resolution = time_shift_settings.get("max_resolution", [720, 1280])
+        self.shift_x1 = time_shift_settings.get("shift_x1", self._resolution_length(self.base_resolution))
+        self.shift_x2 = time_shift_settings.get("shift_x2", self._resolution_length(self.max_resolution))
+        self.shift_y1 = time_shift_settings.get("shift_y1", math.log(self.base_shift))
+        self.shift_y2 = time_shift_settings.get("shift_y2", math.log(self.max_shift))
+        self._mu_slope = (self.shift_y2 - self.shift_y1) / (self.shift_x2 - self.shift_x1)
+        self._mu_bias = self.shift_y1 - self._mu_slope * self.shift_x1
+
+    def _resolution_length(self, resolution):
+        height, width = resolution
+        return math.sqrt(height * width) / self.vae_scale_factor_spatial
+
+    def __call__(self, latent_hw=None, num_steps=None):
+        if latent_hw is None:
+            raise ValueError("latent_hw=(H, W) must be provided when shift_mu_strategy='wan_video'")
+        h, w = latent_hw
+        length = math.sqrt(h * w)
+        return self._mu_slope * length + self._mu_bias
+
+
 def build_time_shift_mu(time_shift_settings):
     if not time_shift_settings.get("dynamic_shift", False):
         return StaticTimeShiftMu(time_shift_settings)
@@ -69,4 +98,6 @@ def build_time_shift_mu(time_shift_settings):
         return LinearDynamicTimeShiftMu(time_shift_settings)
     if shift_mu_strategy == "flux2_empirical":
         return Flux2EmpiricalTimeShiftMu(time_shift_settings)
+    if shift_mu_strategy == "wan_video":
+        return WanVideoDynamicTimeShiftMu(time_shift_settings)
     raise ValueError(f"Unsupported shift_mu_strategy: {shift_mu_strategy}")
