@@ -12,7 +12,7 @@ class ServerConfig:
     max_queue_size: int = 10
 
     task_timeout: int = 300
-    task_history_limit: int = 1000
+    history_limit: int = 1000
 
     http_timeout: int = 30
     http_max_retries: int = 3
@@ -41,6 +41,12 @@ class ServerConfig:
             except ValueError:
                 logger.warning(f"Invalid max queue size: {env_queue_size}")
 
+        if env_history_limit := os.environ.get("LIGHTX2V_HISTORY_LIMIT"):
+            try:
+                config.history_limit = int(env_history_limit)
+            except ValueError:
+                logger.warning(f"Invalid task history limit: {env_history_limit}")
+
         # MASTER_ADDR is now managed by torchrun, no need to set manually
 
         if env_cache_dir := os.environ.get("LIGHTX2V_CACHE_DIR"):
@@ -57,6 +63,10 @@ class ServerConfig:
 
         if self.task_timeout <= 0:
             logger.error("task_timeout must be positive")
+            valid = False
+
+        if self.history_limit < 0:
+            logger.error("history_limit must be >= 0")
             valid = False
 
         return valid

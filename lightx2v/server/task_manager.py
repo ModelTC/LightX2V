@@ -35,8 +35,9 @@ class TaskInfo:
 
 
 class TaskManager:
-    def __init__(self, max_queue_size: int = 100):
+    def __init__(self, max_queue_size: int = 100, history_limit: int = 1000):
         self.max_queue_size = max_queue_size
+        self.history_limit = history_limit
 
         self._tasks: OrderedDict[str, TaskInfo] = OrderedDict()
         self._lock = threading.RLock()
@@ -96,6 +97,7 @@ class TaskManager:
             task.end_time = datetime.now()
             task.save_result_path = save_result_path
             task.result_png = result_png
+            task.message = None
 
             self.completed_tasks += 1
             self._emit_queue_metrics_unlocked()
@@ -244,15 +246,21 @@ class TaskManager:
             self.max_queue_size = max_queue_size
             self._emit_queue_metrics_unlocked()
 
-    def _cleanup_old_tasks(self, keep_count: int = 1000):
-        if len(self._tasks) <= keep_count:
+    def set_history_limit(self, history_limit: int):
+        if history_limit < 0:
+            raise ValueError("history_limit must be >= 0")
+        with self._lock:
+            self.history_limit = history_limit
+
+    def _cleanup_old_tasks(self):
+        if len(self._tasks) <= self.history_limit:
             return
 
         completed_tasks = [(task_id, task) for task_id, task in self._tasks.items() if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]]
 
         completed_tasks.sort(key=lambda x: x[1].end_time or x[1].start_time)
 
-        remove_count = len(self._tasks) - keep_count
+        remove_count = len(self._tasks) - self.history_limit
         for task_id, _ in completed_tasks[:remove_count]:
             del self._tasks[task_id]
             logger.debug(f"Cleaned up old task: {task_id}")

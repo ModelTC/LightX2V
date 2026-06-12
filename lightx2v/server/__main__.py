@@ -13,6 +13,7 @@ def main():
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Server host")
     parser.add_argument("--port", type=int, default=8000, help="Server port")
     parser.add_argument("--max_queue_size", type=int, default=10, help="Maximum active tasks (pending + processing)")
+    parser.add_argument("--history_limit", type=int, default=1000, help="Maximum completed tasks to keep in history")
 
     args, unknown = parser.parse_known_args()
 
