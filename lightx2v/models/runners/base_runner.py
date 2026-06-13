@@ -1,10 +1,15 @@
 import os
+import time
 from abc import ABC
+from functools import wraps
 
 import torch
 import torch.distributed as dist
+from loguru import logger
 
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class BaseRunner(ABC):
@@ -17,6 +22,14 @@ class BaseRunner(ABC):
         self.config = config
         self.vae_encoder_need_img_original = False
         self.input_info = None
+
+    def _sync_for_step_speed(self):
+        if not hasattr(torch_device_module, "synchronize"):
+            return
+        try:
+            torch_device_module.synchronize()
+        except Exception:
+            pass
 
     def apply_disagg_request_overrides(self, config_modify):
         """Mirror flat disagg request fields into ``disagg_config`` in disagg mode only."""
@@ -149,6 +162,144 @@ class BaseRunner(ABC):
             from lightx2v.models.schedulers.scheduler import NullScheduler
 
             self.scheduler = NullScheduler()
+
+    def install_step_speed_timer(self, scheduler):
+        """Wrap scheduler steps and report 10% bucket averages plus the full average."""
+        if scheduler is None or getattr(scheduler, "_lightx2v_step_speed_timer_installed", False):
+            return
+        if not hasattr(scheduler, "step_pre") or not hasattr(scheduler, "step_post"):
+            return
+
+        scheduler._lightx2v_step_speed_timer_installed = True
+        scheduler._lightx2v_step_speed_records = []
+        scheduler._lightx2v_step_speed_start = None
+        scheduler._lightx2v_step_speed_current_step = None
+        scheduler._lightx2v_step_speed_emitted = False
+
+        original_step_pre = scheduler.step_pre
+        original_step_post = scheduler.step_post
+        original_clear = getattr(scheduler, "clear", None)
+
+        def _resolve_step_index(args, kwargs):
+            step_index = kwargs.get("step_index")
+            if step_index is None and len(args) > 0:
+                # Most schedulers use step_pre(step_index); segmented schedulers
+                # commonly use step_pre(segment_idx, step_index, ...).
+                step_index = args[1] if len(args) > 1 else args[0]
+            if step_index is None:
+                step_index = getattr(scheduler, "step_index", None)
+            try:
+                return int(step_index)
+            except (TypeError, ValueError):
+                return None
+
+        @wraps(original_step_pre)
+        def timed_step_pre(*args, **kwargs):
+            if scheduler._lightx2v_step_speed_emitted:
+                scheduler._lightx2v_step_speed_records = []
+                scheduler._lightx2v_step_speed_emitted = False
+            self._sync_for_step_speed()
+            scheduler._lightx2v_step_speed_start = time.perf_counter()
+            result = original_step_pre(*args, **kwargs)
+            scheduler._lightx2v_step_speed_current_step = _resolve_step_index(args, kwargs)
+            return result
+
+        @wraps(original_step_post)
+        def timed_step_post(*args, **kwargs):
+            try:
+                return original_step_post(*args, **kwargs)
+            finally:
+                start = scheduler._lightx2v_step_speed_start
+                if start is not None:
+                    self._sync_for_step_speed()
+                    elapsed = time.perf_counter() - start
+                    step_index = scheduler._lightx2v_step_speed_current_step
+                    if step_index is None:
+                        step_index = getattr(scheduler, "step_index", None)
+                    try:
+                        total_steps = int(getattr(scheduler, "infer_steps", self.config.get("infer_steps", 0)) or 0)
+                    except (TypeError, ValueError):
+                        total_steps = 0
+                    scheduler._lightx2v_step_speed_records.append(
+                        {
+                            "step_index": step_index,
+                            "elapsed": elapsed,
+                            "total_steps": total_steps,
+                        }
+                    )
+                    scheduler._lightx2v_step_speed_start = None
+
+        scheduler.step_pre = timed_step_pre
+        scheduler.step_post = timed_step_post
+
+        if original_clear is not None:
+
+            @wraps(original_clear)
+            def timed_clear(*args, **kwargs):
+                self.report_step_speed(scheduler)
+                return original_clear(*args, **kwargs)
+
+            scheduler.clear = timed_clear
+
+    def report_step_speed(self, scheduler=None):
+        scheduler = scheduler or getattr(self, "scheduler", None)
+        if scheduler is None or getattr(scheduler, "_lightx2v_step_speed_emitted", False):
+            return
+
+        records = getattr(scheduler, "_lightx2v_step_speed_records", [])
+        valid_records = [record for record in records if isinstance(record.get("step_index"), int)]
+        if not valid_records:
+            return
+
+        total_steps = max((record.get("total_steps", 0) for record in valid_records), default=0)
+        if total_steps <= 0:
+            total_steps = max(record["step_index"] for record in valid_records) + 1
+
+        if dist.is_initialized() and dist.get_rank() != 0:
+            scheduler._lightx2v_step_speed_emitted = True
+            return
+
+        rank_label = f"rank {dist.get_rank()}" if dist.is_initialized() else "single rank"
+        elapsed_by_step = {record["step_index"]: record["elapsed"] for record in valid_records}
+
+        for bucket_idx in range(10):
+            start_ratio = bucket_idx / 10.0
+            end_ratio = (bucket_idx + 1) / 10.0
+            start_index = min(int(total_steps * start_ratio), total_steps - 1)
+            end_index = min(int(total_steps * end_ratio), total_steps)
+            if end_index <= start_index:
+                end_index = min(start_index + 1, total_steps)
+
+            selected = [elapsed_by_step[i] for i in range(start_index, end_index) if i in elapsed_by_step]
+            if not selected:
+                continue
+
+            avg_seconds = sum(selected) / len(selected)
+            logger.info(
+                "[Speed] Step {:02d}%-{:02d}% average: {:.6f} s/step ({:.3f} ms/step), steps {}-{}/{}, samples={}, {}",
+                bucket_idx * 10,
+                (bucket_idx + 1) * 10,
+                avg_seconds,
+                avg_seconds * 1000.0,
+                start_index + 1,
+                end_index,
+                total_steps,
+                len(selected),
+                rank_label,
+            )
+
+        all_elapsed = [record["elapsed"] for record in valid_records]
+        avg_seconds = sum(all_elapsed) / len(all_elapsed)
+        logger.info(
+            "[Speed] Step full average: {:.6f} s/step ({:.3f} ms/step), steps 1-{}/{}, samples={}, {}",
+            avg_seconds,
+            avg_seconds * 1000.0,
+            total_steps,
+            total_steps,
+            len(all_elapsed),
+            rank_label,
+        )
+        scheduler._lightx2v_step_speed_emitted = True
 
     def load_vae_decoder(self):
         """Load VAE decoder

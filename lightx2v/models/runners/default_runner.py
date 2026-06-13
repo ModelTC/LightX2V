@@ -97,6 +97,7 @@ class DefaultRunner(BaseRunner):
             self.config["use_prompt_enhancer"] = False
         self.set_init_device()
         self.init_scheduler()
+        self.install_step_speed_timer(getattr(self, "scheduler", None))
 
     def init_modules(self):
         logger.info("Initializing runner modules...")
@@ -250,6 +251,7 @@ class DefaultRunner(BaseRunner):
         self.run_main(total_steps=1)
 
     def end_run(self):
+        self.report_step_speed(getattr(self, "scheduler", None))
         if self.model is not None:
             self.model.scheduler.clear()
         elif hasattr(self, "scheduler") and self.scheduler is not None:

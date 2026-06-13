@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/ddc/yong/LightX2V
-model_path=/data/nvme1/models/Qwen/Qwen-Image-2512
+lightx2v_path=/data/nvme1/wushuo/LightX2V
+model_path=/data/nvme1/wushuo/hf_models/top5_models/Qwen-Image-2512
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=3
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
