@@ -5,6 +5,8 @@ import torch.nn.functional as F
 
 from lightx2v.models.networks.wan.infer.dreamzero.pre_infer import _category_linear
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
+from lightx2v.models.networks.wan.infer.triton_ops import apply_rotary_embedding
+from lightx2v.models.networks.wan.infer.utils import apply_rope_with_cos_sin_cache_inplace
 from lightx2v.utils.envs import GET_DTYPE
 
 
@@ -21,19 +23,111 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         self.max_attention_size = int(local_attn_size) * self.frame_seqlen
         self.kv_caches = {}
         self.cross_attn_kv_caches = {}
+        self._cu_seqlens_cache = {}
+        self._rope_cache = {}
+        self.dreamzero_rope_type = config.get("dreamzero_rope_type", config.get("rope_type", "flashinfer"))
 
     def create_empty_kv_cache(self, dtype, device):
-        return [torch.zeros(2, 0, self.num_heads, self.head_dim, dtype=dtype, device=device) for _ in range(self.blocks_num)]
+        capacity = max(int(self.max_attention_size), 1)
+        return {
+            "capacity": capacity,
+            "window_size": int(self.max_attention_size),
+            "k": [torch.empty(capacity, self.num_heads, self.head_dim, dtype=dtype, device=device) for _ in range(self.blocks_num)],
+            "v": [torch.empty(capacity, self.num_heads, self.head_dim, dtype=dtype, device=device) for _ in range(self.blocks_num)],
+            "lengths": [0 for _ in range(self.blocks_num)],
+            "scratch_k": [None for _ in range(self.blocks_num)],
+            "scratch_v": [None for _ in range(self.blocks_num)],
+        }
 
     def get_kv_cache(self, cache_name, dtype, device):
         cache = self.kv_caches.get(cache_name)
-        if cache is None:
+        if cache is None or cache["k"][0].dtype != dtype or cache["k"][0].device != device:
             cache = self.create_empty_kv_cache(dtype=dtype, device=device)
             self.kv_caches[cache_name] = cache
         return cache
 
     def set_kv_cache(self, cache_name, cache):
         self.kv_caches[cache_name] = cache
+
+    def _ensure_kv_cache_capacity(self, cache, min_capacity, dtype, device):
+        if cache["capacity"] >= min_capacity:
+            return cache
+        new_capacity = max(min_capacity, cache["capacity"] * 2)
+        old_capacity = cache["capacity"]
+        for block_idx in range(self.blocks_num):
+            old_len = min(cache["lengths"][block_idx], old_capacity)
+            new_k = torch.empty(new_capacity, self.num_heads, self.head_dim, dtype=dtype, device=device)
+            new_v = torch.empty(new_capacity, self.num_heads, self.head_dim, dtype=dtype, device=device)
+            if old_len > 0:
+                new_k[:old_len].copy_(cache["k"][block_idx][:old_len])
+                new_v[:old_len].copy_(cache["v"][block_idx][:old_len])
+            cache["k"][block_idx] = new_k
+            cache["v"][block_idx] = new_v
+        cache["capacity"] = new_capacity
+        return cache
+
+    def _get_scratch(self, cache, name, block_idx, length, dtype, device):
+        scratch = cache[name][block_idx]
+        if scratch is None or scratch.shape[0] < length or scratch.device != device or scratch.dtype != dtype:
+            scratch = torch.empty(max(length, 1), self.num_heads, self.head_dim, dtype=dtype, device=device)
+            cache[name][block_idx] = scratch
+        return scratch[:length]
+
+    def _store_video_kv(self, cache, block_idx, k, v):
+        capacity = cache["capacity"]
+        if int(cache["window_size"]) <= 0:
+            old_len = cache["lengths"][block_idx]
+            new_len = old_len + k.shape[0]
+            self._ensure_kv_cache_capacity(cache, new_len, k.dtype, k.device)
+            cache["k"][block_idx][old_len:new_len].copy_(k)
+            cache["v"][block_idx][old_len:new_len].copy_(v)
+            cache["lengths"][block_idx] = new_len
+            return
+
+        if k.shape[0] >= capacity:
+            cache["k"][block_idx].copy_(k[-capacity:])
+            cache["v"][block_idx].copy_(v[-capacity:])
+            cache["lengths"][block_idx] = capacity
+            return
+
+        old_len = cache["lengths"][block_idx]
+        keep = min(old_len, capacity - k.shape[0])
+        if keep > 0 and old_len != keep:
+            cache["k"][block_idx][:keep].copy_(cache["k"][block_idx][old_len - keep : old_len].clone())
+            cache["v"][block_idx][:keep].copy_(cache["v"][block_idx][old_len - keep : old_len].clone())
+        cache["k"][block_idx][keep : keep + k.shape[0]].copy_(k)
+        cache["v"][block_idx][keep : keep + v.shape[0]].copy_(v)
+        cache["lengths"][block_idx] = keep + k.shape[0]
+
+    def _materialize_self_attn_kv(self, cache, block_idx, k, v, action_k=None, action_v=None):
+        old_len = cache["lengths"][block_idx]
+        capacity = cache["capacity"]
+        if int(cache["window_size"]) <= 0:
+            video_len = old_len + k.shape[0]
+            self._ensure_kv_cache_capacity(cache, video_len, k.dtype, k.device)
+            capacity = cache["capacity"]
+        else:
+            video_len = min(old_len + k.shape[0], capacity)
+        old_keep = max(0, video_len - k.shape[0])
+        cur_keep = video_len - old_keep
+        action_len = 0 if action_k is None else action_k.shape[0]
+        total_len = video_len + action_len
+        attn_k = self._get_scratch(cache, "scratch_k", block_idx, total_len, k.dtype, k.device)
+        attn_v = self._get_scratch(cache, "scratch_v", block_idx, total_len, v.dtype, v.device)
+
+        offset = 0
+        if old_keep > 0:
+            attn_k[:old_keep].copy_(cache["k"][block_idx][old_len - old_keep : old_len])
+            attn_v[:old_keep].copy_(cache["v"][block_idx][old_len - old_keep : old_len])
+            offset = old_keep
+        if cur_keep > 0:
+            attn_k[offset : offset + cur_keep].copy_(k[-cur_keep:])
+            attn_v[offset : offset + cur_keep].copy_(v[-cur_keep:])
+            offset += cur_keep
+        if action_len > 0:
+            attn_k[offset : offset + action_len].copy_(action_k)
+            attn_v[offset : offset + action_len].copy_(action_v)
+        return attn_k, attn_v
 
     def get_cross_attn_kv_cache(self, cache_name):
         cache = self.cross_attn_kv_caches.get(cache_name)
@@ -50,6 +144,8 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         if cache_name is None:
             self.kv_caches.clear()
             self.cross_attn_kv_caches.clear()
+            self._cu_seqlens_cache.clear()
+            self._rope_cache.clear()
         else:
             cache_names = {cache_name, f"{cache_name}_cond", f"{cache_name}_uncond"}
             for name in cache_names:
@@ -68,86 +164,116 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         values = table + embed0
         return [self._token_modulation(item) for item in values.chunk(6, dim=1)]
 
+    def _get_cu_seqlens(self, length, device):
+        key = (int(length), str(device))
+        cached = self._cu_seqlens_cache.get(key)
+        if cached is None:
+            cached = torch.tensor([0, int(length)], device=device, dtype=torch.int32)
+            self._cu_seqlens_cache[key] = cached
+        return cached
+
+    def _get_rope_cos_sin(self, freqs):
+        key = ("cos_sin", freqs.data_ptr(), tuple(freqs.shape), str(freqs.device), str(freqs.dtype))
+        cached = self._rope_cache.get(key)
+        if cached is not None:
+            return cached
+        cos = freqs.real.reshape(freqs.shape[0], -1).contiguous()
+        sin = freqs.imag.reshape(freqs.shape[0], -1).contiguous()
+        self._rope_cache[key] = (cos, sin)
+        return cos, sin
+
+    def _get_flashinfer_cos_sin(self, freqs):
+        key = ("flashinfer", freqs.data_ptr(), tuple(freqs.shape), str(freqs.device), str(freqs.dtype))
+        cached = self._rope_cache.get(key)
+        if cached is not None:
+            return cached
+        cos, sin = self._get_rope_cos_sin(freqs)
+        cos_sin = torch.cat([cos, sin], dim=-1).contiguous()
+        self._rope_cache[key] = cos_sin
+        return cos_sin
+
+    def _get_rope_positions(self, length, device):
+        key = ("positions", int(length), str(device))
+        cached = self._rope_cache.get(key)
+        if cached is None:
+            cached = torch.arange(int(length), device=device, dtype=torch.long)
+            self._rope_cache[key] = cached
+        return cached
+
+    def _modulate(self, x, scale, shift):
+        if x.is_cuda and x.is_contiguous():
+            scale_arg = scale
+            shift_arg = shift
+            if x.dim() == 2 and scale.dim() == 2 and scale.shape[0] == x.shape[0]:
+                scale_arg = scale.unsqueeze(0)
+                shift_arg = shift.unsqueeze(0)
+            return self.modulate_func(x, scale=scale_arg, shift=shift_arg).reshape_as(x)
+        return (x.float() * (1.0 + scale.float()) + shift.float()).to(x.dtype)
+
     @staticmethod
     def _apply_rope_polar(x, freqs):
         x_dtype = x.dtype
         seq_len, num_heads, _ = x.shape
-        x_complex = torch.view_as_complex(x.to(torch.float64).reshape(seq_len, num_heads, -1, 2))
+        x_complex = torch.view_as_complex(x.to(torch.float32).reshape(seq_len, num_heads, -1, 2))
         out = torch.view_as_real(x_complex * freqs.to(x.device)).flatten(2)
         return out.to(x_dtype)
 
-    def _causal_rope_action_apply(self, x, freqs, freqs_action, freqs_state, action_register_length, current_start_frame):
-        if action_register_length is not None:
-            action_state_index = (int(current_start_frame) - 1) // int(self.config.get("num_frame_per_block", 2))
-            action_state_index = max(action_state_index, 0)
-            action_start = action_state_index * self.num_action_per_block
-            state_start = action_state_index * self.num_state_per_block
-            action_freqs = freqs_action[action_start : action_start + self.num_action_per_block]
-            state_freqs = freqs_state[state_start : state_start + self.num_state_per_block]
-            freqs = torch.cat(
-                [
-                    freqs,
-                    action_freqs.view(self.num_action_per_block, 1, -1),
-                    state_freqs.view(self.num_state_per_block, 1, -1),
-                ],
-                dim=0,
+    def _apply_rope(self, q, k, freqs):
+        if freqs.shape[0] != q.shape[0]:
+            raise ValueError(f"DreamZero RoPE length mismatch: freqs={freqs.shape[0]}, q={q.shape[0]}.")
+
+        if q.is_cuda and self.dreamzero_rope_type == "flashinfer" and apply_rope_with_cos_sin_cache_inplace is not None:
+            seq_len, num_heads, head_dim = q.shape
+            query = q.reshape(seq_len, num_heads * head_dim).contiguous()
+            key = k.reshape(seq_len, num_heads * head_dim).contiguous()
+            apply_rope_with_cos_sin_cache_inplace(
+                positions=self._get_rope_positions(seq_len, q.device),
+                query=query,
+                key=key,
+                head_size=head_dim,
+                cos_sin_cache=self._get_flashinfer_cos_sin(freqs),
+                is_neox=False,
             )
-        return self._apply_rope_polar(x, freqs)
+            return query.view(seq_len, num_heads, head_dim), key.view(seq_len, num_heads, head_dim)
+
+        if q.is_cuda and self.dreamzero_rope_type in {"flashinfer", "triton"}:
+            cos, sin = self._get_rope_cos_sin(freqs)
+            return (
+                apply_rotary_embedding(q.contiguous(), cos, sin, interleaved=False),
+                apply_rotary_embedding(k.contiguous(), cos, sin, interleaved=False),
+            )
+
+        return self._apply_rope_polar(q, freqs), self._apply_rope_polar(k, freqs)
 
     def infer_self_attn_with_cache(self, phase, x, shift_msa, scale_msa, pre_infer_out, kv_cache):
         seq_total = x.shape[0]
-        norm1_out = phase.norm1.apply(x).to(x.dtype)
-        norm1_out = (norm1_out.float() * (1.0 + scale_msa.float()) + shift_msa.float()).to(x.dtype)
+        norm1_out = phase.norm1.apply(x)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            norm1_out = norm1_out.to(self.sensitive_layer_dtype)
+        norm1_out = self._modulate(norm1_out.contiguous(), scale_msa, shift_msa)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            norm1_out = norm1_out.to(self.infer_dtype)
 
         q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
         k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
         v = phase.self_attn_v.apply(norm1_out).view(seq_total, self.num_heads, self.head_dim)
-        q = self._causal_rope_action_apply(
-            q,
-            pre_infer_out.freqs,
-            pre_infer_out.freqs_action,
-            pre_infer_out.freqs_state,
-            pre_infer_out.action_register_length,
-            pre_infer_out.current_start_frame,
-        )
-        k = self._causal_rope_action_apply(
-            k,
-            pre_infer_out.freqs,
-            pre_infer_out.freqs_action,
-            pre_infer_out.freqs_state,
-            pre_infer_out.action_register_length,
-            pre_infer_out.current_start_frame,
-        )
+        q, k = self._apply_rope(q, k, pre_infer_out.freqs)
 
-        action_q = action_k = action_v = None
+        action_k = action_v = None
         if pre_infer_out.action_register_length is not None:
             action_len = pre_infer_out.action_register_length
-            action_q = q[-action_len:]
             action_k = k[-action_len:]
             action_v = v[-action_len:]
-            q = q[:-action_len]
             k = k[:-action_len]
             v = v[:-action_len]
 
-        cached_k = kv_cache[self.block_idx][0]
-        cached_v = kv_cache[self.block_idx][1]
-        new_k = torch.cat([cached_k, k], dim=0)
-        new_v = torch.cat([cached_v, v], dim=0)
-        if self.max_attention_size > 0:
-            new_k = new_k[-self.max_attention_size :]
-            new_v = new_v[-self.max_attention_size :]
+        q_attn = q
+        k_attn, v_attn = self._materialize_self_attn_kv(kv_cache, self.block_idx, k, v, action_k, action_v)
+        if pre_infer_out.update_cache:
+            self._store_video_kv(kv_cache, self.block_idx, k, v)
 
-        if action_q is not None:
-            q_attn = torch.cat([q, action_q], dim=0)
-            k_attn = torch.cat([new_k, action_k], dim=0)
-            v_attn = torch.cat([new_v, action_v], dim=0)
-        else:
-            q_attn = q
-            k_attn = new_k
-            v_attn = new_v
-
-        cu_q = torch.tensor([0, q_attn.shape[0]], device=q_attn.device, dtype=torch.int32)
-        cu_kv = torch.tensor([0, k_attn.shape[0]], device=k_attn.device, dtype=torch.int32)
+        cu_q = self._get_cu_seqlens(q_attn.shape[0], q_attn.device)
+        cu_kv = self._get_cu_seqlens(k_attn.shape[0], k_attn.device)
         attn_out = phase.self_attn_1.apply(
             q=q_attn,
             k=k_attn,
@@ -157,13 +283,10 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             max_seqlen_q=q_attn.shape[0],
             max_seqlen_kv=k_attn.shape[0],
         )
-        updated_cache = None
-        if pre_infer_out.update_cache:
-            updated_cache = torch.stack([new_k, new_v], dim=0)
-        return phase.self_attn_o.apply(attn_out), updated_cache
+        return phase.self_attn_o.apply(attn_out)
 
     def infer_cross_attn_dreamzero(self, phase, x, y_out, gate_msa, pre_infer_out):
-        x = x + y_out * gate_msa
+        x.add_(y_out * gate_msa)
         norm3_out = phase.norm3.apply(x)
         context = pre_infer_out.context
         if context is None:
@@ -184,8 +307,8 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         else:
             k, v, k_img, v_img = cached_kv
 
-        cu_q = torch.tensor([0, q.shape[0]], device=q.device, dtype=torch.int32)
-        cu_kv = torch.tensor([0, k.shape[0]], device=k.device, dtype=torch.int32)
+        cu_q = self._get_cu_seqlens(q.shape[0], q.device)
+        cu_kv = self._get_cu_seqlens(k.shape[0], k.device)
         attn_out = phase.cross_attn_1.apply(
             q=q,
             k=k,
@@ -196,7 +319,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             max_seqlen_kv=k.shape[0],
         )
 
-        cu_kv_img = torch.tensor([0, k_img.shape[0]], device=k_img.device, dtype=torch.int32)
+        cu_kv_img = self._get_cu_seqlens(k_img.shape[0], k_img.device)
         img_attn_out = phase.cross_attn_2.apply(
             q=q,
             k=k_img,
@@ -206,12 +329,17 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             max_seqlen_q=q.shape[0],
             max_seqlen_kv=k_img.shape[0],
         )
-        return x, phase.cross_attn_o.apply(attn_out + img_attn_out)
+        attn_out.add_(img_attn_out)
+        return x, phase.cross_attn_o.apply(attn_out)
 
     def infer_ffn_dreamzero(self, phase, x, attn_out, c_shift_msa, c_scale_msa):
-        x = x + attn_out
-        norm2_out = phase.norm2.apply(x).to(x.dtype)
-        norm2_out = (norm2_out.float() * (1.0 + c_scale_msa.float()) + c_shift_msa.float()).to(x.dtype)
+        x.add_(attn_out)
+        norm2_out = phase.norm2.apply(x)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            norm2_out = norm2_out.to(self.sensitive_layer_dtype)
+        norm2_out = self._modulate(norm2_out.contiguous(), c_scale_msa, c_shift_msa)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            norm2_out = norm2_out.to(self.infer_dtype)
         y = phase.ffn_0.apply(norm2_out)
         y = F.gelu(y, approximate="tanh")
         return phase.ffn_2.apply(y)
@@ -221,7 +349,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             block.compute_phases[0].modulation,
             pre_infer_out.embed0,
         )
-        y_out, updated_cache = self.infer_self_attn_with_cache(
+        y_out = self.infer_self_attn_with_cache(
             block.compute_phases[0],
             x,
             shift_msa,
@@ -237,18 +365,15 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             pre_infer_out,
         )
         y = self.infer_ffn_dreamzero(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
-        x = x + attn_out + y * c_gate_msa
-        return x, updated_cache
+        x.add_(y * c_gate_msa)
+        return x
 
     def infer_main_blocks(self, blocks, pre_infer_out, kv_cache):
         x = pre_infer_out.x
-        updated_caches = [] if pre_infer_out.update_cache else None
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
-            x, updated_cache = self.infer_block(blocks[block_idx], x, pre_infer_out, kv_cache)
-            if pre_infer_out.update_cache:
-                updated_caches.append(updated_cache)
-        return x, updated_caches
+            x = self.infer_block(blocks[block_idx], x, pre_infer_out, kv_cache)
+        return x
 
     def infer_action_decoder(self, weights, x, pre_infer_out):
         if pre_infer_out.action_length == 0:
@@ -263,7 +388,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         table = weights.head_modulation.tensor.to(x.device, x.dtype)
         shift, scale = [self._token_modulation(item) for item in (table + embed[:, None, :]).chunk(2, dim=1)]
         x = weights.norm.apply(x).to(x.dtype)
-        x = (x.float() * (1.0 + scale.float()) + shift.float()).to(x.dtype)
+        x = self._modulate(x.contiguous(), scale, shift)
         x = weights.head.apply(x)
         return self.unpatchify(x, pre_infer_out.grid_size)
 
@@ -282,9 +407,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
     def infer(self, weights, pre_infer_out):
         self.reset_infer_states()
         kv_cache = self.get_kv_cache(pre_infer_out.cache_name, dtype=pre_infer_out.x.dtype, device=pre_infer_out.x.device)
-        x, updated_caches = self.infer_main_blocks(weights.blocks, pre_infer_out, kv_cache)
-        if pre_infer_out.update_cache:
-            self.set_kv_cache(pre_infer_out.cache_name, updated_caches)
+        x = self.infer_main_blocks(weights.blocks, pre_infer_out, kv_cache)
         video_noise_pred = self.infer_video_head(weights, x, pre_infer_out).to(GET_DTYPE())
         action_noise_pred = self.infer_action_decoder(weights, x, pre_infer_out)
         if action_noise_pred is not None:

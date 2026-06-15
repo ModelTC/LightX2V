@@ -35,7 +35,7 @@ def _action_pos_encoding(timesteps, embedding_dim):
 def _dreamzero_sinusoidal_embedding_1d(dim, position):
     assert dim % 2 == 0
     half = dim // 2
-    position = position.type(torch.float64)
+    position = position.to(torch.float32)
     sinusoid = torch.outer(
         position,
         torch.pow(10000, -torch.arange(half, dtype=position.dtype, device=position.device).div(half)),
@@ -59,6 +59,8 @@ class DreamZeroPreInfer:
         self._freqs_action = None
         self._freqs_state = None
         self._context_projection_cache = {}
+        self._freqs_cache = {}
+        self._time_embedding_cache = {}
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -70,8 +72,8 @@ class DreamZeroPreInfer:
     def _rope_params(max_seq_len, dim, theta=10000):
         assert dim % 2 == 0
         freqs = torch.outer(
-            torch.arange(max_seq_len, dtype=torch.float64),
-            1.0 / torch.pow(theta, torch.arange(0, dim, 2, dtype=torch.float64).div(dim)),
+            torch.arange(max_seq_len, dtype=torch.float32),
+            1.0 / torch.pow(theta, torch.arange(0, dim, 2, dtype=torch.float32).div(dim)),
         )
         return torch.polar(torch.ones_like(freqs), freqs)
 
@@ -89,8 +91,12 @@ class DreamZeroPreInfer:
 
     def _create_freqs(self, grid_size, start_frame, device):
         self._ensure_freqs(device)
+        cache_key = (tuple(grid_size), int(start_frame), str(device))
+        cached = self._freqs_cache.get(cache_key)
+        if cached is not None:
+            return cached
         f, h, w = grid_size
-        return torch.cat(
+        freqs = torch.cat(
             [
                 self._freqs[0][start_frame : start_frame + f].view(f, 1, 1, -1).expand(f, h, w, -1),
                 self._freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
@@ -98,6 +104,33 @@ class DreamZeroPreInfer:
             ],
             dim=-1,
         ).reshape(f * h * w, 1, -1)
+        self._freqs_cache[cache_key] = freqs
+        return freqs
+
+    def _create_attention_freqs(self, grid_size, start_frame, action_register_length, device):
+        freqs = self._create_freqs(grid_size, start_frame, device)
+        if action_register_length is None:
+            return freqs
+        action_state_index = (int(start_frame) - 1) // int(self.config.get("num_frame_per_block", 2))
+        action_state_index = max(action_state_index, 0)
+        cache_key = (tuple(grid_size), int(start_frame), int(action_register_length), action_state_index, str(device))
+        cached = self._freqs_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        action_start = action_state_index * self.num_action_per_block
+        state_start = action_state_index * self.num_state_per_block
+        action_freqs = self._freqs_action[action_start : action_start + self.num_action_per_block]
+        state_freqs = self._freqs_state[state_start : state_start + self.num_state_per_block]
+        freqs = torch.cat(
+            [
+                freqs,
+                action_freqs.view(self.num_action_per_block, 1, -1),
+                state_freqs.view(self.num_state_per_block, 1, -1),
+            ],
+            dim=0,
+        )
+        self._freqs_cache[cache_key] = freqs
+        return freqs
 
     def _action_encoder(self, weights, action, timestep_action):
         action_features = _category_linear(action, weights.action_encoder.W1)
@@ -123,6 +156,62 @@ class DreamZeroPreInfer:
             str(device),
             str(dtype),
         )
+
+    @staticmethod
+    def _small_tensor_key(tensor):
+        if tensor is None:
+            return None
+        flat = tensor.detach().flatten()
+        if flat.numel() == 0:
+            return ()
+        return tuple(int(v) for v in flat.cpu().tolist())
+
+    def _time_cache_key(self, inputs, timestep, timestep_action, seq_len, action, state, device, dtype):
+        key = inputs.get("time_cache_key")
+        if key is None:
+            key = (self._small_tensor_key(timestep), self._small_tensor_key(timestep_action))
+        action_length = int(action.shape[1]) if action is not None else 0
+        state_length = int(state.shape[1]) if state is not None else 0
+        return (
+            key,
+            int(seq_len),
+            action_length,
+            state_length,
+            str(device),
+            str(dtype),
+            str(self.infer_dtype),
+            str(self.sensitive_layer_dtype),
+        )
+
+    def _build_timestep_tokens(self, timestep, timestep_action, state, seq_len, action):
+        frame_count = int(timestep.shape[1])
+        if frame_count <= seq_len:
+            repeat = (seq_len + frame_count - 1) // frame_count
+            timestep_tokens = timestep.repeat_interleave(repeat, dim=1)[:, :seq_len]
+        else:
+            indices = torch.linspace(0, frame_count - 1, seq_len, device=timestep.device, dtype=torch.long)
+            timestep_tokens = timestep[:, indices]
+        if action is not None:
+            stride = timestep_action.shape[1] // state.shape[1]
+            timestep_state = timestep_action[:, ::stride]
+            timestep_tokens = torch.cat([timestep_tokens, timestep_action, timestep_state], dim=1)
+        return timestep_tokens
+
+    @torch.no_grad()
+    def get_time_embeddings(self, weights, inputs, timestep, timestep_action, state, seq_len, action, device, dtype):
+        cache_key = self._time_cache_key(inputs, timestep, timestep_action, seq_len, action, state, device, dtype)
+        cached = self._time_embedding_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        timestep_tokens = self._build_timestep_tokens(timestep, timestep_action, state, seq_len, action)
+        embed = _dreamzero_sinusoidal_embedding_1d(self.freq_dim, timestep_tokens.flatten()).to(device=device, dtype=dtype)
+        embed = weights.time_embedding_0.apply(embed.to(self.sensitive_layer_dtype if self.sensitive_layer_dtype != self.infer_dtype else embed.dtype))
+        embed = F.silu(embed)
+        embed = weights.time_embedding_2.apply(embed)
+        embed0 = weights.time_projection_1.apply(F.silu(embed)).reshape(-1, 6, self.dim)
+        self._time_embedding_cache[cache_key] = (embed, embed0)
+        return embed, embed0
 
     @torch.no_grad()
     def project_context(self, weights, inputs, device, dtype):
@@ -186,25 +275,10 @@ class DreamZeroPreInfer:
             x = torch.cat([x, action_register], dim=0)
 
         timestep = inputs["timestep"].to(device=x.device)
-        frame_count = int(timestep.shape[1])
-        if frame_count <= seq_len:
-            repeat = (seq_len + frame_count - 1) // frame_count
-            timestep_tokens = timestep.repeat_interleave(repeat, dim=1)[:, :seq_len]
-        else:
-            indices = torch.linspace(0, frame_count - 1, seq_len, device=timestep.device, dtype=torch.long)
-            timestep_tokens = timestep[:, indices]
-        if action is not None:
-            stride = timestep_action.shape[1] // state.shape[1]
-            timestep_state = timestep_action[:, ::stride]
-            timestep_tokens = torch.cat([timestep_tokens, timestep_action, timestep_state], dim=1)
+        embed, embed0 = self.get_time_embeddings(weights, inputs, timestep, timestep_action, state, seq_len, action, x.device, x.dtype)
 
-        embed = _dreamzero_sinusoidal_embedding_1d(self.freq_dim, timestep_tokens.flatten()).to(device=x.device, dtype=x.dtype)
-        embed = weights.time_embedding_0.apply(embed.to(self.sensitive_layer_dtype if self.sensitive_layer_dtype != self.infer_dtype else embed.dtype))
-        embed = F.silu(embed)
-        embed = weights.time_embedding_2.apply(embed)
-        embed0 = weights.time_projection_1.apply(F.silu(embed)).reshape(-1, 6, self.dim)
-
-        freqs = self._create_freqs(grid_size, int(inputs.get("current_start_frame", 0)), x.device)
+        current_start_frame = int(inputs.get("current_start_frame", 0))
+        freqs = self._create_attention_freqs(grid_size, current_start_frame, action_register_length, x.device)
         return DreamZeroPreInferOutput(
             x=x,
             embed=embed,
@@ -217,16 +291,17 @@ class DreamZeroPreInfer:
             seq_len=seq_len,
             action_length=action_length,
             action_register_length=action_register_length,
-            current_start_frame=int(inputs.get("current_start_frame", 0)),
+            current_start_frame=current_start_frame,
             update_cache=bool(inputs.get("update_cache", False)),
             cache_name=str(inputs.get("cache_name", "pos")),
         )
 
     @torch.no_grad()
-    def with_context(self, weights, pre_infer_out, inputs):
+    def with_context(self, weights, pre_infer_out, inputs, clone_x=False):
         context = self.project_context(weights, inputs, pre_infer_out.x.device, pre_infer_out.x.dtype)
         return replace(
             pre_infer_out,
+            x=pre_infer_out.x.clone() if clone_x else pre_infer_out.x,
             context=context,
             update_cache=bool(inputs.get("update_cache", False)),
             cache_name=str(inputs.get("cache_name", pre_infer_out.cache_name)),

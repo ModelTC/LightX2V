@@ -5,7 +5,7 @@ lightx2v_path=/data/nvme1/yongyang/nb/LightX2V
 model_path=/data/nvme1/yongyang/nb/models/GEAR-Dreams/DreamZero-DROID
 input_path=/data/nvme1/yongyang/nb/dreamzero/debug_image
 
-export CUDA_VISIBLE_DEVICES=5,6
+export CUDA_VISIBLE_DEVICES=6,7
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

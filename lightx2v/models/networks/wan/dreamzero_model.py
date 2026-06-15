@@ -136,7 +136,7 @@ class DreamZeroModel(WanModel):
         if shared_pre_infer_out is None:
             pre_infer_out = self.pre_infer.infer(self.pre_weight, model_inputs)
         else:
-            pre_infer_out = self.pre_infer.with_context(self.pre_weight, shared_pre_infer_out, model_inputs)
+            pre_infer_out = self.pre_infer.with_context(self.pre_weight, shared_pre_infer_out, model_inputs, clone_x=True)
         video_noise_pred, action_noise_pred = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
         if self.clean_cuda_cache:
             del pre_infer_out

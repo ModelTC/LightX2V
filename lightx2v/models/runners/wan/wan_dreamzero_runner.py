@@ -458,12 +458,13 @@ class WanDreamZeroRunner(WanRunner):
             "current_start_frame": start_frame,
             "update_cache": True,
             "cache_name": self.cache_name,
+            "time_cache_key": ("warmup", int(start_frame), int(length)),
             "enable_cfg": self.enable_cfg,
             "guide_scale": self.config["sample_guide_scale"],
         }
         self.model.infer(inputs)
 
-    def _build_model_inputs(self, video_latents, action_latents, video_t, action_t):
+    def _build_model_inputs(self, video_latents, action_latents, video_t, action_t, step_index):
         return {
             "video_latents": video_latents.to(AI_DEVICE).to(GET_DTYPE()),
             "timestep": torch.ones([1, video_latents.shape[2]], dtype=torch.int64, device=AI_DEVICE) * video_t,
@@ -477,6 +478,13 @@ class WanDreamZeroRunner(WanRunner):
             "current_start_frame": self.current_start_frame,
             "update_cache": False,
             "cache_name": self.cache_name,
+            "time_cache_key": (
+                "denoise",
+                int(self.current_start_frame),
+                int(step_index),
+                int(self.scheduler.infer_steps),
+                int(self.action_scheduler.infer_steps),
+            ),
             "enable_cfg": self.enable_cfg,
             "guide_scale": self.config["sample_guide_scale"],
         }
@@ -608,7 +616,7 @@ class WanDreamZeroRunner(WanRunner):
             should_run = bool(self.dit_step_mask[step_index]) if step_index < len(self.dit_step_mask) else True
             with ProfilingContext4DebugL1("🚀 infer_main"):
                 if should_run or prev_video_pred is None or prev_action_pred is None:
-                    inputs = self._build_model_inputs(self.scheduler.latents, self.action_scheduler.latents, video_t, action_t)
+                    inputs = self._build_model_inputs(self.scheduler.latents, self.action_scheduler.latents, video_t, action_t, step_index)
                     pred = self.model.infer(inputs)
                     prev_video_pred = pred["video"]
                     prev_action_pred = pred["action"]
