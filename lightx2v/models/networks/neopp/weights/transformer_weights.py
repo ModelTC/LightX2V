@@ -5,6 +5,7 @@ try:
 except ImportError:
     get_cutlass_fused_moe_module = None
 
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.attn import FlashAttn2Weight, FlashAttn3Weight  # noqa: F401
 from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightFusedQKNorm3DRope
@@ -68,7 +69,10 @@ class NeoppDecoderLayerWeights(WeightModule):
 
         if config["version"] == "moe":
             gen_num_experts = int(config["llm_config"]["gen_num_experts"])
-            mlp_mot_gen = NeoppSparseMoeWeights(block_index, mm_type, "mlp_mot_gen", gen_num_experts, lora_path=lora_path)
+            moe_backend = config.get("moe_backend", "flashinfer")
+            if moe_backend not in ("pytorch", "flashinfer"):
+                raise ValueError(f"Invalid moe_backend={moe_backend!r}, expected 'pytorch' or 'flashinfer'")
+            mlp_mot_gen = NeoppSparseMoeWeights(block_index, mm_type, "mlp_mot_gen", gen_num_experts, moe_backend=moe_backend, lora_path=lora_path)
         elif config["version"] == "dense":
             mlp_mot_gen = NeoppMlpWeights(block_index, mm_type, lora_path=lora_path)
         else:
@@ -130,11 +134,12 @@ class NeoppAttentionWeights(WeightModule):
 
 
 class NeoppSparseMoeWeights(WeightModule):
-    def __init__(self, block_index, mm_type, subname, num_experts, lora_path=None):
+    def __init__(self, block_index, mm_type, subname, num_experts, moe_backend, lora_path=None):
         super().__init__()
         prefix = f"language_model.model.layers.{block_index}.{subname}"
         lora_prefix = "language_model"
 
+        self.moe_backend = moe_backend
         self.add_module("gate", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate.weight", None, lora_prefix=lora_prefix, lora_path=lora_path))
 
         self.num_experts = num_experts
@@ -143,7 +148,22 @@ class NeoppSparseMoeWeights(WeightModule):
 
     def load(self, weight_dict):
         super().load(weight_dict)
-        self._build_flashinfer_weights()
+        if self.moe_backend == "flashinfer":
+            self._build_flashinfer_weights()
+        elif self.moe_backend == "pytorch":
+            self._build_pytorch_grouped_mm_weights()
+        else:
+            raise ValueError(f"Invalid moe_backend={self.moe_backend!r}, expected 'pytorch' or 'flashinfer'")
+
+    def _build_pytorch_grouped_mm_weights(self):
+        gate_list, up_list, down_list = [], [], []
+        for expert_w in self.experts:
+            gate_list.append(expert_w.gate_proj._get_actual_weight())
+            up_list.append(expert_w.up_proj._get_actual_weight())
+            down_list.append(expert_w.down_proj._get_actual_weight())
+        self._pt_gate_weight = torch.stack(gate_list, dim=0).contiguous()
+        self._pt_up_weight = torch.stack(up_list, dim=0).contiguous()
+        self._pt_down_weight = torch.stack(down_list, dim=0).contiguous()
 
     def _build_flashinfer_weights(self):
         if torch.cuda.is_available():
