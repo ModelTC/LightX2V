@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import torch
 import torch.nn.functional as F
 
@@ -56,9 +58,13 @@ class DreamZeroPreInfer:
         self._freqs = None
         self._freqs_action = None
         self._freqs_state = None
+        self._context_projection_cache = {}
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+
+    def clear_cache(self):
+        self._context_projection_cache.clear()
 
     @staticmethod
     def _rope_params(max_seq_len, dim, theta=10000):
@@ -103,8 +109,54 @@ class DreamZeroPreInfer:
         state_features = F.relu(_category_linear(state, weights.state_encoder.layer1))
         return _category_linear(state_features, weights.state_encoder.layer2)
 
+    @staticmethod
+    def _tensor_cache_id(tensor):
+        if tensor is None:
+            return None
+        return (tensor.data_ptr(), tuple(tensor.shape), str(tensor.device), str(tensor.dtype))
+
+    def _context_cache_key(self, inputs, context, clip_feature, device, dtype):
+        return (
+            str(inputs.get("context_cache_name", inputs.get("cache_name", "pos"))),
+            self._tensor_cache_id(context),
+            self._tensor_cache_id(clip_feature),
+            str(device),
+            str(dtype),
+        )
+
     @torch.no_grad()
-    def infer(self, weights, inputs):
+    def project_context(self, weights, inputs, device, dtype):
+        context = inputs.get("context")
+        clip_feature = inputs.get("clip_feature")
+        if context is None:
+            raise ValueError("DreamZero context projection requires context.")
+        if clip_feature is None:
+            raise ValueError("DreamZero context projection requires clip_feature.")
+
+        cache_key = self._context_cache_key(inputs, context, clip_feature, device, dtype)
+        cached = self._context_projection_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        context = context.to(device=device).to(GET_DTYPE()).squeeze(0)
+        context = weights.text_embedding_0.apply(context.to(self.sensitive_layer_dtype if self.sensitive_layer_dtype != self.infer_dtype else context.dtype))
+        context = F.gelu(context, approximate="tanh")
+        context = weights.text_embedding_2.apply(context)
+
+        clip_feature = clip_feature.to(device=device).to(GET_DTYPE())
+        if clip_feature.dim() == 3:
+            clip_feature = clip_feature.squeeze(0)
+        context_clip = weights.proj_0.apply(clip_feature)
+        context_clip = weights.proj_1.apply(context_clip)
+        context_clip = F.gelu(context_clip, approximate="none")
+        context_clip = weights.proj_3.apply(context_clip)
+        context_clip = weights.proj_4.apply(context_clip)
+        projected_context = torch.cat([context_clip, context], dim=0)
+        self._context_projection_cache[cache_key] = projected_context
+        return projected_context
+
+    @torch.no_grad()
+    def infer_shared(self, weights, inputs):
         x = inputs["video_latents"].to(AI_DEVICE).to(GET_DTYPE())
         if x.shape[0] != 1:
             raise ValueError(f"DreamZero native inference expects batch_size=1, got {x.shape[0]}.")
@@ -152,27 +204,12 @@ class DreamZeroPreInfer:
         embed = weights.time_embedding_2.apply(embed)
         embed0 = weights.time_projection_1.apply(F.silu(embed)).reshape(-1, 6, self.dim)
 
-        context = inputs["context"].to(device=x.device).to(GET_DTYPE()).squeeze(0)
-        context = weights.text_embedding_0.apply(context.to(self.sensitive_layer_dtype if self.sensitive_layer_dtype != self.infer_dtype else context.dtype))
-        context = F.gelu(context, approximate="tanh")
-        context = weights.text_embedding_2.apply(context)
-
-        clip_feature = inputs["clip_feature"].to(device=x.device).to(GET_DTYPE())
-        if clip_feature.dim() == 3:
-            clip_feature = clip_feature.squeeze(0)
-        context_clip = weights.proj_0.apply(clip_feature)
-        context_clip = weights.proj_1.apply(context_clip)
-        context_clip = F.gelu(context_clip, approximate="none")
-        context_clip = weights.proj_3.apply(context_clip)
-        context_clip = weights.proj_4.apply(context_clip)
-        context = torch.cat([context_clip, context], dim=0)
-
         freqs = self._create_freqs(grid_size, int(inputs.get("current_start_frame", 0)), x.device)
         return DreamZeroPreInferOutput(
             x=x,
             embed=embed,
             embed0=embed0,
-            context=context,
+            context=None,
             freqs=freqs,
             freqs_action=self._freqs_action,
             freqs_state=self._freqs_state,
@@ -184,3 +221,17 @@ class DreamZeroPreInfer:
             update_cache=bool(inputs.get("update_cache", False)),
             cache_name=str(inputs.get("cache_name", "pos")),
         )
+
+    @torch.no_grad()
+    def with_context(self, weights, pre_infer_out, inputs):
+        context = self.project_context(weights, inputs, pre_infer_out.x.device, pre_infer_out.x.dtype)
+        return replace(
+            pre_infer_out,
+            context=context,
+            update_cache=bool(inputs.get("update_cache", False)),
+            cache_name=str(inputs.get("cache_name", pre_infer_out.cache_name)),
+        )
+
+    @torch.no_grad()
+    def infer(self, weights, inputs):
+        return self.with_context(weights, self.infer_shared(weights, inputs), inputs)

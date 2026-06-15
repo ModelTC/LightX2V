@@ -6,6 +6,7 @@ from pathlib import Path
 import imageio
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from PIL import Image
 from loguru import logger
@@ -32,7 +33,6 @@ torch_device_module = getattr(torch, AI_DEVICE)
 class WanDreamZeroRunner(WanRunner):
     def __init__(self, config):
         config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)
-        config["cfg_parallel"] = False
         super().__init__(config)
         self.vae_cls = WanVAE
         self.tiny_vae_cls = WanVAE_tiny
@@ -513,12 +513,28 @@ class WanDreamZeroRunner(WanRunner):
 
         self.model.clear_cache(self.cache_name)
         text_encoder_output = self.inputs["text_encoder_output"]
-        self.prompt_embeds = text_encoder_output["context"].to(AI_DEVICE).to(GET_DTYPE())
-        self.negative_prompt_embeds = text_encoder_output.get("context_null")
-        if self.negative_prompt_embeds is not None:
-            self.negative_prompt_embeds = self.negative_prompt_embeds.to(AI_DEVICE).to(GET_DTYPE())
-        elif self.enable_cfg:
-            raise ValueError("DreamZero CFG is enabled but text_encoder_output does not include context_null.")
+        if self.enable_cfg and self.config.get("cfg_parallel", False):
+            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+            cfg_p_rank = dist.get_rank(cfg_p_group)
+            self.prompt_embeds = None
+            self.negative_prompt_embeds = None
+            if cfg_p_rank == 0:
+                context = text_encoder_output.get("context")
+                if context is None:
+                    raise ValueError("DreamZero CFG parallel rank 0 requires context.")
+                self.prompt_embeds = context.to(AI_DEVICE).to(GET_DTYPE())
+            else:
+                context_null = text_encoder_output.get("context_null")
+                if context_null is None:
+                    raise ValueError("DreamZero CFG parallel rank 1 requires context_null.")
+                self.negative_prompt_embeds = context_null.to(AI_DEVICE).to(GET_DTYPE())
+        else:
+            self.prompt_embeds = text_encoder_output["context"].to(AI_DEVICE).to(GET_DTYPE())
+            self.negative_prompt_embeds = text_encoder_output.get("context_null")
+            if self.negative_prompt_embeds is not None:
+                self.negative_prompt_embeds = self.negative_prompt_embeds.to(AI_DEVICE).to(GET_DTYPE())
+            elif self.enable_cfg:
+                raise ValueError("DreamZero CFG is enabled but text_encoder_output does not include context_null.")
 
     def _frame_schedule(self):
         total_frames = min(seq.shape[0] for seq in self.camera_sequences)

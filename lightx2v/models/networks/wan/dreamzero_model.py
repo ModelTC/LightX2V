@@ -31,6 +31,23 @@ class DreamZeroModel(WanModel):
 
     def clear_cache(self, cache_name=None):
         self.transformer_infer.clear_cache(cache_name)
+        self.pre_infer.clear_cache()
+
+    @staticmethod
+    def _gather_cfg_tensor(tensor, group):
+        tensor = tensor.contiguous()
+        gathered = [torch.empty_like(tensor) for _ in range(dist.get_world_size(group))]
+        dist.all_gather(gathered, tensor, group=group)
+        return gathered
+
+    def _prepare_branch_inputs(self, inputs, infer_condition=True, update_cache=False, cache_name="pos"):
+        model_inputs = dict(inputs)
+        if not infer_condition:
+            model_inputs["context"] = model_inputs["negative_context"]
+        model_inputs["update_cache"] = update_cache
+        model_inputs["cache_name"] = cache_name
+        model_inputs["context_cache_name"] = cache_name
+        return model_inputs
 
     @staticmethod
     def _strip_dreamzero_prefix(key):
@@ -109,19 +126,68 @@ class DreamZeroModel(WanModel):
         return weight_dict
 
     @torch.no_grad()
-    def _infer_once(self, inputs, infer_condition=True, update_cache=False, cache_name="pos"):
-        model_inputs = dict(inputs)
-        if not infer_condition:
-            model_inputs["context"] = model_inputs["negative_context"]
-        model_inputs["update_cache"] = update_cache
-        model_inputs["cache_name"] = cache_name
-        pre_infer_out = self.pre_infer.infer(self.pre_weight, model_inputs)
+    def _infer_once(self, inputs, infer_condition=True, update_cache=False, cache_name="pos", shared_pre_infer_out=None):
+        model_inputs = self._prepare_branch_inputs(
+            inputs,
+            infer_condition=infer_condition,
+            update_cache=update_cache,
+            cache_name=cache_name,
+        )
+        if shared_pre_infer_out is None:
+            pre_infer_out = self.pre_infer.infer(self.pre_weight, model_inputs)
+        else:
+            pre_infer_out = self.pre_infer.with_context(self.pre_weight, shared_pre_infer_out, model_inputs)
         video_noise_pred, action_noise_pred = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
         if self.clean_cuda_cache:
             del pre_infer_out
             torch.cuda.empty_cache()
             gc.collect()
         return video_noise_pred, action_noise_pred
+
+    @torch.no_grad()
+    def _infer_cfg_serial(self, inputs, update_cache=False, cache_name="pos"):
+        shared_inputs = dict(inputs)
+        shared_inputs["update_cache"] = update_cache
+        shared_inputs["cache_name"] = cache_name
+        shared_pre_infer_out = self.pre_infer.infer_shared(self.pre_weight, shared_inputs)
+
+        cond_video, cond_action = self._infer_once(
+            inputs,
+            infer_condition=True,
+            update_cache=update_cache,
+            cache_name=self.cfg_cache_name(cache_name, True),
+            shared_pre_infer_out=shared_pre_infer_out,
+        )
+        uncond_video, _uncond_action = self._infer_once(
+            inputs,
+            infer_condition=False,
+            update_cache=update_cache,
+            cache_name=self.cfg_cache_name(cache_name, False),
+            shared_pre_infer_out=shared_pre_infer_out,
+        )
+        return cond_video, cond_action, uncond_video
+
+    @torch.no_grad()
+    def _infer_cfg_parallel(self, inputs, update_cache=False, cache_name="pos"):
+        cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+        assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+        cfg_p_rank = dist.get_rank(cfg_p_group)
+        infer_condition = cfg_p_rank == 0
+        branch_video, branch_action = self._infer_once(
+            inputs,
+            infer_condition=infer_condition,
+            update_cache=update_cache,
+            cache_name=self.cfg_cache_name(cache_name, infer_condition),
+        )
+        video_outputs = self._gather_cfg_tensor(branch_video, cfg_p_group)
+        cond_video = video_outputs[0]
+        uncond_video = video_outputs[1]
+
+        cond_action = None
+        if branch_action is not None:
+            action_outputs = self._gather_cfg_tensor(branch_action, cfg_p_group)
+            cond_action = action_outputs[0]
+        return cond_video, cond_action, uncond_video
 
     @torch.no_grad()
     def infer(self, inputs):
@@ -131,18 +197,18 @@ class DreamZeroModel(WanModel):
         cache_name = inputs.get("cache_name", "pos")
 
         if enable_cfg:
-            cond_video, cond_action = self._infer_once(
-                inputs,
-                infer_condition=True,
-                update_cache=update_cache,
-                cache_name=self.cfg_cache_name(cache_name, True),
-            )
-            uncond_video, _uncond_action = self._infer_once(
-                inputs,
-                infer_condition=False,
-                update_cache=update_cache,
-                cache_name=self.cfg_cache_name(cache_name, False),
-            )
+            if self.config.get("cfg_parallel", False):
+                cond_video, cond_action, uncond_video = self._infer_cfg_parallel(
+                    inputs,
+                    update_cache=update_cache,
+                    cache_name=cache_name,
+                )
+            else:
+                cond_video, cond_action, uncond_video = self._infer_cfg_serial(
+                    inputs,
+                    update_cache=update_cache,
+                    cache_name=cache_name,
+                )
             video_noise_pred = uncond_video + guide_scale * (cond_video - uncond_video)
             action_noise_pred = cond_action
         else:

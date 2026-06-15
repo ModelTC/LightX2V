@@ -20,6 +20,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             local_attn_size = max_chunk_size * int(config.get("num_frame_per_block", 2)) + 1
         self.max_attention_size = int(local_attn_size) * self.frame_seqlen
         self.kv_caches = {}
+        self.cross_attn_kv_caches = {}
 
     def create_empty_kv_cache(self, dtype, device):
         return [torch.zeros(2, 0, self.num_heads, self.head_dim, dtype=dtype, device=device) for _ in range(self.blocks_num)]
@@ -34,12 +35,29 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
     def set_kv_cache(self, cache_name, cache):
         self.kv_caches[cache_name] = cache
 
+    def get_cross_attn_kv_cache(self, cache_name):
+        cache = self.cross_attn_kv_caches.get(cache_name)
+        if cache is None:
+            cache = [None for _ in range(self.blocks_num)]
+            self.cross_attn_kv_caches[cache_name] = cache
+        return cache
+
+    @staticmethod
+    def _cross_attn_cache_key(cache_name, context):
+        return (cache_name, context.data_ptr(), tuple(context.shape), str(context.device), str(context.dtype))
+
     def clear_cache(self, cache_name=None):
         if cache_name is None:
             self.kv_caches.clear()
+            self.cross_attn_kv_caches.clear()
         else:
-            for name in (cache_name, f"{cache_name}_cond", f"{cache_name}_uncond"):
+            cache_names = {cache_name, f"{cache_name}_cond", f"{cache_name}_uncond"}
+            for name in cache_names:
                 self.kv_caches.pop(name, None)
+            for key in list(self.cross_attn_kv_caches.keys()):
+                key_cache_name = key[0] if isinstance(key, tuple) else key
+                if key_cache_name in cache_names:
+                    self.cross_attn_kv_caches.pop(key, None)
 
     @staticmethod
     def _token_modulation(x):
@@ -139,19 +157,33 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             max_seqlen_q=q_attn.shape[0],
             max_seqlen_kv=k_attn.shape[0],
         )
-        updated_cache = torch.stack([new_k, new_v], dim=0)
+        updated_cache = None
+        if pre_infer_out.update_cache:
+            updated_cache = torch.stack([new_k, new_v], dim=0)
         return phase.self_attn_o.apply(attn_out), updated_cache
 
-    def infer_cross_attn_dreamzero(self, phase, x, y_out, gate_msa, context):
+    def infer_cross_attn_dreamzero(self, phase, x, y_out, gate_msa, pre_infer_out):
         x = x + y_out * gate_msa
         norm3_out = phase.norm3.apply(x)
-        context_img = context[:257]
-        context_txt = context[257:]
+        context = pre_infer_out.context
+        if context is None:
+            raise ValueError("DreamZero cross-attention requires projected context.")
 
         n, d = self.num_heads, self.head_dim
         q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
-        k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context_txt)).view(-1, n, d)
-        v = phase.cross_attn_v.apply(context_txt).view(-1, n, d)
+        cross_attn_kv_cache = self.get_cross_attn_kv_cache(self._cross_attn_cache_key(pre_infer_out.cache_name, context))
+        cached_kv = cross_attn_kv_cache[self.block_idx]
+        if cached_kv is None:
+            context_img = context[:257]
+            context_txt = context[257:]
+            k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context_txt)).view(-1, n, d)
+            v = phase.cross_attn_v.apply(context_txt).view(-1, n, d)
+            k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
+            v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
+            cross_attn_kv_cache[self.block_idx] = (k, v, k_img, v_img)
+        else:
+            k, v, k_img, v_img = cached_kv
+
         cu_q = torch.tensor([0, q.shape[0]], device=q.device, dtype=torch.int32)
         cu_kv = torch.tensor([0, k.shape[0]], device=k.device, dtype=torch.int32)
         attn_out = phase.cross_attn_1.apply(
@@ -164,8 +196,6 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             max_seqlen_kv=k.shape[0],
         )
 
-        k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
-        v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
         cu_kv_img = torch.tensor([0, k_img.shape[0]], device=k_img.device, dtype=torch.int32)
         img_attn_out = phase.cross_attn_2.apply(
             q=q,
@@ -204,7 +234,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             x,
             y_out,
             gate_msa,
-            pre_infer_out.context,
+            pre_infer_out,
         )
         y = self.infer_ffn_dreamzero(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
         x = x + attn_out + y * c_gate_msa
@@ -212,11 +242,12 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
 
     def infer_main_blocks(self, blocks, pre_infer_out, kv_cache):
         x = pre_infer_out.x
-        updated_caches = []
+        updated_caches = [] if pre_infer_out.update_cache else None
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
             x, updated_cache = self.infer_block(blocks[block_idx], x, pre_infer_out, kv_cache)
-            updated_caches.append(updated_cache)
+            if pre_infer_out.update_cache:
+                updated_caches.append(updated_cache)
         return x, updated_caches
 
     def infer_action_decoder(self, weights, x, pre_infer_out):

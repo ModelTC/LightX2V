@@ -8,7 +8,7 @@ class DreamZeroPreInferOutput:
     x: torch.Tensor
     embed: torch.Tensor
     embed0: torch.Tensor
-    context: torch.Tensor
+    context: torch.Tensor | None
     freqs: torch.Tensor
     freqs_action: torch.Tensor
     freqs_state: torch.Tensor
