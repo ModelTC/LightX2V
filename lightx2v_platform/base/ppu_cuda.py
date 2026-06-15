@@ -5,8 +5,8 @@ from lightx2v_platform.base.nvidia import CudaDevice
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
-@PLATFORM_DEVICE_REGISTER("metax_cuda")
-class MetaxDevice(CudaDevice):
+@PLATFORM_DEVICE_REGISTER("ppu_cuda")
+class PpuDevice(CudaDevice):
     name = "cuda"
 
     @staticmethod
