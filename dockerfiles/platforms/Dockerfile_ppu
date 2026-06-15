@@ -33,8 +33,6 @@ RUN pip install --no-cache-dir av
 
 # Fix dependencies
 RUN pip install -U peft
-RUN pip install matplotlib
-RUN pip install librosa
 # sage-attn slower than flash-attn3
 RUN pip install sageattention
 
