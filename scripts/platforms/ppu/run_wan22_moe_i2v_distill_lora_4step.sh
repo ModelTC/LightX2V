@@ -7,6 +7,7 @@ model_path=
 export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
+export PLATFORM="ppu_cuda"
 source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \
