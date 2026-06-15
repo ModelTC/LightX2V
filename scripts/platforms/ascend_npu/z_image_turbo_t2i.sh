@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/path/to/LightX2V
-model_path=Tongyi-MAI/Z-Image-Turbo
+lightx2v_path=/data/wushuo1/LightX2V
+model_path=/data/wushuo1/to5_models/Z-Image-Turbo
 
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES=0
