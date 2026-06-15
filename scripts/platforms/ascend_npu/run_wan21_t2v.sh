@@ -3,8 +3,8 @@
 # System management interface: npu-smi info
 
 # set path firstly
-lightx2v_path=
-model_path=
+lightx2v_path=/data/wushuo1/LightX2V
+model_path=/data/wushuo1/to5_models/Wan2.1-T2V-1.3B
 
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES=0

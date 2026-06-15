@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/ddc/yong/LightX2V
-model_path=/data/nvme1/models/Qwen/Qwen-Image-2512
+lightx2v_path=/data/wushuo1/LightX2V
+model_path=/data/wushuo1/to5_models/Qwen-Image-2512
 
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES=0

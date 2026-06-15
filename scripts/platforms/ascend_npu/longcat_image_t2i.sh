@@ -3,8 +3,8 @@
 # LongCat Image T2I Inference Script
 # Usage: bash longcat_image_t2i.sh
 
-lightx2v_path=/workspace
-model_path=/workspace/models/LongCat-Image
+lightx2v_path=/data/wushuo1/LightX2V
+model_path=/data/wushuo1/to5_models/LongCat-Image
 
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES=0
