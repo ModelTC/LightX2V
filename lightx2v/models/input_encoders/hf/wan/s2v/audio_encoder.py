@@ -1,7 +1,10 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import math
 
-import librosa
+try:
+    import librosa
+except ImportError:
+    librosa = None
 import numpy as np
 import torch
 import torch.nn.functional as F

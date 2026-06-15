@@ -189,6 +189,8 @@ class DefaultRunner(BaseRunner):
         self.input_info.negative_prompt = inputs.get("negative_prompt", "")
         if "image_path" in self.input_info.__dataclass_fields__:
             self.input_info.image_path = inputs.get("image_path", "")
+        if "state_path" in self.input_info.__dataclass_fields__:
+            self.input_info.state_path = inputs.get("state_path", "")
         if "audio_path" in self.input_info.__dataclass_fields__:
             self.input_info.audio_path = inputs.get("audio_path", "")
         if "video_path" in self.input_info.__dataclass_fields__:
@@ -196,6 +198,8 @@ class DefaultRunner(BaseRunner):
         if "src_video" in self.input_info.__dataclass_fields__:
             self.input_info.src_video = inputs.get("src_video", "")
         self.input_info.save_result_path = inputs.get("save_result_path", "")
+        if "save_action_path" in self.input_info.__dataclass_fields__:
+            self.input_info.save_action_path = inputs.get("save_action_path", "")
 
     def set_config(self, config_modify):
         logger.info(f"modify config: {config_modify}")

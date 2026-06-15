@@ -271,6 +271,7 @@ class I2VAInputInfo:
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    state_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     save_action_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)

@@ -1,6 +1,9 @@
 import math
 
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
 import torch
 import torch.nn.functional as F
 
