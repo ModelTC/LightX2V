@@ -15,7 +15,10 @@
 - 燧原 Enflame S60 (GCU)
 - Intel AIPC PTL
 - 天数智芯 iluvatar
+- 平头哥 PPU
 
 相关的docker环境可以参考：https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
+
+相关的docker镜像可以参考：https://hub.docker.com/r/lightx2v/lightx2v/tags
 
 相关的使用脚本可以参考：https://github.com/ModelTC/LightX2V/tree/main/scripts/platforms
