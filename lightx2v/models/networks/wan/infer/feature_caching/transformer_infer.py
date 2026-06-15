@@ -237,7 +237,7 @@ class WanTransformerInferTaylorCaching(WanTransformerInferCaching, BaseTaylorCac
             else:
                 self.derivative_approximation(self.blocks_cache_odd[block_idx], "cross_attn_out", attn_out)
 
-            y_out = self.infer_ffn(weights.blocks[block_idx].compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa)
+            y_out = self.infer_ffn(weights.blocks[block_idx].compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
             if self.scheduler.infer_condition:
                 self.derivative_approximation(self.blocks_cache_even[block_idx], "ffn_out", y_out)
             else:
@@ -369,7 +369,7 @@ class WanTransformerInferAdaCaching(WanTransformerInferCaching):
                     self.args_odd.now_residual_tiny = y_out * gate_msa.squeeze(0)
 
             x, attn_out = self.infer_cross_attn(weights.blocks[block_idx].compute_phases[2], x, context, y_out, gate_msa)
-            y_out = self.infer_ffn(weights.blocks[block_idx].compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa)
+            y_out = self.infer_ffn(weights.blocks[block_idx].compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
             x = self.post_process(x, y_out, c_gate_msa)
 
         if self.scheduler.infer_condition:
@@ -634,7 +634,7 @@ class WanTransformerInferCustomCaching(WanTransformerInferCaching, BaseTaylorCac
 
             y_out = self.infer_self_attn(weights.blocks[block_idx].compute_phases[1], grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa)
             x, attn_out = self.infer_cross_attn(weights.blocks[block_idx].compute_phases[2], x, context, y_out, gate_msa)
-            y_out = self.infer_ffn(weights.blocks[block_idx].compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa)
+            y_out = self.infer_ffn(weights.blocks[block_idx].compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
             x = self.post_process(x, y_out, c_gate_msa)
 
         if self.scheduler.infer_condition:

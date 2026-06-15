@@ -54,6 +54,16 @@ void scaled_mxfp6_quant_sm120(
 void scaled_mxfp8_quant_sm120(
     torch::Tensor& output, torch::Tensor const& input, torch::Tensor& output_sf);
 
+void scaled_mxfp8_gelu_quant_sm120(
+    torch::Tensor& output, torch::Tensor const& input, torch::Tensor& output_sf);
+
+void scaled_mxfp8_modulate_quant_sm120(
+    torch::Tensor& output,
+    torch::Tensor const& input,
+    torch::Tensor const& scale,
+    torch::Tensor const& shift,
+    torch::Tensor& output_sf);
+
 void cutlass_scaled_nvfp4_mm_sm120(
     torch::Tensor& D,
     torch::Tensor const& A,
@@ -90,6 +100,16 @@ void cutlass_scaled_mxfp8_mm_sm120(
     torch::Tensor const& B_sf,
     torch::Tensor const& alpha,
     c10::optional<torch::Tensor> const& bias);
+
+void cutlass_scaled_mxfp8_mm_residual_gate_sm120(
+    torch::Tensor& residual,
+    torch::Tensor const& A,
+    torch::Tensor const& B,
+    torch::Tensor const& A_sf,
+    torch::Tensor const& B_sf,
+    torch::Tensor const& alpha,
+    c10::optional<torch::Tensor> const& bias,
+    torch::Tensor const& gate);
 
 at::Tensor dequantize_kv_cache_fp4_cuda(
     at::TensorList values,

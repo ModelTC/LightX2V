@@ -4,8 +4,14 @@ import random
 from typing import Dict, List
 
 import cv2
-import matplotlib
-import matplotlib.pyplot as plt
+
+try:
+    import matplotlib
+    import matplotlib.pyplot as plt
+except ImportError:
+    matplotlib = None
+    plt = None
+
 import numpy as np
 from pose2d_utils import AAPoseMeta
 

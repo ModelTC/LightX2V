@@ -83,6 +83,19 @@ def auto_calc_config(config):
     elif config["model_cls"] == "hunyuan3d":
         # Hunyuan3D shape loads hunyuan3d-dit-v2-1/config.yaml + checkpoint in the runner.
         pass
+    elif config["model_cls"] == "hidream_o1_image":
+        pass
+    elif config["model_cls"] == "wan2.2_s2v":
+        config_path = os.path.join(config["model_path"], "config.json")
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        config.setdefault("text_dim", 4096)
+        config.setdefault("patch_size", (1, 2, 2))
+        config.setdefault("window_size", (-1, -1))
+        config.setdefault("qk_norm", True)
+        config.setdefault("cross_attn_norm", True)
     elif config["model_cls"] == "worldmirror":
         # WorldMirror weights live under {model_path}/{subfolder}/, with a config.json
         # alongside model.safetensors. The runner loads this config directly; here we
@@ -121,6 +134,20 @@ def auto_calc_config(config):
                 config["config_path"] = wm_config
             if wm_ckpt:
                 config["ckpt_path"] = wm_ckpt
+    elif config["model_cls"] == "dreamzero":
+        config_path = os.path.join(config["model_path"], "config.json")
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+            action_head_config = model_config.get("action_head_cfg", {}).get("config", {})
+            diffusion_model_config = action_head_config.get("diffusion_model_cfg", {})
+            config.update(action_head_config)
+            config.update(diffusion_model_config)
+            if "num_frames" in config:
+                config["target_video_length"] = config["num_frames"]
+            if "out_dim" in config:
+                config["num_channels_latents"] = config["out_dim"]
     elif config["model_cls"] == "longcat_image":  # Special config for longcat_image: load both root and transformer config
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -192,6 +219,8 @@ def auto_calc_config(config):
                 config["vae_scale_factor"] = 2 ** len(vae_config["temperal_downsample"])
             elif "block_out_channels" in vae_config:
                 config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
+            if config["model_cls"] in ["ernie_image", "ernie_image_turbo"]:
+                config["vae_scale_factor"] = 2 ** len(vae_config["block_out_channels"])
 
     return config
 

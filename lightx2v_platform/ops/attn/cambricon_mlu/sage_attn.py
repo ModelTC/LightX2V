@@ -23,9 +23,21 @@ class MluSageAttnWeight(AttnWeightTemplate):
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
         elif len(q.shape) == 4:
             bs = q.shape[0]
-        softmax_scale = 1 / math.sqrt(q.shape[-1])
+        softmax_scale = kwds.get("softmax_scale", None)
+        if softmax_scale is None:
+            softmax_scale = 1 / math.sqrt(q.shape[-1])
+        causal = kwds.get("causal", False)
         x = tmo.sage_attn(
-            q=q, k=k, v=v, cu_seq_lens_q=None, cu_seq_lens_kv=None, max_seq_len_kv=max_seqlen_kv, max_seq_len_q=max_seqlen_q, is_causal=False, compute_dtype=torch.bfloat16, softmax_scale=softmax_scale
+            q=q,
+            k=k,
+            v=v,
+            cu_seq_lens_q=None,
+            cu_seq_lens_kv=None,
+            max_seq_len_kv=max_seqlen_kv,
+            max_seq_len_q=max_seqlen_q,
+            is_causal=causal,
+            compute_dtype=torch.bfloat16,
+            softmax_scale=softmax_scale,
         )
         x = x.reshape(bs * max_seqlen_q, -1)
         return x

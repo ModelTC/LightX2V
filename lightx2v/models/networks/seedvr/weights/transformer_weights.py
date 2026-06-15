@@ -13,7 +13,6 @@ class SeedVRTransformerWeights(WeightModule):
         self.qk_bias = config.get("qk_bias", False)
         self.mlp_type = config.get("mlp_type", "swiglu")
 
-        mm_layers = config.get("mm_layers", 0)
         window = config.get("window")
         window_method = config.get("window_method")
         if window is None or isinstance(window[0], int):
@@ -21,11 +20,13 @@ class SeedVRTransformerWeights(WeightModule):
         if window_method is None or isinstance(window_method, str):
             window_method = [window_method] * self.blocks_num
 
+        mm_layers = config.get("mm_layers", self.blocks_num)
+        last_layer_vid_only = bool(config.get("last_layer_vid_only"))
         blocks = WeightModuleList(
             SeedVRTransformerBlockWeights(
                 block_index=i,
                 shared_weights=not ((i < mm_layers) if isinstance(mm_layers, int) else mm_layers[i]),
-                is_last_layer=(i == self.blocks_num - 1),
+                vid_only=(last_layer_vid_only and i == self.blocks_num - 1),
                 mm_type=self.mm_type,
                 rms_norm_type=self.rms_norm_type,
                 norm_eps=self.norm_eps,
@@ -45,7 +46,7 @@ class SeedVRTransformerBlockWeights(WeightModule):
         *,
         block_index: int,
         shared_weights: bool,
-        is_last_layer: bool,
+        vid_only: bool,
         mm_type: str,
         rms_norm_type: str,
         norm_eps: float,
@@ -57,7 +58,7 @@ class SeedVRTransformerBlockWeights(WeightModule):
         super().__init__()
         self.block_index = block_index
         self.shared_weights = shared_weights
-        self.vid_only = is_last_layer
+        self.vid_only = vid_only
         self.window = window
         self.window_method = window_method
         self.mlp_type = mlp_type

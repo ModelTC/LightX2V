@@ -217,7 +217,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             block.compute_phases[0], pre_infer_out.grid_sizes.tensor, x, pre_infer_out.seq_lens, pre_infer_out.freqs, shift_msa, scale_msa, pre_infer_out.adapter_args.get("is_ref_prefill", False)
         )
         x, attn_out = self.infer_cross_attn_with_kvcache(block.compute_phases[1], x, pre_infer_out.context, y_out, gate_msa)
-        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
+        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
 
         if pre_infer_out.adapter_args.get("audio_encoder_output") is None:
@@ -298,8 +298,20 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             else:
                 start_frame = segment_idx * frames
                 q_rope, k_rope = self._apply_rope_sp(q, k, grid_sizes, freqs, start_frame)
-                k_to_store = all2all_seq2head(k_rope, group=self.seq_p_group)
-                v_to_store = all2all_seq2head(v, group=self.seq_p_group)
+                use_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
+                use_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
+                k_to_store = all2all_seq2head(
+                    k_rope,
+                    group=self.seq_p_group,
+                    use_fp8_comm=use_fp8_comm,
+                    use_fp4_comm=use_fp4_comm,
+                )
+                v_to_store = all2all_seq2head(
+                    v,
+                    group=self.seq_p_group,
+                    use_fp8_comm=use_fp8_comm,
+                    use_fp4_comm=use_fp4_comm,
+                )
                 kv_cache.store_kv(k_to_store, v_to_store, local_start_idx, local_end_idx, self.block_idx)
         else:
             kv_cache.store_kv(k, v, local_start_idx, local_end_idx, self.block_idx)

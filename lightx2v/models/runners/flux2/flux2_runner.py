@@ -2,6 +2,7 @@ import gc
 import math
 import os
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -11,6 +12,7 @@ from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2S
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -106,28 +108,89 @@ class Flux2BaseRunner(DefaultRunner):
             input_image = [input_image]
 
         condition_images = []
-        for index, img in enumerate(input_image):
-            image_processor.check_image_input(img)
-            image_width, image_height = img.size
-            if image_width * image_height > 1024 * 1024:
-                img = image_processor._resize_to_target_area(img, 1024 * 1024)
-                image_width, image_height = img.size
+        max_image_area = self.config.get("max_image_area", 1024 * 1024)
+        inpaint_mask = None
+        inpaint_mask_enabled = self.config.get("inpaint_mask_enabled", False)
+        if inpaint_mask_enabled:
+            main_img = input_image[0]
+            image_processor.check_image_input(main_img)
+            processed_img, target_shape = self._preprocess_condition_image(image_processor, main_img, max_image_area, vae_scale_factor)
+            self.input_info.target_shape = target_shape
+            processed_tensor = processed_img.to(AI_DEVICE)
+            condition_images.extend([processed_tensor, processed_tensor])
 
-            multiple_of = vae_scale_factor * 2
-            image_width = (image_width // multiple_of) * multiple_of
-            image_height = (image_height // multiple_of) * multiple_of
-            img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
-            condition_images.append(img.to(AI_DEVICE))
-            if index == 0:
-                self.input_info.target_shape = (image_height, image_width)
+            if len(input_image) > 1:
+                image_processor.check_image_input(input_image[1])
+                inpaint_mask = self._preprocess_inpaint_mask_image(image_processor, input_image[1], main_img, max_image_area, target_shape)
+        else:
+            for index, img in enumerate(input_image):
+                image_processor.check_image_input(img)
+                processed_img, target_shape = self._preprocess_condition_image(image_processor, img, max_image_area, vae_scale_factor)
+                condition_images.append(processed_img.to(AI_DEVICE))
+                if index == 0:
+                    self.input_info.target_shape = target_shape
 
         torch_device_module.empty_cache()
         gc.collect()
 
         return {
             "text_encoder_output": text_encoder_output,
-            "image_encoder_output": {"image_tensor": condition_images},
+            "image_encoder_output": {"image_tensor": condition_images, "inpaint_mask": inpaint_mask},
         }
+
+    @staticmethod
+    def _maybe_resize_to_max_area(image_processor, img, max_image_area):
+        width, height = img.size
+        if max_image_area is not None and max_image_area > 0 and width * height > max_image_area:
+            img = image_processor._resize_to_target_area(img, max_image_area)
+        return img
+
+    @staticmethod
+    def _snap_image_dimensions(width, height, vae_scale_factor):
+        multiple_of = vae_scale_factor * 2
+        return (width // multiple_of) * multiple_of, (height // multiple_of) * multiple_of
+
+    def _preprocess_condition_image(self, image_processor, img, max_image_area, vae_scale_factor):
+        img = self._maybe_resize_to_max_area(image_processor, img, max_image_area)
+        image_width, image_height = self._snap_image_dimensions(*img.size, vae_scale_factor)
+        img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
+        return img, (image_height, image_width)
+
+    def _preprocess_inpaint_mask_image(self, image_processor, mask_img, reference_img, max_image_area, target_shape):
+        mask_img = mask_img.convert("RGB")
+        if mask_img.size != reference_img.size:
+            mask_img = mask_img.resize(reference_img.size)
+        mask_img = self._maybe_resize_to_max_area(image_processor, mask_img, max_image_area)
+        image_height, image_width = target_shape
+        cropped_mask = image_processor.resize(mask_img, image_height, image_width, resize_mode="crop")
+        return self._prepare_inpaint_mask(cropped_mask)
+
+    def _prepare_inpaint_mask(self, mask):
+        if mask is None:
+            return None
+
+        from PIL import Image
+
+        height, width = self.input_info.target_shape
+        multiple_of = self.config.get("vae_scale_factor", 8) * 2
+        packed_h = height // multiple_of
+        packed_w = width // multiple_of
+
+        resample = getattr(Image, "Resampling", Image).BILINEAR
+        mask = mask.convert("RGB").resize((packed_w, packed_h), resample)
+        mask = torch.from_numpy(np.array(mask, dtype=np.float32) / 255.0)
+        mask = mask.permute(2, 0, 1).unsqueeze(0)
+        mask = mask.mean(dim=1, keepdim=True)
+
+        blur_size = getattr(self.input_info, "inpaint_blur_size", None)
+        blur_sigma = getattr(self.input_info, "inpaint_blur_sigma", None)
+        if blur_size is not None and blur_sigma is not None:
+            from torchvision.transforms import GaussianBlur
+
+            blur = GaussianBlur(kernel_size=blur_size * 2 + 1, sigma=blur_sigma)
+            mask = blur(mask)
+
+        return mask.clamp(0, 1).view(1, packed_h * packed_w, 1).to(AI_DEVICE)
 
     def _prepare_text_ids(self, x):
         B, L, _ = x.shape
@@ -162,9 +225,11 @@ class Flux2BaseRunner(DefaultRunner):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
 
-        input_image_tensor = self.inputs["image_encoder_output"]["image_tensor"]
+        image_encoder_output = self.inputs["image_encoder_output"]
+        input_image_tensor = image_encoder_output["image_tensor"]
+        inpaint_mask = image_encoder_output.get("inpaint_mask")
 
-        self.model.scheduler.prepare_i2i(self.input_info, input_image_tensor, self.vae)
+        self.model.scheduler.prepare_i2i(self.input_info, input_image_tensor, self.vae, inpaint_mask=inpaint_mask)
 
         latents, generator = self.run(total_steps)
         return latents, generator
@@ -296,7 +361,7 @@ class Flux2BaseRunner(DefaultRunner):
         latents, generator = self.run_dit()
         images = self.run_vae_decoder(latents)
 
-        if not input_info.return_result_tensor:
+        if not input_info.return_result_tensor and is_main_process():
             image = images[0]
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")

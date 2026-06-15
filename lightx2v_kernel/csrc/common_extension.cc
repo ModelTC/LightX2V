@@ -27,6 +27,16 @@ TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
   m.impl("scaled_mxfp8_quant_sm120", torch::kCUDA, &scaled_mxfp8_quant_sm120);
 
   m.def(
+      "scaled_mxfp8_gelu_quant_sm120(Tensor! output, Tensor! input,"
+      "                 Tensor! output_scale) -> ()");
+  m.impl("scaled_mxfp8_gelu_quant_sm120", torch::kCUDA, &scaled_mxfp8_gelu_quant_sm120);
+
+  m.def(
+      "scaled_mxfp8_modulate_quant_sm120(Tensor! output, Tensor! input, Tensor scale, Tensor shift,"
+      "                 Tensor! output_scale) -> ()");
+  m.impl("scaled_mxfp8_modulate_quant_sm120", torch::kCUDA, &scaled_mxfp8_modulate_quant_sm120);
+
+  m.def(
       "scaled_mxfp6_quant_sm120(Tensor! output, Tensor! input,"
       "                 Tensor! output_scale) -> ()");
   m.impl("scaled_mxfp6_quant_sm120", torch::kCUDA, &scaled_mxfp6_quant_sm120);
@@ -45,6 +55,11 @@ TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
       "cutlass_scaled_mxfp8_mm_sm120(Tensor! out, Tensor mat_a, Tensor mat_b, Tensor scales_a, Tensor scales_b, Tensor "
       "alpha, Tensor? bias) -> ()");
   m.impl("cutlass_scaled_mxfp8_mm_sm120", torch::kCUDA, &cutlass_scaled_mxfp8_mm_sm120);
+
+  m.def(
+      "cutlass_scaled_mxfp8_mm_residual_gate_sm120(Tensor! residual, Tensor mat_a, Tensor mat_b, Tensor scales_a, "
+      "Tensor scales_b, Tensor alpha, Tensor? bias, Tensor gate) -> ()");
+  m.impl("cutlass_scaled_mxfp8_mm_residual_gate_sm120", torch::kCUDA, &cutlass_scaled_mxfp8_mm_residual_gate_sm120);
 
   m.def(
       "dequantize_kv_cache_fp4(Tensor[] values, Tensor[] scale_factors, Tensor[] amax, "

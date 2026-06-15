@@ -14,7 +14,10 @@ Currently supported backends include:
 - Enflame S60 (GCU)
 - Intel AIPC PTL
 - iluvatar
+- T-head PPU
 
 For the corresponding Docker environments, see: https://github.com/ModelTC/LightX2V/tree/main/dockerfiles/platforms
+
+For the corresponding docker images, see: https://hub.docker.com/r/lightx2v/lightx2v/tags
 
 For the corresponding usage scripts, see: https://github.com/ModelTC/LightX2V/tree/main/scripts/platforms

@@ -31,3 +31,4 @@ save_results/*
 *.egg-info/
 lightx2v_train/output_train/*
 lightx2v_train/output_infer/*
+.gitnexus

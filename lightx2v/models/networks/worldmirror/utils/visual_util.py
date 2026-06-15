@@ -8,7 +8,11 @@ import os
 from typing import Tuple
 
 import cv2
-import matplotlib
+
+try:
+    import matplotlib
+except ImportError:
+    matplotlib = None
 import numpy as np
 import requests
 

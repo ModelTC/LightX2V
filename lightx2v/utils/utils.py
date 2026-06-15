@@ -727,7 +727,7 @@ def validate_config_paths(config: dict) -> None:
     Raises:
         FileNotFoundError: If any checkpoint path in config does not exist
     """
-    # Check dit_quantized_ckpt or dit_original_ckpt
+    # Check DiT / adapter checkpoints
     if "dit_quantized_ckpt" in config and config["dit_quantized_ckpt"] is not None:
         check_path_exists(config["dit_quantized_ckpt"])
         logger.debug(f"✓ Verified dit_quantized_ckpt: {config['dit_quantized_ckpt']}")
@@ -735,6 +735,12 @@ def validate_config_paths(config: dict) -> None:
     if "dit_original_ckpt" in config and config["dit_original_ckpt"] is not None:
         check_path_exists(config["dit_original_ckpt"])
         logger.debug(f"✓ Verified dit_original_ckpt: {config['dit_original_ckpt']}")
+
+    if config.get("model_cls", "") == "infinitetalk":
+        if config.get("adapter_model_path", None) is None:
+            raise ValueError("InfiniteTalk requires adapter_model_path in config.")
+        check_path_exists(config["adapter_model_path"])
+        logger.debug(f"✓ Verified adapter_model_path: {config['adapter_model_path']}")
 
     # For wan2.2, check high and low noise checkpoints
     model_cls = config.get("model_cls", "")

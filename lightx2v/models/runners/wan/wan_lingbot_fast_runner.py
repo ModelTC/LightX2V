@@ -12,7 +12,7 @@ from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import get_rank_and_world_size, wan_vae_to_comfy
+from lightx2v.utils.utils import get_rank_and_world_size
 from lightx2v.utils.video_recorder import VideoRecorder
 
 try:
@@ -33,11 +33,6 @@ class LingbotFastRunner(LingbotRunner):
     def __init__(self, config):
         WanRunner.__init__(self, config)
         self.control_type = config.get("control_type", "cam")
-        self.is_live = config.get("is_live", False)
-        if self.is_live:
-            self.width = self.config["target_width"]
-            self.height = self.config["target_height"]
-            self.run_main = self.run_main_live
 
     def load_transformer(self):
         wan_model_kwargs = {
@@ -99,18 +94,14 @@ class LingbotFastRunner(LingbotRunner):
 
         return self.model.scheduler.stream_output
 
-    def decode_segment_latents(self, segment_idx: int, latents: torch.Tensor) -> torch.Tensor:
-        return self.run_vae_decoder(latents.detach().clone())
+    def decode_segment_latents(self, segment_idx: int, segment_latents: torch.Tensor) -> torch.Tensor:
+        is_first = segment_idx == 0
+        is_last = segment_idx == self.video_segment_num - 1
+        return self.vae_decoder.cached_decode_withflag(segment_latents.to(GET_DTYPE()), is_first, is_last)
 
     def init_run(self):
         self.init_kv_cache_manager()
         super().init_run()
-
-    def end_run(self):
-        kv_mgr = getattr(getattr(self, "model", None), "kv_cache_manager", None)
-        if kv_mgr is not None:
-            kv_mgr.save_calibration()
-        super().end_run()
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self, total_steps=None):
@@ -123,49 +114,47 @@ class LingbotFastRunner(LingbotRunner):
             self.vae_decoder = self.load_vae_decoder()
         vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=torch.device("cuda"), vae_decoder=self.vae_decoder)
 
-        with (
-            no_sync_profiling(enabled=vae_decoder.is_async),
-            ProfilingContext4DebugL1(
+        with no_sync_profiling(enabled=vae_decoder.is_async):
+            with ProfilingContext4DebugL1(
                 f"AR chunk total {self.video_segment_num} chunks",
                 recorder_mode=GET_RECORDER_MODE(),
                 metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
                 metrics_labels=["DefaultRunner"],
-            ),
-        ):
-            try:
-                for segment_idx in range(self.video_segment_num):
-                    logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
-                    with ProfilingContext4DebugL1(
-                        f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
-                        recorder_mode=GET_RECORDER_MODE(),
-                        metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
-                        metrics_labels=["DefaultRunner"],
-                    ):
-                        self.check_stop()
-                        self.init_run_segment(segment_idx)
-                        latents = self.run_segment(segment_idx)
+            ):
+                try:
+                    for segment_idx in range(self.video_segment_num):
+                        logger.info(f"start chunk {segment_idx + 1}/{self.video_segment_num}")
+                        with ProfilingContext4DebugL1(
+                            f"chunk end2end {segment_idx + 1}/{self.video_segment_num}",
+                            recorder_mode=GET_RECORDER_MODE(),
+                            metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
+                            metrics_labels=["DefaultRunner"],
+                        ):
+                            self.check_stop()
+                            self.init_run_segment(segment_idx)
+                            latents = self.run_segment(segment_idx)
 
-                        with ProfilingContext4DebugL1("step_pre_in_rerun"):
-                            self.model.scheduler.step_pre(
-                                seg_index=segment_idx,
-                                step_index=self.model.scheduler.infer_steps - 1,
-                                is_rerun=True,
-                            )
-                        with ProfilingContext4DebugL1("infer_main_in_rerun"):
-                            self.model.infer(self.inputs)
+                            with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                                self.model.scheduler.step_pre(
+                                    seg_index=segment_idx,
+                                    step_index=self.model.scheduler.infer_steps - 1,
+                                    is_rerun=True,
+                                )
+                            with ProfilingContext4DebugL1("infer_main_in_rerun"):
+                                self.model.infer(self.inputs)
 
-                    vae_decoder.submit(self.decode_segment_latents, segment_idx, latents)
-                    torch.cuda.empty_cache()
-                decoded_chunks = vae_decoder.finish()
-            finally:
-                if "vae_decoder" in locals():
-                    vae_decoder.finish()
-                if lazy_vae:
-                    del self.vae_decoder
-                    torch.cuda.empty_cache()
-                    gc.collect()
+                        vae_decoder.submit(self.decode_segment_latents, segment_idx, latents)
+                        torch.cuda.empty_cache()
+                    decoded_chunks = vae_decoder.finish()
+                finally:
+                    if "vae_decoder" in locals():
+                        vae_decoder.finish()
+                    if lazy_vae:
+                        del self.vae_decoder
+                        torch.cuda.empty_cache()
+                        gc.collect()
 
-        self.gen_video = torch.cat(decoded_chunks, dim=0)
+        self.gen_video = torch.cat(decoded_chunks, dim=2)
         self.gen_video_final = self.gen_video
         gen_video_final = self.process_images_after_vae_decoder()
         self.end_run()
@@ -186,53 +175,3 @@ class LingbotFastRunner(LingbotRunner):
                 livestream_url=output_video_path,
                 fps=record_fps,
             )
-
-    @ProfilingContext4DebugL1("End run segment")
-    def end_run_segment(self, segment_idx=None):
-        with ProfilingContext4DebugL1("step_pre_in_rerun"):
-            self.model.scheduler.step_pre(seg_index=segment_idx, step_index=self.model.scheduler.infer_steps - 1, is_rerun=True)
-        with ProfilingContext4DebugL1("infer_main_in_rerun"):
-            self.model.infer(self.inputs)
-
-        self.gen_video_final = torch.cat([self.gen_video_final, self.gen_video], dim=0) if self.gen_video_final is not None else self.gen_video
-        if self.is_live:
-            if self.video_recorder:
-                stream_video = wan_vae_to_comfy(self.gen_video)
-                self.video_recorder.pub_video(stream_video)
-
-        torch.cuda.empty_cache()
-
-    @ProfilingContext4DebugL2("Run DiT")
-    def run_main_live(self, total_steps=None):
-        try:
-            self.init_video_recorder()
-            logger.info(f"init video_recorder: {self.video_recorder}")
-            rank, world_size = get_rank_and_world_size()
-            if rank == world_size - 1:
-                assert self.video_recorder is not None
-                self.video_recorder.start(self.width, self.height)
-            if world_size > 1 and dist is not None:
-                dist.barrier()
-            self.init_run()
-            if self.config.get("compile", False):
-                self.model.select_graph_for_compile(self.input_info)
-
-            for segment_idx in range(self.video_segment_num):
-                logger.info(f"start segment {segment_idx + 1}/{self.video_segment_num}")
-                with ProfilingContext4DebugL1(
-                    f"segment end2end {segment_idx + 1}/{self.video_segment_num}",
-                    recorder_mode=GET_RECORDER_MODE(),
-                    metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
-                    metrics_labels=["DefaultRunner"],
-                ):
-                    self.check_stop()
-                    self.init_run_segment(segment_idx)
-                    latents = self.run_segment(segment_idx)
-                    self.gen_video = self.run_vae_decoder(latents)
-                    self.end_run_segment(segment_idx)
-        finally:
-            if hasattr(self.model, "inputs"):
-                self.end_run()
-            if self.video_recorder:
-                self.video_recorder.stop()
-                self.video_recorder = None

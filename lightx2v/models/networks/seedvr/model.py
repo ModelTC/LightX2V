@@ -30,14 +30,10 @@ class SeedVRNaDiTModel(BaseTransformerModel):
         self._init_infer()
 
     def _apply_seedvr_defaults(self):
-        defaults = {
+        common_defaults = {
             "vid_in_channels": 33,
             "vid_out_channels": 16,
-            "vid_dim": 2560,
             "txt_in_dim": 5120,
-            "txt_dim": 2560,
-            "emb_dim": 6 * 2560,
-            "heads": 20,
             "head_dim": 128,
             "expand_ratio": 4,
             "norm": "fusedrms",
@@ -46,26 +42,50 @@ class SeedVRNaDiTModel(BaseTransformerModel):
             "qk_bias": False,
             "qk_norm": "fusedrms",
             "patch_size": (1, 2, 2),
-            "num_layers": 32,
-            "block_type": ["mmdit_sr"] * 32,
-            "mm_layers": 10,
-            "mlp_type": "swiglu",
-            "rope_type": "mmrope3d",
-            "rope_dim": 128,
-            "window": [(4, 3, 3)] * 32,
-            "window_method": ["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * 16,
-            "vid_out_norm": "fusedrms",
             "rms_norm_type": "torch",
             "layer_norm_type": "torch",
             "timestep_sinusoidal_dim": 256,
             "seq_parallel": False,
             "seedvr_has_vid_in": True,
         }
+        for key, value in common_defaults.items():
+            self.config.setdefault(key, value)
+
+        if self.config.get("model_size") == "7b":
+            defaults = {
+                "vid_dim": 3072,
+                "txt_dim": 3072,
+                "heads": 24,
+                "num_layers": 36,
+                "block_type": ["mmdit_sr"] * 36,
+                "mlp_type": "normal",
+                "qk_rope": True,
+                "rope_type": "rope3d",
+                "rope_dim": 64,
+                "window": [(4, 3, 3)] * 36,
+                "window_method": ["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * 18,
+                "last_layer_vid_only": False,
+            }
+        else:
+            defaults = {
+                "vid_dim": 2560,
+                "txt_dim": 2560,
+                "heads": 20,
+                "num_layers": 32,
+                "block_type": ["mmdit_sr"] * 32,
+                "mm_layers": 10,
+                "mlp_type": "swiglu",
+                "rope_type": "mmrope3d",
+                "rope_dim": 128,
+                "window": [(4, 3, 3)] * 32,
+                "window_method": ["720pwin_by_size_bysize", "720pswin_by_size_bysize"] * 16,
+                "vid_out_norm": "fusedrms",
+                "last_layer_vid_only": True,
+            }
         for key, value in defaults.items():
             self.config.setdefault(key, value)
 
-        if "emb_dim" not in self.config:
-            self.config["emb_dim"] = 6 * self.config["vid_dim"]
+        self.config.setdefault("emb_dim", 6 * self.config["vid_dim"])
 
         self.config.setdefault("dit_quant_scheme", "Default")
         self.config.setdefault("dit_quantized", False)
@@ -87,13 +107,14 @@ class SeedVRNaDiTModel(BaseTransformerModel):
             ckpt_lower = str(ckpt_path).lower()
             if not ckpt_lower.endswith(".safetensors"):
                 try:
-                    state = torch.load(ckpt_path, map_location=AI_DEVICE)
+                    map_location = "cpu" if self.device.type == "cpu" else AI_DEVICE
+                    state = torch.load(ckpt_path, map_location=map_location)
                     if isinstance(state, dict) and "state_dict" in state:
                         state = state["state_dict"]
                     remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
                     weight_dict = {}
                     for key, tensor in state.items():
-                        if any(remove_key in key for remove_key in remove_keys):
+                        if "attn.rope.rope.freqs" in key or any(remove_key in key for remove_key in remove_keys):
                             continue
                         if unified_dtype or all(s not in key for s in sensitive_layer):
                             weight_dict[key] = tensor.to(GET_DTYPE())

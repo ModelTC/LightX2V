@@ -1,14 +1,13 @@
-from .calib import CalibRollingKVCachePool
+from .fifo import FIFOKVCachePool
 from .manager import KVCacheManager
-from .quant import LongLiveQuantRollingKVCachePool, SageQuantRollingKVCachePool, StepLongLiveQuantRollingKVCachePool
+from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
 from .rolling import RollingKVCachePool, SpatialRollingKVCachePool
 
 __all__ = [
+    "FIFOKVCachePool",
     "KVCacheManager",
     "RollingKVCachePool",
     "SpatialRollingKVCachePool",
-    "CalibRollingKVCachePool",
-    "SageQuantRollingKVCachePool",
-    "LongLiveQuantRollingKVCachePool",
-    "StepLongLiveQuantRollingKVCachePool",
+    "KIVIQuantRollingKVCachePool",
+    "StepKiviQuantRollingKVCachePool",
 ]
