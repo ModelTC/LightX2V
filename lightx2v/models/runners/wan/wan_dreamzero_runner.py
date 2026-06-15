@@ -602,21 +602,24 @@ class WanDreamZeroRunner(WanRunner):
         prev_video_pred = None
         prev_action_pred = None
         for step_index in range(self.scheduler.infer_steps):
+            logger.info(f"==> DreamZero step_index: {step_index + 1} / {self.scheduler.infer_steps}")
             video_t = self.scheduler.timesteps[step_index]
             action_t = self.action_scheduler.timesteps[step_index]
             should_run = bool(self.dit_step_mask[step_index]) if step_index < len(self.dit_step_mask) else True
-            if should_run or prev_video_pred is None or prev_action_pred is None:
-                inputs = self._build_model_inputs(self.scheduler.latents, self.action_scheduler.latents, video_t, action_t)
-                pred = self.model.infer(inputs)
-                prev_video_pred = pred["video"]
-                prev_action_pred = pred["action"]
+            with ProfilingContext4DebugL1("🚀 infer_main"):
+                if should_run or prev_video_pred is None or prev_action_pred is None:
+                    inputs = self._build_model_inputs(self.scheduler.latents, self.action_scheduler.latents, video_t, action_t)
+                    pred = self.model.infer(inputs)
+                    prev_video_pred = pred["video"]
+                    prev_action_pred = pred["action"]
 
-            self.scheduler.step_index = step_index
-            self.scheduler.noise_pred = prev_video_pred
-            self.scheduler.step_post()
-            self.action_scheduler.step_index = step_index
-            self.action_scheduler.noise_pred = prev_action_pred
-            self.action_scheduler.step_post()
+            with ProfilingContext4DebugL1("step_post"):
+                self.scheduler.step_index = step_index
+                self.scheduler.noise_pred = prev_video_pred
+                self.scheduler.step_post()
+                self.action_scheduler.step_index = step_index
+                self.action_scheduler.noise_pred = prev_action_pred
+                self.action_scheduler.step_post()
 
             if self.progress_callback:
                 self.progress_callback((step_index + 1) / self.scheduler.infer_steps * 100, 100)
