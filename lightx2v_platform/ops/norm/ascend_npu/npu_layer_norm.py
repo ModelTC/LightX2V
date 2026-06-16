@@ -15,7 +15,18 @@ class NpuLayerNormWeight(LayerNormWeightTemplate):
         super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def apply(self, input_tensor):
-        if torch_npu is not None and hasattr(torch_npu, 'npu_layer_norm') and self.weight is not None and self.bias is not None:
+        if torch_npu is not None and hasattr(torch_npu, "npu_layer_norm") and self.weight is not None and self.bias is not None:
+            if self.sensitive_layer_dtype != self.infer_dtype:
+                out = torch_npu.npu_layer_norm(
+                    input_tensor.to(self.sensitive_layer_dtype),
+                    (input_tensor.shape[-1],),
+                    self.weight.to(self.sensitive_layer_dtype),
+                    self.bias.to(self.sensitive_layer_dtype),
+                    self.eps,
+                )
+                if isinstance(out, tuple):
+                    out = out[0]
+                return out.to(self.infer_dtype)
             out = torch_npu.npu_layer_norm(
                 input_tensor,
                 (input_tensor.shape[-1],),

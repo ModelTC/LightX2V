@@ -19,7 +19,9 @@ class NpuRmsNormWeight(RMSWeightTemplate):
         if torch_npu is not None and hasattr(torch_npu, "npu_rms_norm") and weight is not None:
             if self.sensitive_layer_dtype != self.infer_dtype:
                 output_tensor, _ = torch_npu.npu_rms_norm(
-                    input_tensor.float(), weight.float(), self.eps,
+                    input_tensor.to(self.sensitive_layer_dtype),
+                    weight.to(self.sensitive_layer_dtype),
+                    self.eps,
                 )
                 return output_tensor.to(self.infer_dtype)
             output_tensor, _ = torch_npu.npu_rms_norm(input_tensor, weight, self.eps)
