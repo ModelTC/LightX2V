@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -7,6 +9,12 @@ try:
     from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
 except ImportError:
     flashinfer_cutlass_fused_moe = None
+
+from lightx2v.common.flashinfer_autotune import flashinfer_autotune
+from lightx2v.models.networks.neopp.infer.moe_fi_autotune import (
+    MOE_FI_FORCE_RETUNE_ENV,
+    MoeFiAutotune,
+)
 
 try:
     from magi_compiler import magi_compile
@@ -116,11 +124,23 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         self.scaling = self.head_dim**-0.5
         self.use_triton_qknorm_rope = config.get("use_triton_qknorm_rope", True)
         self.version = config.get("version", "moe")
+        self.fi_moe_autotune = MoeFiAutotune.from_neopp_config(config)
         if self.version == "moe":
             self.num_experts_per_tok = llm_config["num_experts_per_tok"]
             self.norm_topk_prob = llm_config.get("norm_topk_prob", True)
-            logger.info(f"NeoPP MoE backend: {config.get('moe_backend', 'flashinfer')}")
+            moe_backend = config.get("moe_backend", "flashinfer")
+            logger.info(f"NeoPP MoE backend: {moe_backend}")
             self._mlp_forward = self._sparse_moe
+            if moe_backend == "flashinfer" and self.fi_moe_autotune.enabled:
+                if flashinfer_autotune is None or flashinfer_cutlass_fused_moe is None:
+                    raise RuntimeError("moe_flashinfer_setting.autotune=true but flashinfer MoE autotuner is not available")
+                logger.info(
+                    f"NeoPP flashinfer MoE autotune enabled "
+                    f"(cache={self.fi_moe_autotune.cache_path}, "
+                    f"tune_mode=auto (cache-only if present, else lazy rebuild), "
+                    f"tune_max_num_tokens={self.fi_moe_autotune.tune_max_num_tokens}, "
+                    f"{MOE_FI_FORCE_RETUNE_ENV}={os.environ.get(MOE_FI_FORCE_RETUNE_ENV, '0')})"
+                )
         else:
             self._mlp_forward = self._dense_mlp
         if self.config["seq_parallel"]:
@@ -418,6 +438,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             moe_w._fi_fc2_weight,
             hidden_states.dtype,
             quant_scales=None,
+            tune_max_num_tokens=self.fi_moe_autotune.tune_max_num_tokens,
         )[0]
         return output
 

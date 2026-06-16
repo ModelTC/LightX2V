@@ -266,20 +266,34 @@ class NeoppRunner(DefaultRunner):
     def init_run(self):
         self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=self.input_info.latent_shape)
 
+    def _run_infer_step(self, step_index: int, infer_steps: int) -> None:
+        logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+
+        with ProfilingContext4DebugL1("step_pre"):
+            self.scheduler.step_pre(step_index)
+
+        with ProfilingContext4DebugL1("🚀 infer_main"):
+            self.model.infer(self.inputs)
+
+        with ProfilingContext4DebugL1("step_post"):
+            self.scheduler.step_post()
+
     def run_main(self):
         self.init_run()
         infer_steps = self.model.scheduler.infer_steps
-        for step_index in range(infer_steps):
-            logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+        infer = self.model.transformer_infer
+        at = infer.fi_moe_autotune
+        start_step = 0
 
-            with ProfilingContext4DebugL1("step_pre"):
-                self.scheduler.step_pre(step_index)
+        if at.cache_rebuild_needed():
+            logger.info("Flashinfer MoE autotune: cache rebuild required; profiling on step 1 only, then cache-only for remaining steps")
+            with at.session(tune_mode=True):
+                self._run_infer_step(0, infer_steps)
+            start_step = 1
 
-            with ProfilingContext4DebugL1("🚀 infer_main"):
-                self.model.infer(self.inputs)
-
-            with ProfilingContext4DebugL1("step_post"):
-                self.scheduler.step_post()
+        with at.session(tune_mode=False):
+            for step_index in range(start_step, infer_steps):
+                self._run_infer_step(step_index, infer_steps)
 
         if self.config.get("save_result_for_debug", True):
             gen_result = self.process_images_after_vae_decoder_for_debug()

@@ -72,6 +72,9 @@ class NeoppDecoderLayerWeights(WeightModule):
             moe_backend = config.get("moe_backend", "flashinfer")
             if moe_backend not in ("pytorch", "flashinfer"):
                 raise ValueError(f"Invalid moe_backend={moe_backend!r}, expected 'pytorch' or 'flashinfer'")
+            fi_cfg = config.get("moe_flashinfer_setting") or {}
+            if fi_cfg.get("autotune") and moe_backend != "flashinfer":
+                raise ValueError("moe_flashinfer_setting.autotune=true requires moe_backend='flashinfer'")
             mlp_mot_gen = NeoppSparseMoeWeights(block_index, mm_type, "mlp_mot_gen", gen_num_experts, moe_backend=moe_backend, lora_path=lora_path)
         elif config["version"] == "dense":
             mlp_mot_gen = NeoppMlpWeights(block_index, mm_type, lora_path=lora_path)
