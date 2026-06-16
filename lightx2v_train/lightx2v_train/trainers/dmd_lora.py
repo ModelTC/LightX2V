@@ -160,9 +160,6 @@ class DmdLoraTrainer(LoraTrainer):
         progress = min(1.0, max(0.0, float(current_iter) / float(self.cdm_warmup_iters)))
         return progress * self.cdm_weight
 
-    def _expand_sigma(self, sigma, latent):
-        return self.scheduler._expand_to_ndim(sigma.to(device=latent.device), latent.ndim)
-
     def _latent_shape(self, sample):
         image = sample["target_image"]
         batch_size = image.shape[0]
@@ -205,7 +202,7 @@ class DmdLoraTrainer(LoraTrainer):
     def sample_end_step(self):
         return int(torch.randint(0, self.scheduler.num_inference_steps, (1,), device=self.model.device).item())
 
-    def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled=False, xt=None, return_traj_state=False):
+    def run_back_simulation(self, condition, latent_shape, end_step_idx, xt=None):
         if xt is None:
             xt = self.sample_initial_latents(latent_shape)
         x0 = None
@@ -214,29 +211,24 @@ class DmdLoraTrainer(LoraTrainer):
         self.model.transformer.train()
         for idx in range(end_step_idx + 1):
             sigma = self.scheduler.sigma_at(idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
-            context = torch.enable_grad if (grad_enabled and idx == end_step_idx) else torch.no_grad
-            with context():
+            with torch.no_grad():
                 velocity = self._predict_velocity(self.model, xt, sigma, condition)
             if idx == end_step_idx:
                 xt_end = xt.detach()
                 vt_end = velocity.detach()
             xt, x0 = self.scheduler.step_by_index(velocity, idx, xt)
 
-        if return_traj_state:
-            if not grad_enabled:
-                x0 = x0.detach()
-            return x0, xt_end, vt_end
-        return x0
+        return x0.detach(), xt_end, vt_end
 
     def _compute_cdm_loss(self, xt, vt, end_step_idx, condition):
         batch_size = xt.shape[0]
 
         traj_sigma = self.scheduler.sigma_at(end_step_idx, batch_size, device=self.model.device, dtype=torch.float32)
         student_sigma = self.scheduler.sample_renoise_sigma(batch_size, device=self.model.device, dtype=torch.float32)
-        student_xt = xt + self._expand_sigma(student_sigma - traj_sigma, xt) * vt
+        student_xt = xt + (student_sigma - traj_sigma) * vt
 
         student_prediction = self._predict_velocity(self.model, student_xt.to(self.running_dtype), student_sigma, condition)
-        student_x0 = student_xt - self._expand_sigma(student_sigma, student_xt) * student_prediction
+        student_x0 = student_xt - student_sigma * student_prediction
         student_x0 = student_x0.to(self.running_dtype)
 
         teacher_sigma = self.scheduler.sample_renoise_sigma(batch_size, device=self.model.device, dtype=self.running_dtype)
@@ -248,8 +240,8 @@ class DmdLoraTrainer(LoraTrainer):
             velocity_fake = self._predict_velocity(self.fake_model, teacher_xt, teacher_sigma, condition)
             velocity_teacher = self._predict_velocity(self.teacher_model, teacher_xt, teacher_sigma, condition)
 
-        x_pred_fake = teacher_xt - self._expand_sigma(teacher_sigma, teacher_xt) * velocity_fake
-        x_pred_teacher = teacher_xt - self._expand_sigma(teacher_sigma, teacher_xt) * velocity_teacher
+        x_pred_fake = teacher_xt - teacher_sigma * velocity_fake
+        x_pred_teacher = teacher_xt - teacher_sigma * velocity_teacher
         return self._dmd_loss(student_x0, x_pred_fake, x_pred_teacher, norm_clip_min=self.cdm_norm_clip_min)
 
     def forward_loss(self, latent_shape, conditions, stage, current_iter=None):
@@ -257,7 +249,7 @@ class DmdLoraTrainer(LoraTrainer):
         self._prepare_sampling_schedule(latent_shape)
         end_step_idx = self.sample_end_step()
         xt_start = self.sample_initial_latents(latent_shape)
-        x0_ref, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, xt=xt_start, return_traj_state=True)
+        x0_ref, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, xt=xt_start)
 
         sigma = self.scheduler.sample_renoise_sigma(latent_shape[0], device=self.model.device, dtype=self.running_dtype)
         noise = torch.randn(latent_shape, device=self.model.device, dtype=torch.float32)
@@ -277,9 +269,11 @@ class DmdLoraTrainer(LoraTrainer):
             velocity_teacher_uncond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, negative_condition)
             velocity_teacher = self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
 
-        x_pred_fake = renoised_xt - self._expand_sigma(sigma, renoised_xt) * velocity_fake
-        x_pred_teacher = renoised_xt - self._expand_sigma(sigma, renoised_xt) * velocity_teacher
-        x0 = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=True, xt=xt_start)
+        x_pred_fake = renoised_xt - sigma * velocity_fake
+        x_pred_teacher = renoised_xt - sigma * velocity_teacher
+        sigma_end = self.scheduler.sigma_at(end_step_idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
+        xt_velocity = self._predict_velocity(self.model, xt_end, sigma_end, condition)
+        x0 = xt_end - sigma_end * xt_velocity
 
         loss_dmd = self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
         total_loss = loss_dmd
@@ -447,17 +441,17 @@ class DmdLoraTrainer(LoraTrainer):
         if os.path.exists(fake_lora_weights_path):
             self.fake_model.load_lora_weights_for_resume(fake_lora_path)
         else:
-            logger.warning("Fake LoRA weights not found in {}. Fake model not restored.", fake_lora_path)
+            print(f"Warning: fake LoRA weights not found in {fake_lora_path}. Fake model not restored.")
 
         if "fake_optimizer" in state:
             self.fake_optimizer.load_state_dict(state["fake_optimizer"])
         else:
-            logger.warning("Fake optimizer state not found in {}.", training_state_path)
+            print(f"Warning: fake optimizer state not found in {training_state_path}.")
 
         if "fake_lr_scheduler" in state:
             self.fake_lr_scheduler.load_state_dict(state["fake_lr_scheduler"])
         else:
-            logger.warning("Fake lr scheduler state not found in {}.", training_state_path)
+            print(f"Warning: fake lr scheduler state not found in {training_state_path}.")
         logger.info("Restored DMD-LoRA training state from {}", training_state_path)
 
     def _load_distributed_state(self, resume_ckpt_path):
