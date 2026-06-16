@@ -109,7 +109,9 @@ class S2VInputInfo:
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    src_video: str = field(default_factory=str)
     audio_path: str = field(default_factory=str)
+    src_pose_path: str = field(default_factory=str)
     audio_num: int = field(default_factory=int)
     with_mask: bool = field(default_factory=lambda: False)
     save_result_path: str = field(default_factory=str)
@@ -210,8 +212,12 @@ class I2IInputInfo:
     prompt: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    inpaint_blur_size: Optional[int] = None
+    inpaint_blur_sigma: Optional[float] = None
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
+    keep_original_aspect: bool = field(default_factory=lambda: False)
+    layout_bboxes: str = field(default_factory=str)
     # shape related
     resize_mode: str = field(default_factory=str)
     target_shape: list = field(default_factory=list)
@@ -248,6 +254,26 @@ class I2AVInputInfo:
     image_strength: float = field(default_factory=float)
     image_frame_idx: Optional[list[int]] = None
     save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    # shape related
+    resize_mode: str = field(default_factory=str)
+    original_shape: list = field(default_factory=list)
+    resized_shape: list = field(default_factory=list)
+    latent_shape: list = field(default_factory=list)
+    target_shape: list = field(default_factory=list)
+    target_video_length: int = field(default_factory=int)
+
+
+@dataclass
+class I2VAInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    prompt_enhanced: str = field(default_factory=str)
+    negative_prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    state_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    save_action_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     resize_mode: str = field(default_factory=str)
@@ -412,6 +438,7 @@ task_dict = {
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,
+    "i2va": I2VAInputInfo,
     "v2av": V2AVInputInfo,
     "ltx2_s2v": LTX2S2VInputInfo,
     "worldplay_i2v": WorldPlayI2VInputInfo,

@@ -115,9 +115,8 @@ def load_video_conditioning(video_path: str, height: int, width: int, frame_cap:
 
 
 def decode_image(image_path: str) -> np.ndarray:
-    image = Image.open(image_path)
-    np_array = np.array(image)[..., :3]
-    return np_array
+    image = Image.open(image_path).convert("RGB")
+    return np.array(image)
 
 
 def _write_audio(container: av.container.Container, audio_stream: av.audio.AudioStream, audio: Audio) -> None:
@@ -346,6 +345,11 @@ def decode_video_from_file(path: str, frame_cap: int, device: DeviceLikeType) ->
 
 
 def encode_single_frame(output_file: str, image_array: np.ndarray, crf: float) -> None:
+    if image_array.ndim == 2:
+        image_array = np.stack([image_array, image_array, image_array], axis=-1)
+    elif image_array.ndim != 3 or image_array.shape[-1] != 3:
+        raise ValueError(f"Expected HxWx3 RGB image; got shape {image_array.shape}.")
+
     container = av.open(output_file, "w", format="mp4")
     try:
         stream = container.add_stream("libx264", rate=1, options={"crf": str(crf), "preset": "veryfast"})

@@ -196,7 +196,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
             gate_msa,
         )
 
-        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa)
+        y = self.infer_ffn(block.compute_phases[2], x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa)
 
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
         return x
@@ -416,7 +416,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
             torch_device_module.empty_cache()
         return x, attn_out
 
-    def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa):
+    def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa=None):
         x.add_(attn_out)
 
         if self.clean_cuda_cache:

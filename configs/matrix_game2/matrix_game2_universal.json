@@ -17,7 +17,7 @@
         "local_attn_size": 6,
         "num_frame_per_chunk": 3,
         "denoising_step_list": [1000.0, 908.8427, 713.9794],
-        "kv_offload": true
+        "kv_offload": false
     },
     "sub_model_folder": "base_distilled_model",
     "sub_model_name": "base_distill.safetensors",

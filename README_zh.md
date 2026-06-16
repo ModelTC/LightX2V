@@ -24,6 +24,8 @@
 
 > 📝 **更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)**
 
+> 🌟 **开发者新手入门教程: [LightX2V 开发者快速入门教程](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
+
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
 
 ## 🧾 社区代码贡献指南
@@ -45,10 +47,13 @@ pre-commit run --all-files
 - [ziyanxzy](https://github.com/ziyanxzy)
 - [Tyr0727](https://github.com/Tyr0727)
 - [hufangjian2017](https://github.com/hufangjian2017)
+- [Fatemanx](https://github.com/Fatemanx)
 
 ## :fire: 最新动态
 
-- **2026年5月29日：** 🚀 我们推出了一个极其高效的 Wan 2.2 14B 变体：[面向 Blackwell 架构的 NVFP4 量化感知步数蒸馏与稀疏注意力模型](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse)。在单张 RTX 5090 显卡上可实现超过 50 倍的加速。
+- **2026年6月15日：** 🚀 支持 平头哥 PPU 的部署。
+
+- **2026年5月29日：** 🚀 我们推出了一个极其高效的 Wan 2.2 14B 变体 (T2V and I2V)：[面向 Blackwell 架构的 NVFP4 量化感知步数蒸馏与稀疏注意力模型](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse)。在单张 RTX 5090 显卡上可实现超过 50 倍的加速。
 
 - **2026年4月30日：** 🚀 支持 天数智芯 的部署，感谢天数智芯团队。
 
@@ -333,6 +338,12 @@ pipe.generate(
 - [xDiT](https://github.com/xdit-project/xDiT)
 - [FastVideo](https://github.com/hao-ai-lab/FastVideo)
 - [Mooncake](https://github.com/kvcache-ai/Mooncake)
+
+同时感谢支持生态发展的云端推理平台：
+
+<a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v"><img src="assets/atlas-cloud-logo.png" alt="Atlas Cloud" width="120"></a>
+
+- [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v) —— 全模态 AI 推理平台，其托管 API 提供 LightX2V 同样支持的 Wan / Seedance / Kling 等模型系列，适合希望使用托管 API 而非自建部署的团队。
 
 ## 🌟 Star 历史
 

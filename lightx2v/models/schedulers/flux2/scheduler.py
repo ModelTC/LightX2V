@@ -129,11 +129,18 @@ class Flux2Scheduler(BaseScheduler):
 
     def step_post(self):
         t = self.timesteps[self.step_index]
-        latents = self.scheduler.step(self.noise_pred, t, self.latents, return_dict=False)[0]
+        noise_pred = self.noise_pred
+        if getattr(self, "inpaint_mask", None) is not None and getattr(self, "input_latents", None) is not None:
+            sigma = self.scheduler.sigmas[self.step_index].to(device=self.latents.device, dtype=self.latents.dtype)
+            expected_noise_pred = (self.latents - self.input_latents) / sigma.clamp(min=1e-6)
+            noise_pred = expected_noise_pred * (1 - self.inpaint_mask) + noise_pred * self.inpaint_mask
+            self.noise_pred = noise_pred
+
+        latents = self.scheduler.step(noise_pred, t, self.latents, return_dict=False)[0]
         latents = apply_scheduler_fls_enhancement(
             self,
             latents,
-            self.noise_pred,
+            noise_pred,
             layout="seq",
             latent_image_ids=self.latent_image_ids,
         )
@@ -188,9 +195,13 @@ class Flux2Scheduler(BaseScheduler):
             latents = latents.reshape(batch_size, num_channels, height * width).permute(0, 2, 1)
             return latents
 
-    def prepare_i2i(self, input_info, input_image, vae):
+    def prepare_i2i(self, input_info, input_image, vae, inpaint_mask=None):
         self.vae = vae
         self.prepare(input_info)
+        self.input_latents = None
+        self.input_image_latents = None
+        self.input_image_ids = None
+        self.inpaint_mask = inpaint_mask.to(AI_DEVICE, dtype=self.dtype) if inpaint_mask is not None else None
 
         image_latents = []
         for img in input_image:
@@ -205,6 +216,7 @@ class Flux2Scheduler(BaseScheduler):
 
                 ref_img_latent = self._pack_latents(ref_img_latent).squeeze(0)
                 ref_img_latent = ref_img_latent.unsqueeze(0).to(AI_DEVICE, dtype=self.dtype)
+                self.input_latents = ref_img_latent
                 self.latents = (1 - self.sigmas[0]) * ref_img_latent + self.sigmas[0] * self.latents
 
         image_latent_ids = self._prepare_image_ids(image_latents, scale=10)

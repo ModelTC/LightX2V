@@ -146,6 +146,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.phase_params["attn_out"],
                 self.phase_params["c_shift_msa"],
                 self.phase_params["c_scale_msa"],
+                self.phase_params["c_gate_msa"],
             )
             x = self.post_process(x, self.phase_params["y"], self.phase_params["c_gate_msa"], pre_infer_out)
             if hasattr(cur_phase, "after_proj"):

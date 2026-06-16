@@ -1,0 +1,14 @@
+{
+    "infer_steps": 8,
+    "resolution": 1024,
+    "aspect_ratio": "1:1",
+    "attn_type": "torch_sdpa",
+    "enable_cfg": false,
+    "sample_guide_scale": 1.0,
+    "use_pe": false,
+    "pe_temperature": 0.6,
+    "pe_top_p": 0.95,
+    "text_encoder_cpu_offload": true,
+    "pe_cpu_offload": true,
+    "vae_cpu_offload": true
+}
