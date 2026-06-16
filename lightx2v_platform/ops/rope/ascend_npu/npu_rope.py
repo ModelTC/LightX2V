@@ -18,6 +18,9 @@ def GET_SENSITIVE_DTYPE():
         "bf16": torch.bfloat16,
         "fp16": torch.float16,
         "fp32": torch.float32,
+        "torch.bfloat16": torch.bfloat16,
+        "torch.float16": torch.float16,
+        "torch.float32": torch.float32,
     }
     flag = os.getenv("SENSITIVE_LAYER_DTYPE", "None")
     if flag == "None":
