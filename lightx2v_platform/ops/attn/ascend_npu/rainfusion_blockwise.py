@@ -82,13 +82,13 @@ class Rainfusion_blockwise(nn.Module):
 
         # 2. 生成行索引  标记False位置为S（大于所有有效索引）
         row_indices = torch.arange(S, device=device).expand(batch_size, S, -1)  # (B*N, S, S)
-        sorted_vals = torch.where(mask_reshaped, row_indices, 1e9).to(torch.float32)
+        sorted_vals = torch.where(mask_reshaped, row_indices, S)
         sorted_vals, _ = torch.sort(sorted_vals, dim=-1)
-        valid_count = mask_reshaped.sum(dim=-1, keepdim=True)  # 每行True的个数
-        keep_mask = row_indices < valid_count  # 前valid_count个位置保留索引，其余填-1
+        valid_count = mask_reshaped.sum(dim=-1, keepdim=True)
+        keep_mask = row_indices < valid_count
         result = torch.where(keep_mask, sorted_vals, -1)
 
-        pos_matrix = result.reshape(B, N, S, S).to(torch.int64)
+        pos_matrix = result.reshape(B, N, S, S)
         return pos_matrix
 
     def get_blockwise_mask(self, score_matrix, sparsity):
@@ -127,7 +127,7 @@ class Rainfusion_blockwise(nn.Module):
             tensor_w_r = tensor_w_r.reshape(b * n, -1, d)
             w_res_len = tensor_w_r.shape[1]
         tensor_hwt = rearrange(tensor_hwt, 'b (fn fb) (hn hb) (wn wb) d -> b (fn hn wn fb hb wb) d',
-                               fn=self.frame_num // 2, fb=2, hb=8, wb=8, hn=h // 8, wn=w // 8)
+                               fn=(self.frame_num - first_frame_num) // 2, fb=2, hb=8, wb=8, hn=h // 8, wn=w // 8)
         if h % 8 != 0:
             tensor_hwt = torch.cat((tensor_hwt, tensor_h_r), dim=1)
         if w % 8 != 0:
@@ -144,7 +144,7 @@ class Rainfusion_blockwise(nn.Module):
         tensor = rearrange(tensor, 'b s n d->(b n) s d', b=b, n=n)
         tensor_hwt, tensor_h, tensor_w = torch.split(tensor, [s - h_res_len - w_res_len, h_res_len, w_res_len], dim=1)
         tensor_hwt = rearrange(tensor_hwt, 'b (fn hn wn fb hb wb) d -> b (fn fb) (hn hb) (wn wb) d',
-                               fn=self.frame_num // 2, fb=2, hb=8, wb=8, hn=h // 8, wn=w // 8)
+                               fn=(self.frame_num - 1) // 2, fb=2, hb=8, wb=8, hn=h // 8, wn=w // 8)
         if w_res_len != 0:
             tensor_w = tensor_w.reshape(b * n, self.frame_num - 1, h - h_sr, w_sr, d)
             tensor_hwt = torch.cat((tensor_hwt, tensor_w), dim=3)
@@ -175,7 +175,6 @@ class Rainfusion_blockwise(nn.Module):
                                                    [s - self.text_len - self.first_frame_len, self.first_frame_len,
                                                     self.text_len], dim=1)
         tensor_i = self.inv_rearrange_with_remaining(tensor_i, h_res_len, w_res_len)
-        tensor = torch.concat((tensor_t, tensor_i), dim=1)
 
         if self.txt_first:
             tensor = torch.concat((tensor_t, tensor_f, tensor_i), dim=1)
@@ -202,8 +201,6 @@ class Rainfusion_blockwise(nn.Module):
             base_blockmask,
     ):
         t_idx = t_b_idx[0]
-        b_idx = t_b_idx[1]
-        device = q.device
 
         if t_idx < self.skip_timesteps:
             base_blockmask = None
@@ -211,16 +208,11 @@ class Rainfusion_blockwise(nn.Module):
                                   opt_mode="manual", op_type="ascend_laser_attention", layout="BNSD")
         else:
             batch, qSeqlen, numHeads, headDim = q.shape
+            assert batch == 1, "Rainfusion_blockwise currently only supports batch size 1."
             _, kvSeqlen, _, _ = k.shape
             blockShapeX, blockShapeY = self.pool_size, self.pool_size
             scale = headDim ** -0.5
 
-            totalQTokens = batch * qSeqlen
-            totalKvTokens = batch * kvSeqlen
-            qBlockNum = math.ceil(qSeqlen / blockShapeX)
-            kvBlockNum = math.ceil(kvSeqlen / blockShapeY)
-            totalQBlocks = qBlockNum
-            maxKvBlockNum = kvBlockNum
             blockShape = [blockShapeX, blockShapeY]
             actualSeqLengthsHost = [qSeqlen for _ in range(batch)]
             actualSeqLengthsKvHost = [kvSeqlen for _ in range(batch)]
