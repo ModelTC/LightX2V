@@ -2,14 +2,13 @@ import math
 from dataclasses import dataclass
 
 import torch
+from PIL import Image
 from diffusers import AutoencoderKLQwenImage, QwenImageEditPlusPipeline, QwenImageTransformer2DModel
 from diffusers.image_processor import VaeImageProcessor
-from PIL import Image
 
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from .base import BaseModel
-
 
 CONDITION_IMAGE_AREA = 384 * 384
 
