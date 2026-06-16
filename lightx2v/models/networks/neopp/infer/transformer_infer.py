@@ -56,18 +56,11 @@ def _pad_tokens_for_grouped_mm(x_perm, counts):
 
     x_padded = x_perm.new_zeros(padded_counts.sum(), x_perm.shape[-1])
     x_padded[dst_idx] = x_perm
-    return x_padded, offsets, padded_counts
+    return x_padded, offsets, padded_counts, dst_idx
 
 
-def _strip_padding_from_grouped_mm_output(out_padded, counts, padded_counts):
-    total = counts.sum()
-    expert_for_row = _sorted_expert_row_map(counts)
-    perm_starts = counts.cumsum(0) - counts
-    padded_starts = padded_counts.cumsum(0) - padded_counts
-    row_idx = torch.arange(total, device=counts.device, dtype=torch.long)
-    within = row_idx - perm_starts[expert_for_row]
-    src_idx = padded_starts[expert_for_row] + within
-    return out_padded[src_idx]
+def _strip_padding_from_grouped_mm_output(out_padded, dst_idx):
+    return out_padded[dst_idx]
 
 
 # Register neopp::kv_update as a PyTorch custom op via torch.library.
@@ -403,19 +396,19 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         counts = flat_topk_idx.bincount(minlength=moe_w.num_experts)
 
         x_perm = hidden_states[token_idxs]
-        x_padded, offsets, padded_counts = _pad_tokens_for_grouped_mm(x_perm, counts)
+        x_padded, offsets, _padded_counts, dst_idx = _pad_tokens_for_grouped_mm(x_perm, counts)
         gate_out = torch._grouped_mm(x_padded, moe_w._pt_gate_weight, offs=offsets)
         up_out = torch._grouped_mm(x_padded, moe_w._pt_up_weight, offs=offsets)
         hidden = F.silu(gate_out) * up_out
         out_padded = torch._grouped_mm(hidden, moe_w._pt_down_weight, offs=offsets)
-        expert_out = _strip_padding_from_grouped_mm_output(out_padded, counts, padded_counts)
+        expert_out = _strip_padding_from_grouped_mm_output(out_padded, dst_idx)
         expert_out.mul_(flat_topk_weight[idxs])
 
         expert_cache = torch.zeros_like(hidden_states)
         expert_cache = expert_cache.to(expert_out.dtype)
         expert_cache.scatter_reduce_(
             0,
-            token_idxs.view(-1, 1).repeat(1, hidden_dim),
+            token_idxs.view(-1, 1).expand(-1, hidden_dim),
             expert_out,
             reduce="sum",
         )
