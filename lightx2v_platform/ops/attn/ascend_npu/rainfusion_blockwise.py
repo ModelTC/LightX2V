@@ -55,22 +55,15 @@ class Rainfusion_blockwise(nn.Module):
             full_blocks_reshaped = full_blocks.view(batch, num_full_blocks, pool_size, headnum, dim)
             full_pooled = full_blocks_reshaped.mean(dim=2)
         else:
-            full_pooled = torch.empty(0, device=input_tensor.device)
+            full_pooled = torch.empty(batch, 0, headnum, dim, device=input_tensor.device)
         if tail_size > 0:
             tail_block = input_tensor[:, num_full_blocks * pool_size:, :, :]
             tail_reshaped = tail_block.view(batch, 1, tail_size, headnum, dim)
             tail_pooled = tail_reshaped.mean(dim=2)
         else:
-            tail_pooled = torch.empty(0, device=input_tensor.device)
+            tail_pooled = torch.empty(batch, 0, headnum, dim, device=input_tensor.device)
 
-        if num_full_blocks > 0 and tail_size > 0:
-            output_tensor = torch.cat([full_pooled, tail_pooled], dim=1)
-        elif num_full_blocks > 0:
-            output_tensor = full_pooled
-        else:
-            output_tensor = tail_pooled
-
-        return output_tensor
+        return torch.cat([full_pooled, tail_pooled], dim=1)
 
     def get_mask_index(self, mask):
         B, N, S, _ = mask.shape
@@ -95,6 +88,7 @@ class Rainfusion_blockwise(nn.Module):
         batch_size, num_heads, rows, cols = score_matrix.shape
 
         keep_len = math.ceil(cols * (1 - sparsity))
+        keep_len = max(1, min(keep_len, cols))
         topk_values, _ = torch.topk(score_matrix, k=keep_len, dim=-1)
         thresholds = topk_values[..., -1:]
         mask = score_matrix >= thresholds
@@ -143,16 +137,18 @@ class Rainfusion_blockwise(nn.Module):
         h = self.grid_size[1]
         w = self.grid_size[2]
         h_sr, w_sr = h % 8, w % 8
+        first_frame_num = self.first_frame_len // (h * w)
+        remaining_frames = self.frame_num - first_frame_num
 
         tensor = rearrange(tensor, 'b s n d->(b n) s d', b=b, n=n)
         tensor_hwt, tensor_h, tensor_w = torch.split(tensor, [s - h_res_len - w_res_len, h_res_len, w_res_len], dim=1)
         tensor_hwt = rearrange(tensor_hwt, 'b (fn hn wn fb hb wb) d -> b (fn fb) (hn hb) (wn wb) d',
-                               fn=(self.frame_num - 1) // 2, fb=2, hb=8, wb=8, hn=h // 8, wn=w // 8)
+                               fn=remaining_frames // 2, fb=2, hb=8, wb=8, hn=h // 8, wn=w // 8)
         if w_res_len != 0:
-            tensor_w = tensor_w.reshape(b * n, self.frame_num - 1, h - h_sr, w_sr, d)
+            tensor_w = tensor_w.reshape(b * n, remaining_frames, h - h_sr, w_sr, d)
             tensor_hwt = torch.cat((tensor_hwt, tensor_w), dim=3)
         if h_sr != 0:
-            tensor_h = tensor_h.reshape(b * n, self.frame_num - 1, h_sr, w, d)
+            tensor_h = tensor_h.reshape(b * n, remaining_frames, h_sr, w, d)
             tensor_hwt = torch.cat((tensor_hwt, tensor_h), dim=2)
         tensor_hwt = tensor_hwt.reshape(b * n, -1, d)
         tensor_hwt = rearrange(tensor_hwt, '(b n) s d -> b s n d', b=b, n=n)

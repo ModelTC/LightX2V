@@ -1,4 +1,5 @@
 import torch
+from functools import lru_cache
 
 from lightx2v_platform.ops.rope.rope_template import GET_DTYPE, RopeTemplate
 from lightx2v_platform.registry_factory import PLATFORM_ROPE_REGISTER
@@ -9,6 +10,7 @@ except ImportError:
     torch_npu = None
 
 
+@lru_cache(maxsize=None)
 def GET_SENSITIVE_DTYPE():
     import os
     DTYPE_MAP = {
@@ -25,6 +27,8 @@ def GET_SENSITIVE_DTYPE():
     flag = os.getenv("SENSITIVE_LAYER_DTYPE", "None")
     if flag == "None":
         return GET_DTYPE()
+    if flag not in DTYPE_MAP:
+        raise ValueError(f"Unsupported SENSITIVE_LAYER_DTYPE: {flag}. Expected one of {list(DTYPE_MAP.keys())}")
     return DTYPE_MAP[flag]
 
 
