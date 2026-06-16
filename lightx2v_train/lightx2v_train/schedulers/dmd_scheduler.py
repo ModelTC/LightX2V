@@ -15,31 +15,11 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
     def linear_shift(mu, t):
         return mu / (mu + (1 / t - 1))
 
-    def _shift_inference_sigmas(self, sigmas, latent_hw=None, num_steps=None):
-        if self.inference_shift is not None:
-            return self.linear_shift(self.inference_shift, sigmas)
-        if self.do_time_shift:
-            return self.time_shift(sigmas, latent_hw=latent_hw, num_steps=num_steps)
-        return sigmas
-
     def set_timesteps(self, num_inference_steps, sigmas=None, latent_hw=None, device=None):
-        device = device or self.device
-        num_inference_steps = int(num_inference_steps)
-
-        if sigmas is None and self.inference_shift is None:
-            super().set_timesteps(num_inference_steps, sigmas=sigmas, latent_hw=latent_hw)
+        super().set_timesteps(num_inference_steps, sigmas=sigmas, latent_hw=latent_hw)
+        if device is not None:
             self.infer_sigmas = self.infer_sigmas.to(device)
             self.infer_timesteps = self.infer_timesteps.to(device)
-        else:
-            if sigmas is None:
-                raw_sigmas = torch.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps, dtype=torch.float32, device=device)
-                sigmas = self._shift_inference_sigmas(raw_sigmas, latent_hw=latent_hw, num_steps=num_inference_steps)
-            else:
-                sigmas = torch.as_tensor(sigmas, dtype=torch.float32, device=device)
-            self.num_inference_steps = num_inference_steps
-            self.infer_sigmas = torch.cat([sigmas, torch.zeros(1, dtype=torch.float32, device=device)])
-            self.infer_timesteps = (sigmas * self.num_train_timesteps).to(device)
-
         self.sigmas = self.infer_sigmas
         self.timesteps = self.infer_timesteps
 
@@ -69,7 +49,8 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
                 inner_sigmas = bin_lows + torch.rand(inner_count, dtype=torch.float32, device=device) * (bin_highs - bin_lows)
             else:
                 raise ValueError(f"Unsupported random sigma sampling_method: {sampling_method}")
-            inner_sigmas = self._shift_inference_sigmas(inner_sigmas, latent_hw=latent_hw, num_steps=num_steps)
+            if self.do_time_shift:
+                inner_sigmas = self.time_shift(inner_sigmas, latent_hw=latent_hw, num_steps=num_steps)
             inner_sigmas = torch.sort(inner_sigmas, descending=True).values
             sigmas = torch.cat(
                 [
