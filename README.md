@@ -24,6 +24,8 @@
 
 > 📝 **More content is available on our [LightX2V Blog](https://light-ai.top/LightX2V-BLOG/)**
 
+> 🌟 **Developer Newbie Guide: [LightX2V Developer Quick Start Guide](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
+
 > 👋 **Join our WeChat group! LightX2V Robot WeChat ID: random42seed**
 
 ## 🧾 Community Code Contribution Guidelines
@@ -48,6 +50,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [Fatemanx](https://github.com/Fatemanx)
 
 ## :fire: Latest News
+
+- **June 15, 2026:** 🚀 Supported deployment on T-head PPU.
 
 - **May 29, 2026:** 🚀 We introduce an extremely efficient Wan 2.2 14B variant (T2V and I2V): [NVFP4 Quantization-Aware Step Distillation with Sparse Attention for Blackwell Architecture](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse). On a single RTX 5090 GPU, it achieves over 50× speedup.
 

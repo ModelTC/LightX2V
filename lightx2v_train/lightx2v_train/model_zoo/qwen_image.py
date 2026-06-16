@@ -26,7 +26,15 @@ class QwenImageModel(BaseModel):
 
     pipeline_cls = QwenImagePipeline
 
-    def load_components(self):
+    def load_components(self, transformer_only=False, reference_model=None):
+        if transformer_only:
+            if reference_model is not None:
+                self.text_pipeline = reference_model.text_pipeline
+                self.vae = reference_model.vae
+                self.vae_scale_factor = reference_model.vae_scale_factor
+                self.image_processor = reference_model.image_processor
+            self.transformer = self.load_transformer()
+            return
         model_path = self.config["model"]["pretrained_model_name_or_path"]
         self.text_pipeline = QwenImagePipeline.from_pretrained(
             model_path,
@@ -35,12 +43,16 @@ class QwenImageModel(BaseModel):
             torch_dtype=self.running_dtype,
         ).to(self.device)
         self.vae = AutoencoderKLQwenImage.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
-        self.transformer = QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        self.transformer = self.load_transformer()
 
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.vae_scale_factor = 2 ** len(self.vae.temperal_downsample)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+
+    def load_transformer(self):
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
 
     def denoiser_module(self):
         return self.transformer
@@ -69,6 +81,9 @@ class QwenImageModel(BaseModel):
 
     def encode_condition(self, sample):
         prompt = sample["prompt"]
+        return self.encode_prompt_condition(prompt)
+
+    def encode_prompt_condition(self, prompt):
         prompt_embed, prompt_embed_mask = self.text_pipeline.encode_prompt(
             prompt=prompt,
             device=self.device,

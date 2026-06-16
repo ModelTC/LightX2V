@@ -23,6 +23,7 @@ from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_dreamzero_runner import WanDreamZeroRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_infinitetalk_runner import InfiniteTalkRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVARunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
@@ -100,6 +101,7 @@ def main():
             "lingbot_world_fast",
             "worldmirror",
             "lingbot_va",
+            "dreamzero",
             "infinitetalk",
         ],
         default="wan2.1",
@@ -121,7 +123,7 @@ def main():
         default="",
         help="The path to input image file(s) for image-to-video (i2v) or image-to-audio-video (i2av) task. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
-    parser.add_argument("--state_path", type=str, default="", help="The path to input robot state file for Motus i2v inference.")
+    parser.add_argument("--state_path", type=str, default="", help="The path to input robot state file for robot i2v/i2va inference.")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument(
         "--audio_path",
@@ -209,7 +211,7 @@ def main():
     parser.add_argument("--wm_ckpt_path", type=str, default=None, help="(worldmirror/recon) Optional .ckpt/.safetensors (pair with --wm_config_path).")
 
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
-    parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus or LingBot-VA.")
+    parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")

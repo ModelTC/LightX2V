@@ -23,14 +23,14 @@ class LoraTrainer(BaseTrainer):
         super().__init__(config)
         self.running_dtype = get_running_dtype(self.model_config["running_dtype"])
 
-        lora_config = self.training_config.get("lora", {})
+        lora_config = self._get_lora_config()
         self.lora_rank = lora_config.get("rank", 16)
         self.lora_alpha = lora_config.get("alpha", self.lora_rank)
         self.lora_target_modules = lora_config.get("target_modules")
 
         self.gradient_checkpointing = self.training_config.get("gradient_checkpointing", True)
 
-        optimizer_config = self.training_config.get("optimizer", {})
+        optimizer_config = self._get_optimizer_config()
         self.optimizer_learning_rate = optimizer_config.get("learning_rate", 1e-4)
         self.optimizer_adam_beta1 = optimizer_config.get("adam_beta1", 0.9)
         self.optimizer_adam_beta2 = optimizer_config.get("adam_beta2", 0.999)
@@ -53,6 +53,12 @@ class LoraTrainer(BaseTrainer):
 
         resume_config = self.config.get("resume", {})
         self.auto_resume = resume_config.get("auto_resume", False)
+
+    def _get_lora_config(self):
+        return self.training_config.get("lora", {})
+
+    def _get_optimizer_config(self):
+        return self.training_config.get("optimizer", {})
 
     def setup(self, resume_ckpt_path=None):
         self.model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)

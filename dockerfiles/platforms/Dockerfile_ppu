@@ -1,0 +1,40 @@
+# Dockerfile for LightX2V on PPU-ZW810E platform
+# Base image: inference-xpu-pytorch with vLLM support from aliyun
+# Pip PyPI: https://aiext-pypi.mirrors.aliyuncs.com/pg1-pip/pypi_index/simple/ (only available in aliyun)
+FROM egslingjun-registry.cn-wulanchabu.cr.aliyuncs.com/egslingjun/inference-xpu-pytorch:26.04-v2.1.0-vllm0.19.0-torch2.10-cu130-20260508
+
+LABEL maintainer="LightX2V Contributors"
+LABEL description="LightX2V video generation framework with PPU support"
+
+# Set working directory
+WORKDIR /workspace
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy LightX2V source
+COPY . /workspace/LightX2V
+
+# Install LightX2V dependencies
+WORKDIR /workspace/LightX2V
+RUN grep -vE '^(sgl-kernel|torch|torchvision|torchaudio)([<=>].*)?$' requirements.txt > /tmp/requirements.no-torch.txt && \
+    pip install --no-cache-dir -r /tmp/requirements.no-torch.txt
+
+# Install LightX2V
+RUN pip install --no-cache-dir -e . --no-deps
+
+# Install av
+RUN pip install --no-cache-dir av
+
+# Fix dependencies
+RUN pip install -U peft
+# sage-attn slower than flash-attn3
+RUN pip install sageattention
+
+# Default command
+CMD ["python", "-c", "from lightx2v import LightX2VPipeline; print('LightX2V PPU ready!')"]

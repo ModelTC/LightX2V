@@ -24,6 +24,8 @@
 
 > 📝 **更多内容请访问我们的 [LightX2V 博客](https://light-ai.top/LightX2V-BLOG/)**
 
+> 🌟 **开发者新手入门教程: [LightX2V 开发者快速入门教程](https://github.com/ModelTC/LightX2V/tree/main/examples/BeginnerGuide)**
+
 > 👋 **加入微信交流群，LightX2V加群机器人微信号: random42seed**
 
 ## 🧾 社区代码贡献指南
@@ -48,6 +50,8 @@ pre-commit run --all-files
 - [Fatemanx](https://github.com/Fatemanx)
 
 ## :fire: 最新动态
+
+- **2026年6月15日：** 🚀 支持 平头哥 PPU 的部署。
 
 - **2026年5月29日：** 🚀 我们推出了一个极其高效的 Wan 2.2 14B 变体 (T2V and I2V)：[面向 Blackwell 架构的 NVFP4 量化感知步数蒸馏与稀疏注意力模型](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse)。在单张 RTX 5090 显卡上可实现超过 50 倍的加速。
 

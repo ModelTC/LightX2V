@@ -29,4 +29,4 @@ class MetaxDevice(CudaDevice):
     @staticmethod
     def init_parallel_env():
         dist.init_process_group(backend="nccl")
-        torch.npu.set_device(dist.get_rank())
+        torch.cuda.set_device(dist.get_rank())

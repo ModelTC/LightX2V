@@ -105,9 +105,9 @@ class HidreamO1ImageRunner(DefaultRunner):
                 "shift": float(self.config.get("shift", 1.0)),
                 "timesteps_list": self.config.get("timesteps_list", self.default_timesteps),
                 "scheduler_name": self.config.get("scheduler_name", "flash"),
-                "noise_scale_start": float(self.config.get("noise_scale_start", 7.5)),
-                "noise_scale_end": float(self.config.get("noise_scale_end", 7.5)),
-                "noise_clip_std": float(self.config.get("noise_clip_std", 2.5)),
+                "noise_scale_start": float(self.config.get("noise_scale_start", 8.0)),
+                "noise_scale_end": float(self.config.get("noise_scale_end", 8.0)),
+                "noise_clip_std": float(self.config.get("noise_clip_std", 8.0)),
             }
         raise ValueError(f"Unsupported HiDream hidream_model_type: {model_type}")
 
@@ -262,7 +262,7 @@ class HidreamO1ImageRunner(DefaultRunner):
         save_result_path = self.inputs.get("save_result_path")
         if self.input_info.return_result_tensor:
             self.end_run()
-            return {"image": image}
+            return {"images": [image]}
         if save_result_path:
             os.makedirs(os.path.dirname(os.path.abspath(save_result_path)), exist_ok=True)
             image.save(save_result_path)
@@ -271,7 +271,7 @@ class HidreamO1ImageRunner(DefaultRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
         self.end_run()
-        return {"image": None}
+        return {"images": None}
 
     def end_run(self):
         if hasattr(self, "scheduler") and self.scheduler is not None:

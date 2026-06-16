@@ -1,5 +1,5 @@
 {
-    "infer_steps": 40,
+    "infer_steps": 4,
     "target_video_length": 81,
     "motion_frame": 9,
     "target_fps": 25,
