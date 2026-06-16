@@ -3,6 +3,7 @@ import torch.distributed as dist
 from torch.nn import functional as F
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.flux2.infer.feature_caching.transformer_infer import Flux2TransformerInferAdaCaching
 from lightx2v.models.networks.flux2.infer.offload.transformer_infer import Flux2OffloadTransformerInfer
 from lightx2v.models.networks.flux2.infer.post_infer import Flux2PostInfer
 from lightx2v.models.networks.flux2.infer.pre_infer import Flux2DevPreInfer, Flux2PreInfer
@@ -103,10 +104,18 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
     pre_weight_class = Flux2PreWeights
 
     def _init_infer_class(self):
-        if self.cpu_offload and self.offload_granularity == "block":
-            self.transformer_infer_class = Flux2OffloadTransformerInfer
+        feature_caching = self.config.get("feature_caching", "NoCaching")
+        if feature_caching in ("NoCaching", "None"):
+            if self.cpu_offload and self.offload_granularity == "block":
+                self.transformer_infer_class = Flux2OffloadTransformerInfer
+            else:
+                self.transformer_infer_class = Flux2TransformerInfer
+        elif feature_caching == "Ada":
+            if self.cpu_offload and self.offload_granularity == "block":
+                raise NotImplementedError("Flux2 AdaCache does not support block-level cpu_offload yet")
+            self.transformer_infer_class = Flux2TransformerInferAdaCaching
         else:
-            self.transformer_infer_class = Flux2TransformerInfer
+            raise NotImplementedError(f"Unsupported feature_caching type: {feature_caching}")
         self.pre_infer_class = Flux2PreInfer
         self.post_infer_class = Flux2PostInfer
 
@@ -219,10 +228,18 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
     pre_weight_class = Flux2DevPreWeights
 
     def _init_infer_class(self):
-        if self.cpu_offload and self.offload_granularity == "block":
-            self.transformer_infer_class = Flux2OffloadTransformerInfer
+        feature_caching = self.config.get("feature_caching", "NoCaching")
+        if feature_caching in ("NoCaching", "None"):
+            if self.cpu_offload and self.offload_granularity == "block":
+                self.transformer_infer_class = Flux2OffloadTransformerInfer
+            else:
+                self.transformer_infer_class = Flux2TransformerInfer
+        elif feature_caching == "Ada":
+            if self.cpu_offload and self.offload_granularity == "block":
+                raise NotImplementedError("Flux2 AdaCache does not support block-level cpu_offload yet")
+            self.transformer_infer_class = Flux2TransformerInferAdaCaching
         else:
-            self.transformer_infer_class = Flux2TransformerInfer
+            raise NotImplementedError(f"Unsupported feature_caching type: {feature_caching}")
         self.pre_infer_class = Flux2DevPreInfer
         self.post_infer_class = Flux2PostInfer
 

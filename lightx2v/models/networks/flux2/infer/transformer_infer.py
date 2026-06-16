@@ -56,6 +56,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         temb_mod_img,
         temb_mod_txt,
         image_rotary_emb,
+        img_attn_hook=None,
     ):
         heads = self.config["num_attention_heads"]
         head_dim = self.config["attention_head_dim"]
@@ -134,7 +135,10 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         img_attn_output = block_weights.to_out.apply(img_attn_output)
         txt_attn_output = block_weights.to_add_out.apply(txt_attn_output)
 
-        hidden_states = hidden_states + gate_msa * img_attn_output
+        gated_img_attn = gate_msa * img_attn_output
+        if img_attn_hook is not None:
+            img_attn_hook(gated_img_attn)
+        hidden_states = hidden_states + gated_img_attn
         encoder_hidden_states = encoder_hidden_states + c_gate_msa * txt_attn_output
         norm_hidden_states2 = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
         norm_hidden_states2 = (norm_hidden_states2 * (1 + scale_mlp) + shift_mlp).squeeze(0)
@@ -237,55 +241,59 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         return hidden_states
 
-    def infer(self, block_weights, pre_infer_out):
+    def _prepare_image_rotary_emb(self, image_rotary_emb, num_txt_tokens):
+        if self.seq_p_group is None or image_rotary_emb is None:
+            return image_rotary_emb
+
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+
+        if isinstance(image_rotary_emb, tuple):
+            freqs_cos, freqs_sin = image_rotary_emb
+
+            txt_cos = freqs_cos[:num_txt_tokens]
+            img_cos = freqs_cos[num_txt_tokens:]
+            txt_sin = freqs_sin[:num_txt_tokens]
+            img_sin = freqs_sin[num_txt_tokens:]
+
+            seqlen = img_cos.shape[0]
+            padding_size = (world_size - (seqlen % world_size)) % world_size
+            if padding_size > 0:
+                img_cos = F.pad(img_cos, (0, 0, 0, padding_size))
+                img_sin = F.pad(img_sin, (0, 0, 0, padding_size))
+            img_cos = torch.chunk(img_cos, world_size, dim=0)[cur_rank]
+            img_sin = torch.chunk(img_sin, world_size, dim=0)[cur_rank]
+
+            freqs_cos = torch.cat([txt_cos, img_cos], dim=0)
+            freqs_sin = torch.cat([txt_sin, img_sin], dim=0)
+            return (freqs_cos, freqs_sin)
+
+        txt_emb = image_rotary_emb[:num_txt_tokens]
+        img_emb = image_rotary_emb[num_txt_tokens:]
+
+        seqlen = img_emb.shape[0]
+        padding_size = (world_size - (seqlen % world_size)) % world_size
+        if padding_size > 0:
+            img_emb = F.pad(img_emb, (0, 0, 0, padding_size))
+        img_emb = torch.chunk(img_emb, world_size, dim=0)[cur_rank]
+        return torch.cat([txt_emb, img_emb], dim=0)
+
+    def _infer_forward(self, block_weights, pre_infer_out, decisive_block_id=None, on_decisive_block=None):
         hidden_states = pre_infer_out.hidden_states
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         timestep = pre_infer_out.timestep
         image_rotary_emb = pre_infer_out.image_rotary_emb
 
         num_txt_tokens = encoder_hidden_states.shape[0]
-
-        if self.seq_p_group is not None and image_rotary_emb is not None:
-            world_size = dist.get_world_size(self.seq_p_group)
-            cur_rank = dist.get_rank(self.seq_p_group)
-
-            if isinstance(image_rotary_emb, tuple):
-                freqs_cos, freqs_sin = image_rotary_emb
-
-                txt_cos = freqs_cos[:num_txt_tokens]
-                img_cos = freqs_cos[num_txt_tokens:]
-                txt_sin = freqs_sin[:num_txt_tokens]
-                img_sin = freqs_sin[num_txt_tokens:]
-
-                seqlen = img_cos.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    img_cos = F.pad(img_cos, (0, 0, 0, padding_size))
-                    img_sin = F.pad(img_sin, (0, 0, 0, padding_size))
-                img_cos = torch.chunk(img_cos, world_size, dim=0)[cur_rank]
-                img_sin = torch.chunk(img_sin, world_size, dim=0)[cur_rank]
-
-                freqs_cos = torch.cat([txt_cos, img_cos], dim=0)
-                freqs_sin = torch.cat([txt_sin, img_sin], dim=0)
-                image_rotary_emb = (freqs_cos, freqs_sin)
-            else:
-                txt_emb = image_rotary_emb[:num_txt_tokens]
-                img_emb = image_rotary_emb[num_txt_tokens:]
-
-                seqlen = img_emb.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    img_emb = F.pad(img_emb, (0, 0, 0, padding_size))
-                img_emb = torch.chunk(img_emb, world_size, dim=0)[cur_rank]
-
-                image_rotary_emb = torch.cat([txt_emb, img_emb], dim=0)
+        image_rotary_emb = self._prepare_image_rotary_emb(image_rotary_emb, num_txt_tokens)
 
         timestep_act = F.silu(timestep)
         double_stream_mod_img = block_weights.double_stream_modulation_img_linear.apply(timestep_act)
         double_stream_mod_txt = block_weights.double_stream_modulation_txt_linear.apply(timestep_act)
         single_stream_mod = block_weights.single_stream_modulation_linear.apply(timestep_act)
 
-        for block in block_weights.double_blocks:
+        for block_idx, block in enumerate(block_weights.double_blocks):
+            block_hook = on_decisive_block if block_idx == decisive_block_id else None
             encoder_hidden_states, hidden_states = self.infer_double_stream_block(
                 block,
                 hidden_states,
@@ -293,6 +301,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 double_stream_mod_img,
                 double_stream_mod_txt,
                 image_rotary_emb,
+                img_attn_hook=block_hook,
             )
 
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=0)
@@ -306,8 +315,10 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 image_rotary_emb,
                 num_txt_tokens=num_txt_tokens,
             )
-        hidden_states = hidden_states[num_txt_tokens:, ...]
-        return hidden_states
+        return hidden_states[num_txt_tokens:, ...]
+
+    def infer(self, block_weights, pre_infer_out):
+        return self._infer_forward(block_weights, pre_infer_out)
 
 
 # Backward-compatible alias
