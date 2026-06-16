@@ -22,21 +22,13 @@ data:
 
 scheduler:
     num_train_timesteps: 1000
-    timestep_distribution: uniform
-    min_t: 0.001
-    max_t: 1.0
     time_shift_settings:
         do_time_shift: true
-        shift_type: exponential
+        shift_type: linear
         # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
         time_shift_power: 1.0
-        dynamic_shift: true
-        patch_size: [2, 2]  # [H, W]
-        # https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L59
-        shift_x1: 256
-        shift_x2: 4096
-        shift_y1: 0.5
-        shift_y2: 1.15
+        dynamic_shift: false
+        time_shift_mu: 3.0
 
 training:
     method: dmd_lora
@@ -48,6 +40,29 @@ training:
     lr_warmup_iters: 10
     save_every_iters: 100
     save_total_limit: 10
+    dmd:
+        num_inference_steps: 4
+        fake_update_ratio: 2
+        image_sizes:
+            - [1024, 1024]
+            - [768, 1344]
+            - [1344, 768]
+        renoise_sigma_min: 0.02
+        renoise_sigma_max: 1.0
+        renoise_discrete_samples: 1000
+        renoise_shift: 5.0
+        random_schedule:
+            enabled: true
+            num_steps_min: 2
+            num_steps_max: 16
+            sigma_min: 0.02
+            sigma_max: 0.98
+            sampling_method: stratified
+        cdm:
+            enabled: true
+            norm_clip_min: 0.1
+            weight: 1.0
+            warmup_iters: 200
     lora:
         rank: 32
         alpha: 32
@@ -64,12 +79,13 @@ training:
             # - img_mlp.net.2
             # - txt_mlp.net.0.proj
             # - txt_mlp.net.2
-    optimizer:
-        learning_rate: 0.0001
-        adam_beta1: 0.9
-        adam_beta2: 0.999
-        weight_decay: 0.001
-        adam_epsilon: 0.00000001
+    student:
+        optimizer:
+            learning_rate: 0.0001
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.001
+            adam_epsilon: 0.00000001
     fake:
         optimizer:
             learning_rate: 0.00002
@@ -77,33 +93,10 @@ training:
             adam_beta2: 0.999
             weight_decay: 0.001
             adam_epsilon: 0.00000001
-    dmd:
-        num_inference_steps: 4
-        fake_update_ratio: 2
+    teacher:
         guidance_scale: 4.0
         negative_prompt: " "
         cfg_norm: layer_norm
-        image_sizes:
-            - [1024, 1024]
-            - [768, 1344]
-            - [1344, 768]
-        sigma_min: 0.02
-        sigma_max: 1.0
-        discrete_samples: 1000
-        renoise_shift: 5.0
-        inference_shift: 3.0
-        random_schedule:
-            enabled: true
-            num_steps_min: 2
-            num_steps_max: 16
-            sigma_min: 0.02
-            sigma_max: 0.98
-            sampling_method: stratified
-        cdm:
-            enabled: true
-            norm_clip_min: 0.1
-            weight: 1.0
-            warmup_iters: 200
     output_dir: ./output_train/qwen_image_cdm_lora
 
 inference:
@@ -116,6 +109,11 @@ inference:
     enable_cfg: false
     output_dir: ./output_infer/qwen_image_cdm_lora
     infer_every_iters: ${training.save_every_iters}
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+    infer_log_every_steps: 10
 
 resume:
     auto_resume: true
