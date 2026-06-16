@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import re
 import sys
@@ -171,12 +172,21 @@ def _format_us(us: float) -> str:
     return f"{us:.1f}us"
 
 
-def analyze_trace_file(path: Path) -> list[ProfilerStepStats]:
+def _load_trace_events(path: Path) -> list[dict]:
     with path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
-    events = payload.get("traceEvents", payload)
-    if not isinstance(events, list):
-        raise ValueError(f"Unexpected trace format in {path}")
+    if isinstance(payload, dict):
+        events = payload.get("traceEvents")
+        if not isinstance(events, list):
+            raise ValueError(f"Unexpected trace format in {path}: 'traceEvents' is missing or not a list")
+        return events
+    if isinstance(payload, list):
+        return payload
+    raise ValueError(f"Unexpected trace format in {path}: expected dict or list")
+
+
+def analyze_trace_file(path: Path) -> list[ProfilerStepStats]:
+    events = _load_trace_events(path)
     return analyze_trace_events(events)
 
 
@@ -260,7 +270,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    resolved_paths: list[Path] = []
     for path in args.traces:
+        path_str = str(path)
+        if "*" in path_str or "?" in path_str or "[" in path_str:
+            matches = sorted(glob.glob(path_str, recursive=True))
+            if not matches:
+                print(f"warning: no files match {path_str}", file=sys.stderr)
+            resolved_paths.extend(Path(m) for m in matches)
+        else:
+            resolved_paths.append(path)
+
+    if not resolved_paths:
+        print("error: no trace files to analyze", file=sys.stderr)
+        return 0
+
+    for path in resolved_paths:
         stats = analyze_trace_file(path)
         print(render_report(path, stats, gap_threshold=args.gap_threshold, gap_per_event_us=args.gap_per_event_us), end="")
 
