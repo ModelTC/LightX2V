@@ -25,4 +25,6 @@ class NpuRmsNormWeight(RMSWeightTemplate):
             output_tensor, _ = torch_npu.npu_rms_norm(input_tensor, weight, self.eps)
             return output_tensor
         x = self._norm(input_tensor.float())
-        return (x.float() * weight.float()).to(self.infer_dtype)
+        if weight is not None:
+            return (x.float() * weight.float()).to(self.infer_dtype)
+        return x.to(self.infer_dtype)

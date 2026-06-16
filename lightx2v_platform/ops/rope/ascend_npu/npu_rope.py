@@ -73,11 +73,11 @@ class NpuRope(RopeTemplate):
             xq_rotated = torch_npu.npu_rotary_mul(xq_part, cos, sin, "interleave")
             xk_rotated = torch_npu.npu_rotary_mul(xk_part, cos, sin, "interleave")
             if s > seq_len:
-                xq = torch.cat([xq_rotated, xq[seq_len:]], dim=0)
-                xk = torch.cat([xk_rotated, xk[seq_len:]], dim=0)
+                xq = torch.cat([xq_rotated.to(self.infer_dtype), xq[seq_len:]], dim=0)
+                xk = torch.cat([xk_rotated.to(self.infer_dtype), xk[seq_len:]], dim=0)
             else:
-                xq = xq_rotated
-                xk = xk_rotated
-            return xq.to(self.infer_dtype), xk.to(self.infer_dtype)
+                xq = xq_rotated.to(self.infer_dtype)
+                xk = xk_rotated.to(self.infer_dtype)
+            return xq, xk
 
         return self._apply_rope_fp32(xq, xk, cos_sin_cache)
