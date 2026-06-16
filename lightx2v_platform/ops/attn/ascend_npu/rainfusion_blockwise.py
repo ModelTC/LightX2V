@@ -126,8 +126,11 @@ class Rainfusion_blockwise(nn.Module):
             tensor_hwt, tensor_w_r = torch.split(tensor_hwt, w - (w % 8), dim=3)
             tensor_w_r = tensor_w_r.reshape(b * n, -1, d)
             w_res_len = tensor_w_r.shape[1]
+        remaining_frames = self.frame_num - first_frame_num
+        if remaining_frames % 2 != 0:
+            raise ValueError(f"The number of remaining frames ({remaining_frames}) must be even to be rearranged with block size 2.")
         tensor_hwt = rearrange(tensor_hwt, 'b (fn fb) (hn hb) (wn wb) d -> b (fn hn wn fb hb wb) d',
-                               fn=(self.frame_num - first_frame_num) // 2, fb=2, hb=8, wb=8, hn=h // 8, wn=w // 8)
+                               fn=remaining_frames // 2, fb=2, hb=8, wb=8, hn=h // 8, wn=w // 8)
         if h % 8 != 0:
             tensor_hwt = torch.cat((tensor_hwt, tensor_h_r), dim=1)
         if w % 8 != 0:
@@ -220,11 +223,11 @@ class Rainfusion_blockwise(nn.Module):
             sparsity = self.sparsity
 
             h_res_len, w_res_len = 0, 0
+            qkv = torch.cat((q, k, v), dim=0)
+            qkv, qkv_pool, h_res_len, w_res_len = self.do_tensor_rearrange_pooling(qkv)
+            q, k, v = torch.chunk(qkv, 3, dim=0)
+
             if base_blockmask is None:
-                qkv = torch.cat((q, k, v), dim=0)
-                qkv, qkv_pool, h_res_len, w_res_len = self.do_tensor_rearrange_pooling(qkv)
-                q, k, v = torch.chunk(qkv, 3, dim=0)
-                # qkv_pool = self.do_tensor_pooling(qkv)
                 query_pool, key_pool, value_pool = torch.chunk(qkv_pool, 3, dim=0)
 
                 attn_scores_head = torch.einsum("blnd,bsnd->bnls", query_pool, key_pool) * scale
@@ -235,9 +238,6 @@ class Rainfusion_blockwise(nn.Module):
             else:
                 selectIdx = base_blockmask[0]
                 selectNumIdx = base_blockmask[1]
-                qkv = torch.cat((q, k, v), dim=0)
-                qkv, qkv_pool, h_res_len, w_res_len = self.do_tensor_rearrange_pooling(qkv)
-                q, k, v = torch.chunk(qkv, 3, dim=0)
 
             q_bnsd = q.transpose(1, 2)
             k_bnsd = k.transpose(1, 2)
