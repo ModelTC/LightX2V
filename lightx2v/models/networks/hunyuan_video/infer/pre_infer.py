@@ -7,9 +7,10 @@ from einops import rearrange
 from torch.nn import functional as F
 
 from lightx2v.utils.envs import *
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
-from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, sage_attn_no_pad_v2
+from .attn_no_pad import flash_attn_no_pad, flash_attn_no_pad_v3, flash_attn_varlen_qkvpacked_func, pad_input, sage_attn_no_pad_v2, unpad_input
 from .module_io import HunyuanVideo15InferModuleOutput
 from .posemb_layers import get_nd_rotary_pos_embed
 
@@ -19,6 +20,15 @@ try:
     TIMESTEP_EMBEDDING_CUDA_AVAILABLE = PLATFORM == "cuda"
 except ImportError:
     TIMESTEP_EMBEDDING_CUDA_AVAILABLE = False
+
+
+_TOKEN_REFINER_ATTN_TYPE_BY_PLATFORM = {
+    "ascend_npu": "npu_flash_attn",
+}
+
+
+def _get_token_refiner_attn_type():
+    return _TOKEN_REFINER_ATTN_TYPE_BY_PLATFORM.get(PLATFORM, "flash_attn2")
 
 
 def apply_gate(x, gate=None, tanh=False):
@@ -38,6 +48,46 @@ def apply_gate(x, gate=None, tanh=False):
         return x * gate.unsqueeze(1).tanh()
     else:
         return x * gate.unsqueeze(1)
+
+
+def _torch_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, causal: bool = False) -> torch.Tensor:
+    q = q.transpose(1, 2)
+    k = k.transpose(1, 2)
+    v = v.transpose(1, 2)
+    if attn_mask is not None:
+        attn_mask = attn_mask[:, None, None, :].expand(-1, 1, q.shape[-2], -1)
+    out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, is_causal=causal)
+    return out.transpose(1, 2)
+
+
+def _npu_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    batch, seqlen, heads, dim = q.shape
+    if attn_mask is None:
+        lengths = torch.full((batch,), seqlen, dtype=torch.int32, device=q.device)
+        indices = torch.arange(batch * seqlen, device=q.device)
+    else:
+        attn_mask = attn_mask.bool()
+        lengths = attn_mask.sum(dim=1, dtype=torch.int32)
+        indices = attn_mask.reshape(-1).nonzero(as_tuple=False).squeeze(1)
+
+    cu_seqlens = torch.zeros(batch + 1, dtype=torch.int32, device=q.device)
+    cu_seqlens[1:] = torch.cumsum(lengths, dim=0)
+    q_unpad = q.reshape(batch * seqlen, heads, dim)[indices]
+    k_unpad = k.reshape(batch * seqlen, heads, dim)[indices]
+    v_unpad = v.reshape(batch * seqlen, heads, dim)[indices]
+
+    out_unpad = ATTN_WEIGHT_REGISTER["npu_flash_attn"]().apply(
+        q=q_unpad,
+        k=k_unpad,
+        v=v_unpad,
+        cu_seqlens_q=cu_seqlens,
+        cu_seqlens_kv=cu_seqlens,
+        max_seqlen_q=int(lengths.max().item()),
+        max_seqlen_kv=int(lengths.max().item()),
+    )
+    out = torch.zeros(batch * seqlen, heads * dim, dtype=out_unpad.dtype, device=out_unpad.device)
+    out[indices] = out_unpad
+    return out.reshape(batch, seqlen, heads, dim)
 
 
 @torch.compiler.disable
@@ -62,11 +112,18 @@ def attention(
     if attn_mask is not None and attn_mask.dtype != torch.bool:
         attn_mask = attn_mask.bool()
     if attn_type == "flash_attn2":
-        x = flash_attn_no_pad(qkv, attn_mask, causal=causal, dropout_p=drop_rate, softmax_scale=None)
+        if flash_attn_varlen_qkvpacked_func is None or pad_input is None or unpad_input is None:
+            x = _torch_attention(q, k, v, attn_mask=attn_mask, causal=causal)
+        else:
+            x = flash_attn_no_pad(qkv, attn_mask, causal=causal, dropout_p=drop_rate, softmax_scale=None)
     elif attn_type == "flash_attn3":
         x = flash_attn_no_pad_v3(qkv, attn_mask, causal=causal, dropout_p=drop_rate, softmax_scale=None)
     elif attn_type == "sage_attn2":
         x = sage_attn_no_pad_v2(qkv, attn_mask, causal=causal, dropout_p=drop_rate, softmax_scale=None)
+    elif attn_type == "npu_flash_attn":
+        x = _npu_attention(q, k, v, attn_mask=attn_mask)
+    elif attn_type == "torch":
+        x = _torch_attention(q, k, v, attn_mask=attn_mask, causal=causal)
     b, s, a, d = x.shape
     out = x.reshape(b, s, -1)
     return out
@@ -218,7 +275,7 @@ class HunyuanVideo15PreInfer:
             norm_x = block.norm1.apply(out.unsqueeze(0)).squeeze(0)
             qkv = block.self_attn_qkv.apply(norm_x).unsqueeze(0)
             q, k, v = rearrange(qkv, "B L (K H D) -> K B L H D", K=3, H=self.heads_num)
-            attn = attention(q, k, v, attn_mask=mask, attn_type="flash_attn2").squeeze(0)
+            attn = attention(q, k, v, attn_mask=mask, attn_type=_get_token_refiner_attn_type()).squeeze(0)
             out = out + apply_gate(block.self_attn_proj.apply(attn).unsqueeze(0), gate_msa).squeeze(0)
             tmp = block.mlp_fc1.apply(block.norm2.apply(out))
             tmp = torch.nn.functional.silu(tmp)
