@@ -80,7 +80,7 @@ class QwenImageModel(BaseModel):
             "prompt_embed_mask": prompt_embed_mask,
         }
 
-    def prepare_denoiser_input(self, noisy_latent):
+    def prepare_denoiser_input(self, noisy_latent, condition=None):
         # noisy_latent: (B, C, T, H, W)
         n = noisy_latent.shape[0]
         h, w = noisy_latent.shape[3], noisy_latent.shape[4]

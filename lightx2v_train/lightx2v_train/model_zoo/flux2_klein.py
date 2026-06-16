@@ -89,7 +89,7 @@ class Flux2KleinModel(BaseModel):
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
 
-    def prepare_denoiser_input(self, noisy_latent):
+    def prepare_denoiser_input(self, noisy_latent, condition=None):
         h, w = noisy_latent.shape[2], noisy_latent.shape[3]
         packed = Flux2KleinPipeline._pack_latents(noisy_latent)
         img_ids = Flux2KleinPipeline._prepare_latent_ids(noisy_latent).to(self.device)

@@ -154,7 +154,7 @@ class LoraTrainer(BaseTrainer):
             noisy_latent = self.noise_scheduler.add_noise(latent, noise, timestep_or_sigma)
             condition = self.model.encode_condition(sample)
 
-        denoiser_input = self.model.prepare_denoiser_input(noisy_latent)
+        denoiser_input = self.model.prepare_denoiser_input(noisy_latent, condition=condition)
         prediction = self.model.denoise(denoiser_input, timestep_or_sigma, condition)
         prediction = self.model.postprocess_denoiser_output(prediction, denoiser_input)
 

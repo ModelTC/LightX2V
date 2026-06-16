@@ -1,0 +1,48 @@
+model:
+    name: qwen_image_edit
+    pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image-Edit-2511
+    max_sequence_length: 1024
+    running_dtype: bf16
+
+data:
+    val:
+        name: image_dataset
+        num_workers: 2
+        target_area: 1048576 # 1024 * 1024
+        shuffle: false
+        data_path:
+            # https://github.com/ModelTC/LightX2V_train_data_examples/blob/main/dataset_edit/val.jsonl
+            - /path/to/LightX2V_train_data_examples/dataset_edit/val.jsonl
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: logitnormal
+    logitnormal_mean: 0.0
+    logitnormal_std: 1.0
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: exponential
+        time_shift_power: 1.0
+        dynamic_shift: true
+        patch_size: [2, 2]  # [H, W]
+        shift_x1: 256
+        shift_x2: 4096
+        shift_y1: 0.5
+        shift_y2: 1.15
+
+inference:
+    method: image_infer
+    negative_prompt: " "
+    num_inference_steps: 40
+    enable_cfg: true
+    cfg_guidance_scale: 4.0
+    seed: 42
+    output_dir: ./output_infer/qwen_image_edit_2511_lora_test
+    lora_config:
+        path: /path/to/pytorch_lora_weights.safetensors
+
+logging:
+    rank_zero_only: true
+    infer_log_every_steps: 10

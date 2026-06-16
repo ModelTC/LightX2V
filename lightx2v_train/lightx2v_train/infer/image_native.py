@@ -37,10 +37,12 @@ class NativeImageInferencer(BaseInferencer):
         with torch.no_grad():
             for i, prompt in enumerate(prompts):
                 generator = torch.Generator(device=self.model.device).manual_seed(base_seed + i)
+                sample_kwargs = self.model.get_pipeline_sample_kwargs(self.dataloader_eval.dataset.samples[i])
                 result = pipe(
                     prompt=prompt,
                     negative_prompt=negative_prompt,
                     generator=generator,
+                    **sample_kwargs,
                     **pipeline_kwargs,
                 )
 

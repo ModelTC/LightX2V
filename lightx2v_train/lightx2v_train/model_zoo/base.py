@@ -117,6 +117,10 @@ class BaseModel:
             "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0),
         }
 
+    def get_pipeline_sample_kwargs(self, sample):
+        """Return per-sample kwargs to pass to pipeline.__call__ during native inference."""
+        return {}
+
     def load_lora_for_infer(self, lora_path, adapter_name=None):
         denoiser = self.denoiser_module()
         if adapter_name is None:

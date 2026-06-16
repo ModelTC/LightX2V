@@ -81,7 +81,7 @@ class LongCatImageModel(BaseModel):
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
 
-    def prepare_denoiser_input(self, noisy_latent):
+    def prepare_denoiser_input(self, noisy_latent, condition=None):
         n = noisy_latent.shape[0]
         h, w = noisy_latent.shape[2], noisy_latent.shape[3]
         packed = LongCatImagePipeline._pack_latents(noisy_latent, n, noisy_latent.shape[1], h, w)

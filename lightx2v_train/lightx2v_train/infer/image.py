@@ -9,16 +9,34 @@ from lightx2v_train.utils.registry import INFERENCER_REGISTER
 from .base import BaseInferencer
 
 
-def _target_hw_for_sample(sample, default_height, default_width):
+def _has_source_images(sample):
+    return bool(sample.get("source_images"))
+
+
+def _target_hw_for_sample(sample, default_height, default_width, infer_sample=None):
     h = sample.get("target_height")
     w = sample.get("target_width")
     if h is not None and w is not None:
         return int(h), int(w)
+    if infer_sample is not None and infer_sample.get("source_images"):
+        source_image = infer_sample["source_images"][0]
+        return int(source_image.shape[-2]), int(source_image.shape[-1])
     return default_height, default_width
 
 
 @INFERENCER_REGISTER("image_infer")
 class ImageInferencer(BaseInferencer):
+    def _load_infer_sample(self, index, prompt):
+        infer_sample = self.dataloader_eval.dataset[index]
+        infer_sample["prompt"] = prompt
+        return infer_sample
+
+    def _load_dummy_sample(self, samples):
+        for index, sample in enumerate(samples):
+            if _has_source_images(sample):
+                return self._load_infer_sample(index, " ")
+        return {"prompt": " "}
+
     @torch.no_grad()
     def infer(self):
         samples = self.dataloader_eval.dataset.samples
@@ -41,13 +59,15 @@ class ImageInferencer(BaseInferencer):
             self.model.load_lora_for_infer(lora_path)
 
         self.enable_cfg = self.infer_config.get("enable_cfg", True)
+        has_source_condition = any(_has_source_images(sample) for sample in samples)
         if self.enable_cfg:
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 4.0)
             negative_prompt = self.infer_config.get("negative_prompt", " ")
-            neg_cond = self.model.encode_condition({"prompt": negative_prompt})
+            static_neg_cond = None if has_source_condition else self.model.encode_condition({"prompt": negative_prompt})
         else:
             self.guidance_scale = None
-            neg_cond = None
+            negative_prompt = None
+            static_neg_cond = None
 
         saved_paths = []
         self.model.set_denoiser_eval()
@@ -59,11 +79,21 @@ class ImageInferencer(BaseInferencer):
                 has_sample = i < len(prompts)
                 prompt = prompts[i] if has_sample else " "
                 sample = samples[i] if has_sample else {}
+                infer_sample = self._load_infer_sample(i, prompt) if has_sample else self._load_dummy_sample(samples)
 
-                height, width = _target_hw_for_sample(sample, default_height, default_width)
+                height, width = _target_hw_for_sample(sample, default_height, default_width, infer_sample=infer_sample)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_condition({"prompt": prompt})
+                pos_cond = self.model.encode_condition(infer_sample)
+                if self.enable_cfg:
+                    if has_source_condition:
+                        neg_sample = dict(infer_sample)
+                        neg_sample["prompt"] = negative_prompt
+                        neg_cond = self.model.encode_condition(neg_sample)
+                    else:
+                        neg_cond = static_neg_cond
+                else:
+                    neg_cond = None
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 latent_hw = (latent.shape[-2], latent.shape[-1])
                 self.scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
