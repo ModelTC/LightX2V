@@ -240,7 +240,7 @@ class Rainfusion_blockwise(nn.Module):
                 actual_seq_lengths_kv=actualSeqLengthsKvHost,
             )
 
-            x = x.transpose(1, 2).view(batch, qSeqlen, numHeads, headDim)
+            x = x.transpose(1, 2).reshape(batch, qSeqlen, numHeads, headDim)
 
             x = self.do_tensor_inv_rearrange(x, h_res_len, w_res_len)
 
