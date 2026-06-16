@@ -87,7 +87,10 @@ class Rainfusion_blockwise(nn.Module):
         thresholds = topk_values[..., -1:]
         mask = score_matrix >= thresholds
 
-        protect_len = (self.first_frame_len + self.text_len + self.pool_size - 1) // self.pool_size
+        total_len = self.frame_num * self.num_tokens_per_frame + self.text_len
+        protected_start_idx = total_len - self.first_frame_len - self.text_len
+        protected_start_block = protected_start_idx // self.pool_size
+        protect_len = cols - protected_start_block
 
         if protect_len > 0:
             mask[:, :, -protect_len:, :] = True
@@ -155,7 +158,7 @@ class Rainfusion_blockwise(nn.Module):
         else:
             tensor_f, tensor_i, tensor_t = torch.split(tensor, [self.first_frame_len, s - self.text_len - self.first_frame_len, self.text_len], dim=1)
         tensor_i_2, h_res_len, w_res_len = self.rearrange_with_remaining(tensor_i)
-        tensor = torch.concat((tensor_i_2, tensor_f, tensor_t), dim=1)
+        tensor = torch.cat((tensor_i_2, tensor_f, tensor_t), dim=1)
         tensor_pool = self.avgpool(tensor, pool_size=128)
         return tensor, tensor_pool, h_res_len, w_res_len
 
@@ -165,20 +168,10 @@ class Rainfusion_blockwise(nn.Module):
         tensor_i = self.inv_rearrange_with_remaining(tensor_i, h_res_len, w_res_len)
 
         if self.txt_first:
-            tensor = torch.concat((tensor_t, tensor_f, tensor_i), dim=1)
+            tensor = torch.cat((tensor_t, tensor_f, tensor_i), dim=1)
         else:
-            tensor = torch.concat((tensor_f, tensor_i, tensor_t), dim=1)
+            tensor = torch.cat((tensor_f, tensor_i, tensor_t), dim=1)
         return tensor
-
-    def do_tensor_pooling(self, tensor):
-        tensor_t = tensor[:, : self.text_len, :, :]
-        tensor_i = tensor[:, self.text_len :, :, :]
-
-        tensor_i_pool = self.avgpool(tensor_i, pool_size=128)
-        tensor_t_pool = self.avgpool(tensor_t, pool_size=128)
-
-        tensor_pool = torch.concat((tensor_t_pool, tensor_i_pool), dim=1)
-        return tensor_pool
 
     def forward(
         self,
