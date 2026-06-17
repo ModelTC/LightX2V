@@ -1,5 +1,6 @@
 import argparse
 import base64
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -47,23 +48,25 @@ def run_generate(client: Any, args: argparse.Namespace) -> Path:
         response_format=args.response_format,
     )
     item = _extract_data_item(response)
-    print(f"[generate] response item: {item}")
+    # print(f"[generate] response item: {item}")
     return _save_image_from_item(item, Path(args.output_dir) / "generate.png")
 
 
 def run_edit(client: Any, args: argparse.Namespace) -> Path:
-    if not args.image:
+    image_paths = [Path(path.strip()) for path in args.image.split(",") if path.strip()]
+    if not image_paths:
         raise ValueError("--image is required for edit mode")
 
-    image_path = Path(args.image)
-    if not image_path.exists():
-        raise FileNotFoundError(f"Image file not found: {image_path}")
+    for image_path in image_paths:
+        if not image_path.exists():
+            raise FileNotFoundError(f"Image file not found: {image_path}")
 
-    with image_path.open("rb") as image_file:
+    with ExitStack() as stack:
+        image_files = [stack.enter_context(image_path.open("rb")) for image_path in image_paths]
         kwargs = {
             "model": args.model,
-            "image": image_file,
-            "prompt": args.edit_prompt or args.prompt,
+            "image": image_files[0] if len(image_files) == 1 else image_files,
+            "prompt": args.prompt,
             "size": args.size,
             "response_format": args.response_format,
         }
@@ -77,7 +80,7 @@ def run_edit(client: Any, args: argparse.Namespace) -> Path:
             response = client.images.edit(**kwargs)
 
     item = _extract_data_item(response)
-    print(f"[edit] response item: {item}")
+    # print(f"[edit] response item: {item}")
     return _save_image_from_item(item, Path(args.output_dir) / "edit.png")
 
 
@@ -87,11 +90,10 @@ def main() -> None:
     parser.add_argument("--api_key", type=str, default="dummy-key", help="OpenAI API key placeholder")
     parser.add_argument("--model", type=str, default="gpt-image-1", help="Model name (for compatibility only)")
     parser.add_argument("--mode", choices=["generate", "edit", "all"], default="all", help="Test mode")
-    parser.add_argument("--prompt", type=str, default="a futuristic city at sunset", help="Prompt for generation")
-    parser.add_argument("--edit_prompt", type=str, default="", help="Prompt for edit (defaults to --prompt)")
+    parser.add_argument("--prompt", type=str, default="a futuristic city at sunset", help="Prompt for generation/edit")
     parser.add_argument("--size", type=str, default="1024x1024", help="Image size, e.g. 1024x1024")
     parser.add_argument("--response_format", choices=["url", "b64_json"], default="url", help="OpenAI response format")
-    parser.add_argument("--image", type=str, default="", help="Input image path for edit mode")
+    parser.add_argument("--image", type=str, default="", help="Input image path for edit mode. Use comma-separated paths for multiple images.")
     parser.add_argument("--mask", type=str, default="", help="Optional mask image path for edit mode")
     parser.add_argument("--output_dir", type=str, default="outputs/openai_images_test", help="Directory to save outputs")
     args = parser.parse_args()

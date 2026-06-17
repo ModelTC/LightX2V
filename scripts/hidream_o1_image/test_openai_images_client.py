@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -167,6 +168,17 @@ def _extra_body_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
     return {"seed": args.seed}
 
 
+def _image_paths_from_args(args: argparse.Namespace) -> list[Path]:
+    image_paths = [Path(path.strip()) for path in args.image.split(",") if path.strip()]
+    if not image_paths:
+        raise ValueError("--image is required for edit mode")
+
+    for image_path in image_paths:
+        if not image_path.exists():
+            raise FileNotFoundError(f"Image file not found: {image_path}")
+    return image_paths
+
+
 def run_generate(client: Any, args: argparse.Namespace, prompt: str | None = None, output_path: Path | None = None) -> ImageRequestResult:
     prompt = args.prompt if prompt is None else prompt
     output_path = Path(args.output_dir) / "generate.png" if output_path is None else output_path
@@ -190,18 +202,14 @@ def run_generate(client: Any, args: argparse.Namespace, prompt: str | None = Non
 
 
 def run_edit(client: Any, args: argparse.Namespace) -> ImageRequestResult:
-    if not args.image:
-        raise ValueError("--image is required for edit mode")
+    image_paths = _image_paths_from_args(args)
 
-    image_path = Path(args.image)
-    if not image_path.exists():
-        raise FileNotFoundError(f"Image file not found: {image_path}")
-
-    with image_path.open("rb") as image_file:
+    with ExitStack() as stack:
+        image_files = [stack.enter_context(image_path.open("rb")) for image_path in image_paths]
         kwargs = {
             "model": args.model,
-            "image": image_file,
-            "prompt": args.edit_prompt or args.prompt,
+            "image": image_files[0] if len(image_files) == 1 else image_files,
+            "prompt": args.prompt,
             "size": args.size,
             "response_format": args.response_format,
             "extra_body": _extra_body_from_args(args),
@@ -311,13 +319,12 @@ def main() -> None:
     parser.add_argument("--api_key", type=str, default="dummy-key", help="OpenAI API key placeholder")
     parser.add_argument("--model", type=str, default="gpt-image-1", help="Model name (for compatibility only)")
     parser.add_argument("--mode", choices=["generate", "edit", "all"], default="generate", help="Test mode")
-    parser.add_argument("--prompt", type=str, default="a futuristic city at sunset", help="Prompt for generation")
+    parser.add_argument("--prompt", type=str, default="a futuristic city at sunset", help="Prompt for generation/edit")
     parser.add_argument("--prompt_json", "--json", dest="prompt_json", type=str, default="", help="JSON file containing prompts for batch generation")
-    parser.add_argument("--edit_prompt", type=str, default="", help="Prompt for edit (defaults to --prompt)")
     parser.add_argument("--seed", type=int, default=None, help="Optional generation seed")
     parser.add_argument("--size", type=str, default="1024x1024", help="Image size, e.g. 1024x1024")
     parser.add_argument("--response_format", choices=["url", "b64_json"], default="b64_json", help="OpenAI response format")
-    parser.add_argument("--image", type=str, default="", help="Input image path for edit mode")
+    parser.add_argument("--image", type=str, default="", help="Input image path for edit mode. Use comma-separated paths for multiple images.")
     parser.add_argument("--mask", type=str, default="", help="Optional mask image path for edit mode")
     parser.add_argument("--output_dir", type=str, default="outputs/openai_images_test", help="Directory to save outputs")
     parser.add_argument("--output_prefix", type=str, default="openai_generate", help="Batch output filename prefix")
