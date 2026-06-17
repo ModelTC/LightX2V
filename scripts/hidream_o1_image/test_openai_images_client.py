@@ -209,7 +209,7 @@ def run_edit(client: Any, args: argparse.Namespace) -> ImageRequestResult:
         kwargs = {
             "model": args.model,
             "image": image_files[0] if len(image_files) == 1 else image_files,
-            "prompt": args.edit_prompt or args.prompt,
+            "prompt": args.prompt,
             "size": args.size,
             "response_format": args.response_format,
             "extra_body": _extra_body_from_args(args),
@@ -319,9 +319,8 @@ def main() -> None:
     parser.add_argument("--api_key", type=str, default="dummy-key", help="OpenAI API key placeholder")
     parser.add_argument("--model", type=str, default="gpt-image-1", help="Model name (for compatibility only)")
     parser.add_argument("--mode", choices=["generate", "edit", "all"], default="generate", help="Test mode")
-    parser.add_argument("--prompt", type=str, default="a futuristic city at sunset", help="Prompt for generation")
+    parser.add_argument("--prompt", type=str, default="a futuristic city at sunset", help="Prompt for generation/edit")
     parser.add_argument("--prompt_json", "--json", dest="prompt_json", type=str, default="", help="JSON file containing prompts for batch generation")
-    parser.add_argument("--edit_prompt", type=str, default="", help="Prompt for edit (defaults to --prompt)")
     parser.add_argument("--seed", type=int, default=None, help="Optional generation seed")
     parser.add_argument("--size", type=str, default="1024x1024", help="Image size, e.g. 1024x1024")
     parser.add_argument("--response_format", choices=["url", "b64_json"], default="b64_json", help="OpenAI response format")
