@@ -17,10 +17,16 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         self.n_heads = config.get("n_heads", config.get("num_attention_heads", 24))
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
+            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
+            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            self.seq_p_tensor_fusion = self.config["parallel"].get("seq_p_tensor_fusion", False)
         else:
             self.seq_p_group = None
-        self.seq_p_fp8_comm = False
-        self.seq_p_fp4_comm = False
+            self.seq_p_fp8_comm = False
+            self.seq_p_fp4_comm = False
+            self.enable_head_parallel = False
+            self.seq_p_tensor_fusion = False
 
         rope_funcs = {
             "flashinfer": apply_wan_rope_with_flashinfer,
@@ -60,7 +66,15 @@ class ZImageTransformerInfer(BaseTransformerInfer):
 
         return scale_msa, gate_msa, scale_mlp, gate_mlp
 
-    def infer_attn(self, attn_phase, hidden_states, freqs_cis, scale_msa=None):
+    def infer_attn(
+        self,
+        attn_phase,
+        hidden_states,
+        freqs_cis,
+        scale_msa=None,
+        image_tokens_len=None,
+        q_only_img=False,
+    ):
         norm1_out = attn_phase.attention_norm1.apply(hidden_states)
         if scale_msa is not None:
             scaled_norm1 = norm1_out * scale_msa
@@ -85,18 +99,30 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         total_seq_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu")
 
-        if self.config["seq_parallel"]:
+        if self.config["seq_parallel"] and image_tokens_len is not None:
+            world_size = torch.distributed.get_world_size(self.seq_p_group)
+            num_heads = query.shape[1]
+            if num_heads % world_size != 0:
+                raise ValueError(
+                    f"Z-Image Ulysses sequence parallel requires attention heads ({num_heads}) "
+                    f"to be divisible by seq_p_size ({world_size}). Please choose a seq_p_size "
+                    "that divides the head count, such as 2, 3, 5, 6, 10, 15, or 30 for this Z-Image model."
+                )
+
             hidden_states_out = attn_phase.calculate_parallel.apply(
                 q=query,
                 k=key,
                 v=value,
-                slice_qkv_len=total_seq_len,
+                slice_qkv_len=image_tokens_len,
                 cu_seqlens_qkv=cu_seqlens,
                 attention_module=attn_phase.calculate,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 use_fp4_comm=self.seq_p_fp4_comm,
-                img_first=False,
+                use_tensor_fusion=self.seq_p_tensor_fusion,
+                enable_head_parallel=self.enable_head_parallel,
+                img_first=True,
+                q_only_img=q_only_img,
             )
         else:
             # todo
@@ -136,13 +162,22 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         hidden_states,
         freqs_cis,
         adaln_input=None,
+        image_tokens_len=None,
+        q_only_img=False,
     ):
         mod_phase = block_weight.compute_phases[0] if block_weight.has_modulation else None
         attn_phase = block_weight.compute_phases[1]
         ffn_phase = block_weight.compute_phases[2]
 
         scale_msa, gate_msa, scale_mlp, gate_mlp = self.infer_mod(mod_phase, hidden_states, adaln_input)
-        attn_out = self.infer_attn(attn_phase, hidden_states, freqs_cis, scale_msa)
+        attn_out = self.infer_attn(
+            attn_phase,
+            hidden_states,
+            freqs_cis,
+            scale_msa,
+            image_tokens_len=image_tokens_len,
+            q_only_img=q_only_img,
+        )
 
         if gate_msa is not None:
             hidden_states.add_(gate_msa * attn_out)
@@ -176,6 +211,8 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                 hidden_states=x_hidden,
                 freqs_cis=x_freqs,
                 adaln_input=adaln_input,
+                image_tokens_len=x_hidden.shape[0],
+                q_only_img=True,
             )
 
         return x_hidden
@@ -195,6 +232,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                 hidden_states=cap_hidden,
                 freqs_cis=cap_freqs,
                 adaln_input=None,
+                image_tokens_len=None,
             )
 
         return cap_hidden
@@ -218,6 +256,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                 hidden_states=unified,
                 freqs_cis=unified_freqs_cis,
                 adaln_input=adaln_input,
+                image_tokens_len=x_len,
             )
 
         return unified

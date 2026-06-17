@@ -27,6 +27,7 @@ class ZImageOffloadTransformerInfer(ZImageTransformerInfer):
         unified,
         unified_freqs_cis,
         adaln_input,
+        image_tokens_len,
     ):
         num_blocks = len(main_blocks)
         for block_idx in range(num_blocks):
@@ -49,6 +50,7 @@ class ZImageOffloadTransformerInfer(ZImageTransformerInfer):
                     hidden_states=unified,
                     freqs_cis=unified_freqs_cis,
                     adaln_input=adaln_input,
+                    image_tokens_len=image_tokens_len,
                 )
 
             self.offload_manager.swap_blocks()
@@ -73,5 +75,6 @@ class ZImageOffloadTransformerInfer(ZImageTransformerInfer):
             unified=unified,
             unified_freqs_cis=unified_freqs_cis,
             adaln_input=adaln_input,
+            image_tokens_len=x_len,
         )
         return unified
