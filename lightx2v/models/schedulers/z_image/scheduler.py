@@ -325,49 +325,38 @@ class RopeEmbedder:
         self.axes_dims = axes_dims
         self.axes_lens = axes_lens
         assert len(axes_dims) == len(axes_lens), "axes_dims and axes_lens must have the same length"
-        self.freqs_cis = None
+        self.freqs_cos_sin = None
 
     @staticmethod
-    def precompute_freqs_cis(dim: List[int], end: List[int], theta: float = 256.0):
-        with torch.device("cpu"):
-            freqs_cis = []
-            for i, (d, e) in enumerate(zip(dim, end)):
-                # Compute base frequencies: [1/theta^0, 1/theta^(2/d), 1/theta^(4/d), ...]
-                freqs = 1.0 / (theta ** (torch.arange(0, d, 2, dtype=torch.float64, device="cpu") / d))
-                # Compute timestep positions: [0, 1, 2, ..., e-1]
-                timestep = torch.arange(e, device=freqs.device, dtype=torch.float64)
-                # Outer product: [e, d//2]
-                freqs = torch.outer(timestep, freqs).float()
-                # Convert to complex: polar(1, angle) = e^(i*angle)
-                freqs_cis_i = torch.polar(torch.ones_like(freqs), freqs).to(torch.complex64)
-                freqs_cis.append(freqs_cis_i)
-            return freqs_cis
+    def precompute_freqs_cos_sin(dim: List[int], end: List[int], theta: float = 256.0, device: torch.device = None):
+        freqs_cos_sin = []
+        for d, e in zip(dim, end):
+            freqs = 1.0 / (theta ** (torch.arange(0, d, 2, dtype=torch.float32, device=device) / d))
+            timestep = torch.arange(e, device=device, dtype=torch.float32)
+            freqs = torch.outer(timestep, freqs)
+            freqs_cos_sin.append((freqs.cos(), freqs.sin()))
+        return freqs_cos_sin
 
-    def __call__(self, ids: torch.Tensor):
+    def __call__(self, ids: torch.Tensor, return_real: bool = False):
         assert ids.ndim == 2
         assert ids.shape[-1] == len(self.axes_dims)
         device = ids.device
-        # Ascend aclnnIndex does not support indexing into complex64 tensors; keep LUT on CPU and gather there.
-        use_cpu_freqs_index = (PLATFORM or "") == "ascend_npu"
 
-        if self.freqs_cis is None:
-            self.freqs_cis = self.precompute_freqs_cis(self.axes_dims, self.axes_lens, theta=self.theta)
-            if not use_cpu_freqs_index:
-                self.freqs_cis = [freqs_cis.to(device) for freqs_cis in self.freqs_cis]
-        elif not use_cpu_freqs_index and self.freqs_cis[0].device != device:
-            self.freqs_cis = [freqs_cis.to(device) for freqs_cis in self.freqs_cis]
+        if self.freqs_cos_sin is None or self.freqs_cos_sin[0][0].device != device:
+            self.freqs_cos_sin = self.precompute_freqs_cos_sin(self.axes_dims, self.axes_lens, theta=self.theta, device=device)
 
-        if use_cpu_freqs_index:
-            ids_cpu = ids.detach().to(dtype=torch.long, device="cpu")
-            result = []
-            for i in range(len(self.axes_dims)):
-                result.append(self.freqs_cis[i][ids_cpu[:, i]])
-            return torch.cat(result, dim=-1).to(device)
+        ids = ids.to(dtype=torch.long)
+        cos_result = []
+        sin_result = []
+        for i, (freqs_cos, freqs_sin) in enumerate(self.freqs_cos_sin):
+            cos_result.append(freqs_cos[ids[:, i]])
+            sin_result.append(freqs_sin[ids[:, i]])
 
-        result = []
-        for i in range(len(self.axes_dims)):
-            result.append(self.freqs_cis[i][ids[:, i]])
-        return torch.cat(result, dim=-1)
+        freqs_cos = torch.cat(cos_result, dim=-1)
+        freqs_sin = torch.cat(sin_result, dim=-1)
+        if return_real:
+            return freqs_cos, freqs_sin
+        return torch.complex(freqs_cos, freqs_sin)
 
 
 class ZImageScheduler(BaseScheduler):
@@ -396,6 +385,7 @@ class ZImageScheduler(BaseScheduler):
             axes_dims=axes_dims,
             axes_lens=axes_lens,
         )
+        self.freqs_cis_cache = {}
 
     @staticmethod
     def _pack_latents(latents, batch_size, num_channels_latents, height, width):
@@ -462,11 +452,27 @@ class ZImageScheduler(BaseScheduler):
         if device is None:
             device = position_ids.device
 
-        freqs_cis = self.rope_embedder(position_ids.to(device))
+        position_ids = position_ids.to(device)
         rope_type = self.config.get("rope_type", "flashinfer")
-        if rope_type == "flashinfer":
-            freqs_cis = torch.cat([freqs_cis.real, freqs_cis.imag], dim=-1).float()
+        cache_key = (
+            rope_type,
+            str(device),
+            str(position_ids.dtype),
+            tuple(position_ids.shape),
+            tuple(position_ids[0].tolist()),
+            tuple(position_ids[-1].tolist()),
+        )
+        cached_freqs_cis = self.freqs_cis_cache.get(cache_key)
+        if cached_freqs_cis is not None:
+            return cached_freqs_cis
 
+        if rope_type in {"flashinfer", "torch"}:
+            freqs_cos, freqs_sin = self.rope_embedder(position_ids, return_real=True)
+            freqs_cis = torch.cat([freqs_cos, freqs_sin], dim=-1).float()
+        else:
+            freqs_cis = self.rope_embedder(position_ids)
+
+        self.freqs_cis_cache[cache_key] = freqs_cis
         return freqs_cis
 
     def get_timesteps(self, num_inference_steps, strength, device):
@@ -520,6 +526,7 @@ class ZImageScheduler(BaseScheduler):
         self.num_warmup_steps = num_warmup_steps
 
     def prepare(self, input_info):
+        self.freqs_cis_cache = {}
         if self.generator is None:
             self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
         else:

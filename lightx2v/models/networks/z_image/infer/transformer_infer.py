@@ -24,7 +24,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
 
         rope_funcs = {
             "flashinfer": apply_wan_rope_with_flashinfer,
-            "torch_naive": apply_rotary_emb_qwen,
+            "torch": apply_rotary_emb_qwen,
         }
 
         rope_type = self.config.get("rope_type", "flashinfer")
@@ -38,8 +38,9 @@ class ZImageTransformerInfer(BaseTransformerInfer):
 
             rope_func = rope_wrapper
         else:
-            # Fallback to hardcoded functions
-            rope_func = rope_funcs.get(rope_type, apply_rotary_emb_qwen)
+            if rope_type not in rope_funcs:
+                raise ValueError(f"Unsupported z-image rope_type: {rope_type}")
+            rope_func = rope_funcs[rope_type]
         self.apply_rope_func = rope_func
 
     def set_scheduler(self, scheduler):
