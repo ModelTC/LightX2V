@@ -39,12 +39,20 @@ def apply_rotary_emb_qwen(
     xk: torch.Tensor,
     cos_sin_cache: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    xq_rotated = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2)).squeeze(0)
-    xk_rotated = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2)).squeeze(0)
-    freqs_cis = cos_sin_cache.unsqueeze(1)
-    xq_out = torch.view_as_real(xq_rotated * freqs_cis).flatten(-2)
-    xk_out = torch.view_as_real(xk_rotated * freqs_cis).flatten(-2)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
+    head_dim = xq.shape[-1]
+    cos, sin = cos_sin_cache[..., : head_dim // 2], cos_sin_cache[..., head_dim // 2 :]
+    cos = cos.unsqueeze(1).to(dtype=xq.dtype)
+    sin = sin.unsqueeze(1).to(dtype=xq.dtype)
+
+    def rotate(x):
+        x_even = x[..., 0::2]
+        x_odd = x[..., 1::2]
+        x_out = torch.empty_like(x)
+        x_out[..., 0::2] = x_even * cos - x_odd * sin
+        x_out[..., 1::2] = x_odd * cos + x_even * sin
+        return x_out
+
+    return rotate(xq), rotate(xk)
 
 
 def patchify(hidden_states: torch.Tensor, patch_size: int = 2, f_patch_size: int = 1) -> torch.Tensor:
