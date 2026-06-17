@@ -170,5 +170,23 @@ class BaseModel:
         if incompatible and incompatible.unexpected_keys:
             logger.warning("Unexpected keys when resuming LoRA: {}", incompatible.unexpected_keys)
 
+    def load_full_weights_for_resume(self, resume_ckpt_path):
+        raise NotImplementedError(f"{self.__class__.__name__} must define load_full_weights_for_resume().")
+
     def save_full_model(self, save_dir):
-        self.denoiser_module().save_pretrained(f"{save_dir}/transformer", safe_serialization=True)
+        denoiser = self.denoiser_module()
+        transformer_dir = os.path.join(save_dir, "transformer")
+        if not is_fsdp2_module(denoiser):
+            if is_main_process():
+                denoiser.save_pretrained(transformer_dir, safe_serialization=True)
+            return
+
+        options = StateDictOptions(
+            full_state_dict=True,
+            cpu_offload=True,
+            ignore_frozen_params=False,
+            strict=False,
+        )
+        state_dict, _ = get_state_dict(denoiser, (), options=options)
+        if is_main_process():
+            denoiser.save_pretrained(transformer_dir, safe_serialization=True, state_dict=state_dict)
