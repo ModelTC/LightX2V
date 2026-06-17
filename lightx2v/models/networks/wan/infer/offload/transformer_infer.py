@@ -130,7 +130,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 x,
                 self.phase_params["shift_msa"],
                 self.phase_params["scale_msa"],
-                grid_sizes=pre_infer_out.grid_sizes.tuple,
+                grid_sizes=pre_infer_out.grid_sizes.tuple if getattr(pre_infer_out, "grid_sizes", None) is not None else None,
             )
         elif cur_phase_idx == 1:
             x, self.phase_params["attn_out"] = self.infer_cross_attn(

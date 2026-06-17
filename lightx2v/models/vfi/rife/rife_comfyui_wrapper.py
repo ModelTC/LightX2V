@@ -82,7 +82,7 @@ class RIFEWrapper:
         for source_idx1, source_idx2, interp_factor in frame_positions:
             if interp_factor == 0.0 or source_idx1 == source_idx2:
                 # No interpolation needed, use the source frame directly
-                output_frames.append(images[source_idx1].to(self.device).float())
+                output_frames.append(images[source_idx1].float())
             else:
                 # Get frames to interpolate
                 frame1 = images[source_idx1]
@@ -103,10 +103,10 @@ class RIFEWrapper:
 
                 # Convert back to ComfyUI format [H, W, C]
                 # Crop to original size and permute dimensions
-                interpolated_frame = interpolated[0, :, :height, :width].permute(1, 2, 0)
+                interpolated_frame = interpolated[0, :, :height, :width].permute(1, 2, 0).cpu()
                 output_frames.append(interpolated_frame)
 
-        return torch.stack(output_frames, dim=0).cpu()
+        return torch.stack(output_frames, dim=0)
 
     def _calculate_target_frame_positions(self, source_fps: float, target_fps: float, total_source_frames: int) -> List[Tuple[int, int, float]]:
         """

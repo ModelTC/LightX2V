@@ -101,7 +101,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
-        if self._rf_mgr is not None:
+        if self._rf_mgr is not None and getattr(pre_infer_out, "grid_sizes", None) is not None:
             self._rf_mgr.update_grid_sizes(pre_infer_out.grid_sizes.tuple)
         self.reset_infer_states()
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)

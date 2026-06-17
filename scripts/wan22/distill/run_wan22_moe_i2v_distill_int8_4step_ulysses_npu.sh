@@ -4,6 +4,11 @@
 lightx2v_path=
 model_path=
 
+if [ -z "$lightx2v_path" ] || [ -z "$model_path" ]; then
+    echo "Error: Please set lightx2v_path and model_path in this script before running."
+    exit 1
+fi
+
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES=0,1
 

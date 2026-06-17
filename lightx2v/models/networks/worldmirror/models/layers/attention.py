@@ -22,7 +22,7 @@ _USE_FLASH_ATTN_V2 = flash_attn_func_v2 is not None
 
 try:
     import torch_npu
-    _USE_NPU_FLASH_ATTN = True
+    _USE_NPU_FLASH_ATTN = torch.npu.is_available()
 except ImportError:
     torch_npu = None
     _USE_NPU_FLASH_ATTN = False
