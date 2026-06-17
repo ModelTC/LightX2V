@@ -5,7 +5,12 @@ from torch.optim import AdamW
 from ..model.loss import *
 from .IFNet_HDv3 import *
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+try:
+    import torch_npu
+    _HAS_NPU = torch.npu.is_available()
+except ImportError:
+    _HAS_NPU = False
+device = torch.device("cuda") if torch.cuda.is_available() else (torch.device("npu") if _HAS_NPU else torch.device("cpu"))
 
 
 class Model:

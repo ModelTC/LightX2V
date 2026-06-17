@@ -2,33 +2,31 @@ import math
 
 import mindiesd
 import torch
-import torch.nn as nn
 from einops import rearrange
 from mindiesd.layers.flash_attn.attention_forward import attention_forward
 
+from lightx2v_platform.ops.attn.template import AttnWeightTemplate
+from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
-class Rainfusion_blockwise(nn.Module):
-    def __init__(
-        self,
-        grid_size: list,
-        pool_size: int = 128,
-        sparsity: float = 0.9,
-        skip_timesteps: int = 0,
-        txt_len: int = 0,
-        txt_first: bool = False,
-    ) -> None:
+try:
+    import torch_npu
+except ImportError:
+    torch_npu = None
+
+"""
+RainFusion is a sparse attention acceleration algorithm.
+RainFusion requires MindIE-SD to be installed. Installation guide: https://gitcode.com/Ascend/MindIE-SD/blob/master/docs/zh/installation.md
+"""
+@PLATFORM_ATTN_WEIGHT_REGISTER("npu_rainfusion_attn")
+class NpuRainfusionAttnWeight(AttnWeightTemplate):
+    def __init__(self, grid_size=None, pool_size=128, sparsity=0.8, skip_timesteps=-1, txt_len=0, txt_first=False):
         """
         参数:
             grid_size (list): latents的THW网格大小。
             sparsity (float, optional): 稀疏度, 取值范围[0, 1]，默认为 0.50。
         """
-        super().__init__()
-
-        # Rainfusion_param
-        self.grid_size = grid_size
-        self.frame_num = self.grid_size[0]
-        self.num_tokens_per_frame = self.grid_size[1] * self.grid_size[2]
-        self.first_frame_len = self.num_tokens_per_frame
+        self.config = {}
+        assert torch_npu is not None, "torch_npu is not installed."
 
         self.pool_size = pool_size
         self.sparsity = sparsity
@@ -36,12 +34,21 @@ class Rainfusion_blockwise(nn.Module):
         self.text_len = txt_len
         self.txt_first = txt_first
 
+        if grid_size is not None:
+            self.update_grid_size(grid_size)
+
+    def update_grid_size(self, grid_size):
+        self.grid_size = grid_size
+        self.frame_num = self.grid_size[0]
+        self.num_tokens_per_frame = self.grid_size[1] * self.grid_size[2]
+        self.first_frame_len = self.num_tokens_per_frame
+
     @staticmethod
     def get_grid_size(latent_size, patch_size):
         t, h, w = latent_size[-3:]
         return [t // patch_size[0], h // patch_size[1], w // patch_size[2]]
 
-    def avgpool(self, input_tensor, pool_size=128):  # BSND in,  BSND out
+    def avgpool(self, input_tensor, pool_size=128):
         batch, seqlen, headnum, dim = input_tensor.shape
 
         num_full_blocks = seqlen // pool_size
@@ -49,12 +56,12 @@ class Rainfusion_blockwise(nn.Module):
 
         pooled_tensors = []
         if num_full_blocks > 0:
-            full_blocks = input_tensor[:, : num_full_blocks * pool_size, :, :]
-            full_blocks_reshaped = full_blocks.view(batch, num_full_blocks, pool_size, headnum, dim)
+            full_blocks = input_tensor[:, :num_full_blocks * pool_size, :, :]
+            full_blocks_reshaped = full_blocks.reshape(batch, num_full_blocks, pool_size, headnum, dim)
             pooled_tensors.append(full_blocks_reshaped.mean(dim=2))
         if tail_size > 0:
-            tail_block = input_tensor[:, num_full_blocks * pool_size :, :, :]
-            tail_reshaped = tail_block.view(batch, 1, tail_size, headnum, dim)
+            tail_block = input_tensor[:, num_full_blocks * pool_size:, :, :]
+            tail_reshaped = tail_block.reshape(batch, 1, tail_size, headnum, dim)
             pooled_tensors.append(tail_reshaped.mean(dim=2))
 
         return torch.cat(pooled_tensors, dim=1)
@@ -63,12 +70,10 @@ class Rainfusion_blockwise(nn.Module):
         B, N, S, _ = mask.shape
         device = mask.device
 
-        # 1. 重塑维度 → (B*N)×S×S
         mask_reshaped = mask.reshape(-1, S, S)
         batch_size = mask_reshaped.shape[0]
 
-        # 2. 生成行索引  标记False位置为S（大于所有有效索引）
-        row_indices = torch.arange(S, device=device).view(1, 1, S).expand(batch_size, S, S)  # (B*N, S, S)
+        row_indices = torch.arange(S, device=device).view(1, 1, S).expand(batch_size, S, S)
         sorted_vals = torch.where(mask_reshaped, row_indices, S)
         sorted_vals, _ = torch.sort(sorted_vals, dim=-1)
         valid_count = mask_reshaped.sum(dim=-1, keepdim=True)
@@ -101,7 +106,7 @@ class Rainfusion_blockwise(nn.Module):
         selectNumIdx = mask[0].transpose(0, 1).sum(dim=-1)
         return selectIdx, selectNumIdx
 
-    def rearrange_with_remaining(self, tensor):  # BSND in ,  BSND out
+    def rearrange_with_remaining(self, tensor):
         b, s, n, d = tensor.shape
         h = self.grid_size[1]
         w = self.grid_size[2]
@@ -128,7 +133,7 @@ class Rainfusion_blockwise(nn.Module):
         tensor_hwt = rearrange(tensor_hwt, "(b n) s d -> b s n d", b=b, n=n)
         return tensor_hwt, h_res_len, w_res_len
 
-    def inv_rearrange_with_remaining(self, tensor, h_res_len, w_res_len):  # BSND in ,  BSND out
+    def inv_rearrange_with_remaining(self, tensor, h_res_len, w_res_len):
         b, s, n, d = tensor.shape
         h = self.grid_size[1]
         w = self.grid_size[2]
@@ -149,7 +154,7 @@ class Rainfusion_blockwise(nn.Module):
         tensor_hwt = rearrange(tensor_hwt, "(b n) s d -> b s n d", b=b, n=n)
         return tensor_hwt
 
-    def do_tensor_rearrange_pooling(self, tensor):  # BSND in ,  BSND out
+    def do_tensor_rearrange_pooling(self, tensor):
         b, s, n, d = tensor.shape
         if s < self.text_len + self.first_frame_len:
             raise ValueError(f"Sequence length {s} is too small for text_len {self.text_len} and first_frame_len {self.first_frame_len}")
@@ -173,14 +178,9 @@ class Rainfusion_blockwise(nn.Module):
             tensor = torch.cat((tensor_f, tensor_i, tensor_t), dim=1)
         return tensor
 
-    def forward(
-        self,
-        q,  # BSND
-        k,
-        v,
-        t_b_idx,
-        base_blockmask,
-    ):
+    def apply(self, q, k, v, grid_size=None, t_b_idx=None, base_blockmask=None, **kwds):
+        if grid_size is not None:
+            self.update_grid_size(grid_size)
         t_idx = t_b_idx[0]
 
         if t_idx < self.skip_timesteps:
@@ -188,7 +188,8 @@ class Rainfusion_blockwise(nn.Module):
             x = attention_forward(q, k, v, opt_mode="manual", op_type="ascend_laser_attention", layout="BNSD")
         else:
             batch, qSeqlen, numHeads, headDim = q.shape
-            assert batch == 1, "Rainfusion_blockwise currently only supports batch size 1."
+            if batch != 1:
+                raise ValueError("NpuRainfusionAttnWeight currently only supports batch size 1.")
             _, kvSeqlen, _, _ = k.shape
             blockShapeX, blockShapeY = self.pool_size, self.pool_size
             scale = headDim**-0.5
@@ -238,3 +239,95 @@ class Rainfusion_blockwise(nn.Module):
             x = self.do_tensor_inv_rearrange(x, h_res_len, w_res_len)
 
         return x, base_blockmask
+
+
+class RainfusionAdapter:
+    def __init__(self, rf_attn, manager):
+        self.rf = rf_attn
+        self.manager = manager
+
+    def _pad_to_expected(self, tensor, actual_seqlen, expected_seqlen):
+        if actual_seqlen > expected_seqlen:
+            return tensor[:expected_seqlen], True
+        elif actual_seqlen < expected_seqlen:
+            diff = expected_seqlen - actual_seqlen
+            pad = torch.zeros((diff, tensor.shape[1], tensor.shape[2]), dtype=tensor.dtype, device=tensor.device)
+            return torch.cat([tensor, pad], dim=0), False
+        else:
+            return tensor, None
+
+    def apply(self, q, k, v, **kwargs):
+        grid_sizes = self.manager.grid_sizes
+        expected_seqlen = grid_sizes[0] * grid_sizes[1] * grid_sizes[2]
+        actual_seqlen = q.shape[0]
+
+        q_valid, trunc_input = self._pad_to_expected(q, actual_seqlen, expected_seqlen)
+        k_valid, _ = self._pad_to_expected(k, actual_seqlen, expected_seqlen)
+        v_valid, _ = self._pad_to_expected(v, actual_seqlen, expected_seqlen)
+
+        attn_out, self.manager._base_blockmask = self.rf.apply(
+            q=q_valid.unsqueeze(0),
+            k=k_valid.unsqueeze(0),
+            v=v_valid.unsqueeze(0),
+            grid_size=list(grid_sizes),
+            t_b_idx=(self.manager.step_index, 0),
+            base_blockmask=self.manager._base_blockmask,
+        )
+        attn_out = attn_out.squeeze(0).reshape(attn_out.shape[1], -1)
+
+        if trunc_input is True:
+            pad_out = torch.zeros((actual_seqlen - expected_seqlen, attn_out.shape[1]), dtype=attn_out.dtype, device=attn_out.device)
+            attn_out = torch.cat([attn_out, pad_out], dim=0)
+        elif trunc_input is False:
+            attn_out = attn_out[:actual_seqlen]
+
+        return attn_out
+
+
+class RainfusionManager:
+    def __init__(self, config):
+        self.config = config
+        self._rf_cfg = config.get("rainfusion", {})
+        self._rf = None
+        self._base_blockmask = None
+        self.grid_sizes = None
+        self.step_index = 0
+
+    def update_grid_sizes(self, grid_sizes):
+        self.grid_sizes = grid_sizes
+        self._init_rf()
+
+    def update_step_index(self, step_index):
+        self.step_index = step_index
+
+    def reset(self):
+        self._base_blockmask = None
+
+    def _init_rf(self):
+        if self._rf is not None and list(self._rf.grid_size) == list(self.grid_sizes):
+            return
+        self._base_blockmask = None
+        self._rf = NpuRainfusionAttnWeight(
+            grid_size=list(self.grid_sizes),
+            pool_size=128,
+            sparsity=self._rf_cfg.get("sparsity", 0.8),
+            skip_timesteps=self._rf_cfg.get("skip_timesteps", -1),
+            txt_len=0,
+            txt_first=False,
+        )
+
+    def apply_non_sp(self, q, k, v, grid_sizes):
+        attn_out, self._base_blockmask = self._rf.apply(
+            q=q, k=k, v=v,
+            grid_size=list(grid_sizes),
+            t_b_idx=(self.step_index, 0),
+            base_blockmask=self._base_blockmask,
+        )
+        return attn_out
+
+    def get_sp_adapter(self):
+        return RainfusionAdapter(self._rf, self)
+
+    @property
+    def is_active(self):
+        return self._rf is not None

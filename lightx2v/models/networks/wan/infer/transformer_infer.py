@@ -79,6 +79,11 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
 
+        self._rf_mgr = None
+        if self.config.get("use_rainfusion", False) and "npu" in AI_DEVICE:
+            from lightx2v_platform.ops.attn.ascend_npu.npu_rainfusion_attn import RainfusionManager
+            self._rf_mgr = RainfusionManager(self.config)
+
     @torch.no_grad()
     def reset_post_adapter_states(self):
         pass
@@ -88,12 +93,16 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.cross_attn_cu_seqlens_q = None
         self.cross_attn_cu_seqlens_kv = None
         self.cross_attn_cu_seqlens_kv_img = None
+        if self._rf_mgr is not None:
+            self._rf_mgr.reset()
         if self.has_post_adapter:
             self.reset_post_adapter_states()
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
+        if self._rf_mgr is not None:
+            self._rf_mgr.update_grid_sizes(pre_infer_out.grid_sizes.tuple)
         self.reset_infer_states()
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
@@ -145,6 +154,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             x,
             shift_msa,
             scale_msa,
+            grid_sizes=pre_infer_out.grid_sizes.tuple,
         )
         x, attn_out = self.infer_cross_attn(
             block.compute_phases[1],
@@ -177,7 +187,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         return shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
 
-    def infer_self_attn(self, phase, x, shift_msa, scale_msa):
+    def infer_self_attn(self, phase, x, shift_msa, scale_msa, grid_sizes=None):
         cos_sin = self.cos_sin
         norm1_quant = None
         norm1_scale = None
@@ -233,7 +243,31 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             "scheduler": self.scheduler,
         }
 
-        if self.config["seq_parallel"]:
+        if self._rf_mgr is not None and not self.config["seq_parallel"]:
+            self._rf_mgr.update_step_index(self.scheduler.step_index)
+            q_4d = q.unsqueeze(0)
+            k_4d = k.unsqueeze(0)
+            v_4d = v.unsqueeze(0)
+            attn_out = self._rf_mgr.apply_non_sp(q_4d, k_4d, v_4d, grid_sizes)
+            attn_out = attn_out.reshape(-1, self.num_heads * self.head_dim)
+        elif self._rf_mgr is not None and self.config["seq_parallel"]:
+            self._rf_mgr.update_step_index(self.scheduler.step_index)
+            attn_module = self._rf_mgr.get_sp_adapter()
+            attn_out = phase.self_attn_1_parallel.apply(
+                q=q,
+                k=k,
+                v=v,
+                slice_qkv_len=img_qkv_len,
+                cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
+                attention_module=attn_module,
+                seq_p_group=self.seq_p_group,
+                use_fp8_comm=self.seq_p_fp8_comm,
+                use_fp4_comm=self.seq_p_fp4_comm,
+                use_tensor_fusion=self.seq_p_tensor_fusion,
+                enable_head_parallel=self.enable_head_parallel,
+                **attn_running_args,
+            )
+        elif self.config["seq_parallel"]:
             attn_out = phase.self_attn_1_parallel.apply(
                 q=q,
                 k=k,

@@ -43,8 +43,8 @@ class NpuRope(RopeTemplate):
     def _apply_rope_fp32(self, xq, xk, cos_sin_cache):
         n = xq.size(1)
         seq_len = cos_sin_cache.size(0)
-        xq_fp32 = torch.view_as_complex(xq[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2))
-        xk_fp32 = torch.view_as_complex(xk[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2))
+        xq_fp32 = torch.view_as_complex(xq[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2).contiguous())
+        xk_fp32 = torch.view_as_complex(xk[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2).contiguous())
         xq_rot = torch.view_as_real(xq_fp32 * cos_sin_cache).flatten(2)
         xk_rot = torch.view_as_real(xk_fp32 * cos_sin_cache).flatten(2)
         if xq.size(0) > seq_len:
