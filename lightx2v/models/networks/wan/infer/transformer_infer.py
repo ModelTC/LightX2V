@@ -82,6 +82,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self._rf_mgr = None
         if self.config.get("use_rainfusion", False) and "npu" in AI_DEVICE:
             from lightx2v_platform.ops.attn.ascend_npu.npu_rainfusion_attn import RainfusionManager
+
             self._rf_mgr = RainfusionManager(self.config)
 
     @torch.no_grad()

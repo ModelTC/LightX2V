@@ -6,6 +6,7 @@ from einops import rearrange
 try:
     import mindiesd
     from mindiesd.layers.flash_attn.attention_forward import attention_forward
+
     _HAS_MINDIESD = True
 except ImportError:
     mindiesd = None
@@ -24,6 +25,8 @@ except ImportError:
 RainFusion is a sparse attention acceleration algorithm.
 RainFusion requires MindIE-SD to be installed. Installation guide: https://gitcode.com/Ascend/MindIE-SD/blob/master/docs/zh/installation.md
 """
+
+
 @PLATFORM_ATTN_WEIGHT_REGISTER("npu_rainfusion_attn")
 class NpuRainfusionAttnWeight(AttnWeightTemplate):
     def __init__(self, grid_size=None, pool_size=128, sparsity=0.8, skip_timesteps=-1, txt_len=0, txt_first=False):
@@ -64,11 +67,11 @@ class NpuRainfusionAttnWeight(AttnWeightTemplate):
 
         pooled_tensors = []
         if num_full_blocks > 0:
-            full_blocks = input_tensor[:, :num_full_blocks * pool_size, :, :]
+            full_blocks = input_tensor[:, : num_full_blocks * pool_size, :, :]
             full_blocks_reshaped = full_blocks.reshape(batch, num_full_blocks, pool_size, headnum, dim)
             pooled_tensors.append(full_blocks_reshaped.mean(dim=2))
         if tail_size > 0:
-            tail_block = input_tensor[:, num_full_blocks * pool_size:, :, :]
+            tail_block = input_tensor[:, num_full_blocks * pool_size :, :, :]
             tail_reshaped = tail_block.reshape(batch, 1, tail_size, headnum, dim)
             pooled_tensors.append(tail_reshaped.mean(dim=2))
 
@@ -326,7 +329,9 @@ class RainfusionManager:
 
     def apply_non_sp(self, q, k, v, grid_sizes):
         attn_out, self._base_blockmask = self._rf.apply(
-            q=q, k=k, v=v,
+            q=q,
+            k=k,
+            v=v,
             grid_size=list(grid_sizes),
             t_b_idx=(self.step_index, 0),
             base_blockmask=self._base_blockmask,

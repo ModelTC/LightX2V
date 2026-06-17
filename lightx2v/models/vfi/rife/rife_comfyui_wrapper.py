@@ -1,3 +1,4 @@
+import importlib.util
 import os
 from typing import List, Optional, Tuple
 
@@ -16,11 +17,7 @@ class RIFEWrapper:
         if device is not None:
             self.device = device
         else:
-            try:
-                import torch_npu
-                _HAS_NPU = torch.npu.is_available()
-            except ImportError:
-                _HAS_NPU = False
+            _HAS_NPU = importlib.util.find_spec("torch_npu") is not None and torch.npu.is_available()
             self.device = torch.device("cuda") if torch.cuda.is_available() else (torch.device("npu") if _HAS_NPU else torch.device("cpu"))
 
         # Setup torch for optimal performance

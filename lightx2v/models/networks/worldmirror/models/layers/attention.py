@@ -6,6 +6,9 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from ...comm.communication import _All2All
+from ...comm.padding import depad_by_length, pad_by_length
+
 try:
     from flash_attn_interface import flash_attn_func as flash_attn_func_v3
 
@@ -22,13 +25,11 @@ _USE_FLASH_ATTN_V2 = flash_attn_func_v2 is not None
 
 try:
     import torch_npu
+
     _USE_NPU_FLASH_ATTN = torch.npu.is_available()
 except ImportError:
     torch_npu = None
     _USE_NPU_FLASH_ATTN = False
-
-from ...comm.communication import _All2All
-from ...comm.padding import depad_by_length, pad_by_length
 
 
 class Attention(nn.Module):

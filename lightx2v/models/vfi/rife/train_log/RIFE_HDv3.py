@@ -1,3 +1,5 @@
+import importlib.util
+
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
@@ -5,11 +7,7 @@ from torch.optim import AdamW
 from ..model.loss import *
 from .IFNet_HDv3 import *
 
-try:
-    import torch_npu
-    _HAS_NPU = torch.npu.is_available()
-except ImportError:
-    _HAS_NPU = False
+_HAS_NPU = importlib.util.find_spec("torch_npu") is not None and torch.npu.is_available()
 device = torch.device("cuda") if torch.cuda.is_available() else (torch.device("npu") if _HAS_NPU else torch.device("cpu"))
 
 
