@@ -1,9 +1,16 @@
 import math
 
-import mindiesd
 import torch
 from einops import rearrange
-from mindiesd.layers.flash_attn.attention_forward import attention_forward
+
+try:
+    import mindiesd
+    from mindiesd.layers.flash_attn.attention_forward import attention_forward
+    _HAS_MINDIESD = True
+except ImportError:
+    mindiesd = None
+    attention_forward = None
+    _HAS_MINDIESD = False
 
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
@@ -27,6 +34,7 @@ class NpuRainfusionAttnWeight(AttnWeightTemplate):
         """
         self.config = {}
         assert torch_npu is not None, "torch_npu is not installed."
+        assert _HAS_MINDIESD, "mindiesd is not installed. RainFusion requires MindIE-SD."
 
         self.pool_size = pool_size
         self.sparsity = sparsity
@@ -115,11 +123,11 @@ class NpuRainfusionAttnWeight(AttnWeightTemplate):
 
         tensor_hwt = rearrange(tensor, "b (f h w) n d -> (b n) f h w d", f=self.frame_num - first_frame_num, h=h, w=w)
         if h % 8 != 0:
-            tensor_hwt, tensor_h_r = torch.split(tensor_hwt, h - (h % 8), dim=2)
+            tensor_hwt, tensor_h_r = torch.split(tensor_hwt, [h - (h % 8), h % 8], dim=2)
             tensor_h_r = tensor_h_r.reshape(b * n, -1, d)
             h_res_len = tensor_h_r.shape[1]
         if w % 8 != 0:
-            tensor_hwt, tensor_w_r = torch.split(tensor_hwt, w - (w % 8), dim=3)
+            tensor_hwt, tensor_w_r = torch.split(tensor_hwt, [w - (w % 8), w % 8], dim=3)
             tensor_w_r = tensor_w_r.reshape(b * n, -1, d)
             w_res_len = tensor_w_r.shape[1]
         remaining_frames = self.frame_num - first_frame_num
@@ -251,7 +259,7 @@ class RainfusionAdapter:
             return tensor[:expected_seqlen], True
         elif actual_seqlen < expected_seqlen:
             diff = expected_seqlen - actual_seqlen
-            pad = torch.zeros((diff, tensor.shape[1], tensor.shape[2]), dtype=tensor.dtype, device=tensor.device)
+            pad = tensor.new_zeros((diff,) + tensor.shape[1:])
             return torch.cat([tensor, pad], dim=0), False
         else:
             return tensor, None
@@ -276,7 +284,7 @@ class RainfusionAdapter:
         attn_out = attn_out.squeeze(0).reshape(attn_out.shape[1], -1)
 
         if trunc_input is True:
-            pad_out = torch.zeros((actual_seqlen - expected_seqlen, attn_out.shape[1]), dtype=attn_out.dtype, device=attn_out.device)
+            pad_out = attn_out.new_zeros((actual_seqlen - expected_seqlen, attn_out.shape[1]))
             attn_out = torch.cat([attn_out, pad_out], dim=0)
         elif trunc_input is False:
             attn_out = attn_out[:actual_seqlen]

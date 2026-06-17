@@ -68,23 +68,19 @@ class Attention(nn.Module):
         return q, k, v, B, N, C
 
     def _npu_flash_attn(self, q: Tensor, k: Tensor, v: Tensor, dropout_p: float = 0.0) -> Tensor:
-        q_t = q.transpose(1, 2).contiguous()
-        k_t = k.transpose(1, 2).contiguous()
-        v_t = v.transpose(1, 2).contiguous()
         keep_prob = 1.0 - dropout_p
         x = torch_npu.npu_fusion_attention(
-            q_t,
-            k_t,
-            v_t,
+            q,
+            k,
+            v,
             self.num_heads,
             pse=None,
             atten_mask=None,
             scale=self.scale,
             keep_prob=keep_prob,
-            input_layout="BNSD",
+            input_layout="BSND",
         )
-        x = x[0].transpose(1, 2)
-        return x
+        return x[0]
 
     def _apply_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         if q.dtype == torch.bfloat16 or q.dtype == torch.float16:

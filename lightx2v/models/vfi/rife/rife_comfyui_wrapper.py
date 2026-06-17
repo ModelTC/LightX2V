@@ -82,7 +82,7 @@ class RIFEWrapper:
         for source_idx1, source_idx2, interp_factor in frame_positions:
             if interp_factor == 0.0 or source_idx1 == source_idx2:
                 # No interpolation needed, use the source frame directly
-                output_frames.append(images[source_idx1].float())
+                output_frames.append(images[source_idx1].float().cpu())
             else:
                 # Get frames to interpolate
                 frame1 = images[source_idx1]

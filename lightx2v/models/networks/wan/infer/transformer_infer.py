@@ -154,7 +154,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             x,
             shift_msa,
             scale_msa,
-            grid_sizes=pre_infer_out.grid_sizes.tuple,
+            grid_sizes=pre_infer_out.grid_sizes.tuple if getattr(pre_infer_out, "grid_sizes", None) is not None else None,
         )
         x, attn_out = self.infer_cross_attn(
             block.compute_phases[1],
