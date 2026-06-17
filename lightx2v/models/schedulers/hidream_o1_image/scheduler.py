@@ -1,12 +1,12 @@
 import einops
 import numpy as np
 import torch
-from PIL import Image
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 
 from lightx2v.models.networks.hidream_o1_image.utils import PATCH_SIZE
 from lightx2v.models.schedulers.hidream_o1_image.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from lightx2v.models.schedulers.scheduler import BaseScheduler
+from lightx2v.utils.profiler import ProfilingContext4DebugL2
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -172,18 +172,18 @@ class HidreamO1ImageScheduler(BaseScheduler):
                 return_dict=False,
             )[0].to(self.dtype)
 
+    @ProfilingContext4DebugL2("Decode HiDream-O1-Image")
     def decode(self):
-        img = (self.latents + 1) / 2
+        img = ((self.latents[0].float() + 1.0) * 127.5).clamp_(0, 255).round_().to(torch.uint8)
         img = einops.rearrange(
-            img.cpu().float(),
-            "B (H W) (C p1 p2) -> B C (H p1) (W p2)",
+            img,
+            "(H W) (C p1 p2) -> (H p1) (W p2) C",
             H=self.h_patches,
             W=self.w_patches,
             p1=PATCH_SIZE,
             p2=PATCH_SIZE,
         )
-        arr = np.round(np.clip(img[0].numpy().transpose(1, 2, 0) * 255, 0, 255)).astype(np.uint8)
-        return Image.fromarray(arr).convert("RGB")
+        return img[:, :, [2, 1, 0]].contiguous().cpu().numpy()
 
     def clear(self):
         self.latents = None
