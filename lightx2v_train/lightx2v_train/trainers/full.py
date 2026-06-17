@@ -7,7 +7,7 @@ from loguru import logger
 
 from lightx2v_train.infer import build_inferencer
 from lightx2v_train.runtime.checkpoint import parse_checkpoint_iteration, prune_checkpoints
-from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process
+from lightx2v_train.runtime.distributed import barrier, is_main_process
 from lightx2v_train.runtime.fsdp import apply_fsdp2
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
@@ -17,12 +17,12 @@ from .lora import LoraTrainer
 @TRAINER_REGISTER("full")
 class FullTrainer(LoraTrainer):
     def setup(self, resume_ckpt_path=None):
-        if resume_ckpt_path is not None and get_world_size() == 1:
-            self.model.load_full_weights_for_resume(resume_ckpt_path)
-
         self.model.set_full_trainable()
 
         apply_fsdp2(self.model, self.config)
+
+        if not self.model.is_fsdp2_wrapped():
+            raise RuntimeError("Full training requires FSDP2. Enable distributed.fsdp2.enabled in the training config.")
 
         if self.gradient_checkpointing:
             self.model.enable_gradient_checkpointing()
@@ -49,21 +49,7 @@ class FullTrainer(LoraTrainer):
         )
 
         if resume_ckpt_path is not None:
-            if self.model.is_fsdp2_wrapped():
-                self._load_distributed_state(resume_ckpt_path)
-            else:
-                self._load_single_process_training_state(resume_ckpt_path)
-
-    def _load_single_process_training_state(self, resume_ckpt_path):
-        training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
-        if not os.path.exists(training_state_path):
-            raise RuntimeError(f"training_state.pt not found in {resume_ckpt_path}")
-
-        state = torch.load(training_state_path, map_location="cpu", weights_only=False)
-        self._validate_checkpoint_metadata(state, training_state_path, resume_ckpt_path)
-        self.optimizer.load_state_dict(state["optimizer"])
-        self.lr_scheduler.load_state_dict(state["lr_scheduler"])
-        logger.info("Restored full training state from {}", training_state_path)
+            self._load_distributed_state(resume_ckpt_path)
 
     def run_inference(self, current_iter):
         base_output_dir = self.infer_config.get("output_dir", "./output_infer")
@@ -78,15 +64,9 @@ class FullTrainer(LoraTrainer):
 
         self.model.set_full_trainable()
 
-    def _is_fsdp2_checkpoint_expected(self):
-        fsdp_config = self.config.get("distributed", {}).get("fsdp2", {})
-        return get_world_size() > 1 and fsdp_config.get("enabled", True)
-
     def _is_complete_checkpoint(self, ckpt_path):
-        if self._is_fsdp2_checkpoint_expected():
-            return os.path.isdir(os.path.join(ckpt_path, "dist_state")) and os.path.exists(os.path.join(ckpt_path, "trainer_state.pt"))
-
-        return os.path.isdir(os.path.join(ckpt_path, "transformer")) and os.path.exists(os.path.join(ckpt_path, "training_state.pt"))
+        dist_state_path = os.path.join(ckpt_path, "dist_state")
+        return os.path.isdir(dist_state_path) and os.path.exists(os.path.join(dist_state_path, ".metadata")) and os.path.exists(os.path.join(ckpt_path, "trainer_state.pt"))
 
     def _resolve_resume(self):
         if not self.auto_resume:
@@ -123,22 +103,6 @@ class FullTrainer(LoraTrainer):
             shutil.copy2(config_path, os.path.join(save_dir, "config.yaml"))
         barrier()
 
-        if self.model.is_fsdp2_wrapped():
-            self._save_distributed_state(save_dir, iteration)
-            barrier()
-            logger.info("[train] saved full distributed checkpoint iter={} path={}", iteration, save_dir)
-            return
-
-        self.model.save_full_model(save_dir)
+        self._save_distributed_state(save_dir, iteration)
         barrier()
-
-        training_state = {
-            "iteration": iteration,
-            "world_size": get_world_size(),
-            "optimizer": self.optimizer.state_dict(),
-            "lr_scheduler": self.lr_scheduler.state_dict(),
-        }
-        if is_main_process():
-            torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
-        barrier()
-        logger.info("[train] saved full checkpoint iter={} path={}", iteration, save_dir)
+        logger.info("[train] saved full distributed checkpoint iter={} path={}", iteration, save_dir)
