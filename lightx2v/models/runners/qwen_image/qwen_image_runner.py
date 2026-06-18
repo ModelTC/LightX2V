@@ -475,6 +475,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
     def _run_pipeline_local(self, input_info):
         self.inputs = self.run_input_encoder()
+        if self.config["task"] == "i2i" and "image_encoder_output" in self.inputs:
+            self.input_info.image_encoder_output = self.inputs["image_encoder_output"]
         self.set_target_shape()
         self.set_img_shapes()
         logger.info(f"input_info: {self.input_info}")
@@ -498,6 +500,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
     def _run_pipeline_disagg_transformer(self, input_info):
         self.inputs = self.receive_encoder_outputs()
+        if self.config["task"] == "i2i" and "image_encoder_output" in self.inputs:
+            self.input_info.image_encoder_output = self.inputs["image_encoder_output"]
         prompt_embeds = self.inputs.get("text_encoder_output", {}).get("prompt_embeds")
         if prompt_embeds is not None:
             self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]

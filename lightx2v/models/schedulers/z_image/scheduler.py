@@ -475,16 +475,6 @@ class ZImageScheduler(BaseScheduler):
         self.freqs_cis_cache[cache_key] = freqs_cis
         return freqs_cis
 
-    def get_timesteps(self, num_inference_steps, strength, device):
-        init_timestep = min(num_inference_steps * strength, num_inference_steps)
-
-        t_start = int(max(num_inference_steps - init_timestep, 0))
-        timesteps = self.timesteps[t_start * self.scheduler.order :]
-        if hasattr(self.scheduler, "set_begin_index"):
-            self.scheduler.set_begin_index(t_start * self.scheduler.order)
-
-        return timesteps, num_inference_steps - t_start
-
     def set_timesteps(self):
         sigmas = np.linspace(1.0, 1 / self.config["infer_steps"], self.config["infer_steps"])
         image_seq_len = self.latents.shape[1]
@@ -507,20 +497,6 @@ class ZImageScheduler(BaseScheduler):
         self.timesteps = timesteps
         self.infer_steps = num_inference_steps
 
-        # Adjust timesteps based on strength for i2i task
-        if self.config["task"] == "i2i" and hasattr(self.input_info, "strength"):
-            strength = getattr(self.input_info, "strength", 0.6)
-            if strength < 0.0 or strength > 1.0:
-                raise ValueError(f"The value of strength should be in [0.0, 1.0] but is {strength}")
-            timesteps, num_inference_steps = self.get_timesteps(num_inference_steps, strength, AI_DEVICE)
-            if num_inference_steps < 1:
-                raise ValueError(
-                    f"After adjusting the num_inference_steps by strength parameter: {strength}, the number of pipeline "
-                    f"steps is {num_inference_steps} which is < 1 and not appropriate for this pipeline."
-                )
-            self.timesteps = timesteps
-            self.infer_steps = num_inference_steps
-
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
         self.num_warmup_steps = num_warmup_steps
@@ -533,30 +509,6 @@ class ZImageScheduler(BaseScheduler):
             logger.info(f"Generator is not None, using existing generator for latents")
         self.prepare_latents(input_info)
         self.set_timesteps()
-
-        if self.config["task"] == "i2i" and hasattr(input_info, "image_encoder_output") and input_info.image_encoder_output is not None:
-            strength = getattr(input_info, "strength", 0.6)
-            if strength > 0.0:
-                image_latents_list = [item["image_latents"] for item in input_info.image_encoder_output]
-                if len(image_latents_list) > 0:
-                    image_latents = torch.cat(image_latents_list, dim=0) if len(image_latents_list) > 1 else image_latents_list[0]
-                    batch_size = self.latents.shape[0]
-                    if batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] == 0:
-                        additional_image_per_prompt = batch_size // image_latents.shape[0]
-                        image_latents = torch.cat([image_latents] * additional_image_per_prompt, dim=0)
-                    elif batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] != 0:
-                        raise ValueError(f"Cannot duplicate `image` of batch size {image_latents.shape[0]} to {batch_size} text prompts.")
-
-                    _, _, height, width = self.latents.shape
-                    if image_latents.shape[2:] != (height, width):
-                        image_latents = F.interpolate(image_latents, size=(height, width), mode="bilinear", align_corners=False)
-                    latent_timestep = self.timesteps[:1].repeat(self.latents.shape[0])
-
-                    noise = randn_tensor(self.latents.shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
-                    if image_latents.shape[1] != self.latents.shape[1]:
-                        repeat_factor = self.latents.shape[1] // image_latents.shape[1]  # 64 // 16 = 4
-                        image_latents = image_latents.repeat(1, repeat_factor, 1, 1)
-                    self.latents = self.scheduler.scale_noise(image_latents, latent_timestep, noise)
 
         self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
 

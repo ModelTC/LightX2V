@@ -70,6 +70,8 @@ def run_edit(client: Any, args: argparse.Namespace) -> Path:
             "size": args.size,
             "response_format": args.response_format,
         }
+        if args.i2i_denoise_strength is not None:
+            kwargs["extra_body"] = {"i2i_denoise_strength": args.i2i_denoise_strength}
         if args.mask:
             mask_path = Path(args.mask)
             if not mask_path.exists():
@@ -95,6 +97,7 @@ def main() -> None:
     parser.add_argument("--response_format", choices=["url", "b64_json"], default="url", help="OpenAI response format")
     parser.add_argument("--image", type=str, default="", help="Input image path for edit mode. Use comma-separated paths for multiple images.")
     parser.add_argument("--mask", type=str, default="", help="Optional mask image path for edit mode")
+    parser.add_argument("--i2i_denoise_strength", type=float, default=None, help="Optional LightX2V edit denoising strength in [0.0, 1.0]")
     parser.add_argument("--output_dir", type=str, default="outputs/openai_images_test", help="Directory to save outputs")
     args = parser.parse_args()
 

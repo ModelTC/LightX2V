@@ -192,6 +192,7 @@ def _build_image_task_request(
     target_shape: Optional[list[int]] = None,
     image_path: str = "",
     image_mask_path: str = "",
+    i2i_denoise_strength: Optional[float] = None,
 ) -> ImageTaskRequest:
     payload = {
         "prompt": prompt,
@@ -203,6 +204,8 @@ def _build_image_task_request(
         payload["target_shape"] = target_shape
     if seed is not None:
         payload["seed"] = seed
+    if i2i_denoise_strength is not None:
+        payload["i2i_denoise_strength"] = i2i_denoise_strength
     return ImageTaskRequest(**payload)
 
 
@@ -259,6 +262,7 @@ async def create_openai_image_edit(
     user: str | None = Form(default=None),
     negative_prompt: str = Form(default=""),
     seed: int | None = Form(default=None),
+    i2i_denoise_strength: float | None = Form(default=None),
 ):
     image_uploads = list(image or [])
     if not image_uploads:
@@ -303,6 +307,7 @@ async def create_openai_image_edit(
         target_shape=target_shape,
         image_path=image_path,
         image_mask_path=image_mask_path,
+        i2i_denoise_strength=i2i_denoise_strength,
     )
 
     result_png = await _run_sync_image_task(request, message)
