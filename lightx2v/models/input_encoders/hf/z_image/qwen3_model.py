@@ -33,13 +33,13 @@ class Qwen3Model_TextEncoder:
     def load(self):
         if self.qwen3_quantized:
             assert self.config["qwen3_quant_scheme"] == "int4"
-            self.text_encoder = Qwen3Model.from_pretrained(self.config["qwen3_quantized_ckpt"], torch_dtype=GET_DTYPE(), device_map=AI_DEVICE)
+            self.text_encoder = Qwen3Model.from_pretrained(self.config["qwen3_quantized_ckpt"], torch_dtype=GET_DTYPE()).to(AI_DEVICE)
         else:
             qwen3_original_ckpt = self.config.get("qwen3_original_ckpt", os.path.join(self.config["model_path"], "text_encoder"))
             if self.cpu_offload:
                 self.text_encoder = Qwen3Model.from_pretrained(qwen3_original_ckpt, torch_dtype=GET_DTYPE(), device_map="cpu")
             else:
-                self.text_encoder = Qwen3Model.from_pretrained(qwen3_original_ckpt, torch_dtype=GET_DTYPE(), device_map=AI_DEVICE)
+                self.text_encoder = Qwen3Model.from_pretrained(qwen3_original_ckpt, torch_dtype=GET_DTYPE()).to(AI_DEVICE)
 
         qwen3_tokenizer_path = self.config.get("qwen3_tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
         self.tokenizer = Qwen2Tokenizer.from_pretrained(qwen3_tokenizer_path)

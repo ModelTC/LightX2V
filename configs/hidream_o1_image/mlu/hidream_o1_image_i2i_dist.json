@@ -1,0 +1,21 @@
+{
+    "hidream_model_type": "full",
+    "infer_steps": 50,
+    "guidance_scale": 5.0,
+    "shift": 3.0,
+    "scheduler_name": "default",
+    "attn_type": "mlu_flash_attn",
+    "rope_type": "torch",
+    "target_height": 2048,
+    "target_width": 2048,
+    "keep_original_aspect": true,
+    "torch_dtype": "bfloat16",
+    "enable_cfg": true,
+    "ln_type": "torch",
+    "layer_norm_type": "torch",
+    "rms_norm_type": "mlu_rms_norm",
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ulysses"
+    }
+}
