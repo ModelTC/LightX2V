@@ -153,9 +153,6 @@ class HidreamO1ImageModel(BaseTransformerModel):
 
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
-        if pre_infer_out.deepstack_visual_embeds is not None:
-            raise NotImplementedError("HiDream seq_parallel does not support deepstack visual embeds yet.")
-
         world_size = dist.get_world_size(self.seq_p_group)
         cur_rank = dist.get_rank(self.seq_p_group)
         hidden_gen = pre_infer_out.inputs_embeds[:, pre_infer_out.idx_gen].contiguous()
@@ -165,6 +162,9 @@ class HidreamO1ImageModel(BaseTransformerModel):
 
         pre_infer_out.inputs_embeds_ar = pre_infer_out.inputs_embeds[:, pre_infer_out.idx_ar].contiguous()
         pre_infer_out.inputs_embeds_gen = torch.chunk(hidden_gen, world_size, dim=1)[cur_rank].contiguous()
+        if pre_infer_out.visual_pos_masks is not None:
+            # Deepstack visual tokens come from prompt image placeholders, which stay in the replicated AR branch.
+            pre_infer_out.visual_pos_masks = pre_infer_out.visual_pos_masks[:, pre_infer_out.idx_ar].contiguous()
 
         vinput_mask_gen = pre_infer_out.vinput_mask.to(pre_infer_out.inputs_embeds.device)[:, pre_infer_out.idx_gen]
         if padding_size > 0:
