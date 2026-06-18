@@ -36,7 +36,7 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
         device = device or self.device
         num_steps_min = max(1, int(num_steps_min))
         num_steps_max = max(num_steps_min, int(num_steps_max))
-        num_steps = int(torch.randint(num_steps_min, num_steps_max + 1, (1,), device=device).item())
+        num_steps = int(torch.randint(num_steps_min, num_steps_max + 1, (1,), device="cpu").item())
         inner_count = max(0, num_steps - 1)
 
         if inner_count:
