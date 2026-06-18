@@ -1,8 +1,11 @@
+import json
 import os
 
 import torch
+from diffusers.models.modeling_utils import SAFE_WEIGHTS_INDEX_NAME, SAFETENSORS_WEIGHTS_NAME
 from diffusers.utils import convert_state_dict_to_diffusers
 from diffusers.utils.peft_utils import get_adapter_name
+from huggingface_hub import split_torch_state_dict_into_shards
 from loguru import logger
 from peft import LoraConfig
 from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
@@ -187,6 +190,34 @@ class BaseModel:
             ignore_frozen_params=False,
             strict=False,
         )
+        logger.info("[checkpoint] gathering consolidated full model state dict")
         state_dict, _ = get_state_dict(denoiser, (), options=options)
         if is_main_process():
-            denoiser.save_pretrained(transformer_dir, safe_serialization=True, state_dict=state_dict)
+            self._save_full_state_dict(transformer_dir, denoiser, state_dict)
+
+    def _save_full_state_dict(self, save_dir, denoiser, state_dict):
+        logger.info("[checkpoint] saving consolidated transformer weights to {}", save_dir)
+        os.makedirs(save_dir, exist_ok=True)
+        denoiser.save_config(save_dir)
+
+        weights_name_pattern = SAFETENSORS_WEIGHTS_NAME.replace(".safetensors", "{suffix}.safetensors")
+        state_dict_split = split_torch_state_dict_into_shards(
+            state_dict,
+            max_shard_size="10GB",
+            filename_pattern=weights_name_pattern,
+        )
+
+        for filename, tensors in state_dict_split.filename_to_tensors.items():
+            shard = {tensor: state_dict[tensor].contiguous() for tensor in tensors}
+            save_file(shard, os.path.join(save_dir, filename), metadata={"format": "pt"})
+
+        if state_dict_split.is_sharded:
+            index = {
+                "metadata": state_dict_split.metadata,
+                "weight_map": state_dict_split.tensor_to_filename,
+            }
+            index_path = os.path.join(save_dir, SAFE_WEIGHTS_INDEX_NAME)
+            with open(index_path, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(index, indent=2, sort_keys=True) + "\n")
+
+        logger.info("[checkpoint] saved consolidated transformer weights to {}", save_dir)

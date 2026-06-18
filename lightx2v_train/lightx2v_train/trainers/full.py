@@ -49,7 +49,7 @@ class FullTrainer(LoraTrainer):
         )
 
         if resume_ckpt_path is not None:
-            self._load_distributed_state(resume_ckpt_path)
+            self._load_distributed_state(resume_ckpt_path, allow_partial_optimizer_state=True)
 
     def run_inference(self, current_iter):
         base_output_dir = self.infer_config.get("output_dir", "./output_infer")
@@ -105,4 +105,6 @@ class FullTrainer(LoraTrainer):
 
         self._save_distributed_state(save_dir, iteration)
         barrier()
-        logger.info("[train] saved full distributed checkpoint iter={} path={}", iteration, save_dir)
+        self.model.save_full_model(save_dir)
+        barrier()
+        logger.info("[train] saved full checkpoint iter={} path={}", iteration, save_dir)

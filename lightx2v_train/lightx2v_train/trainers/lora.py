@@ -5,6 +5,7 @@ import torch
 import torch.distributed.checkpoint as dcp
 from diffusers.optimization import get_scheduler
 from loguru import logger
+from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
 
 from lightx2v_train.infer import build_inferencer
@@ -112,7 +113,7 @@ class LoraTrainer(BaseTrainer):
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
         logger.info("Restored training state from {}", training_state_path)
 
-    def _load_distributed_state(self, resume_ckpt_path):
+    def _load_distributed_state(self, resume_ckpt_path, allow_partial_optimizer_state=False):
         dist_state_path = os.path.join(resume_ckpt_path, "dist_state")
         if not os.path.exists(dist_state_path):
             raise RuntimeError(f"FSDP2 resume requires dist_state/, but it was not found in {resume_ckpt_path}")
@@ -126,8 +127,18 @@ class LoraTrainer(BaseTrainer):
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
         state_module = self.model.fsdp2_state_module()
         model_state, optim_state = get_state_dict(state_module, self.optimizer, options=options)
-        state = {"model": model_state, "optimizer": optim_state}
-        dcp.load(state, checkpoint_id=dist_state_path)
+        if allow_partial_optimizer_state:
+            state = {"model": model_state}
+            dcp.load(state, checkpoint_id=dist_state_path)
+            state["optimizer"] = optim_state
+            dcp.load(
+                {"optimizer": state["optimizer"]},
+                checkpoint_id=dist_state_path,
+                planner=DefaultLoadPlanner(allow_partial_load=True),
+            )
+        else:
+            state = {"model": model_state, "optimizer": optim_state}
+            dcp.load(state, checkpoint_id=dist_state_path)
         set_state_dict(
             state_module,
             self.optimizer,
