@@ -107,6 +107,64 @@ class HidreamO1ImageScheduler(BaseScheduler):
     def set_dtype(self, torch_dtype):
         self.dtype = torch_dtype
 
+    def _get_i2i_denoise_strength(self, inputs):
+        strength = inputs.get("i2i_denoise_strength")
+        if strength is None:
+            return None
+        strength = float(strength)
+        if strength < 0.0 or strength > 1.0:
+            raise ValueError(f"The value of i2i_denoise_strength should be in [0.0, 1.0] but is {strength}")
+        return strength
+
+    def get_timesteps(self, num_inference_steps, strength):
+        target_steps = round(num_inference_steps * strength)
+        if target_steps < 1:
+            raise ValueError(
+                "i2i_denoise_strength results in 0 denoising steps: "
+                f"round(infer_steps * i2i_denoise_strength)=round({num_inference_steps} * {strength})={target_steps}; "
+                "please increase it to run at least 1 step."
+            )
+        t_start = num_inference_steps - target_steps
+        timesteps = self.timesteps[t_start:]
+        if hasattr(self.sched, "set_begin_index"):
+            self.sched.set_begin_index(t_start)
+        return timesteps, target_steps
+
+    def set_i2i_denoise_strength_timesteps(self, inputs):
+        strength = self._get_i2i_denoise_strength(inputs)
+        timesteps, num_inference_steps = self.get_timesteps(len(self.timesteps), strength)
+        self.timesteps = timesteps
+        self.infer_steps = num_inference_steps
+
+    def _scale_i2i_noise(self, image_latents, latent_timestep, noise):
+        if hasattr(self.sched, "scale_noise"):
+            return self.sched.scale_noise(image_latents, latent_timestep, noise)
+        if hasattr(self.sched, "add_noise"):
+            return self.sched.add_noise(image_latents, noise, latent_timestep)
+
+        sigmas = self.sched.sigmas.to(device=image_latents.device, dtype=image_latents.dtype)
+        schedule_timesteps = self.sched.timesteps.to(image_latents.device)
+        latent_timestep = latent_timestep.to(image_latents.device)
+        step_indices = [(schedule_timesteps == t).nonzero()[0].item() for t in latent_timestep]
+        sigma = sigmas[step_indices].flatten()
+        while len(sigma.shape) < len(image_latents.shape):
+            sigma = sigma.unsqueeze(-1)
+        return sigma * noise + (1.0 - sigma) * image_latents
+
+    def prepare_i2i_denoise_strength_latents(self, inputs):
+        image_latents = inputs.get("i2i_image_latents")
+        if image_latents is None:
+            raise ValueError("i2i_denoise_strength currently supports single-image HiDream i2i editing only.")
+        image_latents = image_latents.to(device=AI_DEVICE, dtype=self.dtype)
+        if self.latents.shape[0] != 1:
+            raise ValueError(f"i2i_denoise_strength currently supports single-image single-output editing only, got output latent batch {self.latents.shape[0]}.")
+        if image_latents.shape != self.latents.shape:
+            raise ValueError(f"HiDream i2i_denoise_strength image latents shape {tuple(image_latents.shape)} does not match target latents shape {tuple(self.latents.shape)}.")
+
+        latent_timestep = self.timesteps[:1]
+        noise = self.latents
+        self.latents = self._scale_i2i_noise(image_latents, latent_timestep, noise)
+
     def prepare(self, inputs):
         cfg = inputs["generation_config"]
         self.generation_config = cfg
@@ -135,8 +193,13 @@ class HidreamO1ImageScheduler(BaseScheduler):
         )
         self.timesteps = self.sched.timesteps
         self.infer_steps = len(self.timesteps)
+        strength = self._get_i2i_denoise_strength(inputs)
+        if self.config["task"] == "i2i" and strength is not None:
+            self.set_i2i_denoise_strength_timesteps(inputs)
         self.noise_scale_schedule = self._build_noise_scale_schedule(cfg, self.infer_steps)
         self.noise_pred = None
+        if self.config["task"] == "i2i" and strength is not None:
+            self.prepare_i2i_denoise_strength_latents(inputs)
 
         torch.manual_seed(seed + 1)
         if torch.cuda.is_available():

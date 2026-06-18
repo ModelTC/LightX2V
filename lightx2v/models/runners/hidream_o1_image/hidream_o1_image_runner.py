@@ -187,6 +187,7 @@ class HidreamO1ImageRunner(DefaultRunner):
             device=self.model.device,
             dtype=self.dtype,
             enable_cfg=generation_config["enable_cfg"],
+            i2i_denoise_strength=getattr(self.input_info, "i2i_denoise_strength", None),
         )
         for sample in inputs["samples"]:
             sample["tgt_image_len"] = inputs["tgt_image_len"]
@@ -195,6 +196,7 @@ class HidreamO1ImageRunner(DefaultRunner):
                 "seed": self.input_info.seed,
                 "save_result_path": self.input_info.save_result_path,
                 "generation_config": generation_config,
+                "i2i_denoise_strength": getattr(self.input_info, "i2i_denoise_strength", None),
             }
         )
         return inputs
