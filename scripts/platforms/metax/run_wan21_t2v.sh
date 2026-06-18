@@ -1,12 +1,17 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/path/to/LightX2v
-model_path=/path/to/model
+lightx2v_path=/data/LightX2V
+model_path=/data/models/Wan2.1-T2V-1.3B
 
 # export CUDA_VISIBLE_DEVICES=5
 export PLATFORM="metax_cuda"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export MACA_PATH=${MACA_PATH:-/opt/maca-3.3.0}
+export PATH=${MACA_PATH}/bin:${PATH}
+export LD_LIBRARY_PATH=${MACA_PATH}/lib:${LD_LIBRARY_PATH}
+
+source ${lightx2v_path}/scripts/platforms/metax/logging.sh
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -18,4 +23,4 @@ python -m lightx2v.infer \
 --config_json ${lightx2v_path}/configs/platforms/metax/wan_t2v.json \
 --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
 --negative_prompt "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" \
---save_result_path ${lightx2v_path}/save_results/output_lightx2v_wan_t2v.mp4
+--save_result_path ${lightx2v_path}/save_results/output_lightx2v_wan21_t2v_metax.mp4

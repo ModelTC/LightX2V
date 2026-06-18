@@ -24,6 +24,7 @@ except ImportError:
 
 _TOKEN_REFINER_ATTN_TYPE_BY_PLATFORM = {
     "ascend_npu": "npu_flash_attn",
+    "metax_cuda": "torch",
 }
 
 
