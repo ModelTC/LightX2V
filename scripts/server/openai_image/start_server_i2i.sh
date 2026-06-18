@@ -18,9 +18,3 @@ python -m lightx2v.server \
 --port 8000
 
 echo "Service stopped"
-
-# {
-#   "prompt": "turn the style of the photo to vintage comic book",
-#   "image_path": "assets/inputs/imgs/snake.png",
-#   "infer_steps": 50
-# }

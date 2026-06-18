@@ -18,10 +18,3 @@ python -m lightx2v.server \
 --port 8000
 
 echo "Service stopped"
-
-
-# {
-#   "prompt": "a beautiful sunset over the ocean",
-#   "aspect_ratio": "16:9",
-#   "infer_steps": 50
-# }
