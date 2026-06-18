@@ -273,7 +273,8 @@ class DmdLoraTrainer(LoraTrainer):
         x_pred_teacher = renoised_xt - sigma * velocity_teacher
         sigma_end = self.scheduler.sigma_at(end_step_idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
         xt_velocity = self._predict_velocity(self.model, xt_end, sigma_end, condition)
-        x0 = xt_end - sigma_end * xt_velocity
+        sigma_end_expanded = self.scheduler._expand_to_ndim(sigma_end, xt_end.ndim)
+        x0 = xt_end - sigma_end_expanded * xt_velocity
 
         loss_dmd = self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
         total_loss = loss_dmd
