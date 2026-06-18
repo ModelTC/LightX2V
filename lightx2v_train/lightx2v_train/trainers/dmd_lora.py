@@ -225,10 +225,13 @@ class DmdLoraTrainer(LoraTrainer):
 
         traj_sigma = self.scheduler.sigma_at(end_step_idx, batch_size, device=self.model.device, dtype=torch.float32)
         student_sigma = self.scheduler.sample_renoise_sigma(batch_size, device=self.model.device, dtype=torch.float32)
-        student_xt = xt + (student_sigma - traj_sigma) * vt
+
+        traj_sigma_expanded = self.scheduler._expand_to_ndim(traj_sigma, vt.ndim)
+        student_sigma_expanded = self.scheduler._expand_to_ndim(student_sigma, vt.ndim)
+        student_xt = xt + (student_sigma_expanded - traj_sigma_expanded) * vt
 
         student_prediction = self._predict_velocity(self.model, student_xt.to(self.running_dtype), student_sigma, condition)
-        student_x0 = student_xt - student_sigma * student_prediction
+        student_x0 = student_xt - student_sigma_expanded * student_prediction
         student_x0 = student_x0.to(self.running_dtype)
 
         teacher_sigma = self.scheduler.sample_renoise_sigma(batch_size, device=self.model.device, dtype=self.running_dtype)
@@ -240,8 +243,9 @@ class DmdLoraTrainer(LoraTrainer):
             velocity_fake = self._predict_velocity(self.fake_model, teacher_xt, teacher_sigma, condition)
             velocity_teacher = self._predict_velocity(self.teacher_model, teacher_xt, teacher_sigma, condition)
 
-        x_pred_fake = teacher_xt - teacher_sigma * velocity_fake
-        x_pred_teacher = teacher_xt - teacher_sigma * velocity_teacher
+        teacher_sigma_expanded = self.scheduler._expand_to_ndim(teacher_sigma, teacher_xt.ndim)
+        x_pred_fake = teacher_xt - teacher_sigma_expanded * velocity_fake
+        x_pred_teacher = teacher_xt - teacher_sigma_expanded * velocity_teacher
         return self._dmd_loss(student_x0, x_pred_fake, x_pred_teacher, norm_clip_min=self.cdm_norm_clip_min)
 
     def forward_loss(self, latent_shape, conditions, stage, current_iter=None):
