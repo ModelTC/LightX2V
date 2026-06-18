@@ -21,7 +21,7 @@ class BaseModel:
         self.device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
         self.vae = None
 
-    def load_components(self):
+    def load_components(self, transformer_only=False, reference_model=None):
         raise NotImplementedError
 
     def denoiser_module(self):
@@ -101,6 +101,12 @@ class BaseModel:
 
     def prepare_infer_latents(self, height, width, generator=None):
         raise NotImplementedError
+
+    def dmd_latent_shape(self, batch_size, height, width):
+        raise NotImplementedError(f"{self.__class__.__name__} must define dmd_latent_shape().")
+
+    def cfg_on_denoiser_output(self):
+        return False
 
     def decode_latent(self, latent):
         raise NotImplementedError

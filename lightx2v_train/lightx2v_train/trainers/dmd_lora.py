@@ -168,26 +168,20 @@ class DmdLoraTrainer(LoraTrainer):
         else:
             height, width = image.shape[-2], image.shape[-1]
 
-        latent_channels = getattr(self.model.vae.config, "z_dim", None)
-        if latent_channels is None:
-            latent_channels = self.model.transformer.config.in_channels // 4
-        return (
-            batch_size,
-            int(latent_channels),
-            1,
-            height // self.model.vae_scale_factor,
-            width // self.model.vae_scale_factor,
-        )
+        return self.model.dmd_latent_shape(batch_size, height, width)
 
     def _encode_conditions(self, sample):
         prompt = sample["prompt"]
-        if isinstance(prompt, str):
-            negative_prompt = self.negative_prompt
-        else:
-            negative_prompt = [self.negative_prompt] * len(prompt)
         with torch.no_grad():
             condition = self.model.encode_prompt_condition(prompt)
-            negative_condition = self.model.encode_prompt_condition(negative_prompt)
+            if self.guidance_scale > 1:
+                if isinstance(prompt, str):
+                    negative_prompt = self.negative_prompt
+                else:
+                    negative_prompt = [self.negative_prompt] * len(prompt)
+                negative_condition = self.model.encode_prompt_condition(negative_prompt)
+            else:
+                negative_condition = None
         return condition, negative_condition
 
     def _predict_velocity(self, model, latents, sigma, condition):
@@ -195,6 +189,21 @@ class DmdLoraTrainer(LoraTrainer):
         prediction = model.denoise(denoiser_input, sigma, condition)
         prediction = model.postprocess_denoiser_output(prediction, denoiser_input)
         return prediction
+
+    def _predict_teacher_velocity(self, latents, sigma, condition, negative_condition):
+        if negative_condition is None:
+            return self._predict_velocity(self.teacher_model, latents, sigma, condition)
+
+        if self.teacher_model.cfg_on_denoiser_output():
+            denoiser_input = self.teacher_model.prepare_denoiser_input(latents)
+            cond_prediction = self.teacher_model.denoise(denoiser_input, sigma, condition)
+            uncond_prediction = self.teacher_model.denoise(denoiser_input, sigma, negative_condition)
+            prediction = self._do_cfg(cond_prediction, uncond_prediction, self.guidance_scale, self.cfg_norm)
+            return self.teacher_model.postprocess_denoiser_output(prediction, denoiser_input)
+
+        velocity_teacher_cond = self._predict_velocity(self.teacher_model, latents, sigma, condition)
+        velocity_teacher_uncond = self._predict_velocity(self.teacher_model, latents, sigma, negative_condition)
+        return self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
 
     def sample_initial_latents(self, latent_shape):
         return torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype)
@@ -269,12 +278,11 @@ class DmdLoraTrainer(LoraTrainer):
         with torch.no_grad():
             self.fake_model.transformer.eval()
             velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
-            velocity_teacher_cond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, condition)
-            velocity_teacher_uncond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, negative_condition)
-            velocity_teacher = self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
+            velocity_teacher = self._predict_teacher_velocity(renoised_xt, sigma, condition, negative_condition)
 
-        x_pred_fake = renoised_xt - sigma * velocity_fake
-        x_pred_teacher = renoised_xt - sigma * velocity_teacher
+        sigma_expanded = self.scheduler._expand_to_ndim(sigma, renoised_xt.ndim)
+        x_pred_fake = renoised_xt - sigma_expanded * velocity_fake
+        x_pred_teacher = renoised_xt - sigma_expanded * velocity_teacher
         sigma_end = self.scheduler.sigma_at(end_step_idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
         xt_velocity = self._predict_velocity(self.model, xt_end, sigma_end, condition)
         sigma_end_expanded = self.scheduler._expand_to_ndim(sigma_end, xt_end.ndim)
