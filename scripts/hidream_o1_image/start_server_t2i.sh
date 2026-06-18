@@ -19,9 +19,6 @@ export LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 # set environment variables
 source "${lightx2v_path}/scripts/base/base.sh"
 
-echo "Starting HiDream-O1-Image Dev-2604 T2I distributed service on ${host}:${port}"
-echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}, NPROC_PER_NODE=${nproc_per_node}, MASTER_PORT=${master_port}"
-
 torchrun --nproc_per_node="${nproc_per_node}" --master_port="${master_port}" -m lightx2v.server \
 --model_cls hidream_o1_image \
 --task t2i \

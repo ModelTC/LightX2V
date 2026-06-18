@@ -163,9 +163,14 @@ def _write_summary_line(summary_file: Path, line: str) -> None:
 
 
 def _extra_body_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
-    if args.seed is None:
+    extra_body = {}
+    if args.seed is not None:
+        extra_body["seed"] = args.seed
+    if args.i2i_denoise_strength is not None:
+        extra_body["i2i_denoise_strength"] = args.i2i_denoise_strength
+    if not extra_body:
         return None
-    return {"seed": args.seed}
+    return extra_body
 
 
 def _image_paths_from_args(args: argparse.Namespace) -> list[Path]:
@@ -326,6 +331,7 @@ def main() -> None:
     parser.add_argument("--response_format", choices=["url", "b64_json"], default="b64_json", help="OpenAI response format")
     parser.add_argument("--image", type=str, default="", help="Input image path for edit mode. Use comma-separated paths for multiple images.")
     parser.add_argument("--mask", type=str, default="", help="Optional mask image path for edit mode")
+    parser.add_argument("--i2i_denoise_strength", type=float, default=None, help="Optional LightX2V edit denoising strength in [0.0, 1.0]")
     parser.add_argument("--output_dir", type=str, default="outputs/openai_images_test", help="Directory to save outputs")
     parser.add_argument("--output_prefix", type=str, default="openai_generate", help="Batch output filename prefix")
     parser.add_argument("--summary_file", type=str, default="", help="Batch timing summary file")
