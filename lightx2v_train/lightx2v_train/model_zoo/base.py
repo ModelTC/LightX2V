@@ -2,7 +2,7 @@ import json
 import os
 
 import torch
-from diffusers.models.modeling_utils import SAFE_WEIGHTS_INDEX_NAME, SAFETENSORS_WEIGHTS_NAME
+from diffusers.models.modeling_utils import SAFETENSORS_WEIGHTS_NAME, SAFE_WEIGHTS_INDEX_NAME
 from diffusers.utils import convert_state_dict_to_diffusers
 from diffusers.utils.peft_utils import get_adapter_name
 from huggingface_hub import split_torch_state_dict_into_shards
