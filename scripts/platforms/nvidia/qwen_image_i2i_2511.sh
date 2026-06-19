@@ -3,12 +3,13 @@
 # System management interface: nvidia-smi
 
 # set path firstly
-lightx2v_path=
-model_path=
+lightx2v_path=/data/nvme1/wushuo/LightX2V
+model_path=/data/nvme1/wushuo/hf_models/models/Qwen-Image-2512
 
 export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
+source "${lightx2v_path}/scripts/platforms/nvidia/logging.sh"
 source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \
