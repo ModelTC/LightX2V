@@ -1,7 +1,8 @@
 model:
-    name: qwen_image
-    pretrained_model_name_or_path: /data/nvme1/wushuo/hf_models/models/Qwen-Image-2512
-    max_sequence_length: 1024
+    name: flux2_klein
+    pretrained_model_name_or_path: /data/nvme1/models/FLUX.2-Klein-9B
+    max_sequence_length: 512
+    text_encoder_out_layers: [9, 18, 27]
     running_dtype: bf16
 
 distributed:
@@ -45,15 +46,12 @@ scheduler:
     time_shift_settings:
         do_time_shift: true
         shift_type: exponential
-        # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
         time_shift_power: 1.0
         dynamic_shift: true
-        patch_size: [2, 2]  # [H, W]
-        # https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L59
-        shift_x1: 256
-        shift_x2: 4096
-        shift_y1: 0.5
-        shift_y2: 1.15
+        shift_mu_strategy: flux2_empirical
+        shift_mu_num_steps: 50
+        # Flux2 latents are already 2x2-patchified before scheduler shift length calculation.
+        patch_size: [1, 1] # [H, W]
 
 training:
     method: full
@@ -63,26 +61,26 @@ training:
     max_grad_norm: 1.0
     lr_scheduler: constant
     lr_warmup_iters: 10
-    save_every_iters: 3000
-    save_total_limit: 1
+    save_every_iters: 1500
+    save_total_limit: 2
     optimizer:
         learning_rate: 0.00001
         adam_beta1: 0.9
         adam_beta2: 0.999
         weight_decay: 0.01
         adam_epsilon: 0.00000001
-    output_dir: ./output_train/qwen_image_full_fsdp2
+    output_dir: ./output_train/flux2_klein_full_fsdp2
 
 inference:
     method: image_infer
-    negative_prompt: " "
+    negative_prompt: ""
     default_width: 1024
     default_height: 1024
     num_inference_steps: 50
     enable_cfg: true
     cfg_guidance_scale: 4.0
     seed: 42
-    output_dir: ./output_infer/qwen_image_full_fsdp2
+    output_dir: ./output_infer/flux2_klein_full_fsdp2
     infer_every_iters: ${training.save_every_iters}
 
 logging:

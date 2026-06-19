@@ -1,7 +1,8 @@
 model:
-    name: qwen_image
-    pretrained_model_name_or_path: /data/nvme1/wushuo/hf_models/models/Qwen-Image-2512
+    name: longcat_image
+    pretrained_model_name_or_path: /data/nvme1/models/meituan-longcat/LongCat-Image
     max_sequence_length: 1024
+    attention_backend: _native_flash
     running_dtype: bf16
 
 distributed:
@@ -63,15 +64,15 @@ training:
     max_grad_norm: 1.0
     lr_scheduler: constant
     lr_warmup_iters: 10
-    save_every_iters: 3000
-    save_total_limit: 1
+    save_every_iters: 1500
+    save_total_limit: 2
     optimizer:
         learning_rate: 0.00001
         adam_beta1: 0.9
         adam_beta2: 0.999
         weight_decay: 0.01
         adam_epsilon: 0.00000001
-    output_dir: ./output_train/qwen_image_full_fsdp2
+    output_dir: ./output_train/longcat_image_full_fsdp2
 
 inference:
     method: image_infer
@@ -82,7 +83,7 @@ inference:
     enable_cfg: true
     cfg_guidance_scale: 4.0
     seed: 42
-    output_dir: ./output_infer/qwen_image_full_fsdp2
+    output_dir: ./output_infer/longcat_image_full_fsdp2
     infer_every_iters: ${training.save_every_iters}
 
 logging:

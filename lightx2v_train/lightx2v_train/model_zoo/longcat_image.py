@@ -32,13 +32,18 @@ class LongCatImageModel(BaseModel):
             torch_dtype=self.running_dtype,
         ).to(self.device)
         self.vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
-        self.transformer = LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        self.transformer = self.load_transformer()
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+
+    def load_transformer(self, model_path=None):
+        model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
+        transformer = LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
         attention_backend = self.config["model"].get("attention_backend", None)
         if attention_backend is not None:
-            self.transformer.set_attention_backend(attention_backend)
+            transformer.set_attention_backend(attention_backend)
+        return transformer
 
     def denoiser_module(self):
         return self.transformer

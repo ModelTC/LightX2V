@@ -30,11 +30,15 @@ class Flux2KleinModel(BaseModel):
             torch_dtype=self.running_dtype,
         ).to(self.device)
         self.vae = AutoencoderKLFlux2.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
-        self.transformer = Flux2Transformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        self.transformer = self.load_transformer()
 
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
         self.image_processor = Flux2ImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+
+    def load_transformer(self, model_path=None):
+        model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
+        return Flux2Transformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
 
     def denoiser_module(self):
         return self.transformer
