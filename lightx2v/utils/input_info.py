@@ -212,6 +212,7 @@ class I2IInputInfo:
     prompt: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    i2i_denoise_strength: Optional[float] = None
     inpaint_blur_size: Optional[int] = None
     inpaint_blur_sigma: Optional[float] = None
     save_result_path: str = field(default_factory=str)

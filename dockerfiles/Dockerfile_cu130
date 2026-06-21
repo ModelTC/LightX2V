@@ -1,4 +1,5 @@
-FROM nvidia/cuda:13.0.3-cudnn-devel-ubuntu24.04 AS base
+FROM pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel AS base
+# ubuntu 24.04 python 3.12 torch 2.11 cuda 13.0
 
 WORKDIR /app
 
@@ -6,49 +7,52 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs:$LIBRARY_PATH
 
 RUN apt-get update && apt-get install -y vim tmux zip unzip bzip2 wget git git-lfs build-essential libibverbs-dev ca-certificates \
-    curl iproute2 libsm6 libxext6 kmod ccache libnuma-dev libssl-dev flex bison libgtk-3-dev libpango1.0-dev \
+    curl iproute2 libsm6 libxext6 kmod ccache libnuma-dev libssl-dev flex bison libgtk-3-dev libpango1.0-dev software-properties-common \
     libsoup2.4-dev libnice-dev libopus-dev libvpx-dev libx264-dev libsrtp2-dev libglib2.0-dev libdrm-dev libjpeg-dev libpng-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/* && git lfs install
 
-RUN curl -fsSL -v -o /app/miniconda.sh -O  "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
-RUN chmod +x /app/miniconda.sh && \
-    bash /app/miniconda.sh -b -p /app/miniconda && \
-    rm /app/miniconda.sh && \
-    /app/miniconda/bin/conda install python=3.11 -y && \
-    /app/miniconda/bin/conda clean -ya
-ENV PATH="/app/miniconda/bin:$PATH"
+RUN add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg8 && apt-get update && apt-get install -y ffmpeg
 
-RUN conda install conda-forge::ffmpeg=8.0.0 -y && conda clean -all -y
+RUN printf '[global]\nbreak-system-packages = true\n' > /etc/pip.conf
 
 RUN pip install --no-cache-dir packaging ninja cmake scikit-build-core uv meson ruff pre-commit fastapi uvicorn requests -U
 
-RUN pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
+RUN apt-get remove -y python3-jwt && pip install vllm==0.23.0
 
-RUN git clone https://github.com/vllm-project/vllm.git && cd vllm \
-    && python use_existing_torch.py && pip install --no-cache-dir -r requirements/build/cuda.txt \
-    && pip install --no-cache-dir --no-build-isolation -v -e .
+RUN pip install sglang-kernel==0.4.4
 
-RUN git clone https://github.com/sgl-project/sglang.git && cd sglang/sgl-kernel \
-    && make build && make clean
+RUN pip install --no-cache-dir diffusers transformers tokenizers accelerate safetensors opencv-python numpy
 
-RUN pip install --no-cache-dir diffusers transformers tokenizers accelerate safetensors opencv-python numpy imageio \
-    imageio-ffmpeg einops loguru qtorch ftfy av decord matplotlib debugpy soundfile jsonschema pymongo modelscope \
-    Pillow peft omegaconf mooncake-transfer-engine torchao scipy bson aio-pika asyncpg>=0.27.0 aioboto3>=12.0.0 \
-    PyJWT alibabacloud_dypnsapi20170525==1.2.2 redis==6.4.0 tos zmq graphviz pybind11 torchcodec
+RUN pip install --no-cache-dir imageio imageio-ffmpeg einops loguru qtorch ftfy av decord matplotlib peft
 
-RUN git clone https://github.com/Dao-AILab/flash-attention.git --recursive
+RUN pip install --no-cache-dir torchao torchcodec modelscope Pillow omegaconf librosa scipy debugpy
 
-RUN cd flash-attention && python setup.py install && rm -rf build
+RUN pip install --no-cache-dir jsonschema pymongo mooncake-transfer-engine tos zmq graphviz pybind11
 
-RUN cd flash-attention/hopper && python setup.py install && rm -rf build
+RUN pip install --no-cache-dir bson aio-pika PyJWT asyncpg>=0.27.0 aioboto3>=12.0.0 alibabacloud_dypnsapi20170525==1.2.2 redis==6.4.0
 
-RUN cd flash-attention && pip install -e "flash_attn/cute[dev,cu13]"
+RUN pip list
+
+# FA2 Whl: https://github.com/alkemiik-coder/FlashAttention-2.8.3-Custom-Linux-Wheels
+RUN pip install --no-cache-dir https://github.com/alkemiik-coder/FlashAttention-2.8.3-Custom-Linux-Wheels/releases/download/FA.2.8.3-custom-linux-wheels-x86_64/flash_attn-2.8.3+cu130torch2.11cxx11abiTRUEfullsm80sm90sm100sm120nvcc130-cp312-cp312-linux_x86_64.whl
+
+# FA3 Whl: https://github.com/windreamer/flash-attention3-wheels
+RUN pip install --no-cache-dir https://github.com/windreamer/flash-attention3-wheels/releases/download/2026.05.11-5e0e3b1/flash_attn_3-3.0.0%2B20260511.cu130torch2110cxx11abitrue.ab6632-cp39-abi3-linux_x86_64.whl
+
+# FA4 build from source: https://github.com/Dao-AILab/flash-attention
+RUN git clone https://github.com/Dao-AILab/flash-attention.git --recursive && cd flash-attention && pip install -e "flash_attn/cute[dev,cu13]"
 
 RUN git clone https://github.com/ModelTC/SageAttention.git --depth 1
 
-RUN cd SageAttention && CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install --no-cache-dir --no-build-isolation -v -e .
+RUN cd SageAttention && \
+    CUDA_ARCHITECTURES="8.0,8.6,8.9,9.0,12.0" \
+    EXT_PARALLEL=4 \
+    NVCC_APPEND_FLAGS="--threads 8" \
+    MAX_JOBS=32 \
+    pip install --no-cache-dir --no-build-isolation -v -e .
 
 RUN git clone https://github.com/ModelTC/SageAttention-1104.git --depth 1
 
@@ -83,8 +87,8 @@ RUN git clone --depth 1 https://github.com/linux-rdma/rdma-core.git && \
 RUN git clone https://github.com/ModelTC/q8_kernels.git --depth 1
 RUN cd q8_kernels && git submodule init && git submodule update && python setup.py install && rm -rf build
 
-RUN git clone https://github.com/ModelTC/SpargeAttn-Fix.git --depth 1
-RUN cd SpargeAttn-Fix && TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0" pip install --no-cache-dir --no-build-isolation -v -e .
+RUN git clone https://github.com/ModelTC/SpargeAttn.git --depth 1
+RUN cd SpargeAttn && TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0" pip install --no-cache-dir --no-build-isolation -v -e .
 
 # for 5090 docker
 # RUN git clone https://github.com/ModelTC/LTX-Video-Q8-Kernels.git --depth 1

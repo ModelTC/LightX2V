@@ -1,6 +1,7 @@
 import gc
 import os
 
+import cv2
 import torch
 from loguru import logger
 from transformers import AutoProcessor
@@ -186,6 +187,7 @@ class HidreamO1ImageRunner(DefaultRunner):
             device=self.model.device,
             dtype=self.dtype,
             enable_cfg=generation_config["enable_cfg"],
+            i2i_denoise_strength=getattr(self.input_info, "i2i_denoise_strength", None),
         )
         for sample in inputs["samples"]:
             sample["tgt_image_len"] = inputs["tgt_image_len"]
@@ -194,6 +196,7 @@ class HidreamO1ImageRunner(DefaultRunner):
                 "seed": self.input_info.seed,
                 "save_result_path": self.input_info.save_result_path,
                 "generation_config": generation_config,
+                "i2i_denoise_strength": getattr(self.input_info, "i2i_denoise_strength", None),
             }
         )
         return inputs
@@ -265,7 +268,8 @@ class HidreamO1ImageRunner(DefaultRunner):
             return {"images": [image]}
         if save_result_path:
             os.makedirs(os.path.dirname(os.path.abspath(save_result_path)), exist_ok=True)
-            image.save(save_result_path)
+            if not cv2.imwrite(save_result_path, image):
+                raise RuntimeError(f"Failed to save HiDream image to: {save_result_path}")
             logger.info(f"HiDream image saved successfully to: {save_result_path}")
 
         if GET_RECORDER_MODE():

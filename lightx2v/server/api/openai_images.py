@@ -192,6 +192,7 @@ def _build_image_task_request(
     target_shape: Optional[list[int]] = None,
     image_path: str = "",
     image_mask_path: str = "",
+    i2i_denoise_strength: Optional[float] = None,
 ) -> ImageTaskRequest:
     payload = {
         "prompt": prompt,
@@ -203,6 +204,8 @@ def _build_image_task_request(
         payload["target_shape"] = target_shape
     if seed is not None:
         payload["seed"] = seed
+    if i2i_denoise_strength is not None:
+        payload["i2i_denoise_strength"] = i2i_denoise_strength
     return ImageTaskRequest(**payload)
 
 
@@ -249,7 +252,7 @@ async def _save_upload_file(file: UploadFile, target_dir: Path) -> str:
 @router.post("/edits", response_model=OpenAIImageResponse)
 async def create_openai_image_edit(
     request: Request,
-    image: UploadFile = File(...),
+    image: list[UploadFile] | None = File(default=None),
     prompt: str = Form(...),
     mask: UploadFile | None = File(default=None),
     model: str | None = Form(default=None),
@@ -259,7 +262,13 @@ async def create_openai_image_edit(
     user: str | None = Form(default=None),
     negative_prompt: str = Form(default=""),
     seed: int | None = Form(default=None),
+    i2i_denoise_strength: float | None = Form(default=None),
 ):
+    image_uploads = list(image or [])
+    if not image_uploads:
+        form = await request.form()
+        image_uploads = [upload for upload in form.getlist("image[]") if hasattr(upload, "filename") and hasattr(upload, "read")]
+
     _ = model, user
     if n != 1:
         raise HTTPException(status_code=400, detail="Only n=1 is currently supported")
@@ -277,7 +286,16 @@ async def create_openai_image_edit(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    image_path = await _save_upload_file(image, services.file_service.input_image_dir)
+    if not image_uploads:
+        raise HTTPException(status_code=400, detail="At least one image is required")
+    if mask is not None and len(image_uploads) != 1:
+        raise HTTPException(status_code=400, detail="mask is only supported when exactly one image is uploaded")
+
+    image_paths = []
+    for image_upload in image_uploads:
+        image_paths.append(await _save_upload_file(image_upload, services.file_service.input_image_dir))
+    image_path = ",".join(image_paths)
+
     image_mask_path = ""
     if mask is not None:
         image_mask_path = await _save_upload_file(mask, services.file_service.input_image_dir)
@@ -289,6 +307,7 @@ async def create_openai_image_edit(
         target_shape=target_shape,
         image_path=image_path,
         image_mask_path=image_mask_path,
+        i2i_denoise_strength=i2i_denoise_strength,
     )
 
     result_png = await _run_sync_image_task(request, message)

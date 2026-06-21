@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# System management interface: cnmon
+
 # set path firstly
 lightx2v_path=/data/LightX2V
 model_path=/data/models/Z-Image-Turbo

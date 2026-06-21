@@ -11,12 +11,8 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
-
-try:
-    from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
-except (ImportError, ModuleNotFoundError) as e:
-    logger.warning(f"Flux2 runners not available: {e}")
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
+from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
@@ -436,6 +432,7 @@ class LightX2VPipeline:
         action_path=None,
         video_path=None,  # For SR task (video super-resolution)
         image_strength=None,
+        i2i_denoise_strength=None,
         image_frame_idx=None,
         last_frame_path=None,
         audio_path=None,
@@ -449,6 +446,7 @@ class LightX2VPipeline:
         # Run inference (following LightX2V pattern)
         # Note: image_path supports comma-separated paths for multiple images
         # image_strength can be a scalar (float/int) or a list matching the number of images
+        # i2i_denoise_strength controls single-image edit redraw strength when explicitly set
         # image_frame_idx: optional list of pixel frame indices (one per image), or None to evenly space in [0, num_frames-1]
         self.seed = seed
         self.image_path = image_path
@@ -466,6 +464,7 @@ class LightX2VPipeline:
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
         self.image_strength = image_strength
+        self.i2i_denoise_strength = i2i_denoise_strength
         self.image_frame_idx = image_frame_idx
         if task is not None:
             self.task = task
