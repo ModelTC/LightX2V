@@ -4,7 +4,6 @@ import shutil
 import torch
 import torch.distributed.checkpoint as dcp
 import torch.nn.functional as F
-from diffusers.optimization import get_scheduler
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
 
@@ -15,20 +14,20 @@ from lightx2v_train.runtime.fsdp import apply_fsdp2
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
-from .lora import LoraTrainer
+from .base import BaseTrainer
 
 
-@TRAINER_REGISTER("dmd_lora")
-class DmdLoraTrainer(LoraTrainer):
+@TRAINER_REGISTER("dmd")
+class DmdTrainer(BaseTrainer):
     def __init__(self, config):
         super().__init__(config)
         fake_config = self.training_config.get("fake", {})
-        fake_optimizer_config = fake_config.get("optimizer", {})
-        self.fake_optimizer_learning_rate = fake_optimizer_config.get("learning_rate", self.optimizer_learning_rate)
-        self.fake_optimizer_adam_beta1 = fake_optimizer_config.get("adam_beta1", self.optimizer_adam_beta1)
-        self.fake_optimizer_adam_beta2 = fake_optimizer_config.get("adam_beta2", self.optimizer_adam_beta2)
-        self.fake_optimizer_weight_decay = fake_optimizer_config.get("weight_decay", self.optimizer_weight_decay)
-        self.fake_optimizer_adam_epsilon = fake_optimizer_config.get("adam_epsilon", self.optimizer_adam_epsilon)
+        self.fake_optimizer_config = fake_config.get("optimizer", {})
+        self.fake_optimizer_learning_rate = self.fake_optimizer_config.get("learning_rate", self.optimizer_learning_rate)
+        self.fake_optimizer_adam_beta1 = self.fake_optimizer_config.get("adam_beta1", self.optimizer_adam_beta1)
+        self.fake_optimizer_adam_beta2 = self.fake_optimizer_config.get("adam_beta2", self.optimizer_adam_beta2)
+        self.fake_optimizer_weight_decay = self.fake_optimizer_config.get("weight_decay", self.optimizer_weight_decay)
+        self.fake_optimizer_adam_epsilon = self.fake_optimizer_config.get("adam_epsilon", self.optimizer_adam_epsilon)
 
         self.dmd_config = self.training_config.get("dmd", {})
         teacher_config = self.training_config.get("teacher", {})
@@ -47,8 +46,7 @@ class DmdLoraTrainer(LoraTrainer):
         super().setup(resume_ckpt_path=None)
         self.fake_model = build_model(self.config)
         self.fake_model.load_components(transformer_only=True, reference_model=self.model)
-        self.fake_model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
-        self.fake_model.set_lora_trainable()
+        self._setup_trainable_model(self.fake_model)
         apply_fsdp2(self.fake_model, self.config)
         if self.gradient_checkpointing:
             self.fake_model.enable_gradient_checkpointing()
@@ -61,17 +59,18 @@ class DmdLoraTrainer(LoraTrainer):
         self.teacher_model.transformer.eval()
 
         self.fake_trainable_params = list(self.fake_model.trainable_parameters())
-
-        self.fake_optimizer = torch.optim.AdamW(
+        self.fake_optimizer = self._build_optimizer(
             self.fake_trainable_params,
-            lr=self.fake_optimizer_learning_rate,
-            betas=(self.fake_optimizer_adam_beta1, self.fake_optimizer_adam_beta2),
-            weight_decay=self.fake_optimizer_weight_decay,
-            eps=self.fake_optimizer_adam_epsilon,
+            {
+                "learning_rate": self.fake_optimizer_learning_rate,
+                "adam_beta1": self.fake_optimizer_adam_beta1,
+                "adam_beta2": self.fake_optimizer_adam_beta2,
+                "weight_decay": self.fake_optimizer_weight_decay,
+                "adam_epsilon": self.fake_optimizer_adam_epsilon,
+            },
         )
-        self.fake_lr_scheduler = get_scheduler(
-            self.lr_scheduler_name,
-            optimizer=self.fake_optimizer,
+        self.fake_lr_scheduler = self._build_lr_scheduler(
+            self.fake_optimizer,
             num_warmup_steps=0,
             num_training_steps=max(1, self.max_train_iters * self.fake_update_ratio),
         )
@@ -81,8 +80,8 @@ class DmdLoraTrainer(LoraTrainer):
         if resume_ckpt_path is not None:
             self._load_resume_state(resume_ckpt_path)
 
-        logger.info("[train] dmd_lora student trainable params={}", self._count_trainable(self.model.transformer))
-        logger.info("[train] dmd_lora fake trainable params={}", self._count_trainable(self.fake_model.transformer))
+        logger.info("[train] dmd student trainable params={}", self._count_trainable(self.model.transformer))
+        logger.info("[train] dmd fake trainable params={}", self._count_trainable(self.fake_model.transformer))
 
     @staticmethod
     def _count_trainable(module):
@@ -215,7 +214,8 @@ class DmdLoraTrainer(LoraTrainer):
         microbatches = []
 
         logger.info(
-            "[train] start iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
+            "[train] start method=dmd train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
+            self.train_type,
             current_iter,
             max_train_iters,
             get_world_size(),
@@ -307,6 +307,9 @@ class DmdLoraTrainer(LoraTrainer):
         self._set_student_gradient_sync(enabled)
         self._set_fake_gradient_sync(enabled)
 
+    def _fake_weights_dir(self, root_dir):
+        return os.path.join(root_dir, "fake_lora" if self.train_type == "lora" else "fake_model")
+
     def _load_resume_state(self, resume_ckpt_path):
         if self.model.is_fsdp2_wrapped() or self.fake_model.is_fsdp2_wrapped():
             self._load_distributed_state(resume_ckpt_path)
@@ -324,33 +327,32 @@ class DmdLoraTrainer(LoraTrainer):
 
     def _load_single_process_state(self, resume_ckpt_path):
         training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
-        fake_lora_path = os.path.join(resume_ckpt_path, "fake_lora")
-        fake_lora_weights_path = os.path.join(fake_lora_path, "pytorch_lora_weights.safetensors")
+        fake_weights_dir = self._fake_weights_dir(resume_ckpt_path)
 
         if not os.path.exists(training_state_path):
             raise RuntimeError(f"training_state.pt not found in {resume_ckpt_path}")
 
         state = torch.load(training_state_path, map_location="cpu", weights_only=False)
         self._validate_dmd_checkpoint_metadata(state, training_state_path, resume_ckpt_path)
-        self.model.load_lora_weights_for_resume(resume_ckpt_path)
+        self._load_model_weights(self.model, resume_ckpt_path)
         self.optimizer.load_state_dict(state["optimizer"])
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
 
-        if os.path.exists(fake_lora_weights_path):
-            self.fake_model.load_lora_weights_for_resume(fake_lora_path)
+        if os.path.exists(fake_weights_dir):
+            self._load_model_weights(self.fake_model, fake_weights_dir)
         else:
-            print(f"Warning: fake LoRA weights not found in {fake_lora_path}. Fake model not restored.")
+            logger.warning("Fake model weights not found in {}. Fake model not restored.", fake_weights_dir)
 
         if "fake_optimizer" in state:
             self.fake_optimizer.load_state_dict(state["fake_optimizer"])
         else:
-            print(f"Warning: fake optimizer state not found in {training_state_path}.")
+            logger.warning("fake_optimizer state not found in {}.", training_state_path)
 
         if "fake_lr_scheduler" in state:
             self.fake_lr_scheduler.load_state_dict(state["fake_lr_scheduler"])
         else:
-            print(f"Warning: fake lr scheduler state not found in {training_state_path}.")
-        logger.info("Restored DMD-LoRA training state from {}", training_state_path)
+            logger.warning("fake_lr_scheduler state not found in {}.", training_state_path)
+        logger.info("Restored DMD training state from {}", training_state_path)
 
     def _load_distributed_state(self, resume_ckpt_path):
         dist_state_path = os.path.join(resume_ckpt_path, "dist_state")
@@ -390,7 +392,7 @@ class DmdLoraTrainer(LoraTrainer):
 
         self.lr_scheduler.load_state_dict(trainer_state["lr_scheduler"])
         self.fake_lr_scheduler.load_state_dict(trainer_state["fake_lr_scheduler"])
-        logger.info("Restored distributed DMD-LoRA training state from {}", resume_ckpt_path)
+        logger.info("Restored distributed DMD training state from {}", resume_ckpt_path)
 
     def save_checkpoint(self, iteration, save_total_limit):
         if is_main_process():
@@ -402,14 +404,18 @@ class DmdLoraTrainer(LoraTrainer):
             os.makedirs(save_dir, exist_ok=True)
         barrier()
 
-        self.model.save_lora_weights(save_dir)
+        save_student_weights = self.train_type == "lora" or not self.model.is_fsdp2_wrapped()
+        if save_student_weights:
+            self._save_model_weights(self.model, save_dir)
         barrier()
 
-        fake_save_dir = os.path.join(save_dir, "fake_lora")
-        if is_main_process():
+        fake_save_dir = self._fake_weights_dir(save_dir)
+        save_fake_weights = self.train_type == "lora" or not self.fake_model.is_fsdp2_wrapped()
+        if save_fake_weights and is_main_process():
             os.makedirs(fake_save_dir, exist_ok=True)
         barrier()
-        self.fake_model.save_lora_weights(fake_save_dir)
+        if save_fake_weights:
+            self._save_model_weights(self.fake_model, fake_save_dir)
         barrier()
 
         config_path = self.config.get("config_path")

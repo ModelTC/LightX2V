@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from pathlib import Path
 
 import torch
@@ -7,6 +8,7 @@ from loguru import logger
 from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_distributed
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
+from ..model_zoo.native.wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from .base import BaseInferencer
 
 
@@ -119,3 +121,240 @@ class WanT2VInferencer(BaseInferencer):
             saved_count = saved_count_tensor.item()
         logger.info("[infer] finished saved={}", saved_count)
         return saved_paths
+
+
+@INFERENCER_REGISTER("wan_t2v_ar_infer")
+class WanT2VARInferencer(BaseInferencer):
+    @torch.no_grad()
+    def infer(self):
+        samples = self.dataloader_eval.dataset.samples
+        prompts = [sample["prompt"] for sample in samples]
+        rank = get_rank()
+        world_size = get_world_size()
+
+        default_height = self.infer_config.get("default_height", self.infer_config.get("height", 480))
+        default_width = self.infer_config.get("default_width", self.infer_config.get("width", 832))
+        num_inference_steps = self.infer_config.get("num_inference_steps", 50)
+        fps = self.infer_config.get("fps", 16)
+        video_quality = self.infer_config.get("video_quality", 6.0)
+        macro_block_size = self.infer_config.get("macro_block_size", 16)
+        guidance_scale = self.infer_config.get("cfg_guidance_scale", 3.0)
+        negative_prompt = self.infer_config.get("negative_prompt", " ")
+        base_seed = self.infer_config.get("seed", 42)
+
+        lora_config = self.infer_config.get("lora_config", None)
+        lora_path = lora_config.get("path", None) if lora_config else None
+        should_load_lora = lora_path and getattr(self.model, "_infer_lora_adapter_name", None) is None
+        if should_load_lora:
+            self.model.load_lora_for_infer(lora_path)
+
+        saved_paths = []
+        self.model.set_denoiser_eval()
+        num_slots = (len(prompts) + world_size - 1) // world_size if is_distributed() else len(prompts)
+        logger.info(
+            "[ar-infer] start samples={} steps={} chunk={} output_dir={}",
+            len(prompts),
+            num_inference_steps,
+            self._num_frame_per_chunk(),
+            self.output_infer_dir,
+        )
+        with torch.no_grad():
+            for slot in range(num_slots):
+                i = slot * world_size + rank if is_distributed() else slot
+                has_sample = i < len(prompts)
+                prompt = prompts[i] if has_sample else " "
+                sample = samples[i] if has_sample else {}
+
+                height, width = _target_hw_for_sample(sample, default_height, default_width)
+                seed = base_seed + i if has_sample else base_seed
+                generator = torch.Generator(device=self.model.device).manual_seed(seed)
+                pos_cond = self.model.encode_condition({"prompt": prompt})
+                neg_cond = self.model.encode_condition({"prompt": negative_prompt})
+                latent = self.model.prepare_infer_latents(height, width, generator)
+
+                if has_sample:
+                    logger.info("[ar-infer] sample={}/{} seed={} size={}x{} start", i + 1, len(prompts), seed, height, width)
+                latent = self._ar_rollout(
+                    noise=latent,
+                    pos_cond=pos_cond,
+                    neg_cond=neg_cond,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                )
+
+                if not has_sample:
+                    continue
+
+                videos = self.model.decode_latent(latent)
+                if self.output_infer_dir is not None:
+                    save_path = Path(self.output_infer_dir) / f"{i:05d}.mp4"
+                    export_to_video(
+                        videos[0],
+                        str(save_path),
+                        fps=fps,
+                        quality=video_quality,
+                        macro_block_size=macro_block_size,
+                    )
+                    logger.info("[ar-infer] sample={}/{} saved path={}", i + 1, len(prompts), save_path)
+                    saved_paths.append(str(save_path))
+                logger.info("[ar-infer] sample={}/{} done", i + 1, len(prompts))
+
+        barrier()
+
+        if should_load_lora:
+            self.model.unload_lora_for_infer()
+
+        saved_count = len(saved_paths)
+        if is_distributed():
+            saved_count_tensor = torch.tensor(saved_count, device=self.model.device, dtype=torch.int64)
+            torch.distributed.all_reduce(saved_count_tensor, op=torch.distributed.ReduceOp.SUM)
+            saved_count = saved_count_tensor.item()
+        logger.info("[ar-infer] finished saved={}", saved_count)
+        return saved_paths
+
+    def _ar_rollout(self, noise, pos_cond, neg_cond, num_inference_steps, guidance_scale):
+        transformer = self.model.denoiser_module()
+        if not hasattr(transformer, "_forward_inference"):
+            raise RuntimeError("wan_t2v_ar_infer requires the causal Wan transformer.")
+
+        chunk_size = self._num_frame_per_chunk()
+        batch_size, _, num_frames, _, _ = noise.shape
+        if num_frames % chunk_size != 0:
+            raise ValueError(f"AR inference latent frames={num_frames} must be divisible by chunk_size={chunk_size}.")
+
+        output = torch.zeros_like(noise)
+        frame_seq_length = self._frame_seq_length(noise)
+        kv_cache_pos, crossattn_cache_pos = self._new_caches(batch_size, noise.dtype, noise.device, num_frames, frame_seq_length)
+        kv_cache_neg, crossattn_cache_neg = self._new_caches(batch_size, noise.dtype, noise.device, num_frames, frame_seq_length)
+        pos_context = self.model._condition_to_context_tensor(pos_cond, batch_size=batch_size)
+        neg_context = self.model._condition_to_context_tensor(neg_cond, batch_size=batch_size)
+
+        cache_start_frame = 0
+        num_blocks = num_frames // chunk_size
+        for block_idx in range(num_blocks):
+            current_noise = noise[:, :, cache_start_frame : cache_start_frame + chunk_size]
+            latents = current_noise
+            sample_scheduler = self._build_cf_unipc_scheduler(noise.device, num_inference_steps)
+            logger.info("[ar-infer] block={}/{} frames={}..{}", block_idx + 1, num_blocks, cache_start_frame, cache_start_frame + chunk_size - 1)
+
+            for step_idx, timestep in enumerate(sample_scheduler.timesteps):
+                timestep = timestep.float().reshape(1, 1).expand(batch_size, chunk_size).to(device=noise.device)
+                flow_pred_cond = self._forward_causal_chunk(
+                    latents,
+                    timestep,
+                    pos_context,
+                    kv_cache_pos,
+                    crossattn_cache_pos,
+                    current_start=cache_start_frame * frame_seq_length,
+                    cache_start=cache_start_frame * frame_seq_length,
+                )
+                flow_pred_uncond = self._forward_causal_chunk(
+                    latents,
+                    timestep,
+                    neg_context,
+                    kv_cache_neg,
+                    crossattn_cache_neg,
+                    current_start=cache_start_frame * frame_seq_length,
+                    cache_start=cache_start_frame * frame_seq_length,
+                )
+                flow_pred = flow_pred_uncond + guidance_scale * (flow_pred_cond - flow_pred_uncond)
+                latents = sample_scheduler.step(flow_pred, sample_scheduler.timesteps[step_idx], latents, return_dict=False)[0]
+
+            output[:, :, cache_start_frame : cache_start_frame + chunk_size] = latents
+
+            timestep_zero = torch.zeros((batch_size, chunk_size), device=noise.device, dtype=torch.float32)
+            self._forward_causal_chunk(
+                latents,
+                timestep_zero,
+                pos_context,
+                kv_cache_pos,
+                crossattn_cache_pos,
+                current_start=cache_start_frame * frame_seq_length,
+                cache_start=cache_start_frame * frame_seq_length,
+            )
+            self._forward_causal_chunk(
+                latents,
+                timestep_zero,
+                neg_context,
+                kv_cache_neg,
+                crossattn_cache_neg,
+                current_start=cache_start_frame * frame_seq_length,
+                cache_start=cache_start_frame * frame_seq_length,
+            )
+            cache_start_frame += chunk_size
+
+        return output
+
+    def _forward_causal_chunk(self, latents, timestep, context, kv_cache, crossattn_cache, current_start, cache_start):
+        transformer = self.model.denoiser_module()
+        seq_len = self.model._sequence_length(latents)
+        forward_context = self.model.transformer_forward_context() if hasattr(self.model, "transformer_forward_context") else nullcontext()
+        with forward_context:
+            return transformer(
+                latents,
+                t=timestep,
+                context=context,
+                seq_len=seq_len,
+                kv_cache=kv_cache,
+                crossattn_cache=crossattn_cache,
+                current_start=current_start,
+                cache_start=cache_start,
+            )
+
+    def _build_cf_unipc_scheduler(self, device, num_inference_steps):
+        scheduler_config = self.config.get("scheduler", {})
+        shift = self.infer_config.get("timestep_shift")
+        if shift is None:
+            time_shift_settings = scheduler_config.get("time_shift_settings", {})
+            shift = time_shift_settings.get("time_shift_mu", 5.0)
+        scheduler = FlowUniPCMultistepScheduler(
+            num_train_timesteps=scheduler_config.get("num_train_timesteps", 1000),
+            shift=1,
+            use_dynamic_shifting=False,
+        )
+        scheduler.set_timesteps(num_inference_steps, device=device, shift=float(shift))
+        return scheduler
+
+    def _new_caches(self, batch_size, dtype, device, num_frames, frame_seq_length):
+        transformer = self.model.denoiser_module()
+        num_layers = getattr(transformer, "num_layers", None)
+        if num_layers is None:
+            num_layers = len(transformer.blocks)
+        num_layers = int(num_layers)
+        num_heads = int(transformer.num_heads)
+        head_dim = int(transformer.dim // transformer.num_heads)
+        local_attn_size = int(getattr(transformer, "local_attn_size", -1))
+        if local_attn_size == -1:
+            kv_cache_size = num_frames * frame_seq_length
+        else:
+            kv_cache_size = local_attn_size * frame_seq_length
+
+        kv_cache = []
+        crossattn_cache = []
+        for _ in range(num_layers):
+            kv_cache.append(
+                {
+                    "k": torch.zeros((batch_size, kv_cache_size, num_heads, head_dim), dtype=dtype, device=device),
+                    "v": torch.zeros((batch_size, kv_cache_size, num_heads, head_dim), dtype=dtype, device=device),
+                    "global_end_index": torch.tensor([0], dtype=torch.long, device=device),
+                    "local_end_index": torch.tensor([0], dtype=torch.long, device=device),
+                }
+            )
+            crossattn_cache.append(
+                {
+                    "k": torch.zeros((batch_size, self.model.max_sequence_length, num_heads, head_dim), dtype=dtype, device=device),
+                    "v": torch.zeros((batch_size, self.model.max_sequence_length, num_heads, head_dim), dtype=dtype, device=device),
+                    "is_init": False,
+                }
+            )
+        return kv_cache, crossattn_cache
+
+    def _frame_seq_length(self, latent):
+        _, _, _, latent_height, latent_width = latent.shape
+        patch_t, patch_h, patch_w = self.model.patch_size
+        if patch_t != 1:
+            raise ValueError(f"wan_t2v_ar_infer expects temporal patch size 1, got {patch_t}.")
+        return latent_height * latent_width // (patch_h * patch_w)
+
+    def _num_frame_per_chunk(self):
+        return int(getattr(self.model, "num_frame_per_chunk", self.config.get("training", {}).get("teacher_forcing", {}).get("num_frame_per_chunk", 1)))

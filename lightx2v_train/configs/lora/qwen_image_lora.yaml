@@ -42,7 +42,8 @@ scheduler:
         shift_y2: 1.15
 
 training:
-    method: lora
+    method: flow
+    train_type: lora
     max_train_iters: 3000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true

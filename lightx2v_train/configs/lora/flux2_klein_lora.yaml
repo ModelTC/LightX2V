@@ -40,7 +40,8 @@ scheduler:
         patch_size: [1, 1] # [H, W]
 
 training:
-    method: lora
+    method: flow
+    train_type: lora
     max_train_iters: 3000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
