@@ -1,0 +1,3 @@
+[submodule "lightx2v_ros/src/simulator/simulator/libero_node/LIBERO"]
+	path = lightx2v_ros/src/simulator/simulator/libero_node/LIBERO
+	url = https://github.com/Lifelong-Robot-Learning/LIBERO.git
