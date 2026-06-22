@@ -1,9 +1,11 @@
 import math
 import os
+import time
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import numpy as np
+from loguru import logger
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -14,6 +16,7 @@ from diffusers.models.modeling_utils import ModelMixin
 from einops import rearrange
 from torch import Tensor, nn
 
+from lightx2v.models.runners.vae_postprocess import env_flag
 from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -826,6 +829,8 @@ class HunyuanVideo15VAE:
 
     @torch.no_grad()
     def decode_dist_2d(self, z, world_size_h, world_size_w):
+        detail_timing = env_flag("LIGHTX2V_VAE_DETAIL_TIMING", False)
+        rank0_only = env_flag("LIGHTX2V_VAE_DIST_RANK0_ONLY", False)
         cur_rank = dist.get_rank()
         cur_rank_h = cur_rank // world_size_w
         cur_rank_w = cur_rank % world_size_w
@@ -863,7 +868,13 @@ class HunyuanVideo15VAE:
         zs_chunk = z[:, :, :, h_start:h_end, w_start:w_end].contiguous()
 
         # Decode the chunk
+        if detail_timing:
+            self.device_synchronize()
+            decode_start = time.perf_counter()
         images_chunk = self.vae.decode(zs_chunk, return_dict=False)[0]
+        if detail_timing:
+            self.device_synchronize()
+            logger.info(f"[VAE_DETAIL] rank={cur_rank} decode_chunk_s={time.perf_counter() - decode_start:.6f} latent_chunk_shape={tuple(zs_chunk.shape)} decoded_chunk_shape={tuple(images_chunk.shape)}")
 
         # Remove padding from decoded chunk
         spatial_ratio = 16
@@ -893,11 +904,23 @@ class HunyuanVideo15VAE:
         total_processes = world_size_h * world_size_w
         full_images = [torch.empty_like(images_chunk) for _ in range(total_processes)]
 
+        if detail_timing:
+            self.device_synchronize()
+            gather_start = time.perf_counter()
         dist.all_gather(full_images, images_chunk)
 
         self.device_synchronize()
+        if detail_timing:
+            logger.info(f"[VAE_DETAIL] rank={cur_rank} all_gather_s={time.perf_counter() - gather_start:.6f}")
+
+        if rank0_only and cur_rank != 0:
+            if detail_timing:
+                logger.info(f"[VAE_DETAIL] rank={cur_rank} skip reconstruct after all_gather")
+            return torch.empty(0, device=z.device, dtype=images_chunk.dtype)
 
         # Reconstruct the full image tensor
+        if detail_timing:
+            reconstruct_start = time.perf_counter()
         image_rows = []
         for h_idx in range(world_size_h):
             image_cols = []
@@ -907,6 +930,9 @@ class HunyuanVideo15VAE:
             image_rows.append(torch.cat(image_cols, dim=4))
 
         images = torch.cat(image_rows, dim=3)
+        if detail_timing:
+            self.device_synchronize()
+            logger.info(f"[VAE_DETAIL] rank={cur_rank} reconstruct_s={time.perf_counter() - reconstruct_start:.6f} full_shape={tuple(images.shape)}")
 
         return images
 
