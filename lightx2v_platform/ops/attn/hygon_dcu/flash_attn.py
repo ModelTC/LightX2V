@@ -112,6 +112,11 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         # Compute softmax scale if not provided
         if softmax_scale is None:
             softmax_scale = 1.0 / math.sqrt(q.shape[-1])
+
+        if cu_seqlens_q is not None and cu_seqlens_q.is_cpu:
+            cu_seqlens_q = cu_seqlens_q.to(q_flat.device, non_blocking=True)
+        if cu_seqlens_kv is not None and cu_seqlens_kv.is_cpu:
+            cu_seqlens_kv = cu_seqlens_kv.to(k_flat.device, non_blocking=True)
         # Use Flash Attention 2.6.1 (ROCm version) with varlen interface
         if SAPRDE_LINEAR_ATTN and int(os.getenv("USE_SLA", 0)) and q.shape[1] == k.shape[1]:
             topk_value = float(os.getenv("SPARSE_ATTN_TOPK", "0.5"))
@@ -147,7 +152,7 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         output = output.reshape(bs * max_seqlen_q, -1)
         return output.to(out_dtype)
 
-    def _sdpa_fallback(self, q, k, v, cu_seqlens_q, max_seqlen_q, causal=False, dropout_p=0.0):
+    def _sdpa_fallback(self, q, k, v, cu_seqlens_q, max_seqlen_q, max_seqlen_kv=None, causal=False, dropout_p=0.0):
         """
         Fallback to PyTorch Scaled Dot Product Attention when Flash Attention is not available.
 
@@ -162,17 +167,23 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         Returns:
             Output tensor: [B*Lq, C] (flattened batch)
         """
-        # Reshape from flattened format to batched format
-        bs = cu_seqlens_q.shape[0] - 1
-        # Reshape q, k, v to [B, L, Nq, C]
-        q = q.reshape(bs, max_seqlen_q, q.shape[-2], q.shape[-1])
-        k = k.reshape(bs, max_seqlen_q, k.shape[-2], k.shape[-1])
-        v = v.reshape(bs, max_seqlen_q, v.shape[-2], v.shape[-1])
+        max_seqlen_kv = max_seqlen_q if max_seqlen_kv is None else max_seqlen_kv
+
+        if q.dim() == 4:
+            bs = q.shape[0]
+            q_batched = q
+            k_batched = k
+            v_batched = v
+        else:
+            bs = cu_seqlens_q.shape[0] - 1
+            q_batched = q.reshape(bs, max_seqlen_q, q.shape[-2], q.shape[-1])
+            k_batched = k.reshape(bs, max_seqlen_kv, k.shape[-2], k.shape[-1])
+            v_batched = v.reshape(bs, max_seqlen_kv, v.shape[-2], v.shape[-1])
 
         # Transpose to [B, Nq, L, C] for SDPA
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        q = q_batched.transpose(1, 2)
+        k = k_batched.transpose(1, 2)
+        v = v_batched.transpose(1, 2)
 
         out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, is_causal=causal, dropout_p=dropout_p)
 
