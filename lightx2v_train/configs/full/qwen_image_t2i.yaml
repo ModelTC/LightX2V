@@ -56,7 +56,8 @@ scheduler:
         shift_y2: 1.15
 
 training:
-    method: full
+    method: flow
+    train_type: full
     max_train_iters: 3000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
