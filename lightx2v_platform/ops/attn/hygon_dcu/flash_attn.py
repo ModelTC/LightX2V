@@ -114,7 +114,7 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
             softmax_scale = 1.0 / math.sqrt(q.shape[-1])
         # Use Flash Attention 2.6.1 (ROCm version) with varlen interface
         if SAPRDE_LINEAR_ATTN and int(os.getenv("USE_SLA", 0)) and q.shape[1] == k.shape[1]:
-            topk_value = float(os.getenv("SPARSE_ATTN_TOPK", "0.5"))
+            topk_value = float(os.getenv("SPARSE_ATTN_TOPK", "0.4"))
 
             q = q_flat.unsqueeze(0)
             k = k_flat.unsqueeze(0)
@@ -124,7 +124,7 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
                 q,
                 k,
                 v,
-                topk=0.4,
+                topk=topk_value,
             )
         else:
             output = flash_attn_varlen_func(
