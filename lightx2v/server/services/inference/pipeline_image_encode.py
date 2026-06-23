@@ -8,14 +8,11 @@ import time
 from io import BytesIO
 from typing import Any, Optional
 
+import cv2
+import numpy as np
 import torch
 from PIL import Image
 from loguru import logger
-
-try:
-    from torchvision.io import encode_png as tv_encode_png
-except Exception:
-    tv_encode_png = None
 
 
 def _get_png_compression_level() -> int:
@@ -43,15 +40,36 @@ def _pil_to_png_bytes(pil_image: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-def _pil_images_structure_to_png(images: Any) -> bytes:
-    first = images[0]
-    if isinstance(first, list):
-        pil_image = first[0]
-    else:
-        pil_image = first
-    if not hasattr(pil_image, "save"):
-        raise TypeError(f"Unexpected image element type: {type(pil_image)}")
-    return _pil_to_png_bytes(pil_image)
+def _opencv_to_png_bytes(image: np.ndarray) -> bytes:
+    success, encoded = cv2.imencode(".png", image)
+    if not success:
+        raise RuntimeError(f"Failed to encode OpenCV image to PNG: shape={image.shape}, dtype={image.dtype}")
+    return encoded.tobytes()
+
+
+def _first_image(images: Any) -> Any:
+    image = images
+    while isinstance(image, (list, tuple)):
+        if not image:
+            return None
+        image = image[0]
+    return image
+
+
+def _image_to_png_bytes(image: Any) -> Optional[bytes]:
+    if image is None:
+        return None
+    if isinstance(image, torch.Tensor):
+        return _tensor_to_png_bytes(image)
+    if isinstance(image, np.ndarray):
+        return _opencv_to_png_bytes(image)
+    if isinstance(image, Image.Image):
+        return _pil_to_png_bytes(image)
+    if isinstance(image, str):
+        raw = base64.b64decode(image)
+        img = Image.open(BytesIO(raw)).convert("RGB")
+        return _pil_to_png_bytes(img)
+    raise TypeError(f"Unexpected image element type: {type(image)}")
 
 
 def _tensor_to_png_bytes(image_tensor: torch.Tensor) -> bytes:
@@ -86,23 +104,16 @@ def _tensor_to_png_bytes(image_tensor: torch.Tensor) -> bytes:
     tensor_chw = tensor_chw.to(torch.uint8)
     prep_ms = (time.perf_counter() - prep_start) * 1000
 
-    # Fast path: encode PNG directly from CHW uint8 tensor.
-    if tv_encode_png is not None:
-        encode_start = time.perf_counter()
-        png_bytes = tv_encode_png(tensor_chw, compression_level=PNG_COMPRESSION_LEVEL).numpy().tobytes()
-        encode_ms = (time.perf_counter() - encode_start) * 1000
-        total_ms = (time.perf_counter() - total_start) * 1000
-        logger.info(f"Tensor->PNG(tv) cost total={total_ms:.2f}ms cpu_copy={cpu_ms:.2f}ms preprocess={prep_ms:.2f}ms encode={encode_ms:.2f}ms level={PNG_COMPRESSION_LEVEL} [{task_tag}]")
-        return png_bytes
-
     encode_start = time.perf_counter()
     arr = tensor_chw.permute(1, 2, 0).numpy()
     if arr.shape[-1] == 1:
         arr = arr[:, :, 0]
-    png_bytes = _pil_to_png_bytes(Image.fromarray(arr))
+    elif arr.shape[-1] in (3, 4):
+        arr = np.ascontiguousarray(arr[:, :, ::-1])
+    png_bytes = _opencv_to_png_bytes(arr)
     encode_ms = (time.perf_counter() - encode_start) * 1000
     total_ms = (time.perf_counter() - total_start) * 1000
-    logger.info(f"Tensor->PNG(pil) cost total={total_ms:.2f}ms cpu_copy={cpu_ms:.2f}ms preprocess={prep_ms:.2f}ms encode={encode_ms:.2f}ms level={PNG_COMPRESSION_LEVEL} [{task_tag}]")
+    logger.info(f"Tensor->PNG(cv2) cost total={total_ms:.2f}ms cpu_copy={cpu_ms:.2f}ms preprocess={prep_ms:.2f}ms encode={encode_ms:.2f}ms level={PNG_COMPRESSION_LEVEL} [{task_tag}]")
     return png_bytes
 
 
@@ -115,24 +126,8 @@ def encode_pipeline_return_to_png_bytes(pipeline_return: Any) -> Optional[bytes]
             # e.g. BagelRunner returns (images, audio_or_none)
             pipeline_return = pipeline_return[0]
         if isinstance(pipeline_return, dict):
-            images = pipeline_return.get("images")
-            if images is None:
-                return None
-            if isinstance(images, torch.Tensor):
-                return _tensor_to_png_bytes(images)
-            return _pil_images_structure_to_png(images)
-        if isinstance(pipeline_return, list) and len(pipeline_return) > 0:
-            if isinstance(pipeline_return[0], torch.Tensor):
-                return _tensor_to_png_bytes(pipeline_return[0])
-            return _pil_images_structure_to_png(pipeline_return)
-        if isinstance(pipeline_return, torch.Tensor):
-            return _tensor_to_png_bytes(pipeline_return)
-        if isinstance(pipeline_return, Image.Image):
-            return _pil_to_png_bytes(pipeline_return)
-        if isinstance(pipeline_return, str):
-            raw = base64.b64decode(pipeline_return)
-            img = Image.open(BytesIO(raw)).convert("RGB")
-            return _pil_to_png_bytes(img)
+            pipeline_return = pipeline_return.get("images")
+        return _image_to_png_bytes(_first_image(pipeline_return))
     except Exception as e:
         logger.exception(f"Failed to encode pipeline output to PNG: {e}")
         return None

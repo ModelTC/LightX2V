@@ -6,7 +6,7 @@ nohup \
 torchrun \
 --standalone \
 --nproc_per_node=2 \
-train.py --config configs/lora/qwen_image_lora_dist.yaml \
+train.py --config configs/train/flow/qwen_image_lora_dist.yaml \
 > qwen_image_lora_dist.log 2>&1 &
 
 
