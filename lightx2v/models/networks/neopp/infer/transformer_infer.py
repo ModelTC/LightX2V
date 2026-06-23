@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -8,16 +10,58 @@ try:
 except ImportError:
     flashinfer_cutlass_fused_moe = None
 
+from lightx2v.common.flashinfer_autotune import flashinfer_autotune
+from lightx2v.models.networks.neopp.infer.moe_fi_autotune import (
+    MOE_FI_FORCE_RETUNE_ENV,
+    MoeFiAutotune,
+)
+
 try:
-    from magi_compiler import magi_compile, magi_register_custom_op
+    from magi_compiler import magi_compile
 except ImportError:
     magi_compile = None
-    magi_register_custom_op = None
 
 from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
 from lightx2v.utils.profiler import *
+
+_GROUPED_MM_ALIGN = 8
+
+
+def _expert_padded_counts(counts, align=_GROUPED_MM_ALIGN):
+    pad = (align - counts.remainder(align)) % align
+    return torch.where(counts > 0, counts + pad, counts)
+
+
+def _sorted_expert_row_map(counts):
+    num_experts = counts.shape[0]
+    return torch.repeat_interleave(
+        torch.arange(num_experts, device=counts.device, dtype=torch.long),
+        counts.to(torch.long),
+    )
+
+
+def _pad_tokens_for_grouped_mm(x_perm, counts):
+    padded_counts = _expert_padded_counts(counts)
+    offsets = padded_counts.cumsum(0).to(torch.int32)
+
+    total = counts.sum()
+    expert_for_row = _sorted_expert_row_map(counts)
+    perm_starts = counts.cumsum(0) - counts
+    padded_starts = padded_counts.cumsum(0) - padded_counts
+    row_idx = torch.arange(total, device=counts.device, dtype=torch.long)
+    within = row_idx - perm_starts[expert_for_row]
+    dst_idx = padded_starts[expert_for_row] + within
+
+    x_padded = x_perm.new_zeros(padded_counts.sum(), x_perm.shape[-1])
+    x_padded[dst_idx] = x_perm
+    return x_padded, offsets, padded_counts, dst_idx
+
+
+def _strip_padding_from_grouped_mm_output(out_padded, dst_idx):
+    return out_padded[dst_idx]
+
 
 # Register neopp::kv_update as a PyTorch custom op via torch.library.
 # We use torch.library (define + impl) instead of magi_register_custom_op
@@ -73,10 +117,23 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         self.scaling = self.head_dim**-0.5
         self.use_triton_qknorm_rope = config.get("use_triton_qknorm_rope", True)
         self.version = config.get("version", "moe")
+        self.fi_moe_autotune = MoeFiAutotune.from_neopp_config(config)
         if self.version == "moe":
             self.num_experts_per_tok = llm_config["num_experts_per_tok"]
             self.norm_topk_prob = llm_config.get("norm_topk_prob", True)
+            moe_backend = config.get("moe_backend", "flashinfer")
+            logger.info(f"NeoPP MoE backend: {moe_backend}")
             self._mlp_forward = self._sparse_moe
+            if moe_backend == "flashinfer" and self.fi_moe_autotune.enabled:
+                if flashinfer_autotune is None or flashinfer_cutlass_fused_moe is None:
+                    raise RuntimeError("moe_flashinfer_setting.autotune=true but flashinfer MoE autotuner is not available")
+                logger.info(
+                    f"NeoPP flashinfer MoE autotune enabled "
+                    f"(cache={self.fi_moe_autotune.cache_path}, "
+                    f"tune_mode=auto (cache-only if present, else lazy rebuild), "
+                    f"tune_max_num_tokens={self.fi_moe_autotune.tune_max_num_tokens}, "
+                    f"{MOE_FI_FORCE_RETUNE_ENV}={os.environ.get(MOE_FI_FORCE_RETUNE_ENV, '0')})"
+                )
         else:
             self._mlp_forward = self._dense_mlp
         if self.config["seq_parallel"]:
@@ -92,7 +149,10 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             self.use_magi_compile = False
         if self.use_magi_compile:
             configure_dynamo_for_magi_compile()
-            logger.info("Using Magi Compile (per-layer decoder, split at kv_update)")
+            if self.version == "moe":
+                logger.info("Using Magi Compile (per-layer attention, MoE FFN runs eager)")
+            else:
+                logger.info("Using Magi Compile (per-layer attn + FFN)")
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out, inputs):
@@ -110,7 +170,6 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
     def infer_without_offload(self, blocks, hidden_states, cos_sin, past_key_values):
         seq_len_q = hidden_states.shape[0]
         kvcache_len = past_key_values.shape[2]
-        seq_len_k = kvcache_len + seq_len_q
 
         # Allocate the KV buffer fresh each step so Dynamo sees it as a local
         # tensor inside the compiled region.
@@ -118,23 +177,8 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         self.kv_cache.prepare(past_key_values, seq_len_q)
 
         kv_buf = self.kv_cache._kv_buf
-        cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
         for layer_idx, block_weight in enumerate(blocks):
-            if self.use_magi_compile:
-                hidden_states = self._decoder_layer_magi(
-                    block_weight,
-                    layer_idx,
-                    hidden_states,
-                    cos_t,
-                    sin_t,
-                    cos_h,
-                    sin_h,
-                    cos_w,
-                    sin_w,
-                    kv_buf,
-                )
-            else:
-                hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
+            hidden_states = self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
         return hidden_states
 
     if magi_compile is not None:
@@ -159,7 +203,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             },
             config_patch=_magi_config_patch,
         )
-        def _decoder_layer_magi(
+        def _decoder_layer_attn_magi(
             self,
             block_weight,
             layer_idx,
@@ -173,22 +217,49 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             kv_buf,
         ):
             cos_sin = (cos_t, sin_t, cos_h, sin_h, cos_w, sin_w)
-            return self._decoder_layer(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
+            return self._decoder_layer_attn(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
 
-    # @ProfilingContext4DebugL1("Decoder Layer")
-    def _decoder_layer(self, block_weight, layer_idx, hidden_states, cos_sin, kv_buf=None):
+        @magi_compile(
+            dynamic_arg_dims={"hidden_states": 0},
+            config_patch=_magi_config_patch,
+        )
+        def _decoder_layer_ffn_magi(self, block_weight, hidden_states):
+            return self._decoder_layer_ffn(block_weight, hidden_states)
+
+    def _decoder_layer_attn(self, block_weight, layer_idx, hidden_states, cos_sin, kv_buf=None):
         residual = hidden_states
         hidden_states = block_weight.input_layernorm_mot_gen.apply(hidden_states)
-
         hidden_states = self._self_attn(block_weight.self_attn, layer_idx, hidden_states, cos_sin, kv_buf)
-        hidden_states = residual + hidden_states
+        return residual + hidden_states
 
+    def _decoder_layer_ffn(self, block_weight, hidden_states):
         residual = hidden_states
         gen_hidden = block_weight.post_attention_layernorm_mot_gen.apply(hidden_states)
         gen_hidden = self._mlp_forward(block_weight.mlp_mot_gen, gen_hidden)
-        hidden_states = residual + gen_hidden
+        return residual + gen_hidden
 
-        return hidden_states
+    # @ProfilingContext4DebugL1("Decoder Layer")
+    def _decoder_layer(self, block_weight, layer_idx, hidden_states, cos_sin, kv_buf=None):
+        if self.use_magi_compile:
+            cos_t, sin_t, cos_h, sin_h, cos_w, sin_w = cos_sin
+            hidden_states = self._decoder_layer_attn_magi(
+                block_weight,
+                layer_idx,
+                hidden_states,
+                cos_t,
+                sin_t,
+                cos_h,
+                sin_h,
+                cos_w,
+                sin_w,
+                kv_buf,
+            )
+            if self.version == "moe":
+                return self._decoder_layer_ffn(block_weight, hidden_states)
+            return self._decoder_layer_ffn_magi(block_weight, hidden_states)
+
+        hidden_states = self._decoder_layer_attn(block_weight, layer_idx, hidden_states, cos_sin, kv_buf)
+        return self._decoder_layer_ffn(block_weight, hidden_states)
 
     # @ProfilingContext4DebugL1("Self Attn")
     def _self_attn(self, attn_w, layer_idx, hidden_states, cos_sin, kv_buf=None):
@@ -305,8 +376,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             )
         return attn_output
 
-    # @ProfilingContext4DebugL1("Sparse MoE")
-    def _sparse_moe(self, moe_w, hidden_states):
+    def _moe_route(self, moe_w, hidden_states):
         router_logits = moe_w.gate.apply(hidden_states)
         if self.norm_topk_prob:
             _, selected_experts = torch.topk(router_logits, self.num_experts_per_tok, dim=-1, sorted=False)
@@ -314,6 +384,44 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         else:
             routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
             routing_weights, selected_experts = torch.topk(routing_weights, self.num_experts_per_tok, dim=-1)
+        return selected_experts, routing_weights
+
+    def _sparse_moe_pytorch(self, moe_w, hidden_states, selected_experts, routing_weights):
+        hidden_dim = hidden_states.shape[-1]
+        flat_topk_idx = selected_experts.reshape(-1)
+        flat_topk_weight = routing_weights.reshape(-1, 1)
+
+        idxs = flat_topk_idx.argsort()
+        token_idxs = idxs // self.num_experts_per_tok
+        counts = flat_topk_idx.bincount(minlength=moe_w.num_experts)
+
+        x_perm = hidden_states[token_idxs]
+        x_padded, offsets, _padded_counts, dst_idx = _pad_tokens_for_grouped_mm(x_perm, counts)
+        gate_out = torch._grouped_mm(x_padded, moe_w._pt_gate_weight, offs=offsets)
+        up_out = torch._grouped_mm(x_padded, moe_w._pt_up_weight, offs=offsets)
+        hidden = F.silu(gate_out) * up_out
+        out_padded = torch._grouped_mm(hidden, moe_w._pt_down_weight, offs=offsets)
+        expert_out = _strip_padding_from_grouped_mm_output(out_padded, dst_idx)
+        expert_out.mul_(flat_topk_weight[idxs])
+
+        expert_cache = torch.zeros_like(hidden_states)
+        expert_cache = expert_cache.to(expert_out.dtype)
+        expert_cache.scatter_reduce_(
+            0,
+            token_idxs.view(-1, 1).expand(-1, hidden_dim),
+            expert_out,
+            reduce="sum",
+        )
+        return expert_cache
+
+    # @ProfilingContext4DebugL1("Sparse MoE")
+    def _sparse_moe(self, moe_w, hidden_states):
+        selected_experts, routing_weights = self._moe_route(moe_w, hidden_states)
+        if moe_w.moe_backend == "pytorch":
+            return self._sparse_moe_pytorch(moe_w, hidden_states, selected_experts, routing_weights)
+
+        if flashinfer_cutlass_fused_moe is None:
+            raise RuntimeError("moe_backend=flashinfer but flashinfer.fused_moe is not available")
 
         output = flashinfer_cutlass_fused_moe(
             hidden_states if hidden_states.is_contiguous() else hidden_states.contiguous(),
@@ -323,8 +431,8 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             moe_w._fi_fc2_weight,
             hidden_states.dtype,
             quant_scales=None,
+            tune_max_num_tokens=self.fi_moe_autotune.tune_max_num_tokens,
         )[0]
-
         return output
 
     # @ProfilingContext4DebugL1("FM Head")
@@ -339,8 +447,3 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         gate_states = mlp_w.gate_proj.apply(hidden_states)
         intermediate_states = F.silu(gate_states) * up_states
         return mlp_w.down_proj.apply(intermediate_states)
-
-    # def _dense_mlp(self, mlp_w, hidden_states):
-    #     gate_up_states = torch.mm(hidden_states, mlp_w._fi_gate_up_weight)
-    #     intermediate_states = flashinfer_silu_and_mul(gate_up_states)
-    #     return mlp_w.down_proj.apply(intermediate_states)

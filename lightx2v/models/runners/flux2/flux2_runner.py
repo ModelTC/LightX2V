@@ -8,6 +8,7 @@ from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.schedulers.flux2.feature_caching.scheduler import Flux2DevSchedulerCaching, Flux2SchedulerCaching
 from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2Scheduler
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -37,6 +38,13 @@ class Flux2BaseRunner(DefaultRunner):
     def __init__(self, config):
         config["vae_scale_factor"] = config.get("vae_scale_factor", 16)
         super().__init__(config)
+
+    def _get_scheduler_class(self):
+        if self.config.get("feature_caching", "NoCaching") in ("NoCaching", "None"):
+            return None
+        if self.config.get("feature_caching") == "Ada":
+            return Flux2SchedulerCaching
+        raise NotImplementedError(f"Unsupported feature_caching type: {self.config.get('feature_caching')}")
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -391,7 +399,11 @@ class Flux2KleinRunner(Flux2BaseRunner):
         return [text_encoder]
 
     def init_scheduler(self):
-        self.scheduler = Flux2Scheduler(self.config)
+        caching_scheduler_class = self._get_scheduler_class()
+        if caching_scheduler_class is not None:
+            self.scheduler = caching_scheduler_class(self.config)
+        else:
+            self.scheduler = Flux2Scheduler(self.config)
 
     @ProfilingContext4DebugL1("Run Text Encoder")
     def run_text_encoder(self, text, image_list=None, neg_prompt=None):
@@ -429,7 +441,11 @@ class Flux2DevRunner(Flux2BaseRunner):
         return [text_encoder]
 
     def init_scheduler(self):
-        self.scheduler = Flux2DevScheduler(self.config)
+        caching_scheduler_class = self._get_scheduler_class()
+        if caching_scheduler_class is not None:
+            self.scheduler = Flux2DevSchedulerCaching(self.config)
+        else:
+            self.scheduler = Flux2DevScheduler(self.config)
 
     @ProfilingContext4DebugL1("Run Text Encoder")
     def run_text_encoder(self, text, image_list=None, neg_prompt=None):

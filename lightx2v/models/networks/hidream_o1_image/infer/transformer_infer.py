@@ -54,7 +54,7 @@ class HidreamO1ImageTransformerInfer:
     def _infer_seq_parallel(self, block_weights, pre_infer_out):
         hidden_ar = pre_infer_out.inputs_embeds_ar
         hidden_gen = pre_infer_out.inputs_embeds_gen
-        for decoder_block in block_weights.blocks:
+        for layer_idx, decoder_block in enumerate(block_weights.blocks):
             hidden_ar, hidden_gen = self._infer_decoder_block_seq_parallel(
                 decoder_block,
                 hidden_ar,
@@ -62,6 +62,12 @@ class HidreamO1ImageTransformerInfer:
                 pre_infer_out.rope_cos_sin_ar,
                 pre_infer_out.rope_cos_sin_gen,
             )
+            if pre_infer_out.deepstack_visual_embeds is not None and pre_infer_out.visual_pos_masks is not None and layer_idx < len(pre_infer_out.deepstack_visual_embeds):
+                hidden_ar = self._deepstack_process(
+                    hidden_ar,
+                    pre_infer_out.visual_pos_masks,
+                    pre_infer_out.deepstack_visual_embeds[layer_idx],
+                )
         hidden_gen = block_weights.norm.apply(hidden_gen)
         x_vis = self._infer_final_linear(block_weights, hidden_gen, pre_infer_out.vinput_mask_gen)
         return HidreamTransformerInferOutput(

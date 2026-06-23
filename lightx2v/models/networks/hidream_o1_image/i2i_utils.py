@@ -57,6 +57,7 @@ def build_i2i_samples(
     device,
     dtype,
     enable_cfg,
+    i2i_denoise_strength=None,
 ):
     height, width, preresized_ref_pil = _resolve_target_size(height, width, ref_image_paths, keep_original_aspect)
 
@@ -78,6 +79,13 @@ def build_i2i_samples(
             k += 1
         except Exception as exc:
             logger.warning(f"Incorrect layout_bboxes: {layout_bboxes}, {exc}")
+
+    i2i_image_latents = None
+    if i2i_denoise_strength is not None and len(ref_pils) == 1 and layout_data is None:
+        target_pil = ref_pils[0] if preresized_ref_pil is not None else ref_pils[0].resize((width, height), resample=Image.LANCZOS)
+        x = TENSOR_TRANSFORM(target_pil)
+        i2i_image_latents = einops.rearrange(x, "C (H p1) (W p2) -> (H W) (C p1 p2)", p1=PATCH_SIZE, p2=PATCH_SIZE)
+        i2i_image_latents = i2i_image_latents.unsqueeze(0).to(device, dtype)
 
     if k == 1:
         max_size = max(height, width)
@@ -215,4 +223,5 @@ def build_i2i_samples(
         "h_patches": h_patches,
         "w_patches": w_patches,
         "tgt_image_len": tgt_image_len,
+        "i2i_image_latents": i2i_image_latents,
     }
