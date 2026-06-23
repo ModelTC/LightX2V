@@ -26,6 +26,7 @@ class WanT2VDenoiserInput:
     hidden_states: torch.Tensor
 
 
+@MODEL_REGISTER("wan_t2v_ar")
 @MODEL_REGISTER("wan_t2v")
 class WanT2VModel(BaseModel):
     pipeline_cls = None
@@ -38,7 +39,7 @@ class WanT2VModel(BaseModel):
         self.load_text_encoder = model_config.get("load_text_encoder", True)
         self.load_transformer = model_config.get("load_transformer", True)
         teacher_forcing_config = self.config.get("training", {}).get("teacher_forcing", {})
-        self.use_causal_transformer = model_config.get("causal", False) or teacher_forcing_config.get("enabled", False)
+        self.use_causal_transformer = model_config.get("name") in ["wan_t2v_ar"] or teacher_forcing_config.get("enabled", False)
         self.sample_posterior = model_config.get("sample_posterior", True)
         self.num_train_timesteps = self.config.get("scheduler", {}).get("num_train_timesteps", 1000)
         self.max_sequence_length = model_config.get("max_sequence_length", 512)

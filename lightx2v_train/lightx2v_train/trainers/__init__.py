@@ -1,7 +1,9 @@
 from lightx2v_train.utils.registry import build_trainer
 
-from .dmd import DmdTrainer
+from .dmd import DmdTrainer, VideoArDmdTrainer, VideoDmdTrainer
 from .flow import FlowMatchingTrainer
 from .tf import TFTrainer
 
-__all__ = ["build_trainer", "DmdTrainer", "FlowMatchingTrainer", "TFTrainer"]
+ARDmdTrainer = VideoArDmdTrainer
+
+__all__ = ["build_trainer", "ARDmdTrainer", "DmdTrainer", "FlowMatchingTrainer", "TFTrainer", "VideoArDmdTrainer", "VideoDmdTrainer"]
