@@ -279,6 +279,68 @@ class WanT2VCachedDataset(torch.utils.data.Dataset):
         return len(self.cache_paths) * self.dataset_repeat
 
 
+def _get_array_shape_from_lmdb(env, array_name):
+    with env.begin() as txn:
+        shape_bytes = txn.get(f"{array_name}_shape".encode())
+    if shape_bytes is None:
+        raise KeyError(f"{array_name}_shape not found in LMDB dataset.")
+    return tuple(map(int, shape_bytes.decode().split()))
+
+
+def _retrieve_row_from_lmdb(env, array_name, dtype, row_index, shape=None):
+    data_key = f"{array_name}_{row_index}_data".encode()
+    with env.begin() as txn:
+        row_bytes = txn.get(data_key)
+    if row_bytes is None:
+        raise KeyError(f"{data_key!r} not found in LMDB dataset.")
+    if dtype is str:
+        return row_bytes.decode()
+    array = np.frombuffer(row_bytes, dtype=dtype)
+    if shape is not None and len(shape) > 0:
+        array = array.reshape(shape)
+    return array
+
+
+class CausalForcingLatentLMDBDataset(torch.utils.data.Dataset):
+    def __init__(self, data_path, dataset_repeat=1, max_samples=None):
+        try:
+            import lmdb
+        except ImportError as error:
+            raise ImportError("causal_forcing_lmdb_dataset requires the 'lmdb' Python package.") from error
+
+        self.data_path = str(data_path)
+        self.env = lmdb.open(self.data_path, readonly=True, lock=False, readahead=False, meminit=False)
+        self.latents_shape = _get_array_shape_from_lmdb(self.env, "latents")
+        self.dataset_repeat = dataset_repeat
+        self.max_samples = max_samples
+
+    def __len__(self):
+        length = self.latents_shape[0]
+        if self.max_samples is not None:
+            length = min(length, self.max_samples)
+        return length * self.dataset_repeat
+
+    def __getitem__(self, index):
+        row_index = index % min(self.latents_shape[0], self.max_samples or self.latents_shape[0])
+        latents = _retrieve_row_from_lmdb(
+            self.env,
+            "latents",
+            np.float16,
+            row_index,
+            shape=self.latents_shape[1:],
+        )
+        if latents.ndim == 4:
+            latents = latents[None, ...]
+        clean_latent = torch.tensor(latents, dtype=torch.float32)[-1]
+        prompt = _retrieve_row_from_lmdb(self.env, "prompts", str, row_index)
+        return {
+            "prompts": prompt,
+            "prompt": prompt,
+            "clean_latent": clean_latent,
+            "latent": clean_latent.permute(1, 0, 2, 3).contiguous(),
+        }
+
+
 class PromptDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -407,17 +469,19 @@ def _build_dataloader(dataset, data_config, train_or_val):
     world_size = get_world_size()
     sampler = None
     shuffle = data_config.get("shuffle", train_or_val == "train")
+    drop_last = data_config.get("drop_last", False)
     if train_or_val == "train" and world_size > 1:
-        sampler = DistributedSampler(dataset, shuffle=shuffle)
+        sampler = DistributedSampler(dataset, shuffle=shuffle, drop_last=drop_last)
         shuffle = False
 
     return DataLoader(
         dataset,
-        batch_size=1,
+        batch_size=data_config.get("batch_size", 1),
         shuffle=shuffle if sampler is None else False,
         sampler=sampler,
         num_workers=data_config.get("num_workers", 8),
         pin_memory=data_config.get("pin_memory", True),
+        drop_last=drop_last if sampler is None else False,
     )
 
 
@@ -448,6 +512,16 @@ def build_wan_t2v_cached_dataset(data_config, train_or_val="train"):
     cache_paths = data_config.get("cache_path", data_config.get("data_path"))
     dataset = WanT2VCachedDataset(
         cache_paths=cache_paths,
+        dataset_repeat=data_config.get("dataset_repeat", 1),
+        max_samples=data_config.get("max_samples"),
+    )
+    return _build_dataloader(dataset, data_config, train_or_val)
+
+
+@DATA_REGISTER("causal_forcing_lmdb_dataset")
+def build_causal_forcing_lmdb_dataset(data_config, train_or_val="train"):
+    dataset = CausalForcingLatentLMDBDataset(
+        data_path=data_config["data_path"],
         dataset_repeat=data_config.get("dataset_repeat", 1),
         max_samples=data_config.get("max_samples"),
     )

@@ -9,6 +9,7 @@ model_path=
 export PLATFORM=cambricon_mlu
 export MLU_VISIBLE_DEVICES=0
 export PYTORCH_MLU_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

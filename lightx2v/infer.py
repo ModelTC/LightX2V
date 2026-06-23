@@ -8,10 +8,9 @@ from loguru import logger
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
+from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
-
-# from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
@@ -132,6 +131,12 @@ def main():
         help="Input audio path: Wan s2v / rs2v, or required for LTX-2 task ltx2_s2v.",
     )
     parser.add_argument("--image_strength", type=str, default="1.0", help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
+    parser.add_argument(
+        "--i2i_denoise_strength",
+        type=float,
+        default=None,
+        help="(i2i) Single-image edit denoising strength in [0.0, 1.0]. 0.0 preserves the source image most; 1.0 redraws most. Omit to keep the model's existing behavior.",
+    )
     parser.add_argument(
         "--image_frame_idx", type=str, default="", help="i2av: comma-separated pixel frame indices (one per image). Omit or empty to evenly space frames in [0, num_frames-1]. Example: 0,40,80"
     )

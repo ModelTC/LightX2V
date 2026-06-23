@@ -3,6 +3,11 @@
     "load_kv_cache_in_pipeline_for_debug": true,
     "infer_steps": 50,
     "attn_type": "flash_attn3",
+    "moe_backend": "flashinfer",
+    "moe_flashinfer_setting": {
+        "autotune": true,
+        "tune_max_num_tokens": 8192
+    },
     "cfg_scale": 4.0,
     "timestep_shift": 3.0,
     "cfg_interval": [-1, 2],
