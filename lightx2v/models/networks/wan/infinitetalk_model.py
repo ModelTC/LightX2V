@@ -10,6 +10,8 @@ from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.infinitetalk.pre_weights import WanInfiniteTalkPreWeights
 from lightx2v.models.networks.wan.weights.infinitetalk.transformer_weights import WanInfiniteTalkTransformerWeights
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
+from lightx2v.utils.utils import load_weights
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanInfiniteTalkModel(WanModel):
@@ -34,10 +36,25 @@ class WanInfiniteTalkModel(WanModel):
         if adapter_model_path is None:
             raise ValueError("InfiniteTalk requires adapter_model_path to point to the single/multi adapter checkpoint.")
         logger.info(f"Loading InfiniteTalk adapter weights from {adapter_model_path}")
+
         sensitive_layer = set(self.sensitive_layer)
         sensitive_layer.update({"audio_proj.norm", "norm_x"})
         unified_dtype = GET_DTYPE() == GET_SENSITIVE_DTYPE()
-        return self._load_safetensor_to_dict(adapter_model_path, unified_dtype, sensitive_layer)
+
+        if self.config.get("adapter_quantized", False):
+            assert self.config["adapter_quant_scheme"] == self.config["dit_quant_scheme"]
+            adapter_offload = self.config.get("cpu_offload", False)
+            load_from_rank0 = self.config.get("load_from_rank0", False)
+            adapter_weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=adapter_offload, load_from_rank0=load_from_rank0)
+            target_device = torch.device("cpu") if adapter_offload else torch.device(AI_DEVICE)
+            target_dtype = GET_DTYPE()
+            for key, tensor in adapter_weights_dict.items():
+                adapter_weights_dict[key] = (
+                    tensor.to(device=target_device, dtype=target_dtype) if (tensor.is_floating_point() and tensor.dtype != torch.float8_e4m3fn) else tensor.to(device=target_device)
+                )
+            return adapter_weights_dict
+        else:
+            return self._load_safetensor_to_dict(adapter_model_path, unified_dtype, sensitive_layer)
 
     @torch.no_grad()
     def _infer_infinitetalk_branch(self, inputs, infer_condition=True, use_audio=True):
