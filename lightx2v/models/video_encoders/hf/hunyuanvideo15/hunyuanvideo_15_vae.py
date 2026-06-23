@@ -21,6 +21,80 @@ from lightx2v.models.runners.vae_postprocess import env_flag
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
+_VAE_CONV_SHAPE_LOGGED: set[tuple] = set()
+_VAE_CONV_SHAPE_HOOKED: set[int] = set()
+
+
+def _dist_rank() -> int:
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank()
+    return 0
+
+
+def _tensor_shape(value):
+    if isinstance(value, Tensor):
+        return tuple(value.shape)
+    if isinstance(value, (list, tuple)):
+        return tuple(_tensor_shape(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _tensor_shape(item) for key, item in value.items()}
+    return type(value).__name__
+
+
+def _maybe_register_vae_conv_shape_hooks(module: nn.Module) -> None:
+    if not env_flag("LIGHTX2V_VAE_CONV_SHAPE_LOG", False):
+        return
+
+    module_id = id(module)
+    if module_id in _VAE_CONV_SHAPE_HOOKED:
+        return
+    _VAE_CONV_SHAPE_HOOKED.add(module_id)
+
+    rank = _dist_rank()
+    if rank != 0 and not env_flag("LIGHTX2V_VAE_CONV_SHAPE_LOG_ALL_RANKS", False):
+        return
+
+    hook_count = 0
+
+    def make_hook(name):
+        def hook(conv_module, inputs, output):
+            weight_shape = tuple(conv_module.weight.shape) if getattr(conv_module, "weight", None) is not None else None
+            input_shape = _tensor_shape(inputs[0] if inputs else inputs)
+            output_shape = _tensor_shape(output)
+            key = (
+                rank,
+                name,
+                conv_module.__class__.__name__,
+                weight_shape,
+                input_shape,
+                output_shape,
+                getattr(conv_module, "stride", None),
+                getattr(conv_module, "padding", None),
+                getattr(conv_module, "dilation", None),
+                getattr(conv_module, "groups", None),
+            )
+            if key in _VAE_CONV_SHAPE_LOGGED:
+                return
+            _VAE_CONV_SHAPE_LOGGED.add(key)
+            logger.info(
+                "[VAE_CONV_SHAPE] "
+                f"rank={rank} module={name} type={conv_module.__class__.__name__} "
+                f"input_shape={input_shape} weight_shape={weight_shape} output_shape={output_shape} "
+                f"kernel_size={getattr(conv_module, 'kernel_size', None)} stride={getattr(conv_module, 'stride', None)} "
+                f"padding={getattr(conv_module, 'padding', None)} dilation={getattr(conv_module, 'dilation', None)} "
+                f"groups={getattr(conv_module, 'groups', None)} bias={getattr(conv_module, 'bias', None) is not None} "
+                f"dtype={getattr(conv_module.weight, 'dtype', None) if getattr(conv_module, 'weight', None) is not None else None}"
+            )
+
+        return hook
+
+    for name, child in module.named_modules():
+        if isinstance(child, (nn.Conv2d, nn.Conv3d)):
+            child.register_forward_hook(make_hook(name))
+            hook_count += 1
+
+    logger.info(f"[VAE_CONV_SHAPE] rank={rank} registered {hook_count} conv hooks on {module.__class__.__name__}")
+
 
 @dataclass
 class DecoderOutput(BaseOutput):
@@ -805,13 +879,18 @@ class HunyuanVideo15VAE:
     def decode(self, z):
         z = z / self.vae.config.scaling_factor
 
-        self.vae.enable_tiling()
-        if self.parallel and self.world_size_h is not None and self.world_size_w is not None:
-            video_frames = self.decode_dist_2d(z, self.world_size_h, self.world_size_w)
-            self.world_size_h, self.world_size_w = None, None
-        else:
-            video_frames = self.vae.decode(z, return_dict=False)[0]
-        self.vae.disable_tiling()
+        use_internal_tiling = not env_flag("LIGHTX2V_VAE_DISABLE_INTERNAL_TILING", False)
+        if use_internal_tiling:
+            self.vae.enable_tiling()
+        try:
+            if self.parallel and self.world_size_h is not None and self.world_size_w is not None:
+                video_frames = self.decode_dist_2d(z, self.world_size_h, self.world_size_w)
+                self.world_size_h, self.world_size_w = None, None
+            else:
+                video_frames = self.vae.decode(z, return_dict=False)[0]
+        finally:
+            if use_internal_tiling:
+                self.vae.disable_tiling()
         return video_frames
 
     @torch.no_grad()
@@ -858,6 +937,7 @@ class HunyuanVideo15VAE:
         if detail_timing:
             self.device_synchronize()
             decode_start = time.perf_counter()
+        _maybe_register_vae_conv_shape_hooks(self.vae)
         images_chunk = self.vae.decode(zs_chunk, return_dict=False)[0]
         if detail_timing:
             self.device_synchronize()
