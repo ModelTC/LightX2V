@@ -2,6 +2,7 @@ import os
 import shutil
 
 import torch
+import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 import torch.nn.functional as F
 from diffusers.optimization import get_scheduler
@@ -10,7 +11,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_
 
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
-from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, reduce_mean
+from lightx2v_train.runtime.distributed import barrier, get_world_size, is_distributed, is_main_process, reduce_mean
 from lightx2v_train.runtime.fsdp import apply_fsdp2
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.utils.registry import TRAINER_REGISTER
@@ -142,6 +143,7 @@ class DmdLoraTrainer(LoraTrainer):
     def _prepare_sampling_schedule(self, latent_shape):
         latent_hw = latent_shape[-2:]
         if self.random_schedule_enabled:
+            num_steps = self._sample_synced_int(self.random_schedule_num_steps_min, self.random_schedule_num_steps_max + 1)
             self.scheduler.set_random_timesteps(
                 self.random_schedule_num_steps_min,
                 self.random_schedule_num_steps_max,
@@ -150,6 +152,7 @@ class DmdLoraTrainer(LoraTrainer):
                 sampling_method=self.random_schedule_sampling_method,
                 latent_hw=latent_hw,
                 device=self.model.device,
+                num_steps=num_steps,
             )
         else:
             self.scheduler.set_timesteps(self.num_inference_steps, latent_hw=latent_hw, device=self.model.device)
@@ -208,8 +211,14 @@ class DmdLoraTrainer(LoraTrainer):
     def sample_initial_latents(self, latent_shape):
         return torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype)
 
+    def _sample_synced_int(self, low, high):
+        value = torch.randint(int(low), int(high), (1,), device=self.model.device, dtype=torch.int64)
+        if is_distributed():
+            dist.broadcast(value, src=0)
+        return int(value.item())
+
     def sample_end_step(self):
-        return int(torch.randint(0, self.scheduler.num_inference_steps, (1,), device=self.model.device).item())
+        return self._sample_synced_int(0, self.scheduler.num_inference_steps)
 
     def run_back_simulation(self, condition, latent_shape, end_step_idx, xt=None):
         if xt is None:
@@ -250,7 +259,7 @@ class DmdLoraTrainer(LoraTrainer):
         with torch.no_grad():
             self.fake_model.transformer.eval()
             velocity_fake = self._predict_velocity(self.fake_model, teacher_xt, teacher_sigma, condition)
-            velocity_teacher = self._predict_velocity(self.teacher_model, teacher_xt, teacher_sigma, condition)
+            velocity_teacher = self._predict_teacher_velocity(teacher_xt, teacher_sigma, condition, None)
 
         teacher_sigma_expanded = self.scheduler._expand_to_ndim(teacher_sigma, teacher_xt.ndim)
         x_pred_fake = teacher_xt - teacher_sigma_expanded * velocity_fake

@@ -1,0 +1,141 @@
+model:
+    name: flux2_dev
+    pretrained_model_name_or_path: /path/to/FLUX.2-dev
+    max_sequence_length: 512
+    text_encoder_out_layers: [10, 20, 30]
+    # FLUX.2-dev uses embedded guidance in the transformer, not negative-prompt CFG.
+    guidance_scale: 4.0
+    running_dtype: bf16
+
+distributed:
+    backend: nccl
+    timeout_minutes: 120
+    fsdp2:
+        enabled: true
+        reshard_after_forward:
+            root_reshard: true
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: image_dataset
+        num_workers: 8
+        prompt_dropout_rate: 0.0
+        target_area: 1048576 # 1024 * 1024
+        shuffle: true
+        data_path:
+            - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
+    val:
+        name: image_dataset
+        num_workers: 8
+        shuffle: false
+        data_path:
+            - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: logitnormal
+    logitnormal_mean: 0.0
+    logitnormal_std: 1.0
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: exponential
+        time_shift_power: 1.0
+        dynamic_shift: true
+        shift_mu_strategy: flux2_empirical
+        shift_mu_num_steps: 50
+        # Flux2 dev latents are already 2x2-patchified before scheduler shift length calculation.
+        patch_size: [1, 1] # [H, W]
+
+training:
+    method: dmd_lora
+    max_train_iters: 1000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 10
+    save_every_iters: 100
+    save_total_limit: 10
+    dmd:
+        num_inference_steps: 4
+        fake_update_ratio: 2
+        # Start at 512px for memory; raise to 1024px only after validating available GPUs.
+        image_sizes:
+            - [512, 512]
+        renoise_sigma_min: 0.02
+        renoise_sigma_max: 1.0
+        renoise_discrete_samples: 1000
+        renoise_shift: 5.0
+        random_schedule:
+            enabled: true
+            num_steps_min: 2
+            num_steps_max: 16
+            sigma_min: 0.02
+            sigma_max: 0.98
+            sampling_method: stratified
+        cdm:
+            enabled: true
+            norm_clip_min: 0.1
+            weight: 1.0
+            warmup_iters: 200
+    lora:
+        rank: 16
+        alpha: 16
+        target_modules:
+            - to_q
+            - to_k
+            - to_v
+            - to_out.0
+            - add_q_proj
+            - add_k_proj
+            - add_v_proj
+            - to_add_out
+            - to_qkv_mlp_proj
+    student:
+        optimizer:
+            learning_rate: 0.0001
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.001
+            adam_epsilon: 0.00000001
+    fake:
+        optimizer:
+            learning_rate: 0.00002
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.001
+            adam_epsilon: 0.00000001
+    teacher:
+        # Manual negative-prompt CFG is disabled; embedded guidance comes from model.guidance_scale.
+        guidance_scale: 1.0
+        negative_prompt: ""
+        cfg_norm: none
+    output_dir: ./output_train/flux2_dev_cdm_lora
+
+inference:
+    method: image_infer
+    negative_prompt: ""
+    default_width: 1024
+    default_height: 1024
+    num_inference_steps: 4
+    enable_cfg: false
+    cfg_guidance_scale: ${model.guidance_scale}
+    seed: 42
+    output_dir: ./output_infer/flux2_dev_cdm_lora
+    infer_every_iters:
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 1
+    infer_log_every_steps: 10
+
+resume:
+    auto_resume: true

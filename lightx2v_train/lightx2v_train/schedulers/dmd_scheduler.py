@@ -32,11 +32,14 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
         sampling_method="stratified",
         latent_hw=None,
         device=None,
+        num_steps=None,
     ):
         device = device or self.device
         num_steps_min = max(1, int(num_steps_min))
         num_steps_max = max(num_steps_min, int(num_steps_max))
-        num_steps = int(torch.randint(num_steps_min, num_steps_max + 1, (1,), device="cpu").item())
+        if num_steps is None:
+            num_steps = int(torch.randint(num_steps_min, num_steps_max + 1, (1,), device="cpu").item())
+        num_steps = min(num_steps_max, max(num_steps_min, int(num_steps)))
         inner_count = max(0, num_steps - 1)
 
         if inner_count:
