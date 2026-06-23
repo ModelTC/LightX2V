@@ -1,6 +1,12 @@
 model:
     name: qwen_image
     pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image
+    fake:
+        name: qwen_image
+        pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image
+    teacher:
+        name: qwen_image
+        pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image
     max_sequence_length: 1024
     running_dtype: bf16
 

@@ -6,4 +6,4 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 torchrun \
 --standalone \
 --nproc_per_node=4 \
-train.py --config configs/full/qwen_image_t2i.yaml
+train.py --config configs/train/flow/qwen_image_t2i.yaml
