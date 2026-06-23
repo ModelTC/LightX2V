@@ -42,7 +42,17 @@ class QwenImageEditModel(BaseModel):
 
     pipeline_cls = QwenImageEditPlusPipeline
 
-    def load_components(self):
+    def load_components(self, transformer_only=False, reference_model=None):
+        if transformer_only:
+            if reference_model is not None:
+                self.text_pipeline = reference_model.text_pipeline
+                self.vae = reference_model.vae
+                self.vae_scale_factor = reference_model.vae_scale_factor
+                self.latent_channels = reference_model.latent_channels
+                self.image_processor = reference_model.image_processor
+            self.transformer = self.load_transformer()
+            return
+
         model_path = self.config["model"]["pretrained_model_name_or_path"]
         self.text_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             model_path,
@@ -58,6 +68,13 @@ class QwenImageEditModel(BaseModel):
         self.vae_scale_factor = 2 ** len(self.vae.temperal_downsample)
         self.latent_channels = self.vae.config.z_dim
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+
+    def load_transformer(self):
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        return QwenImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+
+    def load_full_weights_for_resume(self, resume_ckpt_path):
+        self.transformer = QwenImageTransformer2DModel.from_pretrained(resume_ckpt_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
 
     def denoiser_module(self):
         return self.transformer
@@ -165,8 +182,13 @@ class QwenImageEditModel(BaseModel):
         n = noisy_latent.shape[0]
         h, w = noisy_latent.shape[3], noisy_latent.shape[4]
         packed = QwenImageEditPlusPipeline._pack_latents(noisy_latent, n, noisy_latent.shape[1], h, w)
-        hidden_states = torch.cat([packed, condition["source_latents"]], dim=1)
-        img_shapes = [[(1, h // 2, w // 2), *condition["source_img_shapes"]]] * n
+        source_latents = condition.get("source_latents")
+        source_img_shapes = condition.get("source_img_shapes", [])
+        if source_latents is None:
+            hidden_states = packed
+        else:
+            hidden_states = torch.cat([packed, source_latents], dim=1)
+        img_shapes = [[(1, h // 2, w // 2), *source_img_shapes]] * n
         return QwenImageEditDenoiserInput(
             hidden_states=hidden_states,
             target_token_length=packed.shape[1],

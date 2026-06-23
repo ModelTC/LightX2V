@@ -35,6 +35,8 @@ scheduler:
 inference:
     method: image_infer
     negative_prompt: " "
+    default_width: 1024
+    default_height: 1024
     num_inference_steps: 40
     enable_cfg: true
     cfg_guidance_scale: 4.0
