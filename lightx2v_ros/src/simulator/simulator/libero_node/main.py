@@ -51,6 +51,7 @@ class LiberoNode(Node):
             self.get_logger().error(f"expected action length 7, got {action.size}")
             return
 
+        self.get_logger().info(f"received action: {action.tolist()}")
         self.observer.step(action)
         obs = self.observer.obs
         stamp = self.get_clock().now().to_msg()
