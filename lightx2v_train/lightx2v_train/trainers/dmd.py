@@ -357,8 +357,9 @@ class DmdTrainer(BaseTrainer):
                 loss_student = res_student["student"]
                 (loss_student / grad_accum_iters).backward()
                 running_dmd += res_student["dmd"].item() / grad_accum_iters
-                running_cdm += res_student["cdm"].item() / grad_accum_iters
-                running_cdm_weight = res_student["cdm_weight"]
+                if self.cdm_enabled:
+                    running_cdm += res_student["cdm"].item() / grad_accum_iters
+                    running_cdm_weight = res_student["cdm_weight"]
                 microbatches.append((latent_shape, conditions))
 
                 grad_accum_counter += 1
@@ -390,19 +391,29 @@ class DmdTrainer(BaseTrainer):
 
                 current_iter += 1
                 display_dmd = reduce_mean(running_dmd)
-                display_cdm = reduce_mean(running_cdm)
                 display_fake = reduce_mean(running_fake)
                 if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
-                    logger.info(
-                        "[train] iter={}/{} dmd={:.6f} cdm={:.6f} cdm_w={:.6f} fake={:.6f} lr={:.8f}",
-                        current_iter,
-                        max_train_iters,
-                        display_dmd,
-                        display_cdm,
-                        running_cdm_weight,
-                        display_fake,
-                        self.lr_scheduler.get_last_lr()[0],
-                    )
+                    if self.cdm_enabled:
+                        display_cdm = reduce_mean(running_cdm)
+                        logger.info(
+                            "[train] iter={}/{} dmd={:.6f} cdm={:.6f} cdm_w={:.6f} fake={:.6f} lr={:.8f}",
+                            current_iter,
+                            max_train_iters,
+                            display_dmd,
+                            display_cdm,
+                            running_cdm_weight,
+                            display_fake,
+                            self.lr_scheduler.get_last_lr()[0],
+                        )
+                    else:
+                        logger.info(
+                            "[train] iter={}/{} dmd={:.6f} fake={:.6f} lr={:.8f}",
+                            current_iter,
+                            max_train_iters,
+                            display_dmd,
+                            display_fake,
+                            self.lr_scheduler.get_last_lr()[0],
+                        )
                 running_dmd = 0.0
                 running_cdm = 0.0
                 running_fake = 0.0
