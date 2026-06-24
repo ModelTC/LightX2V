@@ -1,6 +1,7 @@
 import argparse
 
 import torch
+
 from lightx2v_train.data import build_data
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
