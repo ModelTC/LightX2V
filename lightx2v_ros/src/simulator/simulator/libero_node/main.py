@@ -2,7 +2,6 @@ import math
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, Int32, String
@@ -21,21 +20,18 @@ class LiberoNode(Node):
         self.declare_parameter("image_size", 224)
         self.declare_parameter("seed", 0)
         self.declare_parameter("action_topic", "/libero/action")
-        self.declare_parameter("pose_topic", "/libero/ee_pose")
         self.declare_parameter("state_topic", "/libero/state")
         self.declare_parameter("agentview_topic", "/libero/agentview/image_raw")
         self.declare_parameter("wrist_topic", "/libero/wrist/image_raw")
-        self.declare_parameter("done_topic", "/libero/done")
-        self.declare_parameter("step_topic", "/libero/step")
+        self.declare_parameter("success_topic", "/libero/success")
+        self.declare_parameter("observation_ready_topic", "/libero/observation_ready")
         self.declare_parameter("task_topic", "/libero/task_description")
-        self.declare_parameter("frame_id", "libero_world")
 
-        self.pose_pub = self.create_publisher(PoseStamped, self.get_parameter("pose_topic").value, 10)
         self.state_pub = self.create_publisher(Float32MultiArray, self.get_parameter("state_topic").value, 10)
         self.agentview_pub = self.create_publisher(Image, self.get_parameter("agentview_topic").value, 10)
         self.wrist_pub = self.create_publisher(Image, self.get_parameter("wrist_topic").value, 10)
-        self.done_pub = self.create_publisher(Bool, self.get_parameter("done_topic").value, 10)
-        self.step_pub = self.create_publisher(Int32, self.get_parameter("step_topic").value, 10)
+        self.success_pub = self.create_publisher(Bool, self.get_parameter("success_topic").value, 10)
+        self.observation_ready_pub = self.create_publisher(Int32, self.get_parameter("observation_ready_topic").value, 10)
         self.task_pub = self.create_publisher(String, self.get_parameter("task_topic").value, 10)
         self.action_sub = self.create_subscription(
             Float32MultiArray,
@@ -53,21 +49,21 @@ class LiberoNode(Node):
             libero_root=self.get_parameter("libero_root").value,
         )
         self.step_index = 0
-        self.done = False
+        self.success = False
         self.observation_timer = self.create_timer(1.0, self.republish_observation)
 
         self.get_logger().info(f"listening for actions on {self.get_parameter('action_topic').value}")
         self.publish_observation()
 
     def republish_observation(self):
-        if self.done:
+        if self.success:
             self.observation_timer.cancel()
             return
         self.publish_observation()
 
     def on_action(self, msg):
-        if self.done:
-            self.get_logger().warning("episode is done; ignoring action")
+        if self.success:
+            self.get_logger().warning("episode already succeeded; ignoring action")
             return
 
         action = np.asarray(msg.data, dtype=np.float32)
@@ -76,19 +72,18 @@ class LiberoNode(Node):
             return
 
         self.get_logger().info(f"received action: {action.tolist()}")
-        _, _, done, _ = self.observer.step(action)
+        _, _, success, _ = self.observer.step(action)
         self.step_index += 1
-        self.done = bool(done)
+        self.success = bool(success)
         self.publish_observation()
 
-        if self.done:
-            self.get_logger().info(f"episode done at step {self.step_index}")
+        if self.success:
+            self.get_logger().info(f"episode succeeded at step {self.step_index}")
 
     def publish_observation(self):
         obs = self.observer.obs
         stamp = self.get_clock().now().to_msg()
 
-        self.pose_pub.publish(self.make_pose_msg(obs, stamp))
         self.state_pub.publish(self.make_state_msg(obs))
         self.agentview_pub.publish(self.make_image_msg(obs["agentview_image"][::-1, ::-1], stamp, "agentview"))
         self.wrist_pub.publish(self.make_image_msg(obs["robot0_eye_in_hand_image"][::-1, ::-1], stamp, "wrist"))
@@ -97,29 +92,13 @@ class LiberoNode(Node):
         task_msg.data = self.observer.task_description
         self.task_pub.publish(task_msg)
 
-        done_msg = Bool()
-        done_msg.data = self.done
-        self.done_pub.publish(done_msg)
+        success_msg = Bool()
+        success_msg.data = self.success
+        self.success_pub.publish(success_msg)
 
-        step_msg = Int32()
-        step_msg.data = self.step_index
-        self.step_pub.publish(step_msg)
-
-    def make_pose_msg(self, obs, stamp):
-        pose = PoseStamped()
-        pose.header.stamp = stamp
-        pose.header.frame_id = self.get_parameter("frame_id").value
-
-        pos = obs["robot0_eef_pos"]
-        quat = obs["robot0_eef_quat"]
-        pose.pose.position.x = float(pos[0])
-        pose.pose.position.y = float(pos[1])
-        pose.pose.position.z = float(pos[2])
-        pose.pose.orientation.x = float(quat[0])
-        pose.pose.orientation.y = float(quat[1])
-        pose.pose.orientation.z = float(quat[2])
-        pose.pose.orientation.w = float(quat[3])
-        return pose
+        observation_ready_msg = Int32()
+        observation_ready_msg.data = self.step_index
+        self.observation_ready_pub.publish(observation_ready_msg)
 
     def make_state_msg(self, obs):
         pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)

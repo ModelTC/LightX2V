@@ -92,8 +92,8 @@ class LiberoActionObserver:
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
-        self.obs, reward, done, info = self.env.step(action)
-        return self.obs, reward, done, info
+        self.obs, reward, success, info = self.env.step(action)
+        return self.obs, reward, success, info
 
     def close(self):
         self.env.close()

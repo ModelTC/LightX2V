@@ -4,19 +4,16 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, Int32, String
 
-from lightx2v.utils.set_config import auto_calc_config, get_default_config  # noqa: E402
-
-from .policy import (
-    FastWAMPolicy,
-)
+from lightx2v.models.runners.wan.fastwam_runner import FastWAMPolicy
+from lightx2v.utils.set_config import auto_calc_config, get_default_config
 
 DEFAULT_DUMMY_ACTION = np.asarray([0, 0, 0, 0, 0, 0, -1], dtype=np.float32)
 ACTION_TOPIC = "/libero/action"
 AGENTVIEW_TOPIC = "/libero/agentview/image_raw"
 WRIST_TOPIC = "/libero/wrist/image_raw"
 STATE_TOPIC = "/libero/state"
-STEP_TOPIC = "/libero/step"
-DONE_TOPIC = "/libero/done"
+OBSERVATION_READY_TOPIC = "/libero/observation_ready"
+SUCCESS_TOPIC = "/libero/success"
 TASK_TOPIC = "/libero/task_description"
 
 
@@ -36,8 +33,8 @@ class FastWAMNode(Node):
         self.wrist = None
         self.state = None
         self.task_description = None
-        self.done = False
-        self.last_processed_step = -1
+        self.success = False
+        self.last_processed_observation = -1
         self.num_steps_wait = int(self.policy_config.get("num_steps_wait", 30))
 
         self.action_pub = self.create_publisher(Float32MultiArray, ACTION_TOPIC, 10)
@@ -67,14 +64,14 @@ class FastWAMNode(Node):
         )
         self.create_subscription(
             Bool,
-            DONE_TOPIC,
-            self.on_done,
+            SUCCESS_TOPIC,
+            self.on_success,
             10,
         )
         self.create_subscription(
             Int32,
-            STEP_TOPIC,
-            self.on_step,
+            OBSERVATION_READY_TOPIC,
+            self.on_observation_ready,
             10,
         )
 
@@ -112,28 +109,28 @@ class FastWAMNode(Node):
     def on_task(self, msg):
         self.task_description = msg.data
 
-    def on_done(self, msg):
-        self.done = bool(msg.data)
+    def on_success(self, msg):
+        self.success = bool(msg.data)
 
-    def on_step(self, msg):
-        step = int(msg.data)
-        if step <= self.last_processed_step:
+    def on_observation_ready(self, msg):
+        observation_index = int(msg.data)
+        if observation_index <= self.last_processed_observation:
             return
-        if self.done:
-            self.get_logger().info(f"environment done at step {step}; stop publishing actions")
-            self.last_processed_step = step
+        if self.success:
+            self.get_logger().info(f"environment succeeded at observation {observation_index}; stop publishing actions")
+            self.last_processed_observation = observation_index
             return
 
         missing = self.missing_inputs()
         if missing:
-            self.get_logger().warning(f"waiting for inputs before step {step}: {missing}")
+            self.get_logger().warning(f"waiting for inputs before observation {observation_index}: {missing}")
             return
 
-        if step < self.num_steps_wait:
+        if observation_index < self.num_steps_wait:
             action = DEFAULT_DUMMY_ACTION.copy()
-            self.get_logger().info(f"step {step}: publishing warmup dummy action")
+            self.get_logger().info(f"observation {observation_index}: publishing warmup dummy action")
         else:
-            self.get_logger().info(f"step {step}: running FastWAM inference/action queue")
+            self.get_logger().info(f"observation {observation_index}: running FastWAM inference/action queue")
             action = self.policy.next_action(
                 agentview_rgb=self.agentview,
                 wrist_rgb=self.wrist,
@@ -142,7 +139,7 @@ class FastWAMNode(Node):
             )
 
         self.publish_action(action)
-        self.last_processed_step = step
+        self.last_processed_observation = observation_index
 
     def missing_inputs(self):
         missing = []
