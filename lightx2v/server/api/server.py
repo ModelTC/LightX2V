@@ -137,6 +137,7 @@ class ApiServer:
                     task_id,
                     save_result_path=result.save_result_path or None,
                     result_png=getattr(result, "result_png", None),
+                    usage=getattr(result, "usage", None),
                 )
                 logger.info(f"Task {task_id} completed successfully")
             else:

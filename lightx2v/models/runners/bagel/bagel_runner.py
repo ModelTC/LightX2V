@@ -29,6 +29,15 @@ class BagelRunner(DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
 
+    def _get_spatial_stride(self):
+        vae_config = self.config.get("vae_config", {})
+        ds = vae_config.get("downsample", 8)
+        return ds, ds
+
+    def _get_spatial_patch(self):
+        ps = self.config.get("latent_patch_size", 2)
+        return ps, ps
+
     def init_scheduler(self):
         self.scheduler = BagelScheduler(self.config)
 

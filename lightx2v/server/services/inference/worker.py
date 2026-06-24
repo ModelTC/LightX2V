@@ -133,6 +133,13 @@ class TorchrunInferenceWorker:
                     logger.info(f"Task {task_data.get('task_id')} encode result_png cost {encode_elapsed_ms:.2f} ms")
                     if png:
                         out["result_png"] = png
+                    usage = self.runner.compute_usage(
+                        prompt=task_data.get("prompt", ""),
+                        target_shape=task_data.get("target_shape", []),
+                        has_input_image=bool(task_data.get("image_path")),
+                    )
+                    if usage:
+                        out["usage"] = usage
                 return out
         else:
             return None
