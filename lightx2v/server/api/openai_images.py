@@ -33,7 +33,9 @@ class OpenAIImageGenerationRequest(BaseModel):
 
 class OpenAIImageResponse(BaseModel):
     created: int
-    data: list[dict[str, str]]
+    data: Optional[list[dict[str, str]]] = None
+    output_format: Optional[Literal["png", "webp", "jpeg"]] = None
+    size: Optional[str] = None
     usage: Optional[Usage] = None
 
 
@@ -164,14 +166,14 @@ def _build_url_response(request: Request, task_id: str, image_bytes: bytes) -> s
     return f"{base}/v1/files/download/{file_name}"
 
 
-def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, response_format: Literal["url", "b64_json"], usage: Optional[dict] = None):
+def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, response_format: Literal["url", "b64_json"], usage: Optional[dict] = None, size: Optional[str] = None):
     total_start = time.perf_counter()
     usage_obj = Usage(**usage) if isinstance(usage, dict) else usage
     if response_format == "b64_json":
         base64_start = time.perf_counter()
         b64_json = base64.b64encode(image_bytes).decode("utf-8")
         base64_elapsed_ms = (time.perf_counter() - base64_start) * 1000
-        response = OpenAIImageResponse(created=int(time.time()), data=[{"b64_json": b64_json}], usage=usage_obj)
+        response = OpenAIImageResponse(created=int(time.time()), data=[{"b64_json": b64_json}], output_format="png", usage=usage_obj, size=size)
         total_elapsed_ms = (time.perf_counter() - total_start) * 1000
         logger.info(
             f"Task {task_id} OpenAI image response build cost total={total_elapsed_ms:.2f} ms base64={base64_elapsed_ms:.2f} ms format=b64_json png_bytes={len(image_bytes)} b64_chars={len(b64_json)}"
@@ -181,7 +183,7 @@ def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, r
     url_start = time.perf_counter()
     url = _build_url_response(request, task_id, image_bytes)
     url_elapsed_ms = (time.perf_counter() - url_start) * 1000
-    response = OpenAIImageResponse(created=int(time.time()), data=[{"url": url}], usage=usage_obj)
+    response = OpenAIImageResponse(created=int(time.time()), data=[{"url": url}], output_format="png", usage=usage_obj, size=size)
     total_elapsed_ms = (time.perf_counter() - total_start) * 1000
     logger.info(f"Task {task_id} OpenAI image response build cost total={total_elapsed_ms:.2f} ms url_write={url_elapsed_ms:.2f} ms format=url png_bytes={len(image_bytes)}")
     return response
@@ -234,7 +236,7 @@ async def create_openai_image_generation(request: Request, body: OpenAIImageGene
     )
 
     result_png, usage = await _run_sync_image_task(request, message)
-    return _build_openai_response(request, message.task_id, result_png, body.response_format, usage)
+    return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
 
 
 async def _save_upload_file(file: UploadFile, target_dir: Path) -> str:
@@ -314,4 +316,4 @@ async def create_openai_image_edit(
     )
 
     result_png, usage = await _run_sync_image_task(request, message)
-    return _build_openai_response(request, message.task_id, result_png, response_format, usage)
+    return _build_openai_response(request, message.task_id, result_png, response_format, usage, size=size)
