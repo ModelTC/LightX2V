@@ -1,6 +1,6 @@
 #!/bin/bash
 
-lightx2v_path=/data/nvme1/yongyang/nb/LightX2V
+lightx2v_path=/root/yongyang3/LightX2V
 base_url=http://127.0.0.1:8000/v1
 output_dir=${lightx2v_path}/save_results/hidream_o1_image_openai_test
 
@@ -12,7 +12,7 @@ python "${lightx2v_path}/scripts/hidream_o1_image/test_openai_images_client.py" 
 --model "gpt-image-1" \
 --mode edit \
 --prompt "remove the earphones" \
---image "/data/nvme1/yongyang/nb/HiDream-O1-Image/assets/edit/test.jpg" \
+--image "/root/test.jpg" \
 --seed 42 \
 --size "2048x2048" \
 --response_format "b64_json" \

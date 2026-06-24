@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme4/gushiqiao/new/LightX2V
-model_path=/data/nvme0/yongyang/models/x2v_models/wan/Wan2.1-I2V-14B-480P/
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/InfiniteTalk
 
-export CUDA_VISIBLE_DEVICES=6
+export CUDA_VISIBLE_DEVICES=0
 
 
 # set environment variables

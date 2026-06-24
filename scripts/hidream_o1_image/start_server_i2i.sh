@@ -1,20 +1,23 @@
 #!/bin/bash
 
-lightx2v_path=/data/nvme1/yongyang/nb/LightX2V
-model_path=/data/nvme1/yongyang/nb/models/HiDream-ai/HiDream-O1-Image
+lightx2v_path=/root/yongyang3/LightX2V
+model_path=/root/wushuo/models/HiDream-O1-Image
 
 host=0.0.0.0
 port=8000
 
-export CUDA_VISIBLE_DEVICES=0
+export PLATFORM=cambricon_mlu
+export MLU_VISIBLE_DEVICES=0,1,2,3
+export PYTORCH_MLU_ALLOC_CONF=expandable_segments:True
+export LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 
 # set environment variables
 source "${lightx2v_path}/scripts/base/base.sh"
 
-python -m lightx2v.server \
+torchrun --nproc_per_node=4 -m lightx2v.server \
 --model_cls hidream_o1_image \
 --task i2i \
 --model_path $model_path \
---config_json ${lightx2v_path}/configs/hidream_o1_image/hidream_o1_image_i2i.json \
+--config_json ${lightx2v_path}/configs/hidream_o1_image/mlu/hidream_o1_image_i2i_dist.json \
 --host "${host}" \
 --port "${port}"

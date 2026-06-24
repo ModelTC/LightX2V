@@ -101,3 +101,79 @@ class RectifiedFlowMatchingScheduler:
         sigma_next = self.infer_sigmas[step_index + 1]
         prev_sample = latent + (sigma_next - sigma) * model_output  # --------------------- (*) from above
         return prev_sample
+
+
+class CausalForcingFlowMatchScheduler:
+    def __init__(self, num_train_timesteps=1000, time_shift_settings=None, shift=None, sigma_min=0.0, extra_one_step=True):
+        self.num_train_timesteps = int(num_train_timesteps)
+        if time_shift_settings is None:
+            time_shift_settings = {}
+
+        if shift is None:
+            if time_shift_settings.get("do_time_shift", True):
+                shift = float(time_shift_settings.get("time_shift_mu", 5.0))
+                shift_type = time_shift_settings.get("shift_type", "linear")
+                if shift_type == "exponential":
+                    shift = math.exp(shift)
+                elif shift_type != "linear":
+                    raise ValueError(f"Unsupported shift_type for CausalForcingFlowMatchScheduler: {shift_type}")
+            else:
+                shift = 1.0
+
+        self.shift = float(shift)
+        self.time_shift_power = float(time_shift_settings.get("time_shift_power", 1.0))
+        sigma_min = time_shift_settings.get("sigma_min", sigma_min)
+        extra_one_step = time_shift_settings.get("extra_one_step", extra_one_step)
+        self.sigma_min = float(sigma_min)
+        self.extra_one_step = bool(extra_one_step)
+        self.set_timesteps(self.num_train_timesteps, training=True)
+
+    def set_timesteps(self, num_inference_steps=1000, denoising_strength=1.0, training=False):
+        sigma_start = self.sigma_min + (1.0 - self.sigma_min) * denoising_strength
+        num_steps = num_inference_steps + 1 if self.extra_one_step else num_inference_steps
+        sigmas = torch.linspace(sigma_start, self.sigma_min, num_steps)
+        if self.extra_one_step:
+            sigmas = sigmas[:-1]
+        if self.time_shift_power == 1.0:
+            self.sigmas = self.shift * sigmas / (1 + (self.shift - 1) * sigmas)
+        else:
+            self.sigmas = self.shift / (self.shift + (1 / sigmas - 1) ** self.time_shift_power)
+        self.timesteps = self.sigmas * self.num_train_timesteps
+        if training:
+            x = self.timesteps
+            y = torch.exp(-2 * ((x - num_inference_steps / 2) / num_inference_steps) ** 2)
+            y_shifted = y - y.min()
+            self.linear_timesteps_weights = y_shifted * (num_inference_steps / y_shifted.sum())
+
+    def sample_chunkwise(self, batch_size, num_frames, num_frame_per_chunk, device, dtype):
+        index = torch.randint(
+            0,
+            self.num_train_timesteps,
+            (batch_size, num_frames),
+            device=device,
+            dtype=torch.long,
+        )
+        index = index.reshape(batch_size, -1, num_frame_per_chunk)
+        index[:, :, 1:] = index[:, :, 0:1]
+        index = index.reshape(batch_size, num_frames)
+
+        sigmas = self.sigmas.to(device=device, dtype=dtype)[index]
+        weights = self.linear_timesteps_weights.to(device=device, dtype=torch.float32)[index]
+        return sigmas, weights
+
+    def sample_clean_augmentation(self, batch_size, num_frames, num_frame_per_chunk, max_timestep, device, dtype):
+        index = torch.randint(
+            int(max_timestep),
+            self.num_train_timesteps,
+            (batch_size, num_frames),
+            device=device,
+            dtype=torch.long,
+        )
+        index = index.reshape(batch_size, -1, num_frame_per_chunk)
+        index[:, :, 1:] = index[:, :, 0:1]
+        index = index.reshape(batch_size, num_frames)
+        return self.sigmas.to(device=device, dtype=dtype)[index]
+
+    def add_noise(self, latent, noise, sigmas):
+        sigmas = sigmas.reshape(sigmas.shape[0], 1, sigmas.shape[1], 1, 1)
+        return (1.0 - sigmas) * latent + sigmas * noise

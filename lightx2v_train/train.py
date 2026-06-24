@@ -1,5 +1,6 @@
 import argparse
 
+import torch
 from lightx2v_train.data import build_data
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
@@ -15,6 +16,8 @@ def parse_args():
 def main():
     args = parse_args()
     config = load_config(args.config)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     init_distributed(config)
     setup_logger(config)
 

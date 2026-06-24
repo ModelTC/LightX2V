@@ -95,7 +95,7 @@ class QwenImageModel(BaseModel):
             "prompt_embed_mask": prompt_embed_mask,
         }
 
-    def prepare_denoiser_input(self, noisy_latent):
+    def prepare_denoiser_input(self, noisy_latent, condition=None):
         # noisy_latent: (B, C, T, H, W)
         n = noisy_latent.shape[0]
         h, w = noisy_latent.shape[3], noisy_latent.shape[4]
@@ -131,6 +131,15 @@ class QwenImageModel(BaseModel):
         latent_w = width // self.vae_scale_factor
         shape = (1, self.vae.config.z_dim, 1, latent_h, latent_w)
         return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
+
+    def dmd_latent_shape(self, batch_size, height, width):
+        return (
+            int(batch_size),
+            int(self.vae.config.z_dim),
+            1,
+            int(height) // self.vae_scale_factor,
+            int(width) // self.vae_scale_factor,
+        )
 
     def decode_latent(self, latent):
         # Reverse the normalization from encode_to_latent:

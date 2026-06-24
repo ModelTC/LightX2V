@@ -6,9 +6,6 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGI
 class WanInfiniteTalkTransformerWeights(WeightModule):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
-        if config.get("dit_quantized", False):
-            raise NotImplementedError("InfiniteTalk adapter loading currently supports original Wan DiT weights.")
-
         self.blocks_num = config["num_layers"]
         self.task = config["task"]
         self.config = config
@@ -200,7 +197,7 @@ class WanInfiniteTalkAudioCrossAttention(WeightModule):
         )
         self.add_module(
             "q_linear",
-            MM_WEIGHT_REGISTER["Default"](
+            MM_WEIGHT_REGISTER[self.config.get("adapter_quant_scheme", "Default")](
                 f"{block_prefix}.{block_index}.audio_cross_attn.q_linear.weight",
                 f"{block_prefix}.{block_index}.audio_cross_attn.q_linear.bias",
                 create_cuda_buffer,
@@ -211,7 +208,7 @@ class WanInfiniteTalkAudioCrossAttention(WeightModule):
         )
         self.add_module(
             "kv_linear",
-            MM_WEIGHT_REGISTER["Default"](
+            MM_WEIGHT_REGISTER[self.config.get("adapter_quant_scheme", "Default")](
                 f"{block_prefix}.{block_index}.audio_cross_attn.kv_linear.weight",
                 f"{block_prefix}.{block_index}.audio_cross_attn.kv_linear.bias",
                 create_cuda_buffer,
@@ -222,7 +219,7 @@ class WanInfiniteTalkAudioCrossAttention(WeightModule):
         )
         self.add_module(
             "proj",
-            MM_WEIGHT_REGISTER["Default"](
+            MM_WEIGHT_REGISTER[self.config.get("adapter_quant_scheme", "Default")](
                 f"{block_prefix}.{block_index}.audio_cross_attn.proj.weight",
                 f"{block_prefix}.{block_index}.audio_cross_attn.proj.bias",
                 create_cuda_buffer,

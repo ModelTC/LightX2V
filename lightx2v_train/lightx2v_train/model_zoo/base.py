@@ -24,7 +24,7 @@ class BaseModel:
         self.device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
         self.vae = None
 
-    def load_components(self):
+    def load_components(self, transformer_only=False, reference_model=None):
         raise NotImplementedError
 
     def denoiser_module(self):
@@ -93,7 +93,7 @@ class BaseModel:
     def encode_condition(self, sample):
         raise NotImplementedError
 
-    def prepare_denoiser_input(self, noisy_latent, sample, condition):
+    def prepare_denoiser_input(self, noisy_latent, condition=None):
         raise NotImplementedError
 
     def denoise(self, denoiser_input, timesteps, condition):
@@ -104,6 +104,12 @@ class BaseModel:
 
     def prepare_infer_latents(self, height, width, generator=None):
         raise NotImplementedError
+
+    def dmd_latent_shape(self, batch_size, height, width):
+        raise NotImplementedError(f"{self.__class__.__name__} must define dmd_latent_shape().")
+
+    def cfg_on_denoiser_output(self):
+        return False
 
     def decode_latent(self, latent):
         raise NotImplementedError
@@ -119,6 +125,10 @@ class BaseModel:
             "num_inference_steps": infer_config.get("num_inference_steps", 50),
             "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0),
         }
+
+    def get_pipeline_sample_kwargs(self, sample):
+        """Return per-sample kwargs to pass to pipeline.__call__ during native inference."""
+        return {}
 
     def load_lora_for_infer(self, lora_path, adapter_name=None):
         denoiser = self.denoiser_module()
