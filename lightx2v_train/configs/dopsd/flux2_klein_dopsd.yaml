@@ -1,0 +1,105 @@
+model:
+    name: flux2_klein
+    pretrained_model_name_or_path: /data/nvme7/HF/hub/models--black-forest-labs--FLUX.2-klein-9B/snapshots/92196c8e11f7b6cf2b7493e037d8c5345c559216
+    max_sequence_length: 512
+    text_encoder_out_layers: [9, 18, 27]
+    running_dtype: bf16
+
+data:
+    train:
+        name: image_dataset
+        num_workers: 4
+        prompt_dropout_rate: 0.0
+        target_area: 1048576
+        shuffle: true
+        data_path:
+            - /data/nvme7/LightX2V_train_data_examples/dataset_v1/train.jsonl
+    val:
+        name: image_dataset
+        num_workers: 4
+        shuffle: false
+        data_path:
+            - /data/nvme7/LightX2V_train_data_examples/dataset_v1/val.jsonl
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: logitnormal
+    logitnormal_mean: 0.0
+    logitnormal_std: 1.0
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: exponential
+        time_shift_power: 1.0
+        dynamic_shift: true
+        shift_mu_strategy: flux2_empirical
+        # train_lora_9b.sh: --num-training-steps 4
+        shift_mu_num_steps: 4
+        patch_size: [1, 1]
+
+training:
+    method: dopsd
+    # train_lora_9b.sh: --max-train-steps 200
+    max_train_iters: 90
+    # train_lora_9b.sh: --gradient-accumulation-steps 1
+    gradient_accumulation_iters: 1
+    # train_lora_9b.sh: --enable-gc
+    gradient_checkpointing: true
+    # arguments.py: --max-grad-norm 1.0
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 0
+    # train_lora_9b.sh: --checkpoint-steps 200
+    save_every_iters: 30
+    save_total_limit: 10
+    dopsd:
+        # train_lora_9b.sh: --num-training-steps 4
+        num_training_steps: 4
+        # train_lora_9b.sh: --ema-decay 0.9999
+        ema_decay: 0.9999
+        # teacher edit branch only; student uses dataset prompt (T2I)
+        edit_sys_prompt: "The output must be exactly the same as the reference image."
+        # save student/teacher x0 trajectory grid during training (not at infer)
+        trajectory_every_iters: 30
+    lora:
+        # train_lora_9b.sh: --lora-rank 64 --lora-alpha 128
+        rank: 64
+        alpha: 128
+        target_modules:
+            - to_q
+            - to_k
+            - to_v
+            - to_out.0
+            - add_q_proj
+            - add_k_proj
+            - add_v_proj
+            - to_add_out
+            - to_qkv_mlp_proj
+    optimizer:
+        learning_rate: 0.00002
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.0
+        adam_epsilon: 0.00000001
+    output_dir: ./output_train/dopsd_editcontext_ema0.9999_onpolicy_4steptrain_9b_corgi_bsz1_lora_lr2e-5
+
+inference:
+    method: image_infer
+    negative_prompt: ""
+    default_width: 1024
+    default_height: 1024
+    num_inference_steps: 4
+    enable_cfg: false
+    cfg_guidance_scale: 1.0
+    seed: 30
+    output_dir: ./output_infer/dopsd_editcontext_ema0.9999_onpolicy_4steptrain_9b_corgi_bsz1_lora_lr2e-5
+    infer_every_iters: ${training.save_every_iters}
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+    infer_log_every_steps: 10
+
+resume:
+    auto_resume: true
