@@ -93,7 +93,7 @@ class BaseModel:
     def encode_condition(self, sample):
         raise NotImplementedError
 
-    def prepare_denoiser_input(self, noisy_latent, sample, condition):
+    def prepare_denoiser_input(self, noisy_latent, condition=None):
         raise NotImplementedError
 
     def denoise(self, denoiser_input, timesteps, condition):
@@ -119,6 +119,10 @@ class BaseModel:
             "num_inference_steps": infer_config.get("num_inference_steps", 50),
             "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0),
         }
+
+    def get_pipeline_sample_kwargs(self, sample):
+        """Return per-sample kwargs to pass to pipeline.__call__ during native inference."""
+        return {}
 
     def load_lora_for_infer(self, lora_path, adapter_name=None):
         denoiser = self.denoiser_module()

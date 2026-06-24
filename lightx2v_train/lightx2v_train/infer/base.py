@@ -27,7 +27,7 @@ class BaseInferencer:
         self.model = model
 
     def cfg_guided_denoise(self, latents, timestep_or_sigma, pos_cond, neg_cond):
-        denoiser_input = self.model.prepare_denoiser_input(latents)
+        denoiser_input = self.model.prepare_denoiser_input(latents, condition=pos_cond)
 
         pred_pos = self.model.denoise(denoiser_input, timestep_or_sigma, pos_cond)
         pred_pos = self.model.postprocess_denoiser_output(pred_pos, denoiser_input)
