@@ -377,9 +377,9 @@ class Flux2BaseRunner(DefaultRunner):
         torch_device_module.empty_cache()
         gc.collect()
 
-        if input_info.return_result_tensor:
-            return {"images": images}
-        return {"images": None}
+        result = {"images": images} if input_info.return_result_tensor else {"images": None}
+        self.end_run()
+        return result
 
 
 @RUNNER_REGISTER("flux2_klein")

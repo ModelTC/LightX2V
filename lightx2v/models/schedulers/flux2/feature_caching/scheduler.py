@@ -11,6 +11,7 @@ class Flux2SchedulerCaching(Flux2Scheduler):
         self.caching_records_2 = [True] * self.infer_steps
 
     def set_timesteps(self):
+        self.clear()
         super().set_timesteps()
         self._refresh_caching_records()
 
