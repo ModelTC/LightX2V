@@ -39,6 +39,7 @@ scheduler:
         patch_size: [1, 1]
 
 training:
+    train_type: lora
     method: dopsd
     max_train_iters: 4000
     gradient_accumulation_iters: 1

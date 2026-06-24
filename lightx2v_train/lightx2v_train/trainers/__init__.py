@@ -1,7 +1,7 @@
 from lightx2v_train.utils.registry import build_trainer
 
-from .dopsd import DopsdTrainer
 from .dmd import DmdTrainer, VideoArDmdTrainer, VideoDmdTrainer
+from .dopsd import DopsdTrainer
 from .flow import FlowMatchingTrainer
 from .tf import TFTrainer
 
