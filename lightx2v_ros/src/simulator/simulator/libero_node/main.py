@@ -23,6 +23,8 @@ class LiberoNode(Node):
         self.declare_parameter("state_topic", "/libero/state")
         self.declare_parameter("agentview_topic", "/libero/agentview/image_raw")
         self.declare_parameter("wrist_topic", "/libero/wrist/image_raw")
+        self.declare_parameter("frontview_topic", "/libero/frontview/image_raw")
+        self.declare_parameter("galleryview_topic", "/libero/galleryview/image_raw")
         self.declare_parameter("success_topic", "/libero/success")
         self.declare_parameter("observation_ready_topic", "/libero/observation_ready")
         self.declare_parameter("task_topic", "/libero/task_description")
@@ -30,6 +32,8 @@ class LiberoNode(Node):
         self.state_pub = self.create_publisher(Float32MultiArray, self.get_parameter("state_topic").value, 10)
         self.agentview_pub = self.create_publisher(Image, self.get_parameter("agentview_topic").value, 10)
         self.wrist_pub = self.create_publisher(Image, self.get_parameter("wrist_topic").value, 10)
+        self.frontview_pub = self.create_publisher(Image, self.get_parameter("frontview_topic").value, 10)
+        self.galleryview_pub = self.create_publisher(Image, self.get_parameter("galleryview_topic").value, 10)
         self.success_pub = self.create_publisher(Bool, self.get_parameter("success_topic").value, 10)
         self.observation_ready_pub = self.create_publisher(Int32, self.get_parameter("observation_ready_topic").value, 10)
         self.task_pub = self.create_publisher(String, self.get_parameter("task_topic").value, 10)
@@ -87,6 +91,8 @@ class LiberoNode(Node):
         self.state_pub.publish(self.make_state_msg(obs))
         self.agentview_pub.publish(self.make_image_msg(obs["agentview_image"][::-1, ::-1], stamp, "agentview"))
         self.wrist_pub.publish(self.make_image_msg(obs["robot0_eye_in_hand_image"][::-1, ::-1], stamp, "wrist"))
+        self.frontview_pub.publish(self.make_image_msg(obs["frontview_image"][::-1, ::-1], stamp, "frontview"))
+        self.galleryview_pub.publish(self.make_image_msg(obs["galleryview_image"][::-1, ::-1], stamp, "galleryview"))
 
         task_msg = String()
         task_msg.data = self.observer.task_description

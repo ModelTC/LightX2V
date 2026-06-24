@@ -84,7 +84,7 @@ class LiberoActionObserver:
             bddl_file_name=str(bddl_file),
             camera_heights=image_size,
             camera_widths=image_size,
-            camera_names=["robot0_eye_in_hand", "agentview"],
+            camera_names=["robot0_eye_in_hand", "agentview", "frontview", "galleryview"],
         )
         self.env.seed(seed)
         self.env.reset()

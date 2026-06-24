@@ -7,9 +7,11 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
-
 AGENTVIEW_TOPIC = "/libero/agentview/image_raw"
 WRIST_TOPIC = "/libero/wrist/image_raw"
+FRONTVIEW_TOPIC = "/libero/frontview/image_raw"
+GALLERYVIEW_TOPIC = "/libero/galleryview/image_raw"
+CAMERAS = ("agentview", "wrist", "frontview", "galleryview")
 
 
 class ImageHttpServer(ThreadingHTTPServer):
@@ -19,10 +21,7 @@ class ImageHttpServer(ThreadingHTTPServer):
 class FrameStore:
     def __init__(self):
         self.condition = Condition()
-        self.frames = {
-            "agentview": (0, None),
-            "wrist": (0, None),
-        }
+        self.frames = {name: (0, None) for name in CAMERAS}
 
     def update(self, name, jpeg):
         with self.condition:
@@ -44,6 +43,8 @@ class ImageWebViewerNode(Node):
         self.declare_parameter("port", 8080)
         self.declare_parameter("agentview_topic", AGENTVIEW_TOPIC)
         self.declare_parameter("wrist_topic", WRIST_TOPIC)
+        self.declare_parameter("frontview_topic", FRONTVIEW_TOPIC)
+        self.declare_parameter("galleryview_topic", GALLERYVIEW_TOPIC)
         self.declare_parameter("jpeg_quality", 85)
 
         self.jpeg_quality = int(self.get_parameter("jpeg_quality").value)
@@ -51,18 +52,13 @@ class ImageWebViewerNode(Node):
         self.http_server = None
         self.http_thread = None
 
-        self.create_subscription(
-            Image,
-            self.get_parameter("agentview_topic").value,
-            lambda msg: self.on_image("agentview", msg),
-            10,
-        )
-        self.create_subscription(
-            Image,
-            self.get_parameter("wrist_topic").value,
-            lambda msg: self.on_image("wrist", msg),
-            10,
-        )
+        for name in CAMERAS:
+            self.create_subscription(
+                Image,
+                self.get_parameter(f"{name}_topic").value,
+                lambda msg, camera_name=name: self.on_image(camera_name, msg),
+                10,
+            )
 
         self.start_http_server()
 
@@ -108,6 +104,12 @@ def make_handler(frame_store):
                 return
             if self.path == "/wrist.mjpg":
                 self.send_stream("wrist")
+                return
+            if self.path == "/frontview.mjpg":
+                self.send_stream("frontview")
+                return
+            if self.path == "/galleryview.mjpg":
+                self.send_stream("galleryview")
                 return
             self.send_error(404)
 
@@ -210,6 +212,14 @@ INDEX_HTML = """<!doctype html>
     <section>
       <h2>wrist</h2>
       <img src="/wrist.mjpg" alt="wrist">
+    </section>
+    <section>
+      <h2>frontview</h2>
+      <img src="/frontview.mjpg" alt="frontview">
+    </section>
+    <section>
+      <h2>galleryview</h2>
+      <img src="/galleryview.mjpg" alt="galleryview">
     </section>
   </main>
 </body>
