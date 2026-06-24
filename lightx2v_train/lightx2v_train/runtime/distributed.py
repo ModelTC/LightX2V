@@ -59,7 +59,10 @@ def get_device_mesh():
 
 def barrier():
     if dist.is_available() and dist.is_initialized():
-        dist.barrier()
+        if dist.get_backend() == "nccl" and torch.cuda.is_available():
+            dist.barrier(device_ids=[torch.cuda.current_device()])
+        else:
+            dist.barrier()
 
 
 def reduce_mean(value):
