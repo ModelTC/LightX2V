@@ -43,6 +43,12 @@ class HidreamO1ImageRunner(DefaultRunner):
         self.default_timesteps = None
         self.dtype = torch.bfloat16
 
+    def _get_spatial_stride(self):
+        return 32, 32
+
+    def _get_spatial_patch(self):
+        return 1, 1
+
     def init_scheduler(self):
         self.scheduler = HidreamO1ImageScheduler(self.config, torch.bfloat16)
 
