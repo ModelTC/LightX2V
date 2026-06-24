@@ -47,8 +47,8 @@ class LongCatImageModel(BaseModel):
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
         self._maybe_set_attention_backend()
 
-    def load_transformer(self):
-        model_path = self.config["model"]["pretrained_model_name_or_path"]
+    def load_transformer(self, model_path=None):
+        model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
         return LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
 
     def _maybe_set_attention_backend(self):

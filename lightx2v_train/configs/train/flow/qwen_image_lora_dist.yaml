@@ -1,6 +1,6 @@
 model:
     name: qwen_image
-    pretrained_model_name_or_path: /data/nvme1/models/Qwen/Qwen-Image-2512
+    pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image-2512
     max_sequence_length: 1024
     running_dtype: bf16
 
@@ -27,13 +27,13 @@ data:
         shuffle: true
         # examples: https://github.com/ModelTC/LightX2V_train_data_examples
         data_path:
-            - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
     val:
         name: image_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /data/nvme1/yongyang/kkk/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000
