@@ -11,7 +11,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from ..schema import ImageTaskRequest
+from ..schema import ImageTaskRequest, Usage
 from ..task_manager import TaskStatus, task_manager
 from .deps import get_services
 
@@ -34,6 +34,7 @@ class OpenAIImageGenerationRequest(BaseModel):
 class OpenAIImageResponse(BaseModel):
     created: int
     data: list[dict[str, str]]
+    usage: Optional[Usage] = None
 
 
 def _write_file_sync(file_path: Path, content: bytes) -> None:
@@ -52,7 +53,7 @@ def _shape_from_size(size: str) -> tuple[int, int]:
     return width, height
 
 
-async def _wait_task_result_png(task_id: str, timeout_seconds: int, poll_interval_seconds: float) -> bytes:
+async def _wait_task_result_png(task_id: str, timeout_seconds: int, poll_interval_seconds: float) -> tuple[bytes, Optional[dict]]:
     start_time = time.monotonic()
     status_checks = 0
     while True:
@@ -64,6 +65,7 @@ async def _wait_task_result_png(task_id: str, timeout_seconds: int, poll_interva
         status = task_status.get("status")
         if status == TaskStatus.COMPLETED.value:
             result_png = task_manager.get_task_result_png(task_id)
+            usage = task_manager.get_task_result_usage(task_id)
             if result_png:
                 wait_elapsed_ms = (time.monotonic() - start_time) * 1000
                 completion_observe_lag_ms = 0.0
@@ -75,7 +77,7 @@ async def _wait_task_result_png(task_id: str, timeout_seconds: int, poll_interva
                     f"completion_observe_lag={completion_observe_lag_ms:.2f} ms "
                     f"poll_interval={poll_interval_seconds:.2f} s status_checks={status_checks}"
                 )
-                return result_png
+                return result_png, usage
             raise HTTPException(status_code=500, detail=f"Task completed but no in-memory image found: {task_id}")
 
         if status == TaskStatus.FAILED.value:
@@ -100,7 +102,7 @@ async def _watch_client_disconnect(request: Request, task_id: str, poll_interval
         await asyncio.sleep(poll_interval_seconds)
 
 
-async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> bytes:
+async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> tuple[bytes, Optional[dict]]:
     task_id = None
     timeout_seconds = 600
     poll_interval_seconds = OPENAI_IMAGE_RESULT_POLL_INTERVAL_SECONDS
@@ -119,7 +121,7 @@ async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> b
         done, pending = await asyncio.wait({wait_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
 
         if wait_task in done:
-            result_png = wait_task.result()
+            result_png, usage = wait_task.result()
             for pending_task in pending:
                 pending_task.cancel()
             if pending:
@@ -127,7 +129,7 @@ async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> b
                 if still_pending:
                     logger.debug(f"Task {task_id} disconnect watcher cancellation is still pending")
             logger.info(f"Task {task_id} OpenAI image task result ready, building response")
-            return result_png
+            return result_png, usage
 
         if disconnect_task in done and disconnect_task.result():
             if not wait_task.done():
@@ -162,13 +164,14 @@ def _build_url_response(request: Request, task_id: str, image_bytes: bytes) -> s
     return f"{base}/v1/files/download/{file_name}"
 
 
-def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, response_format: Literal["url", "b64_json"]):
+def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, response_format: Literal["url", "b64_json"], usage: Optional[dict] = None):
     total_start = time.perf_counter()
+    usage_obj = Usage(**usage) if isinstance(usage, dict) else usage
     if response_format == "b64_json":
         base64_start = time.perf_counter()
         b64_json = base64.b64encode(image_bytes).decode("utf-8")
         base64_elapsed_ms = (time.perf_counter() - base64_start) * 1000
-        response = OpenAIImageResponse(created=int(time.time()), data=[{"b64_json": b64_json}])
+        response = OpenAIImageResponse(created=int(time.time()), data=[{"b64_json": b64_json}], usage=usage_obj)
         total_elapsed_ms = (time.perf_counter() - total_start) * 1000
         logger.info(
             f"Task {task_id} OpenAI image response build cost total={total_elapsed_ms:.2f} ms base64={base64_elapsed_ms:.2f} ms format=b64_json png_bytes={len(image_bytes)} b64_chars={len(b64_json)}"
@@ -178,7 +181,7 @@ def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, r
     url_start = time.perf_counter()
     url = _build_url_response(request, task_id, image_bytes)
     url_elapsed_ms = (time.perf_counter() - url_start) * 1000
-    response = OpenAIImageResponse(created=int(time.time()), data=[{"url": url}])
+    response = OpenAIImageResponse(created=int(time.time()), data=[{"url": url}], usage=usage_obj)
     total_elapsed_ms = (time.perf_counter() - total_start) * 1000
     logger.info(f"Task {task_id} OpenAI image response build cost total={total_elapsed_ms:.2f} ms url_write={url_elapsed_ms:.2f} ms format=url png_bytes={len(image_bytes)}")
     return response
@@ -230,8 +233,8 @@ async def create_openai_image_generation(request: Request, body: OpenAIImageGene
         target_shape=target_shape,
     )
 
-    result_png = await _run_sync_image_task(request, message)
-    return _build_openai_response(request, message.task_id, result_png, body.response_format)
+    result_png, usage = await _run_sync_image_task(request, message)
+    return _build_openai_response(request, message.task_id, result_png, body.response_format, usage)
 
 
 async def _save_upload_file(file: UploadFile, target_dir: Path) -> str:
@@ -310,5 +313,5 @@ async def create_openai_image_edit(
         i2i_denoise_strength=i2i_denoise_strength,
     )
 
-    result_png = await _run_sync_image_task(request, message)
-    return _build_openai_response(request, message.task_id, result_png, response_format)
+    result_png, usage = await _run_sync_image_task(request, message)
+    return _build_openai_response(request, message.task_id, result_png, response_format, usage)
