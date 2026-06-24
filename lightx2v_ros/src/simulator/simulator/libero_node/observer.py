@@ -76,6 +76,7 @@ class LiberoActionObserver:
 
         task_suite = benchmark.get_benchmark_dict()[benchmark_name.lower()]()
         task = task_suite.get_task(task_id)
+        self.task_description = task.language
         bddl_file = Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
         init_state = load_init_states(get_libero_path, task, init_state_id)
 
