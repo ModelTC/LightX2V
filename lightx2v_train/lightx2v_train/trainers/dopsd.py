@@ -221,7 +221,7 @@ class DopsdTrainer(BaseTrainer):
     def _resolve_teacher_reference_image(self, sample, dataset):
         target_image = sample.get("target_image")
         if target_image is not None:
-            if isinstance(target_image, str):
+            if isinstance(target_image, (str, os.PathLike)):
                 return dataset.load_image(target_image)
             return target_image
 

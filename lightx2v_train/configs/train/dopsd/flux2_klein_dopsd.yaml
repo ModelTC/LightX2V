@@ -1,7 +1,6 @@
 model:
     name: flux2_klein
-    pretrained_model_name_or_path: /data/nvme7/HF/hub/models--black-forest-labs--FLUX.2-klein-9B/snapshots/92196c8e11f7b6cf2b7493e037d8c5345c559216
-    max_sequence_length: 512
+    pretrained_model_name_or_path: /path/to/FLUX.2-Klein-9B
     text_encoder_out_layers: [9, 18, 27]
     running_dtype: bf16
 
@@ -13,14 +12,14 @@ data:
         target_area: 1048576
         shuffle: true
         data_path:
-            - /data/nvme7/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
     val:
         name: image_dataset
         num_workers: 4
         target_area: 1048576
         shuffle: false
         data_path:
-            - /data/nvme7/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000
