@@ -41,7 +41,7 @@ def merge_video_audio(video_path: str, audio_path: str):
         "-c:v",
         "copy",
         "-c:a",
-        "aac",
+        "copy",
         "-shortest",
         tmp_path,
     ]
