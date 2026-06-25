@@ -20,6 +20,7 @@ from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
+from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
@@ -104,6 +105,7 @@ def main():
             "lingbot_va",
             "dreamzero",
             "infinitetalk",
+            "fastwam",
         ],
         default="wan2.1",
     )
