@@ -71,13 +71,19 @@ class Cosmos3PreInfer:
             "vision_start_temporal_offset": next_mrope_offset + self.temporal_margin,
         }
 
-    def _prepare_vision_segment(self, latents, text_segment, device):
+    def _prepare_vision_segment(self, latents, text_segment, device, condition_frame_indexes=None):
         p = self.latent_patch_size
         _, _, latent_t, latent_h, latent_w = latents.shape
         patch_h = math.ceil(latent_h / p)
         patch_w = math.ceil(latent_w / p)
         num_vision_tokens = latent_t * patch_h * patch_w
-        noisy_frame_indexes = torch.arange(latent_t, device=device, dtype=torch.long)
+        condition_frame_indexes = [] if condition_frame_indexes is None else condition_frame_indexes
+        condition_frame_set = {int(idx) for idx in condition_frame_indexes if 0 <= int(idx) < latent_t}
+        noisy_frame_indexes = torch.tensor(
+            [idx for idx in range(latent_t) if idx not in condition_frame_set],
+            device=device,
+            dtype=torch.long,
+        )
         frame_token_stride = patch_h * patch_w
         curr = text_segment["und_len"]
         mse_loss_indexes = []
@@ -106,10 +112,10 @@ class Cosmos3PreInfer:
             "num_noisy_vision_tokens": len(noisy_frame_indexes) * frame_token_stride,
         }
 
-    def infer(self, weights, input_ids, latents, timestep):
+    def infer(self, weights, input_ids, latents, timestep, condition_frame_indexes=None):
         device = latents.device
         text_segment = self._prepare_text_segment(input_ids, device)
-        vision_segment = self._prepare_vision_segment(latents, text_segment, device)
+        vision_segment = self._prepare_vision_segment(latents, text_segment, device, condition_frame_indexes=condition_frame_indexes)
         sequence_length = text_segment["und_len"] + vision_segment["num_vision_tokens"]
 
         packed_text_embedding = weights.embed_tokens.apply(text_segment["input_ids"])

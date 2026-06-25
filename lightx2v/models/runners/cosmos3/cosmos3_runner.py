@@ -1,8 +1,10 @@
 import gc
 import os
 
+import numpy as np
 import torch
 import torch.distributed as dist
+from PIL import Image
 from loguru import logger
 from transformers import AutoTokenizer
 
@@ -13,11 +15,13 @@ from lightx2v.models.video_encoders.hf.cosmos3.vae import Cosmos3WanVAE
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
 _SYSTEM_PROMPT_IMAGE = "You are a helpful assistant who will generate images from a give prompt."
+_SYSTEM_PROMPT_VIDEO = "You are a helpful assistant who will generate videos from a give prompt."
 
 
 @RUNNER_REGISTER("cosmos3")
@@ -59,9 +63,9 @@ class Cosmos3Runner(DefaultRunner):
             assert self.config.get("cpu_offload", False)
         if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)
-        if self.config["task"] != "t2i":
-            raise NotImplementedError(f"Cosmos3Runner currently supports task t2i, got {self.config['task']}")
-        self.run_input_encoder = self._run_input_encoder_local_t2i
+        if self.config["task"] not in ("t2i", "i2v"):
+            raise NotImplementedError(f"Cosmos3Runner currently supports tasks t2i/i2v, got {self.config['task']}")
+        self.run_input_encoder = self._run_input_encoder_local
         self.run_dit = self._run_dit_local
         self.config.lock()
 
@@ -75,9 +79,9 @@ class Cosmos3Runner(DefaultRunner):
         base = (base or "").rstrip(".")
         return f"{base}. {addition}" if base else addition
 
-    def _tokenize_chat(self, text: str):
+    def _tokenize_chat(self, text: str, is_image: bool):
         conversations = [
-            {"role": "system", "content": _SYSTEM_PROMPT_IMAGE},
+            {"role": "system", "content": _SYSTEM_PROMPT_IMAGE if is_image else _SYSTEM_PROMPT_VIDEO},
             {"role": "user", "content": text},
         ]
         kwargs = {
@@ -109,21 +113,35 @@ class Cosmos3Runner(DefaultRunner):
     def tokenize_prompt(self, prompt, negative_prompt=None):
         height = int(self.input_info.auto_height)
         width = int(self.input_info.auto_width)
+        num_frames = int(self.config.get("target_video_length", 1))
+        fps = float(self.config.get("target_fps", 24.0))
+        is_image = num_frames == 1
         negative_prompt = "" if negative_prompt is None else negative_prompt
-        cond_text = self._append_prompt_template(prompt, f"This image is of {height}x{width} resolution.")
-        uncond_text = self._append_prompt_template(negative_prompt, f"This image is not of {height}x{width} resolution.")
+
+        cond_text = prompt
+        uncond_text = negative_prompt
+        if not is_image and self.config.get("add_duration_template", True):
+            cond_text = self._append_prompt_template(cond_text, f"The video is {num_frames / fps:.1f} seconds long and is of {fps:.0f} FPS.")
+            uncond_text = self._append_prompt_template(uncond_text, f"The video is not {num_frames / fps:.1f} seconds long and is not of {fps:.0f} FPS.")
+        if self.config.get("add_resolution_template", True):
+            if is_image:
+                cond_text = self._append_prompt_template(cond_text, f"This image is of {height}x{width} resolution.")
+                uncond_text = self._append_prompt_template(uncond_text, f"This image is not of {height}x{width} resolution.")
+            else:
+                cond_text = self._append_prompt_template(cond_text, f"This video is of {height}x{width} resolution.")
+                uncond_text = self._append_prompt_template(uncond_text, f"This video is not of {height}x{width} resolution.")
 
         eos_token_id = self.text_tokenizer.eos_token_id
         vision_start_id = self.text_tokenizer.convert_tokens_to_ids("<|vision_start|>")
         if eos_token_id is None or vision_start_id is None:
             raise ValueError("Cosmos3 tokenizer must provide eos_token_id and <|vision_start|>.")
 
-        cond_input_ids = self._tokenize_chat(cond_text) + [eos_token_id, vision_start_id]
-        uncond_input_ids = self._tokenize_chat(uncond_text) + [eos_token_id, vision_start_id]
+        cond_input_ids = self._tokenize_chat(cond_text, is_image=is_image) + [eos_token_id, vision_start_id]
+        uncond_input_ids = self._tokenize_chat(uncond_text, is_image=is_image) + [eos_token_id, vision_start_id]
         return cond_input_ids, uncond_input_ids
 
     @ProfilingContext4DebugL2("Run Encoders")
-    def _run_input_encoder_local_t2i(self):
+    def _run_input_encoder_local(self):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_tokenizer = self.load_text_encoder()
         cond_input_ids, uncond_input_ids = self.tokenize_prompt(
@@ -147,29 +165,70 @@ class Cosmos3Runner(DefaultRunner):
             height = int(self.config.get("target_height", 1024))
             width = int(self.config.get("target_width", 1024))
 
-        scale = int(self.config.get("vae_scale_factor_spatial", self.config.get("vae_scale_factor", 16)))
-        if height < scale or width < scale:
-            raise ValueError(f"Cosmos3 target size must be at least {scale}x{scale}, got {height}x{width}.")
-        rounded_height = height // scale * scale
-        rounded_width = width // scale * scale
+        spatial_scale = int(self.config.get("vae_scale_factor_spatial", self.config.get("vae_scale_factor", 16)))
+        temporal_scale = int(self.config.get("vae_scale_factor_temporal", 4))
+        if height < spatial_scale or width < spatial_scale:
+            raise ValueError(f"Cosmos3 target size must be at least {spatial_scale}x{spatial_scale}, got {height}x{width}.")
+        rounded_height = height // spatial_scale * spatial_scale
+        rounded_width = width // spatial_scale * spatial_scale
         if rounded_height != height or rounded_width != width:
             logger.warning(f"Cosmos3 target shape rounded from {height}x{width} to {rounded_height}x{rounded_width}")
             height, width = rounded_height, rounded_width
 
         latent_channels = int(self.config.get("latent_channel", 48))
-        latent_frames = int(self.config.get("target_video_length", 1))
+        pixel_frames = int(self.config.get("target_video_length", 1))
+        latent_frames = (pixel_frames - 1) // temporal_scale + 1
         self.input_info.auto_height = height
         self.input_info.auto_width = width
-        self.input_info.target_shape = (1, latent_channels, latent_frames, height // scale, width // scale)
-        self.input_info.image_shapes = [[(latent_frames, height // scale, width // scale)]]
+        self.input_info.target_shape = (1, latent_channels, latent_frames, height // spatial_scale, width // spatial_scale)
+        self.input_info.image_shapes = [[(latent_frames, height // spatial_scale, width // spatial_scale)]]
         logger.info(f"Cosmos3 Runner set target shape: {width}x{height}, latent: {self.input_info.target_shape}")
+
+    def _load_i2v_condition_frame(self):
+        image_path = getattr(self.input_info, "image_path", "")
+        if not image_path:
+            raise ValueError("Cosmos3 i2v requires --image_path.")
+        if not os.path.isfile(image_path):
+            raise FileNotFoundError(f"Cosmos3 i2v image_path does not exist: {image_path}")
+        height = int(self.input_info.auto_height)
+        width = int(self.input_info.auto_width)
+        resample = getattr(Image, "Resampling", Image).BILINEAR
+        with Image.open(image_path) as image:
+            image = image.convert("RGB").resize((width, height), resample=resample)
+            frame = np.asarray(image).astype(np.float32) / 127.5 - 1.0
+        frame = torch.from_numpy(frame).permute(2, 0, 1).unsqueeze(0)
+        return frame.to(device=AI_DEVICE, dtype=GET_DTYPE())
+
+    @ProfilingContext4DebugL2("Prepare i2v condition")
+    def _prepare_i2v_condition_latents(self):
+        if self.config["task"] != "i2v":
+            return
+        if hasattr(self.input_info, "vision_condition_latents") and self.input_info.vision_condition_latents is not None:
+            return
+        loaded_vae_here = not hasattr(self, "vae") or self.vae is None
+        if loaded_vae_here:
+            self.vae = self.load_vae()
+        frame = self._load_i2v_condition_frame()
+        num_frames = int(self.config.get("target_video_length", 189))
+        video = frame.unsqueeze(2).expand(-1, -1, num_frames, -1, -1).contiguous()
+        condition_latents = self.vae.encode(video)
+        self.input_info.vision_condition_latents = condition_latents
+        self.input_info.vision_condition_frame_indexes = [0]
+        del video, frame
+        if loaded_vae_here and (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)):
+            del self.vae
+            torch_device_module.empty_cache()
+            gc.collect()
 
     @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
             self.model.set_scheduler(self.scheduler)
+        self._prepare_i2v_condition_latents()
         self.model.scheduler.prepare(self.input_info)
+        if hasattr(self.input_info, "vision_condition_latents"):
+            self.input_info.vision_condition_latents = None
         return self.run(total_steps)
 
     @ProfilingContext4DebugL1(
@@ -211,6 +270,25 @@ class Cosmos3Runner(DefaultRunner):
         save_dir = os.path.dirname(save_path)
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
+        if self.config["task"] == "i2v":
+            if isinstance(images, torch.Tensor):
+                if images.dim() == 5:
+                    video = images[0].permute(1, 2, 3, 0).contiguous()
+                elif images.dim() == 4:
+                    video = images
+                else:
+                    raise ValueError(f"Cosmos3 i2v tensor output must be 4D or 5D, got {tuple(images.shape)}")
+            else:
+                frames = [torch.from_numpy(np.asarray(image).astype(np.float32) / 255.0) for image in images]
+                video = torch.stack(frames, dim=0)
+            save_to_video(
+                video.clamp(0, 1),
+                save_path,
+                fps=float(self.config.get("target_fps", 24.0)),
+                method=self.config.get("save_video_method", "ffmpeg"),
+            )
+            logger.info(f"Video saved: {save_path}")
+            return
         image_prefix, image_suffix = os.path.splitext(save_path)
         image_suffix = image_suffix.lstrip(".") or "png"
         if isinstance(images, list) and len(images) > 1:
@@ -231,10 +309,10 @@ class Cosmos3Runner(DefaultRunner):
         torch_device_module.empty_cache()
         gc.collect()
         if input_info.return_result_tensor:
-            return {"images": images}
+            return {"video" if self.config["task"] == "i2v" else "images": images}
         if input_info.save_result_path is not None:
-            return {"images": None}
-        return {"images": images}
+            return {"video" if self.config["task"] == "i2v" else "images": None}
+        return {"video" if self.config["task"] == "i2v" else "images": images}
 
     def end_run(self):
         if hasattr(self, "model") and self.model is not None:

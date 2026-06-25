@@ -90,6 +90,7 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             input_ids=input_ids,
             latents=latents,
             timestep=timestep,
+            condition_frame_indexes=getattr(self.scheduler, "vision_condition_frame_indexes", None),
         )
         if self.config["seq_parallel"]:
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)

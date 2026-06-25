@@ -509,16 +509,39 @@ class Cosmos3Scheduler(BaseScheduler):
 
     def prepare_latents(self, input_info):
         shape = tuple(input_info.target_shape)
+        condition_latents = getattr(input_info, "vision_condition_latents", None)
+        condition_frame_indexes = getattr(input_info, "vision_condition_frame_indexes", None)
+        if condition_latents is not None:
+            shape = tuple(condition_latents.shape)
+            input_info.target_shape = shape
         if not shape:
             height = int(self.config.get("target_height", 1024))
             width = int(self.config.get("target_width", 1024))
             scale = int(self.config.get("vae_scale_factor_spatial", self.config.get("vae_scale_factor", 16)))
             channels = int(self.config.get("latent_channel", 48))
-            frames = int(self.config.get("target_video_length", 1))
+            temporal_scale = int(self.config.get("vae_scale_factor_temporal", 4))
+            frames = (int(self.config.get("target_video_length", 1)) - 1) // temporal_scale + 1
             shape = (1, channels, frames, height // scale, width // scale)
             input_info.target_shape = shape
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(int(input_info.seed))
-        self.latents = torch.randn(shape, generator=self.generator, device=AI_DEVICE, dtype=GET_DTYPE())
+        noise = torch.randn(shape, generator=self.generator, device=AI_DEVICE, dtype=GET_DTYPE())
+        self.vision_condition_frame_indexes = None
+        self.vision_condition_mask = None
+        if condition_latents is not None:
+            condition_latents = condition_latents.to(device=AI_DEVICE, dtype=GET_DTYPE())
+            latent_t = int(shape[2])
+            if condition_frame_indexes is None:
+                condition_frame_indexes = [0]
+            condition_frame_indexes = [int(idx) for idx in condition_frame_indexes if 0 <= int(idx) < latent_t]
+            mask = torch.zeros((latent_t,), device=AI_DEVICE, dtype=GET_DTYPE())
+            if condition_frame_indexes:
+                mask[condition_frame_indexes] = 1.0
+            mask = mask.view(1, 1, latent_t, 1, 1)
+            self.latents = mask * condition_latents + (1.0 - mask) * noise
+            self.vision_condition_frame_indexes = condition_frame_indexes
+            self.vision_condition_mask = mask
+        else:
+            self.latents = noise
         self.noise_pred = None
 
     def prepare(self, input_info):
@@ -553,3 +576,5 @@ class Cosmos3Scheduler(BaseScheduler):
         self.timesteps = None
         self.unipc = None
         self.noise_pred = None
+        self.vision_condition_frame_indexes = None
+        self.vision_condition_mask = None
