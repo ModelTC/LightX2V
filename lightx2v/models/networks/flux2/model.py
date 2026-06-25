@@ -125,10 +125,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
             dist.broadcast_object_list(obj_list, src=global_src_rank)
             synced_meta_dict = obj_list[0]
 
-        distributed_weight_dict = {
-            key: torch.empty(meta["shape"], dtype=meta["dtype"], device=target_device)
-            for key, meta in synced_meta_dict.items()
-        }
+        distributed_weight_dict = {key: torch.empty(meta["shape"], dtype=meta["dtype"], device=target_device) for key, meta in synced_meta_dict.items()}
         dist.barrier()
 
         for key in sorted(synced_meta_dict.keys()):
@@ -179,7 +176,6 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         if any(pattern in key for pattern in row_patterns):
             return "row"
         return None
-
 
     def _split_bias_for_tp(self, key, bias, split_type, tp_size):
         if split_type == "col":

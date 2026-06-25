@@ -10,13 +10,13 @@
         16,
         16
     ],
-    "self_attn_1_type": "flash_attn2",
-    "cross_attn_1_type": "flash_attn2",
-    "cross_attn_2_type": "flash_attn2",
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
     "sample_guide_scale": 5.0,
     "sample_shift": 5.0,
     "enable_cfg": true,
-    "cpu_offload": true,
+    "cpu_offload": false,
     "offload_granularity": "model",
     "modulate_type": "torch",
     "rope_type": "torch",
@@ -24,5 +24,10 @@
     "rms_norm_type": "torch",
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
-    "fps": 24
+    "fps": 24,
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ulysses",
+        "cfg_p_size": 2
+    }
 }

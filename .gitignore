@@ -23,6 +23,8 @@
 *.ipynb*
 build/
 dist/
+!configs/platforms/ascend_npu/dist/
+!configs/platforms/ascend_npu/dist/*.json
 .cache/
 server_cache/
 app/.gradio/
