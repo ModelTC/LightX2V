@@ -8,6 +8,8 @@ image_path=/data/nvme1/yongyang/nb/lightx2v_examples/i2va/libero_spatial/task0_i
 state_path=/data/nvme1/yongyang/nb/lightx2v_examples/i2va/libero_spatial/task0_init0/state.npy
 prompt="pick up the black bowl between the plate and the ramekin and place it on the plate"
 
+export CUDA_VISIBLE_DEVICES=0
+
 source "${lightx2v_path}/scripts/base/base.sh"
 
 python -m lightx2v.infer \
