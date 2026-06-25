@@ -10,6 +10,8 @@ class WeightModule:
         return len(self._modules) == 0 and len(self._parameters) == 0
 
     def add_module(self, name, module):
+        if hasattr(self, "config") and hasattr(module, "set_config"):
+            module.set_config(self.config)
         self._modules[name] = module
         setattr(self, name, module)
 

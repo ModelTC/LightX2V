@@ -70,7 +70,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
     # weight load functions
     # =========================
     def load(self, weight_dict):
-        self.load_quantized(weight_dict)
+        if self.load_func is None:
+            self.load_quantized(weight_dict)
+        else:
+            self.load_func(weight_dict)
         if self.weight_need_transpose:
             if hasattr(self, "weight") and self.weight is not None:
                 self.weight = self.weight.t()

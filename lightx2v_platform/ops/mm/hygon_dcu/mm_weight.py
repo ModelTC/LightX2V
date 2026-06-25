@@ -13,6 +13,62 @@ try:
 except ImportError:
     IntegerQuantizer = None
 
+try:
+    from lmslim.quantize.quant_ops import hipblaslt_w8a8_channelwise_gemm
+except ImportError:
+    hipblaslt_w8a8_channelwise_gemm = None
+
+
+def _load_auto_quant_bias(module, weight_dict):
+    module.bias = None
+    module.pin_bias = None
+    if module.bias_name is None or module.bias_name not in weight_dict:
+        return
+    bias = weight_dict[module.bias_name]
+    if module.bias_force_fp32:
+        bias = bias.to(torch.float32)
+    elif hasattr(module, "infer_dtype"):
+        bias = bias.to(module.infer_dtype)
+    module.bias = bias.to(module.weight.device)
+
+
+def _make_weight_contiguous(module):
+    if hasattr(module, "weight") and module.weight is not None:
+        module.weight = module.weight.contiguous()
+    if hasattr(module, "weight_scale") and module.weight_scale is not None:
+        module.weight_scale = module.weight_scale.contiguous()
+
+
+def _flatten_last_dim(input_tensor):
+    if input_tensor.dim() == 2:
+        return input_tensor, None
+    original_shape = input_tensor.shape
+    return input_tensor.reshape(-1, original_shape[-1]), original_shape[:-1]
+
+
+def _restore_last_dim(output_tensor, prefix_shape):
+    if prefix_shape is None:
+        return output_tensor
+    return output_tensor.reshape(*prefix_shape, output_tensor.shape[-1])
+
+
+def _bias_or_none(module, out_dtype=None):
+    if hasattr(module, "bias") and module.bias is not None:
+        bias = module.bias
+        if out_dtype is not None and bias.dtype != out_dtype:
+            bias = bias.to(out_dtype)
+        return bias
+    return None
+
+
+def _require_hipblaslt_w8a8_channelwise_gemm():
+    if hipblaslt_w8a8_channelwise_gemm is None:
+        raise RuntimeError(
+            "int8-vllm-hygon-dcu requires lmslim.quantize.quant_ops."
+            "hipblaslt_w8a8_channelwise_gemm on Hygon DCU."
+        )
+    return hipblaslt_w8a8_channelwise_gemm
+
 
 @PLATFORM_MM_WEIGHT_REGISTER("int8-vllm-hygon-dcu")
 class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate):
@@ -42,6 +98,10 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
 
+    def load(self, weight_dict):
+        super().load(weight_dict)
+        _make_weight_contiguous(self)
+
     def load_int8_perchannel_sym(self, weight_dict):
         """Load INT8 per-channel symmetric quantized weights."""
         if self.config.get("weight_auto_quant", False):
@@ -52,6 +112,7 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
             self.weight, self.weight_scale, _ = w_quantizer.real_quant_tensor(self.weight)
             self.weight = self.weight.to(torch.int8)
             self.weight_scale = self.weight_scale.to(torch.float32)
+            _load_auto_quant_bias(self, weight_dict)
         else:
             self.load_quantized(weight_dict)
 
@@ -63,38 +124,27 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
         return input_tensor_quant, input_tensor_scale
 
     def apply(self, input_tensor):
-        shape = (input_tensor.shape[0], self.weight.shape[1])
         dtype = input_tensor.dtype
-        device = input_tensor.device
+        input_2d, prefix_shape = _flatten_last_dim(input_tensor)
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_2d)
+        out_dtype = dtype if dtype in (torch.bfloat16, torch.float16) else torch.bfloat16
+        m, k = input_tensor_quant.shape
+        n = self.weight.shape[0]
+        hipblaslt_gemm = _require_hipblaslt_w8a8_channelwise_gemm()
+        _, output_tensor = hipblaslt_gemm(
+            a=input_tensor_quant.contiguous(),
+            b=self.weight.contiguous(),
+            scale_a=input_tensor_scale.contiguous(),
+            scale_b=self.weight_scale.contiguous(),
+            m=m,
+            n=n,
+            k=k,
+            transpose_flag="NT",
+            out_dtype=out_dtype,
+            bias=_bias_or_none(self, out_dtype),
+        )
+        output_tensor = output_tensor.reshape(-1, n).narrow(0, 0, m)
 
-        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-
-        # Use ops.blaslt_scaled_mm from vllm for ROCm/DCU instead of torch.ops._C.cutlass_scaled_mm
-        if ops is not None and hasattr(ops, "blaslt_scaled_mm"):
-            # Ensure out_dtype is bfloat16 or float16 as required by blaslt_scaled_mm
-            out_dtype = dtype if dtype in (torch.bfloat16, torch.float16) else torch.bfloat16
-
-            # Ensure input tensor is contiguous for optimal performance
-            input_tensor_quant = input_tensor_quant.contiguous()
-
-            output_tensor = ops.blaslt_scaled_mm(
-                input_tensor_quant,
-                self.weight,
-                input_tensor_scale,
-                self.weight_scale,
-                out_dtype,
-                self.bias if self.bias is not None else None,
-            )
-
-            # Convert back to original dtype if needed
-            if output_tensor.dtype != dtype:
-                output_tensor = output_tensor.to(dtype)
-        else:
-            # Fallback: use manual dequantization and matmul
-            input_dequant = input_tensor_quant.to(dtype) * input_tensor_scale.to(dtype)
-            weight_dequant = self.weight.to(dtype) * self.weight_scale.to(dtype)
-            output_tensor = torch.matmul(input_dequant, weight_dequant)
-            if self.bias is not None:
-                output_tensor = output_tensor + self.bias
-
-        return output_tensor
+        if output_tensor.dtype != dtype:
+            output_tensor = output_tensor.to(dtype)
+        return _restore_last_dim(output_tensor, prefix_shape)
