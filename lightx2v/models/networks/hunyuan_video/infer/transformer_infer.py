@@ -1,8 +1,10 @@
+import os
 from typing import Tuple
 
 import torch
 import torch.nn.functional as F
 from einops import rearrange
+from loguru import logger
 
 try:
     from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
@@ -36,6 +38,10 @@ def apply_gate(x, gate=None, tanh=False):
         return x * gate.unsqueeze(1).tanh()
     else:
         return x * gate.unsqueeze(1)
+
+
+def _env_flag(name, default="0"):
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def apply_hunyuan_rope_with_flashinfer(
@@ -119,6 +125,21 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.apply_rope_func = apply_hunyuan_rope_with_flashinfer
         else:
             self.apply_rope_func = apply_hunyuan_rope_with_torch
+        self.compile_non_attn = _env_flag("LIGHTX2V_COMPILE_DIT_NON_ATTN")
+        self.compile_before_attn = _env_flag("LIGHTX2V_COMPILE_DIT_BEFORE_ATTN")
+        self.compile_non_attn_mode = os.getenv("LIGHTX2V_COMPILE_DIT_MODE", "reduce-overhead")
+        self._compiled_non_attn = {}
+        self._compile_non_attn_failed = set()
+        if self.compile_non_attn or self.compile_before_attn:
+            try:
+                torch._dynamo.config.suppress_errors = True
+            except Exception as exc:
+                logger.warning(f"[Compile] Unable to enable Dynamo suppress_errors: {exc}")
+            logger.info(
+                "[Compile] Hunyuan DiT branch compile: "
+                f"after_attn={self.compile_non_attn}, before_attn={self.compile_before_attn}, "
+                f"mode={self.compile_non_attn_mode}"
+            )
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -155,6 +176,15 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
 
     @torch.no_grad()
     def _infer_img_branch_before_attn(self, weights, infer_module_out):
+        return self._run_non_attn_branch(
+            "img_before_attn",
+            self._infer_img_branch_before_attn_eager,
+            weights,
+            infer_module_out,
+            compile_enabled=self.compile_before_attn,
+        )
+
+    def _infer_img_branch_before_attn_eager(self, weights, infer_module_out):
         (
             img_mod1_shift,
             img_mod1_scale,
@@ -188,6 +218,15 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
 
     @torch.no_grad()
     def _infer_txt_branch_before_attn(self, weights, infer_module_out):
+        return self._run_non_attn_branch(
+            "txt_before_attn",
+            self._infer_txt_branch_before_attn_eager,
+            weights,
+            infer_module_out,
+            compile_enabled=self.compile_before_attn,
+        )
+
+    def _infer_txt_branch_before_attn_eager(self, weights, infer_module_out):
         (
             txt_mod1_shift,
             txt_mod1_scale,
@@ -246,8 +285,36 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
         return img_attn, txt_attn
 
+    def _run_non_attn_branch(self, graph_name, eager_fn, *args, compile_enabled=None):
+        if compile_enabled is None:
+            compile_enabled = self.compile_non_attn
+        if not compile_enabled or graph_name in self._compile_non_attn_failed:
+            return eager_fn(*args)
+
+        compiled_fn = self._compiled_non_attn.get(graph_name)
+        if compiled_fn is None:
+            try:
+                compiled_fn = torch.compile(eager_fn, fullgraph=False, dynamic=False, mode=self.compile_non_attn_mode)
+                self._compiled_non_attn[graph_name] = compiled_fn
+                logger.info(f"[Compile] Created compiled wrapper for {graph_name}")
+            except Exception as exc:
+                self._compile_non_attn_failed.add(graph_name)
+                logger.warning(f"[Compile] Failed to create compiled wrapper for {graph_name}, fallback to eager: {exc}")
+                return eager_fn(*args)
+
+        try:
+            return compiled_fn(*args)
+        except Exception as exc:
+            self._compile_non_attn_failed.add(graph_name)
+            self._compiled_non_attn.pop(graph_name, None)
+            logger.warning(f"[Compile] Runtime failure in {graph_name}, disabling this graph and falling back to eager: {exc}")
+            return eager_fn(*args)
+
     @torch.no_grad()
     def _infer_img_branch_after_attn(self, weights, img_attn, img, img_branch_out):
+        return self._run_non_attn_branch("img_after_attn", self._infer_img_branch_after_attn_eager, weights, img_attn, img, img_branch_out)
+
+    def _infer_img_branch_after_attn_eager(self, weights, img_attn, img, img_branch_out):
         img = img + apply_gate(weights.img_branch.img_attn_proj.apply(img_attn).unsqueeze(0), gate=img_branch_out.img_mod1_gate)
         out = weights.img_branch.img_mlp_fc1.apply(
             self.modulate_func(weights.img_branch.img_norm2.apply(img.squeeze(0)), scale=img_branch_out.img_mod2_scale, shift=img_branch_out.img_mod2_shift).squeeze(0)
@@ -258,6 +325,9 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
 
     @torch.no_grad()
     def _infer_txt_branch_after_attn(self, weights, txt_attn, txt, txt_branch_out):
+        return self._run_non_attn_branch("txt_after_attn", self._infer_txt_branch_after_attn_eager, weights, txt_attn, txt, txt_branch_out)
+
+    def _infer_txt_branch_after_attn_eager(self, weights, txt_attn, txt, txt_branch_out):
         txt = txt + apply_gate(weights.txt_branch.txt_attn_proj.apply(txt_attn).unsqueeze(0), gate=txt_branch_out.txt_mod1_gate)
         out = weights.txt_branch.txt_mlp_fc1.apply(
             self.modulate_func(weights.txt_branch.txt_norm2.apply(txt.squeeze(0)), scale=txt_branch_out.txt_mod2_scale, shift=txt_branch_out.txt_mod2_shift).squeeze(0)
