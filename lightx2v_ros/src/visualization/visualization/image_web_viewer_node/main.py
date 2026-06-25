@@ -6,11 +6,15 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
+
+from .page import INDEX_HTML
 
 AGENTVIEW_TOPIC = "/libero/agentview/image_raw"
 WRIST_TOPIC = "/libero/wrist/image_raw"
 FRONTVIEW_TOPIC = "/libero/frontview/image_raw"
 GALLERYVIEW_TOPIC = "/libero/galleryview/image_raw"
+TASK_TOPIC = "/libero/task_description"
 CAMERAS = ("agentview", "wrist", "frontview", "galleryview")
 
 
@@ -22,6 +26,7 @@ class FrameStore:
     def __init__(self):
         self.condition = Condition()
         self.frames = {name: (0, None) for name in CAMERAS}
+        self.task = ""
 
     def update(self, name, jpeg):
         with self.condition:
@@ -34,6 +39,14 @@ class FrameStore:
             self.condition.wait_for(lambda: self.frames[name][0] != last_seq)
             return self.frames[name]
 
+    def update_task(self, task):
+        with self.condition:
+            self.task = task
+
+    def get_task(self):
+        with self.condition:
+            return self.task
+
 
 class ImageWebViewerNode(Node):
     def __init__(self):
@@ -45,6 +58,7 @@ class ImageWebViewerNode(Node):
         self.declare_parameter("wrist_topic", WRIST_TOPIC)
         self.declare_parameter("frontview_topic", FRONTVIEW_TOPIC)
         self.declare_parameter("galleryview_topic", GALLERYVIEW_TOPIC)
+        self.declare_parameter("task_topic", TASK_TOPIC)
         self.declare_parameter("jpeg_quality", 85)
 
         self.jpeg_quality = int(self.get_parameter("jpeg_quality").value)
@@ -59,6 +73,12 @@ class ImageWebViewerNode(Node):
                 lambda msg, camera_name=name: self.on_image(camera_name, msg),
                 10,
             )
+        self.create_subscription(
+            String,
+            self.get_parameter("task_topic").value,
+            self.on_task,
+            10,
+        )
 
         self.start_http_server()
 
@@ -84,12 +104,20 @@ class ImageWebViewerNode(Node):
         except Exception as exc:
             self.get_logger().error(f"failed to encode {name} image: {exc}")
 
+    def on_task(self, msg):
+        self.frame_store.update_task(msg.data)
+
     def destroy_node(self):
-        if self.http_server is not None:
-            self.http_server.shutdown()
-            self.http_server.server_close()
-        if self.http_thread is not None:
-            self.http_thread.join(timeout=1.0)
+        try:
+            if self.http_server is not None:
+                shutdown_thread = Thread(target=self.http_server.shutdown, daemon=True)
+                shutdown_thread.start()
+                shutdown_thread.join(timeout=1.0)
+                self.http_server.server_close()
+            if self.http_thread is not None:
+                self.http_thread.join(timeout=1.0)
+        except KeyboardInterrupt:
+            pass
         super().destroy_node()
 
 
@@ -98,6 +126,9 @@ def make_handler(frame_store):
         def do_GET(self):
             if self.path in {"/", "/index.html"}:
                 self.send_index()
+                return
+            if self.path == "/task.txt":
+                self.send_task()
                 return
             if self.path == "/agentview.mjpg":
                 self.send_stream("agentview")
@@ -117,6 +148,15 @@ def make_handler(frame_store):
             body = INDEX_HTML.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def send_task(self):
+            body = frame_store.get_task().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -161,72 +201,6 @@ def image_msg_to_bgr(msg):
     return np.ascontiguousarray(image)
 
 
-INDEX_HTML = """<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LIBERO Viewer</title>
-  <style>
-    body {
-      margin: 0;
-      background: #111;
-      color: #eee;
-      font-family: system-ui, sans-serif;
-    }
-    main {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      padding: 12px;
-      box-sizing: border-box;
-      min-height: 100vh;
-    }
-    section {
-      min-width: 0;
-    }
-    h2 {
-      margin: 0 0 8px;
-      font-size: 15px;
-      font-weight: 600;
-    }
-    img {
-      display: block;
-      width: 100%;
-      height: auto;
-      background: #222;
-    }
-    @media (max-width: 900px) {
-      main {
-        grid-template-columns: 1fr;
-      }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <section>
-      <h2>agentview</h2>
-      <img src="/agentview.mjpg" alt="agentview">
-    </section>
-    <section>
-      <h2>wrist</h2>
-      <img src="/wrist.mjpg" alt="wrist">
-    </section>
-    <section>
-      <h2>frontview</h2>
-      <img src="/frontview.mjpg" alt="frontview">
-    </section>
-    <section>
-      <h2>galleryview</h2>
-      <img src="/galleryview.mjpg" alt="galleryview">
-    </section>
-  </main>
-</body>
-</html>
-"""
-
-
 def main(args=None):
     rclpy.init(args=args)
     node = ImageWebViewerNode()
@@ -235,9 +209,12 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        try:
+            node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
