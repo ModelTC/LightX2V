@@ -728,9 +728,13 @@ class InfiniteTalkRunner(WanRunner):
             out_path = self.input_info.save_result_path
             os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
             save_to_video(self.gen_video_final, out_path, fps=self.target_fps, method="ffmpeg")
-            if self.video_audio_path and os.path.isfile(self.video_audio_path):
+            # Prefer original input audio (full quality) over the 16kHz resampled wav
+            original_audio = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
+            original_audio = original_audio.split(",")[0].strip() if original_audio else None
+            mux_audio = original_audio if (original_audio and os.path.isfile(original_audio)) else self.video_audio_path
+            if mux_audio and os.path.isfile(mux_audio):
                 try:
-                    self._mux_audio(out_path, self.video_audio_path)
+                    self._mux_audio(out_path, mux_audio)
                 finally:
                     self._remove_video_audio_path()
             logger.info(f"Video saved to {out_path}")
@@ -749,12 +753,16 @@ class InfiniteTalkRunner(WanRunner):
             "-c:v",
             "copy",
             "-c:a",
-            "aac",
+            "copy",
             "-shortest",
             tmp_path,
         ]
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode != 0:
+                # Fallback to aac re-encoding (e.g. for WAV/PCM inputs)
+                cmd[9] = "aac"
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             os.replace(tmp_path, video_path)
             logger.info(f"Muxed audio from {audio_path}")
         except Exception as exc:
