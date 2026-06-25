@@ -4,9 +4,12 @@ from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 
 from lightx2v_train.runtime.distributed import get_device_mesh, is_distributed
 from lightx2v_train.utils.utils import get_running_dtype
+from lightx2v_train.runtime.ddp import ddp_enabled
 
 
 def fsdp2_enabled(config):
+    if ddp_enabled(config):
+        return False
     fsdp_config = config.get("distributed", {}).get("fsdp2", {})
     return is_distributed() and fsdp_config.get("enabled", True)
 

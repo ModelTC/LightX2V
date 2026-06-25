@@ -13,6 +13,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
 from lightx2v_train.runtime.distributed import barrier, get_world_size, is_distributed, is_main_process, reduce_mean
+from lightx2v_train.runtime.ddp import apply_ddp, set_ddp_gradient_sync
 from lightx2v_train.runtime.fsdp import apply_fsdp2
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
@@ -73,6 +74,7 @@ class DmdTrainer(BaseTrainer):
         apply_fsdp2(self.fake_model, self.config)
         if self.gradient_checkpointing:
             self.fake_model.enable_gradient_checkpointing()
+        apply_ddp(self.fake_model, self.config)
 
         teacher_model_config = copy.deepcopy(self.config)
         teacher_model_config["model"] = copy.deepcopy(base_model_config)
@@ -448,9 +450,11 @@ class DmdTrainer(BaseTrainer):
 
     def _set_student_gradient_sync(self, enabled):
         self.model.set_fsdp2_gradient_sync(enabled)
+        set_ddp_gradient_sync(self.model.denoiser_module(), enabled)
 
     def _set_fake_gradient_sync(self, enabled):
         self.fake_model.set_fsdp2_gradient_sync(enabled)
+        set_ddp_gradient_sync(self.fake_model.denoiser_module(), enabled)
 
     def _set_gradient_sync(self, enabled):
         self._set_student_gradient_sync(enabled)
