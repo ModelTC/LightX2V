@@ -9,8 +9,8 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_
 
 from lightx2v_train.infer import build_inferencer
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
-from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process
 from lightx2v_train.runtime.ddp import apply_ddp, set_ddp_gradient_sync
+from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process
 from lightx2v_train.runtime.fsdp import apply_fsdp2
 from lightx2v_train.schedulers.flow_matching import RectifiedFlowMatchingScheduler
 from lightx2v_train.utils.utils import get_running_dtype
