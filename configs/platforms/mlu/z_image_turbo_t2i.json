@@ -6,6 +6,10 @@
     "enable_cfg": false,
     "sample_guide_scale": 0.0,
     "patch_size": 2,
+    "cpu_offload": false,
+    "offload_granularity": "model",
+    "modulate_type": "torch",
     "rope_type": "torch",
+    "layer_norm_type": "torch",
     "rms_norm_type": "mlu_rms_norm"
 }
