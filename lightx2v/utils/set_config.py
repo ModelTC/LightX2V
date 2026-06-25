@@ -157,6 +157,15 @@ def auto_calc_config(config):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    elif config["model_cls"] == "cosmos3":
+        transformer_config_path = os.path.join(config["model_path"], "transformer", "config.json")
+        if os.path.exists(transformer_config_path):
+            with open(transformer_config_path, "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        config.setdefault("target_video_length", 1)
+        config.setdefault("target_fps", config.get("base_fps", 24))
+        config.setdefault("enable_cfg", True)
     else:
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -221,6 +230,13 @@ def auto_calc_config(config):
                 config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
             if config["model_cls"] in ["ernie_image", "ernie_image_turbo"]:
                 config["vae_scale_factor"] = 2 ** len(vae_config["block_out_channels"])
+
+    if config["model_cls"] == "cosmos3" and os.path.exists(os.path.join(config["model_path"], "vae", "config.json")):
+        with open(os.path.join(config["model_path"], "vae", "config.json"), "r") as f:
+            vae_config = json.load(f)
+        config["vae_scale_factor_spatial"] = int(vae_config.get("scale_factor_spatial", 16))
+        config["vae_scale_factor_temporal"] = int(vae_config.get("scale_factor_temporal", 4))
+        config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
 
     return config
 

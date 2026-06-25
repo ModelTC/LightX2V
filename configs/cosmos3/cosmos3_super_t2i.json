@@ -1,0 +1,20 @@
+{
+    "infer_steps": 50,
+    "sample_guide_scale": 4.0,
+    "sample_shift": 3.0,
+    "target_height": 1024,
+    "target_width": 1024,
+    "target_video_length": 1,
+    "target_fps": 24.0,
+    "enable_cfg": true,
+    "feature_caching": "NoCaching",
+    "rms_norm_type": "one-pass",
+    "attn_rms_norm_type": "one-pass",
+    "rope_type": "triton",
+    "self_attn_type": "flash_attn3",
+    "causal_self_attn_type": "flash_attn3",
+    "cosmos3_meta_init": true,
+    "vae_cpu_offload": false,
+    "cpu_offload": false,
+    "offload_granularity": "block"
+}
