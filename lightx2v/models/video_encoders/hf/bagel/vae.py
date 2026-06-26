@@ -31,5 +31,7 @@ class BagelVae:
 
         image = self.vae_model.decode(latents)
         image = (image * 0.5 + 0.5).clamp(0, 1)[0].permute(1, 2, 0) * 255
-        image = Image.fromarray((image).to(torch.uint8).cpu().numpy())
-        return [image]
+        image = image.to(torch.uint8).cpu()
+        if decode_info.get("return_result_tensor", False):
+            return [image]
+        return [Image.fromarray(image.numpy())]
