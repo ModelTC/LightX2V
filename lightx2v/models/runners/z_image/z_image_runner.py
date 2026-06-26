@@ -159,7 +159,10 @@ class ZImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
-        image_paths_list = self.input_info.image_path.split(",")
+        image_paths_list = [image_path.strip() for image_path in self.input_info.image_path.split(",") if image_path.strip()]
+        if len(image_paths_list) != 1:
+            raise ValueError(f"z-image i2i currently supports exactly one input image, got {len(image_paths_list)}.")
+
         images_list = []
         for image_path in image_paths_list:
             _, image = self.read_image_input(image_path)
@@ -299,7 +302,18 @@ class ZImageRunner(DefaultRunner):
             logger.info(f"Z Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
-        aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
+        aspect_ratio = self.input_info.aspect_ratio
+        if aspect_ratio in as_maps:
+            logger.info(f"Z Image Runner got aspect ratio: {aspect_ratio}")
+            width, height = as_maps[aspect_ratio]
+            return (width, height)
+
+        if self.config["task"] == "i2i" and self.input_info.original_size:
+            width, height = self.input_info.original_size[-1]
+            logger.info(f"Z Image Runner got i2i source image shape: {width}x{height}")
+            return (width, height)
+
+        aspect_ratio = self.config.get("aspect_ratio", None)
         if aspect_ratio in as_maps:
             logger.info(f"Z Image Runner got aspect ratio: {aspect_ratio}")
             width, height = as_maps[aspect_ratio]
@@ -309,7 +323,7 @@ class ZImageRunner(DefaultRunner):
         raise NotImplementedError
 
     def set_target_shape(self):
-        height, width = self.get_input_target_shape()
+        width, height = self.get_input_target_shape()
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
@@ -326,7 +340,7 @@ class ZImageRunner(DefaultRunner):
                 raise ValueError(f"target_shape must be 4D [B, C, H, W], got {len(self.input_info.target_shape)}D: {self.input_info.target_shape}")
             _, _, latent_height, latent_width = self.input_info.target_shape
         else:
-            height, width = self.get_input_target_shape()
+            width, height = self.get_input_target_shape()
 
             vae_scale_factor = self.config["vae_scale_factor"]
             latent_height = 2 * (int(height) // (vae_scale_factor * 2))
