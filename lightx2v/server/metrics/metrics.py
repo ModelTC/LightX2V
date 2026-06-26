@@ -1,5 +1,7 @@
 # -*-coding=utf-8-*-
+import gc
 import threading
+import time
 from typing import List, Tuple
 
 from loguru import logger
@@ -173,6 +175,30 @@ HYBRID_30_900S_BUCKETS = (
     900.0,  # 15min
 )
 
+# GC pauses span from ~100us (gen0) to the hundreds-of-ms gen2 stop-the-world
+# walks that drive the steady-state latency creep. Fine resolution at the low
+# end keeps the frequent gen0/gen1 collections meaningful while still bracketing
+# the slow gen2 tail.
+GC_DURATION_BUCKETS = (
+    0.0001,  # 100us
+    0.00025,  # 250us
+    0.0005,  # 500us
+    0.001,  # 1ms
+    0.0025,  # 2.5ms
+    0.005,  # 5ms
+    0.01,  # 10ms
+    0.025,  # 25ms
+    0.05,  # 50ms
+    0.1,  # 100ms
+    0.2,  # 200ms
+    0.35,  # 350ms
+    0.5,  # 500ms
+    0.75,  # 750ms
+    1.0,  # 1s
+    2.0,  # 2s
+    5.0,  # 5s
+)
+
 
 METRICS_INFO = {
     "lightx2v_api_request_total": MetricsConfig(
@@ -336,6 +362,13 @@ METRICS_INFO = {
         type_="histogram",
         labels=["model_cls"],
     ),
+    "lightx2v_gc_collection_duration_seconds": MetricsConfig(
+        name="lightx2v_gc_collection_duration_seconds",
+        desc="Wall-clock duration of a Python garbage collection pass (s)",
+        type_="histogram",
+        labels=["generation"],
+        buckets=GC_DURATION_BUCKETS,
+    ),
 }
 
 
@@ -395,8 +428,55 @@ class MetricsServer:
         self.server_thread.start()
 
 
+_gc_probe_installed = False
+
+
+def install_gc_duration_probe(metric_client=None):
+    """Record every Python GC pass duration into ``lightx2v_gc_collection_duration_seconds``.
+
+    A ``gc.callbacks`` handler times each collection (``start`` -> ``stop``) with a
+    monotonic clock and observes the elapsed seconds into the histogram, labelled by
+    generation ("0"/"1"/"2"). The gen2 (full) pass is the stop-the-world walk over the
+    steady-state object graph whose cost climbs as the heap grows, so this metric makes
+    the latency-creep mechanism directly observable.
+
+    Idempotent: the callback is appended at most once. The three per-generation child
+    histograms are pre-bound so the hot path only does a dict lookup plus ``observe``.
+    CPython sets ``collecting=1`` for the duration of the callbacks, so the ``observe``
+    cannot trigger a re-entrant collection; the probe is safe to leave always on.
+    """
+    global _gc_probe_installed
+    if _gc_probe_installed:
+        return
+    if metric_client is None:
+        from .monitor import Monitor
+
+        metric_client = Monitor()
+    histogram = getattr(metric_client, "lightx2v_gc_collection_duration_seconds", None)
+    if histogram is None:
+        logger.warning("[GC] gc duration probe not installed: metric is unavailable")
+        return
+
+    children = {g: histogram.labels(generation=str(g)) for g in (0, 1, 2)}
+    start = [0.0]
+
+    def _gc_cb(phase, info):
+        if phase == "start":
+            start[0] = time.perf_counter()
+            return
+        dt = time.perf_counter() - start[0]
+        child = children.get(info.get("generation", 0))
+        if child is not None:
+            child.observe(dt)
+
+    gc.callbacks.append(_gc_cb)
+    _gc_probe_installed = True
+    logger.info("[GC] gc duration probe installed (lightx2v_gc_collection_duration_seconds)")
+
+
 def server_process(metric_port=8001):
     metrics = MetricsServer(
         port=metric_port,
     )
     metrics.start_server()
+    install_gc_duration_probe()
