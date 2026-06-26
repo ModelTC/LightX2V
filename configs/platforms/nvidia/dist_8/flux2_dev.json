@@ -15,13 +15,14 @@
         30
     ],
     "attn_type": "flash_attn2",
-    "cpu_offload": false,
+    "cpu_offload": true,
     "offload_granularity": "block",
     "modulate_type": "torch",
     "rope_type": "torch",
     "layer_norm_type": "torch",
-    "rms_norm_type": "torch",
     "parallel": {
-        "tensor_p_size": 8
+        "seq_p_size": 2,
+        "seq_p_attn_type": "ulysses",
+        "cfg_p_size": 2
     }
 }
