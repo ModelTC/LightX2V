@@ -20,4 +20,4 @@ python -m lightx2v.infer \
 --negative_prompt " " \
 --save_result_path ${lightx2v_path}/save_results/z_image_turbo_i2i.png \
 --seed 42 \
---i2i_denoise_strength 1.0
+--i2i_denoise_strength 0.4
