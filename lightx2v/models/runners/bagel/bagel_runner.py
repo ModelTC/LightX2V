@@ -139,6 +139,7 @@ class BagelRunner(DefaultRunner):
             "latent_downsample": get_bagel_latent_downsample(self.config),
             "latent_channel": self.config["vae_config"]["z_channels"],
             "latent_patch_size": self.config["latent_patch_size"],
+            "return_result_tensor": bool(getattr(self.input_info, "return_result_tensor", False)),
         }
 
     def _save_images(self, images, input_info, log_prefix="Image saved"):
