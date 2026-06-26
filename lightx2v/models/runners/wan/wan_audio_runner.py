@@ -2,6 +2,7 @@ import gc
 import io
 import json
 import os
+import subprocess
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
@@ -733,11 +734,26 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
             # fixed audio segments inputs
             if self.va_controller.reader is None:
+                # Save paths before super().run_main() clears input_info
+                out_path = getattr(self.input_info, "save_result_path", None)
+                orig_audio = (getattr(self.input_info, "audio_path", "") or "").split(",")[0].strip() or None
                 result = super().run_main()
                 # Stop VARecorder so ffmpeg finishes writing the file
                 if self.va_controller is not None:
                     self.va_controller.clear()
                     self.va_controller = None
+                # Re-mux with original audio to replace 16kHz audio
+                if out_path and orig_audio and os.path.isfile(out_path) and os.path.isfile(orig_audio):
+                    try:
+                        tmp = out_path + ".remux.mp4"
+                        cmd = ["ffmpeg", "-y", "-i", out_path, "-i", orig_audio,
+                               "-c:v", "copy", "-c:a", "copy",
+                               "-map", "0:v:0", "-map", "1:a:0", "-shortest", tmp]
+                        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        os.replace(tmp, out_path)
+                        logger.info(f"[wan_audio] Re-muxed with original audio: {orig_audio}")
+                    except Exception as exc:
+                        logger.warning(f"[wan_audio] Re-mux failed: {exc}")
                 return result
 
             self.va_controller.start()
