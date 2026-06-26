@@ -2,6 +2,7 @@ import gc
 import io
 import json
 import os
+import subprocess
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
@@ -100,13 +101,15 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
         target_h, target_w = bucket_config[closet_ratio][0]
     elif resize_mode == "fixed_min_side":
         min_side = 720
-        if fixed_area == "720p":
+        if fixed_area == "1080p":
+            min_side = 1080
+        elif fixed_area == "720p":
             min_side = 720
         elif fixed_area == "480p":
             min_side = 480
         else:
-            logger.warning(f"[wan_audio] fixed_area is not '480p' or '720p', using default 480p: {fixed_area}")
-            min_side = 480
+            logger.warning(f"[wan_audio] fixed_area is not '480p', '720p' or '1080p', using default 720p: {fixed_area}")
+            min_side = 720
         if ori_ratio < 1.0:
             target_h = min_side
             target_w = round(target_h / ori_ratio)
@@ -392,9 +395,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         ref_img, h, w = resize_image(
             ref_img,
-            resize_mode=self.config.get("resize_mode", "adaptive"),
+            resize_mode=getattr(self.input_info, "resize_mode", None) or self.config.get("resize_mode", "adaptive"),
             bucket_shape=self.config.get("bucket_shape", None),
-            fixed_area=self.config.get("fixed_area", None),
+            fixed_area=getattr(self.input_info, "fixed_area", None) or self.config.get("fixed_area", None),
             fixed_shape=self.config.get("fixed_shape", None),
         )
         logger.info(f"[wan_audio] resize_image target_h: {h}, target_w: {w}")
@@ -729,7 +732,27 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
             # fixed audio segments inputs
             if self.va_controller.reader is None:
-                return super().run_main()
+                # Save paths before super().run_main() clears input_info
+                out_path = getattr(self.input_info, "save_result_path", None)
+                orig_audio = (getattr(self.input_info, "audio_path", "") or "").split(",")[0].strip() or None
+                result = super().run_main()
+                # Stop VARecorder so ffmpeg finishes writing the file
+                if self.va_controller is not None:
+                    self.va_controller.clear()
+                    self.va_controller = None
+                # Re-mux with original audio to replace 16kHz audio
+                if out_path and orig_audio and os.path.isfile(out_path) and os.path.isfile(orig_audio):
+                    try:
+                        tmp = out_path + ".remux.mp4"
+                        cmd = ["ffmpeg", "-y", "-i", out_path, "-i", orig_audio,
+                               "-c:v", "copy", "-c:a", "copy",
+                               "-map", "0:v:0", "-map", "1:a:0", "-shortest", tmp]
+                        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        os.replace(tmp, out_path)
+                        logger.info(f"[wan_audio] Re-muxed with original audio: {orig_audio}")
+                    except Exception as exc:
+                        logger.warning(f"[wan_audio] Re-mux failed: {exc}")
+                return result
 
             self.va_controller.start()
             self.init_run()
