@@ -431,6 +431,60 @@ class ZImageScheduler(BaseScheduler):
         grids = torch.meshgrid(axes, indexing="ij")
         return torch.stack(grids, dim=-1)
 
+    def _get_i2i_denoise_strength(self, input_info):
+        strength = getattr(input_info, "i2i_denoise_strength", None)
+        if strength is None:
+            strength = self.config.get("i2i_denoise_strength")
+        if strength is None:
+            return None
+        strength = float(strength)
+        if strength < 0.0 or strength > 1.0:
+            raise ValueError(f"The value of i2i_denoise_strength should be in [0.0, 1.0] but is {strength}")
+        return strength
+
+    def _get_single_i2i_image_latents(self, input_info):
+        image_encoder_output = getattr(input_info, "image_encoder_output", None)
+        if not image_encoder_output:
+            raise ValueError("z-image i2i requires exactly one input image with VAE image latents.")
+        if len(image_encoder_output) != 1:
+            raise ValueError(f"z-image i2i currently supports single-image editing only, got {len(image_encoder_output)} images.")
+        return image_encoder_output[0]["image_latents"]
+
+    def get_timesteps(self, num_inference_steps, strength):
+        target_steps = round(num_inference_steps * strength)
+        if target_steps < 1:
+            raise ValueError(
+                "i2i_denoise_strength results in 0 denoising steps: "
+                f"round(infer_steps * i2i_denoise_strength)=round({num_inference_steps} * {strength})={target_steps}; "
+                "please increase it to run at least 1 step."
+            )
+        t_start = num_inference_steps - target_steps
+        timesteps = self.timesteps[t_start * self.scheduler.order :]
+        if hasattr(self.scheduler, "set_begin_index"):
+            self.scheduler.set_begin_index(t_start * self.scheduler.order)
+        return timesteps, target_steps
+
+    def _resize_i2i_image_latents(self, image_latents, target_height, target_width, target_channels):
+        if image_latents.ndim != 4:
+            raise ValueError(f"Expected z-image i2i image latents with shape [B, C, H, W], got {tuple(image_latents.shape)}")
+        if image_latents.shape[1] != target_channels:
+            raise ValueError(f"z-image i2i image latent channels {image_latents.shape[1]} do not match target channels {target_channels}.")
+        if image_latents.shape[-2:] != (target_height, target_width):
+            image_latents = F.interpolate(image_latents, size=(target_height, target_width), mode="bilinear", align_corners=False)
+        return image_latents
+
+    def prepare_i2i_denoise_strength_latents(self, input_info):
+        image_latents = self._get_single_i2i_image_latents(input_info).to(device=AI_DEVICE, dtype=self.dtype)
+        if self.latents.shape[0] != 1:
+            raise ValueError(f"z-image i2i currently supports single-image single-output editing only, got output latent batch {self.latents.shape[0]}.")
+
+        _, target_channels, target_height, target_width = self.latents.shape
+        image_latents = self._resize_i2i_image_latents(image_latents, target_height, target_width, target_channels)
+
+        latent_timestep = self.timesteps[:1]
+        noise = self.latents
+        self.latents = self.scheduler.scale_noise(image_latents, latent_timestep, noise)
+
     def prepare_latents(self, input_info):
         self.input_info = input_info
         shape = input_info.target_shape
@@ -477,7 +531,8 @@ class ZImageScheduler(BaseScheduler):
 
     def set_timesteps(self):
         sigmas = np.linspace(1.0, 1 / self.config["infer_steps"], self.config["infer_steps"])
-        image_seq_len = self.latents.shape[1]
+        _, _, latent_height, latent_width = self.latents.shape
+        image_seq_len = (latent_height // 2) * (latent_width // 2)
         mu = calculate_shift(
             image_seq_len,
             self.scheduler_config.get("base_image_seq_len", 256),
@@ -497,6 +552,13 @@ class ZImageScheduler(BaseScheduler):
         self.timesteps = timesteps
         self.infer_steps = num_inference_steps
 
+        if self.config["task"] == "i2i":
+            strength = self._get_i2i_denoise_strength(self.input_info)
+            if strength is not None:
+                timesteps, num_inference_steps = self.get_timesteps(num_inference_steps, strength)
+                self.timesteps = timesteps
+                self.infer_steps = num_inference_steps
+
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
         self.num_warmup_steps = num_warmup_steps
@@ -509,6 +571,9 @@ class ZImageScheduler(BaseScheduler):
             logger.info(f"Generator is not None, using existing generator for latents")
         self.prepare_latents(input_info)
         self.set_timesteps()
+        strength = self._get_i2i_denoise_strength(input_info)
+        if self.config["task"] == "i2i" and strength is not None:
+            self.prepare_i2i_denoise_strength_latents(input_info)
 
         self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
 
