@@ -253,7 +253,7 @@ class LTX2Model(BaseTransformerModel):
         """Check if a weight key needs TP splitting.
 
         TP weights include:
-        - Attention layers: to_q, to_k, to_v, to_out.0, q_norm, k_norm
+        - Attention layers: to_q, to_k, to_v, to_gate_logits, to_out.0, q_norm, k_norm
         - FFN layers: net.0.proj, net.2
         """
         # Generic patterns that apply to all attention and FFN layers
@@ -261,6 +261,7 @@ class LTX2Model(BaseTransformerModel):
             ".to_q.",
             ".to_k.",
             ".to_v.",
+            ".to_gate_logits.",
             ".to_out.0.",
             ".q_norm.",
             ".k_norm.",
@@ -273,14 +274,14 @@ class LTX2Model(BaseTransformerModel):
         """Determine the split type for a weight key.
 
         Returns:
-            "col": Column split (to_q, to_k, to_v, net.0.proj)
+            "col": Column split (to_q, to_k, to_v, to_gate_logits, net.0.proj)
             "row": Row split (to_out.0, net.2)
             "norm": Norm split (q_norm, k_norm)
             None: No split needed
         """
         if ".q_norm." in key or ".k_norm." in key:
             return "norm"
-        elif ".to_q." in key or ".to_k." in key or ".to_v." in key or ".net.0.proj." in key:
+        elif ".to_q." in key or ".to_k." in key or ".to_v." in key or ".to_gate_logits." in key or ".net.0.proj." in key:
             return "col"
         elif ".to_out.0." in key or ".net.2." in key:
             return "row"
