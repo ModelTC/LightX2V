@@ -37,6 +37,7 @@ RUN colcon mixin update default
 
 RUN pip uninstall setuptools-scm
 RUN pip install catkin_pkg empy pyqt5-sip PyQt5 sip==6.15.3 setuptools==79.0.1
+RUN pip install hydra-core==1.2.0 robosuite==1.4.0 bddl==1.0.1 coverage==7.6.1 gym==0.25.2 mujoco==3.9.0 future easydict termcolor
 
 
 WORKDIR /root/ros2_lyrical

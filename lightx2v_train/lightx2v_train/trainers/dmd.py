@@ -235,7 +235,7 @@ class DmdTrainer(BaseTrainer):
     def sample_end_step(self):
         return self._sample_synced_int(0, self.scheduler.num_inference_steps)
 
-    def run_back_simulation(self, condition, latent_shape, end_step_idx, xt=None):
+    def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
         if xt is None:
             xt = self.sample_initial_latents(latent_shape)
         x0 = None
@@ -244,13 +244,14 @@ class DmdTrainer(BaseTrainer):
         self.model.transformer.train()
         for idx in range(end_step_idx + 1):
             sigma = self.scheduler.sigma_at(idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
-            with torch.no_grad():
+            context = torch.enable_grad if (grad_enabled and idx == end_step_idx) else torch.no_grad
+            with context():
                 velocity = self._predict_velocity(self.model, xt, sigma, condition)
             if idx == end_step_idx:
                 xt_end = xt.detach()
                 vt_end = velocity.detach()
             xt, x0 = self.scheduler.step_by_index(velocity, idx, xt)
-        return x0.detach(), xt_end, vt_end
+        return x0, xt_end, vt_end
 
     def _compute_cdm_loss(self, xt, vt, end_step_idx, condition):
         batch_size = xt.shape[0]
@@ -285,16 +286,16 @@ class DmdTrainer(BaseTrainer):
         self._prepare_sampling_schedule(latent_shape)
         end_step_idx = self.sample_end_step()
         xt_start = self.sample_initial_latents(latent_shape)
-        x0_ref, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, xt=xt_start)
+        x0, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=(stage != "fake"), xt=xt_start)
 
         sigma = self.scheduler.sample_renoise_sigma(latent_shape[0], device=self.model.device, dtype=self.running_dtype)
         noise = torch.randn(latent_shape, device=self.model.device, dtype=torch.float32)
-        renoised_xt = self.scheduler.add_noise(x0_ref, noise, sigma)
+        renoised_xt = self.scheduler.add_noise(x0.detach(), noise, sigma)
 
         if stage == "fake":
             self.fake_model.transformer.train()
             velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
-            velocity_gt = self.scheduler.build_train_gt(x0_ref.float(), noise)
+            velocity_gt = self.scheduler.build_train_gt(x0.float(), noise)
             loss_fake = F.mse_loss(velocity_fake.float(), velocity_gt.float(), reduction="mean")
             return {"fake": loss_fake}
 
@@ -306,11 +307,6 @@ class DmdTrainer(BaseTrainer):
         expanded_sigma = self.scheduler._expand_to_ndim(sigma, renoised_xt.ndim)
         x_pred_fake = renoised_xt - expanded_sigma * velocity_fake
         x_pred_teacher = renoised_xt - expanded_sigma * velocity_teacher
-        sigma_end = self.scheduler.sigma_at(end_step_idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
-        xt_velocity = self._predict_velocity(self.model, xt_end, sigma_end, condition)
-        sigma_end_expanded = self.scheduler._expand_to_ndim(sigma_end, xt_end.ndim)
-        x0 = xt_end - sigma_end_expanded * xt_velocity
-
         loss_dmd = self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
         total_loss = loss_dmd
 

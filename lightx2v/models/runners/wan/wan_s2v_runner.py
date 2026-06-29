@@ -41,11 +41,15 @@ def merge_video_audio(video_path: str, audio_path: str):
         "-c:v",
         "copy",
         "-c:a",
-        "aac",
+        "copy",
         "-shortest",
         tmp_path,
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if res.returncode != 0:
+        # Fallback to aac re-encoding if stream copy fails (e.g., for WAV inputs)
+        cmd[9] = "aac"
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     os.replace(tmp_path, video_path)
 
 

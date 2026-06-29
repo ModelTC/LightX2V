@@ -1,8 +1,11 @@
+import functools
+import gc
 import os
 from abc import ABC
 
 import torch
 import torch.distributed as dist
+from loguru import logger
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -17,6 +20,42 @@ class BaseRunner(ABC):
         self.config = config
         self.vae_encoder_need_img_original = False
         self.input_info = None
+        self._gc_frozen = False  # one-shot guard for _maybe_freeze_gc()
+
+    def __init_subclass__(cls, **kwargs):
+        """Wrap each subclass's ``run_pipeline`` so the one-shot GC freeze fires after it."""
+        super().__init_subclass__(**kwargs)
+        fn = cls.__dict__.get("run_pipeline")
+        if fn is None or getattr(fn, "_gc_freeze_wrapped", False):
+            return
+
+        @functools.wraps(fn)
+        def run_pipeline(self, *args, **kwargs):
+            result = fn(self, *args, **kwargs)
+            self._maybe_freeze_gc()
+            return result
+
+        run_pipeline._gc_freeze_wrapped = True
+        cls.run_pipeline = run_pipeline
+
+    def _maybe_freeze_gc(self):
+        """Move the steady-state object graph into the GC's permanent generation once."""
+        if getattr(self, "_gc_frozen", False):
+            return
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self._gc_frozen = True
+            logger.info("[GC] skip gc.freeze(): lazy_load/unload_modules rebuilds the model each request")
+            return
+        # Collect before freezing. gc.freeze() merges everything currently tracked into the
+        # permanent generation *without* collecting first, so any uncollected cyclic garbage
+        # sitting in the generations right now would be pinned there forever (a leak) and would
+        # bloat the permanent set, weakening the win. Sweeping it first means only the genuinely
+        # live steady-state graph gets frozen.
+        collected = gc.collect()
+        n = len(gc.get_objects())
+        gc.freeze()
+        self._gc_frozen = True
+        logger.info(f"[GC] gc.collect() reclaimed {collected} objects; gc.freeze() moved ~{n} live tracked objects out of future GC walks")
 
     def apply_disagg_request_overrides(self, config_modify):
         """Mirror flat disagg request fields into ``disagg_config`` in disagg mode only."""

@@ -1,0 +1,15 @@
+{
+  "adapter_model_path": "/data/nvme1/yongyang/nb/FastWAM/checkpoints/fastwam_release/libero_uncond_2cam224.pt",
+  "dataset_stats_path": "/data/nvme1/yongyang/nb/FastWAM/checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json",
+  "camera_size": 224,
+  "action_chunk_size": 32,
+  "actions_per_plan": 10,
+  "num_steps_wait": 30,
+  "action_infer_steps": 20,
+  "action_sample_shift": 5.0,
+  "action_dim_hidden": 1024,
+  "action_dim": 7,
+  "robot_state_dim": 8,
+  "binarize_gripper": true,
+  "default_prompt": "A video recorded from a robot's point of view executing the following instruction: {task_prompt}"
+}
