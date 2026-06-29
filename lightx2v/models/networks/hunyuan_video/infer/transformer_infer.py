@@ -111,11 +111,17 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
             self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
             self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            self.seq_p_tensor_fusion = self.config["parallel"].get("seq_p_tensor_fusion", False)
+            self.seq_p_split_qkv_input = _env_flag("LIGHTX2V_SEQ_P_SPLIT_QKV_INPUT")
+            self.seq_p_split_attn_output = _env_flag("LIGHTX2V_SEQ_P_SPLIT_ATTN_OUTPUT")
         else:
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
+            self.seq_p_tensor_fusion = False
+            self.seq_p_split_qkv_input = False
+            self.seq_p_split_attn_output = False
         self.infer_func = self.infer_without_offload
         if self.config.get("modulate_type", "triton") == "triton":
             self.modulate_func = fuse_scale_shift_kernel
@@ -128,8 +134,15 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         self.compile_non_attn = _env_flag("LIGHTX2V_COMPILE_DIT_NON_ATTN")
         self.compile_before_attn = _env_flag("LIGHTX2V_COMPILE_DIT_BEFORE_ATTN")
         self.compile_non_attn_mode = os.getenv("LIGHTX2V_COMPILE_DIT_MODE", "reduce-overhead")
+        self.share_qkv_act_quant = _env_flag("LIGHTX2V_INT8_SHARE_QKV_ACT_QUANT")
         self._compiled_non_attn = {}
         self._compile_non_attn_failed = set()
+        if self.share_qkv_act_quant:
+            logger.info("[Quant] Reusing dynamic activation quantization for consecutive Q/K/V projections")
+        if self.seq_p_split_qkv_input:
+            logger.info("[Ulysses] Passing split img/txt QKV tensors to avoid pre-attention concat/slice copies")
+        if self.seq_p_split_attn_output:
+            logger.info("[Ulysses] Returning split img/txt attention outputs to avoid post-attention concat/slice copies")
         if self.compile_non_attn or self.compile_before_attn:
             try:
                 torch._dynamo.config.suppress_errors = True
@@ -174,6 +187,22 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         txt = self._infer_txt_branch_after_attn(weights, txt_attn, infer_module_out.txt, txt_branch_out)
         return img, txt
 
+    def _apply_qkv(self, q_weight, k_weight, v_weight, hidden_states):
+        use_shared_quant = (
+            self.share_qkv_act_quant
+            and hasattr(q_weight, "prepare_quantized_input")
+            and hasattr(q_weight, "apply_quantized_input")
+            and not any(getattr(weight, "use_bf16_fallback", False) for weight in (q_weight, k_weight, v_weight))
+        )
+        if use_shared_quant:
+            quantized_input = q_weight.prepare_quantized_input(hidden_states)
+            return (
+                q_weight.apply_quantized_input(hidden_states, quantized_input),
+                k_weight.apply_quantized_input(hidden_states, quantized_input),
+                v_weight.apply_quantized_input(hidden_states, quantized_input),
+            )
+        return q_weight.apply(hidden_states), k_weight.apply(hidden_states), v_weight.apply(hidden_states)
+
     @torch.no_grad()
     def _infer_img_branch_before_attn(self, weights, infer_module_out):
         return self._run_non_attn_branch(
@@ -195,9 +224,12 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         ) = weights.img_branch.img_mod.apply(infer_module_out.vec).chunk(6, dim=-1)
         img_modulated = weights.img_branch.img_norm1.apply(infer_module_out.img.squeeze(0))
         img_modulated = self.modulate_func(img_modulated, scale=img_mod1_scale, shift=img_mod1_shift).squeeze(0)
-        img_q = weights.img_branch.img_attn_q.apply(img_modulated)
-        img_k = weights.img_branch.img_attn_k.apply(img_modulated)
-        img_v = weights.img_branch.img_attn_v.apply(img_modulated)
+        img_q, img_k, img_v = self._apply_qkv(
+            weights.img_branch.img_attn_q,
+            weights.img_branch.img_attn_k,
+            weights.img_branch.img_attn_v,
+            img_modulated,
+        )
         img_q = rearrange(img_q, "L (H D) -> L H D", H=self.heads_num)
         img_k = rearrange(img_k, "L (H D) -> L H D", H=self.heads_num)
         img_v = rearrange(img_v, "L (H D) -> L H D", H=self.heads_num)
@@ -237,9 +269,12 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         ) = weights.txt_branch.txt_mod.apply(infer_module_out.vec).chunk(6, dim=-1)
         txt_modulated = weights.txt_branch.txt_norm1.apply(infer_module_out.txt.squeeze(0))
         txt_modulated = self.modulate_func(txt_modulated, scale=txt_mod1_scale, shift=txt_mod1_shift).squeeze(0)
-        txt_q = weights.txt_branch.txt_attn_q.apply(txt_modulated)
-        txt_k = weights.txt_branch.txt_attn_k.apply(txt_modulated)
-        txt_v = weights.txt_branch.txt_attn_v.apply(txt_modulated)
+        txt_q, txt_k, txt_v = self._apply_qkv(
+            weights.txt_branch.txt_attn_q,
+            weights.txt_branch.txt_attn_k,
+            weights.txt_branch.txt_attn_v,
+            txt_modulated,
+        )
         txt_q = rearrange(txt_q, "L (H D) -> L H D", H=self.heads_num)
         txt_k = rearrange(txt_k, "L (H D) -> L H D", H=self.heads_num)
         txt_v = rearrange(txt_v, "L (H D) -> L H D", H=self.heads_num)
@@ -260,29 +295,51 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
     @torch.no_grad()
     def _infer_attn(self, weights, img_q, img_k, img_v, txt_q, txt_k, txt_v):
         img_seqlen = img_q.shape[1]
-        query = torch.cat([img_q, txt_q], dim=1)
-        key = torch.cat([img_k, txt_k], dim=1)
-        value = torch.cat([img_v, txt_v], dim=1)
-        seqlen = query.shape[1]
+        txt_seqlen = txt_q.shape[1]
+        seqlen = img_seqlen + txt_seqlen
         cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu")
 
-        if self.config["seq_parallel"]:
+        if self.config["seq_parallel"] and self.seq_p_split_qkv_input:
             attn_out = weights.self_attention_parallel.apply(
-                q=query,
-                k=key,
-                v=value,
+                q=(img_q, txt_q),
+                k=(img_k, txt_k),
+                v=(img_v, txt_v),
                 slice_qkv_len=img_seqlen,
                 cu_seqlens_qkv=cu_seqlens_qkv,
                 attention_module=weights.self_attention,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 use_fp4_comm=self.seq_p_fp4_comm,
+                use_tensor_fusion=self.seq_p_tensor_fusion,
                 enable_head_parallel=self.enable_head_parallel,
+                return_split_output=self.seq_p_split_attn_output,
             )
         else:
-            attn_out = weights.self_attention.apply(q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen)
+            query = torch.cat([img_q, txt_q], dim=1)
+            key = torch.cat([img_k, txt_k], dim=1)
+            value = torch.cat([img_v, txt_v], dim=1)
+            if self.config["seq_parallel"]:
+                attn_out = weights.self_attention_parallel.apply(
+                    q=query,
+                    k=key,
+                    v=value,
+                    slice_qkv_len=img_seqlen,
+                    cu_seqlens_qkv=cu_seqlens_qkv,
+                    attention_module=weights.self_attention,
+                    seq_p_group=self.seq_p_group,
+                    use_fp8_comm=self.seq_p_fp8_comm,
+                    use_fp4_comm=self.seq_p_fp4_comm,
+                    use_tensor_fusion=self.seq_p_tensor_fusion,
+                    enable_head_parallel=self.enable_head_parallel,
+                    return_split_output=self.seq_p_split_attn_output,
+                )
+            else:
+                attn_out = weights.self_attention.apply(q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen)
 
-        img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
+        if isinstance(attn_out, (tuple, list)):
+            img_attn, txt_attn = attn_out
+        else:
+            img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
         return img_attn, txt_attn
 
     def _run_non_attn_branch(self, graph_name, eager_fn, *args, compile_enabled=None):
