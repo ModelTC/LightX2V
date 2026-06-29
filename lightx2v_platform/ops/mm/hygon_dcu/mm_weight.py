@@ -1,4 +1,7 @@
+import os
+
 import torch
+import torch.nn.functional as F
 
 from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate
 from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
@@ -61,6 +64,32 @@ def _bias_or_none(module, out_dtype=None):
     return None
 
 
+
+def _env_flag(name, default="0"):
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_patterns(name, default=""):
+    raw = os.getenv(name, default)
+    return tuple(item.strip() for item in raw.replace(";", ",").split(",") if item.strip())
+
+
+def _matches_any(name, patterns):
+    return any(pattern in name for pattern in patterns)
+
+
+def _use_selective_bf16_fallback(weight_name):
+    if not _env_flag("LIGHTX2V_INT8_SELECTIVE"):
+        return False
+    include = _env_patterns("LIGHTX2V_INT8_SELECTIVE_INCLUDE")
+    exclude = _env_patterns(
+        "LIGHTX2V_INT8_SELECTIVE_EXCLUDE",
+        "txt_branch",
+    )
+    if include and not _matches_any(weight_name, include):
+        return True
+    return _matches_any(weight_name, exclude)
+
 def _require_hipblaslt_w8a8_channelwise_gemm():
     if hipblaslt_w8a8_channelwise_gemm is None:
         raise RuntimeError(
@@ -97,6 +126,7 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
         self.load_func = self.load_int8_perchannel_sym
         self.weight_need_transpose = False
         self.act_quant_func = self.act_quant_int8_perchannel_sym_vllm
+        self.use_bf16_fallback = _use_selective_bf16_fallback(weight_name)
 
     def load(self, weight_dict):
         super().load(weight_dict)
@@ -104,6 +134,14 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
 
     def load_int8_perchannel_sym(self, weight_dict):
         """Load INT8 per-channel symmetric quantized weights."""
+        if self.use_bf16_fallback:
+            if not self.config.get("weight_auto_quant", False):
+                raise RuntimeError("Selective BF16 fallback requires weight_auto_quant=1 so original BF16 weights are available.")
+            self.weight = weight_dict[self.weight_name].to(self.infer_dtype)
+            self.weight_scale = None
+            _load_auto_quant_bias(self, weight_dict)
+            return
+
         if self.config.get("weight_auto_quant", False):
             if IntegerQuantizer is None:
                 raise ImportError("IntegerQuantizer not available. Please ensure lightx2v.utils.quant_utils is available.")
@@ -123,11 +161,14 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
         input_tensor_quant, input_tensor_scale, _ = ops.scaled_int8_quant(x, scale=None, azp=None, symmetric=True)
         return input_tensor_quant, input_tensor_scale
 
-    def apply(self, input_tensor):
-        dtype = input_tensor.dtype
+    def prepare_quantized_input(self, input_tensor):
+        if self.use_bf16_fallback:
+            raise RuntimeError("BF16 fallback weights do not support shared INT8 activation quantization.")
         input_2d, prefix_shape = _flatten_last_dim(input_tensor)
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_2d)
-        out_dtype = dtype if dtype in (torch.bfloat16, torch.float16) else torch.bfloat16
+        return input_2d, prefix_shape, input_tensor_quant, input_tensor_scale
+
+    def _apply_quantized_2d(self, input_2d, input_tensor_quant, input_tensor_scale, out_dtype):
         m, k = input_tensor_quant.shape
         n = self.weight.shape[0]
         hipblaslt_gemm = _require_hipblaslt_w8a8_channelwise_gemm()
@@ -143,8 +184,29 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
             out_dtype=out_dtype,
             bias=_bias_or_none(self, out_dtype),
         )
-        output_tensor = output_tensor.reshape(-1, n).narrow(0, 0, m)
+        output_tensor = output_tensor.reshape(-1, n).narrow(0, 0, input_2d.shape[0])
+        return output_tensor
+
+    def apply_quantized_input(self, input_tensor, quantized_input):
+        if self.use_bf16_fallback:
+            return self.apply(input_tensor)
+        dtype = input_tensor.dtype
+        out_dtype = dtype if dtype in (torch.bfloat16, torch.float16) else torch.bfloat16
+        input_2d, prefix_shape, input_tensor_quant, input_tensor_scale = quantized_input
+        output_tensor = self._apply_quantized_2d(input_2d, input_tensor_quant, input_tensor_scale, out_dtype)
 
         if output_tensor.dtype != dtype:
             output_tensor = output_tensor.to(dtype)
         return _restore_last_dim(output_tensor, prefix_shape)
+
+    def _apply_bf16(self, input_tensor):
+        weight = self.weight
+        if weight.dtype != input_tensor.dtype:
+            weight = weight.to(input_tensor.dtype)
+        bias = _bias_or_none(self, input_tensor.dtype)
+        return F.linear(input_tensor, weight, bias)
+
+    def apply(self, input_tensor):
+        if self.use_bf16_fallback:
+            return self._apply_bf16(input_tensor)
+        return self.apply_quantized_input(input_tensor, self.prepare_quantized_input(input_tensor))
