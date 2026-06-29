@@ -5,10 +5,14 @@ import triton.language as tl
 
 @triton.jit
 def _attn_fwd(
-    Q, K, V,
+    Q,
+    K,
+    V,
     qk_scale: tl.constexpr,
     topk: tl.constexpr,
-    LUT, LSE, OS,
+    LUT,
+    LSE,
+    OS,
     H: tl.constexpr,
     LQ: tl.constexpr,
     LK: tl.constexpr,
@@ -80,7 +84,9 @@ def _attn_fwd(
 
 @triton.jit
 def _attn_bwd_preprocess(
-    OS, DOS, DELTAS,
+    OS,
+    DOS,
+    DELTAS,
     H: tl.constexpr,
     LQ,
     D: tl.constexpr,
@@ -111,8 +117,14 @@ def _attn_bwd_preprocess(
 
 @triton.jit
 def _attn_bwd_dq(
-    Q, K, V, LSE, DELTAS,
-    DOS, DQ, LUT,
+    Q,
+    K,
+    V,
+    LSE,
+    DELTAS,
+    DOS,
+    DQ,
+    LUT,
     qk_scale: tl.constexpr,
     topk: tl.constexpr,
     H: tl.constexpr,
@@ -177,7 +189,12 @@ def _attn_bwd_dq(
 
 @triton.jit
 def _attn_bwd_dkdv(
-    Q, K, V, DOS, DK, DV,
+    Q,
+    K,
+    V,
+    DOS,
+    DK,
+    DV,
     qk_scale,
     KBID,
     LSE,
@@ -276,14 +293,7 @@ class _attention_ar(torch.autograd.Function):
         lse = torch.empty((B, H, LQ), device=q.device, dtype=torch.float32)
 
         grid = (M_BLOCKS, B * H)
-        _attn_fwd[grid](
-            q, k, v, qk_scale, topk,
-            lut, lse, o_s,
-            H, LQ, LK, M_BLOCKS,
-            D, BLOCK_M, BLOCK_N,
-            num_warps=4,
-            num_stages=3
-        )
+        _attn_fwd[grid](q, k, v, qk_scale, topk, lut, lse, o_s, H, LQ, LK, M_BLOCKS, D, BLOCK_M, BLOCK_N, num_warps=4, num_stages=3)
 
         ctx.save_for_backward(q, k, v, k_block_id, lut, lse, o_s)
         ctx.qk_scale = qk_scale
@@ -314,8 +324,13 @@ class _attention_ar(torch.autograd.Function):
 
         grid = (M_BLOCKS, B * H)
         _attn_bwd_preprocess[grid](
-            o_s, do_s, delta_s,
-            H, LQ, D, BLOCK_M,
+            o_s,
+            do_s,
+            delta_s,
+            H,
+            LQ,
+            D,
+            BLOCK_M,
         )
 
         grid = (M_BLOCKS, B * H)
