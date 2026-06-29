@@ -112,7 +112,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
-        # (L, H, D) -> (B, H, L, D)
+        # (L, H, D) -> (B, L, H, D)
         q = q.unsqueeze(0)
         k = k.unsqueeze(0)
         v = v.unsqueeze(0)

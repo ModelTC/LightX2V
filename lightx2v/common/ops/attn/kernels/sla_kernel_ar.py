@@ -13,10 +13,10 @@ def _attn_fwd(
     LUT,
     LSE,
     OS,
+    H: tl.constexpr,
     LQ: tl.constexpr,
     LK: tl.constexpr,
     M_BLOCKS: tl.constexpr,
-    H: tl.constexpr,
     D: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -25,10 +25,13 @@ def _attn_fwd(
     idx_bh = tl.program_id(1).to(tl.int64)
 
     idx_b = idx_bh // H
-    idx_h = idx_bh - idx_b * H
+    idx_h = idx_bh % H
 
-    q_offset = idx_b * LQ * H * D + idx_h * D
-    kv_offset = idx_b * LK * H * D + idx_h * D
+    HD: tl.constexpr = H * D
+
+    # Q/K/V/O: (B, L, H, D) contiguous.
+    q_offset = idx_b * LQ * HD + idx_h * D
+    kv_offset = idx_b * LK * HD + idx_h * D
     lut_offset = (idx_bh * M_BLOCKS + idx_m) * topk
     lse_offset = idx_bh * LQ
 
@@ -36,8 +39,8 @@ def _attn_fwd(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, D)
 
-    Q_ptrs = Q + q_offset + offs_m[:, None] * (H * D) + offs_d[None, :]
-    OS_ptrs = OS + q_offset + offs_m[:, None] * (H * D) + offs_d[None, :]
+    Q_ptrs = Q + q_offset + offs_m[:, None] * HD + offs_d[None, :]
+    OS_ptrs = OS + q_offset + offs_m[:, None] * HD + offs_d[None, :]
     LUT_ptr = LUT + lut_offset
     LSE_ptrs = LSE + lse_offset + offs_m
 
@@ -51,8 +54,8 @@ def _attn_fwd(
         k_start = idx_n * BLOCK_N
         k_mask = (k_start + offs_n) < LK
 
-        K_ptrs = K + kv_offset + (k_start + offs_n)[None, :] * (H * D) + offs_d[:, None]
-        V_ptrs = V + kv_offset + (k_start + offs_n)[:, None] * (H * D) + offs_d[None, :]
+        K_ptrs = K + kv_offset + (k_start + offs_n)[None, :] * HD + offs_d[:, None]
+        V_ptrs = V + kv_offset + (k_start + offs_n)[:, None] * HD + offs_d[None, :]
 
         k = tl.load(K_ptrs, mask=k_mask[None, :])
         qk = tl.dot(q, k) * (qk_scale * 1.4426950408889634)
@@ -84,8 +87,8 @@ def _attn_bwd_preprocess(
     OS,
     DOS,
     DELTAS,
-    LQ: tl.constexpr,
     H: tl.constexpr,
+    LQ,
     D: tl.constexpr,
     BLOCK_M: tl.constexpr,
 ):
@@ -93,17 +96,20 @@ def _attn_bwd_preprocess(
     idx_bh = tl.program_id(1).to(tl.int64)
 
     idx_b = idx_bh // H
-    idx_h = idx_bh - idx_b * H
+    idx_h = idx_bh % H
 
-    OS += idx_b * LQ * H * D + idx_h * D
-    DOS += idx_b * LQ * H * D + idx_h * D
+    HD: tl.constexpr = H * D
+
+    os_base = idx_b * LQ * HD + idx_h * D
+    OS += os_base
+    DOS += os_base
     DELTAS += idx_bh * LQ
 
     offs_m = idx_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_d = tl.arange(0, D)
 
-    o_s = tl.load(OS + offs_m[:, None] * (H * D) + offs_d[None, :], mask=offs_m[:, None] < LQ)
-    do_s = tl.load(DOS + offs_m[:, None] * (H * D) + offs_d[None, :], mask=offs_m[:, None] < LQ)
+    o_s = tl.load(OS + offs_m[:, None] * HD + offs_d[None, :], mask=offs_m[:, None] < LQ)
+    do_s = tl.load(DOS + offs_m[:, None] * HD + offs_d[None, :], mask=offs_m[:, None] < LQ)
 
     delta_s = tl.sum(o_s * do_s, axis=1).to(DELTAS.type.element_ty)
     tl.store(DELTAS + offs_m, delta_s, mask=offs_m < LQ)
@@ -121,10 +127,10 @@ def _attn_bwd_dq(
     LUT,
     qk_scale: tl.constexpr,
     topk: tl.constexpr,
+    H: tl.constexpr,
     LQ: tl.constexpr,
     LK: tl.constexpr,
     M_BLOCKS: tl.constexpr,
-    H: tl.constexpr,
     D: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -133,20 +139,22 @@ def _attn_bwd_dq(
     idx_bh = tl.program_id(1).to(tl.int64)
 
     idx_b = idx_bh // H
-    idx_h = idx_bh - idx_b * H
+    idx_h = idx_bh % H
+
+    HD: tl.constexpr = H * D
 
     offs_m = idx_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, D)
 
-    q_offset = idx_b * LQ * H * D + idx_h * D
-    kv_offset = idx_b * LK * H * D + idx_h * D
+    q_offset = idx_b * LQ * HD + idx_h * D
+    kv_offset = idx_b * LK * HD + idx_h * D
     lse_offset = idx_bh * LQ
     lut_offset = (idx_bh * M_BLOCKS + idx_m) * topk
 
-    Q_ptrs = Q + q_offset + offs_m[:, None] * (H * D) + offs_d[None, :]
-    DQ_ptrs = DQ + q_offset + offs_m[:, None] * (H * D) + offs_d[None, :]
-    DOS_ptrs = DOS + q_offset + offs_m[:, None] * (H * D) + offs_d[None, :]
+    Q_ptrs = Q + q_offset + offs_m[:, None] * HD + offs_d[None, :]
+    DQ_ptrs = DQ + q_offset + offs_m[:, None] * HD + offs_d[None, :]
+    DOS_ptrs = DOS + q_offset + offs_m[:, None] * HD + offs_d[None, :]
     LSE_ptrs = LSE + lse_offset + offs_m
     DELTAS_ptrs = DELTAS + lse_offset + offs_m
     LUT_ptr = LUT + lut_offset
@@ -162,8 +170,8 @@ def _attn_bwd_dq(
         k_start = idx_n * BLOCK_N
         k_mask = (k_start + offs_n) < LK
 
-        K_ptrs = K + kv_offset + (k_start + offs_n)[:, None] * (H * D) + offs_d[None, :]
-        V_ptrs = V + kv_offset + (k_start + offs_n)[:, None] * (H * D) + offs_d[None, :]
+        K_ptrs = K + kv_offset + (k_start + offs_n)[:, None] * HD + offs_d[None, :]
+        V_ptrs = V + kv_offset + (k_start + offs_n)[:, None] * HD + offs_d[None, :]
 
         k = tl.load(K_ptrs, mask=k_mask[:, None])
         v = tl.load(V_ptrs, mask=k_mask[:, None])
@@ -191,11 +199,11 @@ def _attn_bwd_dkdv(
     KBID,
     LSE,
     DELTAS,
+    H: tl.constexpr,
     LQ: tl.constexpr,
     LK: tl.constexpr,
     M_BLOCKS: tl.constexpr,
     N_BLOCKS: tl.constexpr,
-    H: tl.constexpr,
     D: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -207,26 +215,28 @@ def _attn_bwd_dkdv(
     idx_bh = tl.program_id(1).to(tl.int64)
 
     idx_b = idx_bh // H
-    idx_h = idx_bh - idx_b * H
+    idx_h = idx_bh % H
+
+    HD: tl.constexpr = H * D
 
     offs_n = idx_n * BLOCK_N + tl.arange(0, BLOCK_N)
     offs_m = tl.arange(0, BLOCK_M2)
     offs_d = tl.arange(0, D)
 
-    q_offset = idx_b * LQ * H * D + idx_h * D
-    kv_offset = idx_b * LK * H * D + idx_h * D
+    q_offset = idx_b * LQ * HD + idx_h * D
+    kv_offset = idx_b * LK * HD + idx_h * D
     kbid_offset = idx_bh * M_BLOCKS * N_BLOCKS
     lse_offset = idx_bh * LQ
 
-    Q_ptrs = Q + q_offset + offs_m[:, None] * (H * D) + offs_d[None, :]
-    DOS_ptrs = DOS + q_offset + offs_m[:, None] * (H * D) + offs_d[None, :]
+    Q_ptrs = Q + q_offset + offs_m[:, None] * HD + offs_d[None, :]
+    DOS_ptrs = DOS + q_offset + offs_m[:, None] * HD + offs_d[None, :]
     LSE_ptrs = LSE + lse_offset + offs_m
     DELTAS_ptrs = DELTAS + lse_offset + offs_m
 
-    K_ptrs = K + kv_offset + offs_n[:, None] * (H * D) + offs_d[None, :]
-    V_ptrs = V + kv_offset + offs_n[:, None] * (H * D) + offs_d[None, :]
-    DK_ptrs = DK + kv_offset + offs_n[:, None] * (H * D) + offs_d[None, :]
-    DV_ptrs = DV + kv_offset + offs_n[:, None] * (H * D) + offs_d[None, :]
+    K_ptrs = K + kv_offset + offs_n[:, None] * HD + offs_d[None, :]
+    V_ptrs = V + kv_offset + offs_n[:, None] * HD + offs_d[None, :]
+    DK_ptrs = DK + kv_offset + offs_n[:, None] * HD + offs_d[None, :]
+    DV_ptrs = DV + kv_offset + offs_n[:, None] * HD + offs_d[None, :]
 
     KBID_ptr = KBID + kbid_offset + idx_n
 
@@ -255,8 +265,8 @@ def _attn_bwd_dkdv(
             dsT = pT * (dpT - delta[None, :])
             dk += tl.dot(dsT.to(q.dtype), q)
 
-        Q_ptrs += BLOCK_M2 * (H * D)
-        DOS_ptrs += BLOCK_M2 * (H * D)
+        Q_ptrs += BLOCK_M2 * HD
+        DOS_ptrs += BLOCK_M2 * HD
         LSE_ptrs += BLOCK_M2
         DELTAS_ptrs += BLOCK_M2
         if (idx_m + BLOCK_M2) % BLOCK_M == 0:
@@ -269,13 +279,10 @@ def _attn_bwd_dkdv(
 class _attention_ar(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v, k_block_id, lut, topk, BLOCK_M, BLOCK_N, qk_scale=None):
-        assert q.is_contiguous() and k.is_contiguous() and v.is_contiguous()
-        assert k_block_id.is_contiguous() and lut.is_contiguous()
-        assert BLOCK_M == 64 or BLOCK_M == 128
-        assert BLOCK_N == 64 or BLOCK_N == 128
+        # q, k, v: (B, L, H, D)
 
         B, LQ, H, D = q.shape
-        _, LK, Hk, Dk = k.shape
+        _, LK, _, Dk = k.shape
 
         if qk_scale is None:
             qk_scale = D**-0.5
@@ -286,7 +293,7 @@ class _attention_ar(torch.autograd.Function):
         lse = torch.empty((B, H, LQ), device=q.device, dtype=torch.float32)
 
         grid = (M_BLOCKS, B * H)
-        _attn_fwd[grid](q, k, v, qk_scale, topk, lut, lse, o_s, LQ, LK, M_BLOCKS, H, D, BLOCK_M, BLOCK_N, num_warps=4 if q.shape[-1] == 64 else 8, num_stages=3)
+        _attn_fwd[grid](q, k, v, qk_scale, topk, lut, lse, o_s, H, LQ, LK, M_BLOCKS, D, BLOCK_M, BLOCK_N, num_warps=4, num_stages=3)
 
         ctx.save_for_backward(q, k, v, k_block_id, lut, lse, o_s)
         ctx.qk_scale = qk_scale
@@ -313,15 +320,15 @@ class _attention_ar(torch.autograd.Function):
         dq = torch.empty_like(q)
         dk = torch.empty_like(k)
         dv = torch.empty_like(v)
-        delta_s = torch.empty((B, H, LQ), device=q.device, dtype=torch.float32)
+        delta_s = torch.empty_like(lse)
 
         grid = (M_BLOCKS, B * H)
         _attn_bwd_preprocess[grid](
             o_s,
             do_s,
             delta_s,
-            LQ,
             H,
+            LQ,
             D,
             BLOCK_M,
         )
@@ -338,10 +345,10 @@ class _attention_ar(torch.autograd.Function):
             lut,
             ctx.qk_scale,
             ctx.topk,
+            ctx.H,
             LQ,
             LK,
             M_BLOCKS,
-            ctx.H,
             D,
             BLOCK_M,
             BLOCK_N,
@@ -361,11 +368,11 @@ class _attention_ar(torch.autograd.Function):
             k_block_id,
             lse,
             delta_s,
+            ctx.H,
             LQ,
             LK,
             M_BLOCKS,
             N_BLOCKS,
-            ctx.H,
             D,
             BLOCK_M,
             BLOCK_N,
