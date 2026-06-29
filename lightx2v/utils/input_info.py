@@ -119,6 +119,7 @@ class S2VInputInfo:
     stream_config: dict = field(default_factory=dict)
     # shape related
     resize_mode: str = field(default_factory=str)
+    fixed_area: str = field(default_factory=str)
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
