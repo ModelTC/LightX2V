@@ -9,9 +9,8 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_
 
 from lightx2v_train.infer import build_inferencer
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
-from lightx2v_train.runtime.ddp import apply_ddp, set_ddp_gradient_sync
 from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process
-from lightx2v_train.runtime.fsdp import apply_fsdp2
+from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradient_sync
 from lightx2v_train.schedulers.flow_matching import RectifiedFlowMatchingScheduler
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -121,12 +120,10 @@ class BaseTrainer:
     def setup(self, resume_ckpt_path=None):
         self._setup_trainable_model(self.model)
 
-        apply_fsdp2(self.model, self.config)
+        apply_parallel(self.model, self.config)
 
         if self.gradient_checkpointing:
             self.model.enable_gradient_checkpointing()
-
-        apply_ddp(self.model, self.config)
 
         if self.infer_every_iters:
             self.inferencer = build_inferencer(self.config)
@@ -225,8 +222,7 @@ class BaseTrainer:
         return ckpt_path, current_iter
 
     def _set_gradient_sync(self, enabled):
-        self.model.set_fsdp2_gradient_sync(enabled)
-        set_ddp_gradient_sync(self.model.denoiser_module(), enabled)
+        set_parallel_gradient_sync(self.model, enabled)
 
     def run_inference(self, current_iter):
         base_output_dir = self.infer_config.get("output_dir", "./output_infer")

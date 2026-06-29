@@ -100,14 +100,15 @@ def apply_ddp(model, config):
         logger.info("DP(DDP) skipped for {} because the denoiser has no trainable parameters.", model.__class__.__name__)
         return model
 
-    wrapped = LightX2VDistributedDataParallel(denoiser, **_ddp_kwargs(config))
+    ddp_kwargs = _ddp_kwargs(config)
+    wrapped = LightX2VDistributedDataParallel(denoiser, **ddp_kwargs)
     if getattr(model, "transformer", None) is not denoiser:
         raise RuntimeError(f"{model.__class__.__name__} must store its trainable denoiser in self.transformer to use DP(DDP).")
     model.transformer = wrapped
     logger.info(
         "DP(DDP) transformer wrapped: broadcast_buffers={} find_unused_parameters={} static_graph={}",
-        wrapped.broadcast_buffers,
-        wrapped.find_unused_parameters,
-        wrapped.static_graph,
+        ddp_kwargs["broadcast_buffers"],
+        ddp_kwargs["find_unused_parameters"],
+        ddp_kwargs["static_graph"],
     )
     return model
