@@ -147,8 +147,9 @@ class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
         diff_sum = (current - previous).abs().float().sum()
         prev_sum = previous.abs().float().sum().clamp_min(1e-12)
         stats = torch.stack([diff_sum, prev_sum])
-        if self.seq_p_group is not None and dist.is_available() and dist.is_initialized():
-            dist.all_reduce(stats, op=dist.ReduceOp.SUM, group=self.seq_p_group)
+        seq_p_group = getattr(self, "seq_p_group", None)
+        if seq_p_group is not None and dist.is_available() and dist.is_initialized():
+            dist.all_reduce(stats, op=dist.ReduceOp.SUM, group=seq_p_group)
         return (stats[0] / stats[1].clamp_min(1e-12)).cpu().item()
 
     def calculate_should_calc(self, img, vec, block):
