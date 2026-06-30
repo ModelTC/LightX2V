@@ -56,11 +56,19 @@ def sync_device_if_available():
 
 
 def _spatial_dims(video):
-    if video.ndim != 5:
-        return -2, -1
-    # VAE tensors are usually B,C,T,H,W before wan_vae_to_comfy and
-    # B,T,H,W,C afterwards. In both layouts, H/W are the two dims before
-    # channels only for the postprocessed form; rank0 crop is done before it.
-    if video.shape[1] in (1, 3, 4, 16, 32):
-        return 3, 4
-    return 2, 3
+    channel_sizes = (1, 3, 4, 16, 32)
+    if video.ndim == 5:
+        # B,T,H,W,C after postprocess: last dim is the channel count.
+        if video.shape[-1] in (1, 3, 4):
+            return 2, 3
+        # B,C,T,H,W before postprocess: dim 1 is latent/image channels.
+        if video.shape[1] in channel_sizes:
+            return 3, 4
+    elif video.ndim == 4:
+        # B,H,W,C image tensor.
+        if video.shape[-1] in (1, 3, 4):
+            return 1, 2
+        # B,C,H,W tensor.
+        if video.shape[1] in channel_sizes:
+            return 2, 3
+    return -2, -1

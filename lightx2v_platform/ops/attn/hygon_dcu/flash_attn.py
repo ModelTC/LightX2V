@@ -113,9 +113,9 @@ class FlashAttnHygonDcu(AttnWeightTemplate):
         if softmax_scale is None:
             softmax_scale = 1.0 / math.sqrt(q.shape[-1])
 
-        if cu_seqlens_q is not None and cu_seqlens_q.is_cpu:
+        if cu_seqlens_q is not None and cu_seqlens_q.device.type == "cpu":
             cu_seqlens_q = cu_seqlens_q.to(q_flat.device, non_blocking=True)
-        if cu_seqlens_kv is not None and cu_seqlens_kv.is_cpu:
+        if cu_seqlens_kv is not None and cu_seqlens_kv.device.type == "cpu":
             cu_seqlens_kv = cu_seqlens_kv.to(k_flat.device, non_blocking=True)
         # Use Flash Attention 2.6.1 (ROCm version) with varlen interface
         if SAPRDE_LINEAR_ATTN and int(os.getenv("USE_SLA", 0)) and q.shape[1] == k.shape[1]:
