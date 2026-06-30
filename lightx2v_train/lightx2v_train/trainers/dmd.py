@@ -13,7 +13,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
 from lightx2v_train.runtime.distributed import barrier, get_world_size, is_distributed, is_main_process, reduce_mean
-from lightx2v_train.runtime.fsdp import apply_fsdp2
+from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradient_sync
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
 from lightx2v_train.utils.registry import TRAINER_REGISTER
@@ -70,7 +70,7 @@ class DmdTrainer(BaseTrainer):
         self.fake_model = build_model(fake_model_config)
         self.fake_model.load_components(transformer_only=True, reference_model=self.model)
         self._setup_trainable_model(self.fake_model)
-        apply_fsdp2(self.fake_model, self.config)
+        apply_parallel(self.fake_model, self.config)
         if self.gradient_checkpointing:
             self.fake_model.enable_gradient_checkpointing()
 
@@ -81,7 +81,7 @@ class DmdTrainer(BaseTrainer):
         self.teacher_model.load_components(transformer_only=True, reference_model=self.model)
         self.teacher_model.transformer.requires_grad_(False)
         self.teacher_model.transformer.eval()
-        apply_fsdp2(self.teacher_model, self.config)
+        apply_parallel(self.teacher_model, self.config)
         self.teacher_model.transformer.eval()
 
         self.fake_trainable_params = list(self.fake_model.trainable_parameters())
@@ -443,10 +443,10 @@ class DmdTrainer(BaseTrainer):
         logger.info("[train] finished iter={}/{}", current_iter, max_train_iters)
 
     def _set_student_gradient_sync(self, enabled):
-        self.model.set_fsdp2_gradient_sync(enabled)
+        set_parallel_gradient_sync(self.model, enabled)
 
     def _set_fake_gradient_sync(self, enabled):
-        self.fake_model.set_fsdp2_gradient_sync(enabled)
+        set_parallel_gradient_sync(self.fake_model, enabled)
 
     def _set_gradient_sync(self, enabled):
         self._set_student_gradient_sync(enabled)

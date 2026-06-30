@@ -16,7 +16,7 @@ from lightx2v_train.infer import build_inferencer
 from lightx2v_train.infer.dopsd_trajectory_viz import save_student_teacher_trajectory_grid
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_distributed, is_main_process, reduce_mean
-from lightx2v_train.runtime.fsdp import apply_fsdp2
+from lightx2v_train.runtime.parallel import apply_parallel
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -102,7 +102,7 @@ class DopsdTrainer(BaseTrainer):
         )
         self.model.set_dual_lora_trainable(self.student_adapter, self.teacher_adapter)
 
-        apply_fsdp2(self.model, self.config)
+        apply_parallel(self.model, self.config)
 
         if self.gradient_checkpointing:
             self.model.enable_gradient_checkpointing()
