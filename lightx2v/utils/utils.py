@@ -265,6 +265,7 @@ def save_to_video(
                 height,
             )
             out_pix = "yuv444p"
+        ffmpeg_preset = os.environ.get("LIGHTX2V_FFMPEG_PRESET", "").strip()
 
         if lossless:
             command = [
@@ -288,9 +289,10 @@ def save_to_video(
                 "libx264rgb",
                 "-crf",
                 "0",
-                "-an",  # No audio
-                output_path,
             ]
+            if ffmpeg_preset:
+                command.extend(["-preset", ffmpeg_preset])
+            command.extend(["-an", output_path])  # No audio
         else:
             command = [
                 ffmpeg_exe,
@@ -313,9 +315,10 @@ def save_to_video(
                 "libx264",
                 "-pix_fmt",
                 out_pix,
-                "-an",  # No audio
-                output_path,
             ]
+            if ffmpeg_preset:
+                command.extend(["-preset", ffmpeg_preset])
+            command.extend(["-an", output_path])  # No audio
 
         # Run FFmpeg (stderr to DEVNULL: avoids pipe buffer deadlock; no need to capture for errors)
         process = subprocess.Popen(
@@ -327,14 +330,15 @@ def save_to_video(
         if process.stdin is None:
             raise BrokenPipeError("No stdin buffer received.")
 
-        # Write frames to FFmpeg
-        for frame in frames:
-            # Pad frame if needed
-            if frame.shape[0] < height or frame.shape[1] < width:
-                padded = np.zeros((height, width, 3), dtype=np.uint8)
-                padded[: frame.shape[0], : frame.shape[1]] = frame
-                frame = padded
-            process.stdin.write(frame.tobytes())
+        if frames.shape[1] == height and frames.shape[2] == width:
+            process.stdin.write(np.ascontiguousarray(frames).tobytes())
+        else:
+            for frame in frames:
+                if frame.shape[0] < height or frame.shape[1] < width:
+                    padded = np.zeros((height, width, 3), dtype=np.uint8)
+                    padded[: frame.shape[0], : frame.shape[1]] = frame
+                    frame = padded
+                process.stdin.write(frame.tobytes())
 
         process.stdin.close()
         process.wait()
