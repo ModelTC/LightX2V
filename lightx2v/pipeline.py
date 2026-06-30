@@ -11,6 +11,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
+from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: F401
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
 from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
@@ -120,6 +121,9 @@ class LightX2VPipeline:
         elif self.model_cls in ["ltx2"]:
             self.num_channels_latents = 128
             self.audio_mel_bins = 16
+        elif self.model_cls in ["cosmos3"]:
+            self.vae_stride = (4, 16, 16)
+            self.num_channels_latents = 48
 
         if model_cls in ["qwen-image", "qwen-image-2512", "qwen-image-edit", "qwen-image-edit-2509", "qwen-image-edit-2511"]:
             self.CONDITION_IMAGE_SIZE = 147456
