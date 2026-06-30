@@ -154,12 +154,10 @@ async def create_image_task_sync(
         done, pending = await asyncio.wait({wait_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
         for pending_task in pending:
             pending_task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
 
-        if disconnect_task in done and disconnect_task.result():
+        if disconnect_task in done:
             if not wait_task.done():
                 wait_task.cancel()
-                await asyncio.gather(wait_task, return_exceptions=True)
             raise HTTPException(status_code=499, detail=f"Client disconnected, task {task_id} cancelled")
 
         result_png = wait_task.result()
