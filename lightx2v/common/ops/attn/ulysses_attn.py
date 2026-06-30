@@ -16,9 +16,17 @@ def _env_flag(name, default="0"):
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 _PROFILE_RANGES_ENABLED = _env_flag("LIGHTX2V_ULYSSES_PROFILE_RANGES")
 _ASYNC_TEXT_GATHER_ENABLED = _env_flag("LIGHTX2V_ULYSSES_ASYNC_TEXT_GATHER")
 _REUSE_TEXT_GATHER_BUFFERS_ENABLED = _env_flag("LIGHTX2V_ULYSSES_REUSE_TEXT_GATHER_BUFFERS")
+_TEXT_GATHER_BUFFER_CACHE_MAX = max(1, _env_int("LIGHTX2V_ULYSSES_TEXT_GATHER_BUFFER_CACHE_MAX", 16))
 
 
 def _profile_range(name):
@@ -61,6 +69,8 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         key = (world_size, tuple(tensor.shape), tensor.dtype, tensor.device)
         buffers = self._text_gather_buffers.get(key)
         if buffers is None:
+            if len(self._text_gather_buffers) >= _TEXT_GATHER_BUFFER_CACHE_MAX:
+                self._text_gather_buffers.clear()
             buffers = [torch.empty_like(tensor) for _ in range(world_size)]
             self._text_gather_buffers[key] = buffers
         return buffers
@@ -128,7 +138,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         if split_qkv_input:
             img_qkv_len = img_q.shape[0]
             txt_qkv_len = txt_q.shape[0]
-            txt_mask_len = None
+            txt_mask_len = cu_seqlens_qkv[2] - img_qkv_len if img_first and len(cu_seqlens_qkv) == 3 else None
         elif img_first:
             img_qkv_len = slice_qkv_len
             if len(cu_seqlens_qkv) == 3:
@@ -542,13 +552,15 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 gathered_txt_attn = self._get_text_gather_buffers(txt_attn, world_size)
                 text_gather_work = dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group, async_op=True)
 
-        img_attn = self._reshape_img_attn(img_attn, world_size, shard_seqlen, q_shard_heads, hidden_dims, seq_p_group, use_fp8_comm)
-
-        # 收集所有进程的文本注意力结果
+        # Finish the async gather before launching any later collective on the same process group.
         if _ASYNC_TEXT_GATHER_ENABLED:
             with _profile_range("text_all_gather_wait"):
                 text_gather_work.wait()
-        else:
+
+        img_attn = self._reshape_img_attn(img_attn, world_size, shard_seqlen, q_shard_heads, hidden_dims, seq_p_group, use_fp8_comm)
+
+        # Gather text attention synchronously when async launch is disabled.
+        if not _ASYNC_TEXT_GATHER_ENABLED:
             with _profile_range("text_all_gather"):
                 gathered_txt_attn = self._get_text_gather_buffers(txt_attn, world_size)
                 dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group)

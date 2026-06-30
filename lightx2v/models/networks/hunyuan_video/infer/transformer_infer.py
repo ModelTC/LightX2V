@@ -132,7 +132,8 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         else:
             self.apply_rope_func = apply_hunyuan_rope_with_torch
         self.compile_non_attn = _env_flag("LIGHTX2V_COMPILE_DIT_NON_ATTN")
-        self.compile_before_attn = _env_flag("LIGHTX2V_COMPILE_DIT_BEFORE_ATTN")
+        self.compile_before_attn_requested = _env_flag("LIGHTX2V_COMPILE_DIT_BEFORE_ATTN")
+        self.compile_before_attn = self.compile_before_attn_requested and _env_flag("LIGHTX2V_COMPILE_DIT_BEFORE_ATTN_UNSAFE")
         self.compile_non_attn_mode = os.getenv("LIGHTX2V_COMPILE_DIT_MODE", "reduce-overhead")
         self.share_qkv_act_quant = _env_flag("LIGHTX2V_INT8_SHARE_QKV_ACT_QUANT")
         self._compiled_non_attn = {}
@@ -143,6 +144,12 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             logger.info("[Ulysses] Passing split img/txt QKV tensors to avoid pre-attention concat/slice copies")
         if self.seq_p_split_attn_output:
             logger.info("[Ulysses] Returning split img/txt attention outputs to avoid post-attention concat/slice copies")
+        if self.compile_before_attn_requested and not self.compile_before_attn:
+            logger.warning(
+                "[Compile] LIGHTX2V_COMPILE_DIT_BEFORE_ATTN is ignored unless "
+                "LIGHTX2V_COMPILE_DIT_BEFORE_ATTN_UNSAFE=1 is also set; before-attn graphs carry "
+                "block-specific weight objects and can grow Dynamo caches quickly."
+            )
         if self.compile_non_attn or self.compile_before_attn:
             try:
                 torch._dynamo.config.suppress_errors = True
@@ -191,7 +198,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         use_shared_quant = (
             self.share_qkv_act_quant
             and hasattr(q_weight, "prepare_quantized_input")
-            and hasattr(q_weight, "apply_quantized_input")
+            and all(hasattr(weight, "apply_quantized_input") for weight in (q_weight, k_weight, v_weight))
             and not any(getattr(weight, "use_bf16_fallback", False) for weight in (q_weight, k_weight, v_weight))
         )
         if use_shared_quant:
