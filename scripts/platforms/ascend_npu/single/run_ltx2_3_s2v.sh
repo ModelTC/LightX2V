@@ -2,7 +2,7 @@
 
 # set path and first
 lightx2v_path=/data/wushuo1/LightX2V
-model_path=/data/wushuo1/to5_models/LTX-2
+model_path=/data/wushuo1/models/LTX-2
 AUDIO_PATH=/data/wushuo1/ltx2_s2v_sample.wav
 
 export PLATFORM=ascend_npu

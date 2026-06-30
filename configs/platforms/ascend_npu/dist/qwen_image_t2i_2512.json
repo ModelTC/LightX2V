@@ -12,6 +12,7 @@
     "rope_type": "torch",
     "layer_norm_type": "torch",
     "rms_norm_type": "torch",
+    "vae_decode_parallel": true,
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses",

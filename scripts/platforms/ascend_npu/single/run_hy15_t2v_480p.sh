@@ -2,7 +2,7 @@
 
 # set path firstly
 lightx2v_path=/data/wushuo1/LightX2V
-model_path=/data/wushuo1/to5_models/HunyuanVideo-1.5
+model_path=/data/wushuo1/models/HunyuanVideo-1.5
 
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES=0

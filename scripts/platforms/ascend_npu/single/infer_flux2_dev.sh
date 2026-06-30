@@ -4,7 +4,7 @@
 # Usage: bash infer_flux2_dev.sh
 
 lightx2v_path=/data/wushuo1/LightX2V
-model_path=/data/wushuo1/to5_models/FLUX.2-dev
+model_path=/data/wushuo1/models/FLUX.2-dev
 
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES=0

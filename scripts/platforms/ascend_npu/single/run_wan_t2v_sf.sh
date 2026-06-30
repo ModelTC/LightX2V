@@ -4,7 +4,7 @@
 
 # set path firstly
 lightx2v_path=/data/wushuo1/LightX2V
-model_path=/data/wushuo1/to5_models/Wan2.1-T2V-1.3B
+model_path=/data/wushuo1/models/Wan2.1-T2V-1.3B
 
 export PLATFORM=ascend_npu
 export ASCEND_RT_VISIBLE_DEVICES=0

@@ -11,6 +11,9 @@
     ],
     "enable_cfg": true,
     "cpu_offload": false,
+    "gemma_cpu_offload": true,
+    "vae_cpu_offload": false,
+    "audio_mel_cpu_offload": true,
     "offload_granularity": "model",
     "norm_modulate_backend": "torch",
     "modulate_type": "torch",
@@ -23,7 +26,7 @@
     "audio_mel_bins": 16,
     "double_precision_rope": false,
     "use_tiling_vae": false,
-    "dit_original_ckpt": "/data/wushuo1/to5_models/LTX-2.3/ltx-2.3-22b-dev.safetensors",
+    "dit_original_ckpt": "/data/wushuo1/models/LTX-2.3/ltx-2.3-22b-dev.safetensors",
     "caption_proj_before_connector": true,
     "cross_attention_adaln": true,
     "apply_gated_attention": true,
@@ -51,7 +54,6 @@
         }
     },
     "parallel": {
-        "seq_p_size": 8,
-        "seq_p_attn_type": "ulysses"
+        "tensor_p_size": 8
     }
 }
