@@ -32,7 +32,9 @@ def _load_auto_quant_bias(module, weight_dict):
         bias = bias.to(torch.float32)
     elif hasattr(module, "infer_dtype"):
         bias = bias.to(module.infer_dtype)
-    module.bias = bias.to(module.weight.device)
+    weight = getattr(module, "weight", None)
+    target_device = weight.device if weight is not None else bias.device
+    module.bias = bias.to(target_device)
 
 
 def _make_weight_contiguous(module):
@@ -174,9 +176,9 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
         hipblaslt_gemm = _require_hipblaslt_w8a8_channelwise_gemm()
         _, output_tensor = hipblaslt_gemm(
             a=input_tensor_quant.contiguous(),
-            b=self.weight.contiguous(),
+            b=self.weight,
             scale_a=input_tensor_scale.contiguous(),
-            scale_b=self.weight_scale.contiguous(),
+            scale_b=self.weight_scale,
             m=m,
             n=n,
             k=k,
@@ -200,11 +202,10 @@ class MMWeightWint8channelAint8channeldynamicVllmHygonDcu(MMWeightQuantTemplate)
         return _restore_last_dim(output_tensor, prefix_shape)
 
     def _apply_bf16(self, input_tensor):
-        weight = self.weight
-        if weight.dtype != input_tensor.dtype:
-            weight = weight.to(input_tensor.dtype)
+        if self.weight.dtype != input_tensor.dtype:
+            self.weight = self.weight.to(input_tensor.dtype)
         bias = _bias_or_none(self, input_tensor.dtype)
-        return F.linear(input_tensor, weight, bias)
+        return F.linear(input_tensor, self.weight, bias)
 
     def apply(self, input_tensor):
         if self.use_bf16_fallback:
