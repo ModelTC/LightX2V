@@ -326,14 +326,14 @@ def save_to_video(
             raise BrokenPipeError("No stdin buffer received.")
 
         if frames.shape[1] == height and frames.shape[2] == width:
-            process.stdin.write(np.ascontiguousarray(frames).tobytes())
+            process.stdin.write(np.ascontiguousarray(frames))
         else:
             for frame in frames:
                 if frame.shape[0] < height or frame.shape[1] < width:
                     padded = np.zeros((height, width, 3), dtype=np.uint8)
                     padded[: frame.shape[0], : frame.shape[1]] = frame
                     frame = padded
-                process.stdin.write(frame.tobytes())
+                process.stdin.write(np.ascontiguousarray(frame))
 
         process.stdin.close()
         process.wait()
