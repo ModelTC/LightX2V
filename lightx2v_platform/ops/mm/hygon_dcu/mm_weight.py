@@ -66,7 +66,6 @@ def _bias_or_none(module, out_dtype=None):
     return None
 
 
-
 def _env_flag(name, default="0"):
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -92,12 +91,10 @@ def _use_selective_bf16_fallback(weight_name):
         return True
     return _matches_any(weight_name, exclude)
 
+
 def _require_hipblaslt_w8a8_channelwise_gemm():
     if hipblaslt_w8a8_channelwise_gemm is None:
-        raise RuntimeError(
-            "int8-vllm-hygon-dcu requires lmslim.quantize.quant_ops."
-            "hipblaslt_w8a8_channelwise_gemm on Hygon DCU."
-        )
+        raise RuntimeError("int8-vllm-hygon-dcu requires lmslim.quantize.quant_ops.hipblaslt_w8a8_channelwise_gemm on Hygon DCU.")
     return hipblaslt_w8a8_channelwise_gemm
 
 
