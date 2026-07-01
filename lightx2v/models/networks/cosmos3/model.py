@@ -3,7 +3,7 @@ import torch.distributed as dist
 from torch.nn import functional as F
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
-from lightx2v.models.networks.cosmos3.infer.module_io import Cosmos3TransformerInferModuleOutput
+from lightx2v.models.networks.cosmos3.infer.module_io import Cosmos3PostInferModuleOutput, Cosmos3TransformerInferModuleOutput
 from lightx2v.models.networks.cosmos3.infer.offload.transformer_infer import Cosmos3OffloadTransformerInfer
 from lightx2v.models.networks.cosmos3.infer.post_infer import Cosmos3PostInfer
 from lightx2v.models.networks.cosmos3.infer.pre_infer import Cosmos3PreInfer
@@ -81,6 +81,44 @@ class Cosmos3TransformerModel(BaseTransformerModel):
         gen_seq = torch.cat(gathered_gen_seq, dim=0)[: pre_infer_out.seq_p_gen_len]
         return Cosmos3TransformerInferModuleOutput(und_seq=transformer_out.und_seq, gen_seq=gen_seq)
 
+    def _combine_cfg_output(self, cond, uncond):
+        guide = self.scheduler.sample_guide_scale
+        return Cosmos3PostInferModuleOutput(
+            vision=uncond.vision + guide * (cond.vision - uncond.vision),
+            sound=None if cond.sound is None else uncond.sound + guide * (cond.sound - uncond.sound),
+            action=None if cond.action is None else uncond.action + guide * (cond.action - uncond.action),
+        )
+
+    @staticmethod
+    def _detach_cfg_output(output):
+        return Cosmos3PostInferModuleOutput(
+            vision=output.vision,
+            sound=output.sound,
+            action=output.action,
+        )
+
+    def _set_scheduler_noise_pred(self, output):
+        self.scheduler.noise_pred = output.vision
+        self.scheduler.noise_pred_sound = output.sound
+        self.scheduler.noise_pred_action = output.action
+
+    @staticmethod
+    def _gather_optional_tensor(tensor, group):
+        if tensor is None:
+            return [None, None]
+        gathered = [torch.zeros_like(tensor) for _ in range(2)]
+        dist.all_gather(gathered, tensor, group=group)
+        return gathered
+
+    def _gather_cfg_parallel_output(self, output, group):
+        vision_list = [torch.zeros_like(output.vision) for _ in range(2)]
+        dist.all_gather(vision_list, output.vision, group=group)
+        sound_list = self._gather_optional_tensor(output.sound, group)
+        action_list = self._gather_optional_tensor(output.action, group)
+        cond = Cosmos3PostInferModuleOutput(vision=vision_list[0], sound=sound_list[0], action=action_list[0])
+        uncond = Cosmos3PostInferModuleOutput(vision=vision_list[1], sound=sound_list[1], action=action_list[1])
+        return cond, uncond
+
     @torch.no_grad()
     def _infer_cond_uncond(self, input_ids):
         latents = self.scheduler.latents
@@ -91,6 +129,11 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             latents=latents,
             timestep=timestep,
             condition_frame_indexes=getattr(self.scheduler, "vision_condition_frame_indexes", None),
+            sound_latents=getattr(self.scheduler, "sound_latents", None),
+            action_latents=getattr(self.scheduler, "action_latents", None),
+            action_domain_id=getattr(self.scheduler, "action_domain_id", None),
+            action_condition_frame_indexes=getattr(self.scheduler, "action_condition_frame_indexes", None),
+            raw_action_dim=getattr(self.scheduler, "raw_action_dim", None),
         )
         if self.config["seq_parallel"]:
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
@@ -118,18 +161,16 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
             cfg_p_rank = dist.get_rank(cfg_p_group)
             input_ids = text_encoder_output["cond_input_ids"] if cfg_p_rank == 0 else text_encoder_output["uncond_input_ids"]
-            noise_pred = self._infer_cond_uncond(input_ids)
-            noise_pred_list = [torch.zeros_like(noise_pred) for _ in range(2)]
-            dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
-            cond, uncond = noise_pred_list[0], noise_pred_list[1]
-            self.scheduler.noise_pred = uncond + self.scheduler.sample_guide_scale * (cond - uncond)
+            output = self._infer_cond_uncond(input_ids)
+            cond, uncond = self._gather_cfg_parallel_output(output, cfg_p_group)
+            self._set_scheduler_noise_pred(self._combine_cfg_output(cond, uncond))
         elif do_cfg:
             cond = self._infer_cond_uncond(text_encoder_output["cond_input_ids"])
             uncond = self._infer_cond_uncond(text_encoder_output["uncond_input_ids"])
-            self.scheduler.noise_pred = uncond + self.scheduler.sample_guide_scale * (cond - uncond)
+            self._set_scheduler_noise_pred(self._combine_cfg_output(cond, uncond))
         else:
             cond = self._infer_cond_uncond(text_encoder_output["cond_input_ids"])
-            self.scheduler.noise_pred = cond
+            self._set_scheduler_noise_pred(self._detach_cfg_output(cond))
 
         if self.cpu_offload:
             self.pre_weight.to_cpu()

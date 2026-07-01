@@ -273,7 +273,12 @@ class I2VAInputInfo:
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    video_path: str = field(default_factory=str)
+    action_path: str = field(default_factory=str)
     state_path: str = field(default_factory=str)
+    action_mode: str = field(default_factory=str)
+    domain_name: str = field(default_factory=str)
+    view_point: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     save_action_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
@@ -308,6 +313,10 @@ class V2AVInputInfo:
     # Pre-processed reference / control video (pose / canny / depth / track for
     # motion transfer, or the degraded source video for ICEdit).
     video_path: str = field(default_factory=str)
+    action_path: str = field(default_factory=str)
+    action_mode: str = field(default_factory=str)
+    domain_name: str = field(default_factory=str)
+    view_point: str = field(default_factory=str)
     reference_video_strength: float = field(default_factory=lambda: 1.0)
     reference_video_frame_cap: Optional[int] = None
     # Optional: mux audio from this file after save (e.g. original driving video).
@@ -315,6 +324,7 @@ class V2AVInputInfo:
     # v2av mux path is not used because LTX2Runner overrides ``process_images_after_vae_decoder``.
     mux_audio_video_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
+    save_action_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     # shape related
     resize_mode: str = field(default_factory=str)
