@@ -155,11 +155,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 torch._dynamo.config.suppress_errors = True
             except Exception as exc:
                 logger.warning(f"[Compile] Unable to enable Dynamo suppress_errors: {exc}")
-            logger.info(
-                "[Compile] Hunyuan DiT branch compile: "
-                f"after_attn={self.compile_non_attn}, before_attn={self.compile_before_attn}, "
-                f"mode={self.compile_non_attn_mode}"
-            )
+            logger.info(f"[Compile] Hunyuan DiT branch compile: after_attn={self.compile_non_attn}, before_attn={self.compile_before_attn}, mode={self.compile_non_attn_mode}")
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
