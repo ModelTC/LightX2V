@@ -30,9 +30,7 @@ def _get_sparse_attn_topk(default: float = 0.4) -> float:
     try:
         topk_value = float(raw_topk)
     except (TypeError, ValueError):
-        logger.warning(
-            "Invalid SPARSE_ATTN_TOPK={!r}; falling back to {:.3f}", raw_topk, default
-        )
+        logger.warning("Invalid SPARSE_ATTN_TOPK={!r}; falling back to {:.3f}", raw_topk, default)
         return default
 
     if not 0.0 < topk_value <= 1.0:
