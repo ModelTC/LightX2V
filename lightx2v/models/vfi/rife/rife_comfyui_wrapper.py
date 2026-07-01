@@ -1,3 +1,4 @@
+import importlib.util
 import os
 from typing import List, Optional, Tuple
 
@@ -13,7 +14,11 @@ class RIFEWrapper:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
     def __init__(self, model_path, device: Optional[torch.device] = None):
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device is not None:
+            self.device = device
+        else:
+            _HAS_NPU = importlib.util.find_spec("torch_npu") is not None and torch.npu.is_available()
+            self.device = torch.device("cuda") if torch.cuda.is_available() else (torch.device("npu") if _HAS_NPU else torch.device("cpu"))
 
         # Setup torch for optimal performance
         torch.set_grad_enabled(False)
@@ -28,7 +33,7 @@ class RIFEWrapper:
         with ProfilingContext4DebugL2("Load RIFE model"):
             self.model.load_model(model_path, -1)
             self.model.eval()
-            self.model.device()
+            self.model.flownet.to(self.device)
 
     @ProfilingContext4DebugL2("Interpolate frames")
     def interpolate_frames(
@@ -74,7 +79,7 @@ class RIFEWrapper:
         for source_idx1, source_idx2, interp_factor in frame_positions:
             if interp_factor == 0.0 or source_idx1 == source_idx2:
                 # No interpolation needed, use the source frame directly
-                output_frames.append(images[source_idx1])
+                output_frames.append(images[source_idx1].float().cpu())
             else:
                 # Get frames to interpolate
                 frame1 = images[source_idx1]
@@ -82,8 +87,8 @@ class RIFEWrapper:
 
                 # Convert ComfyUI format [H, W, C] to RIFE format [1, C, H, W]
                 # Also convert from [0, 1] to [0, 1] (already in correct range)
-                I0 = frame1.permute(2, 0, 1).unsqueeze(0).to(self.device)
-                I1 = frame2.permute(2, 0, 1).unsqueeze(0).to(self.device)
+                I0 = frame1.permute(2, 0, 1).unsqueeze(0).to(self.device).float()
+                I1 = frame2.permute(2, 0, 1).unsqueeze(0).to(self.device).float()
 
                 # Pad images
                 I0 = F.pad(I0, padding)
@@ -98,7 +103,6 @@ class RIFEWrapper:
                 interpolated_frame = interpolated[0, :, :height, :width].permute(1, 2, 0).cpu()
                 output_frames.append(interpolated_frame)
 
-        # Stack all frames
         return torch.stack(output_frames, dim=0)
 
     def _calculate_target_frame_positions(self, source_fps: float, target_fps: float, total_source_frames: int) -> List[Tuple[int, int, float]]:
