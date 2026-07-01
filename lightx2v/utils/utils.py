@@ -22,6 +22,34 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
+_FFMPEG_PRESETS = (
+    "ultrafast",
+    "superfast",
+    "veryfast",
+    "faster",
+    "fast",
+    "medium",
+    "slow",
+    "slower",
+    "veryslow",
+    "placebo",
+)
+
+
+def _get_ffmpeg_preset():
+    preset = os.environ.get("LIGHTX2V_FFMPEG_PRESET", "").strip().lower()
+    if not preset:
+        return None
+    if preset not in _FFMPEG_PRESETS:
+        logger.warning(
+            "Invalid LIGHTX2V_FFMPEG_PRESET={!r}; expected one of {}. Ignoring it.",
+            preset,
+            ", ".join(_FFMPEG_PRESETS),
+        )
+        return None
+    return preset
+
+
 def is_main_process():
     return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
 
@@ -231,6 +259,12 @@ def save_to_video(
         method: Save method - "imageio" or "ffmpeg"
         lossless: Whether to use lossless encoding (ffmpeg method only)
         output_pix_fmt: Pixel format for output (ffmpeg method only)
+
+    Environment:
+        LIGHTX2V_FFMPEG_PRESET: Optional x264 preset. Allowed values are
+            ultrafast, superfast, veryfast, faster, fast, medium, slow,
+            slower, veryslow, and placebo. Faster presets reduce encoding
+            latency but usually produce larger files.
     """
     assert images.dim() == 4 and images.shape[-1] == 3, "Input must be [N, H, W, C] with C=3"
 
@@ -260,7 +294,7 @@ def save_to_video(
         # Get ffmpeg executable from imageio_ffmpeg
         ffmpeg_exe = ffmpeg.get_ffmpeg_exe()
         out_pix = output_pix_fmt or "yuv420p"
-        ffmpeg_preset = os.environ.get("LIGHTX2V_FFMPEG_PRESET", "").strip()
+        ffmpeg_preset = _get_ffmpeg_preset()
 
         if lossless:
             command = [
@@ -287,7 +321,7 @@ def save_to_video(
             ]
             if ffmpeg_preset:
                 command.extend(["-preset", ffmpeg_preset])
-            command.extend(["-an", output_path])  # No audio
+            command.extend(["-an", output_path])  # Keep the existing no-audio output behavior.
         else:
             command = [
                 ffmpeg_exe,
@@ -313,7 +347,7 @@ def save_to_video(
             ]
             if ffmpeg_preset:
                 command.extend(["-preset", ffmpeg_preset])
-            command.extend(["-an", output_path])  # No audio
+            command.extend(["-an", output_path])  # Keep the existing no-audio output behavior.
 
         # Run FFmpeg (stderr to DEVNULL: avoids pipe buffer deadlock; no need to capture for errors)
         process = subprocess.Popen(
@@ -326,10 +360,12 @@ def save_to_video(
             raise BrokenPipeError("No stdin buffer received.")
 
         if frames.shape[1] == height and frames.shape[2] == width:
+            # Fast path: stream the whole contiguous frame buffer without per-frame bytes copies.
             process.stdin.write(np.ascontiguousarray(frames))
         else:
             for frame in frames:
                 if frame.shape[0] < height or frame.shape[1] < width:
+                    # H.264/yuv420p requires even dimensions, so pad odd-sized frames before encoding.
                     padded = np.zeros((height, width, 3), dtype=np.uint8)
                     padded[: frame.shape[0], : frame.shape[1]] = frame
                     frame = padded
