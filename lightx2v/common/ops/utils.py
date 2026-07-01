@@ -124,9 +124,12 @@ def cuda_register_host_tensor(tensor):
     if error != 0:
         raise RuntimeError(f"cudaHostRegister failed for {nbytes} bytes at 0x{ptr:x}: {_cuda_error_text(error)}")
 
-    def unregister(address):
-        if torch.cuda.is_available():
-            torch.cuda.cudart().cudaHostUnregister(address)
+    def unregister(address, is_available=torch.cuda.is_available, cudart=torch.cuda.cudart):
+        try:
+            if is_available():
+                cudart().cudaHostUnregister(address)
+        except Exception:
+            pass
 
     # Tie cudaHostUnregister to storage lifetime, not to a temporary tensor view.
     finalizer = weakref.finalize(storage, unregister, ptr)
