@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import numpy as np
-from loguru import logger
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -14,10 +13,11 @@ from diffusers.models.autoencoders.vae import BaseOutput, DiagonalGaussianDistri
 from diffusers.models.modeling_outputs import AutoencoderKLOutput
 from diffusers.models.modeling_utils import ModelMixin
 from einops import rearrange
+from loguru import logger
 from torch import Tensor, nn
 
-from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v.models.runners.vae_postprocess import env_flag
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
@@ -941,7 +941,9 @@ class HunyuanVideo15VAE:
         images_chunk = self.vae.decode(zs_chunk, return_dict=False)[0]
         if detail_timing:
             self.device_synchronize()
-            logger.info(f"[VAE_DETAIL] rank={cur_rank} decode_chunk_s={time.perf_counter() - decode_start:.6f} latent_chunk_shape={tuple(zs_chunk.shape)} decoded_chunk_shape={tuple(images_chunk.shape)}")
+            logger.info(
+                f"[VAE_DETAIL] rank={cur_rank} decode_chunk_s={time.perf_counter() - decode_start:.6f} latent_chunk_shape={tuple(zs_chunk.shape)} decoded_chunk_shape={tuple(images_chunk.shape)}"
+            )
 
         # Remove padding from decoded chunk
         spatial_ratio = 16
