@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
+from lightx2v.common.ops.utils import create_pin_tensor, move_tensor_back_to_cpu
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 DTYPE_MAP = {
@@ -78,25 +79,22 @@ class RMSWeightTemplate(metaclass=ABCMeta):
                 lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.weight_name.split('.')[1]}.safetensors")
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 tensor = lazy_load_file.get_tensor(self.weight_name)
-                if use_infer_dtype:
-                    tensor = tensor.to(self.infer_dtype)
         else:
             tensor = weight_dict[self.weight_name]
+        if use_infer_dtype:
+            tensor = tensor.to(self.infer_dtype)
         return tensor
 
-    def _create_cpu_pin_weight(self, tensor):
-        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=tensor.dtype)
-        pin_tensor.copy_(tensor)
-        del tensor
-        return pin_tensor
+    def _create_cpu_pin_weight(self, tensor, dtype=None):
+        return create_pin_tensor(tensor, dtype=dtype)
 
     def _load_cuda_buffer(self, weight_dict):
         weight_tensor = self._get_weight_tensor(weight_dict, use_infer_dtype=self.lazy_load)
         self.weight_cuda_buffer = weight_tensor.to(AI_DEVICE)
 
     def _load_cpu_pin_buffer(self):
-        weight_tensor = self._get_weight_tensor(use_infer_dtype=True)
-        self.pin_weight = self._create_cpu_pin_weight(weight_tensor)
+        weight_tensor = self._get_weight_tensor()
+        self.pin_weight = self._create_cpu_pin_weight(weight_tensor, dtype=self.infer_dtype)
 
     @abstractmethod
     def apply(self, input_tensor):
@@ -111,7 +109,7 @@ class RMSWeightTemplate(metaclass=ABCMeta):
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):
-            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
+            move_tensor_back_to_cpu(self, "weight", non_blocking=non_blocking)
         else:
             self.weight = self.weight.to("cpu", non_blocking=non_blocking)
 
@@ -143,9 +141,8 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         else:
             lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-            weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
-            self.pin_weight = self.pin_weight.copy_(weight_tensor)
-        del weight_tensor
+            weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+            self.pin_weight = create_pin_tensor(weight_tensor, dtype=self.infer_dtype)
 
 
 class LayerNormWeightTemplate(metaclass=ABCMeta):
@@ -197,19 +194,16 @@ class LayerNormWeightTemplate(metaclass=ABCMeta):
                 lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{name.split('.')[1]}.safetensors")
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 tensor = lazy_load_file.get_tensor(name)
-                if use_infer_dtype:
-                    tensor = tensor.to(self.infer_dtype)
         else:
             tensor = weight_dict[name]
+        if use_infer_dtype:
+            tensor = tensor.to(self.infer_dtype)
         return tensor
 
     def _create_cpu_pin_tensor(self, tensor):
         if tensor is None:
             return None
-        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=tensor.dtype)
-        pin_tensor.copy_(tensor)
-        del tensor
-        return pin_tensor
+        return create_pin_tensor(tensor)
 
     def _load_cuda_buffers(self, weight_dict):
         weight_tensor = self._get_tensor(self.weight_name, weight_dict, use_infer_dtype=self.lazy_load)
@@ -221,15 +215,15 @@ class LayerNormWeightTemplate(metaclass=ABCMeta):
             self.bias_cuda_buffer = bias_tensor.to(AI_DEVICE)
 
     def _load_cpu_pin_buffers(self):
-        weight_tensor = self._get_tensor(self.weight_name, use_infer_dtype=True)
+        weight_tensor = self._get_tensor(self.weight_name)
         if weight_tensor is not None:
-            self.pin_weight = self._create_cpu_pin_tensor(weight_tensor)
+            self.pin_weight = create_pin_tensor(weight_tensor, dtype=self.infer_dtype)
         else:
             self.weight = None
 
-        bias_tensor = self._get_tensor(self.bias_name, use_infer_dtype=True)
+        bias_tensor = self._get_tensor(self.bias_name)
         if bias_tensor is not None:
-            self.pin_bias = self._create_cpu_pin_tensor(bias_tensor)
+            self.pin_bias = create_pin_tensor(bias_tensor, dtype=self.infer_dtype)
         else:
             self.bias = None
             self.pin_bias = None
@@ -254,11 +248,11 @@ class LayerNormWeightTemplate(metaclass=ABCMeta):
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):
-            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
+            move_tensor_back_to_cpu(self, "weight", non_blocking=non_blocking)
         else:
             self.weight = self.weight.to("cpu", non_blocking=non_blocking)
         if hasattr(self, "pin_bias"):
-            self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
+            move_tensor_back_to_cpu(self, "bias", non_blocking=non_blocking)
         else:
             if self.bias is not None:
                 self.bias = self.bias.to("cpu", non_blocking=non_blocking)
@@ -299,9 +293,8 @@ class LayerNormWeightTemplate(metaclass=ABCMeta):
         else:
             lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-            weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
-            self.pin_weight = self.pin_weight.copy_(weight_tensor)
+            weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+            self.pin_weight = create_pin_tensor(weight_tensor, dtype=self.infer_dtype)
             if self.bias_name is not None:
-                bias_tensor = lazy_load_file.get_tensor(self.bias_name).to(self.infer_dtype)
-                self.pin_bias = self.pin_bias.copy_(bias_tensor)
-        del weight_tensor
+                bias_tensor = lazy_load_file.get_tensor(self.bias_name)
+                self.pin_bias = create_pin_tensor(bias_tensor, dtype=self.infer_dtype)

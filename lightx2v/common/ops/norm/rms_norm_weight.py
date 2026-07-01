@@ -138,9 +138,8 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         self.weight_name = resolve_block_name(self.weight_name, block_index, adapter_block_index, self.is_post_adapter)
         lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-            weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
-            self.pin_weight = self.pin_weight.copy_(weight_tensor)
-        del weight_tensor
+            weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+            self.pin_weight = create_pin_tensor(weight_tensor, dtype=self.infer_dtype)
 
     @abstractmethod
     def apply(self, input_tensor):
