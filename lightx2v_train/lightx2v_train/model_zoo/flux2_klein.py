@@ -103,8 +103,8 @@ class Flux2KleinModel(BaseModel):
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
 
-    def encode_condition(self, sample):
-        return self.encode_prompt_text(sample["prompt"])
+    def encode_prompt_text(self, prompt):
+        return self.encode_prompt_condition(prompt)
 
     def dmd_latent_shape(self, batch_size, height, width):
         latent_h = 2 * (int(height) // (self.vae_scale_factor * 2))
@@ -116,7 +116,7 @@ class Flux2KleinModel(BaseModel):
             latent_w // 2,
         )
 
-    def prepare_denoiser_input(self, noisy_latent):
+    def prepare_denoiser_input(self, noisy_latent, condition=None):
         h, w = noisy_latent.shape[2], noisy_latent.shape[3]
         packed = Flux2KleinPipeline._pack_latents(noisy_latent)
         img_ids = Flux2KleinPipeline._prepare_latent_ids(noisy_latent).to(self.device)
