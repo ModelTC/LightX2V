@@ -1,6 +1,3 @@
-import os
-from contextlib import nullcontext
-
 import torch
 import torch.distributed as dist
 
@@ -10,17 +7,6 @@ try:
 except ImportError:
     quant_fp4_sage3 = None
     dequant_fp4_sage3 = None
-
-
-def _env_flag(name, default="0"):
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
-
-
-_PROFILE_RANGES_ENABLED = _env_flag("LIGHTX2V_ULYSSES_PROFILE_RANGES")
-
-
-def _profile_range(name):
-    return torch.profiler.record_function(f"ulysses::{name}") if _PROFILE_RANGES_ENABLED else nullcontext()
 
 
 def _fp8_all_to_all(input_t, group=None):
@@ -132,26 +118,23 @@ def all2all_head2seq(input, group=None):
     shard_seq_len = seq_len // world_size  # 计算每个进程处理的序列长度
 
     # 重塑输入张量以便进行 all-to-all 操作
-    with _profile_range("head2seq_pre_layout"):
-        input_t = (
-            input.reshape(world_size, shard_seq_len, shard_heads, hidden_dims)  # 重塑为 [world_size, shard_seq_len, shard_heads, hidden_dims]
-            .transpose(1, 2)  # 转置以便进行 all-to-all 操作
-            .contiguous()  # 确保内存连续
-            .reshape(world_size, shard_heads, shard_seq_len, hidden_dims)  # 再次重塑为 [world_size, shard_heads, shard_seq_len, hidden_dims]
-        )
+    input_t = (
+        input.reshape(world_size, shard_seq_len, shard_heads, hidden_dims)  # 重塑为 [world_size, shard_seq_len, shard_heads, hidden_dims]
+        .transpose(1, 2)  # 转置以便进行 all-to-all 操作
+        .contiguous()  # 确保内存连续
+        .reshape(world_size, shard_heads, shard_seq_len, hidden_dims)  # 再次重塑为 [world_size, shard_heads, shard_seq_len, hidden_dims]
+    )
 
     # 创建一个与输入张量相同形状的输出张量
     output = torch.empty_like(input_t)
 
     # 执行 all-to-all 操作，将输入张量的内容分发到所有进程
-    with _profile_range("head2seq_all_to_all"):
-        dist.all_to_all_single(output, input_t, group=group)
+    dist.all_to_all_single(output, input_t, group=group)
 
-    with _profile_range("head2seq_post_layout"):
-        # 重塑输出张量为 [heads, shard_seq_len, hidden_dims] 形状
-        output = output.reshape(heads, shard_seq_len, hidden_dims)
+    # 重塑输出张量为 [heads, shard_seq_len, hidden_dims] 形状
+    output = output.reshape(heads, shard_seq_len, hidden_dims)
 
-        # 转置输出张量并重塑为 [shard_seq_len, heads, hidden_dims] 形状
-        output = output.transpose(0, 1).contiguous().reshape(shard_seq_len, heads, hidden_dims)
+    # 转置输出张量并重塑为 [shard_seq_len, heads, hidden_dims] 形状
+    output = output.transpose(0, 1).contiguous().reshape(shard_seq_len, heads, hidden_dims)
 
     return output  # 返回转换后的输出张量

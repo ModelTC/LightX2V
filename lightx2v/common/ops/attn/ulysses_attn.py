@@ -1,6 +1,3 @@
-import os
-from contextlib import nullcontext
-
 import torch
 import torch.distributed as dist
 from loguru import logger
@@ -10,27 +7,6 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
 from .utils.all2all import all2all_head2seq
-
-
-def _env_flag(name, default="0"):
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_int(name, default):
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-_PROFILE_RANGES_ENABLED = _env_flag("LIGHTX2V_ULYSSES_PROFILE_RANGES")
-_ASYNC_TEXT_GATHER_ENABLED = _env_flag("LIGHTX2V_ULYSSES_ASYNC_TEXT_GATHER")
-_REUSE_TEXT_GATHER_BUFFERS_ENABLED = _env_flag("LIGHTX2V_ULYSSES_REUSE_TEXT_GATHER_BUFFERS")
-_TEXT_GATHER_BUFFER_CACHE_MAX = max(1, _env_int("LIGHTX2V_ULYSSES_TEXT_GATHER_BUFFER_CACHE_MAX", 16))
-
-
-def _profile_range(name):
-    return torch.profiler.record_function(f"ulysses::{name}") if _PROFILE_RANGES_ENABLED else nullcontext()
 
 
 def _is_split_qkv_input(tensor_or_pair):
@@ -62,14 +38,14 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         self.config = {}
         self._text_gather_buffers = {}
 
-    def _get_text_gather_buffers(self, tensor, world_size):
-        if not _REUSE_TEXT_GATHER_BUFFERS_ENABLED:
+    def _get_text_gather_buffers(self, tensor, world_size, reuse_buffers=False, cache_max=16):
+        if not reuse_buffers:
             return [torch.empty_like(tensor) for _ in range(world_size)]
 
         key = (world_size, tuple(tensor.shape), tensor.dtype, tensor.device)
         buffers = self._text_gather_buffers.get(key)
         if buffers is None:
-            if len(self._text_gather_buffers) >= _TEXT_GATHER_BUFFER_CACHE_MAX:
+            if len(self._text_gather_buffers) >= max(1, cache_max):
                 self._text_gather_buffers.clear()
             buffers = [torch.empty_like(tensor) for _ in range(world_size)]
             self._text_gather_buffers[key] = buffers
@@ -91,6 +67,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         img_first=True,
         q_only_img=False,
         return_split_output=False,
+        async_text_gather=False,
+        reuse_text_gather_buffers=False,
+        text_gather_buffer_cache_max=16,
         **kwargs,
     ):
         """
@@ -189,13 +168,12 @@ class UlyssesAttnWeight(AttnWeightTemplate):
 
         # 分割图像和文本的查询、键和值
         if split_qkv_input:
-            with _profile_range("split_qkv_contiguous"):
-                img_q = _contiguous_if_needed(img_q)
-                img_k = _contiguous_if_needed(img_k)
-                img_v = _contiguous_if_needed(img_v)
-                txt_q = _contiguous_if_needed(txt_q)
-                txt_k = _contiguous_if_needed(txt_k)
-                txt_v = _contiguous_if_needed(txt_v)
+            img_q = _contiguous_if_needed(img_q)
+            img_k = _contiguous_if_needed(img_k)
+            img_v = _contiguous_if_needed(img_v)
+            txt_q = _contiguous_if_needed(txt_q)
+            txt_k = _contiguous_if_needed(txt_k)
+            txt_v = _contiguous_if_needed(txt_v)
         elif q_only_img:
             # q 只含图像 token，无需分割；仅 k/v 需要拆出图像和文本部分
             img_q = q.contiguous()
@@ -226,17 +204,16 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 img_k = k[txt_qkv_len:, :, :].contiguous()
                 img_v = v[txt_qkv_len:, :, :].contiguous()
 
-        with _profile_range("seq2head_initial_reshape"):
-            if use_qkv_fusion:
-                # fusion 路径：q_shard_heads == kv_shard_heads（非 GQA、非 q_only_img 时才走此分支）
-                img_qkv = torch.stack([img_q, img_k, img_v], dim=0).reshape(3, img_qkv_len, world_size, shard_heads, hidden_dims)
-                original_dtype = img_qkv.dtype
-            else:
-                # 非 fusion：q 和 kv 分别 reshape，支持 GQA 下头数不同
-                img_q = img_q.reshape(img_qkv_len, world_size, q_shard_heads, hidden_dims)
-                img_k = img_k.reshape(img_qkv_len, world_size, kv_shard_heads, hidden_dims)
-                img_v = img_v.reshape(img_qkv_len, world_size, kv_shard_heads, hidden_dims)
-                original_dtype = img_q.dtype
+        if use_qkv_fusion:
+            # fusion 路径：q_shard_heads == kv_shard_heads（非 GQA、非 q_only_img 时才走此分支）
+            img_qkv = torch.stack([img_q, img_k, img_v], dim=0).reshape(3, img_qkv_len, world_size, shard_heads, hidden_dims)
+            original_dtype = img_qkv.dtype
+        else:
+            # 非 fusion：q 和 kv 分别 reshape，支持 GQA 下头数不同
+            img_q = img_q.reshape(img_qkv_len, world_size, q_shard_heads, hidden_dims)
+            img_k = img_k.reshape(img_qkv_len, world_size, kv_shard_heads, hidden_dims)
+            img_v = img_v.reshape(img_qkv_len, world_size, kv_shard_heads, hidden_dims)
+            original_dtype = img_q.dtype
 
         if enable_head_parallel:
             assert not is_gqa, "GQA（q_heads != kv_heads）暂不支持 enable_head_parallel 模式"
@@ -412,13 +389,12 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             attn = torch.cat(head_attns, dim=1)
 
         else:
-            with _profile_range("pre_all_to_all_layout"):
-                if use_qkv_fusion:
-                    img_qkv = img_qkv.permute(2, 1, 0, 3, 4).contiguous()  # (world_size, img_qkv_len, 3, shard_heads, hidden_dims)
-                else:
-                    img_q = img_q.permute(1, 0, 2, 3).contiguous()  # (world_size, img_qkv_len, q_shard_heads, hidden_dims)
-                    img_k = img_k.permute(1, 0, 2, 3).contiguous()  # (world_size, img_qkv_len, kv_shard_heads, hidden_dims)
-                    img_v = img_v.permute(1, 0, 2, 3).contiguous()
+            if use_qkv_fusion:
+                img_qkv = img_qkv.permute(2, 1, 0, 3, 4).contiguous()  # (world_size, img_qkv_len, 3, shard_heads, hidden_dims)
+            else:
+                img_q = img_q.permute(1, 0, 2, 3).contiguous()  # (world_size, img_qkv_len, q_shard_heads, hidden_dims)
+                img_k = img_k.permute(1, 0, 2, 3).contiguous()  # (world_size, img_qkv_len, kv_shard_heads, hidden_dims)
+                img_v = img_v.permute(1, 0, 2, 3).contiguous()
 
             # 通信图像的查询、键和值
             if use_qkv_fusion:
@@ -491,13 +467,12 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                         output_k = dequant_fp4_sage3(output_k_quant.reshape(1, 1, -1, hidden_dims // 2), output_k_scale.reshape(1, 1, -1, hidden_dims // 16))
                         output_v = dequant_fp4_sage3(output_v_quant.reshape(1, 1, -1, hidden_dims // 2), output_v_scale.reshape(1, 1, -1, hidden_dims // 16))
                 else:
-                    with _profile_range("pre_attn_all_to_all_qkv"):
-                        output_q = torch.empty_like(img_q)
-                        output_k = torch.empty_like(img_k)
-                        output_v = torch.empty_like(img_v)
-                        dist.all_to_all_single(output_q, img_q, group=seq_p_group)
-                        dist.all_to_all_single(output_k, img_k, group=seq_p_group)
-                        dist.all_to_all_single(output_v, img_v, group=seq_p_group)
+                    output_q = torch.empty_like(img_q)
+                    output_k = torch.empty_like(img_k)
+                    output_v = torch.empty_like(img_v)
+                    dist.all_to_all_single(output_q, img_q, group=seq_p_group)
+                    dist.all_to_all_single(output_k, img_k, group=seq_p_group)
+                    dist.all_to_all_single(output_v, img_v, group=seq_p_group)
                 # q 与 kv 使用各自对应的 shard_heads 进行 reshape
                 shard_img_q = output_q.reshape(global_img_seqlen, q_shard_heads, hidden_dims)
                 shard_img_k = output_k.reshape(global_img_seqlen, kv_shard_heads, hidden_dims)
@@ -519,19 +494,17 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 shard_txt_q = txt_q[:, cur_rank * q_shard_heads : (cur_rank + 1) * q_shard_heads, :]
                 shard_txt_k = txt_k[:, cur_rank * kv_shard_heads : (cur_rank + 1) * kv_shard_heads, :]
                 shard_txt_v = txt_v[:, cur_rank * kv_shard_heads : (cur_rank + 1) * kv_shard_heads, :]
-                with _profile_range("attn_input_cat"):
-                    if img_first:
-                        q = torch.cat((shard_img_q, shard_txt_q), dim=0)
-                        k = torch.cat((shard_img_k, shard_txt_k), dim=0)
-                        v = torch.cat((shard_img_v, shard_txt_v), dim=0)
-                    else:
-                        q = torch.cat((shard_txt_q, shard_img_q), dim=0)
-                        k = torch.cat((shard_txt_k, shard_img_k), dim=0)
-                        v = torch.cat((shard_txt_v, shard_img_v), dim=0)
+                if img_first:
+                    q = torch.cat((shard_img_q, shard_txt_q), dim=0)
+                    k = torch.cat((shard_img_k, shard_txt_k), dim=0)
+                    v = torch.cat((shard_img_v, shard_txt_v), dim=0)
+                else:
+                    q = torch.cat((shard_txt_q, shard_img_q), dim=0)
+                    k = torch.cat((shard_txt_k, shard_img_k), dim=0)
+                    v = torch.cat((shard_txt_v, shard_img_v), dim=0)
 
             # 调用注意力函数计算注意力结果
-            with _profile_range("attention_apply"):
-                attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_q, cu_seqlens_kv=cu_seqlens_kv, max_seqlen_q=max_seqlen_q, max_seqlen_kv=max_seqlen_kv, **kwargs)
+            attn = attention_module.apply(q=q, k=k, v=v, cu_seqlens_q=cu_seqlens_q, cu_seqlens_kv=cu_seqlens_kv, max_seqlen_q=max_seqlen_q, max_seqlen_kv=max_seqlen_kv, **kwargs)
 
         if q_only_img:
             # q 只含图像 token：attn 全部是图像侧结果，无 txt_attn，直接还原通信格式
@@ -547,35 +520,30 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         # 通信所有进程的图像注意力结果
         gathered_txt_attn = None
         text_gather_work = None
-        if _ASYNC_TEXT_GATHER_ENABLED:
-            with _profile_range("text_all_gather_launch"):
-                gathered_txt_attn = self._get_text_gather_buffers(txt_attn, world_size)
-                text_gather_work = dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group, async_op=True)
+        if async_text_gather:
+            gathered_txt_attn = self._get_text_gather_buffers(txt_attn, world_size, reuse_text_gather_buffers, text_gather_buffer_cache_max)
+            text_gather_work = dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group, async_op=True)
 
         # Finish the async gather before launching any later collective on the same process group.
-        if _ASYNC_TEXT_GATHER_ENABLED:
-            with _profile_range("text_all_gather_wait"):
-                text_gather_work.wait()
+        if async_text_gather:
+            text_gather_work.wait()
 
         img_attn = self._reshape_img_attn(img_attn, world_size, shard_seqlen, q_shard_heads, hidden_dims, seq_p_group, use_fp8_comm)
 
         # Gather text attention synchronously when async launch is disabled.
-        if not _ASYNC_TEXT_GATHER_ENABLED:
-            with _profile_range("text_all_gather"):
-                gathered_txt_attn = self._get_text_gather_buffers(txt_attn, world_size)
-                dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group)
-        with _profile_range("text_all_gather_cat"):
-            txt_attn = torch.cat(gathered_txt_attn, dim=1)  # 合并所有进程的文本注意力结果
+        if not async_text_gather:
+            gathered_txt_attn = self._get_text_gather_buffers(txt_attn, world_size, reuse_text_gather_buffers, text_gather_buffer_cache_max)
+            dist.all_gather(gathered_txt_attn, txt_attn, group=seq_p_group)
+        txt_attn = torch.cat(gathered_txt_attn, dim=1)  # 合并所有进程的文本注意力结果
 
         if return_split_output:
             return img_attn, txt_attn
 
         # 合并图像和文本的注意力结果
-        with _profile_range("output_img_txt_cat"):
-            if img_first:
-                attn = torch.cat([img_attn, txt_attn], dim=0)
-            else:
-                attn = torch.cat([txt_attn, img_attn], dim=0)
+        if img_first:
+            attn = torch.cat([img_attn, txt_attn], dim=0)
+        else:
+            attn = torch.cat([txt_attn, img_attn], dim=0)
 
         return attn  # 返回最终的注意力结果
 
@@ -587,13 +555,11 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             original_dtype = img_attn.dtype
             original_shape = img_attn.shape
             img_attn_quant, attn_scale = quant_fp8_vllm(img_attn.reshape(-1, original_shape[-1]))
-            with _profile_range("output_all2all_head2seq"):
-                img_attn_quant = all2all_head2seq(img_attn_quant.reshape(original_shape), group=seq_p_group)
-                attn_scale = all2all_head2seq(attn_scale.reshape(original_shape[0], original_shape[1], 1), group=seq_p_group)
+            img_attn_quant = all2all_head2seq(img_attn_quant.reshape(original_shape), group=seq_p_group)
+            attn_scale = all2all_head2seq(attn_scale.reshape(original_shape[0], original_shape[1], 1), group=seq_p_group)
             img_attn = dequant_fp8_vllm(img_attn_quant, attn_scale, original_dtype)
         else:
-            with _profile_range("output_all2all_head2seq"):
-                img_attn = all2all_head2seq(img_attn, group=seq_p_group)
+            img_attn = all2all_head2seq(img_attn, group=seq_p_group)
 
         img_attn = img_attn.reshape(shard_seqlen, -1)  # 重塑为 [shard_seqlen, -1] 形状
         return img_attn

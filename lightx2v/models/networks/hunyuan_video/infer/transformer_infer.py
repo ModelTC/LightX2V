@@ -1,4 +1,3 @@
-import os
 from typing import Tuple
 
 import torch
@@ -38,10 +37,6 @@ def apply_gate(x, gate=None, tanh=False):
         return x * gate.unsqueeze(1).tanh()
     else:
         return x * gate.unsqueeze(1)
-
-
-def _env_flag(name, default="0"):
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def apply_hunyuan_rope_with_flashinfer(
@@ -106,14 +101,18 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         self.config = config
         self.double_blocks_num = config["mm_double_blocks_depth"]
         self.heads_num = config["heads_num"]
+        parallel_config = self.config.get("parallel", {})
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
-            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
-            self.seq_p_tensor_fusion = self.config["parallel"].get("seq_p_tensor_fusion", False)
-            self.seq_p_split_qkv_input = _env_flag("LIGHTX2V_SEQ_P_SPLIT_QKV_INPUT")
-            self.seq_p_split_attn_output = _env_flag("LIGHTX2V_SEQ_P_SPLIT_ATTN_OUTPUT")
+            self.seq_p_fp8_comm = parallel_config.get("seq_p_fp8_comm", False)
+            self.seq_p_fp4_comm = parallel_config.get("seq_p_fp4_comm", False)
+            self.enable_head_parallel = parallel_config.get("seq_p_head_parallel", False)
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
+            self.seq_p_split_qkv_input = parallel_config.get("seq_p_split_qkv_input", False)
+            self.seq_p_split_attn_output = parallel_config.get("seq_p_split_attn_output", False)
+            self.seq_p_async_text_gather = parallel_config.get("seq_p_async_text_gather", False)
+            self.seq_p_reuse_text_gather_buffers = parallel_config.get("seq_p_reuse_text_gather_buffers", False)
+            self.seq_p_text_gather_buffer_cache_max = parallel_config.get("seq_p_text_gather_buffer_cache_max", 16)
         else:
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
@@ -122,6 +121,9 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.seq_p_tensor_fusion = False
             self.seq_p_split_qkv_input = False
             self.seq_p_split_attn_output = False
+            self.seq_p_async_text_gather = False
+            self.seq_p_reuse_text_gather_buffers = False
+            self.seq_p_text_gather_buffer_cache_max = 16
         self.infer_func = self.infer_without_offload
         if self.config.get("modulate_type", "triton") == "triton":
             self.modulate_func = fuse_scale_shift_kernel
@@ -131,11 +133,11 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.apply_rope_func = apply_hunyuan_rope_with_flashinfer
         else:
             self.apply_rope_func = apply_hunyuan_rope_with_torch
-        self.compile_non_attn = _env_flag("LIGHTX2V_COMPILE_DIT_NON_ATTN")
-        self.compile_before_attn_requested = _env_flag("LIGHTX2V_COMPILE_DIT_BEFORE_ATTN")
-        self.compile_before_attn = self.compile_before_attn_requested and _env_flag("LIGHTX2V_COMPILE_DIT_BEFORE_ATTN_UNSAFE")
-        self.compile_non_attn_mode = os.getenv("LIGHTX2V_COMPILE_DIT_MODE", "reduce-overhead")
-        self.share_qkv_act_quant = _env_flag("LIGHTX2V_INT8_SHARE_QKV_ACT_QUANT")
+        self.compile_non_attn = self.config.get("compile_dit_non_attn", False)
+        self.compile_before_attn_requested = self.config.get("compile_dit_before_attn", False)
+        self.compile_before_attn = self.compile_before_attn_requested and self.config.get("compile_dit_before_attn_unsafe", False)
+        self.compile_non_attn_mode = self.config.get("compile_dit_mode", "reduce-overhead")
+        self.share_qkv_act_quant = self.config.get("share_qkv_act_quant", False)
         self._compiled_non_attn = {}
         self._compile_non_attn_failed = set()
         if self.share_qkv_act_quant:
@@ -146,8 +148,8 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             logger.info("[Ulysses] Returning split img/txt attention outputs to avoid post-attention concat/slice copies")
         if self.compile_before_attn_requested and not self.compile_before_attn:
             logger.warning(
-                "[Compile] LIGHTX2V_COMPILE_DIT_BEFORE_ATTN is ignored unless "
-                "LIGHTX2V_COMPILE_DIT_BEFORE_ATTN_UNSAFE=1 is also set; before-attn graphs carry "
+                "[Compile] compile_dit_before_attn is ignored unless "
+                "compile_dit_before_attn_unsafe is also set; before-attn graphs carry "
                 "block-specific weight objects and can grow Dynamo caches quickly."
             )
         if self.compile_non_attn or self.compile_before_attn:
@@ -316,6 +318,9 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                 use_tensor_fusion=self.seq_p_tensor_fusion,
                 enable_head_parallel=self.enable_head_parallel,
                 return_split_output=self.seq_p_split_attn_output,
+                async_text_gather=self.seq_p_async_text_gather,
+                reuse_text_gather_buffers=self.seq_p_reuse_text_gather_buffers,
+                text_gather_buffer_cache_max=self.seq_p_text_gather_buffer_cache_max,
             )
         else:
             query = torch.cat([img_q, txt_q], dim=1)
@@ -335,6 +340,9 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
                     use_tensor_fusion=self.seq_p_tensor_fusion,
                     enable_head_parallel=self.enable_head_parallel,
                     return_split_output=self.seq_p_split_attn_output,
+                    async_text_gather=self.seq_p_async_text_gather,
+                    reuse_text_gather_buffers=self.seq_p_reuse_text_gather_buffers,
+                    text_gather_buffer_cache_max=self.seq_p_text_gather_buffer_cache_max,
                 )
             else:
                 attn_out = weights.self_attention.apply(q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen)
