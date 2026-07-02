@@ -3,6 +3,7 @@ import json
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.models.networks.hunyuan_video.infer.offload.transformer_infer import HunyuanVideo15OffloadTransformerInfer
@@ -142,6 +143,15 @@ class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
         self.previous_modulated_input_even = None
         self.previous_residual_even = None
 
+    def _relative_l1_distance(self, current, previous):
+        diff_sum = (current - previous).abs().float().sum()
+        prev_sum = previous.abs().float().sum().clamp_min(1e-12)
+        stats = torch.stack([diff_sum, prev_sum])
+        seq_p_group = getattr(self, "seq_p_group", None)
+        if seq_p_group is not None and dist.is_available() and dist.is_initialized():
+            dist.all_reduce(stats, op=dist.ReduceOp.SUM, group=seq_p_group)
+        return (stats[0] / stats[1].clamp_min(1e-12)).cpu().item()
+
     def calculate_should_calc(self, img, vec, block):
         inp = img.clone()
         vec_ = vec.clone()
@@ -167,7 +177,7 @@ class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
         else:
             rescale_func = np.poly1d(self.coefficients)
             if self.scheduler.infer_condition:
-                self.accumulated_rel_l1_distance_odd += rescale_func(((modulated_inp - self.previous_modulated_input_odd).abs().mean() / self.previous_modulated_input_odd.abs().mean()).cpu().item())
+                self.accumulated_rel_l1_distance_odd += rescale_func(self._relative_l1_distance(modulated_inp, self.previous_modulated_input_odd))
                 if self.accumulated_rel_l1_distance_odd < self.teacache_thresh:
                     should_calc = False
                 else:
@@ -175,9 +185,7 @@ class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
                     self.accumulated_rel_l1_distance_odd = 0
                 self.previous_modulated_input_odd = modulated_inp
             else:
-                self.accumulated_rel_l1_distance_even += rescale_func(
-                    ((modulated_inp - self.previous_modulated_input_even).abs().mean() / self.previous_modulated_input_even.abs().mean()).cpu().item()
-                )
+                self.accumulated_rel_l1_distance_even += rescale_func(self._relative_l1_distance(modulated_inp, self.previous_modulated_input_even))
                 if self.accumulated_rel_l1_distance_even < self.teacache_thresh:
                     should_calc = False
                 else:

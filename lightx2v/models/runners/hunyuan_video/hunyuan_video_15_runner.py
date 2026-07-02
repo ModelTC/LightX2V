@@ -4,6 +4,7 @@ import os
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torchvision.transforms as transforms
 from PIL import Image
 from loguru import logger
@@ -13,6 +14,7 @@ from lightx2v.models.input_encoders.hf.hunyuan15.qwen25.model import Qwen25VL_Te
 from lightx2v.models.input_encoders.hf.hunyuan15.siglip.model import SiglipVisionEncoder
 from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.vae_postprocess import crop_spatial_to_size, env_flag
 from lightx2v.models.schedulers.hunyuan_video.feature_caching.scheduler import HunyuanVideo15SchedulerCaching
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15SRScheduler, HunyuanVideo15Scheduler
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.hunyuanvideo_15_vae import HunyuanVideo15VAE
@@ -122,6 +124,8 @@ class HunyuanVideo15Runner(DefaultRunner):
             width, height = origin_size
         target_size = self.config["transformer_model_name"].split("_")[0]
         target_height, target_width = self.get_closest_resolution_given_original_size((int(width), int(height)), target_size)
+        self.output_target_height = target_height
+        self.output_target_width = target_width
         latent_shape = [
             self.config.get("in_channels", 32),
             (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
@@ -430,6 +434,17 @@ class HunyuanVideo15Runner(DefaultRunner):
         if self.sr_version:
             latents = self.run_sr(latents)
         images = super().run_vae_decoder(latents)
+        if env_flag("LIGHTX2V_CROP_PADDED_VAE_OUTPUT", False):
+            before_shape = tuple(images.shape) if isinstance(images, torch.Tensor) else None
+            images = crop_spatial_to_size(
+                images,
+                getattr(self, "output_target_height", None),
+                getattr(self, "output_target_width", None),
+            )
+            after_shape = tuple(images.shape) if isinstance(images, torch.Tensor) else None
+            if before_shape != after_shape:
+                rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+                logger.info(f"[VAE_DETAIL] rank={rank} crop_padded_vae_output {before_shape} -> {after_shape}")
         return images
 
     @ProfilingContext4DebugL2("Run Encoders")

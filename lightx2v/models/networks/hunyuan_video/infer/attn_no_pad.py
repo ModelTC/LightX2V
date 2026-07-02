@@ -40,12 +40,20 @@ except ImportError:
     sageattn3_blackwell = None
 
 
+def unpad_input_compat(*args, **kwargs):
+    result = unpad_input(*args, **kwargs)
+    if len(result) == 4:
+        x_unpad, indices, cu_seqlens, max_s = result
+        return x_unpad, indices, cu_seqlens, max_s, None
+    return result
+
+
 def flash_attn_no_pad(qkv, key_padding_mask, causal=False, dropout_p=0.0, softmax_scale=None, deterministic=False):
     batch_size = qkv.shape[0]
     seqlen = qkv.shape[1]
     nheads = qkv.shape[-2]
     x = rearrange(qkv, "b s three h d -> b s (three h d)")
-    x_unpad, indices, cu_seqlens, max_s, used_seqlens_in_batch = unpad_input(x, key_padding_mask)
+    x_unpad, indices, cu_seqlens, max_s, used_seqlens_in_batch = unpad_input_compat(x, key_padding_mask)
 
     x_unpad = rearrange(x_unpad, "nnz (three h d) -> nnz three h d", three=3, h=nheads)
     output_unpad = flash_attn_varlen_qkvpacked_func(
@@ -72,9 +80,9 @@ def flash_attn_no_pad_v3(qkv, key_padding_mask, causal=False, dropout_p=0.0, sof
     batch_size, seqlen, _, nheads, head_dim = qkv.shape
     query, key, value = qkv.unbind(dim=2)
 
-    query_unpad, indices, cu_seqlens_q, max_seqlen_q, _ = unpad_input(rearrange(query, "b s h d -> b s (h d)"), key_padding_mask)
-    key_unpad, _, cu_seqlens_k, _, _ = unpad_input(rearrange(key, "b s h d -> b s (h d)"), key_padding_mask)
-    value_unpad, _, _, _, _ = unpad_input(rearrange(value, "b s h d -> b s (h d)"), key_padding_mask)
+    query_unpad, indices, cu_seqlens_q, max_seqlen_q, _ = unpad_input_compat(rearrange(query, "b s h d -> b s (h d)"), key_padding_mask)
+    key_unpad, _, cu_seqlens_k, _, _ = unpad_input_compat(rearrange(key, "b s h d -> b s (h d)"), key_padding_mask)
+    value_unpad, _, _, _, _ = unpad_input_compat(rearrange(value, "b s h d -> b s (h d)"), key_padding_mask)
 
     query_unpad = rearrange(query_unpad, "nnz (h d) -> nnz h d", h=nheads)
     key_unpad = rearrange(key_unpad, "nnz (h d) -> nnz h d", h=nheads)
@@ -92,9 +100,9 @@ def sage_attn_no_pad_v2(qkv, key_padding_mask, causal=False, dropout_p=0.0, soft
     batch_size, seqlen, _, nheads, head_dim = qkv.shape
     query, key, value = qkv.unbind(dim=2)
 
-    query_unpad, indices, cu_seqlens_q, max_seqlen_q, _ = unpad_input(rearrange(query, "b s h d -> b s (h d)"), key_padding_mask)
-    key_unpad, _, cu_seqlens_k, _, _ = unpad_input(rearrange(key, "b s h d -> b s (h d)"), key_padding_mask)
-    value_unpad, _, _, _, _ = unpad_input(rearrange(value, "b s h d -> b s (h d)"), key_padding_mask)
+    query_unpad, indices, cu_seqlens_q, max_seqlen_q, _ = unpad_input_compat(rearrange(query, "b s h d -> b s (h d)"), key_padding_mask)
+    key_unpad, _, cu_seqlens_k, _, _ = unpad_input_compat(rearrange(key, "b s h d -> b s (h d)"), key_padding_mask)
+    value_unpad, _, _, _, _ = unpad_input_compat(rearrange(value, "b s h d -> b s (h d)"), key_padding_mask)
 
     query_unpad = rearrange(query_unpad, "nnz (h d) -> nnz h d", h=nheads)
     key_unpad = rearrange(key_unpad, "nnz (h d) -> nnz h d", h=nheads)
@@ -115,9 +123,9 @@ def sage_attn_no_pad_v3(qkv, key_padding_mask, causal=False, dropout_p=0.0, soft
     batch_size, seqlen, _, nheads, head_dim = qkv.shape
     query, key, value = qkv.unbind(dim=2)
 
-    query_unpad, indices, cu_seqlens_q, max_seqlen_q, _ = unpad_input(rearrange(query, "b s h d -> b s (h d)"), key_padding_mask)
-    key_unpad, _, cu_seqlens_k, _, _ = unpad_input(rearrange(key, "b s h d -> b s (h d)"), key_padding_mask)
-    value_unpad, _, _, _, _ = unpad_input(rearrange(value, "b s h d -> b s (h d)"), key_padding_mask)
+    query_unpad, indices, cu_seqlens_q, max_seqlen_q, _ = unpad_input_compat(rearrange(query, "b s h d -> b s (h d)"), key_padding_mask)
+    key_unpad, _, cu_seqlens_k, _, _ = unpad_input_compat(rearrange(key, "b s h d -> b s (h d)"), key_padding_mask)
+    value_unpad, _, _, _, _ = unpad_input_compat(rearrange(value, "b s h d -> b s (h d)"), key_padding_mask)
 
     query_unpad = rearrange(query_unpad, "nnz (h d) -> nnz h d", h=nheads)
     key_unpad = rearrange(key_unpad, "nnz (h d) -> nnz h d", h=nheads)
