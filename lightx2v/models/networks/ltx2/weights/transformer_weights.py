@@ -526,6 +526,7 @@ class LTX2AttentionTP(WeightModule):
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
         self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
+        self.apply_gated_attention = self.config.get("apply_gated_attention", False)
 
         block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
@@ -540,6 +541,26 @@ class LTX2AttentionTP(WeightModule):
             "tp_rank": tp_rank,
             "tp_size": tp_size,
         }
+
+        if self.apply_gated_attention:
+            self.add_module(
+                "to_gate_logits",
+                MM_WEIGHT_REGISTER["TensorParallel"](
+                    weight_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_gate_logits.weight",
+                    bias_name=f"{model_prefix}.{block_prefix}.{block_index}.{attn_prefix}.to_gate_logits.bias",
+                    mm_type=mm_type,
+                    tp_group=tp_group,
+                    tp_rank=tp_rank,
+                    tp_size=tp_size,
+                    split_dim="col",
+                    create_cuda_buffer=create_cuda_buffer,
+                    create_cpu_buffer=create_cpu_buffer,
+                    lazy_load=self.lazy_load,
+                    lazy_load_file=self.lazy_load_file,
+                    lora_prefix=block_lora_prefix,
+                    lora_path=lora_path,
+                ),
+            )
 
         self.add_module(
             f"q_norm",
