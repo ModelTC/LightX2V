@@ -6,24 +6,47 @@ import torch
 from lightx2v.models.networks.wan.infer.module_io import GridOutput
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.utils.envs import *
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
+
+_POSITION_FLOAT32_PLATFORMS = {
+    "ascend_npu",
+    "cambricon_mlu",
+    "metax_cuda",
+}
+
+
+def _position_math_dtype():
+    if PLATFORM in _POSITION_FLOAT32_PLATFORMS:
+        return torch.float32
+    return torch.float64
+
+
+def _empty_device_cache():
+    device_module = getattr(torch, AI_DEVICE, None)
+    if device_module is not None and hasattr(device_module, "empty_cache"):
+        device_module.empty_cache()
 
 
 def sinusoidal_embedding_1d(dim, position):
     # preprocess
     assert dim % 2 == 0
     half = dim // 2
-    position = position.type(torch.float64)
+    dtype = _position_math_dtype()
+    position = position.type(dtype)
 
     # calculation
-    sinusoid = torch.outer(position, torch.pow(10000, -torch.arange(half).to(position).div(half)))
+    sinusoid = torch.outer(position, torch.pow(10000, -torch.arange(half, device=position.device, dtype=dtype).div(half)))
     x = torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1)
     return x
 
 
 def rope_params(max_seq_len, dim, theta=10000):
     assert dim % 2 == 0
-    freqs = torch.outer(torch.arange(max_seq_len), 1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float64).div(dim)))
+    dtype = _position_math_dtype()
+    freqs = torch.outer(
+        torch.arange(max_seq_len, dtype=dtype),
+        1.0 / torch.pow(theta, torch.arange(0, dim, 2, dtype=dtype).div(dim)),
+    )
     freqs = torch.polar(torch.ones_like(freqs), freqs)
     return freqs
 
@@ -97,12 +120,12 @@ class WanSFPreInfer(WanPreInfer):
         context = weights.text_embedding_2.apply(out)
         if self.clean_cuda_cache:
             del out
-            torch.cuda.empty_cache()
+            _empty_device_cache()
 
         if self.clean_cuda_cache:
             if self.config.get("use_image_encoder", True):
                 del context_clip
-            torch.cuda.empty_cache()
+            _empty_device_cache()
 
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
 
