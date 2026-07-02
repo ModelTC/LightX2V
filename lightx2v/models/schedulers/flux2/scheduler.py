@@ -229,6 +229,16 @@ class Flux2Scheduler(BaseScheduler):
         self.input_image_latents = packed_latents
         self.input_image_ids = image_latent_ids
 
+    def clear(self):
+        self.generator = None
+        self.latents = None
+        self.inpaint_mask = None
+        self.input_latents = None
+        self.input_image_latents = None
+        self.input_image_ids = None
+        self.noise_pred = None
+        self.infer_condition = True
+
 
 class Flux2DevScheduler(Flux2Scheduler):
     """Scheduler for Flux2 Dev: adds guidance_proj pre-computation."""
