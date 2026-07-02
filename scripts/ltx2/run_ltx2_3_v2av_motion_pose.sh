@@ -4,6 +4,7 @@
 # Accepts any of: Canny / Depth / Pose mode
 
 # set path firstly
+# The model_pathpoints to LTX-2, while the config includes the weights for LTX-2.3
 lightx2v_path=
 model_path=
 video_path=

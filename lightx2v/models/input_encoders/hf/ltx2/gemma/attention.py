@@ -1,3 +1,4 @@
+import os
 from enum import Enum
 from typing import Protocol
 
@@ -5,12 +6,16 @@ import torch
 
 from lightx2v.models.input_encoders.hf.ltx2.gemma.rope import LTXRopeType, apply_rotary_emb
 
+_DISABLE_XFORMERS_PLATFORMS = {"metax_cuda"}
+_USE_XFORMERS = os.getenv("PLATFORM") not in _DISABLE_XFORMERS_PLATFORMS
+
 memory_efficient_attention = None
 flash_attn_interface = None
-try:
-    from xformers.ops import memory_efficient_attention
-except ImportError:
-    memory_efficient_attention = None
+if _USE_XFORMERS:
+    try:
+        from xformers.ops import memory_efficient_attention
+    except ImportError:
+        memory_efficient_attention = None
 try:
     # FlashAttention3 and XFormersAttention cannot be used together
     if memory_efficient_attention is None:
