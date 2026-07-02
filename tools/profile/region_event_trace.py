@@ -263,20 +263,10 @@ def assign_parent_region(
 ) -> str:
     """Assign a GPU event to a ``record_function`` region name.
 
-    1. Largest overlap with ``gpu_user_annotation`` intervals (preferred).
-    2. CPU ``user_annotation`` half-open interval containing the launch timestamp.
+    1. CPU ``user_annotation`` half-open interval containing the launch timestamp.
+    2. Largest overlap with ``gpu_user_annotation`` intervals (fallback).
     3. ``"-"`` if no match.
     """
-    best = ("-", 0.0)
-    for a0, a1, name in gpu_anns:
-        if name.startswith(config.gpu_skip_prefixes):
-            continue
-        ov = max(0.0, min(te, a1) - max(ts, a0))
-        if ov > best[1]:
-            best = (name, ov)
-    if best[1] > 0:
-        return best[0]
-
     if cpu_anns:
         for i, (start, _end, name) in enumerate(cpu_anns):
             next_start = cpu_anns[i + 1][0] if i + 1 < len(cpu_anns) else float("inf")
@@ -291,9 +281,17 @@ def assign_parent_region(
         cand = [a for a in cpu_anns if a[0] < te and a[1] > ts]
     if not cand and cpu_anns and launch_ts < cpu_anns[0][0]:
         return cpu_anns[0][2]
-    if not cand:
-        return "-"
-    return min(cand, key=lambda a: a[1] - a[0])[2]
+    if cand:
+        return min(cand, key=lambda a: a[1] - a[0])[2]
+
+    best = ("-", 0.0)
+    for a0, a1, name in gpu_anns:
+        if name.startswith(config.gpu_skip_prefixes):
+            continue
+        ov = max(0.0, min(te, a1) - max(ts, a0))
+        if ov > best[1]:
+            best = (name, ov)
+    return best[0]
 
 
 def collect_regions(
