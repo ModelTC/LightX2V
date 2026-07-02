@@ -3,6 +3,7 @@ from typing import Tuple
 import torch
 import torch.nn.functional as F
 from einops import rearrange
+from loguru import logger
 
 try:
     from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
@@ -100,16 +101,29 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         self.config = config
         self.double_blocks_num = config["mm_double_blocks_depth"]
         self.heads_num = config["heads_num"]
+        parallel_config = self.config.get("parallel", {})
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
-            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            self.seq_p_fp8_comm = parallel_config.get("seq_p_fp8_comm", False)
+            self.seq_p_fp4_comm = parallel_config.get("seq_p_fp4_comm", False)
+            self.enable_head_parallel = parallel_config.get("seq_p_head_parallel", False)
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
+            self.seq_p_split_qkv_input = parallel_config.get("seq_p_split_qkv_input", False)
+            self.seq_p_split_attn_output = parallel_config.get("seq_p_split_attn_output", False)
+            self.seq_p_async_text_gather = parallel_config.get("seq_p_async_text_gather", False)
+            self.seq_p_reuse_text_gather_buffers = parallel_config.get("seq_p_reuse_text_gather_buffers", False)
+            self.seq_p_text_gather_buffer_cache_max = parallel_config.get("seq_p_text_gather_buffer_cache_max", 16)
         else:
             self.seq_p_group = None
             self.seq_p_fp8_comm = False
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
+            self.seq_p_tensor_fusion = False
+            self.seq_p_split_qkv_input = False
+            self.seq_p_split_attn_output = False
+            self.seq_p_async_text_gather = False
+            self.seq_p_reuse_text_gather_buffers = False
+            self.seq_p_text_gather_buffer_cache_max = 16
         self.infer_func = self.infer_without_offload
         if self.config.get("modulate_type", "triton") == "triton":
             self.modulate_func = fuse_scale_shift_kernel
@@ -119,6 +133,31 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.apply_rope_func = apply_hunyuan_rope_with_flashinfer
         else:
             self.apply_rope_func = apply_hunyuan_rope_with_torch
+        self.compile_non_attn = self.config.get("compile_dit_non_attn", False)
+        self.compile_before_attn_requested = self.config.get("compile_dit_before_attn", False)
+        self.compile_before_attn = self.compile_before_attn_requested and self.config.get("compile_dit_before_attn_unsafe", False)
+        self.compile_non_attn_mode = self.config.get("compile_dit_mode", "reduce-overhead")
+        self.share_qkv_act_quant = self.config.get("share_qkv_act_quant", False)
+        self._compiled_non_attn = {}
+        self._compile_non_attn_failed = set()
+        if self.share_qkv_act_quant:
+            logger.info("[Quant] Reusing dynamic activation quantization for consecutive Q/K/V projections")
+        if self.seq_p_split_qkv_input:
+            logger.info("[Ulysses] Passing split img/txt QKV tensors to avoid pre-attention concat/slice copies")
+        if self.seq_p_split_attn_output:
+            logger.info("[Ulysses] Returning split img/txt attention outputs to avoid post-attention concat/slice copies")
+        if self.compile_before_attn_requested and not self.compile_before_attn:
+            logger.warning(
+                "[Compile] compile_dit_before_attn is ignored unless "
+                "compile_dit_before_attn_unsafe is also set; before-attn graphs carry "
+                "block-specific weight objects and can grow Dynamo caches quickly."
+            )
+        if self.compile_non_attn or self.compile_before_attn:
+            try:
+                torch._dynamo.config.suppress_errors = True
+            except Exception as exc:
+                logger.warning(f"[Compile] Unable to enable Dynamo suppress_errors: {exc}")
+            logger.info(f"[Compile] Hunyuan DiT branch compile: after_attn={self.compile_non_attn}, before_attn={self.compile_before_attn}, mode={self.compile_non_attn_mode}")
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -153,8 +192,33 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         txt = self._infer_txt_branch_after_attn(weights, txt_attn, infer_module_out.txt, txt_branch_out)
         return img, txt
 
+    def _apply_qkv(self, q_weight, k_weight, v_weight, hidden_states):
+        use_shared_quant = (
+            self.share_qkv_act_quant
+            and hasattr(q_weight, "prepare_quantized_input")
+            and all(hasattr(weight, "apply_quantized_input") for weight in (q_weight, k_weight, v_weight))
+            and not any(getattr(weight, "use_bf16_fallback", False) for weight in (q_weight, k_weight, v_weight))
+        )
+        if use_shared_quant:
+            quantized_input = q_weight.prepare_quantized_input(hidden_states)
+            return (
+                q_weight.apply_quantized_input(hidden_states, quantized_input),
+                k_weight.apply_quantized_input(hidden_states, quantized_input),
+                v_weight.apply_quantized_input(hidden_states, quantized_input),
+            )
+        return q_weight.apply(hidden_states), k_weight.apply(hidden_states), v_weight.apply(hidden_states)
+
     @torch.no_grad()
     def _infer_img_branch_before_attn(self, weights, infer_module_out):
+        return self._run_non_attn_branch(
+            "img_before_attn",
+            self._infer_img_branch_before_attn_eager,
+            weights,
+            infer_module_out,
+            compile_enabled=self.compile_before_attn,
+        )
+
+    def _infer_img_branch_before_attn_eager(self, weights, infer_module_out):
         (
             img_mod1_shift,
             img_mod1_scale,
@@ -165,9 +229,12 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         ) = weights.img_branch.img_mod.apply(infer_module_out.vec).chunk(6, dim=-1)
         img_modulated = weights.img_branch.img_norm1.apply(infer_module_out.img.squeeze(0))
         img_modulated = self.modulate_func(img_modulated, scale=img_mod1_scale, shift=img_mod1_shift).squeeze(0)
-        img_q = weights.img_branch.img_attn_q.apply(img_modulated)
-        img_k = weights.img_branch.img_attn_k.apply(img_modulated)
-        img_v = weights.img_branch.img_attn_v.apply(img_modulated)
+        img_q, img_k, img_v = self._apply_qkv(
+            weights.img_branch.img_attn_q,
+            weights.img_branch.img_attn_k,
+            weights.img_branch.img_attn_v,
+            img_modulated,
+        )
         img_q = rearrange(img_q, "L (H D) -> L H D", H=self.heads_num)
         img_k = rearrange(img_k, "L (H D) -> L H D", H=self.heads_num)
         img_v = rearrange(img_v, "L (H D) -> L H D", H=self.heads_num)
@@ -188,6 +255,15 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
 
     @torch.no_grad()
     def _infer_txt_branch_before_attn(self, weights, infer_module_out):
+        return self._run_non_attn_branch(
+            "txt_before_attn",
+            self._infer_txt_branch_before_attn_eager,
+            weights,
+            infer_module_out,
+            compile_enabled=self.compile_before_attn,
+        )
+
+    def _infer_txt_branch_before_attn_eager(self, weights, infer_module_out):
         (
             txt_mod1_shift,
             txt_mod1_scale,
@@ -198,9 +274,12 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         ) = weights.txt_branch.txt_mod.apply(infer_module_out.vec).chunk(6, dim=-1)
         txt_modulated = weights.txt_branch.txt_norm1.apply(infer_module_out.txt.squeeze(0))
         txt_modulated = self.modulate_func(txt_modulated, scale=txt_mod1_scale, shift=txt_mod1_shift).squeeze(0)
-        txt_q = weights.txt_branch.txt_attn_q.apply(txt_modulated)
-        txt_k = weights.txt_branch.txt_attn_k.apply(txt_modulated)
-        txt_v = weights.txt_branch.txt_attn_v.apply(txt_modulated)
+        txt_q, txt_k, txt_v = self._apply_qkv(
+            weights.txt_branch.txt_attn_q,
+            weights.txt_branch.txt_attn_k,
+            weights.txt_branch.txt_attn_v,
+            txt_modulated,
+        )
         txt_q = rearrange(txt_q, "L (H D) -> L H D", H=self.heads_num)
         txt_k = rearrange(txt_k, "L (H D) -> L H D", H=self.heads_num)
         txt_v = rearrange(txt_v, "L (H D) -> L H D", H=self.heads_num)
@@ -221,33 +300,89 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
     @torch.no_grad()
     def _infer_attn(self, weights, img_q, img_k, img_v, txt_q, txt_k, txt_v):
         img_seqlen = img_q.shape[1]
-        query = torch.cat([img_q, txt_q], dim=1)
-        key = torch.cat([img_k, txt_k], dim=1)
-        value = torch.cat([img_v, txt_v], dim=1)
-        seqlen = query.shape[1]
+        txt_seqlen = txt_q.shape[1]
+        seqlen = img_seqlen + txt_seqlen
         cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu")
 
-        if self.config["seq_parallel"]:
+        if self.config["seq_parallel"] and self.seq_p_split_qkv_input:
             attn_out = weights.self_attention_parallel.apply(
-                q=query,
-                k=key,
-                v=value,
+                q=(img_q, txt_q),
+                k=(img_k, txt_k),
+                v=(img_v, txt_v),
                 slice_qkv_len=img_seqlen,
                 cu_seqlens_qkv=cu_seqlens_qkv,
                 attention_module=weights.self_attention,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
                 use_fp4_comm=self.seq_p_fp4_comm,
+                use_tensor_fusion=self.seq_p_tensor_fusion,
                 enable_head_parallel=self.enable_head_parallel,
+                return_split_output=self.seq_p_split_attn_output,
+                async_text_gather=self.seq_p_async_text_gather,
+                reuse_text_gather_buffers=self.seq_p_reuse_text_gather_buffers,
+                text_gather_buffer_cache_max=self.seq_p_text_gather_buffer_cache_max,
             )
         else:
-            attn_out = weights.self_attention.apply(q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen)
+            query = torch.cat([img_q, txt_q], dim=1)
+            key = torch.cat([img_k, txt_k], dim=1)
+            value = torch.cat([img_v, txt_v], dim=1)
+            if self.config["seq_parallel"]:
+                attn_out = weights.self_attention_parallel.apply(
+                    q=query,
+                    k=key,
+                    v=value,
+                    slice_qkv_len=img_seqlen,
+                    cu_seqlens_qkv=cu_seqlens_qkv,
+                    attention_module=weights.self_attention,
+                    seq_p_group=self.seq_p_group,
+                    use_fp8_comm=self.seq_p_fp8_comm,
+                    use_fp4_comm=self.seq_p_fp4_comm,
+                    use_tensor_fusion=self.seq_p_tensor_fusion,
+                    enable_head_parallel=self.enable_head_parallel,
+                    return_split_output=self.seq_p_split_attn_output,
+                    async_text_gather=self.seq_p_async_text_gather,
+                    reuse_text_gather_buffers=self.seq_p_reuse_text_gather_buffers,
+                    text_gather_buffer_cache_max=self.seq_p_text_gather_buffer_cache_max,
+                )
+            else:
+                attn_out = weights.self_attention.apply(q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen)
 
-        img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
+        if isinstance(attn_out, (tuple, list)):
+            img_attn, txt_attn = attn_out
+        else:
+            img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
         return img_attn, txt_attn
+
+    def _run_non_attn_branch(self, graph_name, eager_fn, *args, compile_enabled=None):
+        if compile_enabled is None:
+            compile_enabled = self.compile_non_attn
+        if not compile_enabled or graph_name in self._compile_non_attn_failed:
+            return eager_fn(*args)
+
+        compiled_fn = self._compiled_non_attn.get(graph_name)
+        if compiled_fn is None:
+            try:
+                compiled_fn = torch.compile(eager_fn, fullgraph=False, dynamic=False, mode=self.compile_non_attn_mode)
+                self._compiled_non_attn[graph_name] = compiled_fn
+                logger.info(f"[Compile] Created compiled wrapper for {graph_name}")
+            except Exception as exc:
+                self._compile_non_attn_failed.add(graph_name)
+                logger.warning(f"[Compile] Failed to create compiled wrapper for {graph_name}, fallback to eager: {exc}")
+                return eager_fn(*args)
+
+        try:
+            return compiled_fn(*args)
+        except Exception as exc:
+            self._compile_non_attn_failed.add(graph_name)
+            self._compiled_non_attn.pop(graph_name, None)
+            logger.warning(f"[Compile] Runtime failure in {graph_name}, disabling this graph and falling back to eager: {exc}")
+            return eager_fn(*args)
 
     @torch.no_grad()
     def _infer_img_branch_after_attn(self, weights, img_attn, img, img_branch_out):
+        return self._run_non_attn_branch("img_after_attn", self._infer_img_branch_after_attn_eager, weights, img_attn, img, img_branch_out)
+
+    def _infer_img_branch_after_attn_eager(self, weights, img_attn, img, img_branch_out):
         img = img + apply_gate(weights.img_branch.img_attn_proj.apply(img_attn).unsqueeze(0), gate=img_branch_out.img_mod1_gate)
         out = weights.img_branch.img_mlp_fc1.apply(
             self.modulate_func(weights.img_branch.img_norm2.apply(img.squeeze(0)), scale=img_branch_out.img_mod2_scale, shift=img_branch_out.img_mod2_shift).squeeze(0)
@@ -258,6 +393,9 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
 
     @torch.no_grad()
     def _infer_txt_branch_after_attn(self, weights, txt_attn, txt, txt_branch_out):
+        return self._run_non_attn_branch("txt_after_attn", self._infer_txt_branch_after_attn_eager, weights, txt_attn, txt, txt_branch_out)
+
+    def _infer_txt_branch_after_attn_eager(self, weights, txt_attn, txt, txt_branch_out):
         txt = txt + apply_gate(weights.txt_branch.txt_attn_proj.apply(txt_attn).unsqueeze(0), gate=txt_branch_out.txt_mod1_gate)
         out = weights.txt_branch.txt_mlp_fc1.apply(
             self.modulate_func(weights.txt_branch.txt_norm2.apply(txt.squeeze(0)), scale=txt_branch_out.txt_mod2_scale, shift=txt_branch_out.txt_mod2_shift).squeeze(0)
