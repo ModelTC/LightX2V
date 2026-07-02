@@ -539,6 +539,7 @@ class SekoTalkInputs:
     stream_config: dict | Any = UNSET
 
     resize_mode: str | Any = UNSET
+    fixed_area: str | Any = UNSET
     target_shape: list | Any = UNSET
 
     # prev info
