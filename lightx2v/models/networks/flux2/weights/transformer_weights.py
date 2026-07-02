@@ -1,5 +1,47 @@
+import torch.distributed as dist
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+
+
+def _tp_info(config):
+    if not config.get("tensor_parallel", False):
+        return None, 0, 1
+    tp_group = config.get("device_mesh").get_group(mesh_dim="tensor_p")
+    return tp_group, dist.get_rank(tp_group), dist.get_world_size(tp_group)
+
+
+def _mm_weight(config, weight_name, bias_name=None, split_dim=None, create_cuda_buffer=False, create_cpu_buffer=False):
+    mm_type = config.get("dit_quant_scheme", "Default")
+    if config.get("tensor_parallel", False) and split_dim is not None:
+        tp_group, tp_rank, tp_size = _tp_info(config)
+        return MM_WEIGHT_REGISTER["TensorParallel"](
+            weight_name=weight_name,
+            bias_name=bias_name,
+            mm_type=mm_type,
+            tp_group=tp_group,
+            tp_rank=tp_rank,
+            tp_size=tp_size,
+            split_dim=split_dim,
+            create_cuda_buffer=create_cuda_buffer,
+            create_cpu_buffer=create_cpu_buffer,
+        )
+    return MM_WEIGHT_REGISTER[mm_type](
+        weight_name,
+        bias_name,
+        create_cuda_buffer,
+        create_cpu_buffer,
+    )
+
+
+def _rms_weight(config, weight_name, create_cuda_buffer=False, create_cpu_buffer=False):
+    # Flux2 q/k RMSNorm weights are head_dim-sized, so TP over heads must replicate them.
+    rms_norm_type = config.get("rms_norm_type", "torch")
+    return RMS_WEIGHT_REGISTER[rms_norm_type](
+        weight_name,
+        create_cuda_buffer,
+        create_cpu_buffer,
+    )
 
 
 class Flux2DoubleBlockWeights(WeightModule):
@@ -16,112 +58,20 @@ class Flux2DoubleBlockWeights(WeightModule):
 
         p = f"transformer_blocks.{self.block_idx}"
 
-        self.add_module(
-            "to_q",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.to_q.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "to_k",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.to_k.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "to_v",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.to_v.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "norm_q",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{p}.attn.norm_q.weight",
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "norm_k",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{p}.attn.norm_k.weight",
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
+        self.add_module("to_q", _mm_weight(config, f"{p}.attn.to_q.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("to_k", _mm_weight(config, f"{p}.attn.to_k.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("to_v", _mm_weight(config, f"{p}.attn.to_v.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("norm_q", _rms_weight(config, f"{p}.attn.norm_q.weight", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("norm_k", _rms_weight(config, f"{p}.attn.norm_k.weight", create_cuda_buffer, create_cpu_buffer))
 
-        self.add_module(
-            "add_q_proj",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.add_q_proj.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "add_k_proj",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.add_k_proj.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "add_v_proj",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.add_v_proj.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "norm_added_q",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{p}.attn.norm_added_q.weight",
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "norm_added_k",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{p}.attn.norm_added_k.weight",
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
+        self.add_module("add_q_proj", _mm_weight(config, f"{p}.attn.add_q_proj.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("add_k_proj", _mm_weight(config, f"{p}.attn.add_k_proj.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("add_v_proj", _mm_weight(config, f"{p}.attn.add_v_proj.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("norm_added_q", _rms_weight(config, f"{p}.attn.norm_added_q.weight", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("norm_added_k", _rms_weight(config, f"{p}.attn.norm_added_k.weight", create_cuda_buffer, create_cpu_buffer))
 
-        self.add_module(
-            "to_out",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.to_out.0.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "to_add_out",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.to_add_out.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
+        self.add_module("to_out", _mm_weight(config, f"{p}.attn.to_out.0.weight", None, "row", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("to_add_out", _mm_weight(config, f"{p}.attn.to_add_out.weight", None, "row", create_cuda_buffer, create_cpu_buffer))
 
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
 
@@ -131,43 +81,10 @@ class Flux2DoubleBlockWeights(WeightModule):
                 ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
             )
 
-        self.add_module(
-            "ff_net_0",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.ff.linear_in.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "ff_net_2",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.ff.linear_out.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-
-        self.add_module(
-            "ff_context_net_0",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.ff_context.linear_in.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "ff_context_net_2",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.ff_context.linear_out.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
+        self.add_module("ff_net_0", _mm_weight(config, f"{p}.ff.linear_in.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("ff_net_2", _mm_weight(config, f"{p}.ff.linear_out.weight", None, "row", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("ff_context_net_0", _mm_weight(config, f"{p}.ff_context.linear_in.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("ff_context_net_2", _mm_weight(config, f"{p}.ff_context.linear_out.weight", None, "row", create_cuda_buffer, create_cpu_buffer))
 
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():
@@ -194,42 +111,10 @@ class Flux2SingleBlockWeights(WeightModule):
 
         p = f"single_transformer_blocks.{self.block_idx}"
 
-        self.add_module(
-            "to_qkv_mlp_proj",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.to_qkv_mlp_proj.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-
-        self.add_module(
-            "norm_q",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{p}.attn.norm_q.weight",
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-        self.add_module(
-            "norm_k",
-            RMS_WEIGHT_REGISTER[self.rms_norm_type](
-                f"{p}.attn.norm_k.weight",
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
-
-        self.add_module(
-            "to_out",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{p}.attn.to_out.weight",
-                None,
-                create_cuda_buffer,
-                create_cpu_buffer,
-            ),
-        )
+        self.add_module("to_qkv_mlp_proj", _mm_weight(config, f"{p}.attn.to_qkv_mlp_proj.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("norm_q", _rms_weight(config, f"{p}.attn.norm_q.weight", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("norm_k", _rms_weight(config, f"{p}.attn.norm_k.weight", create_cuda_buffer, create_cpu_buffer))
+        self.add_module("to_out", _mm_weight(config, f"{p}.attn.to_out.weight", None, "row", create_cuda_buffer, create_cpu_buffer))
 
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
 
@@ -260,8 +145,6 @@ class Flux2TransformerWeights(WeightModule):
         self.num_single_layers = config.get("num_single_layers", 20)
         self.mm_type = config.get("dit_quant_scheme", "Default")
 
-        inner_dim = config.get("num_attention_heads", 24) * config.get("attention_head_dim", 64)
-
         self.double_blocks = WeightModuleList([Flux2DoubleBlockWeights(config, i) for i in range(self.num_layers)])
         self.single_blocks = WeightModuleList([Flux2SingleBlockWeights(config, i) for i in range(self.num_single_layers)])
         self.register_offload_buffers(config)
@@ -269,24 +152,9 @@ class Flux2TransformerWeights(WeightModule):
         self.add_module("double_blocks", self.double_blocks)
         self.add_module("single_blocks", self.single_blocks)
 
-        self.add_module(
-            "double_stream_modulation_img_linear",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                "double_stream_modulation_img.linear.weight",
-            ),
-        )
-        self.add_module(
-            "double_stream_modulation_txt_linear",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                "double_stream_modulation_txt.linear.weight",
-            ),
-        )
-        self.add_module(
-            "single_stream_modulation_linear",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                "single_stream_modulation.linear.weight",
-            ),
-        )
+        self.add_module("double_stream_modulation_img_linear", _mm_weight(config, "double_stream_modulation_img.linear.weight"))
+        self.add_module("double_stream_modulation_txt_linear", _mm_weight(config, "double_stream_modulation_txt.linear.weight"))
+        self.add_module("single_stream_modulation_linear", _mm_weight(config, "single_stream_modulation.linear.weight"))
 
     def register_offload_buffers(self, config):
         if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block":

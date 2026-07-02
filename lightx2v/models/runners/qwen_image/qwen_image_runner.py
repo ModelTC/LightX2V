@@ -370,6 +370,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             return (target_width, target_height)
 
         aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
+        if not aspect_ratio and self.config.get("task") == "t2i":
+            aspect_ratio = "16:9"
         if aspect_ratio in as_maps:
             logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
             width, height = as_maps[aspect_ratio]
@@ -394,6 +396,9 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         if custom_shape is not None:
             width, height = custom_shape
         else:
+            original_size = getattr(self.input_info, "original_size", None)
+            if not original_size:
+                raise ValueError("Qwen Image requires a valid target_shape/aspect_ratio, or an input image with original_size.")
             width, height = self.input_info.original_size[-1]
             calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, width / height)
             multiple_of = self.config["vae_scale_factor"] * 2

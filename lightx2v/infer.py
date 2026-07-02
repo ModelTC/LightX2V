@@ -264,7 +264,6 @@ def main():
     # validate_task_arguments(args)
 
     seed_all(args.seed)
-
     # set config
     config = set_config(args)
     # init input_info
