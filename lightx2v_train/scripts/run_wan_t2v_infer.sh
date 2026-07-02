@@ -5,12 +5,9 @@ set -e
 cd "$(dirname "$0")/.."
 
 export PYTHONPATH=/data/nvme4/gushiqiao/new/diffusers/src:${PYTHONPATH}
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-5}
 
 NPROC_PER_NODE=${NPROC_PER_NODE:-1}
-CONFIG=${CONFIG:-configs/infer/wan2_1_t2v_1_3b_tf_chunkwise_ar.yaml}
+CONFIG=${CONFIG:-configs/infer/wan2_2_ti2v_5b_tf_ar.yaml}
 
-torchrun \
---standalone \
---nproc_per_node="${NPROC_PER_NODE}" \
-infer.py --config "${CONFIG}"
+python3 infer.py --config "${CONFIG}"

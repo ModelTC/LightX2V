@@ -38,7 +38,6 @@ scheduler:
 
 training:
     method: dmd
-    train_type: lora
     max_train_iters: 1000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
@@ -58,23 +57,24 @@ training:
         renoise_sigma_max: 1.0
         renoise_discrete_samples: 1000
         renoise_shift: 5.0
-    lora:
-        rank: 32
-        alpha: 32
-        target_modules:
-            - to_k
-            - to_q
-            - to_v
-            - to_out.0
-            # - add_q_proj
-            # - add_k_proj
-            # - add_v_proj
-            # - to_add_out
-            # - img_mlp.net.0.proj
-            # - img_mlp.net.2
-            # - txt_mlp.net.0.proj
-            # - txt_mlp.net.2
     student:
+        train_type: lora
+        lora:
+            rank: 32
+            alpha: 32
+            target_modules:
+                - to_k
+                - to_q
+                - to_v
+                - to_out.0
+                # - add_q_proj
+                # - add_k_proj
+                # - add_v_proj
+                # - to_add_out
+                # - img_mlp.net.0.proj
+                # - img_mlp.net.2
+                # - txt_mlp.net.0.proj
+                # - txt_mlp.net.2
         optimizer:
             learning_rate: 0.0001
             adam_beta1: 0.9
@@ -82,6 +82,23 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     fake:
+        train_type: lora
+        lora:
+            rank: 32
+            alpha: 32
+            target_modules:
+                - to_k
+                - to_q
+                - to_v
+                - to_out.0
+                # - add_q_proj
+                # - add_k_proj
+                # - add_v_proj
+                # - to_add_out
+                # - img_mlp.net.0.proj
+                # - img_mlp.net.2
+                # - txt_mlp.net.0.proj
+                # - txt_mlp.net.2
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9

@@ -18,8 +18,8 @@ def parse_args():
 
 
 def _load_full_checkpoint_for_infer(model, config):
-    infer_config = config.get("inference", {})
-    checkpoint_path = infer_config.get("checkpoint_path")
+    model_config = config.get("model", {})
+    checkpoint_path = model_config.get("checkpoint_path")
     if not checkpoint_path:
         return
 
@@ -27,7 +27,7 @@ def _load_full_checkpoint_for_infer(model, config):
     if path.is_dir():
         path = path / "model_state.pt"
     if not path.exists():
-        raise FileNotFoundError(f"inference.checkpoint_path not found: {path}")
+        raise FileNotFoundError(f"checkpoint_path not found: {path}")
 
     state_dict = torch.load(str(path), map_location="cpu", weights_only=False)
     if isinstance(state_dict, dict):
@@ -48,7 +48,7 @@ def _load_full_checkpoint_for_infer(model, config):
             key = key[len("transformer.") :]
         fixed_state_dict[key] = value
 
-    strict = infer_config.get("checkpoint_strict", True)
+    strict = model_config.get("checkpoint_strict", True)
     incompatible = model.denoiser_module().load_state_dict(fixed_state_dict, strict=strict)
     logger.info("Loaded inference checkpoint from {} strict={}", path, strict)
     if not strict and incompatible:

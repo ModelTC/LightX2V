@@ -7,8 +7,12 @@ model:
 distributed:
     backend: nccl
     timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
     fsdp2:
         enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
         reshard_after_forward:
             root_reshard: false
             block_reshard: true

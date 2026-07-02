@@ -1,8 +1,9 @@
 model:
-    name: wan_t2v
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
+    name: wan_t2v_14b
+    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-14B/
     max_sequence_length: 512
     running_dtype: bf16
+    transformer_param_dtype: fp32
     vae_dtype: fp32
     load_vae: true
     load_text_encoder: true
@@ -78,7 +79,7 @@ scheduler:
 
 training:
     method: flow
-    train_type: full
+    train_type: lora
     max_train_iters: 3000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
@@ -87,16 +88,26 @@ training:
     lr_warmup_iters: 10
     save_every_iters: 100
     save_total_limit: 10
+    lora:
+        rank: 64
+        alpha: 64
+        target_modules:
+            - q
+            - k
+            - v
+            - o
+            - ffn.0
+            - ffn.2
     optimizer:
-        learning_rate: 0.00001
+        learning_rate: 0.0001
         adam_beta1: 0.9
         adam_beta2: 0.999
         weight_decay: 0.01
         adam_epsilon: 0.00000001
-    output_dir: ./output_train/wan2_1_t2v_1_3b_full
+    output_dir: ./output_train/wan2_1_t2v_14b_lora
 
 inference:
-    method: wan_t2v_infer
+    method: wan_t2v_14b_infer
     negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards"
     default_width: 832
     default_height: 480
@@ -106,7 +117,7 @@ inference:
     enable_cfg: true
     cfg_guidance_scale: 5.0
     seed: 42
-    output_dir: ./output_infer/wan2_1_t2v_1_3b_full
+    output_dir: ./output_infer/wan2_1_t2v_14b_lora
     infer_every_iters: ${training.save_every_iters}
 
 logging:

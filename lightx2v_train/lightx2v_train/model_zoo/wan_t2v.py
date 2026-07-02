@@ -11,6 +11,7 @@ from peft import LoraConfig, inject_adapter_in_model
 from peft.utils import set_peft_model_state_dict
 from safetensors.torch import load_file
 
+from lightx2v_train.runtime.distributed import get_sequence_parallel_world_size
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -26,6 +27,8 @@ class WanT2VDenoiserInput:
     hidden_states: torch.Tensor
 
 
+@MODEL_REGISTER("wan_t2v_14b_ar")
+@MODEL_REGISTER("wan_t2v_14b")
 @MODEL_REGISTER("wan_t2v_ar")
 @MODEL_REGISTER("wan_t2v")
 class WanT2VModel(BaseModel):
@@ -38,23 +41,44 @@ class WanT2VModel(BaseModel):
         self.load_vae = model_config.get("load_vae", True)
         self.load_text_encoder = model_config.get("load_text_encoder", True)
         self.load_transformer = model_config.get("load_transformer", True)
-        teacher_forcing_config = self.config.get("training", {}).get("teacher_forcing", {})
-        self.use_causal_transformer = model_config.get("name") in ["wan_t2v_ar"] or teacher_forcing_config.get("enabled", False)
+        training_config = self.config.get("training", {})
+        teacher_forcing_config = training_config.get("teacher_forcing", {})
+        model_name = model_config.get("name")
+        teacher_forcing_enabled = teacher_forcing_config.get("enabled", False)
+        causal_model_names = {"wan_t2v_ar", "wan_t2v_14b_ar"}
+        self.use_causal_transformer = model_name in causal_model_names or bool(model_config.get("causal", False)) or teacher_forcing_enabled
         self.sample_posterior = model_config.get("sample_posterior", True)
-        self.num_train_timesteps = self.config.get("scheduler", {}).get("num_train_timesteps", 1000)
+        scheduler_config = self.config.get("scheduler", {})
+        self.num_train_timesteps = scheduler_config.get("num_train_timesteps", 1000)
         self.max_sequence_length = model_config.get("max_sequence_length", 512)
-        default_param_dtype = "fp32" if self.config.get("training", {}).get("train_type") == "full" else model_config.get("running_dtype", "bf16")
-        self.transformer_param_dtype = get_running_dtype(model_config.get("transformer_param_dtype", default_param_dtype))
+        self.transformer_param_dtype = get_running_dtype(model_config.get("transformer_param_dtype", "fp32"))
         self.vae_dtype = get_running_dtype(model_config.get("vae_dtype", "fp32"))
         self.t5_dtype = get_running_dtype(model_config.get("t5_dtype", "bf16"))
         self.t5_cpu = model_config.get("t5_cpu", False)
         self.vae_stride = tuple(model_config.get("vae_stride", (4, 8, 8)))
         self.patch_size = tuple(model_config.get("patch_size", (1, 2, 2)))
-        self.sp_size = int(model_config.get("sequence_parallel_size", 1))
-        self.num_frame_per_chunk = int(teacher_forcing_config.get("num_frame_per_chunk", model_config.get("num_frame_per_chunk", 1)))
-        self.local_attn_size = int(model_config.get("local_attn_size", teacher_forcing_config.get("local_attn_size", -1)))
-        self.sink_size = int(model_config.get("sink_size", teacher_forcing_config.get("sink_size", 0)))
-        self.independent_first_frame = bool(model_config.get("independent_first_frame", teacher_forcing_config.get("independent_first_frame", False)))
+        self.sp_size = get_sequence_parallel_world_size()
+        if "num_frame_per_chunk" in teacher_forcing_config:
+            self.num_frame_per_chunk = int(teacher_forcing_config["num_frame_per_chunk"])
+        else:
+            self.num_frame_per_chunk = int(model_config.get("num_frame_per_chunk", 1))
+        if "local_attn_size" in model_config:
+            self.local_attn_size = int(model_config["local_attn_size"])
+        else:
+            self.local_attn_size = int(teacher_forcing_config.get("local_attn_size", -1))
+        if "sink_size" in model_config:
+            self.sink_size = int(model_config["sink_size"])
+        else:
+            self.sink_size = int(teacher_forcing_config.get("sink_size", 0))
+        if "defer_kv_cache_updates" in model_config:
+            self.defer_kv_cache_updates = bool(model_config["defer_kv_cache_updates"])
+        else:
+            self.defer_kv_cache_updates = bool(model_config.get("defer_cache_updates", False))
+        self.detach_kv_cache_updates = bool(model_config.get("detach_kv_cache_updates", False))
+        if "independent_first_frame" in model_config:
+            self.independent_first_frame = bool(model_config["independent_first_frame"])
+        else:
+            self.independent_first_frame = bool(teacher_forcing_config.get("independent_first_frame", False))
         self.text_encoder = None
         self.text_pipeline = None
 
@@ -109,6 +133,8 @@ class WanT2VModel(BaseModel):
                 torch_dtype=self.transformer_param_dtype,
                 local_attn_size=self.local_attn_size,
                 sink_size=self.sink_size,
+                defer_kv_cache_updates=self.defer_kv_cache_updates,
+                detach_kv_cache_updates=self.detach_kv_cache_updates,
             )
         else:
             transformer = WanModel.from_pretrained(model_path, torch_dtype=self.transformer_param_dtype)
@@ -147,8 +173,10 @@ class WanT2VModel(BaseModel):
             self.transformer = inject_adapter_in_model(lora_config, self.transformer)
 
     def _lora_config_for_infer(self):
-        lora_config = dict(self.config.get("training", {}).get("lora", {}))
-        lora_config.update(self.config.get("inference", {}).get("lora_config", {}))
+        training_config = self.config.get("training", {})
+        inference_config = self.config.get("inference", {})
+        lora_config = dict(training_config.get("lora", {}))
+        lora_config.update(inference_config.get("lora_config", {}))
         rank = lora_config.get("rank", 64)
         alpha = lora_config.get("alpha", rank)
         target_modules = lora_config.get("target_modules", ["q", "k", "v", "o", "ffn.0", "ffn.2"])
@@ -284,7 +312,16 @@ class WanT2VModel(BaseModel):
                 seq_len=seq_len,
             )
 
-    def denoise_teacher_forcing(self, noisy_latent, timestep_or_sigma, condition, clean_latent, aug_timestep_or_sigma=None):
+    def denoise_teacher_forcing(
+        self,
+        noisy_latent,
+        timestep_or_sigma,
+        condition,
+        clean_latent,
+        aug_timestep_or_sigma=None,
+        frame_offset=0,
+        global_num_frames=None,
+    ):
         if not isinstance(self.transformer, CausalWanModel):
             raise RuntimeError("Wan teacher forcing requires model.causal=True or training.teacher_forcing.enabled=True.")
 
@@ -306,8 +343,10 @@ class WanT2VModel(BaseModel):
         if aug_t is not None:
             aug_t = self._causal_timestep(aug_t, noisy_latent)
         context = self._condition_to_context_tensor(condition, batch_size=noisy_latent.shape[0])
-        seq_len = self._sequence_length(noisy_latent)
-        self._prepare_causal_block_mask(noisy_latent, teacher_forcing=True)
+        seq_len = self._sequence_length(noisy_latent, pad_to_sp=False)
+        if global_num_frames is None:
+            global_num_frames = noisy_latent.shape[2]
+        self._prepare_causal_block_mask(noisy_latent, teacher_forcing=True, mask_num_frames=global_num_frames)
 
         with self.transformer_forward_context():
             return self.transformer(
@@ -317,13 +356,17 @@ class WanT2VModel(BaseModel):
                 seq_len=seq_len,
                 clean_x=clean_latent,
                 aug_t=aug_t,
+                local_frame_offset=frame_offset,
+                global_num_frames=global_num_frames,
+                balanced_sequence_parallel=self.sp_size > 1,
             )
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
         return prediction
 
     def prepare_infer_latents(self, height, width, generator=None):
-        num_frames = self.config.get("inference", {}).get("num_frames", 81)
+        inference_config = self.config.get("inference", {})
+        num_frames = inference_config.get("num_frames", 81)
         num_latent_frames = (num_frames - 1) // self.vae_scale_factor_temporal + 1
         in_channels = self._latent_channels()
         shape = (
@@ -347,9 +390,17 @@ class WanT2VModel(BaseModel):
         raise NotImplementedError("Native Wan T2V uses wan_t2v_infer instead of assembling a diffusers pipeline.")
 
     def get_pipeline_infer_kwargs(self, infer_config):
+        if "height" in infer_config:
+            height = infer_config["height"]
+        else:
+            height = infer_config.get("default_height", 480)
+        if "width" in infer_config:
+            width = infer_config["width"]
+        else:
+            width = infer_config.get("default_width", 832)
         return {
-            "height": infer_config.get("height", infer_config.get("default_height", 480)),
-            "width": infer_config.get("width", infer_config.get("default_width", 832)),
+            "height": height,
+            "width": width,
             "num_frames": infer_config.get("num_frames", 81),
             "num_inference_steps": infer_config.get("num_inference_steps", 50),
             "guidance_scale": infer_config.get("cfg_guidance_scale", 5.0),
@@ -408,25 +459,30 @@ class WanT2VModel(BaseModel):
             raise ValueError(f"Causal Wan timestep must be scalar, [B], or [B, F], got shape {tuple(timestep.shape)}.")
         return timestep
 
-    def _prepare_causal_block_mask(self, latent, teacher_forcing):
+    def _prepare_causal_block_mask(self, latent, teacher_forcing, mask_num_frames=None):
+        if mask_num_frames is None:
+            mask_num_frames = latent.shape[2]
         key = (
             bool(teacher_forcing),
-            int(latent.shape[2]),
+            int(mask_num_frames),
             int(latent.shape[-2]),
             int(latent.shape[-1]),
             tuple(self.patch_size),
             int(self.num_frame_per_chunk),
             int(self.local_attn_size),
             bool(self.independent_first_frame),
+            int(self.sp_size),
         )
         if getattr(self.transformer, "_lightx2v_block_mask_key", None) != key:
             self.transformer.block_mask = None
             self.transformer._lightx2v_block_mask_key = key
 
-    def _sequence_length(self, latent):
+    def _sequence_length(self, latent, pad_to_sp=True):
         latent_frames, latent_height, latent_width = latent.shape[-3:]
         patch_t, patch_h, patch_w = self.patch_size
         seq_len = (latent_frames // patch_t) * (latent_height // patch_h) * (latent_width // patch_w)
+        if not pad_to_sp:
+            return seq_len
         return math.ceil(seq_len / self.sp_size) * self.sp_size
 
     def _latent_channels(self):
