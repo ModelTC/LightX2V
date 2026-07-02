@@ -6,6 +6,10 @@ from loguru import logger
 
 from lightx2v.common.ops.attn.sol_attn import _morton3d_indices
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.models.networks.wan.infer.block_profile import (
+    WanBlockProfile,
+    region_profile,
+)
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -101,6 +105,8 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.init_compile(config)
 
         self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
+        self._block_profile = WanBlockProfile(config)
+        self._transformer_profile = None
 
     @torch.no_grad()
     def reset_post_adapter_states(self):
@@ -223,6 +229,13 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             x = self.run_block(block_idx, block, x, pre_infer_out)
         return x
 
+    def run_block(self, block_idx, block, *args):
+        if self._transformer_profile is not None and self._transformer_profile.block_idx == block_idx:
+            self._block_profile.bind(block, args[0], args[1])
+            with self._transformer_profile.record_block(block_idx):
+                return self.infer_block(block, *args)
+        return super().run_block(block_idx, block, *args)
+
     def infer_block(self, block, x, pre_infer_out, self_attn_kwargs=None):
         if hasattr(block.compute_phases[0], "before_proj") and block.compute_phases[0].before_proj.weight is not None:
             x = block.compute_phases[0].before_proj.apply(x) + pre_infer_out.x
@@ -270,6 +283,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         return shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
 
+    @region_profile("self_attn", emit="self_attn")
     def infer_self_attn(self, phase, x, shift_msa, scale_msa, grid_sizes=None, **self_attn_kwargs):
         cos_sin = self.cos_sin
         norm1_quant = None
@@ -384,6 +398,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         return y
 
+    @region_profile("cross_attn", emit="cross_attn")
     def infer_cross_attn(self, phase, x, context, y_out, gate_msa):
         if self.sensitive_layer_dtype != self.infer_dtype:
             x = x.to(self.sensitive_layer_dtype) + y_out.to(self.sensitive_layer_dtype) * gate_msa.squeeze()
@@ -443,6 +458,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             torch_device_module.empty_cache()
         return x, attn_out
 
+    @region_profile("dense_ffn", emit="dense_ffn")
     def infer_ffn(self, phase, x, attn_out, c_shift_msa, c_scale_msa, c_gate_msa=None):
         x.add_(attn_out)
 

@@ -51,6 +51,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.offload_manager.swap_cpu_buffers()
 
             self.offload_manager.prefetch_weights((block_idx + 1) % len(blocks), blocks)
+            block = self.offload_manager.cuda_buffers[0]
             if AI_DEVICE == "xpu":
                 # XPU streams do not guarantee cross-stream memory visibility even
                 # after a device-wide sync, so run compute on the default stream.

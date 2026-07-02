@@ -1,215 +1,193 @@
-# PyTorch Trace Profiling
+# Transformer Profiling
 
 ## 概述
 
-LightX2V 提供 `lightx2v.utils.torch_trace_profiler` 模块，基于 PyTorch Profiler 采集 CPU / CUDA kernel 级 trace，并导出为：
+LightX2V 当前提供两类 transformer profile：
 
-- **TensorBoard** 格式（`.pt.trace.json`，在 TensorBoard 的 **PYTORCH PROFILER** 页查看）
-- **Chrome Trace** 格式（`.json`，可用 Perfetto 或 Chrome Tracing 查看）
+- `full`：采集某个 infer step 的完整 transformer 执行过程，输出 PyTorch Profiler / TensorBoard trace。
+- `block`：采集某个 infer step 的某个 transformer block，输出 TensorBoard trace、逻辑 op trace，以及按 region 聚合的人类可读报告。
 
-在目标函数的**调用处**使用 `TorchTraceProfileContext` 即可采集；未包裹的调用不受影响。每个进程全局只允许 profile **一个**调用点（首次执行者生效）。
+这两类 profile 都由环境变量 `LIGHTX2V_PROFILE_MODE` 开启：
+
+```bash
+export LIGHTX2V_PROFILE_MODE=full   # 或 block
+```
+
+目前支持的主要路径：
+
+- Hunyuan3D shape transformer
+- SekoTalk / Wan audio transformer
+
+不开启 `LIGHTX2V_PROFILE_MODE` 时，推理走普通路径。
 
 ---
 
-## 构造参数
+## Full Profile
 
-在调用处创建 `TorchTraceProfileContext(...)`，所有参数均有默认值：
+`full` 模式只包住目标 infer step 的 transformer 执行，不生成 layer report。它适合查看整体 timeline、kernel 分布、CPU/GPU gap、异步调度等问题。
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `name` | `None` | 调用点标签，用于日志与全局唯一性识别；省略时使用被调用函数的 qualified name |
-| `profile_format` | `tensorboard` | `tensorboard` 或 `chrome` |
-| `tb_dir` | `{cwd}/save_results/torch_profile` | TensorBoard logdir |
-| `chrome_path` | `{cwd}/save_results/trace.json` | Chrome trace 输出路径（`profile_format=chrome` 时生效） |
-| `wait` | `1` | schedule：等待步数（不采集） |
-| `warmup` | `3` | schedule：预热步数（采集但不导出） |
-| `active` | `1` | schedule：有效采集步数（导出 trace） |
-| `with_stack` | `False` | 是否采集 Python 调用栈 |
-| `tensorboard_port` | `16006` | 日志中提示的 TensorBoard 端口 |
+### 运行方式
 
-是否采集 trace 取决于代码里是否写了 `TorchTraceProfileContext`；导出路径与 schedule 通过构造参数配置。
-
-### 导出格式说明
-
-| `FORMAT` | 产出 | 查看方式 |
-|----------|------|----------|
-| `tensorboard` | `{TB_DIR}/*.pt.trace.json` | TensorBoard → **PYTORCH PROFILER** |
-| `chrome` | `{CHROME_PATH}` | 见下文「查看 Chrome trace」 |
-
----
-
-## 快速开始
-
-### 1. 采集 trace
-
-以 Qwen Image 为例，在 `qwen_image_runner.py` 顶部取消注释 import，并在 `run()` 的 `infer_main` 调用处取消注释 profile 代码（可按需修改参数），然后正常运行推理（如 `scripts/qwen_image/qwen_image_i2i_2511.sh`）：
-
-```python
-from lightx2v.utils.torch_trace_profiler import TorchTraceProfileContext
-
-
-with TorchTraceProfileContext(
-    "🚀 infer_main",
-    tb_dir="save_results/torch_profile",
-    with_stack=True,
-) as profile:
-    profile.run(self.model.infer, self.inputs)
-```
-
-推理结束后日志会打印 trace 路径及查看命令。
-
-### 2. 查看 TensorBoard
-
-先安装 PyTorch Profiler 插件（一次性）：
+以 Hunyuan3D 为例，在常规脚本里设置：
 
 ```bash
-pip install tensorboard torch-tb-profiler
+export LIGHTX2V_PROFILE_MODE=full
+bash scripts/hunyuan3d/run_hunyuan3d.sh
 ```
 
-**注意：** 必须打开 **PYTORCH PROFILER** 标签页。默认 SCALARS 页没有 profiler trace 文件，会显示 “No dashboards are active”，属于正常现象。
+输出目录形如：
 
-在 **trace 文件所在的环境** 启动 TensorBoard（logdir 与构造参数 tb_dir 一致）：
+```text
+prof_results/hunyuan3d_transformer_profile/full_step_10_YYYYmmdd_HHMMSS/
+└── *.pt.trace.json
+```
+
+可用 TensorBoard 打开该目录：
 
 ```bash
-tensorboard --logdir save_results/torch_profile --port 16006 --bind_all
+tensorboard --logdir prof_results/hunyuan3d_transformer_profile/full_step_10_YYYYmmdd_HHMMSS --port 16006 --bind_all
 ```
 
-浏览器打开：
+浏览器访问：
 
-```
+```text
 http://127.0.0.1:16006/#pytorch_profiler
 ```
 
-下面分两种常见部署情况说明，二者可叠加（例如 Remote SSH 连远程宿主机，而推理又在 Docker 里）。
-
-#### Remote SSH
-
-只要 TensorBoard 跑在远程机器上，而浏览器在本地，就需要把远程端口转到本地。
-
-在 IDE **Ports** 面板转发远程的 `16006`（或你指定的 `TENSORBOARD_PORT`），再在本地浏览器打开 `http://127.0.0.1:16006/#pytorch_profiler`。
-
-#### 推理在 Docker 内
-
-trace 写在容器文件系统里，宿主机上直接 `tensorboard --logdir ...` 读不到容器内的 logdir；且容器内 TensorBoard 监听的是容器网络地址，宿主机 `127.0.0.1:16006` 默认也访问不到。
-
-推荐使用 bridge 脚本（需显式指定容器名与 logdir，示例见脚本头部注释）：
-
-```bash
-TENSORBOARD_CONTAINER=wyr_lightx2v_h100_202605 \
-TORCH_PROFILE_TB_DIR=/data/nvme0/wangyingrui/LightX2V/save_results/torch_profile \
-bash /data/nvme0/wangyingrui/wyr_scripts/run_tensorboard_docker_bridge.sh
-```
-
-若代码里使用 `tb_dir="save_results/torch_profile"` 且在 LightX2V repo 根目录运行推理，则 `TORCH_PROFILE_TB_DIR` 通常为 `{LightX2V}/save_results/torch_profile` 的**容器内绝对路径**。
-
-脚本会：
-
-1. 在推理同一容器内启动 TensorBoard（`--logdir` 为 `TORCH_PROFILE_TB_DIR`）
-2. 在宿主机启动 TCP 代理，把 `0.0.0.0:16006` 转发到容器内 TB 端口
-
-若 logdir 下没有 `*.pt.trace.json`，脚本会打印 WARNING。
-
-### 3. 查看 Chrome trace
-
-Chrome 格式 trace（`profile_format="chrome"` 时的 `trace.json`）可用以下方式打开：
-
-#### Perfetto UI（推荐）
-
-1. 打开 [https://ui.perfetto.dev/](https://ui.perfetto.dev/)
-2. **Open trace file**，选择 trace 文件
-
-#### Chrome Tracing
-
-1. 将 trace 下载到本机（Remote 环境需先下载）
-2. 浏览器打开 `chrome://tracing`
-3. **Load**，选择 JSON 文件
-
-Docker 内采集时，同样需先把 `trace.json` 从容器拷到本机（或挂载目录可见），再在 Perfetto / Chrome 中打开。
+注意要打开 **PYTORCH PROFILER** 页，不是 SCALARS 页。
 
 ---
 
-## 在代码中接入
+## Block Profile
 
-在**调用处**用 context 包裹，并通过 `.run(func, *args)` 发起 profile；未包裹的代码路径零开销：
+`block` 模式用于单层深入分析。它会在目标 block 上同时采集：
+
+- PyTorch profiler trace：`*.pt.trace.json`
+- 逻辑 op shape：`block_{layer}_op_trace.jsonl`
+- 汇总报告：`block_{layer}_layer_trace.txt`
+
+汇总报告会把 CUDA kernels 归属到粗粒度 region，并结合逻辑 op shape 估算 FLOPs / TFLOPS。
+
+### 运行方式
+
+```bash
+export LIGHTX2V_PROFILE_MODE=block
+bash scripts/hunyuan3d/run_hunyuan3d.sh
+```
+
+输出目录形如：
+
+```text
+prof_results/hunyuan3d_transformer_profile/block_step_10_layer_0_YYYYmmdd_HHMMSS/
+├── *.pt.trace.json
+├── block_0_op_trace.jsonl
+└── block_0_layer_trace.txt
+```
+
+`block_0_layer_trace.txt` 示例：
+
+```text
+Layer index: 0   ProfilerStep#0   GPU events: 64
+Region assigned: 64/64
+ProfilerStep  compute=1.673 ms  wall=3.878 ms
+
+── self_attn ── kernel_sum=0.788 ms
+── cross_attn ── kernel_sum=0.456 ms
+── dense_ffn ── kernel_sum=0.430 ms
+```
+
+---
+
+## 修改采集目标
+
+为了减少配置和 review 负担，当前只保留一个 env 开关。采集目标在代码默认值里直接写明：
 
 ```python
-from lightx2v.utils.torch_trace_profiler import TorchTraceProfileContext
+# lightx2v/utils/transformer_profile.py
+class TransformerProfile:
+    profile_infer_step = 1
+    profile_block_idx = 2
+```
 
-with TorchTraceProfileContext(
+开发者临时分析其他 step 或 block 时，直接修改这两个默认值即可。例如分析 block 15：
+
+```python
+profile_block_idx = 15
+```
+
+调试完成后再改回默认值。
+
+---
+
+## Region 与 Op Trace
+
+`block` 模式里有两层信息：
+
+1. `region_profile`：在 PyTorch trace 中标出粗粒度执行区间，例如 `self_attn`、`cross_attn`、`dense_ffn`、`moe`、`audio_adapter`。
+2. `op_shape_trace`：写出逻辑 op 的 shape / FLOPs，例如 GEMM、ATTN、MOE。
+
+二者结合后，`block_profile_report.py` 会把 kernel 时间和理论计算量对应起来，生成 `block_{layer}_layer_trace.txt`。
+
+---
+
+## 文件职责
+
+### Full 与 Block 共用
+
+| 文件 | 说明 |
+|------|------|
+| `lightx2v/utils/transformer_profile.py` | 读取 `LIGHTX2V_PROFILE_MODE`，选择 full/block，创建输出目录 |
+| `lightx2v/utils/torch_trace_profiler.py` | PyTorch profiler trace 导出 |
+| 模型 `transformer_infer.py` | 在目标 infer step 调用 `record_full()` 或 `record_block()` |
+
+### Block 专用
+
+| 文件 | 说明 |
+|------|------|
+| `lightx2v/utils/region_profile.py` | region decorator 与当前 active profile 管理 |
+| `lightx2v/utils/op_shape_trace.py` | 写 `block_{layer}_op_trace.jsonl` |
+| `tools/profile/region_event_trace.py` | 解析 torch trace + op trace，生成 region report 和 ProfilerStep summary |
+| `tools/profile/trace_correlation.py` | kernel 与 CPU launch / region 关联辅助 |
+| `lightx2v/models/networks/*/infer/block_profile.py` | 模型侧 op shape hook |
+| `lightx2v/models/networks/*/infer/block_profile_report.py` | 模型侧 report 配置 |
+
+---
+
+## 底层 TorchProfileContext
+
+`lightx2v.utils.torch_trace_profiler.TorchProfileContext` 仍然可以用于临时 profile 任意调用点，但它不是 Hunyuan3D/Seko transformer profile 的主入口。
+
+示例：
+
+```python
+from lightx2v.utils.torch_trace_profiler import TorchProfileContext
+
+with TorchProfileContext(
     "my_forward",
-    profile_format="tensorboard",
     tb_dir="save_results/torch_profile",
     with_stack=True,
 ) as profile:
     profile.run(my_forward, arg1, arg2)
 ```
 
-首次执行该调用点时，会按 schedule **重复调用**目标函数（默认 5 次：wait=1 / warmup=3 / active=1），每轮末尾 `prof.step()`，并在 active 阶段导出 trace。
-
-要点：
-
-- **开关在调用处**：想 profile 哪段逻辑，就在哪行调用外包一层；评测完删除或注释即可
-- **全局唯一**：每个进程只允许 profile 一个调用点；若多处写了 context，仅**首次执行**的那个会采集，其余打 log 并正常执行
-- 采集完成后，后续调用恢复为单次正常执行
-- 需要再次采集：`TorchTraceProfiler.reset_session()`
-- 需要 Python 调用栈：构造时设 `with_stack=True`
-- 子区间分析：在代码里用 `torch.profiler.record_function("my_region")` 包裹目标代码
-
-Qwen Image 参考实现：`lightx2v/models/runners/qwen_image/qwen_image_runner.py` 的 `run()` 中 `infer_main` 调用处（见注释示例）。
-
----
-
-## Schedule 说明
-
-默认 schedule 为 **wait=1 / warmup=3 / active=1**（共 5 步）：
-
-```
-step 1        : wait    — 不采集
-step 2 ~ 4    : warmup  — 采集但不导出（GPU 预热、编译稳定）
-step 5        : active  — 采集并导出 trace
-```
-
-总 `prof.step()` 次数固定为 `wait + warmup + active`，由三者自动决定。
+默认 schedule 为 `wait=1 / warmup=3 / active=1`，会重复调用目标函数共 5 次。这个行为适合独立函数分析，但不适合直接包住带状态推进的扩散循环。因此常规模型 profile 优先使用 `LIGHTX2V_PROFILE_MODE=full/block`。
 
 ---
 
 ## 常见问题
 
-### TensorBoard 显示 “No dashboards are active”
+### full 模式为什么没有 `block_x_layer_trace.txt`？
 
-- 打开 **PYTORCH PROFILER** 页，不是 SCALARS
-- 确认 logdir 下有 `.pt.trace.json`
-- 确认已安装 `torch-tb-profiler`
+`full` 只产出 TensorBoard trace，用于整体 timeline 分析。单层 kernel_sum / TFLOPS 报告属于 `block` 模式。
 
-### `trace.json` 未生成
+### block 模式为什么需要 `block_x_op_trace.jsonl`？
 
-- `profile_format="chrome"`
-- schedule 已跑完 active 步
-- 查看日志中 `[Profile] step=... chrome=...`
+PyTorch trace 只有 kernel 名称和耗时，不知道某个 kernel 对应的逻辑 GEMM / ATTN shape。`op_trace.jsonl` 提供 shape 和 FLOPs，报告才能计算 TFLOPS 和效率。
 
-### Remote SSH 下 localhost 无响应
+### 为什么默认只用一个 env？
 
-TensorBoard 已在远程（或容器已桥接到宿主机）监听 `--bind_all` 后，在 IDE **Ports** 转发对应端口；与是否在 Docker 内无关。
+这个功能主要面向能直接改代码的开发者。保留大量 env 配置会增加实现和 review 复杂度；当前选择是 env 只控制模式，step/block 默认值直接在 `TransformerProfile` 中修改。
 
-### Docker 内 TB 打不开 / logdir 为空
+### 非 H100 机器报 peak TFLOPS 错误怎么办？
 
-- 确认 TB 与推理在**同一容器**，且 `--logdir` 为容器内路径
-- 确认宿主机已 `-p` 映射或存在到容器 IP 的 TCP 代理
-
-### Trace 里点 GPU kernel 只有 C++ 栈、没有 Python 栈
-
-- 采集时需设 `with_stack=True` 并重新 profile
-- GPU kernel 事件本身挂在 CUDA 层；Python 栈在 CPU / `python_function` 侧，可在 TensorBoard Operator 视图或 Perfetto 的 CPU track 中查看
-
-### 共用机器端口冲突
-
-为每位使用者指定不同 `tensorboard_port`（如 `16006`、`26006`）。
-
----
-
-## 相关文件
-
-| 文件 | 说明 |
-|------|------|
-| `lightx2v/utils/torch_trace_profiler.py` | 核心模块 |
-| `lightx2v/models/runners/qwen_image/qwen_image_runner.py` | Qwen Image 调用处注释示例 |
+block report 当前会自动识别 H100 的 BF16/FP8 peak TFLOPS。其他硬件需要在 `tools/profile/region_event_trace.py` 的 `infer_peak_tflops_from_device()` 中补充硬件峰值。
