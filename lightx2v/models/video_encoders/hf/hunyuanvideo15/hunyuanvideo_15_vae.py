@@ -14,9 +14,16 @@ from diffusers.models.modeling_utils import ModelMixin
 from einops import rearrange
 from torch import Tensor, nn
 
-from lightx2v_platform.base.global_var import AI_DEVICE
+from lightx2v_platform.base.global_var import AI_DEVICE, PLATFORM
 
 torch_device_module = getattr(torch, AI_DEVICE)
+
+
+_REPLICATE_PAD_FLOAT32_PLATFORMS = {
+    "ascend_npu",
+    "cambricon_mlu",
+    "metax_cuda",
+}
 
 
 @dataclass
@@ -28,6 +35,12 @@ class DecoderOutput(BaseOutput):
 def swish(x: Tensor) -> Tensor:
     """Applies the swish activation function."""
     return x * torch.sigmoid(x)
+
+
+def _pad(x: torch.Tensor, pad, mode: str = "constant", value: float = 0.0) -> torch.Tensor:
+    if mode == "replicate" and PLATFORM in _REPLICATE_PAD_FLOAT32_PLATFORMS and x.dtype == torch.bfloat16:
+        return F.pad(x.float(), pad, mode=mode, value=value).to(dtype=x.dtype)
+    return F.pad(x, pad, mode=mode, value=value)
 
 
 def forward_with_checkpointing(module, *inputs, use_checkpointing=False):
@@ -117,7 +130,7 @@ class Conv3d(nn.Conv3d):
             padded_chunks = []
             for i in range(len(chunks)):
                 if self.padding[0] > 0:
-                    padded_chunk = F.pad(
+                    padded_chunk = _pad(
                         chunks[i],
                         (0, 0, 0, 0, self.padding[0], self.padding[0]),
                         mode="constant" if self.padding_mode == "zeros" else self.padding_mode,
@@ -171,7 +184,7 @@ class CausalConv3d(nn.Module):
             self.conv = nn.Conv3d(chan_in, chan_out, kernel_size, stride=stride, dilation=dilation, **kwargs)
 
     def forward(self, x):
-        x = F.pad(x, self.time_causal_padding, mode=self.pad_mode)
+        x = _pad(x, self.time_causal_padding, mode=self.pad_mode)
         return self.conv(x)
 
 
