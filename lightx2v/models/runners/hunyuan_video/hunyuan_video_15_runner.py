@@ -130,13 +130,17 @@ class HunyuanVideo15Runner(DefaultRunner):
         ]
 
         ori_latent_h, ori_latent_w = latent_shape[2], latent_shape[3]
-        if dist.is_initialized() and dist.get_world_size() > 1:
+        align_single_card_shape = self.config.get("align_single_card_shape", True)
+        use_dist_vae_decode = dist.is_initialized() and dist.get_world_size() > 1 and not align_single_card_shape
+        if use_dist_vae_decode:
             latent_h, latent_w, world_size_h, world_size_w = self._adjust_latent_for_grid_splitting(ori_latent_h, ori_latent_w, dist.get_world_size())
             latent_shape[2], latent_shape[3] = latent_h, latent_w
             logger.info(f"ori latent: {ori_latent_h}x{ori_latent_w}, adjust_latent: {latent_h}x{latent_w}, grid: {world_size_h}x{world_size_w}")
         else:
             latent_shape[2], latent_shape[3] = ori_latent_h, ori_latent_w
             world_size_h, world_size_w = None, None
+            if dist.is_initialized() and dist.get_world_size() > 1:
+                logger.info(f"align_single_card_shape enabled, keep latent: {ori_latent_h}x{ori_latent_w}; distributed VAE decode disabled")
 
         self.vae_decoder.world_size_h = world_size_h
         self.vae_decoder.world_size_w = world_size_w
