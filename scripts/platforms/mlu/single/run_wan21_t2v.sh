@@ -12,6 +12,7 @@ export PYTORCH_MLU_ALLOC_CONF=expandable_segments:True
 export LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 
 # set environment variables
+source "${lightx2v_path}/scripts/platforms/mlu/single/logging.sh"
 source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \

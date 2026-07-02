@@ -12,6 +12,7 @@ export LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 source ${lightx2v_path}/scripts/platforms/mlu/logging.sh
 
 # set environment variables
+source "${lightx2v_path}/scripts/platforms/mlu/single/logging.sh"
 source ${lightx2v_path}/scripts/base/base.sh
 
 mkdir -p ${lightx2v_path}/save_results

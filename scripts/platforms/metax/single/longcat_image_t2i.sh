@@ -21,7 +21,7 @@ python -m lightx2v.infer \
     --model_cls longcat_image \
     --task t2i \
     --model_path $model_path \
-    --config_json ${lightx2v_path}/configs/platforms/metax/longcat_image_t2i.json \
+    --config_json ${lightx2v_path}/configs/platforms/metax/single/longcat_image_t2i.json \
     --prompt "一只小猫躺在沙发上" \
     --negative_prompt "" \
     --save_result_path ${lightx2v_path}/save_results/longcat_image_t2i_metax.png \

@@ -23,6 +23,7 @@ from lightx2v.models.networks.ltx2.weights.transformer_weights import (
 from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
+from lightx2v_platform.base import global_var
 
 
 def _multimodal_guider_calculate(
@@ -140,14 +141,15 @@ class LTX2Model(BaseTransformerModel):
         """
         Load and distribute weights from rank 0 to all ranks.
 
-        Only supports tensor parallel mode with CUDA device.
+        Supports tensor parallel mode on the active LightX2V platform device.
         CPU offload is not supported.
         """
         # CPU offload is not supported
         if self.cpu_offload:
             raise NotImplementedError("_load_weights_from_rank0 does not support CPU offload. Please set cpu_offload=False.")
 
-        logger.info("Loading distributed weights with tensor parallel (CUDA only)")
+        device = self._get_parallel_weight_device()
+        logger.info(f"Loading distributed weights with tensor parallel on {device}")
         global_src_rank = 0
 
         if is_weight_loader:
@@ -198,11 +200,10 @@ class LTX2Model(BaseTransformerModel):
             dist.broadcast_object_list(obj_list, src=global_src_rank)
             synced_meta_dict = obj_list[0]
 
-        # Allocate tensors on CUDA
+        # Allocate tensors on the active accelerator.
         distributed_weight_dict = {}
         for key, meta in synced_meta_dict.items():
             is_tp = meta.get("is_tp", False)
-            device = torch.device(f"cuda:{torch.cuda.current_device()}")
             if is_tp:
                 # TP weight: each rank gets its own slice
                 distributed_weight_dict[key] = torch.empty(meta["shape"], dtype=meta["dtype"], device=device)
@@ -229,25 +230,46 @@ class LTX2Model(BaseTransformerModel):
                         if rank_key in weight_dict:
                             if rank_idx == self.tp_rank:
                                 # Copy to my own buffer
-                                distributed_weight_dict[key].copy_(weight_dict[rank_key], non_blocking=True)
+                                distributed_weight_dict[key].copy_(weight_dict[rank_key].to(device), non_blocking=True)
                             else:
                                 # Send to other ranks
-                                dist.send(weight_dict[rank_key].contiguous(), dst=rank_idx, group=self.tp_group)
+                                dist.send(weight_dict[rank_key].to(device).contiguous(), dst=rank_idx, group=self.tp_group)
                 else:
                     # Other ranks: receive from rank 0
                     dist.recv(distributed_weight_dict[key], src=global_src_rank, group=self.tp_group)
             else:
                 # Non-TP weight: broadcast to all ranks
                 if is_weight_loader:
-                    distributed_weight_dict[key].copy_(weight_dict[key], non_blocking=True)
+                    distributed_weight_dict[key].copy_(weight_dict[key].to(device), non_blocking=True)
 
                 dist.broadcast(distributed_weight_dict[key], src=global_src_rank)
 
-        torch.cuda.synchronize()
+        self._synchronize_parallel_weight_device(device)
 
-        logger.info(f"Weights distributed across {dist.get_world_size()} devices on CUDA")
+        logger.info(f"Weights distributed across {dist.get_world_size()} devices on {device}")
 
         return distributed_weight_dict
+
+    def _get_parallel_weight_device(self):
+        device_type = global_var.AI_DEVICE or getattr(self, "device", None)
+        device_type = str(device_type).split(":", 1)[0] if device_type else "cpu"
+        if device_type == "cpu":
+            return "cpu"
+
+        device_module = getattr(torch, device_type, None)
+        if device_module is not None and hasattr(device_module, "current_device"):
+            return f"{device_type}:{device_module.current_device()}"
+
+        if dist.is_available() and dist.is_initialized():
+            return f"{device_type}:{dist.get_rank()}"
+
+        return device_type
+
+    def _synchronize_parallel_weight_device(self, device):
+        device_type = str(device).split(":", 1)[0]
+        device_module = getattr(torch, device_type, None)
+        if device_module is not None and hasattr(device_module, "synchronize"):
+            device_module.synchronize()
 
     def _is_tp_weight(self, key):
         """Check if a weight key needs TP splitting.

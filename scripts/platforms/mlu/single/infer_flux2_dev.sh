@@ -12,6 +12,7 @@ export MLU_VISIBLE_DEVICES=0
 export PYTORCH_MLU_ALLOC_CONF=expandable_segments:True
 export LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 
+
 source ${lightx2v_path}/scripts/platforms/mlu/logging.sh
 
 # set environment variables
