@@ -1,4 +1,4 @@
-      
+
 #!/bin/bash
 
 # set path and first
@@ -23,7 +23,7 @@ python -m lightx2v.infer \
   --model_cls ltx2 \
   --task i2av \
   --model_path "${model_path}" \
-  --config_json ${lightx2v_path}/configs/ltx2/ltx2_3.json \
+  --config_json ${lightx2v_path}/configs/platforms/metax/ltx_2_3.json \
   --image_path "${IMAGE_PATH}" \
   --image_strength "${IMAGE_STRENGTH}" \
   --prompt "A person speaks clearly in a quiet room, natural lighting, cinematic medium shot." \
