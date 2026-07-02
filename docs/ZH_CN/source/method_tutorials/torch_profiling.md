@@ -56,6 +56,23 @@ http://127.0.0.1:16006/#pytorch_profiler
 
 注意要打开 **PYTORCH PROFILER** 页，不是 SCALARS 页。
 
+### ProfilerStep gap 快速统计
+
+如果只想量化 TensorBoard GPU timeline 里 `ProfilerStep#N` 的 wall time、GPU active time 和空白 gap，可以直接解析 trace：
+
+```bash
+python tools/profile/profiler_step_gap.py --brief \
+  prof_results/hunyuan3d_transformer_profile/full_step_10_YYYYmmdd_HHMMSS/*.pt.trace.json
+```
+
+输出示例：
+
+```text
+ProfilerStep#0: wall=56.154 ms, gpu_active=43.612 ms, self_gap=12.542 ms, raw_gpu_sum=43.613 ms, gpu_memcpy=24, gpu_memset=131, kernel=1733
+```
+
+该工具使用 trace 中的 `gpu_user_annotation` 作为 `ProfilerStep#N` 窗口，`gpu_active` 是窗口内 GPU activity 区间 merge 后的耗时，`self_gap = wall - gpu_active`。`raw_gpu_sum` 是未 merge 的 GPU activity 耗时求和，后面的 `gpu_memcpy/gpu_memset/kernel` 是窗口内事件数量，适合对比两次 trace 的 gap 和 memcpy 数量变化。
+
 ---
 
 ## Block Profile
@@ -105,7 +122,7 @@ ProfilerStep  compute=1.673 ms  wall=3.878 ms
 ```python
 # lightx2v/utils/transformer_profile.py
 class TransformerProfile:
-    profile_infer_step = 1
+    profile_infer_step = 10
     profile_block_idx = 2
 ```
 
@@ -128,6 +145,14 @@ profile_block_idx = 15
 
 二者结合后，`block_profile_report.py` 会把 kernel 时间和理论计算量对应起来，生成 `block_{layer}_layer_trace.txt`。
 
+### Kernel 到 Region 的归属口径
+
+`block` report 需要把 GPU timeline 上的 kernel / memcpy / memset 归属到粗粒度 region。这里不能只看 GPU annotation 的起止重叠：GPU annotation 的尾部和实际 kernel 结束时间可能存在 overlap 或截断，容易把 region 末尾 launch 的 kernel 漏到下一个区域或漏成未归属。
+
+因此 `tools/profile/region_event_trace.py` 会通过 trace correlation 找到 kernel 对应的 CPU `cudaLaunchKernel` timestamp，并优先用这个 launch timestamp 落入的 CPU `user_annotation` region 作为可靠的归属依据。这样更符合“哪个 region 发起了这个 GPU work”的语义，也能覆盖 kernel 在 GPU 上延迟执行、跨过 annotation 尾部的情况。只有在 CPU launch correlation 找不到时，才退回 GPU annotation overlap 做兜底。
+
+注意这和 `profiler_step_gap.py --brief` 的口径不同：gap 统计刻意使用 GPU timeline 里的 `gpu_user_annotation` `ProfilerStep#N` 窗口来量化 wall/gpu_active/self_gap；region report 则关心 kernel 属于哪个 CPU 发起的 region。
+
 ---
 
 ## 文件职责
@@ -138,6 +163,7 @@ profile_block_idx = 15
 |------|------|
 | `lightx2v/utils/transformer_profile.py` | 读取 `LIGHTX2V_PROFILE_MODE`，选择 full/block，创建输出目录 |
 | `lightx2v/utils/torch_trace_profiler.py` | PyTorch profiler trace 导出 |
+| `tools/profile/profiler_step_gap.py` | 解析 full/block trace 中的 `gpu_user_annotation` ProfilerStep，快速统计 wall/gpu_active/self_gap/raw_gpu_sum 和 GPU event 数量 |
 | 模型 `transformer_infer.py` | 在目标 infer step 调用 `record_full()` 或 `record_block()` |
 
 ### Block 专用

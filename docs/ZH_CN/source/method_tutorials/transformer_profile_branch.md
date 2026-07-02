@@ -38,6 +38,7 @@
 | `lightx2v/utils/op_shape_trace.py` | 写出逻辑 op shape JSONL |
 | `tools/profile/region_event_trace.py` | 解析 torch trace + op trace，生成 block report |
 | `tools/profile/trace_correlation.py` | kernel 与 CPU launch / region 的关联辅助 |
+| `tools/profile/profiler_step_gap.py` | 解析 `gpu_user_annotation` ProfilerStep，快速统计 wall/gpu_active/self_gap/raw_gpu_sum 和 GPU event 数量 |
 
 模型侧文件：
 
@@ -63,6 +64,7 @@ lightx2v/utils/region_profile.py
 lightx2v/utils/op_shape_trace.py
 tools/profile/region_event_trace.py
 tools/profile/trace_correlation.py
+tools/profile/profiler_step_gap.py
 ```
 
 如果目标分支上这些文件已经有本地改动，优先手工合并，避免直接覆盖。
@@ -137,6 +139,25 @@ bash scripts/<model>/run_<model>.sh
 ```
 
 `full` 至少应生成 `*.pt.trace.json`。`block` 至少应生成 `*.pt.trace.json`、`block_{layer}_op_trace.jsonl`、`block_{layer}_layer_trace.txt`。
+
+如需快速对比两个 full trace 的 GPU timeline gap，可使用：
+
+```bash
+python tools/profile/profiler_step_gap.py --brief prof_results/<model>_transformer_profile/full_step_10_*/*.pt.trace.json
+```
+
+其中 `wall/gpu_active/self_gap/raw_gpu_sum` 使用 `gpu_user_annotation` 的 `ProfilerStep#N` 窗口统计，不影响 `block` report 中基于 CPU launch timestamp 的 kernel/region 归属逻辑。
+
+## Kernel / Region 归属口径
+
+`block` report 的目标是回答“这个 GPU work 是哪个粗粒度 region 发起的”。这个问题不要只用 GPU timeline 上的 `gpu_user_annotation` 重叠关系来判断：region 末尾 launch 的 kernel 可能在 GPU 上延后执行，kernel 尾部也可能越过 annotation 边界；如果强依赖 GPU annotation overlap，就容易把尾部 op 漏到下一个 region 或漏成未归属。
+
+因此 `tools/profile/region_event_trace.py` 会先通过 trace correlation 找到 GPU event 对应的 CPU runtime 事件，并取 `cudaLaunchKernel` / `LaunchKernel` 的 CPU timestamp。region 归属优先使用这个 launch timestamp 所在的 CPU `user_annotation` 半开区间。这个口径更贴近“谁发起了 kernel”，也和 Python / C++ launch 顺序一致。
+
+`gpu_user_annotation` 仍然有价值，但用途不同：
+
+- `profiler_step_gap.py --brief` 用它的 `ProfilerStep#N` 窗口统计 wall/gpu_active/self_gap，目的是观察 GPU timeline 空白。
+- `region_event_trace.py` 只把 GPU annotation overlap 当作 CPU launch correlation 找不到时的 fallback，目的是提升 report 归属率，而不是改变归属语义。
 
 ## 迁移原则
 

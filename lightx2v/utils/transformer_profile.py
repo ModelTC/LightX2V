@@ -112,7 +112,7 @@ def _one_step_torch_profile(out_dir: Path, name: str):
 class TransformerProfile:
     # Developer-side profile target. Change these concrete indices directly
     # when inspecting a different infer step or a different transformer block.
-    profile_infer_step = 1
+    profile_infer_step = 10
     profile_block_idx = 2
 
     def __init__(self, model_type: str, block_profile: Any | None = None):
