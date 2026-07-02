@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.longcat_image.infer.offload.transformer_infer import LongCatImageOffloadTransformerInfer
@@ -29,8 +30,6 @@ class LongCatImageTransformerModel(BaseTransformerModel):
         # Use transformer_in_channels to avoid conflict with VAE's in_channels
         self.in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
         self.attention_kwargs = {}
-        if self.config["seq_parallel"]:
-            raise NotImplementedError("Sequence parallel is not implemented for LongCatImageTransformerModel")
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
@@ -65,6 +64,9 @@ class LongCatImageTransformerModel(BaseTransformerModel):
             encoder_hidden_states=prompt_embeds,
         )
 
+        if self.config["seq_parallel"]:
+            pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
+
         hidden_states = self.transformer_infer.infer(
             block_weights=self.transformer_weights,
             pre_infer_out=pre_infer_out,
@@ -72,15 +74,37 @@ class LongCatImageTransformerModel(BaseTransformerModel):
 
         noise_pred = self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out.temb)
 
+        if self.config["seq_parallel"]:
+            noise_pred = self._seq_parallel_post_process(noise_pred)
+
         return noise_pred
 
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
-        raise NotImplementedError("Sequence parallel pre-process is not implemented for LongCatImageTransformerModel")
+        if pre_infer_out.input_image_latents is not None:
+            raise NotImplementedError("Sequence parallel is not implemented for LongCat I2I input image latents.")
+
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        seqlen = pre_infer_out.hidden_states.shape[0]
+        self._seq_parallel_output_seq_len = seqlen
+
+        padding_size = (world_size - (seqlen % world_size)) % world_size
+        if padding_size > 0:
+            pre_infer_out.hidden_states = F.pad(pre_infer_out.hidden_states, (0, 0, 0, padding_size))
+        pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=0)[cur_rank]
+        return pre_infer_out
 
     @torch.no_grad()
-    def _seq_parallel_post_process(self, x):
-        raise NotImplementedError("Sequence parallel post-process is not implemented for LongCatImageTransformerModel")
+    def _seq_parallel_post_process(self, noise_pred):
+        world_size = dist.get_world_size(self.seq_p_group)
+        gathered_noise_pred = [torch.empty_like(noise_pred) for _ in range(world_size)]
+        dist.all_gather(gathered_noise_pred, noise_pred, group=self.seq_p_group)
+        noise_pred = torch.cat(gathered_noise_pred, dim=1)
+        output_seq_len = getattr(self, "_seq_parallel_output_seq_len", None)
+        if output_seq_len is not None:
+            noise_pred = noise_pred[:, :output_seq_len]
+        return noise_pred
 
     @compiled_method()
     @torch.no_grad()
