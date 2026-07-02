@@ -2,8 +2,13 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.models.networks.hunyuan3d.infer.block_profile import (
+    Hunyuan3DBlockProfile,
+    region_profile,
+)
 from lightx2v.models.networks.hunyuan3d.infer.module_io import Hunyuan3DPreInferOutput
 from lightx2v.models.networks.hunyuan3d.infer.moe_infer import infer_moe_block
+from lightx2v.utils.transformer_profile import TransformerProfile
 
 
 class Hunyuan3DTransformerInfer(BaseTransformerInfer):
@@ -15,6 +20,11 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         self.num_heads = config["num_heads"]
         self.head_dim = config["hidden_size"] // self.num_heads
         self.scheduler = None
+        self._block_profile = Hunyuan3DBlockProfile(config)
+        self._transformer_profile = TransformerProfile(
+            "hunyuan3d",
+            self._block_profile,
+        )
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -123,6 +133,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         )
         return attn_output.reshape(batch_size, seqlen_q, -1)
 
+    @region_profile("self_attn", emit="self_attn")
     def _infer_self_attention(self, block_weights, hidden_states):
         norm_hidden = self._flatten_norm(block_weights.norm1, hidden_states)
         query, key, value = self._project_qkv(
@@ -138,6 +149,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         flat = attn_output.reshape(-1, attn_output.shape[-1])
         return block_weights.attn1.out_proj.apply(flat).reshape(batch_size, seq_len, -1)
 
+    @region_profile("cross_attn", emit="cross_attn")
     def _infer_cross_attention(self, block_weights, hidden_states, cond):
         norm_hidden = self._flatten_norm(block_weights.norm2, hidden_states)
         batch_size, seq_len, _ = norm_hidden.shape
@@ -161,6 +173,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         flat = attn_output.reshape(-1, attn_output.shape[-1])
         return block_weights.attn2.out_proj.apply(flat).reshape(batch_size, seq_len, -1)
 
+    @region_profile("dense_ffn", emit="dense_ffn")
     def _infer_mlp(self, block_weights, hidden_states):
         batch_size, seq_len, hidden_dim = hidden_states.shape
         flat = block_weights.mlp.fc1.apply(hidden_states.reshape(-1, hidden_dim))
@@ -168,12 +181,16 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         flat = block_weights.mlp.fc2.apply(flat)
         return flat.reshape(batch_size, seq_len, hidden_dim)
 
+    @region_profile("skip_connection", emit="skip_connection")
+    def _infer_skip_connection(self, block_weights, hidden_states, skip_value):
+        cat = torch.cat([skip_value, hidden_states], dim=-1)
+        batch_size, seq_len, hidden_dim = hidden_states.shape
+        flat = block_weights.skip_linear.apply(cat.reshape(-1, cat.shape[-1]))
+        return block_weights.skip_norm.apply(flat).reshape(batch_size, seq_len, hidden_dim)
+
     def infer_block(self, block_weights, hidden_states, cond, skip_value=None):
         if block_weights.skip_linear is not None:
-            cat = torch.cat([skip_value, hidden_states], dim=-1)
-            batch_size, seq_len, hidden_dim = hidden_states.shape
-            flat = block_weights.skip_linear.apply(cat.reshape(-1, cat.shape[-1]))
-            hidden_states = block_weights.skip_norm.apply(flat).reshape(batch_size, seq_len, hidden_dim)
+            hidden_states = self._infer_skip_connection(block_weights, hidden_states, skip_value)
 
         hidden_states = hidden_states + self._infer_self_attention(block_weights, hidden_states)
         hidden_states = hidden_states + self._infer_cross_attention(block_weights, hidden_states, cond)
@@ -185,7 +202,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
 
         return hidden_states
 
-    def infer(self, block_weights, pre_infer_out: Hunyuan3DPreInferOutput):
+    def _infer(self, block_weights, pre_infer_out: Hunyuan3DPreInferOutput, transformer_profile=None):
         hidden_states = pre_infer_out.hidden_states
         cond = pre_infer_out.cond
 
@@ -193,7 +210,31 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         for layer, block in enumerate(block_weights.blocks):
             skip_value = None if layer <= self.depth // 2 else skip_value_list.pop()
 
-            hidden_states = self.infer_block(block, hidden_states, cond, skip_value=skip_value)
+            if transformer_profile is not None and transformer_profile.block_idx == layer:
+                self._block_profile.bind(block, cond.shape[1], hidden_states)
+                with transformer_profile.record_block(layer):
+                    hidden_states = self.infer_block(block, hidden_states, cond, skip_value=skip_value)
+            else:
+                hidden_states = self.infer_block(block, hidden_states, cond, skip_value=skip_value)
             if layer < self.depth // 2:
                 skip_value_list.append(hidden_states)
+
         return hidden_states
+
+    def _infer_with_full_profile(self, block_weights, pre_infer_out):
+        with self._transformer_profile.record_full():
+            return self._infer(block_weights, pre_infer_out)
+
+    def _infer_with_block_profile(self, block_weights, pre_infer_out):
+        transformer_profile = self._transformer_profile.start_block()
+        hidden_states = self._infer(block_weights, pre_infer_out, transformer_profile)
+        transformer_profile.write_block_report()
+        return hidden_states
+
+    def infer(self, block_weights, pre_infer_out: Hunyuan3DPreInferOutput):
+        profile_mode = self._transformer_profile.mode_for_step(self.scheduler.step_index)
+        if profile_mode == "full":
+            return self._infer_with_full_profile(block_weights, pre_infer_out)
+        if profile_mode == "block":
+            return self._infer_with_block_profile(block_weights, pre_infer_out)
+        return self._infer(block_weights, pre_infer_out)
