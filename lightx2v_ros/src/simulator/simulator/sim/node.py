@@ -10,11 +10,10 @@ from typing import Callable
 
 import numpy as np
 import rclpy
+from common.contract import EnvContract
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, Int32, String
-
-from common.contract import EnvContract
 
 from .base_env import BaseSimEnv
 
@@ -71,16 +70,12 @@ class SimulatorNode(Node):
             self.max_episode_steps = 0
 
         self.state_pub = self.create_publisher(Float32MultiArray, contract.state_topic, 10)
-        self.image_pubs = {
-            cam: self.create_publisher(Image, contract.camera_topic(cam), 10) for cam in contract.cameras
-        }
+        self.image_pubs = {cam: self.create_publisher(Image, contract.camera_topic(cam), 10) for cam in contract.cameras}
         self.success_pub = self.create_publisher(Bool, contract.success_topic, 10)
         self.observation_ready_pub = self.create_publisher(Int32, contract.observation_ready_topic, 10)
         self.task_pub = self.create_publisher(String, contract.task_topic, 10)
         self.episode_pub = self.create_publisher(Int32, contract.episode_topic, 10)
-        self.action_sub = self.create_subscription(
-            Float32MultiArray, contract.action_topic, self.on_action, 10
-        )
+        self.action_sub = self.create_subscription(Float32MultiArray, contract.action_topic, self.on_action, 10)
 
         # `step_index` is a monotonic global observation counter (never reset), so the
         # policy's "process only newer observations" logic keeps working across episodes.
@@ -117,9 +112,7 @@ class SimulatorNode(Node):
 
         action = np.asarray(msg.data, dtype=np.float32).reshape(-1)
         if action.size != self.contract.action_dim:
-            self.get_logger().error(
-                f"expected action length {self.contract.action_dim}, got {action.size}"
-            )
+            self.get_logger().error(f"expected action length {self.contract.action_dim}, got {action.size}")
             return
 
         self.obs, success = self.env.step(action)
@@ -130,10 +123,7 @@ class SimulatorNode(Node):
         capped = self.max_episode_steps > 0 and self.episode_step >= self.max_episode_steps
         if self.loop and (self.success or capped):
             outcome = "SUCCESS" if self.success else f"step cap ({self.max_episode_steps})"
-            self.get_logger().info(
-                f"episode {self.episode_index} ended [{outcome}] after {self.episode_step} steps "
-                f"(global step {self.step_index}); starting next episode..."
-            )
+            self.get_logger().info(f"episode {self.episode_index} ended [{outcome}] after {self.episode_step} steps (global step {self.step_index}); starting next episode...")
             # Emit the final frame (success flag reflects the outcome) before rebuilding.
             self.publish_observation()
             self._start_next_episode()
@@ -158,10 +148,7 @@ class SimulatorNode(Node):
         # sees the new episode's first frame as "newer" than anything it processed.
         self.step_index += 1
         self.success = False
-        self.get_logger().info(
-            f"episode {self.episode_index} started (global step {self.step_index}): "
-            f"{self.env.task_description!r}"
-        )
+        self.get_logger().info(f"episode {self.episode_index} started (global step {self.step_index}): {self.env.task_description!r}")
         self.publish_observation()
 
     def _slow_down_timer(self):

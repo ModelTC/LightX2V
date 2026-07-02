@@ -52,11 +52,7 @@ class LinearNormalizer:
 
     def __init__(self, stats, mode="min/max"):
         mode = _canonical_norm_mode(mode)
-        g = {
-            key[len("global_"):]: torch.as_tensor(value, dtype=torch.float32)
-            for key, value in stats.items()
-            if key.startswith("global_")
-        }
+        g = {key[len("global_") :]: torch.as_tensor(value, dtype=torch.float32) for key, value in stats.items() if key.startswith("global_")}
         if mode == "z-score":
             mean, std = g["mean"], g["std"]
             self.scale = 1.0 / (std + self.std_reg)

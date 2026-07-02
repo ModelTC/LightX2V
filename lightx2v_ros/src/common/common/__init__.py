@@ -1,8 +1,8 @@
 from .contract import (
     CONTRACTS,
-    EnvContract,
     LIBERO_CONTRACT,
     ROBOTWIN_CONTRACT,
+    EnvContract,
     get_contract,
 )
 

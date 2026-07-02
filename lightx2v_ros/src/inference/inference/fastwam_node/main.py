@@ -1,10 +1,10 @@
 import numpy as np
 import rclpy
+from common.contract import get_contract
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, Int32, String
 
-from common.contract import get_contract
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMPolicy
 from lightx2v.utils.set_config import auto_calc_config, get_default_config
 
@@ -40,9 +40,7 @@ class FastWAMNode(Node):
         self.action_pub = self.create_publisher(Float32MultiArray, self.contract.action_topic, 10)
         self._camera_subs = []
         for cam in self.contract.policy_input_cameras:
-            self._camera_subs.append(
-                self.create_subscription(Image, self.contract.camera_topic(cam), self._make_image_cb(cam), 10)
-            )
+            self._camera_subs.append(self.create_subscription(Image, self.contract.camera_topic(cam), self._make_image_cb(cam), 10))
         self.create_subscription(Float32MultiArray, self.contract.state_topic, self.on_state, 10)
         self.create_subscription(String, self.contract.task_topic, self.on_task, 10)
         self.create_subscription(Bool, self.contract.success_topic, self.on_success, 10)
@@ -77,9 +75,7 @@ class FastWAMNode(Node):
         for key, expected in (("action_dim", self.contract.action_dim), ("robot_state_dim", self.contract.state_dim)):
             actual = int(config.get(key, expected))
             if actual != expected:
-                self.get_logger().warning(
-                    f"config `{key}`={actual} disagrees with env '{self.contract.name}' contract ({expected})"
-                )
+                self.get_logger().warning(f"config `{key}`={actual} disagrees with env '{self.contract.name}' contract ({expected})")
         return config
 
     def _build_dummy_action(self):
@@ -98,9 +94,7 @@ class FastWAMNode(Node):
     def on_state(self, msg):
         state = np.asarray(msg.data, dtype=np.float32)
         if state.size != self.contract.state_dim:
-            self.get_logger().error(
-                f"expected {self.contract.state_topic} length {self.contract.state_dim}, got {state.size}"
-            )
+            self.get_logger().error(f"expected {self.contract.state_topic} length {self.contract.state_dim}, got {state.size}")
             return
         self.state = state
 

@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-
 from common.contract import EnvContract
 
 from ..sim.base_env import BaseSimEnv, Observation
@@ -72,10 +71,7 @@ class RoboTwinEnv(BaseSimEnv):
     def _prepare_runtime(self) -> None:
         root = self.robotwin_root
         if not (root / "envs").is_dir():
-            raise FileNotFoundError(
-                f"RoboTwin is not vendored at {root}. See robotwin_node/RoboTwin/README "
-                "and run the RoboTwin install/asset-download steps."
-            )
+            raise FileNotFoundError(f"RoboTwin is not vendored at {root}. See robotwin_node/RoboTwin/README and run the RoboTwin install/asset-download steps.")
         # RoboTwin source uses root-relative imports such as `from envs import ...`
         # and `from generate_episode_instructions import *`.
         _add_python_path(root)
@@ -84,10 +80,7 @@ class RoboTwinEnv(BaseSimEnv):
     def _require_config(self, *parts) -> Path:
         path = self._configs_path.joinpath(*parts)
         if not path.exists():
-            raise FileNotFoundError(
-                f"Missing RoboTwin config: {path}. Populate `task_config/` (and `assets/`) "
-                "from the official RoboTwin repo (see robotwin_node/RoboTwin/script)."
-            )
+            raise FileNotFoundError(f"Missing RoboTwin config: {path}. Populate `task_config/` (and `assets/`) from the official RoboTwin repo (see robotwin_node/RoboTwin/script).")
         return path
 
     def _build_task_args(self) -> dict:
@@ -201,9 +194,7 @@ class RoboTwinEnv(BaseSimEnv):
                 return self._observation()
             except Exception as exc:  # e.g. UnStableError on an unlucky seed
                 last_err = exc
-        raise RuntimeError(
-            f"RoboTwin failed to set up a new episode after {max_setup_retries} seeds; last error: {last_err}"
-        )
+        raise RuntimeError(f"RoboTwin failed to set up a new episode after {max_setup_retries} seeds; last error: {last_err}")
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32).reshape(-1)

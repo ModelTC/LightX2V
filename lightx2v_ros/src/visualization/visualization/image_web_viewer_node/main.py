@@ -4,11 +4,10 @@ from threading import Condition, Thread
 import cv2
 import numpy as np
 import rclpy
+from common.contract import get_contract
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
-
-from common.contract import get_contract
 
 from .page import render_index
 
@@ -93,9 +92,7 @@ class ImageWebViewerNode(Node):
         self.http_server = ImageHttpServer((host, port), handler)
         self.http_thread = Thread(target=self.http_server.serve_forever, daemon=True)
         self.http_thread.start()
-        self.get_logger().info(
-            f"[{self.contract.name}] image web viewer on http://{host}:{port} cameras={self.cameras}"
-        )
+        self.get_logger().info(f"[{self.contract.name}] image web viewer on http://{host}:{port} cameras={self.cameras}")
 
     def on_image(self, name, msg):
         try:
@@ -140,7 +137,7 @@ def make_handler(frame_store, cameras, title):
                 self.send_task()
                 return
             if self.path.endswith(".mjpg"):
-                name = self.path[1:-len(".mjpg")]
+                name = self.path[1 : -len(".mjpg")]
                 if name in camera_set:
                     self.send_stream(name)
                     return

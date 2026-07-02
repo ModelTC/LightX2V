@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import Dict, Tuple
 
 import numpy as np
-
 from common.contract import EnvContract
 
 
@@ -68,6 +67,4 @@ class BaseSimEnv(ABC):
                 raise ValueError(f"env '{self.contract.name}' camera '{cam}' must be HxWx3, got {image.shape}")
         state = np.asarray(obs.state, dtype=np.float32).reshape(-1)
         if state.size != self.contract.state_dim:
-            raise ValueError(
-                f"env '{self.contract.name}' state dim {state.size} != contract {self.contract.state_dim}"
-            )
+            raise ValueError(f"env '{self.contract.name}' state dim {state.size} != contract {self.contract.state_dim}")

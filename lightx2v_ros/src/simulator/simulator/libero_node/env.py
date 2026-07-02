@@ -3,7 +3,6 @@
 import math
 
 import numpy as np
-
 from common.contract import EnvContract
 
 from ..sim.base_env import BaseSimEnv, Observation
@@ -63,11 +62,7 @@ class LiberoEnv(BaseSimEnv):
     def _observation(self) -> Observation:
         obs = self.observer.obs
         # LIBERO renders upside-down/mirrored relative to the policy expectation.
-        images = {
-            cam: np.ascontiguousarray(obs[key][::-1, ::-1])
-            for cam, key in self.CAMERA_OBS_KEYS.items()
-            if cam in self.contract.cameras
-        }
+        images = {cam: np.ascontiguousarray(obs[key][::-1, ::-1]) for cam, key in self.CAMERA_OBS_KEYS.items() if cam in self.contract.cameras}
         return Observation(images=images, state=self._state(obs))
 
     def _state(self, obs) -> np.ndarray:

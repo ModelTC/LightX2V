@@ -113,9 +113,7 @@ _VIEW_TEMPLATE = """    <section class="view">
 def render_index(cameras, title="LightX2V ROS"):
     columns = max(1, min(len(cameras), 4))
     style = _STYLE.replace("__COLUMNS__", str(columns))
-    views = "\n".join(
-        _VIEW_TEMPLATE.format(name=html.escape(str(cam)), label=html.escape(str(cam))) for cam in cameras
-    )
+    views = "\n".join(_VIEW_TEMPLATE.format(name=html.escape(str(cam)), label=html.escape(str(cam))) for cam in cameras)
     safe_title = html.escape(str(title))
     return f"""<!doctype html>
 <html>
