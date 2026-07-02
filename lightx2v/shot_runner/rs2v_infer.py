@@ -177,6 +177,10 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         audio_files, mask_files = self._parse_audio_path(clip_input_info.audio_path)
         clip_input_info.audio_num = len(audio_files)
 
+        # should set before _load_mask_latents (rs2v.process_single_mask）
+        # it will resize mask image by input_info.resize_mode and input_info.fixed_area
+        # otherwise repeat generate will use the old input_info and cause error
+        rs2v.input_info = clip_input_info
         audio_array = self._load_audio_array(audio_files, audio_sr, clip_input_info.video_duration)
         person_mask_latens = self._load_mask_latents(rs2v, mask_files)
 
@@ -184,7 +188,6 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         total_clips = self._calc_total_clips(audio_array.shape[1], audio_per_frame, target_video_length)
         ref_state_seq = get_reference_state_sequence(target_video_length - 3, target_fps)
 
-        rs2v.input_info = clip_input_info
         rs2v.inputs_static = rs2v._run_input_encoder_local_rs2v_static()
 
         self.va_controller = None
