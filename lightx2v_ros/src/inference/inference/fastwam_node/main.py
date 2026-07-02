@@ -1,5 +1,6 @@
 import numpy as np
 import rclpy
+from common.contract import get_contract
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, Int32, String
@@ -7,72 +8,48 @@ from std_msgs.msg import Bool, Float32MultiArray, Int32, String
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMPolicy
 from lightx2v.utils.set_config import auto_calc_config, get_default_config
 
-DEFAULT_DUMMY_ACTION = np.asarray([0, 0, 0, 0, 0, 0, -1], dtype=np.float32)
-ACTION_TOPIC = "/libero/action"
-AGENTVIEW_TOPIC = "/libero/agentview/image_raw"
-WRIST_TOPIC = "/libero/wrist/image_raw"
-STATE_TOPIC = "/libero/state"
-OBSERVATION_READY_TOPIC = "/libero/observation_ready"
-SUCCESS_TOPIC = "/libero/success"
-TASK_TOPIC = "/libero/task_description"
-
 
 class FastWAMNode(Node):
     def __init__(self):
         super().__init__("fastwam_node")
 
+        self.declare_parameter("env", "libero")
         self.declare_parameter("config_json", "")
         self.declare_parameter("model_path", "")
+        self.declare_parameter("num_steps_wait", -1)
 
-        self.get_logger().info("loading FastWAM policy")
+        env = str(self.get_parameter("env").value).strip().lower()
+        self.contract = get_contract(env)
+
+        self.get_logger().info(f"[{self.contract.name}] loading FastWAM policy")
         self.policy_config = self.build_policy_config()
         self.policy = FastWAMPolicy.from_config(self.policy_config)
-        self.get_logger().info("FastWAM policy loaded")
+        self.get_logger().info(f"[{self.contract.name}] FastWAM policy loaded")
 
-        self.agentview = None
-        self.wrist = None
+        self.images = {cam: None for cam in self.contract.policy_input_cameras}
         self.state = None
         self.task_description = None
         self.success = False
+        self.episode_index = 0
         self.last_processed_observation = -1
-        self.num_steps_wait = int(self.policy_config.get("num_steps_wait", 30))
 
-        self.action_pub = self.create_publisher(Float32MultiArray, ACTION_TOPIC, 10)
-        self.create_subscription(
-            Image,
-            AGENTVIEW_TOPIC,
-            self.on_agentview,
-            10,
-        )
-        self.create_subscription(
-            Image,
-            WRIST_TOPIC,
-            self.on_wrist,
-            10,
-        )
-        self.create_subscription(
-            Float32MultiArray,
-            STATE_TOPIC,
-            self.on_state,
-            10,
-        )
-        self.create_subscription(
-            String,
-            TASK_TOPIC,
-            self.on_task,
-            10,
-        )
-        self.create_subscription(
-            Bool,
-            SUCCESS_TOPIC,
-            self.on_success,
-            10,
-        )
-        self.create_subscription(
-            Int32,
-            OBSERVATION_READY_TOPIC,
-            self.on_observation_ready,
-            10,
+        ns_wait = int(self.get_parameter("num_steps_wait").value)
+        self.num_steps_wait = ns_wait if ns_wait >= 0 else int(self.policy_config.get("num_steps_wait", 0))
+        self.dummy_action = self._build_dummy_action()
+
+        self.action_pub = self.create_publisher(Float32MultiArray, self.contract.action_topic, 10)
+        self._camera_subs = []
+        for cam in self.contract.policy_input_cameras:
+            self._camera_subs.append(self.create_subscription(Image, self.contract.camera_topic(cam), self._make_image_cb(cam), 10))
+        self.create_subscription(Float32MultiArray, self.contract.state_topic, self.on_state, 10)
+        self.create_subscription(String, self.contract.task_topic, self.on_task, 10)
+        self.create_subscription(Bool, self.contract.success_topic, self.on_success, 10)
+        self.create_subscription(Int32, self.contract.episode_topic, self.on_episode, 10)
+        self.create_subscription(Int32, self.contract.observation_ready_topic, self.on_observation_ready, 10)
+
+        self.get_logger().info(
+            f"[{self.contract.name}] fastwam_node ready: input_cameras={list(self.contract.policy_input_cameras)} "
+            f"action_dim={self.contract.action_dim} state_dim={self.contract.state_dim} num_steps_wait={self.num_steps_wait}"
         )
 
     def build_policy_config(self):
@@ -91,18 +68,33 @@ class FastWAMNode(Node):
                 "config_json": config_json,
             }
         )
-        return auto_calc_config(config)
+        config = auto_calc_config(config)
 
-    def on_agentview(self, msg):
-        self.agentview = image_msg_to_rgb(msg)
+        # The config_json is authoritative for policy params; warn loudly on any
+        # mismatch with the environment contract so dimension bugs surface early.
+        for key, expected in (("action_dim", self.contract.action_dim), ("robot_state_dim", self.contract.state_dim)):
+            actual = int(config.get(key, expected))
+            if actual != expected:
+                self.get_logger().warning(f"config `{key}`={actual} disagrees with env '{self.contract.name}' contract ({expected})")
+        return config
 
-    def on_wrist(self, msg):
-        self.wrist = image_msg_to_rgb(msg)
+    def _build_dummy_action(self):
+        action = np.zeros(self.contract.action_dim, dtype=np.float32)
+        if self.contract.gripper_postprocess:
+            # LIBERO warmup keeps the gripper open while the scene settles.
+            action[-1] = -1.0
+        return action
+
+    def _make_image_cb(self, camera):
+        def _cb(msg):
+            self.images[camera] = image_msg_to_rgb(msg)
+
+        return _cb
 
     def on_state(self, msg):
         state = np.asarray(msg.data, dtype=np.float32)
-        if state.shape != (8,):
-            self.get_logger().error(f"expected /libero/state length 8, got {state.size}")
+        if state.size != self.contract.state_dim:
+            self.get_logger().error(f"expected {self.contract.state_topic} length {self.contract.state_dim}, got {state.size}")
             return
         self.state = state
 
@@ -111,6 +103,18 @@ class FastWAMNode(Node):
 
     def on_success(self, msg):
         self.success = bool(msg.data)
+
+    def on_episode(self, msg):
+        episode = int(msg.data)
+        if episode == self.episode_index:
+            return
+        # Simulator looped into a fresh episode: drop the queued action chunk and any
+        # stale success/observation bookkeeping so we start clean on the new rollout.
+        self.episode_index = episode
+        self.success = False
+        self.last_processed_observation = -1
+        self.policy.reset()
+        self.get_logger().info(f"new episode {episode}; policy state reset for fresh rollout")
 
     def on_observation_ready(self, msg):
         observation_index = int(msg.data)
@@ -127,13 +131,12 @@ class FastWAMNode(Node):
             return
 
         if observation_index < self.num_steps_wait:
-            action = DEFAULT_DUMMY_ACTION.copy()
+            action = self.dummy_action.copy()
             self.get_logger().info(f"observation {observation_index}: publishing warmup dummy action")
         else:
             self.get_logger().info(f"observation {observation_index}: running FastWAM inference/action queue")
             action = self.policy.next_action(
-                agentview_rgb=self.agentview,
-                wrist_rgb=self.wrist,
+                images={cam: self.images[cam] for cam in self.contract.policy_input_cameras},
                 state=self.state,
                 task_description=self.task_description,
             )
@@ -142,11 +145,7 @@ class FastWAMNode(Node):
         self.last_processed_observation = observation_index
 
     def missing_inputs(self):
-        missing = []
-        if self.agentview is None:
-            missing.append("agentview")
-        if self.wrist is None:
-            missing.append("wrist")
+        missing = [cam for cam in self.contract.policy_input_cameras if self.images.get(cam) is None]
         if self.state is None:
             missing.append("state")
         if not self.task_description:
@@ -155,8 +154,8 @@ class FastWAMNode(Node):
 
     def publish_action(self, action):
         action = np.asarray(action, dtype=np.float32).reshape(-1)
-        if action.shape != (7,):
-            raise ValueError(f"expected action length 7, got {action.size}")
+        if action.size != self.contract.action_dim:
+            raise ValueError(f"expected action length {self.contract.action_dim}, got {action.size}")
         msg = Float32MultiArray()
         msg.data = action.tolist()
         self.action_pub.publish(msg)

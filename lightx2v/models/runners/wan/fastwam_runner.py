@@ -25,18 +25,47 @@ def resize_rgb(image, width, height):
     return np.asarray(pil.resize((width, height), resample=Image.BILINEAR), dtype=np.uint8)
 
 
-class MinMaxNormalizer:
-    range_tol = 1e-4
+def _canonical_norm_mode(mode):
+    compact = str(mode).strip().lower().replace("-", "").replace("_", "").replace("/", "")
+    if compact == "minmax":
+        return "min/max"
+    if compact == "zscore":
+        return "z-score"
+    if compact == "q01q99":
+        return "q01/q99"
+    raise ValueError(f"unsupported normalize_mode: {mode!r}")
 
-    def __init__(self, stats):
-        min_v = torch.as_tensor(stats["global_min"], dtype=torch.float32)
-        max_v = torch.as_tensor(stats["global_max"], dtype=torch.float32)
-        input_range = max_v - min_v
-        ignore = input_range < self.range_tol
-        input_range[ignore] = 2.0
-        self.scale = 2.0 / input_range
-        self.offset = -1.0 - self.scale * min_v
-        self.offset[ignore] = -min_v[ignore]
+
+class LinearNormalizer:
+    """Affine normalizer matching FastWAM's SingleFieldLinearNormalizer (global stats).
+
+    Modes used by the released checkpoints:
+      - "min/max"  (LIBERO):   maps [global_min, global_max] -> [-1, 1]
+      - "q01/q99":             maps [global_q01, global_q99] -> [-1, 1]
+      - "z-score"  (RoboTwin): (x - global_mean) / global_std
+    """
+
+    std_reg = 1e-8
+    range_tol = 1e-4
+    output_min = -1.0
+    output_max = 1.0
+
+    def __init__(self, stats, mode="min/max"):
+        mode = _canonical_norm_mode(mode)
+        g = {key[len("global_") :]: torch.as_tensor(value, dtype=torch.float32) for key, value in stats.items() if key.startswith("global_")}
+        if mode == "z-score":
+            mean, std = g["mean"], g["std"]
+            self.scale = 1.0 / (std + self.std_reg)
+            self.offset = -mean / (std + self.std_reg)
+        else:
+            low, high = (g["min"].clone(), g["max"].clone()) if mode == "min/max" else (g["q01"].clone(), g["q99"].clone())
+            input_range = high - low
+            ignore = input_range < self.range_tol
+            input_range[ignore] = self.output_max - self.output_min
+            self.scale = (self.output_max - self.output_min) / input_range
+            self.offset = self.output_min - self.scale * low
+            self.offset[ignore] = (self.output_max + self.output_min) / 2 - low[ignore]
+        self.mode = mode
 
     def forward(self, x):
         x = torch.as_tensor(x, dtype=torch.float32)
@@ -45,6 +74,13 @@ class MinMaxNormalizer:
     def backward(self, x):
         x = torch.as_tensor(x, dtype=torch.float32)
         return (x - self.offset) / self.scale
+
+
+class MinMaxNormalizer(LinearNormalizer):
+    """Backwards-compatible alias: LIBERO used a global min/max normalizer."""
+
+    def __init__(self, stats):
+        super().__init__(stats, mode="min/max")
 
 
 class FastWAMPolicy:
@@ -65,6 +101,9 @@ class FastWAMPolicy:
         binarize_gripper=True,
         default_prompt=None,
         camera_size=224,
+        policy_profile="libero",
+        normalize_mode="min/max",
+        gripper_postprocess=None,
         config=None,
     ):
         self.device = torch.device(device)
@@ -103,6 +142,10 @@ class FastWAMPolicy:
         self.seed = None if seed is None or int(seed) < 0 else int(seed)
         self.binarize_gripper = bool(binarize_gripper)
         self.default_prompt = str(default_prompt)
+        self.policy_profile = str(policy_profile).strip().lower()
+        self.normalize_mode = _canonical_norm_mode(normalize_mode)
+        # LIBERO post-processes the single gripper channel; RoboTwin (dual-arm qpos) does not.
+        self.gripper_postprocess = (self.policy_profile == "libero") if gripper_postprocess is None else bool(gripper_postprocess)
         self.config = config
         self._check_model_config()
         self.pending_actions = deque()
@@ -135,6 +178,9 @@ class FastWAMPolicy:
             binarize_gripper=config.get("binarize_gripper", True),
             default_prompt=config.get("default_prompt"),
             camera_size=config.get("camera_size", 224),
+            policy_profile=config.get("policy_profile", "libero"),
+            normalize_mode=config.get("normalize_mode", "min/max"),
+            gripper_postprocess=config.get("gripper_postprocess"),
             config=config,
         )
 
@@ -147,8 +193,8 @@ class FastWAMPolicy:
         with open(self.dataset_stats_path, "r", encoding="utf-8") as f:
             stats = json.load(f)
         return (
-            MinMaxNormalizer(stats["state"]["default"]),
-            MinMaxNormalizer(stats["action"]["default"]),
+            LinearNormalizer(stats["state"]["default"], self.normalize_mode),
+            LinearNormalizer(stats["action"]["default"], self.normalize_mode),
         )
 
     def _load_text_encoder(self):
@@ -188,17 +234,17 @@ class FastWAMPolicy:
     def reset(self):
         self.pending_actions.clear()
 
-    def next_action(self, agentview_rgb, wrist_rgb, state, task_description):
+    def next_action(self, images, state, task_description):
         if not self.pending_actions:
-            action_chunk = self.predict_action_chunk(agentview_rgb, wrist_rgb, state, task_description)
+            action_chunk = self.predict_action_chunk(images, state, task_description)
             for action in action_chunk[: self.actions_per_plan]:
                 self.pending_actions.append(np.asarray(action, dtype=np.float32))
         if not self.pending_actions:
             raise RuntimeError("FastWAM produced an empty action chunk")
         return self.pending_actions.popleft()
 
-    def predict_action_chunk(self, agentview_rgb, wrist_rgb, state, task_description, seed=None):
-        image = self.build_image_tensor(agentview_rgb, wrist_rgb)
+    def predict_action_chunk(self, images, state, task_description, seed=None):
+        image = self.build_image_tensor(images)
         first_frame_latents = self.encode_image_latents(image)
         context, context_mask = self.encode_prompt(self.default_prompt.format(task_prompt=task_description))
         robot_state = self.state_normalizer.forward(np.asarray(state, dtype=np.float32))
@@ -216,10 +262,12 @@ class FastWAMPolicy:
             seed=self.seed if seed is None else seed,
         )
         action = self.action_normalizer.backward(action).numpy()
-        action[..., -1] = action[..., -1] * 2 - 1
-        action[..., -1] = action[..., -1] * -1.0
-        if self.binarize_gripper:
-            action[..., -1] = np.sign(action[..., -1])
+        if self.gripper_postprocess:
+            # LIBERO single-gripper channel: map [0,1] -> [-1,1], flip sign, optional binarize.
+            action[..., -1] = action[..., -1] * 2 - 1
+            action[..., -1] = action[..., -1] * -1.0
+            if self.binarize_gripper:
+                action[..., -1] = np.sign(action[..., -1])
         return action.astype(np.float32)
 
     def _run_action_denoising(self, inputs, action_shape, action_infer_steps, seed):
@@ -239,12 +287,34 @@ class FastWAMPolicy:
         scheduler.clear()
         return action
 
-    def build_image_tensor(self, agentview_rgb, wrist_rgb):
-        primary = resize_rgb(agentview_rgb, self.camera_size, self.camera_size)
-        wrist = resize_rgb(wrist_rgb, self.camera_size, self.camera_size)
-        rgb = np.concatenate([primary, wrist], axis=1)
+    def build_image_tensor(self, images):
+        """Compose the policy image from a dict of {camera_name: HxWx3 RGB}.
+
+        Layouts mirror the released FastWAM checkpoints:
+          - LIBERO   : [agentview | wrist] side-by-side, each camera_size x camera_size.
+          - RoboTwin : head (320x256) on top, [left | right] (each 160x128) below,
+                       i.e. final [384, 320, 3]; matches deploy_policy.py.
+        """
+        rgb = self._compose_rgb(images)
         tensor = torch.from_numpy(rgb).permute(2, 0, 1).to(device=self.device, dtype=GET_DTYPE())
         return tensor * (2.0 / 255.0) - 1.0
+
+    def _compose_rgb(self, images):
+        def _get(name):
+            if name not in images or images[name] is None:
+                raise KeyError(f"FastWAM profile '{self.policy_profile}' requires camera '{name}'")
+            return images[name]
+
+        if self.policy_profile == "robotwin":
+            head = resize_rgb(_get("head_camera"), 320, 256)
+            left = resize_rgb(_get("left_camera"), 160, 128)
+            right = resize_rgb(_get("right_camera"), 160, 128)
+            bottom = np.concatenate([left, right], axis=1)
+            return np.concatenate([head, bottom], axis=0)
+
+        primary = resize_rgb(_get("agentview"), self.camera_size, self.camera_size)
+        wrist = resize_rgb(_get("wrist"), self.camera_size, self.camera_size)
+        return np.concatenate([primary, wrist], axis=1)
 
     def encode_image_latents(self, image):
         image = image.unsqueeze(1)
@@ -352,8 +422,7 @@ class FastWAMRunner(BaseRunner):
         agentview, wrist = self._load_image_pair()
         state = self._load_state()
         actions = self.policy.predict_action_chunk(
-            agentview_rgb=agentview,
-            wrist_rgb=wrist,
+            images={"agentview": agentview, "wrist": wrist},
             state=state,
             task_description=self.input_info.prompt,
             seed=self.input_info.seed,

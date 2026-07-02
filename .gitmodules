@@ -1,3 +1,7 @@
 [submodule "lightx2v_ros/src/simulator/simulator/libero_node/LIBERO"]
 	path = lightx2v_ros/src/simulator/simulator/libero_node/LIBERO
 	url = https://github.com/Lifelong-Robot-Learning/LIBERO.git
+[submodule "lightx2v_ros/src/simulator/simulator/robotwin_node/RoboTwin"]
+	path = lightx2v_ros/src/simulator/simulator/robotwin_node/RoboTwin
+	url = https://github.com/robotwin-Platform/robotwin.git
+	branch = main
