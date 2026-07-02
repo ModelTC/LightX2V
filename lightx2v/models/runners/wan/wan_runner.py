@@ -691,7 +691,7 @@ class MultiModelStruct:
                     self.model[1] = low_noise_model
                     self.model[1].infer(inputs)
 
-    @ProfilingContext4DebugL2("Swtich models in infer_main costs")
+    @ProfilingContext4DebugL2("Switch models in infer_main costs")
     def get_current_model_index(self):
         if self.scheduler.timesteps[self.scheduler.step_index] >= self.boundary_timestep:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
