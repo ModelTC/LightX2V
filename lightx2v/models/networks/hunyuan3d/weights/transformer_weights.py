@@ -1,3 +1,5 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
@@ -49,6 +51,13 @@ class Hunyuan3DMoEWeights(WeightModule):
         num_experts = config.get("num_experts", 8)
         self.num_experts = num_experts
         self.moe_top_k = config.get("moe_top_k", 2)
+        self.moe_backend = str(config.get("moe_backend", "pytorch")).strip().lower()
+        if self.moe_backend not in ("pytorch", "flashinfer"):
+            raise ValueError(f"Invalid Hunyuan3D moe_backend={self.moe_backend!r}, expected 'pytorch' or 'flashinfer'")
+        fi_cfg = config.get("moe_flashinfer_setting") or {}
+        if fi_cfg.get("autotune") and self.moe_backend != "flashinfer":
+            raise ValueError("moe_flashinfer_setting.autotune=true requires moe_backend='flashinfer'")
+        self.moe_flashinfer_tune_max_num_tokens = int(fi_cfg.get("tune_max_num_tokens", 8192))
         self.add_module(
             "gate",
             MM_WEIGHT_REGISTER[mm_type](
@@ -62,6 +71,43 @@ class Hunyuan3DMoEWeights(WeightModule):
         )
         experts = WeightModuleList(Hunyuan3DFeedForwardWeights(f"{prefix}.experts.{expert_idx}", mm_type) for expert_idx in range(num_experts))
         self.add_module("experts", experts)
+
+    def load(self, weight_dict):
+        super().load(weight_dict)
+        if self.moe_backend == "flashinfer" and self.experts[0].fc1._get_actual_weight() is not None:
+            self._build_flashinfer_weights()
+
+    def to_cuda(self, non_blocking=False):
+        super().to_cuda(non_blocking=non_blocking)
+        if self.moe_backend == "flashinfer":
+            self._build_flashinfer_weights()
+
+    def to_cpu(self, non_blocking=False):
+        super().to_cpu(non_blocking=non_blocking)
+        for attr in ("_fi_fc1_weight", "_fi_fc2_weight", "_fi_fc1_bias", "_fi_fc2_bias"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+
+    @staticmethod
+    def _stack_optional_biases(biases):
+        if all(bias is None for bias in biases):
+            return None
+        if any(bias is None for bias in biases):
+            raise ValueError("FlashInfer Hunyuan3D MoE requires either all expert biases or no expert biases")
+        return torch.stack([bias.contiguous() for bias in biases], dim=0)
+
+    def _build_flashinfer_weights(self):
+        fc1_list, fc2_list = [], []
+        fc1_biases, fc2_biases = [], []
+        for expert_w in self.experts:
+            fc1_list.append(expert_w.fc1._get_actual_weight().t().contiguous())
+            fc2_list.append(expert_w.fc2._get_actual_weight().t().contiguous())
+            fc1_biases.append(expert_w.fc1._get_actual_bias())
+            fc2_biases.append(expert_w.fc2._get_actual_bias())
+        self._fi_fc1_weight = torch.stack(fc1_list, dim=0)
+        self._fi_fc2_weight = torch.stack(fc2_list, dim=0)
+        self._fi_fc1_bias = self._stack_optional_biases(fc1_biases)
+        self._fi_fc2_bias = self._stack_optional_biases(fc2_biases)
 
 
 class Hunyuan3DSelfAttentionWeights(WeightModule):

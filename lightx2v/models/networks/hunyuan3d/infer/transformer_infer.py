@@ -1,8 +1,16 @@
+import os
+
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
+from lightx2v.common.flashinfer_autotune import flashinfer_autotune
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.hunyuan3d.infer.module_io import Hunyuan3DPreInferOutput
+from lightx2v.models.networks.hunyuan3d.infer.moe_fi_autotune import (
+    MOE_FI_FORCE_RETUNE_ENV,
+    MoeFiAutotune,
+)
 from lightx2v.models.networks.hunyuan3d.infer.moe_infer import infer_moe_block
 
 
@@ -15,6 +23,16 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         self.num_heads = config["num_heads"]
         self.head_dim = config["hidden_size"] // self.num_heads
         self.scheduler = None
+        self.fi_moe_autotune = MoeFiAutotune.from_hunyuan3d_config(config)
+        if self.fi_moe_autotune.enabled:
+            if flashinfer_autotune is None:
+                raise RuntimeError("Hunyuan3D FlashInfer MoE autotune enabled but flashinfer autotuner is not available")
+            logger.info(
+                f"Hunyuan3D FlashInfer MoE autotune enabled "
+                f"(cache={self.fi_moe_autotune.cache_path}, "
+                f"tune_max_num_tokens={self.fi_moe_autotune.tune_max_num_tokens}, "
+                f"{MOE_FI_FORCE_RETUNE_ENV}={os.environ.get(MOE_FI_FORCE_RETUNE_ENV, '0')})"
+            )
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -70,8 +88,8 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
             v = value[0]
             seqlen_q = q.shape[0]
             seqlen_k = k.shape[0]
-            cu_seqlens_q = torch.tensor([0, q.shape[0]], dtype=torch.int32, device=q.device)
-            cu_seqlens_k = torch.tensor([0, k.shape[0]], dtype=torch.int32, device=k.device)
+            cu_seqlens_q = torch.tensor([0, q.shape[0]], dtype=torch.int32)
+            cu_seqlens_k = torch.tensor([0, k.shape[0]], dtype=torch.int32)
             attn_output = calculate.apply(
                 q=q,
                 k=k,
@@ -90,8 +108,8 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
             v = value.reshape(-1, self.num_heads, self.head_dim)
             seqlen_q = q.shape[0] // batch_size
             seqlen_k = k.shape[0] // batch_size
-            cu_seqlens_q = torch.tensor([0, q.shape[0]], dtype=torch.int32, device=q.device)
-            cu_seqlens_k = torch.tensor([0, k.shape[0]], dtype=torch.int32, device=k.device)
+            cu_seqlens_q = torch.tensor([0, q.shape[0]], dtype=torch.int32)
+            cu_seqlens_k = torch.tensor([0, k.shape[0]], dtype=torch.int32)
             attn_output = calculate.apply(
                 q=q,
                 k=k,
@@ -109,8 +127,8 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         q = query.reshape(-1, self.num_heads, self.head_dim)
         k = key.reshape(-1, self.num_heads, self.head_dim)
         v = value.reshape(-1, self.num_heads, self.head_dim)
-        cu_seqlens_q = torch.arange(0, batch_size + 1, dtype=torch.int32, device=q.device) * seqlen_q
-        cu_seqlens_k = torch.arange(0, batch_size + 1, dtype=torch.int32, device=k.device) * seqlen_k
+        cu_seqlens_q = torch.arange(0, batch_size + 1, dtype=torch.int32) * seqlen_q
+        cu_seqlens_k = torch.arange(0, batch_size + 1, dtype=torch.int32) * seqlen_k
         attn_output = calculate.apply(
             q=q,
             k=k,

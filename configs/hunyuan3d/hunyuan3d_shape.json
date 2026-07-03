@@ -8,5 +8,10 @@
     "num_chunks": 8000,
     "octree_resolution": 384,
     "attn_type": "torch_sdpa",
+    "moe_backend": "flashinfer",
+    "moe_flashinfer_setting": {
+        "autotune": true,
+        "tune_max_num_tokens": 8192
+    },
     "rms_norm_type": "torch"
 }
