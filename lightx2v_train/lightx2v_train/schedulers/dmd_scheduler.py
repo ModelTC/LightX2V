@@ -23,6 +23,54 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
         self.sigmas = self.infer_sigmas
         self.timesteps = self.infer_timesteps
 
+    def set_random_timesteps(
+        self,
+        num_steps_min,
+        num_steps_max,
+        sigma_min=0.25,
+        sigma_max=0.95,
+        sampling_method="stratified",
+        latent_hw=None,
+        device=None,
+        num_steps=None,
+    ):
+        device = device or self.device
+        num_steps_min = max(1, int(num_steps_min))
+        num_steps_max = max(num_steps_min, int(num_steps_max))
+        if num_steps is None:
+            num_steps = int(torch.randint(num_steps_min, num_steps_max + 1, (1,), device="cpu").item())
+        num_steps = min(num_steps_max, max(num_steps_min, int(num_steps)))
+        inner_count = max(0, num_steps - 1)
+
+        if inner_count:
+            if sampling_method == "uniform":
+                inner_sigmas = torch.empty(inner_count, dtype=torch.float32, device=device).uniform_(sigma_min, sigma_max)
+            elif sampling_method == "stratified":
+                bin_edges = torch.linspace(sigma_min, sigma_max, inner_count + 1, dtype=torch.float32, device=device)
+                bin_lows = bin_edges[:-1]
+                bin_highs = bin_edges[1:]
+                inner_sigmas = bin_lows + torch.rand(inner_count, dtype=torch.float32, device=device) * (bin_highs - bin_lows)
+            else:
+                raise ValueError(f"Unsupported random sigma sampling_method: {sampling_method}")
+            if self.do_time_shift:
+                inner_sigmas = self.time_shift(inner_sigmas, latent_hw=latent_hw, num_steps=num_steps)
+            inner_sigmas = torch.sort(inner_sigmas, descending=True).values
+            sigmas = torch.cat(
+                [
+                    torch.ones(1, dtype=torch.float32, device=device),
+                    inner_sigmas,
+                    torch.zeros(1, dtype=torch.float32, device=device),
+                ]
+            )
+        else:
+            sigmas = torch.tensor([1.0, 0.0], dtype=torch.float32, device=device)
+
+        self.sigmas = sigmas
+        self.infer_sigmas = sigmas
+        self.infer_timesteps = sigmas[:-1] * self.num_train_timesteps
+        self.timesteps = self.infer_timesteps
+        self.num_inference_steps = int(sigmas.numel() - 1)
+
     def sigma_at(self, step_idx, batch_size, device=None, dtype=None):
         sigma = self.sigmas[int(step_idx)].expand(int(batch_size))
         if device is not None or dtype is not None:

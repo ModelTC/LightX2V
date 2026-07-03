@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme4/gushiqiao/new/LightX2V
-model_path=/data/nvme0/yongyang/models/x2v_models/wan/Wan2.1-I2V-14B-480P/
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/InfiniteTalk
 
-export CUDA_VISIBLE_DEVICES=5
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -13,10 +13,10 @@ python -m lightx2v.infer \
 --model_cls infinitetalk \
 --task s2v \
 --model_path $model_path \
---config_json ${lightx2v_path}/configs/infinitetalk/infinitetalk_480p_multi_distilled.json \
---prompt "In a casual, intimate setting, a man and a woman are engaged in a heartfelt conversation inside a car. The man, sporting a denim jacket over a blue shirt, sits attentively with a seatbelt fastened, his gaze fixed on the woman beside him. The woman, wearing a black tank top and a denim jacket draped over her shoulders, smiles warmly, her eyes reflecting genuine interest and connection. The car's interior, with its beige seats and simple design, provides a backdrop that emphasizes their interaction. The scene captures a moment of shared understanding and connection, set against the soft, diffused light of an overcast day. A medium shot from a slightly angled perspective, focusing on their expressions and body language." \
---negative_prompt "bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards" \
---image_path /data/nvme4/gushiqiao/new/InfiniteTalk/examples/multi/ref_img.png \
---audio_path /data/nvme4/gushiqiao/new/InfiniteTalk/examples/multi/1-man.WAV,/data/nvme4/gushiqiao/new/InfiniteTalk/examples/multi/1-woman.WAV \
---save_result_path ${lightx2v_path}/save_results/infinitetalk_multi_480p_distilled.mp4 \
+--config_json ${lightx2v_path}/configs/infinitetalk/fp8/infinitetalk_mutli_distilled.json \
+--prompt  "The video features a man and a woman standing by a bench in the park, their expressions tense and voices raised as they argue. The man gestures with both hands, his arms swinging slightly as if to emphasize each heated word, while the woman stands with her hands on her waist, her brows furrowed in frustration. The background is a wide expanse of sunlit grass, the golden light contrasting with the sharp energy of their quarrel. Their voices seem to clash in the air, and the rhythm of their hand movements and body postures interweaves with the rising tension, creating a vivid scene of confrontation." \
+--negative_prompt 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走 \
+--image_path ${lightx2v_path}/assets/inputs/audio/multi_person/seko_input.png \
+--audio_path ${lightx2v_path}/assets/inputs/audio/multi_person/p1.mp3,${lightx2v_path}/assets/inputs/audio/multi_person/p2.mp3 \
+--save_result_path ${lightx2v_path}/save_results/infinitetalk_multi_distilled.mp4 \
 --seed 42

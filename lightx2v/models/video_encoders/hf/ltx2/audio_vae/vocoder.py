@@ -7,6 +7,13 @@ import torch.nn.functional as F
 from torch import nn
 
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.resnet import LRELU_SLOPE, ResBlock1
+from lightx2v_platform.base.global_var import PLATFORM
+
+_REPLICATE_PAD_FLOAT32_PLATFORMS = {
+    "ascend_npu",
+    "cambricon_mlu",
+    "metax_cuda",
+}
 
 
 def get_padding(kernel_size: int, dilation: int = 1) -> int:
@@ -48,6 +55,12 @@ def kaiser_sinc_filter1d(cutoff: float, half_width: float, kernel_size: int) -> 
     return filter_.view(1, 1, kernel_size)
 
 
+def _pad1d(x: torch.Tensor, pad: tuple[int, int], mode: str) -> torch.Tensor:
+    if mode == "replicate" and PLATFORM in _REPLICATE_PAD_FLOAT32_PLATFORMS and x.dtype == torch.bfloat16:
+        return F.pad(x.float(), pad, mode=mode).to(dtype=x.dtype)
+    return F.pad(x, pad, mode=mode)
+
+
 class LowPassFilter1d(nn.Module):
     def __init__(
         self,
@@ -75,7 +88,7 @@ class LowPassFilter1d(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, n_channels, _ = x.shape
         if self.padding:
-            x = F.pad(x, (self.pad_left, self.pad_right), mode=self.padding_mode)
+            x = _pad1d(x, (self.pad_left, self.pad_right), mode=self.padding_mode)
         return F.conv1d(x, self.filter.expand(n_channels, -1, -1), stride=self.stride, groups=n_channels)
 
 
@@ -120,7 +133,7 @@ class UpSample1d(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, n_channels, _ = x.shape
-        x = F.pad(x, (self.pad, self.pad), mode="replicate")
+        x = _pad1d(x, (self.pad, self.pad), mode="replicate")
         filt = self.filter.to(dtype=x.dtype, device=x.device).expand(n_channels, -1, -1)
         x = self.ratio * F.conv_transpose1d(x, filt, stride=self.stride, groups=n_channels)
         return x[..., self.pad_left : -self.pad_right]

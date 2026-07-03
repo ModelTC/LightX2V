@@ -35,7 +35,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+            - /path/to/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0

@@ -68,6 +68,8 @@ class ImageDataset(Dataset):
             "target_image": self._resolve_path(target_image, data_dir) if target_image is not None else None,
             "prompt": str(prompt).strip(),
             "source_images": [self._resolve_path(p, data_dir) for p in source_images],
+            "target_height": record.get("target_height"),
+            "target_width": record.get("target_width"),
         }
 
     def _resolve_path(self, path, data_dir):

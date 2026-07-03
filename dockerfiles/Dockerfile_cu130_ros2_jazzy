@@ -1,0 +1,44 @@
+FROM lightx2v/lightx2v:26062001-cu130 AS base
+# ubuntu 24.04 python 3.12 torch 2.11 cuda 13.0
+
+RUN apt update && apt install locales
+RUN locale-gen en_US en_US.UTF-8
+RUN update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+ENV LANG=en_US.UTF-8
+
+
+RUN apt install software-properties-common -y
+RUN add-apt-repository universe -y
+
+
+RUN apt update && apt install curl -y
+
+RUN export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F'"' '{print $4}') \
+    && curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo ${UBUNTU_CODENAME:-${VERSION_CODENAME}})_all.deb" \
+    && dpkg -i /tmp/ros2-apt-source.deb
+
+
+RUN apt update --fix-missing && apt install -y ros-dev-tools
+
+RUN pip uninstall setuptools-scm
+RUN pip install catkin_pkg empy pyqt5-sip PyQt5 sip==6.15.3 setuptools==79.0.1
+RUN pip install hydra-core==1.2.0 robosuite==1.4.0 bddl==1.0.1 coverage==7.6.1 gym==0.25.2 mujoco==3.9.0 future easydict termcolor
+
+
+# Install ROS2 Jazzy (Install from apt on Ubuntu 24.04)
+
+RUN apt install -y ros-jazzy-desktop
+
+
+WORKDIR /root
+
+
+# Test ROS2
+
+# Talker
+# source /opt/ros/jazzy/setup.bash
+# ros2 run demo_nodes_cpp talker
+
+# Listener
+# source /opt/ros/jazzy/setup.bash
+# ros2 run demo_nodes_py listener

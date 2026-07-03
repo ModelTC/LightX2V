@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme4/gushiqiao/new/LightX2V
-model_path=/data/nvme0/yongyang/models/x2v_models/wan/Wan2.1-I2V-14B-480P/
+lightx2v_path=/data/nvme4/gushiqiao/new/debug/LightX2V
+model_path=/data/nvme5/gushiqiao/models/InfiniteTalk
 
-export CUDA_VISIBLE_DEVICES=6
+export CUDA_VISIBLE_DEVICES=7
 
 
 # set environment variables
@@ -14,10 +14,10 @@ python -m lightx2v.infer \
 --model_cls infinitetalk \
 --task s2v \
 --model_path $model_path \
---config_json ${lightx2v_path}/configs/infinitetalk/infinitetalk_480p_single_distilled.json \
---prompt "A woman is passionately singing into a professional microphone in a recording studio. She wears large black headphones and a dark cardigan over a gray top. Her long, wavy brown hair frames her face as she looks slightly upwards, her mouth open mid-song. The studio is equipped with various audio equipment, including a mixing console and a keyboard, with soundproofing panels on the walls. The lighting is warm and focused on her, creating a professional and intimate atmosphere. A close-up shot captures her expressive performance." \
---negative_prompt "bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards" \
---image_path /data/nvme4/gushiqiao/new/InfiniteTalk/examples/single/ref_image.png \
---audio_path /data/nvme4/gushiqiao/new/InfiniteTalk/examples/single/1.wav \
---save_result_path ${lightx2v_path}/save_results/infinitetalk_single_480p.mp4 \
+--config_json ${lightx2v_path}/configs/infinitetalk/h100/infinitetalk_single_distilled.json \
+--prompt  "让角色根据音频内容自然说话" \
+--negative_prompt 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走 \
+--image_path /data/nvme5/gushiqiao/cases/wecom-temp-3950334-bfa56035a08485356431b5a1c5c28a82.png \
+--audio_path ${lightx2v_path}/assets/inputs/audio/seko_input.mp3 \
+--save_result_path ${lightx2v_path}/save_results/infinitetalk_single_720p.mp4 \
 --seed 42

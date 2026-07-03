@@ -17,11 +17,12 @@ from lightx2v_train.runtime.distributed import (
     get_sequence_parallel_rank,
     get_sequence_parallel_world_size,
     get_world_size,
+    is_distributed,
     is_main_process,
     is_sequence_parallel_enabled,
     reduce_mean,
 )
-from lightx2v_train.runtime.fsdp import apply_fsdp2
+from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradient_sync
 from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, broadcast_sequence_parallel_value, sync_sequence_parallel_gradients
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
@@ -74,6 +75,20 @@ class DmdTrainer(BaseTrainer):
         self.negative_prompt = teacher_config["negative_prompt"] if "negative_prompt" in teacher_config else self.dmd_config.get("negative_prompt", " ")
         self.cfg_norm = teacher_config["cfg_norm"] if "cfg_norm" in teacher_config else self.dmd_config.get("cfg_norm", "layer_norm")
         self.image_sizes = self.dmd_config.get("image_sizes", [])
+
+        random_schedule_config = self.dmd_config.get("random_schedule", {})
+        self.random_schedule_enabled = bool(random_schedule_config.get("enabled", False))
+        self.random_schedule_num_steps_min = int(random_schedule_config.get("num_steps_min", 1))
+        self.random_schedule_num_steps_max = int(random_schedule_config.get("num_steps_max", self.num_inference_steps))
+        self.random_schedule_sigma_min = float(random_schedule_config.get("sigma_min", 0.02))
+        self.random_schedule_sigma_max = float(random_schedule_config.get("sigma_max", 0.98))
+        self.random_schedule_sampling_method = random_schedule_config.get("sampling_method", "stratified")
+
+        self.cdm_config = self.dmd_config.get("cdm", {})
+        self.cdm_enabled = bool(self.cdm_config.get("enabled", False))
+        self.cdm_weight = float(self.cdm_config.get("weight", 1.0))
+        self.cdm_warmup_iters = int(self.cdm_config.get("warmup_iters", 0))
+        self.cdm_norm_clip_min = float(self.cdm_config.get("norm_clip_min", 0.1))
 
     def _get_optimizer_config(self):
         return self.training_config["student"]["optimizer"]
@@ -137,7 +152,7 @@ class DmdTrainer(BaseTrainer):
         self.fake_model = build_model(fake_model_config)
         self.fake_model.load_components(transformer_only=True, reference_model=self.model)
         self._setup_trainable_model(self.fake_model, role="fake")
-        apply_fsdp2(self.fake_model, self.config)
+        apply_parallel(self.fake_model, self.config)
         if self.gradient_checkpointing:
             self.fake_model.enable_gradient_checkpointing()
 
@@ -151,7 +166,7 @@ class DmdTrainer(BaseTrainer):
         self.teacher_model.load_components(transformer_only=True, reference_model=self.model)
         self.teacher_model.transformer.requires_grad_(False)
         self.teacher_model.transformer.eval()
-        apply_fsdp2(self.teacher_model, self.config)
+        apply_parallel(self.teacher_model, self.config)
         self.teacher_model.transformer.eval()
 
         self.fake_trainable_params = list(self.fake_model.trainable_parameters())
@@ -182,6 +197,17 @@ class DmdTrainer(BaseTrainer):
         logger.info("[train] dmd train_types student={} fake={}", self.student_train_type, self.fake_train_type)
         logger.info("[train] dmd student trainable params={}", self._count_trainable(self.model.transformer))
         logger.info("[train] dmd fake trainable params={}", self._count_trainable(self.fake_model.transformer))
+        if self.random_schedule_enabled:
+            logger.info(
+                "[train] dmd random sigma schedule enabled: steps=[{}, {}], sigma=[{}, {}], sampling_method={}",
+                self.random_schedule_num_steps_min,
+                self.random_schedule_num_steps_max,
+                self.random_schedule_sigma_min,
+                self.random_schedule_sigma_max,
+                self.random_schedule_sampling_method,
+            )
+        if self.cdm_enabled:
+            logger.info("[train] dmd CDM enabled: weight={} warmup_iters={}", self.cdm_weight, self.cdm_warmup_iters)
 
     @staticmethod
     def _count_trainable(module):
@@ -203,13 +229,38 @@ class DmdTrainer(BaseTrainer):
         raise ValueError(f"Unsupported cfg_norm: {cfg_norm}")
 
     @staticmethod
-    def _dmd_loss(latents, x_pred_fake_flow, x_pred_teacher):
+    def _dmd_loss(latents, x_pred_fake_flow, x_pred_teacher, norm_clip_min=None):
         with torch.no_grad():
             grad = x_pred_fake_flow - x_pred_teacher
             dims = tuple(range(1, latents.ndim))
             normalizer = torch.abs(latents - x_pred_teacher).mean(dim=dims, keepdim=True)
+            if norm_clip_min is not None:
+                normalizer = normalizer.clamp(min=float(norm_clip_min))
             grad = torch.nan_to_num(grad / normalizer)
         return 0.5 * F.mse_loss(latents.float(), (latents.float() - grad.float()).detach(), reduction="mean")
+
+    def _prepare_sampling_schedule(self, latent_shape):
+        latent_hw = latent_shape[-2:]
+        if self.random_schedule_enabled:
+            num_steps = self._sample_synced_int(self.random_schedule_num_steps_min, self.random_schedule_num_steps_max + 1)
+            self.scheduler.set_random_timesteps(
+                self.random_schedule_num_steps_min,
+                self.random_schedule_num_steps_max,
+                sigma_min=self.random_schedule_sigma_min,
+                sigma_max=self.random_schedule_sigma_max,
+                sampling_method=self.random_schedule_sampling_method,
+                latent_hw=latent_hw,
+                device=self.model.device,
+                num_steps=num_steps,
+            )
+            return
+        self.scheduler.set_timesteps(self.num_inference_steps, latent_hw=latent_hw, device=self.model.device)
+
+    def _effective_cdm_weight(self, current_iter=None):
+        if self.cdm_warmup_iters <= 0 or current_iter is None:
+            return self.cdm_weight
+        progress = min(1.0, max(0.0, float(current_iter) / float(self.cdm_warmup_iters)))
+        return progress * self.cdm_weight
 
     def _latent_shape(self, sample):
         image = sample["target_image"]
@@ -234,15 +285,18 @@ class DmdTrainer(BaseTrainer):
 
     def _encode_conditions(self, sample):
         prompt = sample["prompt"]
-        if isinstance(prompt, str):
-            negative_prompt = self.negative_prompt
-        else:
-            negative_prompt = [self.negative_prompt] * len(prompt)
         with torch.no_grad():
             condition = self.model.encode_prompt_condition(prompt)
-            negative_condition = self.model.encode_prompt_condition(negative_prompt)
+            if self.guidance_scale > 1:
+                if isinstance(prompt, str):
+                    negative_prompt = self.negative_prompt
+                else:
+                    negative_prompt = [self.negative_prompt] * len(prompt)
+                negative_condition = self.model.encode_prompt_condition(negative_prompt)
+            else:
+                negative_condition = None
         condition = broadcast_sequence_parallel_value(condition)
-        negative_condition = broadcast_sequence_parallel_value(negative_condition)
+        negative_condition = broadcast_sequence_parallel_value(negative_condition) if negative_condition is not None else None
         return condition, negative_condition
 
     def _predict_velocity(self, model, latents, sigma, condition):
@@ -251,54 +305,116 @@ class DmdTrainer(BaseTrainer):
         prediction = model.postprocess_denoiser_output(prediction, denoiser_input)
         return prediction
 
+    def _predict_teacher_velocity(self, latents, sigma, condition, negative_condition):
+        if negative_condition is None:
+            return self._predict_velocity(self.teacher_model, latents, sigma, condition)
+
+        if self.teacher_model.cfg_on_denoiser_output():
+            denoiser_input = self.teacher_model.prepare_denoiser_input(latents)
+            cond_prediction = self.teacher_model.denoise(denoiser_input, sigma, condition)
+            uncond_prediction = self.teacher_model.denoise(denoiser_input, sigma, negative_condition)
+            prediction = self._do_cfg(cond_prediction, uncond_prediction, self.guidance_scale, self.cfg_norm)
+            return self.teacher_model.postprocess_denoiser_output(prediction, denoiser_input)
+
+        velocity_teacher_cond = self._predict_velocity(self.teacher_model, latents, sigma, condition)
+        velocity_teacher_uncond = self._predict_velocity(self.teacher_model, latents, sigma, negative_condition)
+        return self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
+
     def sample_initial_latents(self, latent_shape):
         return broadcast_sequence_parallel_value(torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype))
 
+    def _sample_synced_int(self, low, high):
+        value = torch.randint(int(low), int(high), (1,), device=self.model.device, dtype=torch.int64)
+        if is_distributed():
+            dist.broadcast(value, src=0)
+        return int(value.item())
+
     def sample_end_step(self):
-        return int(broadcast_sequence_parallel_value(int(torch.randint(0, self.num_inference_steps, (1,), device=self.model.device).item())))
+        return self._sample_synced_int(0, self.scheduler.num_inference_steps)
 
     def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
-        self.scheduler.set_timesteps(self.num_inference_steps, latent_hw=latent_shape[-2:])
         if xt is None:
             xt = self.sample_initial_latents(latent_shape)
         x0 = None
+        xt_end = None
+        vt_end = None
         self.model.transformer.train()
         for idx in range(end_step_idx + 1):
             sigma = self.scheduler.sigma_at(idx, latent_shape[0], device=self.model.device, dtype=self.running_dtype)
             context = torch.enable_grad if (grad_enabled and idx == end_step_idx) else torch.no_grad
             with context():
                 velocity = self._predict_velocity(self.model, xt, sigma, condition)
+            if idx == end_step_idx:
+                xt_end = xt.detach()
+                vt_end = velocity.detach()
             xt, x0 = self.scheduler.step_by_index(velocity, idx, xt)
-        return x0
+        return x0, xt_end, vt_end
 
-    def forward_loss(self, latent_shape, conditions, stage):
+    def _compute_cdm_loss(self, xt, vt, end_step_idx, condition):
+        batch_size = xt.shape[0]
+
+        traj_sigma = self.scheduler.sigma_at(end_step_idx, batch_size, device=self.model.device, dtype=torch.float32)
+        student_sigma = self.scheduler.sample_renoise_sigma(batch_size, device=self.model.device, dtype=torch.float32)
+
+        traj_sigma_expanded = self.scheduler._expand_to_ndim(traj_sigma, vt.ndim)
+        student_sigma_expanded = self.scheduler._expand_to_ndim(student_sigma, vt.ndim)
+        student_xt = xt + (student_sigma_expanded - traj_sigma_expanded) * vt
+
+        student_prediction = self._predict_velocity(self.model, student_xt.to(self.running_dtype), student_sigma, condition)
+        student_x0 = student_xt - student_sigma_expanded * student_prediction
+        student_x0 = student_x0.to(self.running_dtype)
+
+        teacher_sigma = self.scheduler.sample_renoise_sigma(batch_size, device=self.model.device, dtype=self.running_dtype)
+        teacher_noise = torch.randn_like(student_x0)
+        teacher_xt = self.scheduler.add_noise(student_x0, teacher_noise, teacher_sigma)
+
+        with torch.no_grad():
+            self.fake_model.transformer.eval()
+            velocity_fake = self._predict_velocity(self.fake_model, teacher_xt, teacher_sigma, condition)
+            velocity_teacher = self._predict_teacher_velocity(teacher_xt, teacher_sigma, condition, None)
+
+        teacher_sigma_expanded = self.scheduler._expand_to_ndim(teacher_sigma, teacher_xt.ndim)
+        x_pred_fake = teacher_xt - teacher_sigma_expanded * velocity_fake
+        x_pred_teacher = teacher_xt - teacher_sigma_expanded * velocity_teacher
+        return self._dmd_loss(student_x0, x_pred_fake, x_pred_teacher, norm_clip_min=self.cdm_norm_clip_min)
+
+    def forward_loss(self, latent_shape, conditions, stage, current_iter=None):
         condition, negative_condition = conditions
+        self._prepare_sampling_schedule(latent_shape)
         end_step_idx = self.sample_end_step()
         xt_start = self.sample_initial_latents(latent_shape)
-        x0_ref = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=False, xt=xt_start)
+        x0, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=(stage != "fake"), xt=xt_start)
 
         sigma = self.scheduler.sample_renoise_sigma(latent_shape[0], device=self.model.device, dtype=self.running_dtype)
         sigma = broadcast_sequence_parallel_value(sigma)
         noise = broadcast_sequence_parallel_value(torch.randn(latent_shape, device=self.model.device, dtype=torch.float32))
-        renoised_xt = self.scheduler.add_noise(x0_ref, noise, sigma)
+        renoised_xt = self.scheduler.add_noise(x0.detach(), noise, sigma)
 
         if stage == "fake":
             self.fake_model.transformer.train()
             velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
-            velocity_gt = self.scheduler.build_train_gt(x0_ref.float(), noise)
-            return F.mse_loss(velocity_fake.float(), velocity_gt.float(), reduction="mean")
+            velocity_gt = self.scheduler.build_train_gt(x0.float(), noise)
+            loss_fake = F.mse_loss(velocity_fake.float(), velocity_gt.float(), reduction="mean")
+            return {"fake": loss_fake}
 
         with torch.no_grad():
             self.fake_model.transformer.eval()
             velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
-            velocity_teacher_cond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, condition)
-            velocity_teacher_uncond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, negative_condition)
-            velocity_teacher = self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
+            velocity_teacher = self._predict_teacher_velocity(renoised_xt, sigma, condition, negative_condition)
 
-        x_pred_fake = renoised_xt - sigma * velocity_fake
-        x_pred_teacher = renoised_xt - sigma * velocity_teacher
-        x0 = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=True, xt=xt_start)
-        return self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
+        expanded_sigma = self.scheduler._expand_to_ndim(sigma, renoised_xt.ndim)
+        x_pred_fake = renoised_xt - expanded_sigma * velocity_fake
+        x_pred_teacher = renoised_xt - expanded_sigma * velocity_teacher
+        loss_dmd = self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
+        total_loss = loss_dmd
+
+        cdm_weight = self._effective_cdm_weight(current_iter)
+        if self.cdm_enabled and cdm_weight != 0:
+            loss_cdm = self._compute_cdm_loss(xt_end, vt_end, end_step_idx, condition)
+            total_loss = total_loss + cdm_weight * loss_cdm
+        else:
+            loss_cdm = total_loss.new_zeros(())
+        return {"student": total_loss, "dmd": loss_dmd.detach(), "cdm": loss_cdm.detach(), "cdm_weight": cdm_weight}
 
     def train(self):
         resume_ckpt_path, current_iter = self._resolve_resume()
@@ -315,7 +431,9 @@ class DmdTrainer(BaseTrainer):
         save_total_limit = self.save_total_limit
         grad_accum_counter = 0
         running_dmd = 0.0
+        running_cdm = 0.0
         running_fake = 0.0
+        running_cdm_weight = 0.0
         microbatches = []
 
         logger.info(
@@ -347,9 +465,13 @@ class DmdTrainer(BaseTrainer):
                 sync_grad = (grad_accum_counter + 1) % grad_accum_iters == 0
 
                 self._set_student_gradient_sync(sync_grad)
-                loss_dmd = self.forward_loss(latent_shape, conditions, stage="student")
-                (loss_dmd / grad_accum_iters).backward()
-                running_dmd += loss_dmd.item() / grad_accum_iters
+                res_student = self.forward_loss(latent_shape, conditions, stage="student", current_iter=current_iter)
+                loss_student = res_student["student"]
+                (loss_student / grad_accum_iters).backward()
+                running_dmd += res_student["dmd"].item() / grad_accum_iters
+                if self.cdm_enabled:
+                    running_cdm += res_student["cdm"].item() / grad_accum_iters
+                    running_cdm_weight = res_student["cdm_weight"]
                 microbatches.append((latent_shape, conditions))
 
                 grad_accum_counter += 1
@@ -367,7 +489,8 @@ class DmdTrainer(BaseTrainer):
                     for microbatch_idx, (micro_latent_shape, micro_conditions) in enumerate(microbatches):
                         sync_fake_grad = microbatch_idx == len(microbatches) - 1
                         self._set_fake_gradient_sync(sync_fake_grad)
-                        loss_fake = self.forward_loss(micro_latent_shape, micro_conditions, stage="fake")
+                        res_fake = self.forward_loss(micro_latent_shape, micro_conditions, stage="fake")
+                        loss_fake = res_fake["fake"]
                         (loss_fake / len(microbatches)).backward()
                         fake_loss += loss_fake.item() / len(microbatches)
                     self._sync_sequence_parallel_grads(self.fake_trainable_params)
@@ -382,15 +505,29 @@ class DmdTrainer(BaseTrainer):
                 display_dmd = reduce_mean(running_dmd)
                 display_fake = reduce_mean(running_fake)
                 if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
-                    logger.info(
-                        "[train] iter={}/{} dmd={:.6f} fake={:.6f} lr={:.8f}",
-                        current_iter,
-                        max_train_iters,
-                        display_dmd,
-                        display_fake,
-                        self.lr_scheduler.get_last_lr()[0],
-                    )
+                    if self.cdm_enabled:
+                        display_cdm = reduce_mean(running_cdm)
+                        logger.info(
+                            "[train] iter={}/{} dmd={:.6f} cdm={:.6f} cdm_w={:.6f} fake={:.6f} lr={:.8f}",
+                            current_iter,
+                            max_train_iters,
+                            display_dmd,
+                            display_cdm,
+                            running_cdm_weight,
+                            display_fake,
+                            self.lr_scheduler.get_last_lr()[0],
+                        )
+                    else:
+                        logger.info(
+                            "[train] iter={}/{} dmd={:.6f} fake={:.6f} lr={:.8f}",
+                            current_iter,
+                            max_train_iters,
+                            display_dmd,
+                            display_fake,
+                            self.lr_scheduler.get_last_lr()[0],
+                        )
                 running_dmd = 0.0
+                running_cdm = 0.0
                 running_fake = 0.0
 
                 if save_every_iters and current_iter % save_every_iters == 0:
@@ -407,10 +544,10 @@ class DmdTrainer(BaseTrainer):
         logger.info("[train] finished iter={}/{}", current_iter, max_train_iters)
 
     def _set_student_gradient_sync(self, enabled):
-        self.model.set_fsdp2_gradient_sync(enabled)
+        set_parallel_gradient_sync(self.model, enabled)
 
     def _set_fake_gradient_sync(self, enabled):
-        self.fake_model.set_fsdp2_gradient_sync(enabled)
+        set_parallel_gradient_sync(self.fake_model, enabled)
 
     def _set_gradient_sync(self, enabled):
         self._set_student_gradient_sync(enabled)

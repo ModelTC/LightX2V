@@ -6,6 +6,24 @@ from pydantic import BaseModel, Field
 from ..utils.generate_task_id import generate_task_id
 
 
+class UsageInputTokensDetails(BaseModel):
+    image_tokens: int = 0
+    text_tokens: int = 0
+
+
+class UsageOutputTokensDetails(BaseModel):
+    image_tokens: int = 0
+    text_tokens: int = 0
+
+
+class Usage(BaseModel):
+    input_tokens: int
+    input_tokens_details: UsageInputTokensDetails
+    output_tokens: int
+    total_tokens: int
+    output_tokens_details: UsageOutputTokensDetails
+
+
 def generate_random_seed() -> int:
     return random.randint(0, 2**32 - 1)
 
@@ -90,6 +108,7 @@ class TaskResponse(BaseModel):
     save_result_path: str
     # Filled after image generation in-process; never serialized in JSON responses.
     result_png: Optional[bytes] = Field(default=None, exclude=True)
+    usage: Optional[Usage] = Field(default=None, exclude=True)
 
 
 class StopTaskResponse(BaseModel):

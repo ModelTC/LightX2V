@@ -21,6 +21,13 @@ RUN export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-inf
 RUN apt update && apt install -y ros-dev-tools
 
 
+RUN pip uninstall setuptools-scm
+RUN pip install catkin_pkg empy pyqt5-sip PyQt5 sip==6.15.3 setuptools==79.0.1
+RUN pip install hydra-core==1.2.0 robosuite==1.4.0 bddl==1.0.1 coverage==7.6.1 gym==0.25.2 mujoco==3.9.0 future easydict termcolor
+
+
+# Install ROS2 Lyrical (Build from source on Ubuntu 24.04)
+
 RUN mkdir -p ~/ros2_lyrical/src
 WORKDIR /root/ros2_lyrical
 RUN vcs import --input https://raw.githubusercontent.com/ros2/ros2/lyrical/ros2.repos src
@@ -35,10 +42,6 @@ RUN colcon mixin add default https://github.com/colcon/colcon-mixin-repository/r
 RUN colcon mixin update default
 
 
-RUN pip uninstall setuptools-scm
-RUN pip install catkin_pkg empy pyqt5-sip PyQt5 sip==6.15.3 setuptools==79.0.1
-
-
 WORKDIR /root/ros2_lyrical
 RUN colcon build --symlink-install --mixin release
 
@@ -48,9 +51,9 @@ WORKDIR /root
 # Test ROS2
 
 # Talker
-# . ~/ros2_lyrical/install/local_setup.bash
+# source ~/ros2_lyrical/install/local_setup.bash
 # ros2 run demo_nodes_cpp talker
 
 # Listener
-# . ~/ros2_lyrical/install/local_setup.bash
+# source ~/ros2_lyrical/install/local_setup.bash
 # ros2 run demo_nodes_py listener

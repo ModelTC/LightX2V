@@ -276,7 +276,7 @@ class WanT2VModel(BaseModel):
     def encode_prompt_condition(self, prompt):
         return self.encode_condition({"prompt": prompt})
 
-    def prepare_denoiser_input(self, noisy_latent):
+    def prepare_denoiser_input(self, noisy_latent, condition=None):
         return WanT2VDenoiserInput(hidden_states=noisy_latent)
 
     def denoise(self, denoiser_input, timestep_or_sigma, condition):

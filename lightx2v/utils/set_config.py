@@ -157,6 +157,15 @@ def auto_calc_config(config):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
+    elif config["model_cls"] == "cosmos3":
+        transformer_config_path = os.path.join(config["model_path"], "transformer", "config.json")
+        if os.path.exists(transformer_config_path):
+            with open(transformer_config_path, "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        config.setdefault("target_video_length", 1)
+        config.setdefault("target_fps", config.get("base_fps", 24))
+        config.setdefault("enable_cfg", True)
     else:
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -206,7 +215,7 @@ def auto_calc_config(config):
     if "infer_steps" not in config and "num_inference_steps" in config:
         config["infer_steps"] = config["num_inference_steps"]
 
-    if config["task"] in ["i2v", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
+    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
@@ -221,6 +230,18 @@ def auto_calc_config(config):
                 config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
             if config["model_cls"] in ["ernie_image", "ernie_image_turbo"]:
                 config["vae_scale_factor"] = 2 ** len(vae_config["block_out_channels"])
+
+    if config["model_cls"] == "cosmos3" and os.path.exists(os.path.join(config["model_path"], "vae", "config.json")):
+        with open(os.path.join(config["model_path"], "vae", "config.json"), "r") as f:
+            vae_config = json.load(f)
+        config["vae_scale_factor_spatial"] = int(vae_config.get("scale_factor_spatial", 16))
+        config["vae_scale_factor_temporal"] = int(vae_config.get("scale_factor_temporal", 4))
+        config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
+    if config["model_cls"] == "cosmos3" and os.path.exists(os.path.join(config["model_path"], "sound_tokenizer", "config.json")):
+        with open(os.path.join(config["model_path"], "sound_tokenizer", "config.json"), "r") as f:
+            sound_config = json.load(f)
+        config["sound_sampling_rate"] = int(sound_config.get("sampling_rate", 48000))
+        config["sound_hop_size"] = int(sound_config.get("hop_size", 1920))
 
     return config
 

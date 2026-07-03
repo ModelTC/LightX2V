@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: F401
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
 from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
@@ -19,6 +20,7 @@ from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
+from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
@@ -81,6 +83,7 @@ def main():
             "ernie_image_turbo",
             "hidream_o1_image",
             "longcat_image",
+            "cosmos3",
             "wan2.2_animate",
             "wan2.2_s2v",
             "hunyuan_video_1.5",
@@ -102,6 +105,7 @@ def main():
             "lingbot_va",
             "dreamzero",
             "infinitetalk",
+            "fastwam",
         ],
         default="wan2.1",
     )
@@ -195,6 +199,11 @@ def main():
         default=None,
         help="Directory path for lingbot camera/action control files (poses.npy, intrinsics.npy, optional action.npy).",
     )
+    parser.add_argument("--action_mode", type=str, default=None, choices=["forward_dynamics", "inverse_dynamics", "policy"], help="Cosmos3 action mode.")
+    parser.add_argument("--domain_name", type=str, default=None, help="Cosmos3 action embodiment domain name.")
+    parser.add_argument("--view_point", type=str, default=None, help="Cosmos3 action viewpoint label.")
+    parser.add_argument("--action_chunk_size", type=int, default=None, help="Cosmos3 action chunk size.")
+    parser.add_argument("--action_chunk_index", type=int, default=None, help="Cosmos3 action chunk index when action_path contains action_chunks.")
     parser.add_argument(
         "--action_ckpt",
         type=str,

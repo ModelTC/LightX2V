@@ -1,3 +1,4 @@
+import os
 import threading
 import uuid
 from collections import OrderedDict
@@ -9,6 +10,21 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from .metrics import monitor_cli
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid {name}={raw!r} (not an int); using default {default}")
+        return default
+    if value <= 0:
+        logger.warning(f"Invalid {name}={value} (must be > 0); using default {default}")
+        return default
+    return value
 
 
 class TaskStatus(Enum):
@@ -30,13 +46,17 @@ class TaskInfo:
     error_type: Optional[str] = None
     save_result_path: Optional[str] = None
     result_png: Optional[bytes] = None
+    usage: Optional[dict] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     thread: Optional[threading.Thread] = None
 
 
 class TaskManager:
-    def __init__(self, max_queue_size: int = 100):
+    def __init__(self, max_queue_size: int = 100, result_png_keep_count: Optional[int] = None):
         self.max_queue_size = max_queue_size
+        if result_png_keep_count is None:
+            result_png_keep_count = _env_positive_int("LIGHTX2V_RESULT_PNG_KEEP_COUNT", 50)
+        self.result_png_keep_count = result_png_keep_count
 
         self._tasks: OrderedDict[str, TaskInfo] = OrderedDict()
         self._lock = threading.RLock()
@@ -85,7 +105,7 @@ class TaskManager:
 
             return task
 
-    def complete_task(self, task_id: str, save_result_path: Optional[str] = None, result_png: Optional[bytes] = None):
+    def complete_task(self, task_id: str, save_result_path: Optional[str] = None, result_png: Optional[bytes] = None, usage: Optional[dict] = None):
         with self._lock:
             if task_id not in self._tasks:
                 logger.warning(f"Task {task_id} not found for completion")
@@ -96,6 +116,10 @@ class TaskManager:
             task.end_time = datetime.now()
             task.save_result_path = save_result_path
             task.result_png = result_png
+            task.usage = usage
+
+            if result_png is not None:
+                self._evict_old_result_png_unlocked()
 
             self.completed_tasks += 1
             self._emit_queue_metrics_unlocked()
@@ -152,6 +176,13 @@ class TaskManager:
             if not task:
                 return None
             return task.result_png
+
+    def get_task_result_usage(self, task_id: str) -> Optional[dict]:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
+            return task.usage
 
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         task = self.get_task(task_id)
@@ -256,6 +287,26 @@ class TaskManager:
         for task_id, _ in completed_tasks[:remove_count]:
             del self._tasks[task_id]
             logger.debug(f"Cleaned up old task: {task_id}")
+
+    def _evict_old_result_png_unlocked(self):
+        """Free the oldest result_png blob once the cap is exceeded.
+
+        Caller must hold ``self._lock``. Only the heavy bytes are dropped (set to None); the
+        task record and its metadata stay in ``_tasks`` so ``get_task_status`` still works.
+
+        Runs after every blob-adding completion, so the cache is at most one blob over the
+        cap and evicting a single oldest entry restores it -- no full sort needed. ``_tasks``
+        is in start order (start_task's move_to_end), not completion order, so the oldest is
+        selected explicitly by ``end_time``.
+        """
+        keep = self.result_png_keep_count
+        blob_tasks = [(task_id, task) for task_id, task in self._tasks.items() if task.result_png is not None]
+        if len(blob_tasks) <= keep:
+            return
+
+        oldest_id, oldest = min(blob_tasks, key=lambda x: x[1].end_time or x[1].start_time)
+        oldest.result_png = None
+        logger.debug(f"Evicted oldest result_png blob (task {oldest_id}), keeping {keep} most recent")
 
     def _emit_queue_metrics_unlocked(self):
         pending_tasks = sum(1 for t in self._tasks.values() if t.status == TaskStatus.PENDING)

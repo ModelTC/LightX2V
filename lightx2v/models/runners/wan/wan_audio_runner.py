@@ -89,6 +89,8 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
             area_in_pixels = 480 * 832
         elif fixed_area == "720p":
             area_in_pixels = 720 * 1280
+        elif fixed_area == "1080p":
+            area_in_pixels = 1080 * 1920
         else:
             area_in_pixels = 480 * 832
         target_h = round(np.sqrt(area_in_pixels * ori_ratio))
@@ -100,13 +102,15 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
         target_h, target_w = bucket_config[closet_ratio][0]
     elif resize_mode == "fixed_min_side":
         min_side = 720
-        if fixed_area == "720p":
+        if fixed_area == "1080p":
+            min_side = 1080
+        elif fixed_area == "720p":
             min_side = 720
         elif fixed_area == "480p":
             min_side = 480
         else:
-            logger.warning(f"[wan_audio] fixed_area is not '480p' or '720p', using default 480p: {fixed_area}")
-            min_side = 480
+            logger.warning(f"[wan_audio] fixed_area is not '480p', '720p' or '1080p', using default 720p: {fixed_area}")
+            min_side = 720
         if ori_ratio < 1.0:
             target_h = min_side
             target_w = round(target_h / ori_ratio)
@@ -359,6 +363,24 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         return audio_files, mask_files
 
+    def _get_image_resize_kwargs(self):
+        input_info = getattr(self, "input_info", None)
+        return {
+            "resize_mode": (getattr(input_info, "resize_mode", None) if input_info is not None else None) or self.config.get("resize_mode", "adaptive"),
+            "bucket_shape": self.config.get("bucket_shape", None),
+            "fixed_area": (getattr(input_info, "fixed_area", None) if input_info is not None else None) or self.config.get("fixed_area", None),
+            "fixed_shape": self.config.get("fixed_shape", None),
+        }
+
+    def _resolve_patched_spatial_size(self, h, w):
+        patched_h = h // self.config["vae_stride"][1] // self.config["patch_size"][1]
+        patched_w = w // self.config["vae_stride"][2] // self.config["patch_size"][2]
+        patched_h, patched_w = get_optimal_patched_size_with_sp(patched_h, patched_w, 1)
+        latent_h = patched_h * self.config["patch_size"][1]
+        latent_w = patched_w * self.config["patch_size"][2]
+        target_shape = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
+        return target_shape, patched_h, patched_w
+
     def process_single_mask(self, mask_file):
         mask_img = load_image(mask_file)
         mask_img = TF.to_tensor(mask_img).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
@@ -366,20 +388,10 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if mask_img.shape[1] == 3:  # If it is an RGB three-channel image
             mask_img = mask_img[:, :1]  # Only take the first channel
 
-        mask_img, h, w = resize_image(
-            mask_img,
-            resize_mode=self.config.get("resize_mode", "adaptive"),
-            bucket_shape=self.config.get("bucket_shape", None),
-            fixed_area=self.config.get("fixed_area", None),
-            fixed_shape=self.config.get("fixed_shape", None),
-        )
-
-        mask_latent = torch.nn.functional.interpolate(
-            mask_img,  # (1, 1, H, W)
-            size=(h // 16, w // 16),
-            mode="bicubic",
-        )
-
+        mask_img, h, w = resize_image(mask_img, **self._get_image_resize_kwargs())
+        target_shape, patched_h, patched_w = self._resolve_patched_spatial_size(h, w)
+        mask_img = F.interpolate(mask_img, size=(target_shape[0], target_shape[1]), mode="bicubic")
+        mask_latent = F.interpolate(mask_img, size=(patched_h, patched_w), mode="bicubic")
         mask_latent = (mask_latent > 0).to(torch.int8)
         return mask_latent
 
@@ -390,19 +402,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
             ref_img = load_image(img_path)
         ref_img = TF.to_tensor(ref_img).sub_(0.5).div_(0.5).unsqueeze(0).to(AI_DEVICE)
 
-        ref_img, h, w = resize_image(
-            ref_img,
-            resize_mode=self.config.get("resize_mode", "adaptive"),
-            bucket_shape=self.config.get("bucket_shape", None),
-            fixed_area=self.config.get("fixed_area", None),
-            fixed_shape=self.config.get("fixed_shape", None),
-        )
+        ref_img, h, w = resize_image(ref_img, **self._get_image_resize_kwargs())
         logger.info(f"[wan_audio] resize_image target_h: {h}, target_w: {w}")
-        patched_h = h // self.config["vae_stride"][1] // self.config["patch_size"][1]
-        patched_w = w // self.config["vae_stride"][2] // self.config["patch_size"][2]
-
-        patched_h, patched_w = get_optimal_patched_size_with_sp(patched_h, patched_w, 1)
-
+        target_shape, patched_h, patched_w = self._resolve_patched_spatial_size(h, w)
         latent_h = patched_h * self.config["patch_size"][1]
         latent_w = patched_w * self.config["patch_size"][2]
 
@@ -412,11 +414,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
 
-        target_shape = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
-
         logger.info(f"[wan_audio] target_h: {target_shape[0]}, target_w: {target_shape[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
 
-        ref_img = torch.nn.functional.interpolate(ref_img, size=(target_shape[0], target_shape[1]), mode="bicubic")
+        ref_img = F.interpolate(ref_img, size=(target_shape[0], target_shape[1]), mode="bicubic")
         return ref_img, latent_shape, target_shape
 
     @ProfilingContext4DebugL1(
@@ -729,7 +729,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
             # fixed audio segments inputs
             if self.va_controller.reader is None:
-                return super().run_main()
+                result = super().run_main()
+                # Stop VARecorder so ffmpeg finishes writing the file
+                if self.va_controller is not None:
+                    self.va_controller.clear()
+                    self.va_controller = None
+                return result
 
             self.va_controller.start()
             self.init_run()
