@@ -81,12 +81,12 @@ class Hunyuan3DShapeRunner(DefaultRunner):
             return model
 
     def _build_dit_weight_dict(self):
-        state_dict = self._ckpt["model"]
-        dtype = GET_DTYPE()
-        weight_dict = {}
-        for key, tensor in state_dict.items():
-            weight_dict[key] = tensor.to(dtype=dtype)
-        return weight_dict
+        ckpt = self._ckpt
+        ckpt_path = self.config.get("dit_original_ckpt")
+        if ckpt_path:
+            use_safetensors = bool(self.config.get("use_safetensors", False)) or str(ckpt_path).endswith(".safetensors")
+            ckpt = load_checkpoint_dict(ckpt_path, use_safetensors=use_safetensors)
+        return Hunyuan3DDiTModel._build_weight_dict(ckpt["model"], GET_DTYPE() == GET_SENSITIVE_DTYPE(), {}, config=self.config)
 
     def load_text_encoder(self):
         return []

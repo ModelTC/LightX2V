@@ -95,7 +95,10 @@ class Hunyuan3DDiTModel(BaseTransformerModel):
         for key, tensor in state_dict.items():
             if config is None and not (unified_dtype or all(s not in key for s in sensitive_layer)):
                 dtype = GET_SENSITIVE_DTYPE()
-            weight_dict[key] = tensor.to(dtype=dtype)
+            if tensor.dtype == torch.float8_e4m3fn or key.endswith(".weight_scale"):
+                weight_dict[key] = tensor
+            else:
+                weight_dict[key] = tensor.to(dtype=dtype)
         return weight_dict
 
     @property

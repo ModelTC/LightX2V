@@ -49,6 +49,7 @@ class Hunyuan3DMoEWeights(WeightModule):
         super().__init__()
         prefix = f"blocks.{block_idx}.moe"
         num_experts = config.get("num_experts", 8)
+        moe_mm_type = "Default" if str(mm_type).startswith("fp8") else mm_type
         self.num_experts = num_experts
         self.moe_top_k = config.get("moe_top_k", 2)
         self.moe_backend = str(config.get("moe_backend", "pytorch")).strip().lower()
@@ -60,22 +61,44 @@ class Hunyuan3DMoEWeights(WeightModule):
         self.moe_flashinfer_tune_max_num_tokens = int(fi_cfg.get("tune_max_num_tokens", 8192))
         self.add_module(
             "gate",
-            MM_WEIGHT_REGISTER[mm_type](
+            MM_WEIGHT_REGISTER[moe_mm_type](
                 f"{prefix}.gate.weight",
                 None,
             ),
         )
         self.add_module(
             "shared_experts",
-            Hunyuan3DFeedForwardWeights(f"{prefix}.shared_experts", mm_type),
+            Hunyuan3DFeedForwardWeights(f"{prefix}.shared_experts", moe_mm_type),
         )
-        experts = WeightModuleList(Hunyuan3DFeedForwardWeights(f"{prefix}.experts.{expert_idx}", mm_type) for expert_idx in range(num_experts))
+        experts = WeightModuleList(Hunyuan3DFeedForwardWeights(f"{prefix}.experts.{expert_idx}", moe_mm_type) for expert_idx in range(num_experts))
         self.add_module("experts", experts)
 
     def load(self, weight_dict):
         super().load(weight_dict)
+        self._validate_no_fp8_moe_weights()
         if self.moe_backend == "flashinfer" and self.experts[0].fc1._get_actual_weight() is not None:
             self._build_flashinfer_weights()
+
+    @staticmethod
+    def _is_fp8_tensor(tensor):
+        return tensor is not None and tensor.dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+
+    def _iter_moe_mm_weights(self):
+        yield "gate", self.gate
+        yield "shared_experts.fc1", self.shared_experts.fc1
+        yield "shared_experts.fc2", self.shared_experts.fc2
+        for expert_idx, expert in enumerate(self.experts):
+            yield f"experts.{expert_idx}.fc1", expert.fc1
+            yield f"experts.{expert_idx}.fc2", expert.fc2
+
+    def _validate_no_fp8_moe_weights(self):
+        for name, module in self._iter_moe_mm_weights():
+            for attr in ("weight", "pin_weight", "weight_cuda_buffer"):
+                if self._is_fp8_tensor(getattr(module, attr, None)):
+                    raise ValueError(
+                        f"Hunyuan3D MoE FP8 is not supported yet, but {name}.{attr} is FP8. "
+                        "Regenerate the checkpoint so .moe. weights stay BF16."
+                    )
 
     def to_cuda(self, non_blocking=False):
         super().to_cuda(non_blocking=non_blocking)
