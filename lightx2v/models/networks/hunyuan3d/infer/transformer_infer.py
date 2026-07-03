@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.flashinfer_autotune import flashinfer_autotune
+from lightx2v.common.ops.norm.rms_norm_weight import apply_qk_rms_norm
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.hunyuan3d.infer.module_io import Hunyuan3DPreInferOutput
 from lightx2v.models.networks.hunyuan3d.infer.moe_fi_autotune import (
@@ -23,6 +24,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         self.num_heads = config["num_heads"]
         self.head_dim = config["hidden_size"] // self.num_heads
         self.scheduler = None
+        self.use_fused_qk_rms_norm = bool(config.get("use_fused_qk_rms_norm", False))
         self.fi_moe_autotune = MoeFiAutotune.from_hunyuan3d_config(config)
         if self.fi_moe_autotune.enabled:
             if flashinfer_autotune is None:
@@ -67,6 +69,9 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
             v.reshape(batch_size, seq_len, num_heads, head_dim),
         )
 
+    def _apply_qk_norm(self, query, key, norm_q, norm_k):
+        return apply_qk_rms_norm(query, key, norm_q, norm_k, use_triton=self.use_fused_qk_rms_norm)
+
     def _project_qkv(self, hidden_states, to_q, to_k, to_v, norm_q, norm_k):
         batch_size, seq_len, hidden_dim = hidden_states.shape
         flat = hidden_states.reshape(-1, hidden_dim)
@@ -74,10 +79,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         k = to_k.apply(flat).reshape(batch_size, seq_len, hidden_dim)
         v = to_v.apply(flat).reshape(batch_size, seq_len, hidden_dim)
         query, key, value = self._reshape_self_qkv(q, k, v, self.num_heads, self.head_dim, batch_size, seq_len)
-        if norm_q is not None:
-            query = norm_q.apply(query.reshape(-1, self.head_dim)).reshape(batch_size, seq_len, self.num_heads, self.head_dim)
-        if norm_k is not None:
-            key = norm_k.apply(key.reshape(-1, self.head_dim)).reshape(batch_size, seq_len, self.num_heads, self.head_dim)
+        query, key = self._apply_qk_norm(query, key, norm_q, norm_k)
         return query, key, value
 
     def _run_attention(self, query, key, value, calculate, merge_batch=False):
@@ -169,11 +171,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         k = k_flat.reshape(batch_size, cond_len, self.num_heads * self.head_dim)
         v = v_flat.reshape(batch_size, cond_len, self.num_heads * self.head_dim)
         key, value = self._reshape_cross_kv(k, v, self.num_heads, self.head_dim, batch_size, cond_len)
-
-        if block_weights.attn2.norm_q is not None:
-            query = block_weights.attn2.norm_q.apply(query.reshape(-1, self.head_dim)).reshape(batch_size, seq_len, self.num_heads, self.head_dim)
-        if block_weights.attn2.norm_k is not None:
-            key = block_weights.attn2.norm_k.apply(key.reshape(-1, self.head_dim)).reshape(batch_size, cond_len, self.num_heads, self.head_dim)
+        query, key = self._apply_qk_norm(query, key, block_weights.attn2.norm_q, block_weights.attn2.norm_k)
 
         attn_output = self._run_attention(query, key, value, block_weights.attn2.calculate, merge_batch=False)
         flat = attn_output.reshape(-1, attn_output.shape[-1])

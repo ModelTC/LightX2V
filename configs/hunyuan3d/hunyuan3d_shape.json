@@ -8,6 +8,7 @@
     "num_chunks": 8000,
     "octree_resolution": 384,
     "attn_type": "torch_sdpa",
+    "use_fused_qk_rms_norm": true,
     "moe_backend": "flashinfer",
     "moe_flashinfer_setting": {
         "autotune": true,
