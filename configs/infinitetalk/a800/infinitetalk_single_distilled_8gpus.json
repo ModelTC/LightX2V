@@ -46,6 +46,6 @@
     "use_timestep_transform": true,
     "parallel": {
         "seq_p_size": 8,
-        "seq_p_attn_type": "ulysses-4090"
+        "seq_p_attn_type": "ulysses"
     }
 }
