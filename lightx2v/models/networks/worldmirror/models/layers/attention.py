@@ -11,7 +11,10 @@ try:
 
     _USE_FLASH_ATTN_V3 = True
 except ImportError:
-    from flash_attn.flash_attn_interface import flash_attn_func as flash_attn_func_v2
+    try:
+        from flash_attn.flash_attn_interface import flash_attn_func as flash_attn_func_v2
+    except ImportError:
+        flash_attn_func_v2 = None
 
     _USE_FLASH_ATTN_V3 = False
 from ...comm.communication import _All2All
