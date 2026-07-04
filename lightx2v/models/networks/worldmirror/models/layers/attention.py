@@ -6,16 +6,30 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from ...comm.communication import _All2All
+from ...comm.padding import depad_by_length, pad_by_length
+
 try:
     from flash_attn_interface import flash_attn_func as flash_attn_func_v3
 
     _USE_FLASH_ATTN_V3 = True
 except ImportError:
-    from flash_attn.flash_attn_interface import flash_attn_func as flash_attn_func_v2
-
     _USE_FLASH_ATTN_V3 = False
-from ...comm.communication import _All2All
-from ...comm.padding import depad_by_length, pad_by_length
+
+try:
+    from flash_attn.flash_attn_interface import flash_attn_func as flash_attn_func_v2
+except ImportError:
+    flash_attn_func_v2 = None
+
+_USE_FLASH_ATTN_V2 = flash_attn_func_v2 is not None
+
+try:
+    import torch_npu
+
+    _USE_NPU_FLASH_ATTN = torch.npu.is_available()
+except ImportError:
+    torch_npu = None
+    _USE_NPU_FLASH_ATTN = False
 
 
 class Attention(nn.Module):
@@ -54,6 +68,21 @@ class Attention(nn.Module):
         q, k = self.q_norm(q).to(v.dtype), self.k_norm(k).to(v.dtype)
         return q, k, v, B, N, C
 
+    def _npu_flash_attn(self, q: Tensor, k: Tensor, v: Tensor, dropout_p: float = 0.0) -> Tensor:
+        keep_prob = 1.0 - dropout_p
+        x = torch_npu.npu_fusion_attention(
+            q,
+            k,
+            v,
+            self.num_heads,
+            pse=None,
+            atten_mask=None,
+            scale=self.scale,
+            keep_prob=keep_prob,
+            input_layout="BSND",
+        )
+        return x[0]
+
     def _apply_attention(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         if q.dtype == torch.bfloat16 or q.dtype == torch.float16:
             if q.is_contiguous():
@@ -70,8 +99,12 @@ class Attention(nn.Module):
                 v = v.transpose(1, 2).contiguous()
             if _USE_FLASH_ATTN_V3:
                 x = flash_attn_func_v3(q, k, v)
-            else:
+            elif _USE_FLASH_ATTN_V2:
                 x = flash_attn_func_v2(q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0)
+            elif _USE_NPU_FLASH_ATTN:
+                x = self._npu_flash_attn(q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0)
+            else:
+                x = F.scaled_dot_product_attention(q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0)
             if x.is_contiguous():
                 x = x.transpose(1, 2)
             else:
