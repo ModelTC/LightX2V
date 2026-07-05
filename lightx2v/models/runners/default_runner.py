@@ -496,6 +496,8 @@ class DefaultRunner(TPRunnerMixin, BaseRunner):
                     return enhanced_prompt
 
     def process_images_after_vae_decoder(self):
+        if self.gen_video_final is None:
+            return None
         self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
 
         if "video_frame_interpolation" in self.config:

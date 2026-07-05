@@ -1,7 +1,7 @@
 #!/bin/bash
 lightx2v_path=/data/nvme1/wushuo/LightX2V
 model_path="/data/nvme1/wushuo/hf_models/models/black-forest-labs/FLUX.2-dev"
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 source ${lightx2v_path}/scripts/base/base.sh
 

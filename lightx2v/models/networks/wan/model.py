@@ -28,6 +28,7 @@ from lightx2v.models.networks.wan.weights.transformer_weights import (
 from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanModel(BaseTransformerModel):
@@ -51,6 +52,104 @@ class WanModel(BaseTransformerModel):
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
+
+    # ------------------------------------------------------------------ TP --
+    def _rank_device(self):
+        if dist.is_initialized():
+            return torch.device(f"{AI_DEVICE}:{dist.get_rank()}")
+        return torch.device(AI_DEVICE)
+
+    def _get_split_type(self, key):
+        if not key.endswith(".weight"):
+            return None
+        col_infixes = (
+            ".self_attn.q.",
+            ".self_attn.k.",
+            ".self_attn.v.",
+            ".self_attn.norm_q.",
+            ".self_attn.norm_k.",
+            ".cross_attn.q.",
+            ".cross_attn.k.",
+            ".cross_attn.v.",
+            ".cross_attn.norm_q.",
+            ".cross_attn.norm_k.",
+            ".cross_attn.k_img.",
+            ".cross_attn.v_img.",
+        )
+        row_infixes = (".self_attn.o.", ".cross_attn.o.", ".ffn.2.")
+        if any(s in key for s in col_infixes):
+            return "col"
+        if any(s in key for s in row_infixes):
+            return "row"
+        if ".ffn.0." in key:
+            return "col"
+        return None
+
+    def _split_bias_for_tp(self, bias, split_type, tp_size):
+        if split_type == "col":
+            return list(torch.chunk(bias, tp_size, dim=0))
+        raise ValueError(f"Unsupported bias split_type: {split_type}")
+
+    def _split_weight_for_tp(self, key, weight, tp_size):
+        split_type = self._get_split_type(key)
+        if split_type == "col":
+            return list(torch.chunk(weight, tp_size, dim=0))
+        if split_type == "row":
+            return list(torch.chunk(weight, tp_size, dim=1))
+        raise ValueError(f"Unknown split_type for {key}")
+
+    def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
+        if not self.use_tp:
+            return super()._load_weights_from_rank0(weight_dict, is_weight_loader)
+
+        src_rank = 0
+        target_device = self._rank_device()
+
+        if is_weight_loader:
+            processed, meta, processed_bias = {}, {}, set()
+            for key, tensor in weight_dict.items():
+                split_type = self._get_split_type(key)
+                if key.endswith(".weight") and split_type is not None:
+                    shards = self._split_weight_for_tp(key, tensor, self.tp_size)
+                    for r, shard in enumerate(shards):
+                        processed[f"{key}__tp_{r}"] = shard.contiguous()
+                    meta[key] = {"shape": shards[0].shape, "dtype": shards[0].dtype, "is_tp": True}
+                    bias_key = key.replace(".weight", ".bias")
+                    if bias_key in weight_dict and split_type == "col":
+                        bias_shards = self._split_bias_for_tp(weight_dict[bias_key], split_type, self.tp_size)
+                        for r, shard in enumerate(bias_shards):
+                            processed[f"{bias_key}__tp_{r}"] = shard.contiguous()
+                        meta[bias_key] = {"shape": bias_shards[0].shape, "dtype": bias_shards[0].dtype, "is_tp": True}
+                        processed_bias.add(bias_key)
+                elif key not in processed_bias:
+                    processed[key] = tensor
+                    meta[key] = {"shape": tensor.shape, "dtype": tensor.dtype, "is_tp": False}
+            obj_list = [meta]
+        else:
+            obj_list = [None]
+
+        dist.broadcast_object_list(obj_list, src=src_rank)
+        synced_meta = obj_list[0]
+
+        distributed = {k: torch.empty(m["shape"], dtype=m["dtype"], device=target_device) for k, m in synced_meta.items()}
+
+        for key in sorted(synced_meta.keys()):
+            m = synced_meta[key]
+            if m["is_tp"]:
+                for r in range(self.tp_size):
+                    buf = processed[f"{key}__tp_{r}"].to(target_device) if is_weight_loader else torch.empty(m["shape"], dtype=m["dtype"], device=target_device)
+                    dist.broadcast(buf, src=src_rank, group=self.tp_group)
+                    if r == self.tp_rank:
+                        distributed[key].copy_(buf)
+                    del buf
+            else:
+                if is_weight_loader:
+                    distributed[key].copy_(processed[key].to(target_device))
+                dist.broadcast(distributed[key], src=src_rank, group=self.tp_group)
+
+        return distributed
+
+    # ------------------------------------------------------------------ TP --
 
     def _init_infer_class(self):
         self.pre_infer_class = WanPreInfer

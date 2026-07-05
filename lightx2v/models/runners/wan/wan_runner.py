@@ -171,6 +171,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
         return text_encoders
 
     def get_vae_parallel(self):
+        if self.config.get("tensor_parallel", False):
+            return False
         if isinstance(self.config.get("parallel", False), bool):
             return self.config.get("parallel", False)
         if isinstance(self.config.get("parallel", False), dict):
@@ -628,6 +630,30 @@ class WanRunner(DisaggMixin, DefaultRunner):
             int(target_width) // self.config["vae_stride"][2],
         ]
         return latent_shape
+
+    @ProfilingContext4DebugL2("Run Encoders")
+    def _run_input_encoder_local_t2v(self):
+        if self._use_tp_rank0_io():
+            payload = None
+            if self._is_rank0():
+                self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
+                self._load_rank0_text_encoder()
+                text_encoder_output = self.run_text_encoder(self.input_info)
+                self._unload_rank0_text_encoder()
+                payload = {"text_encoder_output": text_encoder_output, "latent_shape": self.input_info.latent_shape}
+            payload = self._broadcast_rank0_payload(payload)
+            self.input_info.latent_shape = payload["latent_shape"]
+            return {"text_encoder_output": payload["text_encoder_output"], "image_encoder_output": None}
+        return super()._run_input_encoder_local_t2v()
+
+    def run_vae_decoder(self, latents):
+        if self._use_tp_rank0_io():
+            images = None
+            if self._is_rank0():
+                images = super().run_vae_decoder(latents)
+            dist.barrier()
+            return images
+        return super().run_vae_decoder(latents)
 
 
 class MultiModelStruct:
