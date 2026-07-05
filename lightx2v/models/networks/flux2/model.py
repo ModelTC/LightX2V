@@ -25,49 +25,9 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         super().__init__(model_path, config, device)
         self.in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
         self.attention_kwargs = {}
-        self._init_tensor_parallel()
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
-
-    def _init_tensor_parallel(self):
-        if self.config.get("tensor_parallel", False):
-            self.use_tp = True
-            self.tp_group = self.config.get("device_mesh").get_group(mesh_dim="tensor_p")
-            self.tp_rank = dist.get_rank(self.tp_group)
-            self.tp_size = dist.get_world_size(self.tp_group)
-        else:
-            self.use_tp = False
-            self.tp_group = None
-            self.tp_rank = 0
-            self.tp_size = 1
-
-    def _should_load_weights(self):
-        if self.config.get("device_mesh") is None:
-            return True
-        if dist.is_initialized() and self.use_tp:
-            return dist.get_rank() == 0
-        return super()._should_load_weights()
-
-    def _load_ckpt(self, unified_dtype, sensitive_layer):
-        if not self.use_tp:
-            return super()._load_ckpt(unified_dtype, sensitive_layer)
-        original_device = self.device
-        self.device = torch.device("cpu")
-        try:
-            return super()._load_ckpt(unified_dtype, sensitive_layer)
-        finally:
-            self.device = original_device
-
-    def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
-        if not self.use_tp:
-            return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
-        original_device = self.device
-        self.device = torch.device("cpu")
-        try:
-            return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
-        finally:
-            self.device = original_device
 
     def _rank_device(self):
         ai_device = global_var.AI_DEVICE

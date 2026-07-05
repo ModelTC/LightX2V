@@ -155,12 +155,95 @@ class DefaultRunner(BaseRunner):
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
+        if self._use_tp_rank0_io() and not self._is_rank0():
+            self.model = self.load_transformer()
+            self.text_encoders = None
+            self.image_encoder = None
+            self.vae_encoder = None
+            self.vae_decoder = None
+            self.vfi_model = None
+            self.vsr_model = None
+            return
+
         self.model = self.load_transformer()
         self.text_encoders = self.load_text_encoder()
         self.image_encoder = self.load_image_encoder()
         self.vae_encoder, self.vae_decoder = self.load_vae()
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
         self.vsr_model = self.load_vsr_model() if "video_super_resolution" in self.config else None
+
+    def _use_tp_rank0_io(self):
+        return self.config.get("tensor_parallel", False) and dist.is_initialized()
+
+    def _is_rank0(self):
+        return not dist.is_initialized() or dist.get_rank() == 0
+
+    def _rank_device(self):
+        if dist.is_initialized():
+            return torch.device(f"{AI_DEVICE}:{dist.get_rank()}")
+        return torch.device(AI_DEVICE)
+
+    def _tensor_meta_tree(self, obj):
+        if torch.is_tensor(obj):
+            return {"__tensor__": True, "shape": tuple(obj.shape), "dtype": obj.dtype}
+        if isinstance(obj, dict):
+            return {"__dict__": [(key, self._tensor_meta_tree(value)) for key, value in obj.items()]}
+        if isinstance(obj, list):
+            return {"__list__": [self._tensor_meta_tree(value) for value in obj]}
+        if isinstance(obj, tuple):
+            return {"__tuple__": [self._tensor_meta_tree(value) for value in obj]}
+        return {"__object__": obj}
+
+    def _materialize_meta_tree(self, meta, device):
+        if meta.get("__tensor__", False):
+            return torch.empty(meta["shape"], dtype=meta["dtype"], device=device)
+        if "__dict__" in meta:
+            return {key: self._materialize_meta_tree(value, device) for key, value in meta["__dict__"]}
+        if "__list__" in meta:
+            return [self._materialize_meta_tree(value, device) for value in meta["__list__"]]
+        if "__tuple__" in meta:
+            return tuple(self._materialize_meta_tree(value, device) for value in meta["__tuple__"])
+        return meta["__object__"]
+
+    def _broadcast_tensor_tree(self, obj, src_obj, src=0):
+        if torch.is_tensor(obj):
+            if self._is_rank0():
+                obj = src_obj.to(self._rank_device(), non_blocking=True)
+            dist.broadcast(obj, src=src)
+            return obj
+        if isinstance(obj, dict):
+            return {key: self._broadcast_tensor_tree(value, src_obj[key] if self._is_rank0() else None, src=src) for key, value in obj.items()}
+        if isinstance(obj, list):
+            return [self._broadcast_tensor_tree(value, src_obj[idx] if self._is_rank0() else None, src=src) for idx, value in enumerate(obj)]
+        if isinstance(obj, tuple):
+            return tuple(self._broadcast_tensor_tree(value, src_obj[idx] if self._is_rank0() else None, src=src) for idx, value in enumerate(obj))
+        return obj
+
+    def _broadcast_rank0_payload(self, payload):
+        if not self._use_tp_rank0_io():
+            return payload
+
+        meta_list = [self._tensor_meta_tree(payload) if self._is_rank0() else None]
+        dist.broadcast_object_list(meta_list, src=0)
+        payload_tree = payload if self._is_rank0() else self._materialize_meta_tree(meta_list[0], self._rank_device())
+        payload_tree = self._broadcast_tensor_tree(payload_tree, payload if self._is_rank0() else None, src=0)
+        dist.barrier()
+        return payload_tree
+
+    def _load_rank0_text_encoder(self):
+        if not self._is_rank0():
+            return
+        if self.text_encoders is None or self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.text_encoders = self.load_text_encoder()
+
+    def _unload_rank0_text_encoder(self):
+        if not self._is_rank0():
+            return
+        if self.text_encoders is not None and (self._use_tp_rank0_io() or self.config.get("lazy_load", False) or self.config.get("unload_modules", False)):
+            del self.text_encoders
+            self.text_encoders = None
+            torch_device_module.empty_cache()
+            gc.collect()
 
     def check_sub_servers(self, task_type):
         urls = self.config.get("sub_servers", {}).get(task_type, [])
