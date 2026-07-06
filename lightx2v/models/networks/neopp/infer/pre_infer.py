@@ -136,7 +136,15 @@ class NeoppPreInfer:
             timestep_embeddings += noise_embeddings
         image_embeds = image_embeds + timestep_embeddings
 
-        return NeoppPreInferModuleOutput(image_embeds=image_embeds, t=t, z=z, image_token_num=token_h * token_w, timestep_embeddings=timestep_embeddings)
+        return NeoppPreInferModuleOutput(
+            image_embeds=image_embeds,
+            t=t,
+            z=z,
+            image_token_num=token_h * token_w,
+            timestep_embeddings=timestep_embeddings,
+            token_h=token_h,
+            token_w=token_w,
+        )
 
     def patchify(self, images, patch_size, channel_first=False):
         """
