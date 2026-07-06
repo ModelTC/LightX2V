@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
-from lightx2v.common.ops.attn.flash_attn import FlashAttn2Weight, flash_attn_func_v2
+from lightx2v.common.ops.attn.flash_attn import FlashAttn2Weight, FlashAttn3Weight, flash_attn_func_v2, flash_attn_func_v3
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.hunyuan_image3.infer.utils import apply_linear, apply_mlp, apply_rotary_pos_emb, first_weight_device, repeat_kv, to_device
 
@@ -27,6 +27,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         self._warned_flash_attention_fallback = False
         self._warned_flash_attention_mask_fallback = False
         self.flash_attn2 = FlashAttn2Weight() if self.attn_impl == "flash_attention_2" and flash_attn_func_v2 is not None else None
+        self.flash_attn3 = FlashAttn3Weight() if self.attn_impl == "flash_attention_3" and flash_attn_func_v3 is not None else None
         self._warned_flashinfer_fallback = False
 
     def set_scheduler(self, scheduler):
@@ -104,7 +105,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             key_states = key_states.contiguous()
             value_states = value_states.contiguous()
         allow_segmented_mask = past_key_values is None or self._is_full_prefill_position_ids(position_ids, q_len, key_states.shape[-2])
-        flash_attention_segments = self._flash_attention_2_segments(
+        flash_attention_segments = self._flash_attention_segments(
             attention_mask,
             q_len,
             key_states.shape[-2],
@@ -114,7 +115,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         if flash_attention_segments is None:
             attn_output = F.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask=attention_mask, dropout_p=0.0)
         else:
-            attn_output = self._apply_flash_attention_2_segments(query_states, key_states, value_states, flash_attention_segments)
+            attn_output = self._apply_flash_attention_segments(query_states, key_states, value_states, flash_attention_segments)
         attn_output = attn_output.transpose(1, 2).contiguous().reshape(batch, q_len, -1)
         attn_output = apply_linear(phase.o_proj, attn_output.reshape(-1, attn_output.shape[-1]))
         return attn_output.reshape(batch, q_len, -1)
@@ -259,42 +260,56 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             prefix_lengths.append(prefix_len)
         return prefix_lengths
 
-    def _flash_attention_2_segments(self, attention_mask, q_len, kv_len, query_states, allow_segmented_mask=True):
-        if self.attn_impl != "flash_attention_2":
+    def _active_flash_attention_weight(self):
+        if self.attn_impl == "flash_attention_2":
+            return self.flash_attn2, flash_attn_func_v2, "flash-attn2"
+        if self.attn_impl == "flash_attention_3":
+            return self.flash_attn3, flash_attn_func_v3, "flash-attn3"
+        return None, None, None
+
+    def _flash_attention_segments(self, attention_mask, q_len, kv_len, query_states, allow_segmented_mask=True):
+        if self.attn_impl not in ("flash_attention_2", "flash_attention_3"):
             return None
-        if self.flash_attn2 is None or flash_attn_func_v2 is None:
+        flash_attn_weight, flash_attn_func, package_name = self._active_flash_attention_weight()
+        if flash_attn_weight is None or flash_attn_func is None:
             if not self._warned_flash_attention_fallback:
-                logger.warning("HunyuanImage3 attn_impl='flash_attention_2' requested but flash-attn2 is not available; falling back to PyTorch SDPA.")
+                logger.warning(f"HunyuanImage3 attn_impl='{self.attn_impl}' requested but {package_name} is not available; falling back to PyTorch SDPA.")
                 self._warned_flash_attention_fallback = True
             return None
         segments = self._attention_mask_to_flash_attention_2_segments(attention_mask, q_len, kv_len, allow_segmented_mask=allow_segmented_mask)
         if segments is None:
             if attention_mask is not None and not self._warned_flash_attention_mask_fallback:
-                logger.warning("HunyuanImage3 attn_impl='flash_attention_2' does not support the current attention_mask layout; falling back to PyTorch SDPA for masked attention.")
+                logger.warning(f"HunyuanImage3 attn_impl='{self.attn_impl}' does not support the current attention_mask layout; falling back to PyTorch SDPA for masked attention.")
                 self._warned_flash_attention_mask_fallback = True
             return None
         if query_states.device.type != "cuda":
             if not self._warned_flash_attention_fallback:
-                logger.warning("HunyuanImage3 attn_impl='flash_attention_2' requires CUDA tensors; falling back to PyTorch SDPA.")
+                logger.warning(f"HunyuanImage3 attn_impl='{self.attn_impl}' requires CUDA tensors; falling back to PyTorch SDPA.")
                 self._warned_flash_attention_fallback = True
             return None
         if query_states.dtype not in (torch.float16, torch.bfloat16):
             if not self._warned_flash_attention_fallback:
-                logger.warning("HunyuanImage3 attn_impl='flash_attention_2' requires fp16/bf16 tensors; falling back to PyTorch SDPA.")
+                logger.warning(f"HunyuanImage3 attn_impl='{self.attn_impl}' requires fp16/bf16 tensors; falling back to PyTorch SDPA.")
                 self._warned_flash_attention_fallback = True
             return None
         return segments
 
+    def _flash_attention_2_segments(self, attention_mask, q_len, kv_len, query_states, allow_segmented_mask=True):
+        return self._flash_attention_segments(attention_mask, q_len, kv_len, query_states, allow_segmented_mask=allow_segmented_mask)
+
     def _build_cu_seqlens(self, batch, seq_len, device):
         return torch.arange(0, (batch + 1) * seq_len, seq_len, dtype=torch.int32, device=device)
 
-    def _apply_flash_attention_2(self, query_states, key_states, value_states, causal=False):
+    def _apply_flash_attention(self, query_states, key_states, value_states, causal=False):
         batch, _, q_len, _ = query_states.shape
         kv_len = key_states.shape[-2]
         q = query_states.transpose(1, 2).contiguous()
         k = key_states.transpose(1, 2).contiguous()
         v = value_states.transpose(1, 2).contiguous()
-        attn_output = self.flash_attn2.apply(
+        flash_attn_weight, _, _ = self._active_flash_attention_weight()
+        if flash_attn_weight is None:
+            raise RuntimeError(f"HunyuanImage3 attn_impl='{self.attn_impl}' has no active flash attention kernel.")
+        attn_output = flash_attn_weight.apply(
             q,
             k,
             v,
@@ -306,11 +321,14 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         )
         return attn_output.reshape(batch, q_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
-    def _apply_flash_attention_2_segments(self, query_states, key_states, value_states, segments):
+    def _apply_flash_attention_2(self, query_states, key_states, value_states, causal=False):
+        return self._apply_flash_attention(query_states, key_states, value_states, causal=causal)
+
+    def _apply_flash_attention_segments(self, query_states, key_states, value_states, segments):
         if segments and isinstance(segments[0], list):
             return torch.cat(
                 [
-                    self._apply_flash_attention_2_segments(
+                    self._apply_flash_attention_segments(
                         query_states[batch_idx : batch_idx + 1],
                         key_states[batch_idx : batch_idx + 1],
                         value_states[batch_idx : batch_idx + 1],
@@ -323,7 +341,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         outputs = []
         for q_start, q_end, kv_end, causal in segments:
             outputs.append(
-                self._apply_flash_attention_2(
+                self._apply_flash_attention(
                     query_states[:, :, q_start:q_end, :],
                     key_states[:, :, :kv_end, :],
                     value_states[:, :, :kv_end, :],
@@ -331,6 +349,9 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
                 )
             )
         return torch.cat(outputs, dim=2)
+
+    def _apply_flash_attention_2_segments(self, query_states, key_states, value_states, segments):
+        return self._apply_flash_attention_segments(query_states, key_states, value_states, segments)
 
     def infer_mlp(self, phase, hidden_states):
         if not phase.is_moe:

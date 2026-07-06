@@ -270,7 +270,7 @@ def test_hunyuan_image3_native_option_cli_args_override_config_json(tmp_path):
         guidance_rescale=0.25,
         enable_auto_image_size=True,
         hunyuan_image_size="auto",
-        attn_impl="flash_attention_2",
+        attn_impl="flash_attention_3",
         moe_impl="flashinfer",
         rewrite=True,
         sys_deepseek_prompt="text_rendering",
@@ -283,7 +283,7 @@ def test_hunyuan_image3_native_option_cli_args_override_config_json(tmp_path):
     assert config["guidance_rescale"] == 0.25
     assert config["enable_auto_image_size"] is True
     assert config["hunyuan_image_size"] == "auto"
-    assert config["attn_impl"] == "flash_attention_2"
+    assert config["attn_impl"] == "flash_attention_3"
     assert config["moe_impl"] == "flashinfer"
     assert config["rewrite"] is True
     assert config["sys_deepseek_prompt"] == "text_rendering"
@@ -317,6 +317,7 @@ def test_hunyuan_image3_ti2i_script_passes_cache_args_in_python_entrypoint():
     ]:
         assert cli_arg in python_entry
     assert '--use_meanflow "${use_meanflow:-false}"' in python_entry
+    assert '--attn_impl "${attn_impl:-flash_attention_3}"' in python_entry
 
 
 def test_hunyuan_image3_t2i_script_passes_cache_args_in_python_entrypoint():
@@ -345,6 +346,7 @@ def test_hunyuan_image3_t2i_script_passes_cache_args_in_python_entrypoint():
         "--reproduce",
     ]:
         assert cli_arg in python_entry
+    assert '--attn_impl "${attn_impl:-flash_attention_3}"' in python_entry
 
 
 def test_hunyuan_image3_runner_is_not_upstream_pipeline_wrapper():
@@ -1353,7 +1355,63 @@ def test_hunyuan_image3_flash_attention_2_dispatches_to_lightx2v_kernel(monkeypa
     )
     fake_flash = FakeFlashAttn2()
     infer.flash_attn2 = fake_flash
-    monkeypatch.setattr(infer, "_flash_attention_2_segments", lambda attention_mask, q_len, kv_len, query_states, allow_segmented_mask=True: [(0, q_len, kv_len, False)])
+    monkeypatch.setattr(infer, "_flash_attention_segments", lambda attention_mask, q_len, kv_len, query_states, allow_segmented_mask=True: [(0, q_len, kv_len, False)])
+    phase = SimpleNamespace(qkv_proj=FakeLinear(4, 12), o_proj=FakeLinear(4, 4), query_layernorm=None, key_layernorm=None)
+
+    output = infer.infer_attention(
+        0,
+        phase,
+        torch.randn(1, 3, 4),
+        attention_mask=None,
+        position_ids=torch.arange(3).reshape(1, 3),
+        custom_pos_emb=None,
+        past_key_values=None,
+    )
+
+    assert output.shape == (1, 3, 4)
+    assert len(fake_flash.calls) == 1
+    q, k, v, kwargs = fake_flash.calls[0]
+    assert q.shape == (1, 3, 1, 4)
+    assert k.shape == (1, 3, 1, 4)
+    assert v.shape == (1, 3, 1, 4)
+    assert kwargs["max_seqlen_q"] == 3
+    assert kwargs["max_seqlen_kv"] == 3
+    assert kwargs["causal"] is False
+
+
+def test_hunyuan_image3_flash_attention_3_dispatches_to_lightx2v_kernel(monkeypatch):
+    from lightx2v.models.networks.hunyuan_image3.infer.transformer_infer import HunyuanImage3TransformerInfer
+
+    class FakeLinear:
+        def __init__(self, in_features, out_features):
+            self.weight = torch.randn(in_features, out_features)
+            self.bias = None
+
+        def apply(self, input_tensor):
+            return torch.mm(input_tensor, self.weight)
+
+    class FakeFlashAttn3:
+        def __init__(self):
+            self.calls = []
+
+        def apply(self, q, k, v, **kwargs):
+            self.calls.append((q, k, v, kwargs))
+            return torch.ones(q.shape[0] * q.shape[1], q.shape[2] * q.shape[3], dtype=q.dtype, device=q.device)
+
+    infer = HunyuanImage3TransformerInfer(
+        {
+            "num_layers": 1,
+            "hidden_size": 4,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "attention_head_dim": 4,
+            "hidden_act": "silu",
+            "attn_impl": "flash_attention_3",
+        }
+    )
+    fake_flash = FakeFlashAttn3()
+    infer.flash_attn3 = fake_flash
+    monkeypatch.setattr(infer, "_flash_attention_segments", lambda attention_mask, q_len, kv_len, query_states, allow_segmented_mask=True: [(0, q_len, kv_len, False)])
     phase = SimpleNamespace(qkv_proj=FakeLinear(4, 12), o_proj=FakeLinear(4, 4), query_layernorm=None, key_layernorm=None)
 
     output = infer.infer_attention(

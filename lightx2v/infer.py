@@ -182,7 +182,7 @@ def main():
     hunyuan_native_args.add_argument("--hunyuan_image_size", "--hunyuan-image-size", dest="hunyuan_image_size", type=str, default=None)
     hunyuan_native_args.add_argument("--hunyuan_timesteps", "--hunyuan-timesteps", dest="hunyuan_timesteps", type=str, default=None)
     hunyuan_native_args.add_argument("--hunyuan_sigmas", "--hunyuan-sigmas", dest="hunyuan_sigmas", type=str, default=None)
-    hunyuan_native_args.add_argument("--attn_impl", "--attn-impl", dest="attn_impl", type=str, choices=["sdpa", "flash_attention_2"], default=None)
+    hunyuan_native_args.add_argument("--attn_impl", "--attn-impl", dest="attn_impl", type=str, choices=["sdpa", "flash_attention_2", "flash_attention_3"], default=None)
     hunyuan_native_args.add_argument("--moe_impl", "--moe-impl", dest="moe_impl", type=str, choices=["eager", "flashinfer"], default=None)
     hunyuan_native_args.add_argument("--rewrite", dest="rewrite", type=_str2bool, nargs="?", const=True, default=None)
     hunyuan_native_args.add_argument("--sys_deepseek_prompt", "--sys-deepseek-prompt", dest="sys_deepseek_prompt", type=str, choices=["universal", "text_rendering"], default=None)

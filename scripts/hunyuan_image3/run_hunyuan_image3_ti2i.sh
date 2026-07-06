@@ -58,6 +58,7 @@ echo "use_taylor_cache=${use_taylor_cache:-false}"
 echo "use_meanflow=${use_meanflow:-false}"
 echo "guidance_rescale=${guidance_rescale:-0.0}"
 echo "enable_auto_image_size=${enable_auto_image_size:-false}"
+echo "attn_impl=${attn_impl:-flash_attention_3}"
 
 source "${lightx2v_path}/scripts/base/base.sh"
 
@@ -89,7 +90,7 @@ python -m lightx2v.infer \
     --hunyuan_image_size "${hunyuan_image_size:-}" \
     --hunyuan_timesteps "${hunyuan_timesteps:-}" \
     --hunyuan_sigmas "${hunyuan_sigmas:-}" \
-    --attn_impl "${attn_impl:-flash_attention_2}" \
+    --attn_impl "${attn_impl:-flash_attention_3}" \
     --moe_impl "${moe_impl:-eager}" \
     --rewrite "${rewrite:-false}" \
     --sys_deepseek_prompt "${sys_deepseek_prompt:-universal}" \
