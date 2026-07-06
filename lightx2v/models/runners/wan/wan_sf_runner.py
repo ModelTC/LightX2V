@@ -14,6 +14,9 @@ from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import get_rank_and_world_size
 from lightx2v.utils.video_recorder import VideoRecorder
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 @RUNNER_REGISTER("wan2.1_sf")
@@ -37,7 +40,7 @@ class WanSFRunner(WanRunner):
     def init_kv_cache_manager(self):
         kv_mgr = getattr(self.model, "kv_cache_manager", None)
         if kv_mgr is None:
-            kv_mgr = KVCacheManager(config=self.config, device=torch.device("cuda"), sp_group=self.model.seq_p_group)
+            kv_mgr = KVCacheManager(config=self.config, device=torch.device(AI_DEVICE), sp_group=self.model.seq_p_group)
             self.model.kv_cache_manager = kv_mgr
         kv_mgr.ar_config = dict(self.config.get("ar_config", {}))
         kv_mgr._create_kv_caches(self.input_info.latent_shape)
@@ -60,7 +63,7 @@ class WanSFRunner(WanRunner):
         images = self.vae_decoder.decode(latents.to(GET_DTYPE()), use_cache=True)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            torch.cuda.empty_cache()
+            torch_device_module.empty_cache()
             gc.collect()
         return images
 
@@ -122,7 +125,7 @@ class WanSFRunner(WanRunner):
             self.model.scheduler.step_pre(seg_index=segment_idx, step_index=self.model.scheduler.infer_steps - 1, is_rerun=True)
         with ProfilingContext4DebugL1("🚀 infer_main_in_rerun"):
             self.model.infer(self.inputs)
-        torch.cuda.empty_cache()
+        torch_device_module.empty_cache()
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self, total_steps=None):
@@ -133,7 +136,7 @@ class WanSFRunner(WanRunner):
         lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
         if lazy_vae:
             self.vae_decoder = self.load_vae_decoder()
-        vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=torch.device("cuda"), vae_decoder=self.vae_decoder)
+        vae_decoder = AsyncVAEChunkDecoder.from_config(self.config, device=torch.device(AI_DEVICE), vae_decoder=self.vae_decoder)
 
         with no_sync_profiling(enabled=vae_decoder.is_async):
             with ProfilingContext4DebugL1(
@@ -165,14 +168,14 @@ class WanSFRunner(WanRunner):
                                 self.model.infer(self.inputs)
 
                         vae_decoder.submit(self.decode_segment_latents, segment_idx, latents)
-                        torch.cuda.empty_cache()
+                        torch_device_module.empty_cache()
                     decoded_chunks = vae_decoder.finish()
                 finally:
                     if "vae_decoder" in locals():
                         vae_decoder.finish()
                     if lazy_vae:
                         del self.vae_decoder
-                        torch.cuda.empty_cache()
+                        torch_device_module.empty_cache()
                         gc.collect()
 
         self.gen_video = torch.cat(decoded_chunks, dim=2)

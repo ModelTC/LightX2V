@@ -6,6 +6,8 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.distributed as dist
+import torch.nn.functional as F
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 from torch import nn
@@ -268,6 +270,33 @@ class LongCatImageScheduler(BaseScheduler):
         else:
             self.seq_p_group = None
 
+    def _seq_parallel_rope(self, rotary_emb, txt_seq_len):
+        if self.seq_p_group is None:
+            return rotary_emb
+
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+
+        def chunk_image_emb(image_emb):
+            seqlen = image_emb.shape[0]
+            padding_size = (world_size - (seqlen % world_size)) % world_size
+            if padding_size > 0:
+                image_emb = F.pad(image_emb, (0, 0, 0, padding_size))
+            return torch.chunk(image_emb, world_size, dim=0)[cur_rank]
+
+        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+            txt_emb = rotary_emb[:txt_seq_len]
+            img_emb = chunk_image_emb(rotary_emb[txt_seq_len:])
+            return torch.cat([txt_emb, img_emb], dim=0)
+
+        freqs_cos, freqs_sin = rotary_emb
+        txt_cos, img_cos = freqs_cos[:txt_seq_len], freqs_cos[txt_seq_len:]
+        txt_sin, img_sin = freqs_sin[:txt_seq_len], freqs_sin[txt_seq_len:]
+        return (
+            torch.cat([txt_cos, chunk_image_emb(img_cos)], dim=0),
+            torch.cat([txt_sin, chunk_image_emb(img_sin)], dim=0),
+        )
+
     @staticmethod
     def _pack_latents(latents, batch_size, num_channels, height, width):
         """Pack latents from [B, C, H, W] to [B, (H//2)*(W//2), C*4] for transformer input.
@@ -368,6 +397,7 @@ class LongCatImageScheduler(BaseScheduler):
             self.image_rotary_emb = torch.cat([cos_half, sin_half], dim=-1)  # [L, D]
         else:
             self.image_rotary_emb = (freqs_cos, freqs_sin)
+        self.image_rotary_emb = self._seq_parallel_rope(self.image_rotary_emb, txt_seq_len)
 
         # Handle CFG: prepare negative embeddings rotary
         if self.config.get("enable_cfg", True):
@@ -382,6 +412,7 @@ class LongCatImageScheduler(BaseScheduler):
                 self.negative_image_rotary_emb = torch.cat([neg_cos_half, neg_sin_half], dim=-1)
             else:
                 self.negative_image_rotary_emb = (neg_freqs_cos, neg_freqs_sin)
+            self.negative_image_rotary_emb = self._seq_parallel_rope(self.negative_image_rotary_emb, neg_txt_seq_len)
 
     def step_pre(self, step_index):
         """Prepare for a single denoising step."""
@@ -445,6 +476,7 @@ class LongCatImageScheduler(BaseScheduler):
             self.image_rotary_emb = torch.cat([cos_half, sin_half], dim=-1)
         else:
             self.image_rotary_emb = (freqs_cos, freqs_sin)
+        self.image_rotary_emb = self._seq_parallel_rope(self.image_rotary_emb, txt_seq_len)
 
         # Store output sequence length for later truncation
         self.output_seq_len = self.latents.shape[1]
@@ -462,6 +494,7 @@ class LongCatImageScheduler(BaseScheduler):
                 self.negative_image_rotary_emb = torch.cat([neg_cos_half, neg_sin_half], dim=-1)
             else:
                 self.negative_image_rotary_emb = (neg_freqs_cos, neg_freqs_sin)
+            self.negative_image_rotary_emb = self._seq_parallel_rope(self.negative_image_rotary_emb, neg_txt_seq_len)
 
     def _encode_image(self, image):
         """Encode input image using VAE.

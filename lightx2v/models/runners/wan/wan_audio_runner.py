@@ -89,6 +89,8 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
             area_in_pixels = 480 * 832
         elif fixed_area == "720p":
             area_in_pixels = 720 * 1280
+        elif fixed_area == "1080p":
+            area_in_pixels = 1080 * 1920
         else:
             area_in_pixels = 480 * 832
         target_h = round(np.sqrt(area_in_pixels * ori_ratio))

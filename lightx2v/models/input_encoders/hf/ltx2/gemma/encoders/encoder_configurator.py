@@ -137,24 +137,41 @@ VIDEO_ONLY_GEMMA_TEXT_ENCODER_KEY_OPS = (
 )
 
 
-def create_and_populate(module: GemmaTextEncoder) -> GemmaTextEncoder:
-    model = module.model
-    v_model = model.model.vision_tower.vision_model
-    l_model = model.model.language_model
+def _resolve_vision_model(vision_tower: torch.nn.Module) -> torch.nn.Module:
+    return getattr(vision_tower, "vision_model", vision_tower)
 
-    config = model.config.text_config
+
+def _register_or_replace_buffer(module: torch.nn.Module, name: str, value: torch.Tensor) -> None:
+    if name in module._buffers:
+        module._buffers[name] = value
+    else:
+        module.register_buffer(name, value)
+
+
+def _populate_legacy_rotary_buffers(l_model: torch.nn.Module, config: Gemma3Config) -> None:
+    if not hasattr(l_model, "rotary_emb_local"):
+        return
+
     dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-    base = config.rope_local_base_freq
+    base = getattr(config, "rope_local_base_freq", 10000)
     local_rope_freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(dtype=torch.float) / dim))
     inv_freqs, _ = ROPE_INIT_FUNCTIONS[config.rope_scaling["rope_type"]](config)
 
+    _register_or_replace_buffer(l_model.rotary_emb_local, "inv_freq", local_rope_freqs)
+    _register_or_replace_buffer(l_model.rotary_emb, "inv_freq", inv_freqs)
+
+
+def create_and_populate(module: GemmaTextEncoder) -> GemmaTextEncoder:
+    model = module.model
+    v_model = _resolve_vision_model(model.model.vision_tower)
+    l_model = model.model.language_model
+
     positions_length = len(v_model.embeddings.position_ids[0])
     position_ids = torch.arange(positions_length, dtype=torch.long, device="cpu").unsqueeze(0)
-    v_model.embeddings.register_buffer("position_ids", position_ids)
+    _register_or_replace_buffer(v_model.embeddings, "position_ids", position_ids)
     embed_scale = torch.tensor(model.config.text_config.hidden_size**0.5, device="cpu")
-    l_model.embed_tokens.register_buffer("embed_scale", embed_scale)
-    l_model.rotary_emb_local.register_buffer("inv_freq", local_rope_freqs)
-    l_model.rotary_emb.register_buffer("inv_freq", inv_freqs)
+    _register_or_replace_buffer(l_model.embed_tokens, "embed_scale", embed_scale)
+    _populate_legacy_rotary_buffers(l_model, model.config.text_config)
 
     return module
 

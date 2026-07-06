@@ -270,6 +270,11 @@ def main():
         default=None,
         help="Directory path for lingbot camera/action control files (poses.npy, intrinsics.npy, optional action.npy).",
     )
+    parser.add_argument("--action_mode", type=str, default=None, choices=["forward_dynamics", "inverse_dynamics", "policy"], help="Cosmos3 action mode.")
+    parser.add_argument("--domain_name", type=str, default=None, help="Cosmos3 action embodiment domain name.")
+    parser.add_argument("--view_point", type=str, default=None, help="Cosmos3 action viewpoint label.")
+    parser.add_argument("--action_chunk_size", type=int, default=None, help="Cosmos3 action chunk size.")
+    parser.add_argument("--action_chunk_index", type=int, default=None, help="Cosmos3 action chunk index when action_path contains action_chunks.")
     parser.add_argument(
         "--action_ckpt",
         type=str,

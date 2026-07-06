@@ -18,7 +18,7 @@
 
 **LightX2V** 是一个先进的轻量级图像视频生成推理框架，专为提供高效、高性能的图像视频生成解决方案而设计。该统一平台集成了多种前沿的图像视频生成技术，支持文本生成视频(T2V)和图像生成视频(I2V)，文本生图片(T2I)，图像编辑(I2I)等多样化生成任务。**X2V 表示将不同的输入模态(X，如文本或图像)转换为视觉输出(Vision)**。
 
-> 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V 在线服务](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI视频生成平台，提供LTX2.3 / Wan 2.2 / SekoTalk / Qwen-Image / SeedVR2等多个模型多种任务的免费体验使用。
+> 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V Studio](https://x2v.light-ai.top/login)** - 免费、轻量、快速的AI视频生成平台，提供LTX2.3 / Wan 2.2 / SekoTalk / Qwen-Image / SeedVR2等多个模型多种任务的免费体验使用。
 
 > 🤗 **HuggingFace 模型仓库: [LightX2V HuggingFace](https://huggingface.co/lightx2v)**
 
