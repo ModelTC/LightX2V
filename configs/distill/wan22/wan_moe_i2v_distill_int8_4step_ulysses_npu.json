@@ -4,12 +4,12 @@
     "text_len": 512,
     "target_height": 720,
     "target_width": 1280,
-    "use_rainfusion": true,
-    "rainfusion": {
+    "rainfusion_attn_setting": {
+        "pool_size": 128,
         "sparsity": 0.8,
         "skip_timesteps": -1
     },
-    "self_attn_1_type": "npu_flash_attn",
+    "self_attn_1_type": "rainfusion_attn",
     "cross_attn_1_type": "npu_flash_attn",
     "cross_attn_2_type": "npu_flash_attn",
     "sample_guide_scale": [
