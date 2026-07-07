@@ -12,6 +12,7 @@ from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRun
 from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
+from lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner import HunyuanImage3Runner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
@@ -45,6 +46,17 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all, validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
+
+
+def _str2bool(value):
+    if isinstance(value, bool):
+        return value
+    lowered = value.lower()
+    if lowered in ("1", "true", "yes", "y", "on"):
+        return True
+    if lowered in ("0", "false", "no", "n", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got {value!r}")
 
 
 def init_runner(config):
@@ -88,6 +100,7 @@ def main():
             "wan2.2_s2v",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
+            "hunyuan_image3",
             "hunyuan3d",
             "worldplay_distill",
             "worldplay_ar",
@@ -116,6 +129,36 @@ def main():
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
+    hunyuan_cache_args = parser.add_argument_group("HunyuanImage3 cache options")
+    hunyuan_cache_args.add_argument("--enable_kv_cache", "--enable-kv-cache", dest="enable_kv_cache", type=_str2bool, nargs="?", const=True, default=None)
+    hunyuan_cache_args.add_argument("--enable_text_kv_cache", "--enable-text-kv-cache", dest="enable_text_kv_cache", type=_str2bool, nargs="?", const=True, default=None)
+    hunyuan_cache_args.add_argument("--use_taylor_cache", "--use-taylor-cache", dest="use_taylor_cache", type=_str2bool, nargs="?", const=True, default=None)
+    hunyuan_cache_args.add_argument("--taylor_cache_interval", "--taylor-cache-interval", dest="taylor_cache_interval", type=int, default=None)
+    hunyuan_cache_args.add_argument("--taylor_cache_order", "--taylor-cache-order", dest="taylor_cache_order", type=int, default=None)
+    hunyuan_cache_args.add_argument(
+        "--taylor_cache_enable_first_enhance",
+        "--taylor-cache-enable-first-enhance",
+        dest="taylor_cache_enable_first_enhance",
+        type=_str2bool,
+        nargs="?",
+        const=True,
+        default=None,
+    )
+    hunyuan_cache_args.add_argument("--taylor_cache_first_enhance_steps", "--taylor-cache-first-enhance-steps", dest="taylor_cache_first_enhance_steps", type=int, default=None)
+    hunyuan_cache_args.add_argument(
+        "--taylor_cache_enable_tailing_enhance",
+        "--taylor-cache-enable-tailing-enhance",
+        dest="taylor_cache_enable_tailing_enhance",
+        type=_str2bool,
+        nargs="?",
+        const=True,
+        default=None,
+    )
+    hunyuan_cache_args.add_argument("--taylor_cache_tailing_enhance_steps", "--taylor-cache-tailing-enhance-steps", dest="taylor_cache_tailing_enhance_steps", type=int, default=None)
+    hunyuan_cache_args.add_argument("--taylor_cache_low_freqs_order", "--taylor-cache-low-freqs-order", dest="taylor_cache_low_freqs_order", type=int, default=None)
+    hunyuan_cache_args.add_argument("--taylor_cache_high_freqs_order", "--taylor-cache-high-freqs-order", dest="taylor_cache_high_freqs_order", type=int, default=None)
+    hunyuan_native_args = parser.add_argument_group("HunyuanImage3 native implementation options")
+    hunyuan_native_args.add_argument("--moe_impl", "--moe-impl", dest="moe_impl", type=str, choices=["eager", "flashinfer"], default=None)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")

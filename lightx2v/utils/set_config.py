@@ -39,6 +39,29 @@ def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS and v is not None})
 
+    _hunyuan_image3_cli_cache_keys = (
+        "enable_kv_cache",
+        "enable_text_kv_cache",
+        "use_taylor_cache",
+        "taylor_cache_interval",
+        "taylor_cache_order",
+        "taylor_cache_enable_first_enhance",
+        "taylor_cache_first_enhance_steps",
+        "taylor_cache_enable_tailing_enhance",
+        "taylor_cache_tailing_enhance_steps",
+        "taylor_cache_low_freqs_order",
+        "taylor_cache_high_freqs_order",
+    )
+    config["_hunyuan_image3_cli_cache_snapshot"] = {
+        k: getattr(args, k, None) for k in _hunyuan_image3_cli_cache_keys if hasattr(args, k) and getattr(args, k, None) is not None
+    }
+    _hunyuan_image3_cli_native_keys = (
+        "moe_impl",
+    )
+    config["_hunyuan_image3_cli_native_snapshot"] = {
+        k: getattr(args, k, None) for k in _hunyuan_image3_cli_native_keys if hasattr(args, k) and getattr(args, k, None) is not None
+    }
+
     # Snapshot worldmirror-specific CLI flags so they can win over JSON
     # defaults after auto_calc_config merges the JSON in. See the
     # ``worldmirror`` branch of ``auto_calc_config`` for the replay logic.
@@ -214,6 +237,54 @@ def auto_calc_config(config):
     # LightX2V scheduler stack expects `infer_steps`.
     if "infer_steps" not in config and "num_inference_steps" in config:
         config["infer_steps"] = config["num_inference_steps"]
+
+    if config["model_cls"] == "hunyuan_image3":
+        if "num_layers" not in config and "num_hidden_layers" in config:
+            config["num_layers"] = config["num_hidden_layers"]
+        if "num_heads" not in config and "num_attention_heads" in config:
+            config["num_heads"] = config["num_attention_heads"]
+        if "num_attention_heads" not in config and "num_heads" in config:
+            config["num_attention_heads"] = config["num_heads"]
+        if "attention_head_dim" not in config and "hidden_size" in config and "num_attention_heads" in config:
+            config["attention_head_dim"] = config["hidden_size"] // config["num_attention_heads"]
+        if "infer_steps" not in config and "diff_infer_steps" in config:
+            config["infer_steps"] = config["diff_infer_steps"]
+        if "sample_guide_scale" not in config and "diff_guidance_scale" in config:
+            config["sample_guide_scale"] = config["diff_guidance_scale"]
+        if "sample_shift" not in config and "flow_shift" in config:
+            config["sample_shift"] = config["flow_shift"]
+        config.setdefault("img_proj_type", "unet")
+        if config.get("patch_size") is None or isinstance(config.get("patch_size"), (list, tuple)):
+            config["patch_size"] = 1
+        if config.get("patch_embed_hidden_dim") is None:
+            config["patch_embed_hidden_dim"] = 1024
+        config["cfg_distilled"] = bool(config.get("cfg_distilled", False))
+        config["use_meanflow"] = bool(config.get("use_meanflow", False))
+        config.setdefault("use_qk_norm", True)
+        config.setdefault("rms_norm_eps", 1e-5)
+        config.setdefault("rms_norm_type", "fp32_variance")
+        config.setdefault("hidden_act", "silu")
+        config.setdefault("mlp_bias", False)
+        config.setdefault("attention_bias", False)
+        config.setdefault("moe_layer_num_skipped", 0)
+        config.setdefault("use_mixed_mlp_moe", False)
+        config.setdefault("moe_impl", "eager")
+        config.setdefault("pipeline_parallel", True)
+        if "vae_scale_factor" not in config:
+            vae_downsample_factor = config.get("vae_downsample_factor")
+            if isinstance(vae_downsample_factor, list) and vae_downsample_factor:
+                config["vae_scale_factor"] = int(vae_downsample_factor[0])
+        _hunyuan_image3_cli_cache_snapshot = config.pop("_hunyuan_image3_cli_cache_snapshot", None)
+        if isinstance(_hunyuan_image3_cli_cache_snapshot, dict):
+            for k, v in _hunyuan_image3_cli_cache_snapshot.items():
+                config[k] = v
+        _hunyuan_image3_cli_native_snapshot = config.pop("_hunyuan_image3_cli_native_snapshot", None)
+        if isinstance(_hunyuan_image3_cli_native_snapshot, dict):
+            for k, v in _hunyuan_image3_cli_native_snapshot.items():
+                config[k] = v
+
+    config.pop("_hunyuan_image3_cli_cache_snapshot", None)
+    config.pop("_hunyuan_image3_cli_native_snapshot", None)
 
     if config["task"] in ["i2v", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
