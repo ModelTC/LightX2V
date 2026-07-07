@@ -1,0 +1,51 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 720,
+    "target_width": 1280,
+    "use_rainfusion": true,
+    "rainfusion": {
+        "sparsity": 0.8,
+        "skip_timesteps": -1
+    },
+    "self_attn_1_type": "npu_flash_attn",
+    "cross_attn_1_type": "npu_flash_attn",
+    "cross_attn_2_type": "npu_flash_attn",
+    "sample_guide_scale": [
+        3.5,
+        3.5
+    ],
+    "sample_shift": 5.0,
+    "enable_cfg": false,
+    "cpu_offload": false,
+    "offload_granularity": "block",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
+    "use_image_encoder": false,
+    "boundary": 0.900,
+    "boundary_step_index": 2,
+    "denoising_step_list": [
+        1000,
+        750,
+        500,
+        250
+    ],
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-npu",
+    "modulate_type": "torch",
+    "rope_type": "npu_rope",
+    "layer_norm_type": "npu_layer_norm",
+    "rms_norm_type": "npu_rms_norm",
+    "high_noise_quantized_ckpt": "models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
+    "low_noise_quantized_ckpt": "models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
+    "video_frame_interpolation": {
+        "algo": "rife",
+        "target_fps": 30,
+        "model_path": "models/rife/train_log/flownet.pkl"
+    },
+    "parallel": {
+        "seq_p_size": 2,
+        "seq_p_attn_type": "ulysses"
+    }
+}
