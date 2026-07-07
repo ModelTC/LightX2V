@@ -308,6 +308,11 @@ def auto_calc_config(config):
         config["vae_scale_factor_spatial"] = int(vae_config.get("scale_factor_spatial", 16))
         config["vae_scale_factor_temporal"] = int(vae_config.get("scale_factor_temporal", 4))
         config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
+    if config["model_cls"] == "cosmos3" and os.path.exists(os.path.join(config["model_path"], "sound_tokenizer", "config.json")):
+        with open(os.path.join(config["model_path"], "sound_tokenizer", "config.json"), "r") as f:
+            sound_config = json.load(f)
+        config["sound_sampling_rate"] = int(sound_config.get("sampling_rate", 48000))
+        config["sound_hop_size"] = int(sound_config.get("hop_size", 1920))
 
     return config
 

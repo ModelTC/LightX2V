@@ -1,5 +1,6 @@
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import (
+    ATTN_WEIGHT_REGISTER,
     CONV3D_WEIGHT_REGISTER,
     EMBEDDING_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
@@ -129,6 +130,8 @@ class IndividualTokenRefinerBlock(WeightModule):
             "self_attn_proj",
             MM_WEIGHT_REGISTER["Default"](f"{block_prefix}.{block_idx}.self_attn_proj.weight", f"{block_prefix}.{block_idx}.self_attn_proj.bias"),
         )
+        attention_weights_cls = ATTN_WEIGHT_REGISTER[self.config["attn_type"]]
+        self.add_module("self_attention", attention_weights_cls())
         self.add_module(
             "norm2",
             LN_WEIGHT_REGISTER["torch"](f"{block_prefix}.{block_idx}.norm2.weight", f"{block_prefix}.{block_idx}.norm2.bias"),

@@ -121,25 +121,17 @@ async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> t
         disconnect_task = asyncio.create_task(_watch_client_disconnect(request, task_id))
 
         done, pending = await asyncio.wait({wait_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
+        for pending_task in pending:
+            pending_task.cancel()
 
-        if wait_task in done:
-            result_png, usage = wait_task.result()
-            for pending_task in pending:
-                pending_task.cancel()
-            if pending:
-                _, still_pending = await asyncio.wait(pending, timeout=0)
-                if still_pending:
-                    logger.debug(f"Task {task_id} disconnect watcher cancellation is still pending")
-            logger.info(f"Task {task_id} OpenAI image task result ready, building response")
-            return result_png, usage
-
-        if disconnect_task in done and disconnect_task.result():
+        if disconnect_task in done:
             if not wait_task.done():
                 wait_task.cancel()
-                await asyncio.wait({wait_task}, timeout=0)
             raise HTTPException(status_code=499, detail=f"Client disconnected, task {task_id} cancelled")
 
-        raise HTTPException(status_code=500, detail=f"Task {task_id} ended without image result")
+        result_png, usage = wait_task.result()
+        logger.info(f"Task {task_id} OpenAI image task result ready, building response")
+        return result_png, usage
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:

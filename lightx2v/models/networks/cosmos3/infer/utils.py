@@ -155,16 +155,19 @@ def get_3d_mrope_ids_vae_tokens(
     fps: float | None = None,
     base_fps: float = 24.0,
     temporal_compression_factor: int = 4,
+    base_temporal_compression_factor: int | None = None,
+    start_frame_offset: int = 0,
 ):
     fps_modulation_enabled = fps is not None and grid_t > 1
+    effective_base_tcf = base_temporal_compression_factor if base_temporal_compression_factor is not None else temporal_compression_factor
     if fps_modulation_enabled:
         tps = fps / temporal_compression_factor
-        base_tps = base_fps / temporal_compression_factor
+        base_tps = base_fps / effective_base_tcf
         frame_indices = torch.arange(grid_t, dtype=torch.float32)
-        t_index = (frame_indices / tps * base_tps + temporal_offset).view(-1, 1)
+        t_index = ((frame_indices + start_frame_offset) / tps * base_tps + temporal_offset).view(-1, 1)
         t_index = t_index.expand(-1, grid_h * grid_w).flatten()
     else:
-        t_index = torch.arange(grid_t, dtype=torch.long).view(-1, 1).expand(-1, grid_h * grid_w).flatten() + int(temporal_offset)
+        t_index = torch.arange(grid_t, dtype=torch.long).view(-1, 1).expand(-1, grid_h * grid_w).flatten() + int(temporal_offset) + start_frame_offset
 
     h_index = torch.arange(grid_h, dtype=torch.long).view(1, -1, 1).expand(grid_t, -1, grid_w).flatten()
     w_index = torch.arange(grid_w, dtype=torch.long).view(1, 1, -1).expand(grid_t, grid_h, -1).flatten()

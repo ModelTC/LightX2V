@@ -150,6 +150,11 @@ class LongCatImageDoubleBlockWeights(WeightModule):
 
         # Attention calculation module
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
+        if self.config["seq_parallel"]:
+            self.add_module(
+                "calculate_parallel",
+                ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
+            )
 
         # Image FFN
         self.add_module(
@@ -296,6 +301,11 @@ class LongCatImageSingleBlockWeights(WeightModule):
 
         # Attention calculation module
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[self.attn_type]())
+        if self.config["seq_parallel"]:
+            self.add_module(
+                "calculate_parallel",
+                ATTN_WEIGHT_REGISTER[self.config["parallel"].get("seq_p_attn_type", "ulysses")](),
+            )
 
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():

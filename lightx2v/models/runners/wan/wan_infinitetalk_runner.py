@@ -23,6 +23,7 @@ from lightx2v.utils.input_info import UNSET
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process, save_to_video, wan_vae_to_comfy
+from lightx2v.utils.va_controller import VAController
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -106,8 +107,11 @@ class InfiniteTalkRunner(WanRunner):
         self.audio_sample_rate = int(self.config.get("audio_sample_rate", 16000))
         self.target_fps = int(self.config.get("target_fps", 25))
         self.video_audio_path = None
+        self.video_audio_array = None
         self.cond_video_temp_path = None
         self.cond_video_duration = None
+        self.va_controller = None
+        self.stream_save_video = False
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
@@ -289,6 +293,7 @@ class InfiniteTalkRunner(WanRunner):
         return new_speech1, new_speech2, new_speech1 + new_speech2
 
     def _write_sum_audio(self, input_data, audio_arrays):
+        self.video_audio_array = np.asarray(audio_arrays, dtype=np.float32)
         if sf is not None:
             fd, audio_path = tempfile.mkstemp(prefix="infinitetalk_sum_", suffix=".wav")
             os.close(fd)
@@ -506,6 +511,7 @@ class InfiniteTalkRunner(WanRunner):
         self.cond_video_duration = self._get_cond_video_duration(self.cond_file_path)
         first_image = self._extract_specific_frame(self.cond_file_path, 0)
         self.src_h, self.src_w, self.target_h, self.target_w = self._select_target_size(first_image)
+        self.input_info.target_shape = [self.target_h, self.target_w]
 
         full_audio_embs = self._prepare_audio_embeddings(input_data)
         if any(audio_emb.shape[0] <= 0 for audio_emb in full_audio_embs):
@@ -623,7 +629,7 @@ class InfiniteTalkRunner(WanRunner):
 
         self.cond_image = self._prepare_cond_image(0)
         self.cond_frame = None
-        self.gen_video_list = []
+        self.gen_video_list = None if self.stream_save_video else []
 
     def get_video_segment_num(self):
         if self.expected_frames <= self.frame_num:
@@ -683,6 +689,47 @@ class InfiniteTalkRunner(WanRunner):
         self._run_dit_clip(self.dit_inputs)
         return self.scheduler.latents
 
+    def _should_stream_save_video(self):
+        return bool(self.config.get("stream_save_video", True) and not self.input_info.return_result_tensor and getattr(self.input_info, "save_result_path", None))
+
+    def _init_stream_video_controller(self):
+        if not self.stream_save_video:
+            return
+        self.va_controller = VAController(self)
+        logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
+
+    def _get_audio_segment(self, start_frame, frame_count):
+        audio_sample_start = int(round(start_frame * self.audio_sample_rate / self.target_fps))
+        audio_sample_end = int(round((start_frame + frame_count) * self.audio_sample_rate / self.target_fps))
+        audio_sample_count = max(audio_sample_end - audio_sample_start, 0)
+        if audio_sample_count == 0:
+            return torch.zeros(0, dtype=torch.float32)
+
+        if self.video_audio_array is None:
+            return torch.zeros(audio_sample_count, dtype=torch.float32)
+
+        audio = self.video_audio_array.reshape(-1)
+        audio_seg = audio[audio_sample_start : min(audio_sample_end, audio.shape[0])]
+        if audio_seg.shape[0] < audio_sample_count:
+            audio_seg = np.pad(audio_seg, (0, audio_sample_count - audio_seg.shape[0]))
+        return torch.from_numpy(audio_seg.astype(np.float32, copy=False))
+
+    def _publish_video_segment(self, videos, start_frame):
+        if self.va_controller is None or self.va_controller.recorder is None:
+            return
+        frame_count = videos.shape[2]
+        if frame_count <= 0:
+            return
+        video_seg = videos[:, :, :frame_count].to(torch.float32)
+        comfy_video = wan_vae_to_comfy(video_seg.cpu())
+        audio_seg = self._get_audio_segment(start_frame, frame_count)
+        self.va_controller.pub_livestream(
+            comfy_video,
+            audio_seg,
+            video_seg.cpu(),
+            valid_duration=frame_count / self.target_fps,
+        )
+
     @ProfilingContext4DebugL1(
         "End run segment",
         recorder_mode=GET_RECORDER_MODE(),
@@ -692,9 +739,19 @@ class InfiniteTalkRunner(WanRunner):
     def end_run_segment(self, segment_idx, latents):
         videos = self.run_vae_decoder(latents).cpu()
         if self.is_first_segment:
-            self.gen_video_list.append(videos)
+            output_videos = videos
+            output_start_frame = 0
         else:
-            self.gen_video_list.append(videos[:, :, self.current_motion_frames_num :])
+            output_videos = videos[:, :, self.current_motion_frames_num :]
+            output_start_frame = self.audio_start_idx + self.current_motion_frames_num
+
+        valid_frames = min(output_videos.shape[2], max(self.expected_frames - output_start_frame, 0))
+        if valid_frames > 0:
+            output_videos = output_videos[:, :, :valid_frames]
+            if self.stream_save_video:
+                self._publish_video_segment(output_videos, output_start_frame)
+            else:
+                self.gen_video_list.append(output_videos)
 
         if segment_idx < self.video_segment_num - 1:
             self.cond_frame = videos[:, :, -self.motion_frame :].to(torch.float32).to(AI_DEVICE)
@@ -706,8 +763,10 @@ class InfiniteTalkRunner(WanRunner):
 
     @ProfilingContext4DebugL2("Run DiT + decode")
     def run_main(self):
+        self.stream_save_video = self._should_stream_save_video()
         self.init_run()
         self.get_video_segment_num()
+        self._init_stream_video_controller()
 
         for segment_idx in range(self.video_segment_num):
             logger.info(f"start InfiniteTalk segment {segment_idx + 1}/{self.video_segment_num}")
@@ -716,11 +775,19 @@ class InfiniteTalkRunner(WanRunner):
                 latents = self.run_segment(segment_idx)
                 self.end_run_segment(segment_idx, latents)
 
+        if self.stream_save_video:
+            return self.process_images_after_vae_decoder()
+
         self.gen_video = torch.cat(self.gen_video_list, dim=2)[:, :, : self.expected_frames].to(torch.float32)
         return self.process_images_after_vae_decoder()
 
     @ProfilingContext4DebugL1("Process after vae decoder")
     def process_images_after_vae_decoder(self):
+        if self.stream_save_video:
+            if self.input_info.save_result_path is not None and is_main_process():
+                logger.info(f"Video saved to {self.input_info.save_result_path}")
+            return {"video": None}
+
         self.gen_video_final = wan_vae_to_comfy(self.gen_video)
         if self.input_info.return_result_tensor:
             return {"video": self.gen_video_final}
@@ -771,8 +838,13 @@ class InfiniteTalkRunner(WanRunner):
                 os.remove(tmp_path)
 
     def end_run(self):
+        if self.va_controller is not None:
+            self.va_controller.clear()
+            self.va_controller = None
         self._remove_video_audio_path()
         self._remove_cond_video_temp_path()
+        self.video_audio_array = None
+        self.stream_save_video = False
         if hasattr(self, "inputs"):
             del self.inputs
         torch.cuda.empty_cache()

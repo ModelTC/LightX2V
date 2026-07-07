@@ -1,3 +1,4 @@
+import copy
 import json
 import math
 import os
@@ -497,8 +498,12 @@ class Cosmos3Scheduler(BaseScheduler):
         if sample_shift is not None:
             self.scheduler_config["flow_shift"] = float(sample_shift)
         self.unipc = None
+        self.sound_unipc = None
+        self.action_unipc = None
         self.timesteps = None
         self.noise_pred = None
+        self.noise_pred_sound = None
+        self.noise_pred_action = None
         self.keep_latents_dtype_in_scheduler = True
 
     def _build_unipc(self):
@@ -542,13 +547,47 @@ class Cosmos3Scheduler(BaseScheduler):
             self.vision_condition_mask = mask
         else:
             self.latents = noise
+        self.sound_latents = None
+        if self.config.get("enable_sound", False) or self.config.get("task") in ("t2av", "i2av"):
+            sound_shape = getattr(input_info, "sound_latent_shape", None) or getattr(input_info, "audio_latent_shape", None)
+            if not sound_shape:
+                sound_dim = int(self.config.get("sound_dim", 64))
+                sound_len = int(self.config.get("sound_latent_length", 0))
+                if sound_len <= 0:
+                    num_frames = int(self.config.get("target_video_length", 189))
+                    fps = float(self.config.get("target_fps", 24.0))
+                    sampling_rate = int(self.config.get("sound_sampling_rate", 48000))
+                    hop_size = int(self.config.get("sound_hop_size", 1920))
+                    sound_len = (int(num_frames / fps * sampling_rate) + hop_size - 1) // hop_size
+                sound_shape = (sound_dim, sound_len)
+            self.sound_latents = torch.randn(tuple(sound_shape), generator=self.generator, device=AI_DEVICE, dtype=GET_DTYPE())
+
+        self.action_latents = None
+        self.action_domain_id = getattr(input_info, "action_domain_id", None)
+        self.action_condition_frame_indexes = getattr(input_info, "action_condition_frame_indexes", None)
+        self.raw_action_dim = getattr(input_info, "raw_action_dim", None)
+        action_latents = getattr(input_info, "action_latents", None)
+        if action_latents is not None:
+            self.action_latents = action_latents.to(device=AI_DEVICE, dtype=GET_DTYPE())
+            if self.raw_action_dim is not None:
+                self.action_latents[:, int(self.raw_action_dim) :] = 0
+        else:
+            action_shape = getattr(input_info, "action_latent_shape", None)
+            if action_shape is not None:
+                self.action_latents = torch.randn(tuple(action_shape), generator=self.generator, device=AI_DEVICE, dtype=GET_DTYPE())
+                if self.raw_action_dim is not None:
+                    self.action_latents[:, int(self.raw_action_dim) :] = 0
         self.noise_pred = None
+        self.noise_pred_sound = None
+        self.noise_pred_action = None
 
     def prepare(self, input_info):
         self.prepare_latents(input_info)
         self.unipc = self._build_unipc()
         self.unipc.set_timesteps(int(self.config["infer_steps"]), device=AI_DEVICE)
         self.timesteps = self.unipc.timesteps
+        self.sound_unipc = copy.deepcopy(self.unipc) if self.sound_latents is not None else None
+        self.action_unipc = copy.deepcopy(self.unipc) if self.action_latents is not None else None
         self.infer_steps = len(self.timesteps)
         self.step_index = 0
 
@@ -568,13 +607,42 @@ class Cosmos3Scheduler(BaseScheduler):
             self.latents.unsqueeze(0),
             return_dict=False,
         )[0].squeeze(0)
+        if self.sound_latents is not None:
+            if self.noise_pred_sound is None:
+                raise RuntimeError("Cosmos3Scheduler requires noise_pred_sound before sound step_post().")
+            self.sound_latents = self.sound_unipc.step(
+                self.noise_pred_sound.unsqueeze(0),
+                t,
+                self.sound_latents.unsqueeze(0),
+                return_dict=False,
+            )[0].squeeze(0)
+        if self.action_latents is not None and self.noise_pred_action is not None:
+            self.action_latents = self.action_unipc.step(
+                self.noise_pred_action.unsqueeze(0),
+                t,
+                self.action_latents.unsqueeze(0),
+                return_dict=False,
+            )[0].squeeze(0)
+            if self.raw_action_dim is not None:
+                self.action_latents[:, int(self.raw_action_dim) :] = 0
         self.noise_pred = None
+        self.noise_pred_sound = None
+        self.noise_pred_action = None
 
     def clear(self):
         self.generator = None
         self.latents = None
+        self.sound_latents = None
+        self.action_latents = None
         self.timesteps = None
         self.unipc = None
+        self.sound_unipc = None
+        self.action_unipc = None
         self.noise_pred = None
+        self.noise_pred_sound = None
+        self.noise_pred_action = None
         self.vision_condition_frame_indexes = None
         self.vision_condition_mask = None
+        self.action_domain_id = None
+        self.action_condition_frame_indexes = None
+        self.raw_action_dim = None

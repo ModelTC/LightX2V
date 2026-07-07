@@ -584,7 +584,8 @@ class Cosmos3WanVAE:
         vae_path = self.config.get("vae_path", os.path.join(self.config["model_path"], "vae"))
         with open(os.path.join(vae_path, "config.json"), "r") as f:
             self.vae_config = json.load(f)
-        self.load_encoder = self.config.get("task") == "i2v" or self.config.get("cosmos3_load_vae_encoder", False)
+        encoder_tasks = {"i2v", "i2av", "i2va", "v2av"}
+        self.load_encoder = self.config.get("task") in encoder_tasks or self.config.get("cosmos3_load_vae_encoder", False)
         model_cls = AutoencoderKLWan if self.load_encoder else AutoencoderKLWanDecodeOnly
         self.model = model_cls(self.vae_config).to(self.device).to(self.dtype)
         weight_path = os.path.join(vae_path, "diffusion_pytorch_model.safetensors")
@@ -615,7 +616,7 @@ class Cosmos3WanVAE:
     @torch.no_grad()
     def encode(self, video: torch.Tensor):
         if not self.load_encoder:
-            raise RuntimeError("Cosmos3WanVAE was loaded without encoder. Set task=i2v or cosmos3_load_vae_encoder=True.")
+            raise RuntimeError("Cosmos3WanVAE was loaded without encoder. Use a condition task or set cosmos3_load_vae_encoder=True.")
         if self.cpu_offload:
             self.model.to(torch.device(AI_DEVICE))
         video = video.to(device=next(self.model.parameters()).device, dtype=self.dtype)

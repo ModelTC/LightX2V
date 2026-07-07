@@ -343,10 +343,13 @@ def _audio_cache_rope_kernel(
     h: tl.constexpr,
     w: tl.constexpr,
     token_start,
+    global_end,
     ref_tokens: tl.constexpr,
+    sink_tokens: tl.constexpr,
     local_per_frame: tl.constexpr,
     world_size: tl.constexpr,
     rank: tl.constexpr,
+    seq_len: tl.constexpr,
     num_heads: tl.constexpr,
     head_dim: tl.constexpr,
     t_dim: tl.constexpr,
@@ -356,7 +359,12 @@ def _audio_cache_rope_kernel(
     row_idx = tl.program_id(0)
     token_head_idx = row_idx // num_heads
     head_idx = row_idx - token_head_idx * num_heads
-    token_idx = token_start + token_head_idx
+    local_token_idx = token_start + token_head_idx
+    range_end = token_start + seq_len
+    recent_local_tokens = tl.maximum(range_end - sink_tokens, 0)
+    recent_global_start = global_end - recent_local_tokens
+    recent_token_idx = recent_global_start + local_token_idx - sink_tokens
+    token_idx = tl.where(local_token_idx < sink_tokens, local_token_idx, recent_token_idx)
 
     half_head_dim: tl.constexpr = head_dim // 2
     col_offsets = tl.arange(0, BLOCK_SIZE)
@@ -372,7 +380,10 @@ def _audio_cache_rope_kernel(
     spatial_chunk: tl.constexpr = padded_hw // world_size
     is_ref = token_idx < ref_tokens
     gen_idx = tl.maximum(token_idx - ref_tokens, 0)
-    frame_idx = gen_idx // local_per_frame
+    ref_frames: tl.constexpr = ref_tokens // local_per_frame
+    ref_frame_idx = token_idx // local_per_frame
+    gen_frame_idx = ref_frames + gen_idx // local_per_frame
+    frame_idx = tl.where(is_ref, ref_frame_idx, gen_frame_idx)
     ref_spatial_idx = token_idx % local_per_frame
     gen_spatial_idx = gen_idx % local_per_frame
     local_spatial_idx = tl.where(is_ref, ref_spatial_idx, gen_spatial_idx)
@@ -386,7 +397,7 @@ def _audio_cache_rope_kernel(
     freq_row = tl.where(is_temporal, frame_idx, tl.where(is_h, y, z))
     freq_col = col_offsets
     freq_offset = (freq_row * half_head_dim + freq_col) * 2
-    load_mask = mask & (~is_temporal | ~is_ref) & (is_temporal | spatial_valid)
+    load_mask = mask & (is_temporal | spatial_valid)
     cos_vals = tl.load(freqs_real_ptr + freq_offset, mask=load_mask, other=1.0)
     sin_vals = tl.load(freqs_real_ptr + freq_offset + 1, mask=load_mask, other=0.0)
 
@@ -407,6 +418,8 @@ def apply_audio_cache_rope(
     local_per_frame: int,
     world_size: int = 1,
     rank: int = 0,
+    global_end: int | None = None,
+    sink_tokens: int = 0,
 ) -> torch.Tensor:
     seq_len, num_heads, head_dim = x.shape
     c = head_dim // 2
@@ -416,6 +429,8 @@ def apply_audio_cache_rope(
     out = torch.empty_like(x_contig)
     freqs_real = torch.view_as_real(freqs.to(device=x.device))
     block_size = triton.next_power_of_2(c)
+    if global_end is None:
+        global_end = token_start + seq_len
     _audio_cache_rope_kernel[(seq_len * num_heads,)](
         out,
         x_contig,
@@ -423,10 +438,13 @@ def apply_audio_cache_rope(
         h,
         w,
         int(token_start),
+        int(global_end),
         int(ref_tokens),
+        int(sink_tokens),
         int(local_per_frame),
         int(world_size),
         int(rank),
+        int(seq_len),
         num_heads,
         head_dim,
         t_dim,
