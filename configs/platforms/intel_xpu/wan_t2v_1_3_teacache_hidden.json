@@ -36,7 +36,7 @@
         ]
     ],
     "use_ret_steps": true,
-    "teacache_cache_target": "latent",
+    "teacache_cache_target": "hidden",
     "teacache_thresh": 0.26,
     "teacache_log_cache_stats": true
 }

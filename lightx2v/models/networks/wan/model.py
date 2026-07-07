@@ -108,12 +108,28 @@ class WanModel(BaseTransformerModel):
         if self.config["seq_parallel"]:
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
-        x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
+        use_output_latent_cache = self.config["feature_caching"] == "Tea" and getattr(self.transformer_infer, "cache_target", "hidden") == "latent"
+        if use_output_latent_cache:
+            should_calc = self.transformer_infer.should_recalculate(pre_infer_out)
+            if should_calc:
+                x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
 
-        if self.config["seq_parallel"]:
-            x = self._seq_parallel_post_process(x)
+                if self.config["seq_parallel"]:
+                    x = self._seq_parallel_post_process(x)
 
-        noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
+                latent_output = self.post_infer.infer_latent(x, pre_infer_out)[0]
+                self.transformer_infer.cache_output_latent(pre_infer_out, latent_output)
+                noise_pred = latent_output.float()
+            else:
+                noise_pred = self.transformer_infer.get_output_latent().float()
+                x = None
+        else:
+            x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
+
+            if self.config["seq_parallel"]:
+                x = self._seq_parallel_post_process(x)
+
+            noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
 
         if self.clean_cuda_cache:
             del x, pre_infer_out

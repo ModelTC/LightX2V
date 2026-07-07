@@ -15,12 +15,17 @@ class WanPostInfer:
         self.scheduler = scheduler
 
     @torch.no_grad()
-    def infer(self, x, pre_infer_out):
+    def infer_latent(self, x, pre_infer_out):
         x = self.unpatchify(x, pre_infer_out.grid_sizes.tuple)
 
         if self.clean_cuda_cache:
             torch.cuda.empty_cache()
 
+        return x
+
+    @torch.no_grad()
+    def infer(self, x, pre_infer_out):
+        x = self.infer_latent(x, pre_infer_out)
         return [u.float() for u in x]
 
     def unpatchify(self, x, grid_sizes):

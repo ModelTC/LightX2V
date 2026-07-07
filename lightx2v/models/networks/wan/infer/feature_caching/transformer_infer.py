@@ -1,9 +1,11 @@
 import gc
 import json
+import math
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTaylorCachingTransformerInfer
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
@@ -27,13 +29,20 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
     def __init__(self, config):
         super().__init__(config)
         self.teacache_thresh = config["teacache_thresh"]
+        self.cache_target = config.get("teacache_cache_target", "hidden")
         self.accumulated_rel_l1_distance_even = 0
         self.previous_e0_even = None
         self.previous_residual_even = None
+        self.output_latent_even = None
         self.accumulated_rel_l1_distance_odd = 0
         self.previous_e0_odd = None
         self.previous_residual_odd = None
+        self.output_latent_odd = None
         self.use_ret_steps = config["use_ret_steps"]
+        self.log_cache_stats = config.get("teacache_log_cache_stats", False)
+        self.keep_hidden_channels = config.get("teacache_residual_keep_hidden_channels")
+        self.channel_index = int(config.get("teacache_residual_channel_index", 0))
+        self._cache_stats_logged = False
         if self.use_ret_steps:
             self.coefficients = self.config["coefficients"][0]
             self.ret_steps = 5
@@ -42,6 +51,109 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
             self.coefficients = self.config["coefficients"][1]
             self.ret_steps = 1
             self.cutoff_steps = self.config["infer_steps"] - 1
+
+    def _tensor_nbytes(self, tensor):
+        return tensor.numel() * tensor.element_size()
+
+    def _tensor_summary(self, name, tensor):
+        return {
+            "name": name,
+            "shape": list(tensor.shape),
+            "dtype": str(tensor.dtype),
+            "device": str(tensor.device),
+            "numel": tensor.numel(),
+            "bytes": self._tensor_nbytes(tensor),
+            "mib": round(self._tensor_nbytes(tensor) / (1024 * 1024), 4),
+        }
+
+    def _expand_cached_residual(self, cached_residual, target_hidden_dim):
+        if cached_residual.shape[-1] == target_hidden_dim:
+            return cached_residual
+        repeat_factor = math.ceil(target_hidden_dim / cached_residual.shape[-1])
+        expanded = cached_residual.repeat(1, repeat_factor)[..., :target_hidden_dim]
+        return expanded.contiguous()
+
+    def _compress_cached_residual(self, residual):
+        if self.keep_hidden_channels is None:
+            return residual
+        keep_hidden_channels = int(self.keep_hidden_channels)
+        if keep_hidden_channels <= 0 or keep_hidden_channels >= residual.shape[-1]:
+            return residual
+        channel_index = min(max(self.channel_index, 0), residual.shape[-1] - 1)
+        if keep_hidden_channels == 1:
+            return residual[..., channel_index : channel_index + 1].contiguous()
+        return residual[..., :keep_hidden_channels].contiguous()
+
+    def _log_hidden_cache_layout_once(self, pre_infer_out, residual_before_store, residual_after_store):
+        if self._cache_stats_logged or not self.log_cache_stats:
+            return
+        grid_t, grid_h, grid_w = pre_infer_out.grid_sizes.tuple
+        patch_t, patch_h, patch_w = tuple(self.config.get("patch_size", (1, 2, 2)))
+        latent_shape = [self.config.get("out_dim", 16), grid_t * patch_t, grid_h * patch_h, grid_w * patch_w]
+        latent_numel = math.prod(latent_shape)
+        latent_bytes = latent_numel * residual_before_store.element_size()
+        payload = {
+            "feature_caching": self.config.get("feature_caching"),
+            "note": "TeaCache stores transformer hidden residuals, not the final 16-channel latent tensor.",
+            "latent_after_unpatchify": {
+                "shape": latent_shape,
+                "dtype": str(residual_before_store.dtype),
+                "numel": latent_numel,
+                "bytes": latent_bytes,
+                "mib": round(latent_bytes / (1024 * 1024), 4),
+            },
+            "cached_hidden_residual_before_store": self._tensor_summary("previous_residual", residual_before_store),
+            "cached_hidden_residual_after_store": self._tensor_summary("previous_residual_stored", residual_after_store),
+            "cached_timestep_embedding": self._tensor_summary("previous_e0", pre_infer_out.embed0),
+            "grid_sizes": [grid_t, grid_h, grid_w],
+            "patch_size": [patch_t, patch_h, patch_w],
+        }
+        logger.info("TeaCache layout: {}", json.dumps(payload, ensure_ascii=False))
+        self._cache_stats_logged = True
+
+    def _log_output_cache_layout_once(self, pre_infer_out, output_latent):
+        if self._cache_stats_logged or not self.log_cache_stats:
+            return
+        grid_t, grid_h, grid_w = pre_infer_out.grid_sizes.tuple
+        patch_t, patch_h, patch_w = tuple(self.config.get("patch_size", (1, 2, 2)))
+        payload = {
+            "feature_caching": self.config.get("feature_caching"),
+            "note": "TeaCache stores post_infer 16-channel latent output instead of transformer hidden residual.",
+            "cached_output_latent": self._tensor_summary("output_latent", output_latent),
+            "cached_timestep_embedding": self._tensor_summary("previous_e0", pre_infer_out.embed0),
+            "grid_sizes": [grid_t, grid_h, grid_w],
+            "patch_size": [patch_t, patch_h, patch_w],
+        }
+        logger.info("TeaCache layout: {}", json.dumps(payload, ensure_ascii=False))
+        self._cache_stats_logged = True
+
+    def _get_output_cache(self):
+        if self.scheduler.infer_condition:
+            return self.output_latent_even
+        return self.output_latent_odd
+
+    def has_output_cache(self):
+        return self._get_output_cache() is not None
+
+    def cache_output_latent(self, pre_infer_out, output_latent):
+        cached_output_latent = output_latent.clone()
+        if self.scheduler.infer_condition:
+            self.output_latent_even = cached_output_latent
+        else:
+            self.output_latent_odd = cached_output_latent
+        self._log_output_cache_layout_once(pre_infer_out, cached_output_latent)
+
+    def get_output_latent(self):
+        return self._get_output_cache()
+
+    def should_recalculate(self, pre_infer_out):
+        index = self.scheduler.step_index
+        caching_records = self.scheduler.caching_records if self.scheduler.infer_condition else self.scheduler.caching_records_2
+        if index <= self.scheduler.infer_steps - 1:
+            should_calc = self.calculate_should_calc(pre_infer_out.embed, pre_infer_out.embed0)
+            caching_records[index] = should_calc
+
+        return caching_records[index] or self.must_calc(index) or not self.has_output_cache()
 
     # calculate should_calc
     @torch.no_grad()
@@ -100,6 +212,9 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
         return should_calc
 
     def infer_main_blocks(self, weights, pre_infer_out):
+        if self.cache_target == "latent":
+            return self.infer_calculating(weights, pre_infer_out)
+
         if self.scheduler.infer_condition:
             index = self.scheduler.step_index
             caching_records = self.scheduler.caching_records
@@ -131,17 +246,24 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
         return x
 
     def infer_calculating(self, weights, pre_infer_out):
+        if self.cache_target == "latent":
+            return super().infer_main_blocks(weights, pre_infer_out)
+
         ori_x = pre_infer_out.x.clone()
 
         x = super().infer_main_blocks(weights, pre_infer_out)
         if self.scheduler.infer_condition:
-            self.previous_residual_even = x - ori_x
+            residual = x - ori_x
+            self.previous_residual_even = self._compress_cached_residual(residual)
             if self.config["cpu_offload"]:
                 self.previous_residual_even = self.previous_residual_even.cpu()
+            self._log_hidden_cache_layout_once(pre_infer_out, residual, self.previous_residual_even)
         else:
-            self.previous_residual_odd = x - ori_x
+            residual = x - ori_x
+            self.previous_residual_odd = self._compress_cached_residual(residual)
             if self.config["cpu_offload"]:
                 self.previous_residual_odd = self.previous_residual_odd.cpu()
+            self._log_hidden_cache_layout_once(pre_infer_out, residual, self.previous_residual_odd)
 
         if self.config["cpu_offload"]:
             ori_x = ori_x.to("cpu")
@@ -151,10 +273,15 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
         return x
 
     def infer_using_cache(self, x):
+        if self.cache_target == "latent":
+            raise RuntimeError("Latent-output TeaCache should reuse cached output latents in WanModel, not transformer hidden residuals.")
+
         if self.scheduler.infer_condition:
-            x.add_(self.previous_residual_even.to(AI_DEVICE))
+            cached_residual = self.previous_residual_even.to(AI_DEVICE)
         else:
-            x.add_(self.previous_residual_odd.to(AI_DEVICE))
+            cached_residual = self.previous_residual_odd.to(AI_DEVICE)
+        cached_residual = self._expand_cached_residual(cached_residual, x.shape[-1])
+        x.add_(cached_residual)
         return x
 
     def clear(self):
@@ -171,6 +298,9 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
         self.previous_residual_odd = None
         self.previous_e0_even = None
         self.previous_e0_odd = None
+        self.output_latent_even = None
+        self.output_latent_odd = None
+        self._cache_stats_logged = False
 
         torch.cuda.empty_cache()
 
