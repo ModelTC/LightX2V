@@ -112,6 +112,11 @@ class InfiniteTalkRunner(WanRunner):
         self.cond_video_duration = None
         self.va_controller = None
         self.stream_save_video = False
+        self.cond_video_reader = None
+        self.cond_video_reader_path = None
+        self.cond_static_image = None
+        self.cond_static_image_path = None
+        self.cond_frame_cache = {}
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
@@ -397,30 +402,62 @@ class InfiniteTalkRunner(WanRunner):
         self._write_sum_audio(input_data, speech)
         return [self._load_or_encode_audio(speech)]
 
-    def _extract_specific_frame(self, video_path, frame_id):
-        if not _is_video(video_path):
-            return Image.open(video_path).convert("RGB")
+    def _close_cond_video_reader(self):
+        if self.cond_video_reader is not None:
+            del self.cond_video_reader
+            self.cond_video_reader = None
+        self.cond_video_reader_path = None
+
+    def _clear_cond_frame_source(self):
+        self._close_cond_video_reader()
+        self.cond_static_image = None
+        self.cond_static_image_path = None
+        self.cond_frame_cache.clear()
+        gc.collect()
+
+    def _get_cond_video_reader(self, video_path):
         if VideoReader is None:
             raise ImportError("decord is required for InfiniteTalk video cond_video inputs.")
-        vr = VideoReader(video_path, ctx=cpu(0))
+        if self.cond_video_reader is None or self.cond_video_reader_path != video_path:
+            self._close_cond_video_reader()
+            self.cond_video_reader = VideoReader(video_path, ctx=cpu(0))
+            self.cond_video_reader_path = video_path
+        return self.cond_video_reader
+
+    def _cache_cond_frame(self, frame_id, image):
+        cache_size = int(self.config.get("cond_frame_cache_size", 2))
+        if cache_size <= 0:
+            return image
+        self.cond_frame_cache[frame_id] = image
+        while len(self.cond_frame_cache) > cache_size:
+            self.cond_frame_cache.pop(next(iter(self.cond_frame_cache)))
+        return image
+
+    def _extract_specific_frame(self, video_path, frame_id):
+        if not _is_video(video_path):
+            if self.cond_static_image is None or self.cond_static_image_path != video_path:
+                self.cond_static_image = Image.open(video_path).convert("RGB")
+                self.cond_static_image_path = video_path
+            return self.cond_static_image
+
+        frame_id = max(int(frame_id), 0)
+        cached_frame = self.cond_frame_cache.get(frame_id)
+        if cached_frame is not None:
+            return cached_frame
+
+        vr = self._get_cond_video_reader(video_path)
         if frame_id < len(vr):
             frame = vr[frame_id].asnumpy()
         else:
             frame = vr[-1].asnumpy()
-        del vr
-        gc.collect()
-        return Image.fromarray(frame)
+        return self._cache_cond_frame(frame_id, Image.fromarray(frame))
 
     def _get_cond_video_duration(self, video_path):
         if not _is_video(video_path):
             return None
-        if VideoReader is None:
-            raise ImportError("decord is required for InfiniteTalk video cond_video inputs.")
-        vr = VideoReader(video_path, ctx=cpu(0))
+        vr = self._get_cond_video_reader(video_path)
         frame_count = len(vr)
         fps = float(vr.get_avg_fps() or self.target_fps)
-        del vr
-        gc.collect()
         if frame_count <= 0 or fps <= 0:
             return None
         return frame_count / fps
@@ -507,6 +544,7 @@ class InfiniteTalkRunner(WanRunner):
 
         self.input_data = input_data
         self.cond_file_path = self._prepare_cond_video_path(input_data["cond_video"])
+        self._clear_cond_frame_source()
         logger.info(f"InfiniteTalk cond_video: {input_data['cond_video']}")
         self.cond_video_duration = self._get_cond_video_duration(self.cond_file_path)
         first_image = self._extract_specific_frame(self.cond_file_path, 0)
@@ -755,7 +793,8 @@ class InfiniteTalkRunner(WanRunner):
 
         if segment_idx < self.video_segment_num - 1:
             self.cond_frame = videos[:, :, -self.motion_frame :].to(torch.float32).to(AI_DEVICE)
-            self.cond_image = self._prepare_cond_image(self._segment_start_frame(segment_idx + 1))
+            if _is_video(self.cond_file_path):
+                self.cond_image = self._prepare_cond_image(self._segment_start_frame(segment_idx + 1))
 
         del videos
         torch.cuda.empty_cache()
@@ -842,6 +881,7 @@ class InfiniteTalkRunner(WanRunner):
             self.va_controller.clear()
             self.va_controller = None
         self._remove_video_audio_path()
+        self._clear_cond_frame_source()
         self._remove_cond_video_temp_path()
         self.video_audio_array = None
         self.stream_save_video = False
