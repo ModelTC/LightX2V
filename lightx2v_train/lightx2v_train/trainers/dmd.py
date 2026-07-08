@@ -20,6 +20,17 @@ from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from .base import BaseTrainer
 
+try:
+    from torch.distributed.tensor import DTensor
+except ImportError:
+    DTensor = ()
+
+
+def _materialize_checkpoint_tensor(tensor):
+    if isinstance(tensor, DTensor):
+        return tensor.full_tensor()
+    return tensor
+
 
 @TRAINER_REGISTER("dmd")
 class DmdTrainer(BaseTrainer):
@@ -738,9 +749,10 @@ class VideoDmdTrainer(DmdTrainer):
             ):
                 if key.startswith(prefix):
                     key = key[len(prefix) :]
-            fixed[key] = value
+            fixed[key] = _materialize_checkpoint_tensor(value)
 
-        incompatible = self.model.denoiser_module().load_state_dict(fixed, strict=strict)
+        denoiser = self.model.denoiser_module()
+        incompatible = denoiser.load_state_dict(fixed, strict=strict)
         if not strict:
             if incompatible.missing_keys:
                 logger.warning("Missing keys when loading {} student checkpoint: {}", self.trainer_name, incompatible.missing_keys)

@@ -1,6 +1,6 @@
 model:
     name: wan_t2v
-    pretrained_model_name_or_path: Wan2.1-T2V-1.3B
+    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -35,24 +35,28 @@ data:
     train:
         name: wan_t2v_video_dataset
         data_path:
-            - /path/to/wan_t2v_video_metadata.jsonl
-        video_root: /path/to/videos
-        video_column: video
-        prompt_column: caption
+            - /data/nvme7/wangshankun/train_data/vipe_long/extracted/metadata.jsonl
         height: 480
         width: 832
         num_frames: 81
-        frame_rate: 24
-        random_start: true
+        video_column: video
+        prompt_column: caption
+        dataset_repeat: 3
+        prompt_dropout_rate: 0.0
+        frame_rate: 16
+        fix_frame_rate: false
+        random_start: false
+        skip_missing: true
+        decode_retries: 3
         batch_size: 1
-        num_workers: 8
+        num_workers: 4
         pin_memory: true
         shuffle: true
         drop_last: true
     val:
         name: prompt_dataset
         data_path:
-            - /path/to/wan_t2v_prompts.txt
+            - /data/nvme7/wangshankun/train_data/dmd/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0
@@ -74,7 +78,7 @@ scheduler:
 training:
     method: video_dmd
     train_type: full
-    max_train_iters: 300
+    max_train_iters: 600
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
     max_grad_norm: 10.0
@@ -85,7 +89,7 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 5
-        generator_ckpt: /path/to/wan2_1_t2v_1_3b_dmd_student_model_state.pt
+        generator_ckpt: /data/nvme7/wangshankun/LightX2V/lightx2v_train/output_train/wan2_1_t2v_1_3b_dmd/checkpoint-000000700
         dfd:
             real_replace_prob: 0.5
         denoising_step_list:
@@ -111,18 +115,18 @@ training:
         renoise_shift: 5.0
     student:
         optimizer:
-            learning_rate: 0.000002
+            learning_rate: 0.00002
             adam_beta1: 0.0
             adam_beta2: 0.999
             weight_decay: 0.01
-            adam_epsilon: 0.00000001
+            adam_epsilon: 0.0000001
     fake:
         optimizer:
-            learning_rate: 0.0000004
+            learning_rate: 0.000004
             adam_beta1: 0.0
             adam_beta2: 0.999
             weight_decay: 0.01
-            adam_epsilon: 0.00000001
+            adam_epsilon: 0.0000001
     teacher:
         guidance_scale: 3.0
         negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
