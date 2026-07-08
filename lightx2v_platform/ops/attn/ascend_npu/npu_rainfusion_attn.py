@@ -34,12 +34,15 @@ class NpuRainfusionOperator:
         v,
         scale,
         head_num,
-        select_idx,
-        select_num_idx,
-        block_shape,
-        actual_seq_lengths,
-        actual_seq_lengths_kv,
+        block_mask=None,
+        select_idx=None,
+        select_num_idx=None,
+        block_shape=None,
+        actual_seq_lengths=None,
+        actual_seq_lengths_kv=None,
     ):
+        if select_idx is None or select_num_idx is None:
+            raise ValueError("NpuRainfusionOperator requires select_idx and select_num_idx.")
         q_bnsd = q.transpose(1, 2)
         k_bnsd = k.transpose(1, 2)
         v_bnsd = v.transpose(1, 2)

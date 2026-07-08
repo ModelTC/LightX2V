@@ -3,10 +3,60 @@ import math
 import torch
 from einops import rearrange
 
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, SPARSE_OPERATOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .template import AttnWeightTemplate
+
+
+class CudaRainfusionSparseOperator:
+    def __init__(self, sparse_operator, dense_attn_type="torch_sdpa", pool_size=128, operator_setting=None):
+        self.pool_size = pool_size
+        self.dense_attn_type = dense_attn_type
+        self.operator_setting = operator_setting or {}
+        operator_cls = SPARSE_OPERATOR_REGISTER[sparse_operator]
+        try:
+            self.sparse_operator = operator_cls(q_block_size=pool_size, k_block_size=pool_size, operator_setting=self.operator_setting)
+        except TypeError:
+            self.sparse_operator = operator_cls(self.operator_setting)
+            if getattr(self.sparse_operator, "q_block_size", pool_size) != pool_size or getattr(self.sparse_operator, "k_block_size", pool_size) != pool_size:
+                raise ValueError(f"{sparse_operator} does not support RainFusion pool_size={pool_size}.")
+        self.dense_attn = ATTN_WEIGHT_REGISTER[dense_attn_type]()
+
+    def dense_attention(self, q, k, v):
+        b, q_seqlen, num_heads, head_dim = q.shape
+        if b != 1:
+            raise ValueError("CudaRainfusionSparseOperator currently only supports batch size 1.")
+        out = self.dense_attn.apply(q, k, v, max_seqlen_q=q_seqlen, max_seqlen_kv=k.shape[1])
+        return out.reshape(b, q_seqlen, num_heads, head_dim)
+
+    def sparse_attention(
+        self,
+        q,
+        k,
+        v,
+        scale,
+        head_num,
+        block_mask,
+        select_idx=None,
+        select_num_idx=None,
+        block_shape=None,
+        actual_seq_lengths=None,
+        actual_seq_lengths_kv=None,
+    ):
+        b, q_seqlen, num_heads, head_dim = q.shape
+        if b != 1:
+            raise ValueError("CudaRainfusionSparseOperator currently only supports batch size 1.")
+        out = self.sparse_operator(
+            q.squeeze(0),
+            k.squeeze(0),
+            v.squeeze(0),
+            block_mask,
+            max_seqlen_q=q_seqlen,
+            max_seqlen_kv=k.shape[1],
+            softmax_scale=scale,
+        )
+        return out.reshape(b, q_seqlen, num_heads, head_dim)
 
 
 @ATTN_WEIGHT_REGISTER("rainfusion_attn")
@@ -16,8 +66,13 @@ class RainfusionAttnWeight(AttnWeightTemplate):
     skip_timesteps = -1
     text_len = 0
     txt_first = False
+    backend = "auto"
+    sparse_operator = "flashinfer_operator"
+    dense_attn_type = "torch_sdpa"
+    operator_setting = {}
 
     _operator = None
+    _operator_key = None
     _base_blockmask = None
     _grid_size = None
     _step_index = None
@@ -32,6 +87,13 @@ class RainfusionAttnWeight(AttnWeightTemplate):
         cls.skip_timesteps = setting.get("skip_timesteps", cls.skip_timesteps)
         cls.text_len = setting.get("text_len", setting.get("txt_len", cls.text_len))
         cls.txt_first = setting.get("txt_first", cls.txt_first)
+        cls.backend = setting.get("backend", cls.backend)
+        cls.sparse_operator = setting.get("sparse_operator", cls.sparse_operator)
+        cls.dense_attn_type = setting.get("dense_attn_type", cls.dense_attn_type)
+        cls.operator_setting = setting.get("operator_setting", cls.operator_setting)
+        cls._operator = None
+        cls._operator_key = None
+        cls._base_blockmask = None
 
     @classmethod
     def reset_state(cls):
@@ -40,13 +102,26 @@ class RainfusionAttnWeight(AttnWeightTemplate):
 
     @classmethod
     def _get_operator(cls):
-        if cls._operator is not None:
+        backend = cls.backend
+        if backend == "auto":
+            backend = "npu" if "npu" in AI_DEVICE else "cuda_sparse"
+        operator_key = (backend, cls.sparse_operator, cls.dense_attn_type, cls.pool_size, repr(cls.operator_setting))
+        if cls._operator is not None and cls._operator_key == operator_key:
             return cls._operator
-        if "npu" not in AI_DEVICE:
-            raise RuntimeError("rainfusion_attn currently requires ascend_npu platform.")
-        from lightx2v_platform.ops.attn.ascend_npu.npu_rainfusion_attn import NpuRainfusionOperator
+        if backend == "npu":
+            from lightx2v_platform.ops.attn.ascend_npu.npu_rainfusion_attn import NpuRainfusionOperator
 
-        cls._operator = NpuRainfusionOperator()
+            cls._operator = NpuRainfusionOperator()
+        elif backend == "cuda_sparse":
+            cls._operator = CudaRainfusionSparseOperator(
+                sparse_operator=cls.sparse_operator,
+                dense_attn_type=cls.dense_attn_type,
+                pool_size=cls.pool_size,
+                operator_setting=cls.operator_setting,
+            )
+        else:
+            raise ValueError(f"Unsupported rainfusion_attn backend: {backend}")
+        cls._operator_key = operator_key
         return cls._operator
 
     @classmethod
@@ -105,7 +180,7 @@ class RainfusionAttnWeight(AttnWeightTemplate):
         return pos_matrix
 
     @classmethod
-    def get_blockwise_mask(cls, score_matrix):
+    def build_blockwise_mask(cls, score_matrix):
         batch_size, num_heads, rows, cols = score_matrix.shape
 
         keep_len = math.ceil(cols * (1 - cls.sparsity))
@@ -125,6 +200,15 @@ class RainfusionAttnWeight(AttnWeightTemplate):
             mask[:, :, -protect_len:, :] = True
             mask[:, :, :, -protect_len:] = True
 
+        return mask
+
+    @classmethod
+    def get_blockwise_mask(cls, score_matrix):
+        mask = cls.build_blockwise_mask(score_matrix)
+        return cls.get_select_indices(mask)
+
+    @classmethod
+    def get_select_indices(cls, mask):
         select_idx = cls.get_mask_index(mask)
         select_idx = select_idx[0].transpose(0, 1)
         select_num_idx = mask[0].transpose(0, 1).sum(dim=-1)
@@ -242,9 +326,7 @@ class RainfusionAttnWeight(AttnWeightTemplate):
 
         scheduler = kwargs.get("scheduler", None)
         step_index = cls._get_step_index(scheduler)
-        if cls._step_index != step_index:
-            cls._base_blockmask = None
-            cls._step_index = step_index
+        cls._step_index = step_index
 
         if len(q.shape) == 4:
             bs = q.shape[0]
@@ -281,15 +363,17 @@ class RainfusionAttnWeight(AttnWeightTemplate):
                 query_pool, key_pool, _ = torch.chunk(qkv_pool, 3, dim=0)
                 attn_scores_head = torch.einsum("blnd,bsnd->bnls", query_pool, key_pool) * scale
                 attn_scores_fake = torch.nn.functional.softmax(attn_scores_head, dim=-1)
-                cls._base_blockmask = cls.get_blockwise_mask(attn_scores_fake)
+                cls._base_blockmask = cls.build_blockwise_mask(attn_scores_fake)
 
-            select_idx, select_num_idx = cls._base_blockmask
+            block_mask = cls._base_blockmask
+            select_idx, select_num_idx = cls.get_select_indices(block_mask)
             out = cls._get_operator().sparse_attention(
                 q_4d,
                 k_4d,
                 v_4d,
                 scale=scale,
                 head_num=num_heads,
+                block_mask=block_mask,
                 select_idx=select_idx,
                 select_num_idx=select_num_idx,
                 block_shape=[self.pool_size, self.pool_size],
