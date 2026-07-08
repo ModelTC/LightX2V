@@ -5,7 +5,16 @@ import torch
 from diffusers.utils import export_to_video
 from loguru import logger
 
-from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_distributed
+from lightx2v_train.runtime.distributed import (
+    barrier,
+    get_data_parallel_rank,
+    get_data_parallel_world_size,
+    get_rank,
+    get_sequence_parallel_rank,
+    get_sequence_parallel_world_size,
+    is_distributed,
+)
+from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
@@ -21,14 +30,19 @@ def _target_hw_for_sample(sample, default_height, default_width):
     return default_height, default_width
 
 
+@INFERENCER_REGISTER("wan_ti2v_5b_infer")
+@INFERENCER_REGISTER("wan_t2v_14b_infer")
 @INFERENCER_REGISTER("wan_t2v_infer")
 class WanT2VInferencer(BaseInferencer):
     @torch.no_grad()
     def infer(self):
         samples = self.dataloader_eval.dataset.samples
         prompts = [sample["prompt"] for sample in samples]
-        rank = get_rank()
-        world_size = get_world_size()
+        rank = get_data_parallel_rank()
+        world_size = get_data_parallel_world_size()
+        sp_rank = get_sequence_parallel_rank()
+        sp_world_size = get_sequence_parallel_world_size()
+        is_sp_leader = sp_rank == 0
 
         default_height = self.infer_config.get("default_height", self.infer_config.get("height", 480))
         default_width = self.infer_config.get("default_width", self.infer_config.get("width", 832))
@@ -53,31 +67,43 @@ class WanT2VInferencer(BaseInferencer):
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 5.0)
             negative_prompt = self.infer_config.get("negative_prompt", " ")
             neg_cond = self.model.encode_condition({"prompt": negative_prompt})
+            neg_cond = broadcast_sequence_parallel_value(neg_cond)
         else:
             self.guidance_scale = None
             neg_cond = None
 
         saved_paths = []
         self.model.set_denoiser_eval()
-        num_slots = (len(prompts) + world_size - 1) // world_size if is_distributed() else len(prompts)
-        logger.info("[infer] start samples={} steps={} output_dir={}", len(prompts), num_inference_steps, self.output_infer_dir)
+        num_slots = (len(prompts) + world_size - 1) // world_size
+        if get_rank() == 0:
+            logger.info(
+                "[infer] start samples={} steps={} dp_world={} sp_world={} output_dir={}",
+                len(prompts),
+                num_inference_steps,
+                world_size,
+                sp_world_size,
+                self.output_infer_dir,
+            )
         with torch.no_grad():
             for slot in range(num_slots):
-                i = slot * world_size + rank if is_distributed() else slot
+                i = slot * world_size + rank
                 has_sample = i < len(prompts)
                 prompt = prompts[i] if has_sample else " "
                 sample = samples[i] if has_sample else {}
+                should_log_sample = has_sample and is_sp_leader
 
                 height, width = _target_hw_for_sample(sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
                 pos_cond = self.model.encode_condition({"prompt": prompt})
                 latent = self.model.prepare_infer_latents(height, width, generator)
+                pos_cond = broadcast_sequence_parallel_value(pos_cond)
+                latent = broadcast_sequence_parallel_value(latent)
                 latent_hw = (latent.shape[-2], latent.shape[-1])
                 self.scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
                 total_steps = len(self.scheduler.infer_timesteps)
 
-                if has_sample:
+                if should_log_sample:
                     logger.info("[infer] sample={}/{} seed={} size={}x{} start", i + 1, len(prompts), seed, height, width)
                 for step_idx, _ in enumerate(self.scheduler.infer_timesteps):
                     sigma = self.scheduler.infer_sigmas[step_idx].unsqueeze(0)
@@ -89,10 +115,10 @@ class WanT2VInferencer(BaseInferencer):
                     )
                     latent = self.scheduler.step(model_output, step_idx, latent)
                     step = step_idx + 1
-                    if has_sample and (step == 1 or step % infer_log_every_steps == 0 or step == total_steps):
+                    if should_log_sample and (step == 1 or step % infer_log_every_steps == 0 or step == total_steps):
                         logger.info("[infer] sample={}/{} step={}/{}", i + 1, len(prompts), step, total_steps)
 
-                if not has_sample:
+                if not has_sample or not is_sp_leader:
                     continue
 
                 videos = self.model.decode_latent(latent)
@@ -124,14 +150,19 @@ class WanT2VInferencer(BaseInferencer):
         return saved_paths
 
 
+@INFERENCER_REGISTER("wan_ti2v_5b_ar_infer")
+@INFERENCER_REGISTER("wan_t2v_14b_ar_infer")
 @INFERENCER_REGISTER("wan_t2v_ar_infer")
 class WanT2VARInferencer(BaseInferencer):
     @torch.no_grad()
     def infer(self):
         samples = self.dataloader_eval.dataset.samples
         prompts = [sample["prompt"] for sample in samples]
-        rank = get_rank()
-        world_size = get_world_size()
+        rank = get_data_parallel_rank()
+        world_size = get_data_parallel_world_size()
+        sp_rank = get_sequence_parallel_rank()
+        sp_world_size = get_sequence_parallel_world_size()
+        is_sp_leader = sp_rank == 0
 
         default_height = self.infer_config.get("default_height", self.infer_config.get("height", 480))
         default_width = self.infer_config.get("default_width", self.infer_config.get("width", 832))
@@ -143,6 +174,7 @@ class WanT2VARInferencer(BaseInferencer):
         guidance_scale = self.infer_config.get("cfg_guidance_scale", 3.0)
         negative_prompt = self.infer_config.get("negative_prompt", " ")
         base_seed = self.infer_config.get("seed", 42)
+        save_latents_only = bool(self.infer_config.get("save_latents_only", False))
 
         lora_config = self.infer_config.get("lora_config", None)
         lora_path = lora_config.get("path", None) if lora_config else None
@@ -152,20 +184,25 @@ class WanT2VARInferencer(BaseInferencer):
 
         saved_paths = []
         self.model.set_denoiser_eval()
-        num_slots = (len(prompts) + world_size - 1) // world_size if is_distributed() else len(prompts)
-        logger.info(
-            "[ar-infer] start samples={} steps={} chunk={} output_dir={}",
-            len(prompts),
-            num_inference_steps,
-            self._num_frame_per_chunk(),
-            self.output_infer_dir,
-        )
+        num_slots = (len(prompts) + world_size - 1) // world_size
+        if get_rank() == 0:
+            logger.info(
+                "[ar-infer] start samples={} steps={} chunk={} dp_world={} sp_world={} save_latents_only={} output_dir={}",
+                len(prompts),
+                num_inference_steps,
+                self._num_frame_per_chunk(),
+                world_size,
+                sp_world_size,
+                save_latents_only,
+                self.output_infer_dir,
+            )
         with torch.no_grad():
             for slot in range(num_slots):
-                i = slot * world_size + rank if is_distributed() else slot
+                i = slot * world_size + rank
                 has_sample = i < len(prompts)
                 prompt = prompts[i] if has_sample else " "
                 sample = samples[i] if has_sample else {}
+                should_log_sample = has_sample and is_sp_leader
 
                 height, width = _target_hw_for_sample(sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
@@ -173,8 +210,11 @@ class WanT2VARInferencer(BaseInferencer):
                 pos_cond = self.model.encode_condition({"prompt": prompt})
                 neg_cond = self.model.encode_condition({"prompt": negative_prompt}) if enable_cfg else None
                 latent = self.model.prepare_infer_latents(height, width, generator)
+                pos_cond = broadcast_sequence_parallel_value(pos_cond)
+                neg_cond = broadcast_sequence_parallel_value(neg_cond) if neg_cond is not None else None
+                latent = broadcast_sequence_parallel_value(latent)
 
-                if has_sample:
+                if should_log_sample:
                     logger.info("[ar-infer] sample={}/{} seed={} size={}x{} start", i + 1, len(prompts), seed, height, width)
                 latent = self._ar_rollout(
                     noise=latent,
@@ -182,21 +222,36 @@ class WanT2VARInferencer(BaseInferencer):
                     neg_cond=neg_cond,
                     num_inference_steps=num_inference_steps,
                     guidance_scale=guidance_scale if enable_cfg else None,
+                    log_progress=should_log_sample,
                 )
 
-                if not has_sample:
+                if not has_sample or not is_sp_leader:
                     continue
 
-                videos = self.model.decode_latent(latent)
                 if self.output_infer_dir is not None:
-                    save_path = Path(self.output_infer_dir) / f"{i:05d}.mp4"
-                    export_to_video(
-                        videos[0],
-                        str(save_path),
-                        fps=fps,
-                        quality=video_quality,
-                        macro_block_size=macro_block_size,
-                    )
+                    if save_latents_only:
+                        save_path = Path(self.output_infer_dir) / f"{i:05d}.pt"
+                        torch.save(
+                            {
+                                "latent": latent.detach().cpu(),
+                                "prompt": prompt,
+                                "seed": seed,
+                                "height": height,
+                                "width": width,
+                                "num_frames": self.infer_config.get("num_frames"),
+                            },
+                            save_path,
+                        )
+                    else:
+                        videos = self.model.decode_latent(latent)
+                        save_path = Path(self.output_infer_dir) / f"{i:05d}.mp4"
+                        export_to_video(
+                            videos[0],
+                            str(save_path),
+                            fps=fps,
+                            quality=video_quality,
+                            macro_block_size=macro_block_size,
+                        )
                     logger.info("[ar-infer] sample={}/{} saved path={}", i + 1, len(prompts), save_path)
                     saved_paths.append(str(save_path))
                 logger.info("[ar-infer] sample={}/{} done", i + 1, len(prompts))
@@ -214,7 +269,7 @@ class WanT2VARInferencer(BaseInferencer):
         logger.info("[ar-infer] finished saved={}", saved_count)
         return saved_paths
 
-    def _ar_rollout(self, noise, pos_cond, neg_cond, num_inference_steps, guidance_scale):
+    def _ar_rollout(self, noise, pos_cond, neg_cond, num_inference_steps, guidance_scale, log_progress=False):
         transformer = self.model.denoiser_module()
         if not hasattr(transformer, "_forward_inference"):
             raise RuntimeError("wan_t2v_ar_infer requires the causal Wan transformer.")
@@ -242,7 +297,8 @@ class WanT2VARInferencer(BaseInferencer):
         for block_idx in range(num_blocks):
             current_noise = noise[:, :, cache_start_frame : cache_start_frame + chunk_size]
             latents = current_noise
-            logger.info("[ar-infer] block={}/{} frames={}..{}", block_idx + 1, num_blocks, cache_start_frame, cache_start_frame + chunk_size - 1)
+            if log_progress:
+                logger.info("[ar-infer] block={}/{} frames={}..{}", block_idx + 1, num_blocks, cache_start_frame, cache_start_frame + chunk_size - 1)
 
             if denoising_steps is None:
                 sample_scheduler = self._build_cf_unipc_scheduler(noise.device, num_inference_steps)

@@ -25,7 +25,8 @@ class BaseTrainer:
         self.noise_scheduler = RectifiedFlowMatchingScheduler(config)
         self.running_dtype = get_running_dtype(self.model_config["running_dtype"])
         self.train_type = self._resolve_train_type()
-        logger.info("[train] train_type={}", self.train_type)
+        if self.train_type is not None:
+            logger.info("[train] train_type={}", self.train_type)
 
         lora_config = self._get_lora_config()
         self.lora_rank = lora_config.get("rank", 16)
@@ -223,6 +224,9 @@ class BaseTrainer:
 
     def _set_gradient_sync(self, enabled):
         set_parallel_gradient_sync(self.model, enabled)
+
+    def _after_backward(self):
+        pass
 
     def run_inference(self, current_iter):
         base_output_dir = self.infer_config.get("output_dir", "./output_infer")

@@ -12,8 +12,18 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_
 
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
-from lightx2v_train.runtime.distributed import barrier, get_world_size, is_distributed, is_main_process, reduce_mean
+from lightx2v_train.runtime.distributed import (
+    barrier,
+    get_sequence_parallel_rank,
+    get_sequence_parallel_world_size,
+    get_world_size,
+    is_distributed,
+    is_main_process,
+    is_sequence_parallel_enabled,
+    reduce_mean,
+)
 from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradient_sync
+from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, broadcast_sequence_parallel_value, sync_sequence_parallel_gradients
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
 from lightx2v_train.utils.registry import TRAINER_REGISTER
@@ -23,23 +33,47 @@ from .base import BaseTrainer
 
 @TRAINER_REGISTER("dmd")
 class DmdTrainer(BaseTrainer):
+    def _resolve_train_type(self):
+        if "train_type" in self.training_config:
+            raise ValueError("DMD trainers use training.student.train_type and training.fake.train_type; remove training.train_type.")
+        return None
+
     def __init__(self, config):
         super().__init__(config)
-        fake_config = self.training_config.get("fake", {})
-        self.fake_optimizer_config = fake_config.get("optimizer", {})
+        self.student_config = self.training_config["student"]
+        self.fake_config = self.training_config["fake"]
+        self.student_train_type = self.student_config["train_type"]
+        self.fake_train_type = self.fake_config["train_type"]
+
+        if "lora" in self.training_config:
+            raise ValueError("DMD trainers do not read training.lora. Use training.student.lora and training.fake.lora.")
+
+        self.student_lora_config = None
+        if self.student_train_type == "lora":
+            self.student_lora_config = copy.deepcopy(self.student_config["lora"])
+            self.student_lora_config["rank"] = int(self.student_lora_config["rank"])
+            self.student_lora_config["alpha"] = int(self.student_lora_config["alpha"])
+
+        self.fake_lora_config = None
+        if self.fake_train_type == "lora":
+            self.fake_lora_config = copy.deepcopy(self.fake_config["lora"])
+            self.fake_lora_config["rank"] = int(self.fake_lora_config["rank"])
+            self.fake_lora_config["alpha"] = int(self.fake_lora_config["alpha"])
+
+        self.fake_optimizer_config = self.fake_config["optimizer"]
         self.fake_optimizer_learning_rate = self.fake_optimizer_config.get("learning_rate", self.optimizer_learning_rate)
         self.fake_optimizer_adam_beta1 = self.fake_optimizer_config.get("adam_beta1", self.optimizer_adam_beta1)
         self.fake_optimizer_adam_beta2 = self.fake_optimizer_config.get("adam_beta2", self.optimizer_adam_beta2)
         self.fake_optimizer_weight_decay = self.fake_optimizer_config.get("weight_decay", self.optimizer_weight_decay)
         self.fake_optimizer_adam_epsilon = self.fake_optimizer_config.get("adam_epsilon", self.optimizer_adam_epsilon)
 
-        self.dmd_config = self.training_config.get("dmd", {})
-        teacher_config = self.training_config.get("teacher", {})
+        self.dmd_config = self.training_config["dmd"]
+        teacher_config = self.training_config["teacher"] if "teacher" in self.training_config else {}
         self.num_inference_steps = int(self.dmd_config.get("num_inference_steps", 4))
         self.fake_update_ratio = max(1, int(self.dmd_config.get("fake_update_ratio", 1)))
-        self.guidance_scale = float(teacher_config.get("guidance_scale", self.dmd_config.get("guidance_scale", 3.0)))
-        self.negative_prompt = teacher_config.get("negative_prompt", self.dmd_config.get("negative_prompt", " "))
-        self.cfg_norm = teacher_config.get("cfg_norm", self.dmd_config.get("cfg_norm", "layer_norm"))
+        self.guidance_scale = float(teacher_config["guidance_scale"] if "guidance_scale" in teacher_config else self.dmd_config.get("guidance_scale", 3.0))
+        self.negative_prompt = teacher_config["negative_prompt"] if "negative_prompt" in teacher_config else self.dmd_config.get("negative_prompt", " ")
+        self.cfg_norm = teacher_config["cfg_norm"] if "cfg_norm" in teacher_config else self.dmd_config.get("cfg_norm", "layer_norm")
         self.image_sizes = self.dmd_config.get("image_sizes", [])
 
         random_schedule_config = self.dmd_config.get("random_schedule", {})
@@ -57,8 +91,53 @@ class DmdTrainer(BaseTrainer):
         self.cdm_norm_clip_min = float(self.cdm_config.get("norm_clip_min", 0.1))
 
     def _get_optimizer_config(self):
-        student_config = self.training_config.get("student", {})
-        return student_config.get("optimizer", self.training_config.get("optimizer", {}))
+        return self.training_config["student"]["optimizer"]
+
+    def _setup_trainable_model(self, model, role="student"):
+        if role == "student":
+            train_type = self.student_train_type
+            lora_config = self.student_lora_config
+        elif role == "fake":
+            train_type = self.fake_train_type
+            lora_config = self.fake_lora_config
+        else:
+            raise ValueError(f"Unsupported DMD model role: {role}")
+        if train_type == "lora":
+            model.add_lora(lora_config["rank"], lora_config["alpha"], lora_config.get("target_modules"))
+            model.set_lora_trainable()
+            return
+        model.set_full_trainable()
+
+    def _restore_trainable_model(self, model, role="student"):
+        if role == "student":
+            train_type = self.student_train_type
+        elif role == "fake":
+            train_type = self.fake_train_type
+        else:
+            raise ValueError(f"Unsupported DMD model role: {role}")
+        if train_type == "lora":
+            model.set_lora_trainable()
+            return
+        model.set_full_trainable()
+
+    def _save_model_weights(self, model, save_dir, role="student"):
+        train_type = self.student_train_type if role == "student" else self.fake_train_type
+        if train_type == "lora":
+            model.save_lora_weights(save_dir)
+            return
+        if is_main_process():
+            torch.save(model.denoiser_module().state_dict(), os.path.join(save_dir, "model_state.pt"))
+
+    def _load_model_weights(self, model, save_dir, role="student"):
+        train_type = self.student_train_type if role == "student" else self.fake_train_type
+        if train_type == "lora":
+            model.load_lora_weights_for_resume(save_dir)
+            return
+        model_state_path = os.path.join(save_dir, "model_state.pt")
+        if not os.path.exists(model_state_path):
+            raise RuntimeError(f"model_state.pt not found in {save_dir}")
+        state_dict = torch.load(model_state_path, map_location="cpu", weights_only=False)
+        model.denoiser_module().load_state_dict(state_dict)
 
     def setup(self, resume_ckpt_path=None):
         super().setup(resume_ckpt_path=None)
@@ -66,17 +145,23 @@ class DmdTrainer(BaseTrainer):
 
         fake_model_config = copy.deepcopy(self.config)
         fake_model_config["model"] = copy.deepcopy(base_model_config)
-        fake_model_config["model"].update(copy.deepcopy(self.model_config.get("fake", {}) or {}))
+        if "fake" in self.model_config:
+            if not isinstance(self.model_config["fake"], dict):
+                raise ValueError("model.fake must be a mapping.")
+            fake_model_config["model"].update(copy.deepcopy(self.model_config["fake"]))
         self.fake_model = build_model(fake_model_config)
         self.fake_model.load_components(transformer_only=True, reference_model=self.model)
-        self._setup_trainable_model(self.fake_model)
+        self._setup_trainable_model(self.fake_model, role="fake")
         apply_parallel(self.fake_model, self.config)
         if self.gradient_checkpointing:
             self.fake_model.enable_gradient_checkpointing()
 
         teacher_model_config = copy.deepcopy(self.config)
         teacher_model_config["model"] = copy.deepcopy(base_model_config)
-        teacher_model_config["model"].update(copy.deepcopy(self.model_config.get("teacher", {}) or {}))
+        if "teacher" in self.model_config:
+            if not isinstance(self.model_config["teacher"], dict):
+                raise ValueError("model.teacher must be a mapping.")
+            teacher_model_config["model"].update(copy.deepcopy(self.model_config["teacher"]))
         self.teacher_model = build_model(teacher_model_config)
         self.teacher_model.load_components(transformer_only=True, reference_model=self.model)
         self.teacher_model.transformer.requires_grad_(False)
@@ -106,9 +191,10 @@ class DmdTrainer(BaseTrainer):
         if resume_ckpt_path is not None:
             self._load_resume_state(resume_ckpt_path)
 
-        logger.info("[train] dmd student model={} path={}", self.model_config.get("name"), self.model_config.get("pretrained_model_name_or_path"))
-        logger.info("[train] dmd fake model={} path={}", fake_model_config["model"].get("name"), fake_model_config["model"].get("pretrained_model_name_or_path"))
-        logger.info("[train] dmd teacher model={} path={}", teacher_model_config["model"].get("name"), teacher_model_config["model"].get("pretrained_model_name_or_path"))
+        logger.info("[train] dmd student model={} path={}", self.model_config["name"], self.model_config["pretrained_model_name_or_path"])
+        logger.info("[train] dmd fake model={} path={}", fake_model_config["model"]["name"], fake_model_config["model"]["pretrained_model_name_or_path"])
+        logger.info("[train] dmd teacher model={} path={}", teacher_model_config["model"]["name"], teacher_model_config["model"]["pretrained_model_name_or_path"])
+        logger.info("[train] dmd train_types student={} fake={}", self.student_train_type, self.fake_train_type)
         logger.info("[train] dmd student trainable params={}", self._count_trainable(self.model.transformer))
         logger.info("[train] dmd fake trainable params={}", self._count_trainable(self.fake_model.transformer))
         if self.random_schedule_enabled:
@@ -180,11 +266,22 @@ class DmdTrainer(BaseTrainer):
         image = sample["target_image"]
         batch_size = image.shape[0]
         if self.image_sizes:
-            height, width = self.image_sizes[torch.randint(0, len(self.image_sizes), (1,), device=self.model.device).item()]
+            image_size_index = int(torch.randint(0, len(self.image_sizes), (1,), device=self.model.device).item())
+            image_size_index = broadcast_sequence_parallel_value(image_size_index)
+            height, width = self.image_sizes[image_size_index]
         else:
             height, width = image.shape[-2], image.shape[-1]
 
-        return self.model.dmd_latent_shape(batch_size, height, width)
+        latent_channels = getattr(self.model.vae.config, "z_dim", None)
+        if latent_channels is None:
+            latent_channels = self.model.transformer.config.in_channels // 4
+        return (
+            batch_size,
+            int(latent_channels),
+            1,
+            height // self.model.vae_scale_factor,
+            width // self.model.vae_scale_factor,
+        )
 
     def _encode_conditions(self, sample):
         prompt = sample["prompt"]
@@ -198,6 +295,8 @@ class DmdTrainer(BaseTrainer):
                 negative_condition = self.model.encode_prompt_condition(negative_prompt)
             else:
                 negative_condition = None
+        condition = broadcast_sequence_parallel_value(condition)
+        negative_condition = broadcast_sequence_parallel_value(negative_condition) if negative_condition is not None else None
         return condition, negative_condition
 
     def _predict_velocity(self, model, latents, sigma, condition):
@@ -222,7 +321,7 @@ class DmdTrainer(BaseTrainer):
         return self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
 
     def sample_initial_latents(self, latent_shape):
-        return torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype)
+        return broadcast_sequence_parallel_value(torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype))
 
     def _sample_synced_int(self, low, high):
         value = torch.randint(int(low), int(high), (1,), device=self.model.device, dtype=torch.int64)
@@ -287,7 +386,8 @@ class DmdTrainer(BaseTrainer):
         x0, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=(stage != "fake"), xt=xt_start)
 
         sigma = self.scheduler.sample_renoise_sigma(latent_shape[0], device=self.model.device, dtype=self.running_dtype)
-        noise = torch.randn(latent_shape, device=self.model.device, dtype=torch.float32)
+        sigma = broadcast_sequence_parallel_value(sigma)
+        noise = broadcast_sequence_parallel_value(torch.randn(latent_shape, device=self.model.device, dtype=torch.float32))
         renoised_xt = self.scheduler.add_noise(x0.detach(), noise, sigma)
 
         if stage == "fake":
@@ -337,9 +437,10 @@ class DmdTrainer(BaseTrainer):
         microbatches = []
 
         logger.info(
-            "[train] start method={} train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
+            "[train] start method={} student_train_type={} fake_train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
             self.training_config.get("method", "dmd"),
-            self.train_type,
+            self.student_train_type,
+            self.fake_train_type,
             current_iter,
             max_train_iters,
             get_world_size(),
@@ -377,6 +478,7 @@ class DmdTrainer(BaseTrainer):
                 if grad_accum_counter % grad_accum_iters != 0:
                     continue
 
+                self._sync_sequence_parallel_grads(self.trainable_params)
                 torch.nn.utils.clip_grad_norm_(self.trainable_params, max_grad_norm)
                 self.optimizer.step()
                 self.lr_scheduler.step()
@@ -384,19 +486,18 @@ class DmdTrainer(BaseTrainer):
 
                 fake_loss = 0.0
                 for _ in range(fake_update_ratio):
-                    fake_step_loss = 0.0
                     for microbatch_idx, (micro_latent_shape, micro_conditions) in enumerate(microbatches):
                         sync_fake_grad = microbatch_idx == len(microbatches) - 1
                         self._set_fake_gradient_sync(sync_fake_grad)
                         res_fake = self.forward_loss(micro_latent_shape, micro_conditions, stage="fake")
                         loss_fake = res_fake["fake"]
                         (loss_fake / len(microbatches)).backward()
-                        fake_step_loss += loss_fake.item() / len(microbatches)
+                        fake_loss += loss_fake.item() / len(microbatches)
+                    self._sync_sequence_parallel_grads(self.fake_trainable_params)
                     torch.nn.utils.clip_grad_norm_(self.fake_trainable_params, max_grad_norm)
                     self.fake_optimizer.step()
                     self.fake_lr_scheduler.step()
                     self.fake_optimizer.zero_grad(set_to_none=True)
-                    fake_loss += fake_step_loss
                 running_fake += fake_loss / fake_update_ratio
                 microbatches = []
 
@@ -452,8 +553,11 @@ class DmdTrainer(BaseTrainer):
         self._set_student_gradient_sync(enabled)
         self._set_fake_gradient_sync(enabled)
 
+    def _sync_sequence_parallel_grads(self, params):
+        sync_sequence_parallel_gradients(params)
+
     def _fake_weights_dir(self, root_dir):
-        return os.path.join(root_dir, "fake_lora" if self.train_type == "lora" else "fake_model")
+        return os.path.join(root_dir, "fake_lora" if self.fake_train_type == "lora" else "fake_model")
 
     def _load_resume_state(self, resume_ckpt_path):
         if self.model.is_fsdp2_wrapped() or self.fake_model.is_fsdp2_wrapped():
@@ -469,6 +573,12 @@ class DmdTrainer(BaseTrainer):
             logger.warning("Checkpoint {} has no world_size metadata. Assuming world_size=1 for backward compatibility.", state_path)
             state["world_size"] = 1
         self._validate_checkpoint_metadata(state, state_path, resume_ckpt_path)
+        checkpoint_student_train_type = state.get("student_train_type")
+        if checkpoint_student_train_type is not None and checkpoint_student_train_type != self.student_train_type:
+            raise RuntimeError(f"Cannot resume checkpoint saved with student_train_type={checkpoint_student_train_type!r} using training.student.train_type={self.student_train_type!r}: {state_path}")
+        checkpoint_fake_train_type = state.get("fake_train_type")
+        if checkpoint_fake_train_type is not None and checkpoint_fake_train_type != self.fake_train_type:
+            raise RuntimeError(f"Cannot resume checkpoint saved with fake_train_type={checkpoint_fake_train_type!r} using training.fake.train_type={self.fake_train_type!r}: {state_path}")
 
     def _load_single_process_state(self, resume_ckpt_path):
         training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
@@ -479,12 +589,12 @@ class DmdTrainer(BaseTrainer):
 
         state = torch.load(training_state_path, map_location="cpu", weights_only=False)
         self._validate_dmd_checkpoint_metadata(state, training_state_path, resume_ckpt_path)
-        self._load_model_weights(self.model, resume_ckpt_path)
+        self._load_model_weights(self.model, resume_ckpt_path, role="student")
         self.optimizer.load_state_dict(state["optimizer"])
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
 
         if os.path.exists(fake_weights_dir):
-            self._load_model_weights(self.fake_model, fake_weights_dir)
+            self._load_model_weights(self.fake_model, fake_weights_dir, role="fake")
         else:
             logger.warning("Fake model weights not found in {}. Fake model not restored.", fake_weights_dir)
 
@@ -549,18 +659,18 @@ class DmdTrainer(BaseTrainer):
             os.makedirs(save_dir, exist_ok=True)
         barrier()
 
-        save_student_weights = self.train_type == "lora" or not self.model.is_fsdp2_wrapped()
+        save_student_weights = self.student_train_type == "lora" or not self.model.is_fsdp2_wrapped()
         if save_student_weights:
-            self._save_model_weights(self.model, save_dir)
+            self._save_model_weights(self.model, save_dir, role="student")
         barrier()
 
         fake_save_dir = self._fake_weights_dir(save_dir)
-        save_fake_weights = self.train_type == "lora" or not self.fake_model.is_fsdp2_wrapped()
+        save_fake_weights = self.fake_train_type == "lora" or not self.fake_model.is_fsdp2_wrapped()
         if save_fake_weights and is_main_process():
             os.makedirs(fake_save_dir, exist_ok=True)
         barrier()
         if save_fake_weights:
-            self._save_model_weights(self.fake_model, fake_save_dir)
+            self._save_model_weights(self.fake_model, fake_save_dir, role="fake")
         barrier()
 
         config_path = self.config.get("config_path")
@@ -569,6 +679,8 @@ class DmdTrainer(BaseTrainer):
 
         if self.model.is_fsdp2_wrapped() or self.fake_model.is_fsdp2_wrapped():
             self._save_distributed_state(save_dir, iteration)
+            if self._should_save_consolidated_student():
+                self._save_consolidated_student_weights(save_dir)
             barrier()
             logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
             return
@@ -576,6 +688,8 @@ class DmdTrainer(BaseTrainer):
         training_state = {
             "iteration": iteration,
             "world_size": get_world_size(),
+            "student_train_type": self.student_train_type,
+            "fake_train_type": self.fake_train_type,
             "optimizer": self.optimizer.state_dict(),
             "lr_scheduler": self.lr_scheduler.state_dict(),
             "fake_optimizer": self.fake_optimizer.state_dict(),
@@ -586,6 +700,21 @@ class DmdTrainer(BaseTrainer):
         barrier()
         logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
 
+    def _should_save_consolidated_student(self):
+        enabled = bool(self.training_config.get("save_consolidated_student", False))
+        if not enabled:
+            return False
+        if self.student_train_type != "full":
+            logger.warning("save_consolidated_student=true is ignored because training.student.train_type='{}'.", self.student_train_type)
+            return False
+        return True
+
+    def _save_consolidated_student_weights(self, save_dir):
+        output_dir = os.path.join(save_dir, "student_consolidated")
+        logger.info("[train] saving consolidated student weights to {}", output_dir)
+        self.model.save_full_model(output_dir)
+        barrier()
+
     def _save_distributed_state(self, save_dir, iteration):
         dist_state_path = os.path.join(save_dir, "dist_state")
         if is_main_process():
@@ -594,6 +723,8 @@ class DmdTrainer(BaseTrainer):
                 {
                     "iteration": iteration,
                     "world_size": get_world_size(),
+                    "student_train_type": self.student_train_type,
+                    "fake_train_type": self.fake_train_type,
                     "lr_scheduler": self.lr_scheduler.state_dict(),
                     "fake_lr_scheduler": self.fake_lr_scheduler.state_dict(),
                 },
@@ -618,17 +749,22 @@ class DmdTrainer(BaseTrainer):
 @TRAINER_REGISTER("video_dmd")
 class VideoDmdTrainer(DmdTrainer):
     trainer_name = "video_dmd"
-    allowed_model_names = {"wan_t2v"}
+    allowed_model_names = {"wan_t2v", "wan_t2v_14b", "wan_ti2v_5b"}
 
     def __init__(self, config):
         super().__init__(config)
-        if self.model_config.get("name") not in self.allowed_model_names:
+        model_name = self.model_config["name"]
+        if model_name not in self.allowed_model_names:
             allowed = ", ".join(repr(name) for name in sorted(self.allowed_model_names))
             raise ValueError(f"{self.trainer_name} trainer currently requires model.name in {{{allowed}}}.")
-        if self.train_type != "full":
-            raise ValueError(f"{self.trainer_name} trainer only supports training.train_type='full'.")
+        default_lora_target_modules = ["q", "k", "v", "o", "ffn.0", "ffn.2"]
+        if self.student_lora_config is not None and "target_modules" not in self.student_lora_config:
+            self.student_lora_config["target_modules"] = list(default_lora_target_modules)
+        if self.fake_lora_config is not None and "target_modules" not in self.fake_lora_config:
+            self.fake_lora_config["target_modules"] = list(default_lora_target_modules)
 
-        self.num_train_timestep = int(self.dmd_config.get("num_train_timestep", self.config["scheduler"].get("num_train_timesteps", 1000)))
+        scheduler_config = self.config["scheduler"]
+        self.num_train_timestep = int(self.dmd_config["num_train_timestep"] if "num_train_timestep" in self.dmd_config else scheduler_config.get("num_train_timesteps", 1000))
         default_denoising_steps = [int(round(self.num_train_timestep * (1.0 - step_idx / self.num_inference_steps))) for step_idx in range(self.num_inference_steps)]
         self.denoising_step_list = list(self.dmd_config.get("denoising_step_list", default_denoising_steps))
         self.num_inference_steps = len(self.denoising_step_list)
@@ -636,18 +772,32 @@ class VideoDmdTrainer(DmdTrainer):
         self.warp_denoising_step = bool(self.dmd_config.get("warp_denoising_step", True))
         self.min_step = int(float(self.dmd_config.get("min_step_ratio", 0.02)) * self.num_train_timestep)
         self.max_step = int(float(self.dmd_config.get("max_step_ratio", 0.98)) * self.num_train_timestep)
-        self.score_timestep_shift = float(self.dmd_config.get("timestep_shift", self.config["scheduler"].get("time_shift_settings", {}).get("time_shift_mu", 5.0)))
+        time_shift_settings = scheduler_config["time_shift_settings"] if "time_shift_settings" in scheduler_config else {}
+        if not isinstance(time_shift_settings, dict):
+            raise ValueError("scheduler.time_shift_settings must be a mapping.")
+        self.score_timestep_shift = float(self.dmd_config["timestep_shift"] if "timestep_shift" in self.dmd_config else time_shift_settings.get("time_shift_mu", 5.0))
         self.ts_schedule = bool(self.dmd_config.get("ts_schedule", False))
         self.ts_schedule_max = bool(self.dmd_config.get("ts_schedule_max", False))
         self.min_score_timestep = int(self.dmd_config.get("min_score_timestep", 0))
 
-        student_config = self.training_config.get("student", {})
-        model_student_config = self.model_config.get("student", {})
-        self.student_checkpoint_path = model_student_config.get(
-            "checkpoint_path",
-            student_config.get("checkpoint_path", self.training_config.get("generator_ckpt", self.dmd_config.get("generator_ckpt"))),
-        )
-        self.student_checkpoint_strict = bool(model_student_config.get("checkpoint_strict", student_config.get("checkpoint_strict", True)))
+        self.student_checkpoint_path = None
+        self.student_checkpoint_strict = True
+        if "checkpoint_strict" in self.student_config:
+            self.student_checkpoint_strict = bool(self.student_config["checkpoint_strict"])
+        if "student" in self.model_config:
+            if not isinstance(self.model_config["student"], dict):
+                raise ValueError("model.student must be a mapping.")
+            model_student_config = self.model_config["student"]
+            if "checkpoint_path" in model_student_config:
+                self.student_checkpoint_path = model_student_config["checkpoint_path"]
+            if "checkpoint_strict" in model_student_config:
+                self.student_checkpoint_strict = bool(model_student_config["checkpoint_strict"])
+        if self.student_checkpoint_path is None and "checkpoint_path" in self.student_config:
+            self.student_checkpoint_path = self.student_config["checkpoint_path"]
+        if self.student_checkpoint_path is None and "generator_ckpt" in self.training_config:
+            self.student_checkpoint_path = self.training_config["generator_ckpt"]
+        if self.student_checkpoint_path is None and "generator_ckpt" in self.dmd_config:
+            self.student_checkpoint_path = self.dmd_config["generator_ckpt"]
 
     def setup(self, resume_ckpt_path=None):
         if resume_ckpt_path is None and self.student_checkpoint_path:
@@ -721,9 +871,10 @@ class VideoDmdTrainer(DmdTrainer):
         save_total_limit = self.save_total_limit
 
         logger.info(
-            "[train] start method={} train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
+            "[train] start method={} student_train_type={} fake_train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
             self.training_config.get("method", self.trainer_name),
-            self.train_type,
+            self.student_train_type,
+            self.fake_train_type,
             current_iter,
             max_train_iters,
             get_world_size(),
@@ -806,6 +957,7 @@ class VideoDmdTrainer(DmdTrainer):
             (loss / grad_accum_iters).backward()
             loss_value += loss.item() / grad_accum_iters
 
+        self._sync_sequence_parallel_grads(params)
         torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
         optimizer.step()
         scheduler.step()
@@ -829,15 +981,20 @@ class VideoDmdTrainer(DmdTrainer):
     def _latent_shape(self, sample):
         prompt = sample["prompt"]
         batch_size = 1 if isinstance(prompt, str) else len(prompt)
-        configured_shape = self.dmd_config.get("image_or_video_shape", self.training_config.get("image_or_video_shape"))
+        if "image_or_video_shape" in self.dmd_config:
+            configured_shape = self.dmd_config["image_or_video_shape"]
+        elif "image_or_video_shape" in self.training_config:
+            configured_shape = self.training_config["image_or_video_shape"]
+        else:
+            configured_shape = None
         if configured_shape is not None:
             shape = list(configured_shape)
             shape[0] = batch_size
             return tuple(int(dim) for dim in shape)
 
-        infer_config = self.config.get("inference", {})
-        height = infer_config.get("default_height", infer_config.get("height", 480))
-        width = infer_config.get("default_width", infer_config.get("width", 832))
+        infer_config = self.config["inference"] if "inference" in self.config else {}
+        height = infer_config["default_height"] if "default_height" in infer_config else infer_config.get("height", 480)
+        width = infer_config["default_width"] if "default_width" in infer_config else infer_config.get("width", 832)
         num_frames = infer_config.get("num_frames", 81)
         num_latent_frames = (int(num_frames) - 1) // self.model.vae_scale_factor_temporal + 1
         return (
@@ -860,6 +1017,7 @@ class VideoDmdTrainer(DmdTrainer):
             dtype=self.running_dtype,
         )
         noise = torch.randn(latent_shape, device=self.model.device, dtype=torch.float32)
+        noise = broadcast_sequence_parallel_value(noise)
 
         with torch.no_grad():
             renoised_xt = self.scheduler.add_noise(generated, noise, sigma)
@@ -926,7 +1084,7 @@ class VideoDmdTrainer(DmdTrainer):
             t = timestep / self.num_train_timestep
             timestep = self.score_timestep_shift * t / (1 + (self.score_timestep_shift - 1) * t) * self.num_train_timestep
         timestep = timestep.clamp(self.min_step, self.max_step)
-        return (timestep / self.num_train_timestep).to(dtype=dtype)
+        return broadcast_sequence_parallel_value((timestep / self.num_train_timestep).to(dtype=dtype))
 
     def _denoised_timestep_window(self, exit_idx):
         exit_idx = int(exit_idx)
@@ -948,13 +1106,14 @@ class VideoDmdTrainer(DmdTrainer):
 @TRAINER_REGISTER("video_ar_dmd")
 class VideoArDmdTrainer(VideoDmdTrainer):
     trainer_name = "video_ar_dmd"
-    allowed_model_names = {"wan_t2v_ar"}
+    allowed_model_names = {"wan_t2v_ar", "wan_t2v_14b_ar", "wan_ti2v_5b", "wan_ti2v_5b_ar"}
 
     def __init__(self, config):
         super().__init__(config)
-        self.num_frame_per_chunk = int(self.dmd_config.get("num_frame_per_chunk", self.model_config.get("num_frame_per_chunk", 3)))
+        self.num_frame_per_chunk = int(self.dmd_config["num_frame_per_chunk"] if "num_frame_per_chunk" in self.dmd_config else self.model_config.get("num_frame_per_chunk", 3))
         self.same_step_across_blocks = bool(self.dmd_config.get("same_step_across_blocks", True))
         self.context_noise = float(self.dmd_config.get("context_noise", 0.0))
+        self.sequence_parallel_cache = bool(self.dmd_config["sp_cache"] if "sp_cache" in self.dmd_config else False)
 
     def run_back_simulation(self, condition, latent_shape, grad_enabled, xt=None):
         transformer = self.model.denoiser_module()
@@ -967,24 +1126,36 @@ class VideoArDmdTrainer(VideoDmdTrainer):
         if num_frames % self.num_frame_per_chunk != 0:
             raise ValueError(f"ar_dmd latent frames={num_frames} must be divisible by num_frame_per_chunk={self.num_frame_per_chunk}.")
 
+        use_sp_cache = self._use_sequence_parallel_cache()
+        sp_size = get_sequence_parallel_world_size() if use_sp_cache else 1
+        sp_rank = get_sequence_parallel_rank() if use_sp_cache else 0
+        if use_sp_cache and self.num_frame_per_chunk % sp_size != 0:
+            raise ValueError(f"training.dmd.num_frame_per_chunk={self.num_frame_per_chunk} must be divisible by sequence_parallel.size={sp_size} when training.dmd.sp_cache=true.")
+
         self.model.transformer.train()
         output_chunks = []
         context = self.model._condition_to_context_tensor(condition, batch_size=batch_size)
         frame_seq_length = self._frame_seq_length(xt)
-        kv_cache, crossattn_cache = self._new_caches(batch_size, xt.dtype, xt.device, num_frames, frame_seq_length)
+        kv_cache, crossattn_cache = self._new_caches(batch_size, xt.dtype, xt.device, num_frames, frame_seq_length, sequence_parallel_cache=use_sp_cache)
         num_blocks = num_frames // self.num_frame_per_chunk
         exit_indices = self._sample_exit_indices(num_blocks, len(self.denoising_steps), xt.device)
 
         current_start_frame = 0
         for block_idx in range(num_blocks):
             current_num_frames = self.num_frame_per_chunk
-            latents = xt[:, :, current_start_frame : current_start_frame + current_num_frames]
+            if use_sp_cache:
+                local_num_frames = current_num_frames // sp_size
+                local_start_frame = current_start_frame + sp_rank * local_num_frames
+            else:
+                local_num_frames = current_num_frames
+                local_start_frame = current_start_frame
+            latents = xt[:, :, local_start_frame : local_start_frame + local_num_frames]
             exit_idx = int(exit_indices[0] if self.same_step_across_blocks else exit_indices[block_idx])
 
             x0 = None
             for step_idx, current_timestep in enumerate(self.denoising_steps):
                 timestep = torch.full(
-                    (batch_size, current_num_frames),
+                    (batch_size, local_num_frames),
                     float(current_timestep),
                     device=xt.device,
                     dtype=torch.float32,
@@ -1001,6 +1172,8 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                         crossattn_cache,
                         current_start=current_start_frame * frame_seq_length,
                         cache_start=current_start_frame * frame_seq_length,
+                        local_frame_offset=local_start_frame,
+                        balanced_sequence_parallel=use_sp_cache,
                     )
                     x0 = self._flow_to_x0(latents, flow_pred, timestep)
 
@@ -1008,7 +1181,7 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                     break
 
                 next_timestep = torch.full(
-                    (batch_size, current_num_frames),
+                    (batch_size, local_num_frames),
                     float(self.denoising_steps[step_idx + 1]),
                     device=xt.device,
                     dtype=torch.float32,
@@ -1016,11 +1189,11 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                 with torch.no_grad():
                     latents = self._add_noise_by_timestep(x0, torch.randn_like(x0), next_timestep)
 
-            output_chunks.append(x0)
+            output_chunks.append(all_gather_sequence(x0, dim=2) if use_sp_cache else x0)
 
             cache_latents = x0.detach()
             cache_timestep = torch.full(
-                (batch_size, current_num_frames),
+                (batch_size, local_num_frames),
                 self.context_noise,
                 device=xt.device,
                 dtype=torch.float32,
@@ -1037,6 +1210,8 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                     crossattn_cache,
                     current_start=current_start_frame * frame_seq_length,
                     cache_start=current_start_frame * frame_seq_length,
+                    local_frame_offset=local_start_frame,
+                    balanced_sequence_parallel=use_sp_cache,
                 )
 
             current_start_frame += current_num_frames
@@ -1045,6 +1220,12 @@ class VideoArDmdTrainer(VideoDmdTrainer):
             torch.cat(output_chunks, dim=2).to(dtype=self.running_dtype),
             *self._denoised_timestep_window(exit_indices),
         )
+
+    def _use_sequence_parallel_cache(self):
+        enabled = bool(self.sequence_parallel_cache and is_sequence_parallel_enabled())
+        if enabled and bool(getattr(self.model.denoiser_module(), "defer_kv_cache_updates", False)):
+            raise ValueError("training.dmd.sp_cache=true does not support model.defer_kv_cache_updates=true. Set model.defer_kv_cache_updates=false or disable training.dmd.sp_cache.")
+        return enabled
 
     def _denoised_timestep_window(self, exit_indices):
         if not self.same_step_across_blocks:
@@ -1069,7 +1250,19 @@ class VideoArDmdTrainer(VideoDmdTrainer):
             return indices.tolist()
         return torch.randint(0, num_steps, (count,), device=device).tolist()
 
-    def _forward_causal_chunk(self, model, latents, timestep, context, kv_cache, crossattn_cache, current_start, cache_start):
+    def _forward_causal_chunk(
+        self,
+        model,
+        latents,
+        timestep,
+        context,
+        kv_cache,
+        crossattn_cache,
+        current_start,
+        cache_start,
+        local_frame_offset=0,
+        balanced_sequence_parallel=False,
+    ):
         transformer = model.denoiser_module()
         seq_len = model._sequence_length(latents)
         forward_context = model.transformer_forward_context() if hasattr(model, "transformer_forward_context") else torch.no_grad()
@@ -1083,13 +1276,21 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                 crossattn_cache=crossattn_cache,
                 current_start=current_start,
                 cache_start=cache_start,
+                local_frame_offset=local_frame_offset,
+                balanced_sequence_parallel=balanced_sequence_parallel,
             )
 
-    def _new_caches(self, batch_size, dtype, device, num_frames, frame_seq_length):
+    def _new_caches(self, batch_size, dtype, device, num_frames, frame_seq_length, sequence_parallel_cache=False):
         transformer = self.model.denoiser_module()
         num_layers = int(getattr(transformer, "num_layers", len(transformer.blocks)))
         num_heads = int(transformer.num_heads)
         head_dim = int(transformer.dim // transformer.num_heads)
+        kv_num_heads = num_heads
+        if sequence_parallel_cache:
+            sp_size = get_sequence_parallel_world_size()
+            if num_heads % sp_size != 0:
+                raise ValueError(f"transformer.num_heads={num_heads} must be divisible by sequence_parallel.size={sp_size}.")
+            kv_num_heads = num_heads // sp_size
         local_attn_size = int(getattr(transformer, "local_attn_size", -1))
         kv_cache_size = num_frames * frame_seq_length if local_attn_size == -1 else local_attn_size * frame_seq_length
 
@@ -1098,8 +1299,8 @@ class VideoArDmdTrainer(VideoDmdTrainer):
         for _ in range(num_layers):
             kv_cache.append(
                 {
-                    "k": torch.zeros((batch_size, kv_cache_size, num_heads, head_dim), dtype=dtype, device=device),
-                    "v": torch.zeros((batch_size, kv_cache_size, num_heads, head_dim), dtype=dtype, device=device),
+                    "k": torch.zeros((batch_size, kv_cache_size, kv_num_heads, head_dim), dtype=dtype, device=device),
+                    "v": torch.zeros((batch_size, kv_cache_size, kv_num_heads, head_dim), dtype=dtype, device=device),
                     "global_end_index": torch.tensor([0], dtype=torch.long, device=device),
                     "local_end_index": torch.tensor([0], dtype=torch.long, device=device),
                 }

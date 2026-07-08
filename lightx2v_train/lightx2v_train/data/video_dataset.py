@@ -12,7 +12,7 @@ from PIL import Image
 from loguru import logger
 from torch.utils.data import DataLoader, DistributedSampler
 
-from lightx2v_train.runtime.distributed import get_world_size
+from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
 
 
@@ -466,12 +466,18 @@ class PromptDataset(torch.utils.data.Dataset):
 
 
 def _build_dataloader(dataset, data_config, train_or_val):
-    world_size = get_world_size()
+    dp_world_size = get_data_parallel_world_size()
     sampler = None
     shuffle = data_config.get("shuffle", train_or_val == "train")
     drop_last = data_config.get("drop_last", False)
-    if train_or_val == "train" and world_size > 1:
-        sampler = DistributedSampler(dataset, shuffle=shuffle, drop_last=drop_last)
+    if train_or_val == "train" and dp_world_size > 1:
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=dp_world_size,
+            rank=get_data_parallel_rank(),
+            shuffle=shuffle,
+            drop_last=drop_last,
+        )
         shuffle = False
 
     return DataLoader(

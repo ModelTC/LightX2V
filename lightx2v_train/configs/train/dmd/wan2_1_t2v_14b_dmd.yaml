@@ -1,6 +1,6 @@
 model:
-    name: wan_t2v_ar
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
+    name: wan_t2v_14b
+    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-14B/
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -8,20 +8,13 @@ model:
     load_vae: true
     load_text_encoder: true
     load_transformer: true
-    num_frame_per_chunk: 3
-    defer_kv_cache_updates: false
-    detach_kv_cache_updates: true
     fake:
-        name: wan_t2v
-        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
+        name: wan_t2v_14b
+        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-14B/
     teacher:
-        name: wan_t2v
-        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
+        name: wan_t2v_14b
+        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-14B/
         transformer_param_dtype: bf16
-    # student:
-    #     # checkpoint_path: /data/nvme4/gushiqiao/new/Causal-Forcing/checkpoints/chunkwise/causal_cd.pt
-    #     checkpoint_path: /data/nvme4/gushiqiao/new/recon/LightX2V/lightx2v_train/output_train/wan2_1_t2v_1_3b_tf_chunkwise_full_fp32param/checkpoint-000002400
-    #     checkpoint_strict: true
 
 distributed:
     backend: nccl
@@ -31,7 +24,7 @@ distributed:
         size: 1
     fsdp2:
         enabled: true
-        size: 4
+        size: ${oc.env:WORLD_SIZE,1}
         reshard_after_forward:
             root_reshard: false
             block_reshard: true
@@ -74,15 +67,15 @@ scheduler:
         extra_one_step: true
 
 training:
-    method: video_ar_dmd
-    max_train_iters: 1000
-    gradient_accumulation_iters: 1
+    method: video_dmd
+    max_train_iters: 5000
+    gradient_accumulation_iters: 4
     gradient_checkpointing: true
     max_grad_norm: 10.0
     lr_scheduler: constant
     lr_warmup_iters: 0
     save_every_iters: 100
-    save_total_limit: 10
+    save_total_limit: 2
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 5
@@ -99,14 +92,6 @@ training:
         min_score_timestep: 0
         min_step_ratio: 0.02
         max_step_ratio: 0.98
-        same_step_across_blocks: true
-        num_frame_per_chunk: 3
-        num_training_frames: 21
-        context_noise: 0
-        renoise_sigma_min: 0.02
-        renoise_sigma_max: 0.98
-        renoise_discrete_samples: 1000
-        renoise_shift: 5.0
     student:
         train_type: full
         optimizer:
@@ -127,10 +112,10 @@ training:
         guidance_scale: 3.0
         negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
         cfg_norm: none
-    output_dir: ./output_train1/wan2_1_t2v_1_3b_ar_dmd_chunkwise_full
+    output_dir: ./output_train/wan2_1_t2v_14b_dmd
 
 inference:
-    method: wan_t2v_ar_infer
+    method: wan_t2v_14b_infer
     default_width: 832
     default_height: 480
     num_frames: 81
@@ -146,7 +131,7 @@ inference:
     cfg_guidance_scale: 1.0
     negative_prompt: " "
     seed: 42
-    output_dir: ./output_infer1/wan2_1_t2v_1_3b_ar_dmd_chunkwise_full
+    output_dir: ./output_infer/wan2_1_t2v_14b_dmd
     infer_every_iters: ${training.save_every_iters}
 
 logging:
@@ -155,4 +140,4 @@ logging:
     infer_log_every_steps: 10
 
 resume:
-    auto_resume: true
+    auto_resume: false

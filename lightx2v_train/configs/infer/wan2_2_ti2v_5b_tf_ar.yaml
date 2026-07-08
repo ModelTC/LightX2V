@@ -1,24 +1,39 @@
 model:
-    name: wan_t2v
-    pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
-    causal: true
+    name: wan_ti2v_5b_ar
+    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B
+    #checkpoint_path: /data/nvme4/gushiqiao/new/LightX2V/lightx2v_train/output_train/wan2_2_ti2v_5b_tf_cache_96f_sp4/checkpoint-000005000
+    checkpoint_strict: true
+    latent_channels: 48
     max_sequence_length: 512
     running_dtype: bf16
-    transformer_param_dtype: fp32
+    transformer_param_dtype: bf16
     vae_dtype: fp32
+    t5_dtype: bf16
+    t5_cpu: true
     load_vae: true
     load_text_encoder: true
     load_transformer: true
+    num_frame_per_chunk: 8
+    local_attn_size: 32
+    sink_size: 8
+    vae_stride:
+        - 4
+        - 16
+        - 16
+    patch_size:
+        - 1
+        - 2
+        - 2
 
 distributed:
     backend: nccl
     timeout_minutes: 60
     sequence_parallel:
-        enabled: false
-        size: 1
+        enabled: true
+        size: 4
     fsdp2:
         enabled: true
-        size: ${oc.env:WORLD_SIZE,1}
+        size: 2
         reshard_after_forward:
             root_reshard: false
             block_reshard: true
@@ -29,22 +44,14 @@ distributed:
             cast_forward_inputs: false
 
 data:
-    train:
-        name: causal_forcing_lmdb_dataset
-        data_path: /path/to/causal_forcing_data/dataset/clean_data
-        dataset_repeat: 1
-        batch_size: 1
-        num_workers: 8
-        pin_memory: true
-        shuffle: true
-        drop_last: true
     val:
         name: prompt_dataset
         data_path:
-            - /path/to/wan_t2v_prompts.txt
-        max_samples: 1
+            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+        max_samples: 10
         batch_size: 1
         num_workers: 0
+        pin_memory: true
         shuffle: false
 
 scheduler:
@@ -60,48 +67,22 @@ scheduler:
         sigma_min: 0.0
         extra_one_step: true
 
-training:
-    method: teacher_forcing
-    train_type: full
-    max_train_iters: 5000
-    gradient_accumulation_iters: 1
-    gradient_checkpointing: true
-    max_grad_norm: 10.0
-    lr_scheduler: constant
-    lr_warmup_iters: 0
-    save_every_iters: 100
-    save_total_limit: 10
-    teacher_forcing:
-        enabled: true
-        mode: chunkwise
-        num_frame_per_chunk: 3
-        noise_augmentation_max_timestep: 0
-    optimizer:
-        learning_rate: 0.000002
-        adam_beta1: 0.0
-        adam_beta2: 0.999
-        weight_decay: 0.01
-        adam_epsilon: 0.00000001
-    output_dir: ./output_train/wan2_1_t2v_1_3b_tf_chunkwise_full_fp32param
-
 inference:
-    method: wan_t2v_ar_infer
+    method: wan_ti2v_5b_ar_infer
     negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
-    default_width: 832
-    default_height: 480
-    num_frames: 81
+    default_width: 1280
+    default_height: 704
+    num_frames: 381
     num_inference_steps: 50
-    fps: 16
+    fps: 24
     enable_cfg: true
     cfg_guidance_scale: 3.0
     seed: 42
-    output_dir: ./output_infer/wan2_1_t2v_1_3b_tf_chunkwise_full_fp32param
-    infer_every_iters: ${training.save_every_iters}
+    save_latents_only: false
+    video_quality: 6.0
+    macro_block_size: 16
+    output_dir: ./output_infer/wan2_2_ti2v_5b_tf_ar_1
 
 logging:
     rank_zero_only: true
-    train_log_every_iters: 10
     infer_log_every_steps: 10
-
-resume:
-    auto_resume: true
