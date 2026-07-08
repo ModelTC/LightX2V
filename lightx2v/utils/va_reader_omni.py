@@ -559,6 +559,267 @@ class OmniVAReader:
         self.stop()
 
 
+class SekoAROmniVAReader(OmniVAReader):
+    def __init__(
+        self,
+        rank: int,
+        world_size: int,
+        stream_url: str,
+        latent_per_chunk: int = 3,
+        audio_window_secs: float = 1.0,
+        look_ahead_secs: float = 0.0,
+        video_fps: float = 16,
+        sample_rate: int = 16000,
+        audio_channels: int = 1,
+        target_rank: int = 0,
+        model_runner=None,
+        huoshan_tts_voice_type=None,
+        stream_config: dict = {},
+        **kwargs,
+    ):
+        self.rank = rank
+        self.world_size = world_size
+        self.stream_url = stream_url
+        self.sample_rate = sample_rate
+
+        self.audio_channels = audio_channels
+        self.latent_per_chunk = latent_per_chunk
+        self.audio_window_secs = audio_window_secs
+        self.look_ahead_secs = look_ahead_secs
+        self.video_fps = video_fps
+
+        self.target_rank = target_rank % self.world_size
+        self.origin_flag_tensor = torch.tensor([0], dtype=torch.int32).to(device="cuda")
+        self.latent_flag_tensor = torch.tensor([0], dtype=torch.int32).to(device="cuda")
+        self.valid_duration_tensor = torch.tensor([0], dtype=torch.float32).to(device="cuda")
+        self.immediate_switch_tensor = torch.tensor([0], dtype=torch.int32).to(device="cuda")
+
+        self.chat_adapter = None
+        self.model_runner = model_runner
+        self.huoshan_tts_voice_type = huoshan_tts_voice_type
+        self.stream_config = stream_config
+
+        assert self.audio_channels == 1, "Only mono audio is supported for OmniVAReader"
+        self.initAR()
+        logger.info(f"VAReader initialized for stream: {stream_url} target_rank: {self.target_rank}")
+
+    def initAR(self):
+        # ref: https://github.com/ModelTC/LightX2V/blob/main/lightx2v/models/input_encoders/hf/seko_audio/audio_adapter.py#L267-L280
+        # 假定 frame_per_latent = 4（每个latent包含4个frame）
+        # 左边界帧索引：[0, 1, 5,  9, 13, 17, ...]
+        # 右边界帧索引：[1, 5, 9, 13, 17, 21, ...]
+        # 中心时间戳（秒）：[(0+1)/2/fps, (1+5)/2/fps, (5+9)/2/fps, ...]，除第一个外，其余为(latent_idx*4-1)/fps
+        # 上边界时间戳（秒）:[1/fps, 5/fps, 9/fps, ...]+look_ahead_secs，即(latent_idx*4+1)/fps + look_ahead_secs
+        # 每一个 latent 对应的音频时间范围（假定每个chunk包含3个latent，即每3个latent取一次音频）：
+        #    [0.5/fps - audio_window_secs/2, 0.5/fps + audio_window_secs/2] 上界应小于 1/fps + look_ahead_secs
+        #    [3/fps - audio_window_secs/2, 3/fps + audio_window_secs/2]     上界应小于 5/fps + look_ahead_secs
+        # 取 [7/fps - audio_window_secs/2, 7/fps + audio_window_secs/2]     上界应小于 9/fps + look_ahead_secs
+        #    [11/fps - audio_window_secs/2, 11/fps + audio_window_secs/2]   上界应小于 13/fps + look_ahead_secs
+        #    [15/fps - audio_window_secs/2, 15/fps + audio_window_secs/2]   上界应小于 17/fps + look_ahead_secs
+        # 取 [19/fps - audio_window_secs/2, 19/fps + audio_window_secs/2]   上界应小于 21/fps + look_ahead_secs
+        #    [23/fps - audio_window_secs/2, 23/fps + audio_window_secs/2]   上界应小于 25/fps + look_ahead_secs
+        #    ...
+        # 每次取音频应当取 chunk 对应所有 latents 的音频块范围上界的最大值，每次按chunk取的音频段为：
+        #    [0, 9/fps + look_ahead_secs]
+        #    [9/fps + look_ahead_secs, 21/fps + look_ahead_secs]
+        #    [21/fps + look_ahead_secs, 33/fps + look_ahead_secs]
+        #    ...
+        # 需要根据这个恢复每个chunk内各个latent对应的音频段，用于audio encode 计算
+        # 这些音频对应的输出音频段应当按照中心坐标对齐：
+        #    [-3/fps, 9/fps],
+        #    [9/fps, 21/fps],
+        #    [21/fps, 33/fps],
+        #    ...
+        #  [后面-12/fps, (latent_per_chunk - 1 ) * 4 + 1  + chunk_idx * letent_per_chunk * 4]
+
+        # 第一次取 9/fps + look_ahead_secs 秒的音频
+        self.segment_duration = ((self.latent_per_chunk - 1) * 4 + 1) / self.video_fps + self.look_ahead_secs
+        # 后续每次取 12/fps 秒的音频
+        self.other_fetch_duration = self.latent_per_chunk * 4 / self.video_fps
+        self.chunk_idx = 0
+        self.last_chunk_audios = None
+
+        # 当前chunk的原音频，每个chunk合成的视频长度固定，对应音频长度为: 12/fps
+        self.origin_audio_tensor = torch.zeros(int(self.sample_rate * self.other_fetch_duration) * 2, dtype=torch.uint8, device="cuda")
+        # 当前chunk内各个latent对应的音频段，用于audio encode 计算
+        self.latent_audio_tensor = torch.zeros(self.latent_per_chunk * int(self.sample_rate * self.audio_window_secs) * 2, dtype=torch.uint8, device="cuda")
+
+    # 获取当前latent对应的边界索引帧序号
+    def get_latent_idxs(self, i, base_idx):
+        latent_idx = self.chunk_idx * self.latent_per_chunk + i
+        if latent_idx == 0:
+            center_secs = 0.5 / self.video_fps
+        else:
+            center_secs = (latent_idx * 4 - 1) / self.video_fps
+        # 当前 latent 音频窗口上界索引
+        right_idx = int((center_secs + self.audio_window_secs / 2) * self.sample_rate)
+        # 当前 latent 音频窗口下界索引
+        left_idx = right_idx - int(self.sample_rate * self.audio_window_secs)
+        # 当前 latent 音频段上界索引
+        look_ahead_secs = (latent_idx * 4 + 1) / self.video_fps + self.look_ahead_secs
+        look_ahead_idx = int(look_ahead_secs * self.sample_rate)
+        logger.debug(f"latent_idx: {latent_idx} center_secs: {center_secs} right_idx: {right_idx} left_idx: {left_idx} look_ahead_secs: {look_ahead_secs} look_ahead_idx: {look_ahead_idx}")
+
+        # 对齐当前缓存的所有音频的起始位置（只缓存了最多两个chunk的音频）
+        left_idx -= base_idx
+        right_idx -= base_idx
+        look_ahead_idx -= base_idx
+        logger.debug(f"adjusted idxs: {left_idx} {right_idx} {look_ahead_idx}")
+        return left_idx, right_idx, look_ahead_idx
+
+    # 获取当前chunk对应的原始音频的开始和结束索引帧
+    def get_chunk_origin_idxs(self, base_idx):
+        # end secs: 9/fps + chunk_idx * 12/fps
+        end_secs = ((self.latent_per_chunk - 1) * 4 + 1 + self.chunk_idx * self.latent_per_chunk * 4) / self.video_fps
+        start_secs = end_secs - (self.latent_per_chunk * 4) / self.video_fps
+        start_idx = int(start_secs * self.sample_rate)
+        end_idx = int(end_secs * self.sample_rate)
+        logger.debug(f"chunk_idx: {self.chunk_idx} start_idx: {start_idx} end_idx: {end_idx}")
+        # 对齐当前缓存的所有音频的起始位置（只缓存了最多两个chunk的音频）
+        start_idx -= base_idx
+        end_idx -= base_idx
+        logger.debug(f"adjusted idxs: {start_idx} {end_idx}")
+        return start_idx, end_idx
+
+    def prepare_ar_audios(self, merged_audio, origin_audios, latent_audios):
+        # 当前chunk音频的上一个chunk音频的开始时间，用于对齐音频初始位置
+        last_chunk_start_secs = 0
+        if self.chunk_idx > 1:
+            last_chunk_start_secs = self.segment_duration + (self.chunk_idx - 2) * self.other_fetch_duration
+        base_idx = int(last_chunk_start_secs * self.sample_rate)
+        audio_length = len(merged_audio)
+        logger.debug(
+            "chunk idx: ", self.chunk_idx, "start_secs: ", last_chunk_start_secs, "end_secs: ", last_chunk_start_secs + self.segment_duration, "base_idx: ", base_idx, "audio_length: ", audio_length
+        )
+
+        # 构造原始音频，用于合成最终视频
+        start_idx, end_idx = self.get_chunk_origin_idxs(base_idx)
+        pad_idx = max(-start_idx, 0)
+        real_start = max(start_idx, 0)
+        real_len = min(end_idx, audio_length) - real_start
+        logger.debug(f"----- center audios pad_idx: {pad_idx} real_start: {real_start} real_len: {real_len} -----")
+        origin_audios[pad_idx : pad_idx + real_len] = merged_audio[real_start : real_start + real_len]
+
+        # 构造 latent 音频，用于 audio encode
+        for i in range(self.latent_per_chunk):
+            left_idx, right_idx, look_ahead_idx = self.get_latent_idxs(i, base_idx)
+            pad_idx = max(-left_idx, 0)
+            real_start = max(left_idx, 0)
+            real_len = min(look_ahead_idx, right_idx, audio_length) - real_start
+            logger.debug(f"----- {i} pad_idx: {pad_idx} real_start: {real_start} real_len: {real_len} -----")
+            latent_audios[i, pad_idx : pad_idx + real_len] = merged_audio[real_start : real_start + real_len]
+
+    def prepare_audio_data(self, chat_audio_result):
+        sample_count = 0
+        audio = np.array([], dtype=np.int16)
+        origin_audios = np.zeros(int(self.sample_rate * self.other_fetch_duration), dtype=np.int16)
+        latent_audios = np.zeros((self.latent_per_chunk, int(self.sample_rate * self.audio_window_secs)), dtype=np.int16)
+
+        # convert chat audio result to mono and target sample rate
+        if chat_audio_result is not None:
+            audio_data, audio_info = chat_audio_result
+            audio, sample_count = self.convert_pcm_s16le_to_mono_resampled(audio_data, audio_info)
+        valid_duration = sample_count / self.sample_rate
+        if sample_count <= 0:
+            return origin_audios.tobytes(), latent_audios.tobytes(), valid_duration
+
+        if self.chunk_idx == 0:
+            expect_count = int(self.segment_duration * self.sample_rate)
+        else:
+            expect_count = int(self.other_fetch_duration * self.sample_rate)
+        assert sample_count <= expect_count, f"audio length {sample_count} > expect_count {expect_count}"
+
+        # pad 0 to the audio to make it the same length as expect_count
+        if sample_count < expect_count:
+            pad_count = expect_count - sample_count
+            logger.debug(f"pad {pad_count} samples to audio")
+            audio = np.pad(audio, (0, pad_count), mode="constant", constant_values=0)
+
+        # if is not the first segment, concat with previous segment
+        if self.last_chunk_audios is not None:
+            logger.debug(f"concat {self.last_chunk_audios.shape} with {audio.shape}")
+            merged_audio = np.concatenate([self.last_chunk_audios, audio])
+        else:
+            merged_audio = audio
+        self.prepare_ar_audios(merged_audio, origin_audios, latent_audios)
+        logger.debug(
+            f"chunk[{self.chunk_idx}] origin_audios: {origin_audios.shape} {origin_audios.dtype} {origin_audios.min()} {origin_audios.max()} latent_audios: {latent_audios.shape} {latent_audios.dtype} {latent_audios.min()} {latent_audios.max()} {sample_count}, valid_duration: {valid_duration}"
+        )
+
+        # update prev seg chunk
+        self.last_chunk_audios = audio
+        self.chunk_idx += 1
+        return origin_audios.tobytes(), latent_audios.tobytes(), valid_duration
+
+    def get_fetch_duration(self):
+        fetch_duration = self.segment_duration
+        # after immediate switch, reset prev seg chunk
+        if self.chat_adapter is not None and self.chat_adapter.reset_prev:
+            self.chat_adapter.reset_prev = False
+            self.chunk_idx = 0
+            self.last_chunk_audios = None
+            logger.warning(f"Reset prev seg chunk")
+        # first segment, fetch segment_duration, else fetch self.other_fetch_duration
+        if self.chunk_idx > 0 and self.last_chunk_audios is not None:
+            fetch_duration = self.other_fetch_duration
+        return fetch_duration
+
+    def get_audio_segment(self):
+        origin_audio = None
+        latent_audio = None
+        valid_duration = 0
+        try:
+            if self.rank == self.target_rank:
+                fetch_duration = self.get_fetch_duration()
+                # logger.info(f"Get segment, fetch_duration: {fetch_duration}")
+                if self.chat_adapter.status == "voice":
+                    audio_result = self.chat_adapter.get_audio(fetch_duration)
+                    origin_audio, latent_audio, valid_duration = self.prepare_audio_data(audio_result)
+                    # think all voice segments inferred, naturally switch to blank
+                    if audio_result is None:
+                        logger.info(f"Think all voice segments inferred, naturally switch to blank")
+                        self.chat_adapter.status = "blank"
+                        self.chunk_idx = 0
+                        self.last_chunk_audios = None
+                else:
+                    origin_audio, latent_audio, valid_duration = self.prepare_audio_data(None)
+
+            if self.world_size > 1:
+                origin_audio = self.braodcast_audio_data(origin_audio, self.origin_audio_tensor, self.origin_flag_tensor)
+                latent_audio = self.braodcast_audio_data(latent_audio, self.latent_audio_tensor, self.latent_flag_tensor)
+                valid_duration = self.braodcast_valid_duration(valid_duration)
+
+            origin_audio = self.bytes_to_ndarray(origin_audio)
+            latent_audio = self.bytes_to_ndarray(latent_audio)
+            if latent_audio is not None:
+                # latent_audio: (latent_per_chunk, audio_window * sr)
+                latent_audio = latent_audio.reshape(self.latent_per_chunk, -1)
+            return origin_audio, latent_audio, valid_duration
+
+        except Exception:
+            logger.warning(f"Failed to get voice segment: {traceback.format_exc()}")
+            return None, None, 0
+
+    def braodcast_audio_data(self, audio_data, audio_tensor, flag_tensor):
+        if self.rank == self.target_rank:
+            if audio_data is None:
+                flag_tensor.fill_(0)
+            else:
+                flag_tensor.fill_(1)
+                audio_tensor.copy_(torch.frombuffer(bytearray(audio_data), dtype=torch.uint8))
+                # logger.info(f"rank {self.rank} send audio_tensor: {self.audio_tensor.shape}")
+
+        dist.broadcast(flag_tensor, src=self.target_rank)
+        if flag_tensor.item() == 0:
+            return None
+
+        dist.broadcast(audio_tensor, src=self.target_rank)
+        if self.rank != self.target_rank:
+            # logger.info(f"rank {self.rank} recv audio_tensor: {self.audio_tensor.shape}")
+            audio_data = audio_tensor.cpu().numpy().tobytes()
+        return audio_data
+
+
 if __name__ == "__main__":
     WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
     RANK = int(os.environ.get("RANK", 0))

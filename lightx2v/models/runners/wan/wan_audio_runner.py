@@ -1275,8 +1275,10 @@ class WanAudioARRunner(WanAudioRunner):
         self.inputs["audio_encoder_output"] = torch.stack(features_list, dim=0)
         self.inputs["previmg_encoder_output"] = {"prev_latents": None, "prev_mask": None, "prev_len": 0}
 
-    def init_run_segment(self, segment_idx):
+    def init_run_segment(self, segment_idx, origin_audio=None, latent_audio=None):
         self.segment_idx = segment_idx
+        if origin_audio is not None:
+            self._encode_audio_for_each_chunk(segment_idx, origin_audio, latent_audio)
 
     @ProfilingContext4DebugL1(
         "Prefill reference kv",
@@ -1340,9 +1342,8 @@ class WanAudioARRunner(WanAudioRunner):
                 torch.distributed.barrier(group=sp_group)
 
     @ProfilingContext4DebugL2("Run DiT")
-    def run_main(self):
+    def run_main_with_fixed_audio(self):
         try:
-            self.init_run()
             if self.config.get("compile", False) and hasattr(self.model, "comple"):
                 self.model.select_graph_for_compile(self.input_info)
             logger.info("start ar audio generation")
@@ -1388,6 +1389,7 @@ class WanAudioARRunner(WanAudioRunner):
                             self.check_stop()
                             self.init_run_segment(segment_idx)
                             segment_latents = self.run_segment(segment_idx)
+                            logger.debug(f"segment_latents shape: {segment_latents.shape}")
 
                         vae_decoder.submit(self.decode_segment_latents, segment_idx, segment_latents)
                     segment_videos = vae_decoder.finish()
@@ -1407,5 +1409,110 @@ class WanAudioARRunner(WanAudioRunner):
             return result
         finally:
             if getattr(self, "va_controller", None) is not None:
+                self.va_controller.clear()
+                self.va_controller = None
+
+    # origin_audio: (4 * latent_per_chunk / fps * sr), eg. (4 * 3 / 16 * 16000)
+    # latent_audio: (latent_per_chunk, audio_window * sr) eg. (3, 1.0 * 16000)
+    def _encode_audio_for_each_chunk(self, segment_idx: int, origin_audio: np.ndarray, latent_audio: np.ndarray) -> torch.Tensor:
+        self.input_info.seed = self.input_info.seed + segment_idx
+        torch.manual_seed(self.input_info.seed)
+
+        # used for remux output video
+        end_idx = origin_audio.shape[0] // self._audio_processor.audio_frame_rate
+        # 第一段vae解码出来视频只有 (4 - 1) * latent_per_chunk 帧
+        if segment_idx == 0:
+            end_idx -= 1 * self.config["ar_config"]["num_frame_per_chunk"] * self._audio_processor.audio_frame_rate
+        origin_audio_tensor = torch.Tensor(origin_audio).float().unsqueeze(0)
+        self.segment = AudioSegment(origin_audio_tensor, 0, end_idx)
+
+        latent_audio_tensor = torch.Tensor(latent_audio).float().to(AI_DEVICE)
+        latent_length = latent_audio.shape[0]
+        audio_slice_list = self.audio_encoder.audio_feature_extractor(latent_audio_tensor, sampling_rate=self.config.get("audio_sr", 16000), return_tensors="pt").input_values.squeeze(0)
+
+        audio_slice_list = audio_slice_list.to(device=AI_DEVICE, dtype=GET_DTYPE())
+        audio_feat = self.audio_encoder.audio_feature_encoder(audio_slice_list, return_dict=True).last_hidden_state
+
+        audio_feat_per_latent = self.audio_sliding_processor.audio_feat_per_latent
+        left = audio_feat.shape[1] // 2 - audio_feat_per_latent // 2
+        assert left >= 0
+        audio_feat = audio_feat[:, left : left + audio_feat_per_latent]
+        audio_feat = audio_feat.reshape(1, latent_length, audio_feat_per_latent, -1).contiguous()
+        audio_feat = self.audio_adapter.forward_audio_proj(audio_feat, audio_feat.shape[1])
+
+        self.inputs["audio_encoder_output"] = audio_feat
+        self.inputs["previmg_encoder_output"] = {"prev_latents": None, "prev_mask": None, "prev_len": 0}
+
+    def run_main(self):
+        try:
+            self.va_controller = None
+            self.init_run()
+            logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
+
+            # fixed audio segments inputs
+            if self.va_controller.reader is None:
+                return self.run_main_with_fixed_audio()
+
+            self.va_controller.start()
+            if self.config.get("compile", False) and hasattr(self.model, "comple"):
+                self.model.select_graph_for_compile(self.input_info)
+            logger.info("start ar audio generation")
+
+            # steam audio input, video segment num is unlimited
+            self.video_segment_num = 1000000
+            segment_idx = 0
+            fail_count, max_fail_count = 0, 10
+            self.va_controller.before_control()
+
+            latent_shape = list(self.input_info.latent_shape)
+            latent_shape[1] = self.config["ar_config"]["num_frame_per_chunk"]
+            self.input_info.latent_shape = latent_shape
+            self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
+            self._validate_prompt_travel_schedule()
+            self.init_kv_cache_manager()
+            self.prefill_reference_kv()
+
+            while True:
+                with ProfilingContext4DebugL1(f"stream segment get audio segment {segment_idx}"):
+                    control = self.va_controller.next_control()
+                    if control.action == "blank_to_voice":
+                        self.prev_video = control.data
+                    elif control.action == "wait":
+                        time.sleep(0.01)
+                        continue
+
+                    origin_audio, latent_audio, valid_duration = self.va_controller.reader.get_audio_segment()
+                    if origin_audio is None or latent_audio is None:
+                        fail_count += 1
+                        logger.warning(f"Failed to get audio chunk {fail_count} times")
+                        if fail_count > max_fail_count:
+                            raise Exception(f"Failed to get audio chunk {fail_count} times, stop reader")
+                        continue
+
+                with ProfilingContext4DebugL1(f"stream segment end2end {segment_idx}"):
+                    try:
+                        # reset pause signal
+                        self.pause_signal = False
+                        self.can_pause = valid_duration <= 1e-5
+                        self.init_run_segment(segment_idx, origin_audio, latent_audio)
+                        self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
+                        self.check_stop()
+                        latents = self.run_segment(0)
+                        self.check_stop()
+                        self.gen_video = self.decode_segment_latents(segment_idx, latents)
+                        logger.debug(f"gen_video shape: {self.gen_video.shape}")
+                        self.check_stop()
+                        self.end_run_segment(segment_idx, valid_duration=valid_duration)
+                        segment_idx += 1
+                        fail_count = 0
+                    except Exception as e:
+                        if "pause_signal, pause running" in str(e):
+                            logger.warning(f"model infer audio pause: {e}, should continue")
+                        else:
+                            raise
+        finally:
+            if hasattr(self.model, "inputs"):
+                self.end_run()
+            if self.va_controller is not None:
                 self.va_controller.clear()
                 self.va_controller = None
