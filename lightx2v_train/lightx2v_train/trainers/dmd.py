@@ -56,6 +56,16 @@ class DmdTrainer(BaseTrainer):
         self.cdm_warmup_iters = int(self.cdm_config.get("warmup_iters", 0))
         self.cdm_norm_clip_min = float(self.cdm_config.get("norm_clip_min", 0.1))
 
+        self.dfd_config = self.dmd_config.get("dfd", self.dmd_config.get("data_forcing", {}))
+        self.dfd_real_replace_prob = float(
+            self.dfd_config.get(
+                "real_replace_prob",
+                self.dfd_config.get("replace_prob", self.dfd_config.get("prob", self.dmd_config.get("dfd_real_replace_prob", 0.0))),
+            )
+        )
+        if not 0.0 <= self.dfd_real_replace_prob <= 1.0:
+            raise ValueError(f"dmd.dfd.real_replace_prob must be in [0, 1], got {self.dfd_real_replace_prob}.")
+
     def _get_optimizer_config(self):
         student_config = self.training_config.get("student", {})
         return student_config.get("optimizer", self.training_config.get("optimizer", {}))
@@ -122,6 +132,8 @@ class DmdTrainer(BaseTrainer):
             )
         if self.cdm_enabled:
             logger.info("[train] dmd CDM enabled: weight={} warmup_iters={}", self.cdm_weight, self.cdm_warmup_iters)
+        if self.dfd_real_replace_prob > 0:
+            logger.info("[train] DFD enabled: real_replace_prob={}", self.dfd_real_replace_prob)
 
     @staticmethod
     def _count_trainable(module):
@@ -233,6 +245,33 @@ class DmdTrainer(BaseTrainer):
     def sample_end_step(self):
         return self._sample_synced_int(0, self.scheduler.num_inference_steps)
 
+    def _sample_synced_bool(self, probability):
+        value = torch.rand((), device=self.model.device) < float(probability)
+        if is_distributed():
+            dist.broadcast(value, src=0)
+        return bool(value.item())
+
+    def _encode_dfd_real_latent(self, sample, expected_shape):
+        if sample is None:
+            raise ValueError("DFD requires the current training sample so real data can be encoded.")
+        with torch.no_grad():
+            real_latent = self.model.encode_to_latent(sample)
+        real_latent = real_latent.to(device=self.model.device, dtype=self.running_dtype).detach()
+        expected_shape = tuple(int(dim) for dim in expected_shape)
+        if tuple(real_latent.shape) != expected_shape:
+            raise ValueError(
+                "DFD real latent shape does not match generated latent shape: "
+                f"real={tuple(real_latent.shape)} generated={expected_shape}. "
+                "Use data/configured image_or_video_shape that matches the generated latent shape."
+            )
+        return real_latent
+
+    def _select_teacher_score_latents(self, generated_latents, noise, sigma, sample):
+        if self.dfd_real_replace_prob <= 0 or not self._sample_synced_bool(self.dfd_real_replace_prob):
+            return self.scheduler.add_noise(generated_latents.detach(), noise, sigma)
+        real_latent = self._encode_dfd_real_latent(sample, generated_latents.shape)
+        return self.scheduler.add_noise(real_latent, noise, sigma)
+
     def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
         if xt is None:
             xt = self.sample_initial_latents(latent_shape)
@@ -279,7 +318,7 @@ class DmdTrainer(BaseTrainer):
         x_pred_teacher = teacher_xt - teacher_sigma_expanded * velocity_teacher
         return self._dmd_loss(student_x0, x_pred_fake, x_pred_teacher, norm_clip_min=self.cdm_norm_clip_min)
 
-    def forward_loss(self, latent_shape, conditions, stage, current_iter=None):
+    def forward_loss(self, latent_shape, conditions, stage, current_iter=None, sample=None):
         condition, negative_condition = conditions
         self._prepare_sampling_schedule(latent_shape)
         end_step_idx = self.sample_end_step()
@@ -300,11 +339,12 @@ class DmdTrainer(BaseTrainer):
         with torch.no_grad():
             self.fake_model.transformer.eval()
             velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
-            velocity_teacher = self._predict_teacher_velocity(renoised_xt, sigma, condition, negative_condition)
+            teacher_xt = self._select_teacher_score_latents(x0, noise, sigma, sample)
+            velocity_teacher = self._predict_teacher_velocity(teacher_xt, sigma, condition, negative_condition)
 
         expanded_sigma = self.scheduler._expand_to_ndim(sigma, renoised_xt.ndim)
         x_pred_fake = renoised_xt - expanded_sigma * velocity_fake
-        x_pred_teacher = renoised_xt - expanded_sigma * velocity_teacher
+        x_pred_teacher = teacher_xt - expanded_sigma * velocity_teacher
         loss_dmd = self._dmd_loss(x0, x_pred_fake, x_pred_teacher)
         total_loss = loss_dmd
 
@@ -364,7 +404,7 @@ class DmdTrainer(BaseTrainer):
                 sync_grad = (grad_accum_counter + 1) % grad_accum_iters == 0
 
                 self._set_student_gradient_sync(sync_grad)
-                res_student = self.forward_loss(latent_shape, conditions, stage="student", current_iter=current_iter)
+                res_student = self.forward_loss(latent_shape, conditions, stage="student", current_iter=current_iter, sample=sample)
                 loss_student = res_student["student"]
                 (loss_student / grad_accum_iters).backward()
                 running_dmd += res_student["dmd"].item() / grad_accum_iters
@@ -802,7 +842,7 @@ class VideoDmdTrainer(DmdTrainer):
             conditions = self._encode_conditions(sample)
             latent_shape = self._latent_shape(sample)
             set_sync(micro_idx == grad_accum_iters - 1)
-            loss = self.forward_loss(latent_shape, conditions, stage=stage)
+            loss = self.forward_loss(latent_shape, conditions, stage=stage, sample=sample)
             (loss / grad_accum_iters).backward()
             loss_value += loss.item() / grad_accum_iters
 
@@ -848,7 +888,7 @@ class VideoDmdTrainer(DmdTrainer):
             int(width) // self.model.vae_scale_factor_spatial,
         )
 
-    def forward_loss(self, latent_shape, conditions, stage):
+    def forward_loss(self, latent_shape, conditions, stage, sample=None):
         condition, negative_condition = conditions
         generated, denoised_timestep_from, denoised_timestep_to = self.run_back_simulation(condition, latent_shape, grad_enabled=(stage != "fake"))
 
@@ -874,16 +914,17 @@ class VideoDmdTrainer(DmdTrainer):
             self.fake_model.transformer.eval()
             self.teacher_model.transformer.eval()
             velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition)
-            velocity_teacher_cond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, condition)
+            teacher_xt = self._select_teacher_score_latents(generated, noise, sigma, sample)
+            velocity_teacher_cond = self._predict_velocity(self.teacher_model, teacher_xt, sigma, condition)
             if self.guidance_scale == 0:
                 velocity_teacher = velocity_teacher_cond
             else:
-                velocity_teacher_uncond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, negative_condition)
+                velocity_teacher_uncond = self._predict_velocity(self.teacher_model, teacher_xt, sigma, negative_condition)
                 velocity_teacher = self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
 
             expanded_sigma = self.scheduler._expand_to_ndim(sigma, renoised_xt.ndim)
             x_pred_fake = renoised_xt - expanded_sigma * velocity_fake
-            x_pred_teacher = renoised_xt - expanded_sigma * velocity_teacher
+            x_pred_teacher = teacher_xt - expanded_sigma * velocity_teacher
 
         return self._dmd_loss(generated, x_pred_fake, x_pred_teacher)
 

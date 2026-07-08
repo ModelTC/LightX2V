@@ -1,6 +1,6 @@
 model:
     name: wan_t2v
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B
+    pretrained_model_name_or_path: Wan2.1-T2V-1.3B
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -33,9 +33,17 @@ distributed:
 
 data:
     train:
-        name: prompt_dataset
+        name: wan_t2v_video_dataset
         data_path:
-            - /data/nvme7/wangshankun/train_data/dmd/vidprom_filtered_extended.txt
+            - /path/to/wan_t2v_video_metadata.jsonl
+        video_root: /path/to/videos
+        video_column: video
+        prompt_column: caption
+        height: 480
+        width: 832
+        num_frames: 81
+        frame_rate: 24
+        random_start: true
         batch_size: 1
         num_workers: 8
         pin_memory: true
@@ -44,7 +52,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /data/nvme7/wangshankun/train_data/dmd/wan_t2v_prompts.txt
+            - /path/to/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0
@@ -66,7 +74,7 @@ scheduler:
 training:
     method: video_dmd
     train_type: full
-    max_train_iters: 1000
+    max_train_iters: 300
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
     max_grad_norm: 10.0
@@ -77,6 +85,9 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 5
+        generator_ckpt: /path/to/wan2_1_t2v_1_3b_dmd_student_model_state.pt
+        dfd:
+            real_replace_prob: 0.5
         denoising_step_list:
             - 1000
             - 750
@@ -116,7 +127,7 @@ training:
         guidance_scale: 3.0
         negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
         cfg_norm: none
-    output_dir: ./output_train/wan2_1_t2v_1_3b_dmd
+    output_dir: ./output_train/wan2_1_t2v_1_3b_dfd
 
 inference:
     method: wan_t2v_infer
@@ -135,7 +146,7 @@ inference:
     cfg_guidance_scale: 1.0
     negative_prompt: " "
     seed: 42
-    output_dir: ./output_infer/wan2_1_t2v_1_3b_dmd
+    output_dir: ./output_infer/wan2_1_t2v_1_3b_dfd
     infer_every_iters: ${training.save_every_iters}
 
 logging:
