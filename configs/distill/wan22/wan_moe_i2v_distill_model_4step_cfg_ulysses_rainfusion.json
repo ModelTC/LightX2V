@@ -33,8 +33,8 @@
         500,
         250
     ],
-    "high_noise_original_ckpt": "/data/nvme1/wushuo/hf_models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors",
-    "low_noise_original_ckpt": "/data/nvme1/wushuo/hf_models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors",
+    "high_noise_original_ckpt": "/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors",
+    "low_noise_original_ckpt": "/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors",
     "parallel": {
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses"
