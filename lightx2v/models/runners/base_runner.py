@@ -337,8 +337,4 @@ class BaseRunner(ABC):
                 print(f"end_run failed: {e}")
             raise Exception(f"find rank: {rank} stop_signal, stop running, it's an expected behavior")
         if paused == 1:
-            try:
-                self.end_run()
-            except Exception as e:
-                print(f"end_run failed: {e}")
             raise Exception(f"find rank: {rank} pause_signal, pause running, it's an expected behavior")
