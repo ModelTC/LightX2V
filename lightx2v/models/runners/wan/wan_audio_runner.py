@@ -1416,7 +1416,6 @@ class WanAudioARRunner(WanAudioRunner):
                             self.check_stop()
                             self.init_run_segment(segment_idx)
                             segment_latents = self.run_segment(segment_idx)
-                            logger.debug(f"segment_latents shape: {segment_latents.shape}")
 
                         vae_decoder.submit(self.decode_segment_latents, segment_idx, segment_latents)
                     segment_videos = vae_decoder.finish()
@@ -1524,21 +1523,20 @@ class WanAudioARRunner(WanAudioRunner):
             self.prefill_reference_kv()
 
             while True:
-                with ProfilingContext4DebugL1(f"stream segment get audio segment {segment_idx}"):
-                    control = self.va_controller.next_control()
-                    if control.action == "blank_to_voice":
-                        self.prev_video = control.data
-                    elif control.action == "wait":
-                        time.sleep(0.01)
-                        continue
+                control = self.va_controller.next_control()
+                if control.action == "blank_to_voice":
+                    self.prev_video = control.data
+                elif control.action == "wait":
+                    time.sleep(0.01)
+                    continue
 
-                    origin_audio, latent_audio, valid_duration = self.va_controller.reader.get_audio_segment()
-                    if origin_audio is None or latent_audio is None:
-                        fail_count += 1
-                        logger.warning(f"Failed to get audio chunk {fail_count} times")
-                        if fail_count > max_fail_count:
-                            raise Exception(f"Failed to get audio chunk {fail_count} times, stop reader")
-                        continue
+                origin_audio, latent_audio, valid_duration = self.va_controller.reader.get_audio_segment()
+                if origin_audio is None or latent_audio is None:
+                    fail_count += 1
+                    logger.warning(f"Failed to get audio chunk {fail_count} times")
+                    if fail_count > max_fail_count:
+                        raise Exception(f"Failed to get audio chunk {fail_count} times, stop reader")
+                    continue
 
                 with ProfilingContext4DebugL1(f"stream segment end2end {segment_idx}"):
                     try:
