@@ -1194,7 +1194,7 @@ class WanAudioARRunner(WanAudioRunner):
             f"start_latent={self.prompt_travel_segments[prompt_idx].start_latent}"
         )
 
-    def _validate_prompt_travel_schedule(self):
+    def _validate_prompt_travel_schedule(self, allow_open_ended=False):
         if not self.prompt_travel_segments:
             return
         latent_length = int(self.input_info.latent_shape[1])
@@ -1206,7 +1206,7 @@ class WanAudioARRunner(WanAudioRunner):
                 raise ValueError("invalid prompt travel schedule: start_latents must be non-decreasing")
             if segment.start_latent == prev_start_latent:
                 logger.warning(f"Prompt travel segment at frame {segment.start_frame} maps to duplicate latent {segment.start_latent}; the later segment will be selected at that latent.")
-            if segment.start_latent >= latent_length:
+            if not allow_open_ended and segment.start_latent >= latent_length:
                 raise ValueError(f"prompt travel start_frame {segment.start_frame} is outside latent length {latent_length}")
             prev_start_latent = segment.start_latent
 
@@ -1273,6 +1273,7 @@ class WanAudioARRunner(WanAudioRunner):
             feat = self.audio_adapter.forward_audio_proj(feat, feat.shape[1])
             features_list.append(feat.squeeze(0))
         self.inputs["audio_encoder_output"] = torch.stack(features_list, dim=0)
+        self.inputs["audio_encoder_output_is_chunk"] = False
         self.inputs["previmg_encoder_output"] = {"prev_latents": None, "prev_mask": None, "prev_len": 0}
 
     def init_run_segment(self, segment_idx, origin_audio=None, latent_audio=None):
@@ -1304,7 +1305,11 @@ class WanAudioARRunner(WanAudioRunner):
         start = segment_idx * chunk_size
         end = start + chunk_size
         self.model.scheduler.set_timesteps(infer_steps, device=AI_DEVICE)
-        xt = self.model.scheduler.noise[:, start:end].to(AI_DEVICE)
+        chunk_noise = self._make_ar_chunk_noise(segment_idx)
+        if chunk_noise is None:
+            xt = self.model.scheduler.noise[:, start:end].to(AI_DEVICE)
+        else:
+            xt = chunk_noise.to(AI_DEVICE)
         for step_index in range(infer_steps):
             logger.info(f"==> chunk: {segment_idx + 1} / {self.video_segment_num}, step_index: {step_index + 1} / {infer_steps}")
             self.model.kv_cache_manager.current_step = step_index
@@ -1318,6 +1323,27 @@ class WanAudioARRunner(WanAudioRunner):
                 current_step = (segment_idx * infer_steps) + step_index + 1
                 total_all_steps = self.video_segment_num * infer_steps
                 self.progress_callback((current_step / total_all_steps) * 100, 100)
+        return xt
+
+    def run_stream_segment(self, segment_idx=0):
+        infer_steps = self.model.scheduler.infer_steps
+        self.model.scheduler.set_timesteps(infer_steps, device=AI_DEVICE)
+        chunk_noise = self._make_ar_chunk_noise(segment_idx)
+        if chunk_noise is None:
+            xt = self.model.scheduler.noise.to(AI_DEVICE)
+        else:
+            xt = chunk_noise.to(AI_DEVICE)
+        for step_index in range(infer_steps):
+            logger.info(f"==> stream chunk: {segment_idx + 1}, step_index: {step_index + 1} / {infer_steps}")
+            self.model.kv_cache_manager.current_step = step_index
+            with ProfilingContext4DebugL1("step_pre"):
+                self.model.scheduler.step_pre(segment_idx, step_index, xt)
+            with ProfilingContext4DebugL1("🚀 infer_main"):
+                self.model.infer(self.inputs)
+            with ProfilingContext4DebugL1("step_post"):
+                xt = self.model.scheduler.step_post(xt)
+            if self.progress_callback:
+                self.progress_callback(((step_index + 1) / infer_steps) * 100, 100)
         return xt
 
     def decode_segment_latents(self, segment_idx: int, segment_latents: torch.Tensor) -> torch.Tensor:
@@ -1353,6 +1379,7 @@ class WanAudioARRunner(WanAudioRunner):
             latent_shape[1] = self.inputs["audio_encoder_output"].shape[1]
             latent_shape[1] = (latent_shape[1] // self.config["ar_config"]["num_frame_per_chunk"]) * self.config["ar_config"]["num_frame_per_chunk"]
             self.input_info.latent_shape = latent_shape
+            self._enable_ar_chunk_noise(self.input_info.seed, latent_shape)
             self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
             self.get_video_segment_num()
             self._validate_prompt_travel_schedule()
@@ -1415,14 +1442,15 @@ class WanAudioARRunner(WanAudioRunner):
     # origin_audio: (4 * latent_per_chunk / fps * sr), eg. (4 * 3 / 16 * 16000)
     # latent_audio: (latent_per_chunk, audio_window * sr) eg. (3, 1.0 * 16000)
     def _encode_audio_for_each_chunk(self, segment_idx: int, origin_audio: np.ndarray, latent_audio: np.ndarray) -> torch.Tensor:
-        self.input_info.seed = self.input_info.seed + segment_idx
-        torch.manual_seed(self.input_info.seed)
+        torch.manual_seed(self._ar_chunk_seed(segment_idx))
 
         # used for remux output video
         end_idx = origin_audio.shape[0] // self._audio_processor.audio_frame_rate
-        # 第一段vae解码出来视频只有 (4 - 1) * latent_per_chunk 帧
+        # The first cached VAE decode has no previous temporal cache, so it emits
+        # vae_stride_t - 1 fewer video frames than later chunks.
         if segment_idx == 0:
-            end_idx -= 1 * self.config["ar_config"]["num_frame_per_chunk"] * self._audio_processor.audio_frame_rate
+            vae_stride_t = int(self.config.get("vae_stride", [4])[0])
+            end_idx = max(end_idx - max(vae_stride_t - 1, 0), 0)
         origin_audio_tensor = torch.Tensor(origin_audio).float().unsqueeze(0)
         self.segment = AudioSegment(origin_audio_tensor, 0, end_idx)
 
@@ -1441,7 +1469,25 @@ class WanAudioARRunner(WanAudioRunner):
         audio_feat = self.audio_adapter.forward_audio_proj(audio_feat, audio_feat.shape[1])
 
         self.inputs["audio_encoder_output"] = audio_feat
+        self.inputs["audio_encoder_output_is_chunk"] = True
         self.inputs["previmg_encoder_output"] = {"prev_latents": None, "prev_mask": None, "prev_len": 0}
+
+    def _enable_ar_chunk_noise(self, base_seed: int, latent_shape):
+        self._ar_base_seed = int(base_seed)
+        self._ar_chunk_latent_shape = list(latent_shape)
+        self._ar_chunk_latent_shape[1] = int(self.config["ar_config"]["num_frame_per_chunk"])
+
+    def _ar_chunk_seed(self, segment_idx: int) -> int:
+        return int(getattr(self, "_ar_base_seed", self.input_info.seed)) + int(segment_idx)
+
+    def _make_ar_chunk_noise(self, segment_idx: int):
+        latent_shape = getattr(self, "_ar_chunk_latent_shape", None)
+        if latent_shape is None:
+            return None
+        seed = self._ar_chunk_seed(segment_idx)
+        torch.manual_seed(seed)
+        generator = torch.Generator("cpu").manual_seed(seed)
+        return torch.randn(*latent_shape, dtype=GET_DTYPE(), device="cpu", generator=generator)
 
     def run_main(self):
         try:
@@ -1464,11 +1510,15 @@ class WanAudioARRunner(WanAudioRunner):
             fail_count, max_fail_count = 0, 10
             self.va_controller.before_control()
 
+            if self.config.get("ar_config", {}).get("local_attn_size", -1) == -1:
+                raise ValueError("seko_talk_ar stream requires ar_config.local_attn_size for rolling KV cache.")
+
             latent_shape = list(self.input_info.latent_shape)
             latent_shape[1] = self.config["ar_config"]["num_frame_per_chunk"]
             self.input_info.latent_shape = latent_shape
-            self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
-            self._validate_prompt_travel_schedule()
+            self._enable_ar_chunk_noise(self.input_info.seed, latent_shape)
+            self.model.scheduler.prepare(seed=self._ar_chunk_seed(0), latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
+            self._validate_prompt_travel_schedule(allow_open_ended=True)
             self.init_kv_cache_manager()
             self.prefill_reference_kv()
 
@@ -1494,10 +1544,12 @@ class WanAudioARRunner(WanAudioRunner):
                         # reset pause signal
                         self.pause_signal = False
                         self.can_pause = valid_duration <= 1e-5
+                        chunk_size = int(self.model.scheduler.chunk_size)
+                        self._apply_prompt_travel_for_latent(segment_idx * chunk_size)
                         self.init_run_segment(segment_idx, origin_audio, latent_audio)
-                        self.model.scheduler.prepare(seed=self.input_info.seed, latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
+                        self.model.scheduler.prepare(seed=self._ar_chunk_seed(segment_idx), latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
                         self.check_stop()
-                        latents = self.run_segment(0)
+                        latents = self.run_stream_segment(segment_idx)
                         self.check_stop()
                         self.gen_video = self.decode_segment_latents(segment_idx, latents)
                         logger.debug(f"gen_video shape: {self.gen_video.shape}")
