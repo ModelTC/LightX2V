@@ -212,7 +212,7 @@ class ChatAdapter:
             try:
                 message = BSON.decode(message)
                 msg_type = message["type"]
-                logger.debug("Received message type: {}".format(msg_type))
+                # logger.debug("Received message type: {}".format(msg_type))
                 if msg_type == "AgentAudio":
                     audio = message["audio"]
                     if audio["type"] != "Pcm":
@@ -220,7 +220,7 @@ class ChatAdapter:
                         continue
                     pcm_data = audio["data"]
                     audio_info = AudioInfo(audio["info"])
-                    logger.debug("Received audio with duration: {}".format(audio_info.duration()))
+                    # logger.debug("Received audio with duration: {}".format(audio_info.duration()))
                     if self.audio_info is None:
                         self.audio_info = audio_info
                     else:
@@ -272,8 +272,8 @@ class ChatAdapter:
 
         # the actual sample count fetched
         sample_count = len(pcm_data) // (self.audio_info.channel_count * 2)
-        logger.debug("Fetched {} bytes audio".format(sample_count))
-        logger.debug("After fetch, there are {} bytes left".format(self.audio_buffer.current_size))
+        # logger.debug("Fetched {} bytes audio".format(sample_count))
+        # logger.debug("After fetch, there are {} bytes left".format(self.audio_buffer.current_size))
         audio_info = deepcopy(self.audio_info)
         audio_info.sample_count = sample_count
         return (pcm_data, audio_info)
@@ -658,13 +658,13 @@ class SekoAROmniVAReader(OmniVAReader):
         # 当前 latent 音频段上界索引
         look_ahead_secs = (latent_idx * 4 + 1) / self.video_fps + self.look_ahead_secs
         look_ahead_idx = int(look_ahead_secs * self.sample_rate)
-        logger.debug(f"latent_idx: {latent_idx} center_secs: {center_secs} right_idx: {right_idx} left_idx: {left_idx} look_ahead_secs: {look_ahead_secs} look_ahead_idx: {look_ahead_idx}")
+        # logger.debug(f"latent [{latent_idx}]: center_secs: {center_secs} ahead_sec: {look_ahead_secs} {left_idx} {right_idx} {look_ahead_idx}")
 
         # 对齐当前缓存的所有音频的起始位置（只缓存了最多两个chunk的音频）
         left_idx -= base_idx
         right_idx -= base_idx
         look_ahead_idx -= base_idx
-        logger.debug(f"adjusted idxs: {left_idx} {right_idx} {look_ahead_idx}")
+        # logger.debug(f"latent [{latent_idx}]: {left_idx} {right_idx} {look_ahead_idx}")
         return left_idx, right_idx, look_ahead_idx
 
     # 获取当前chunk对应的原始音频的开始和结束索引帧
@@ -674,11 +674,11 @@ class SekoAROmniVAReader(OmniVAReader):
         start_secs = end_secs - (self.latent_per_chunk * 4) / self.video_fps
         start_idx = int(start_secs * self.sample_rate)
         end_idx = int(end_secs * self.sample_rate)
-        logger.debug(f"chunk_idx: {self.chunk_idx} start_idx: {start_idx} end_idx: {end_idx}")
+        # logger.debug(f"chunk {self.chunk_idx} start_secs: {start_secs} end_secs: {end_secs} {start_idx} {end_idx}")
         # 对齐当前缓存的所有音频的起始位置（只缓存了最多两个chunk的音频）
         start_idx -= base_idx
         end_idx -= base_idx
-        logger.debug(f"adjusted idxs: {start_idx} {end_idx}")
+        # logger.debug(f"chunk {self.chunk_idx} adjusted: {start_idx} {end_idx}")
         return start_idx, end_idx
 
     def prepare_ar_audios(self, merged_audio, origin_audios, latent_audios):
@@ -688,16 +688,13 @@ class SekoAROmniVAReader(OmniVAReader):
             last_chunk_start_secs = self.segment_duration + (self.chunk_idx - 2) * self.other_fetch_duration
         base_idx = int(last_chunk_start_secs * self.sample_rate)
         audio_length = len(merged_audio)
-        logger.debug(
-            "chunk idx: ", self.chunk_idx, "start_secs: ", last_chunk_start_secs, "end_secs: ", last_chunk_start_secs + self.segment_duration, "base_idx: ", base_idx, "audio_length: ", audio_length
-        )
 
         # 构造原始音频，用于合成最终视频
         start_idx, end_idx = self.get_chunk_origin_idxs(base_idx)
         pad_idx = max(-start_idx, 0)
         real_start = max(start_idx, 0)
         real_len = min(end_idx, audio_length) - real_start
-        logger.debug(f"----- center audios pad_idx: {pad_idx} real_start: {real_start} real_len: {real_len} -----")
+        # logger.debug(f"origin audios pad_idx: {pad_idx} real_start: {real_start} real_len: {real_len}")
         origin_audios[pad_idx : pad_idx + real_len] = merged_audio[real_start : real_start + real_len]
 
         # 构造 latent 音频，用于 audio encode
@@ -706,7 +703,7 @@ class SekoAROmniVAReader(OmniVAReader):
             pad_idx = max(-left_idx, 0)
             real_start = max(left_idx, 0)
             real_len = min(look_ahead_idx, right_idx, audio_length) - real_start
-            logger.debug(f"----- {i} pad_idx: {pad_idx} real_start: {real_start} real_len: {real_len} -----")
+            # logger.debug(f"latent audios {i} pad_idx: {pad_idx} real_start: {real_start} real_len: {real_len}")
             latent_audios[i, pad_idx : pad_idx + real_len] = merged_audio[real_start : real_start + real_len]
 
     def prepare_audio_data(self, chat_audio_result):
@@ -719,9 +716,9 @@ class SekoAROmniVAReader(OmniVAReader):
         if chat_audio_result is not None:
             audio_data, audio_info = chat_audio_result
             audio, sample_count = self.convert_pcm_s16le_to_mono_resampled(audio_data, audio_info)
-        valid_duration = sample_count / self.sample_rate
+
         if sample_count <= 0:
-            return origin_audios.tobytes(), latent_audios.tobytes(), valid_duration
+            return origin_audios.tobytes(), latent_audios.tobytes(), 0
 
         if self.chunk_idx == 0:
             expect_count = int(self.segment_duration * self.sample_rate)
@@ -729,22 +726,24 @@ class SekoAROmniVAReader(OmniVAReader):
             expect_count = int(self.other_fetch_duration * self.sample_rate)
         assert sample_count <= expect_count, f"audio length {sample_count} > expect_count {expect_count}"
 
+        valid_duration = self.other_fetch_duration
         # pad 0 to the audio to make it the same length as expect_count
         if sample_count < expect_count:
             pad_count = expect_count - sample_count
             logger.debug(f"pad {pad_count} samples to audio")
             audio = np.pad(audio, (0, pad_count), mode="constant", constant_values=0)
+            valid_duration -= pad_count / self.sample_rate
 
         # if is not the first segment, concat with previous segment
         if self.last_chunk_audios is not None:
-            logger.debug(f"concat {self.last_chunk_audios.shape} with {audio.shape}")
+            # logger.debug(f"concat {self.last_chunk_audios.shape} with {audio.shape}")
             merged_audio = np.concatenate([self.last_chunk_audios, audio])
         else:
             merged_audio = audio
         self.prepare_ar_audios(merged_audio, origin_audios, latent_audios)
-        logger.debug(
-            f"chunk[{self.chunk_idx}] origin_audios: {origin_audios.shape} {origin_audios.dtype} {origin_audios.min()} {origin_audios.max()} latent_audios: {latent_audios.shape} {latent_audios.dtype} {latent_audios.min()} {latent_audios.max()} {sample_count}, valid_duration: {valid_duration}"
-        )
+        # logger.debug(
+        #     f"chunk[{self.chunk_idx}] origin_audios: {origin_audios.shape} {origin_audios.dtype} {origin_audios.min()} {origin_audios.max()} latent_audios: {latent_audios.shape} {latent_audios.dtype} {latent_audios.min()} {latent_audios.max()} {sample_count}, valid_duration: {valid_duration}"
+        # )
 
         # update prev seg chunk
         self.last_chunk_audios = audio

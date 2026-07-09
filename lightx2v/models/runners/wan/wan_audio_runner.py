@@ -1334,7 +1334,7 @@ class WanAudioARRunner(WanAudioRunner):
         else:
             xt = chunk_noise.to(AI_DEVICE)
         for step_index in range(infer_steps):
-            logger.info(f"==> stream chunk: {segment_idx + 1}, step_index: {step_index + 1} / {infer_steps}")
+            # logger.info(f"==> stream chunk: {segment_idx + 1}, step_index: {step_index + 1} / {infer_steps}")
             self.model.kv_cache_manager.current_step = step_index
             with ProfilingContext4DebugL1("step_pre"):
                 self.model.scheduler.step_pre(segment_idx, step_index, xt)
@@ -1451,6 +1451,7 @@ class WanAudioARRunner(WanAudioRunner):
         if segment_idx == 0:
             vae_stride_t = int(self.config.get("vae_stride", [4])[0])
             end_idx = max(end_idx - max(vae_stride_t - 1, 0), 0)
+            origin_audio = origin_audio[-end_idx * self._audio_processor.audio_frame_rate :]
         origin_audio_tensor = torch.Tensor(origin_audio).float().unsqueeze(0)
         self.segment = AudioSegment(origin_audio_tensor, 0, end_idx)
 
@@ -1552,7 +1553,7 @@ class WanAudioARRunner(WanAudioRunner):
                         latents = self.run_stream_segment(segment_idx)
                         self.check_stop()
                         self.gen_video = self.decode_segment_latents(segment_idx, latents)
-                        logger.debug(f"gen_video shape: {self.gen_video.shape}")
+                        # logger.debug(f"gen_video shape: {self.gen_video.shape}")
                         self.check_stop()
                         self.end_run_segment(segment_idx, valid_duration=valid_duration)
                         segment_idx += 1
