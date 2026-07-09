@@ -3,6 +3,7 @@ from .flash_attn import FlashAttn2Weight, FlashAttn3Weight, FlashAttn4Weight, Sp
 from .general_sparse_attn import GeneralSparseAttnWeight
 from .nbhd_attn import NbhdAttnWeight, NbhdAttnWeightFlashInfer
 from .radial_attn import RadialAttnWeight
+from .rainfusion_attn import RainfusionAttnWeight
 from .ring_attn import RingAttnWeight
 from .sage_attn import SageAttn2KInt8VFP8Weight, SageAttn2Weight, SageAttn3Weight, SparseSageAttn2Weight, SparseSageAttn3Weight
 from .sla_attn import SlaAttnWeight

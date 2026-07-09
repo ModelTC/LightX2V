@@ -234,6 +234,7 @@ class MagiOperator:
             q_ranges=q_ranges,
             k_ranges=k_ranges,
             attn_type_map=attn_type_map,
+            softmax_scale=kwargs.get("softmax_scale", None),
             auto_range_merge=True,
         )[0]
 
@@ -287,14 +288,19 @@ class FlexBlockOperator:
 class FlashinferOperator:
     sparse_wrapper = None
     mask = None
+    plan_key = None
 
     def __init__(self, q_block_size=128, k_block_size=128, operator_setting={}):
         self.q_block_size = q_block_size
         self.k_block_size = k_block_size
         self.operator_setting = operator_setting
-        if FlashinferOperator.sparse_wrapper is None:
+        self._ensure_sparse_wrapper()
+
+    @classmethod
+    def _ensure_sparse_wrapper(cls):
+        if cls.sparse_wrapper is None:
             float_workspace_buffer = torch.empty(1024 * 1024 * 1024, dtype=torch.uint8, device=AI_DEVICE)
-            FlashinferOperator.sparse_wrapper = flashinfer.sparse.VariableBlockSparseAttentionWrapper(float_workspace_buffer, backend="fa2")
+            cls.sparse_wrapper = flashinfer.sparse.VariableBlockSparseAttentionWrapper(float_workspace_buffer, backend="fa2")
 
     def __call__(
         self,
@@ -308,16 +314,33 @@ class FlashinferOperator:
         max_seqlen_kv=None,
         **kwargs,
     ):
+        self._ensure_sparse_wrapper()
         seqlen, head_num, head_dim = q.shape
+        kv_seqlen = k.shape[0]
+        softmax_scale = kwargs.get("softmax_scale", None)
         # (B, H, Q_block_num, K_block_num) -> (H, Q_block_num, K_block_num)
         mask = mask.squeeze(0)
-        if FlashinferOperator.mask is None or not torch.equal(mask, FlashinferOperator.mask):
+        plan_key = (
+            tuple(mask.shape),
+            seqlen,
+            kv_seqlen,
+            head_num,
+            head_dim,
+            q.dtype,
+            k.dtype,
+            str(q.device),
+            str(k.device),
+            self.q_block_size,
+            self.k_block_size,
+            softmax_scale,
+        )
+        if FlashinferOperator.mask is None or FlashinferOperator.plan_key != plan_key or not torch.equal(mask, FlashinferOperator.mask):
             _, q_block_num, k_block_num = mask.shape
             block_row_sz = torch.ones(q_block_num, dtype=torch.int32, device=q.device) * self.q_block_size
             block_row_sz[-1] = seqlen - self.q_block_size * (q_block_num - 1)
             block_row_sz = block_row_sz.unsqueeze(0).repeat(head_num, 1)
             block_col_sz = torch.ones(k_block_num, dtype=torch.int32, device=k.device) * self.k_block_size
-            block_col_sz[-1] = seqlen - self.k_block_size * (k_block_num - 1)
+            block_col_sz[-1] = kv_seqlen - self.k_block_size * (k_block_num - 1)
             block_col_sz = block_col_sz.unsqueeze(0).repeat(head_num, 1)
             FlashinferOperator.sparse_wrapper.plan(
                 block_mask_map=mask,
@@ -327,8 +350,11 @@ class FlashinferOperator:
                 num_kv_heads=head_num,
                 head_dim=head_dim,
                 q_data_type=q.dtype,
+                kv_data_type=k.dtype,
+                sm_scale=softmax_scale,
             )
-            FlashinferOperator.mask = mask
+            FlashinferOperator.mask = mask.clone()
+            FlashinferOperator.plan_key = plan_key
 
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
