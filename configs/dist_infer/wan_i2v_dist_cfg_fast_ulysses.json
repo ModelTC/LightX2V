@@ -12,7 +12,7 @@
     "cpu_offload": false,
     "parallel": {
         "seq_p_size": 4,
-        "seq_p_attn_type": "ulysses",
+        "seq_p_attn_type": "fast_ulysses",
         "cfg_p_size": 1
     }
 }

@@ -79,7 +79,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["lightx2v*"]
-exclude = ["lightx2v_kernel*"]
+exclude = ["lightx2v_kernel*", "lightx2v_fast_ulysses*"]
 
 [tool.ruff]
 exclude = [

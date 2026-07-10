@@ -1,0 +1,18 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel",
+    "packaging",
+    "ninja",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lightx2v-fast-ulysses"
+version = "0.0.1"
+description = "LightX2V-vendored fast-ulysses NVSHMEM all-to-all extension"
+requires-python = ">=3.10"
+dependencies = ["torch"]
+
+[tool.setuptools]
+include-package-data = true
