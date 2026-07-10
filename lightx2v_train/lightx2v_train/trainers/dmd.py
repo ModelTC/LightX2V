@@ -170,7 +170,7 @@ class DmdTrainer(BaseTrainer):
         with torch.no_grad():
             grad = x_pred_fake_flow - x_pred_teacher
             dims = tuple(range(1, latents.ndim))
-            normalizer = torch.abs(latents - x_pred_teacher).mean(dim=dims, keepdim=True)
+            normalizer = torch.abs(latents - x_pred_teacher).mean(dim=dims, keepdim=True) + 1e-6
             if norm_clip_min is not None:
                 normalizer = normalizer.clamp(min=float(norm_clip_min))
             grad = torch.nan_to_num(grad / normalizer)
@@ -281,7 +281,8 @@ class DmdTrainer(BaseTrainer):
         if self.dfd_real_replace_prob <= 0 or not self._sample_synced_bool(self.dfd_real_replace_prob):
             return self.scheduler.add_noise(generated_latents.detach(), noise, sigma)
         real_latent = self._encode_dfd_real_latent(sample, generated_latents.shape)
-        return self.scheduler.add_noise(real_latent, noise, sigma)
+        teacher_score_latent = generated_latents + (real_latent - generated_latents).detach()
+        return self.scheduler.add_noise(teacher_score_latent, noise, sigma)
 
     def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
         if xt is None:

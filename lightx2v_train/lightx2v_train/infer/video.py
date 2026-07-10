@@ -21,6 +21,35 @@ def _target_hw_for_sample(sample, default_height, default_width):
     return default_height, default_width
 
 
+def _configured_denoising_step_list(config, infer_config):
+    dmd_config = config.get("training", {}).get("dmd", {})
+    return infer_config.get("denoising_step_list", dmd_config.get("denoising_step_list"))
+
+
+def _build_configured_denoising_steps(config, infer_config, device):
+    denoising_step_list = _configured_denoising_step_list(config, infer_config)
+    if not denoising_step_list:
+        return None
+
+    scheduler_config = config.get("scheduler", {})
+    scheduler = CausalForcingFlowMatchScheduler(
+        num_train_timesteps=scheduler_config.get("num_train_timesteps", 1000),
+        time_shift_settings=scheduler_config.get("time_shift_settings", {}),
+    )
+    raw_steps = torch.tensor(denoising_step_list, dtype=torch.long, device=device)
+    warp = infer_config.get("warp_denoising_step", config.get("training", {}).get("dmd", {}).get("warp_denoising_step", True))
+    if not warp:
+        return raw_steps.to(dtype=torch.float32)
+
+    timesteps = torch.cat(
+        [
+            scheduler.timesteps.to(device=device, dtype=torch.float32),
+            torch.zeros(1, device=device, dtype=torch.float32),
+        ]
+    )
+    return timesteps[scheduler.num_train_timesteps - raw_steps]
+
+
 @INFERENCER_REGISTER("wan_t2v_infer")
 class WanT2VInferencer(BaseInferencer):
     @torch.no_grad()
@@ -74,7 +103,13 @@ class WanT2VInferencer(BaseInferencer):
                 pos_cond = self.model.encode_condition({"prompt": prompt})
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 latent_hw = (latent.shape[-2], latent.shape[-1])
-                self.scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
+                denoising_steps = _build_configured_denoising_steps(self.config, self.infer_config, latent.device)
+                if denoising_steps is None:
+                    self.scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
+                else:
+                    sigmas = (denoising_steps / float(self.scheduler.num_train_timesteps)).detach().cpu().tolist()
+                    logger.info("[infer] using denoising_step_list={}", [round(float(step), 4) for step in denoising_steps.detach().cpu()])
+                    self.scheduler.set_timesteps(len(sigmas), sigmas=sigmas, latent_hw=latent_hw)
                 total_steps = len(self.scheduler.infer_timesteps)
 
                 if has_sample:
@@ -378,25 +413,10 @@ class WanT2VARInferencer(BaseInferencer):
         return scheduler
 
     def _configured_denoising_step_list(self):
-        dmd_config = self.config.get("training", {}).get("dmd", {})
-        return self.infer_config.get("denoising_step_list", dmd_config.get("denoising_step_list"))
+        return _configured_denoising_step_list(self.config, self.infer_config)
 
     def _build_ar_denoising_steps(self, device):
-        denoising_step_list = self._configured_denoising_step_list()
-        if not denoising_step_list:
-            return None
-        scheduler = self._causal_forcing_scheduler()
-        raw_steps = torch.tensor(denoising_step_list, dtype=torch.long, device=device)
-        warp = self.infer_config.get("warp_denoising_step", self.config.get("training", {}).get("dmd", {}).get("warp_denoising_step", True))
-        if not warp:
-            return raw_steps.to(dtype=torch.float32)
-        timesteps = torch.cat(
-            [
-                scheduler.timesteps.to(device=device, dtype=torch.float32),
-                torch.zeros(1, device=device, dtype=torch.float32),
-            ]
-        )
-        return timesteps[scheduler.num_train_timesteps - raw_steps]
+        return _build_configured_denoising_steps(self.config, self.infer_config, device)
 
     def _causal_forcing_scheduler(self):
         scheduler = getattr(self, "_ar_cf_scheduler", None)
