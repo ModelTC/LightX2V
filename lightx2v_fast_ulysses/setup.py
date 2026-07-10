@@ -40,9 +40,7 @@ class CMakeBuild(build_ext):
         arch = env.get("CUSTOM_ULYSSES_CUDA_ARCH", "80;90;100")
         # Torch expects dotted arch (e.g. 86 -> 8.6, 100 -> 10.0); insert the
         # decimal point before the last digit of each ";"-separated token.
-        env["TORCH_CUDA_ARCH_LIST"] = " ".join(
-            f"{tok[:-1]}.{tok[-1]}" for tok in arch.split(";") if tok
-        )
+        env["TORCH_CUDA_ARCH_LIST"] = " ".join(f"{tok[:-1]}.{tok[-1]}" for tok in arch.split(";") if tok)
         subprocess.check_call(
             [
                 "cmake",

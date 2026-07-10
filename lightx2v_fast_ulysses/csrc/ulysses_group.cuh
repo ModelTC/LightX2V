@@ -17,7 +17,7 @@ class UlyssesGroup: public torch::CustomClassHolder {
 public:
     static int64_t              uniqueid_nints();  // ceil(sizeof(nvshmemx_uniqueid_t)/8)
     static std::vector<int64_t> get_uniqueid();    // rank0 only
-    static void init_world(std::vector<int64_t> uid_ints, int64_t global_rank, int64_t global_nranks);  // idempotent
+    static void init_world(std::vector<int64_t> uid_ints, int64_t rank, int64_t nranks);  // idempotent
 
     UlyssesGroup(std::vector<int64_t> peer_global_pes, int64_t my_rank, int64_t device_id, int64_t reserved_bytes);
     ~UlyssesGroup() override;

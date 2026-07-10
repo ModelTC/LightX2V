@@ -76,7 +76,7 @@ std::vector<int64_t> UlyssesGroup::get_uniqueid()
     return out;
 }
 
-void UlyssesGroup::init_world(std::vector<int64_t> uid_ints, int64_t global_rank, int64_t global_nranks)
+void UlyssesGroup::init_world(std::vector<int64_t> uid_ints, int64_t rank, int64_t nranks)
 {
     if (g_world_inited)
         return;
@@ -89,8 +89,7 @@ void UlyssesGroup::init_world(std::vector<int64_t> uid_ints, int64_t global_rank
     // auto-stamps when version is invalid; here we explicitly substitute that step).
     nvshmemx_init_attr_t attr = NVSHMEMX_INIT_ATTR_INITIALIZER;
     TORCH_CHECK(
-        nvshmemx_set_attr_uniqueid_args(static_cast<int>(global_rank), static_cast<int>(global_nranks), &uid, &attr)
-            == 0,
+        nvshmemx_set_attr_uniqueid_args(static_cast<int>(rank), static_cast<int>(nranks), &uid, &attr) == 0,
         "nvshmemx_set_attr_uniqueid_args failed");
     // DEVIATION (see task-5-report): use the host-lib direct entry nvshmemx_hostlib_init_attr instead of
     // inline nvshmemx_init_attr. The inline version calls nvshmemi_init_thread, a symbol that lives only
@@ -228,7 +227,7 @@ void UlyssesGroup::destroy()
 
 UlyssesGroup::~UlyssesGroup()
 {
-    destroy();
+    // Collective cleanup must be explicit. Python synchronizes ranks before calling destroy().
 }
 
 }  // namespace ulysses

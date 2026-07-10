@@ -27,10 +27,10 @@ class AsyncA2AHandle:
 
 class UlyssesGroup:
     def __init__(
-            self,
-            process_group: Optional[dist.ProcessGroup] = None,
-            device: Optional[torch.device] = None,
-            initial_pool_bytes: int = 2 << 30,
+        self,
+        process_group: Optional[dist.ProcessGroup] = None,
+        device: Optional[torch.device] = None,
+        initial_pool_bytes: int = 2 << 30,
     ) -> None:
         pg = process_group if process_group is not None else dist.group.WORLD
         self.pg = pg
@@ -54,18 +54,20 @@ class UlyssesGroup:
         os.environ.setdefault("NVSHMEM_REMOTE_TRANSPORT", "none")
 
         cls = torch.classes.fast_ulysses.UlyssesGroup
-        if dist.get_rank() == 0:
+        pg_rank = dist.get_rank(pg)
+        if pg_rank == 0:
             uid = cls.get_uniqueid()
         else:
             uid = [0] * cls.uniqueid_nints()
         uid_t = torch.tensor(uid, dtype=torch.int64, device=device)
-        dist.broadcast(uid_t, src=0, group=dist.group.WORLD)
-        cls.init_world(uid_t.tolist(), dist.get_rank(), dist.get_world_size())
+        src_global_rank = dist.get_global_rank(pg, 0)
+        dist.broadcast(uid_t, src=src_global_rank, group=pg)
+        cls.init_world(uid_t.tolist(), pg_rank, self.world_size)
 
         dist.barrier(group=pg)
         self._group = cls(
-            [int(r) for r in self.peer_global_ranks],
-            int(self.rank),
+            list(range(self.world_size)),
+            int(pg_rank),
             int(device.index),
             int(initial_pool_bytes),
         )
@@ -97,12 +99,12 @@ class UlyssesGroup:
         return out, ev_done
 
     def all_to_all_single_4d(
-            self,
-            x: torch.Tensor,
-            *,
-            mode: int = 0,
-            tag: str = "",
-            use_tma: bool | None = None,
+        self,
+        x: torch.Tensor,
+        *,
+        mode: int = 0,
+        tag: str = "",
+        use_tma: bool | None = None,
     ) -> torch.Tensor:
         # COLLECTIVE SEMANTICS: s/n must divide world_size (uniform). The first (shape, mode, use_tma)
         # seen runs a local micro-benchmark and caches the launch config; every rank MUST issue the SAME
@@ -117,17 +119,15 @@ class UlyssesGroup:
         #
         # tag scopes the symmetric-heap output buffer (reused on same tag+shape+dtype). Results that
         # must stay live together (e.g. q/k/v) MUST use distinct tags, else they alias one buffer.
-        return torch.ops.fast_ulysses.all_to_all_single_4d(
-            self._group, x.contiguous(), mode, tag, use_tma
-        )
+        return torch.ops.fast_ulysses.all_to_all_single_4d(self._group, x.contiguous(), mode, tag, use_tma)
 
     def all_to_all_single_4d_async(
-            self,
-            x: torch.Tensor,
-            *,
-            mode: int = 0,
-            tag: str = "",
-            use_tma: bool | None = None,
+        self,
+        x: torch.Tensor,
+        *,
+        mode: int = 0,
+        tag: str = "",
+        use_tma: bool | None = None,
     ) -> AsyncA2AHandle:
         # Async variant: launches on the group's comm stream and returns immediately; kernels submitted
         # to the caller's stream afterwards overlap with the a2a until handle.wait(). Collective
@@ -143,9 +143,7 @@ class UlyssesGroup:
         x = x.contiguous()
         out, ev_done = self._launch_on_comm_stream(
             [x],
-            lambda: torch.ops.fast_ulysses.all_to_all_single_4d(
-                self._group, x, mode, tag, use_tma
-            ),
+            lambda: torch.ops.fast_ulysses.all_to_all_single_4d(self._group, x, mode, tag, use_tma),
         )
         return AsyncA2AHandle(out, ev_done)
 

@@ -1,7 +1,9 @@
-import unittest
+import importlib.util
 import json
+import re
 import sys
 import types
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -41,6 +43,55 @@ class FakeAttention:
         return kwargs["q"]
 
 
+class FakeNativeUlyssesGroup:
+    uid = [17, 23, 42, 99]
+    init_calls = []
+    constructor_calls = []
+
+    @classmethod
+    def reset(cls):
+        cls.init_calls.clear()
+        cls.constructor_calls.clear()
+
+    @classmethod
+    def uniqueid_nints(cls):
+        return len(cls.uid)
+
+    @classmethod
+    def get_uniqueid(cls):
+        return list(cls.uid)
+
+    @classmethod
+    def init_world(cls, uid, rank, nranks):
+        cls.init_calls.append((list(uid), int(rank), int(nranks)))
+
+    def __init__(self, peer_pes, rank, device_id, initial_pool_bytes):
+        type(self).constructor_calls.append((list(peer_pes), int(rank), int(device_id), int(initial_pool_bytes)))
+        self.destroyed = False
+
+    def destroy(self):
+        self.destroyed = True
+
+
+class FakeCudaStream:
+    def __init__(self, device=None, priority=0):
+        self.device = device
+        self.priority = priority
+
+    @staticmethod
+    def priority_range():
+        return (0, -1)
+
+
+def _load_fast_ulysses_comm_module():
+    path = Path(__file__).resolve().parents[1] / "lightx2v_fast_ulysses" / "comm.py"
+    spec = importlib.util.spec_from_file_location("_lightx2v_fast_ulysses_comm_test", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 class FastUlyssesBackendTest(unittest.TestCase):
     def tearDown(self):
         from lightx2v.common.ops.attn.fast_ulysses_attn import FastUlyssesAttnWeight
@@ -49,6 +100,7 @@ class FastUlyssesBackendTest(unittest.TestCase):
         FastUlyssesAttnWeight._single_node_cache.clear()
         FastUlyssesAttnWeight.reset_runtime_stats()
         FakeFastUlyssesGroup.instances.clear()
+        FakeNativeUlyssesGroup.reset()
 
     def test_fast_ulysses_backend_is_registered(self):
         from lightx2v.common.ops import attn  # noqa: F401
@@ -322,6 +374,61 @@ class FastUlyssesBackendTest(unittest.TestCase):
         self.assertEqual(captured[0]["device"], device)
         self.assertIn(((0, 1), 1), FastUlyssesAttnWeight._groups)
 
+    def test_native_group_bootstrap_uses_process_group_scope(self):
+        comm = _load_fast_ulysses_comm_module()
+        pg = object()
+        original_tensor = torch.tensor
+        broadcasts = []
+        barriers = []
+
+        def get_rank(group=None):
+            self.assertIs(group, pg)
+            return 1
+
+        def get_world_size(group=None):
+            self.assertIs(group, pg)
+            return 2
+
+        def get_process_group_ranks(group):
+            self.assertIs(group, pg)
+            return [4, 5]
+
+        def get_global_rank(group, group_rank):
+            self.assertIs(group, pg)
+            self.assertEqual(group_rank, 0)
+            return 4
+
+        def broadcast(tensor, src, group):
+            broadcasts.append((src, group, tensor.tolist()))
+            tensor.copy_(original_tensor(FakeNativeUlyssesGroup.uid, dtype=tensor.dtype))
+
+        def barrier(group=None):
+            self.assertIs(group, pg)
+            barriers.append(group)
+
+        fake_classes = types.SimpleNamespace(fast_ulysses=types.SimpleNamespace(UlyssesGroup=FakeNativeUlyssesGroup))
+        with (
+            mock.patch.object(comm.dist, "get_rank", side_effect=get_rank),
+            mock.patch.object(comm.dist, "get_world_size", side_effect=get_world_size),
+            mock.patch.object(comm.dist, "get_process_group_ranks", side_effect=get_process_group_ranks),
+            mock.patch.object(comm.dist, "get_global_rank", side_effect=get_global_rank),
+            mock.patch.object(comm.dist, "broadcast", side_effect=broadcast),
+            mock.patch.object(comm.dist, "barrier", side_effect=barrier),
+            mock.patch.object(comm.torch, "classes", fake_classes),
+            mock.patch.object(comm.torch, "tensor", side_effect=lambda data, dtype=None, device=None: original_tensor(data, dtype=dtype)),
+            mock.patch.object(comm.torch.cuda, "set_device"),
+            mock.patch.object(comm.torch.cuda, "Stream", FakeCudaStream),
+        ):
+            group = comm.UlyssesGroup(process_group=pg, device=torch.device("cuda", 3), initial_pool_bytes=1024)
+
+        self.assertEqual(group.rank, 1)
+        self.assertEqual(group.world_size, 2)
+        self.assertEqual(group.peer_global_ranks, [4, 5])
+        self.assertEqual(broadcasts, [(4, pg, [0, 0, 0, 0])])
+        self.assertEqual(FakeNativeUlyssesGroup.init_calls, [([17, 23, 42, 99], 1, 2)])
+        self.assertEqual(FakeNativeUlyssesGroup.constructor_calls, [([0, 1], 1, 3, 1024)])
+        self.assertEqual(barriers, [pg, pg])
+
     def test_native_package_surface_and_build_are_a2a_only(self):
         root = Path(__file__).resolve().parents[1] / "lightx2v_fast_ulysses"
         init_text = (root / "__init__.py").read_text()
@@ -338,6 +445,19 @@ class FastUlyssesBackendTest(unittest.TestCase):
         self.assertNotIn("file(GLOB", cmake_text)
         self.assertNotIn("all_to_all_qk.cu", cmake_text)
         self.assertNotIn("qk_norm_rope.cu", cmake_text)
+
+    def test_native_destructor_does_not_run_collective_cleanup(self):
+        root = Path(__file__).resolve().parents[1] / "lightx2v_fast_ulysses"
+        text = (root / "csrc" / "ulysses_group.cu").read_text()
+        marker = "UlyssesGroup::~UlyssesGroup()"
+        self.assertIn(marker, text)
+        body = text.split(marker, 1)[1].split("\n}", 1)[0]
+        body_without_comments = re.sub(r"//.*", "", body)
+
+        self.assertNotRegex(body_without_comments, r"\bdestroy\s*\(")
+        self.assertNotIn("nvshmem_free", body_without_comments)
+        self.assertNotIn("nvshmem_team_destroy", body_without_comments)
+        self.assertNotIn("nvshmemx_hostlib_finalize", body_without_comments)
 
     def test_wan_i2v_fast_config_uses_fast_ulysses(self):
         root = Path(__file__).resolve().parents[1]
