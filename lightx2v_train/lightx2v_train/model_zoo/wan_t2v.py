@@ -17,7 +17,7 @@ from lightx2v_train.utils.utils import get_running_dtype
 
 from .base import BaseModel
 from .native.wan.modules.causal_model import CausalWanModel
-from .native.wan.modules.model import WanModel
+from .native.wan.modules.model import GanAttentionBlock, RegisterTokens, WanModel
 from .native.wan.modules.t5 import T5EncoderModel
 from .native.wan.modules.vae import WanVAE
 
@@ -311,6 +311,92 @@ class WanT2VModel(BaseModel):
                 context=context,
                 seq_len=seq_len,
             )
+
+    def add_gan_classifier(
+        self,
+        feature_layers=(21, 29),
+        num_classes=1,
+        hidden_dim=None,
+        ffn_dim=None,
+        num_heads=None,
+        concat_time_embedding=False,
+    ):
+        """Attach One-Forcing's discriminator head to a bidirectional Wan backbone."""
+        if isinstance(self.transformer, CausalWanModel):
+            raise ValueError("The One-Forcing GAN classifier must be attached to the bidirectional fake-score model.")
+
+        feature_layers = tuple(int(layer) for layer in feature_layers)
+        if not feature_layers:
+            raise ValueError("feature_layers must contain at least one transformer block index.")
+        if tuple(sorted(set(feature_layers))) != feature_layers:
+            raise ValueError("feature_layers must be unique and strictly increasing.")
+        if min(feature_layers) < 0 or max(feature_layers) >= len(self.transformer.blocks):
+            raise ValueError(
+                f"GAN feature layers {feature_layers} are invalid for a transformer with "
+                f"{len(self.transformer.blocks)} blocks."
+            )
+
+        hidden_dim = int(hidden_dim or self.transformer.dim)
+        if hidden_dim != int(self.transformer.dim):
+            raise ValueError(
+                f"GAN hidden_dim={hidden_dim} must match Wan transformer dim={self.transformer.dim}."
+            )
+        ffn_dim = int(ffn_dim or self.transformer.ffn_dim)
+        num_heads = int(num_heads or self.transformer.num_heads)
+        time_dim = hidden_dim if concat_time_embedding else 0
+        classifier_input_dim = hidden_dim * len(feature_layers) + time_dim
+
+        self.transformer.gan_feature_layers = feature_layers
+        self.transformer.gan_concat_time_embedding = bool(concat_time_embedding)
+        self.transformer.gan_register_tokens = RegisterTokens(len(feature_layers), hidden_dim)
+        self.transformer.gan_attention_blocks = torch.nn.ModuleList(
+            [GanAttentionBlock(dim=hidden_dim, ffn_dim=ffn_dim, num_heads=num_heads) for _ in feature_layers]
+        )
+        self.transformer.gan_classifier = torch.nn.Sequential(
+            torch.nn.LayerNorm(classifier_input_dim),
+            torch.nn.Linear(classifier_input_dim, hidden_dim),
+            torch.nn.SiLU(),
+            torch.nn.Linear(hidden_dim, int(num_classes)),
+        )
+
+    def classify_latents(self, noisy_latent, timestep_or_sigma, condition):
+        """Return discriminator logits while reusing the fake-score Wan backbone."""
+        if isinstance(self.transformer, CausalWanModel):
+            raise ValueError("classify_latents requires a bidirectional Wan transformer.")
+        required = ("gan_feature_layers", "gan_register_tokens", "gan_attention_blocks", "gan_classifier")
+        missing = [name for name in required if not hasattr(self.transformer, name)]
+        if missing:
+            raise RuntimeError(f"GAN classifier is not initialized; missing attributes: {missing}")
+
+        hidden_states = noisy_latent.to(device=self.device, dtype=self.running_dtype)
+        if hidden_states.ndim == 4:
+            hidden_states = hidden_states.unsqueeze(0)
+        timestep = timestep_or_sigma.float() * self.num_train_timesteps
+        if timestep.ndim == 0:
+            timestep = timestep.unsqueeze(0)
+        if timestep.ndim == 2:
+            if not torch.all(timestep == timestep[:, :1]):
+                raise ValueError("The bidirectional GAN classifier requires one shared timestep per video.")
+            timestep = timestep[:, 0]
+        timestep = timestep.to(device=self.device)
+
+        latent_list = self._batch_to_list(hidden_states)
+        context = self._condition_to_context_list(condition, batch_size=len(latent_list))
+        seq_len = self._sequence_length(hidden_states)
+        with self.transformer_forward_context():
+            _, logits = self.transformer(
+                latent_list,
+                t=timestep,
+                context=context,
+                seq_len=seq_len,
+                classify_mode=True,
+                concat_time_embeddings=self.transformer.gan_concat_time_embedding,
+                register_tokens=self.transformer.gan_register_tokens,
+                cls_pred_branch=self.transformer.gan_classifier,
+                gan_ca_blocks=self.transformer.gan_attention_blocks,
+                gan_feature_layers=self.transformer.gan_feature_layers,
+            )
+        return logits
 
     def denoise_teacher_forcing(
         self,
