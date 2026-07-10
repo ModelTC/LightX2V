@@ -14,6 +14,13 @@ export TAYLOR_CACHE_ENABLE_TAILING_ENHANCE="${TAYLOR_CACHE_ENABLE_TAILING_ENHANC
 export TAYLOR_CACHE_TAILING_ENHANCE_STEPS="${TAYLOR_CACHE_TAILING_ENHANCE_STEPS:-1}"
 export TAYLOR_CACHE_LOW_FREQS_ORDER="${TAYLOR_CACHE_LOW_FREQS_ORDER:-2}"
 export TAYLOR_CACHE_HIGH_FREQS_ORDER="${TAYLOR_CACHE_HIGH_FREQS_ORDER:-2}"
+export FLASHINFER_AUTOTUNE_MODE="${FLASHINFER_AUTOTUNE_MODE:-${flashinfer_autotune_mode:-off}}"
+export FLASHINFER_AUTOTUNE_CACHE="${FLASHINFER_AUTOTUNE_CACHE:-${flashinfer_autotune_cache:-${lightx2v_path}/save_results/hunyuan_image3_flashinfer_autotune_i2i.json}}"
+export FLASHINFER_TUNE_MAX_NUM_TOKENS="${FLASHINFER_TUNE_MAX_NUM_TOKENS:-${flashinfer_tune_max_num_tokens:-16384}}"
+export FLASHINFER_TUNING_BUCKETS="${FLASHINFER_TUNING_BUCKETS:-${flashinfer_tuning_buckets:-128,256,512,1024,2048,4096,8192,12288,16384}}"
+export FLASHINFER_AUTOTUNE_ROUND_UP="${FLASHINFER_AUTOTUNE_ROUND_UP:-${flashinfer_autotune_round_up:-true}}"
+export ATTN_IMPL="${ATTN_IMPL:-${attn_impl:-torch_sdpa}}"
+export HUNYUAN_CFG_MODE="${HUNYUAN_CFG_MODE:-${hunyuan_cfg_mode:-batch}}"
 
 if [ -z "${CUDA_VISIBLE_DEVICES:-}" ] && command -v nvidia-smi >/dev/null 2>&1; then
     gpu_count=$(nvidia-smi -L | wc -l)
@@ -27,7 +34,11 @@ source ${lightx2v_path}/scripts/base/base.sh
 echo "ENABLE_KV_CACHE=${ENABLE_KV_CACHE}"
 echo "ENABLE_TEXT_KV_CACHE=${ENABLE_TEXT_KV_CACHE}"
 echo "USE_TAYLOR_CACHE=${USE_TAYLOR_CACHE}"
+echo "HUNYUAN_CFG_MODE=${HUNYUAN_CFG_MODE}"
 echo "moe_impl=${moe_impl:-flashinfer}"
+echo "ATTN_IMPL=${ATTN_IMPL}"
+echo "FLASHINFER_AUTOTUNE_MODE=${FLASHINFER_AUTOTUNE_MODE}"
+echo "FLASHINFER_AUTOTUNE_CACHE=${FLASHINFER_AUTOTUNE_CACHE}"
 
 base_config="${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_i2i.json"
 runtime_config="$(mktemp /tmp/hunyuan_image3_i2i_config.XXXXXX.json)"
@@ -71,4 +82,11 @@ python -m lightx2v.infer \
     --image_path "${image_path}" \
     --save_result_path ${lightx2v_path}/save_results/hunyuan_image3_i2i.png \
     --seed 42 \
-    --moe_impl "${moe_impl:-flashinfer}"
+    --hunyuan_cfg_mode "${HUNYUAN_CFG_MODE}" \
+    --moe_impl "${moe_impl:-flashinfer}" \
+    --attn_impl "${ATTN_IMPL}" \
+    --flashinfer_autotune_mode "${FLASHINFER_AUTOTUNE_MODE}" \
+    --flashinfer_autotune_cache "${FLASHINFER_AUTOTUNE_CACHE}" \
+    --flashinfer_tune_max_num_tokens "${FLASHINFER_TUNE_MAX_NUM_TOKENS}" \
+    --flashinfer_tuning_buckets "${FLASHINFER_TUNING_BUCKETS}" \
+    --flashinfer_autotune_round_up "${FLASHINFER_AUTOTUNE_ROUND_UP}"

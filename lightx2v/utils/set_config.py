@@ -57,6 +57,14 @@ def set_args2config(args):
     }
     _hunyuan_image3_cli_native_keys = (
         "moe_impl",
+        "hunyuan_cfg_mode",
+        "attn_impl",
+        "flashinfer_autotune",
+        "flashinfer_autotune_mode",
+        "flashinfer_autotune_cache",
+        "flashinfer_tuning_buckets",
+        "flashinfer_autotune_round_up",
+        "flashinfer_tune_max_num_tokens",
     )
     config["_hunyuan_image3_cli_native_snapshot"] = {
         k: getattr(args, k, None) for k in _hunyuan_image3_cli_native_keys if hasattr(args, k) and getattr(args, k, None) is not None
@@ -269,6 +277,8 @@ def auto_calc_config(config):
         config.setdefault("moe_layer_num_skipped", 0)
         config.setdefault("use_mixed_mlp_moe", False)
         config.setdefault("moe_impl", "eager")
+        config.setdefault("attn_impl", "torch_sdpa")
+        config.setdefault("hunyuan_cfg_mode", "batch")
         config.setdefault("pipeline_parallel", True)
         if "vae_scale_factor" not in config:
             vae_downsample_factor = config.get("vae_downsample_factor")

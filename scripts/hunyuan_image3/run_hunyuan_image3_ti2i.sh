@@ -55,7 +55,11 @@ echo "Running HunyuanImage3 ${DEMO}"
 echo "enable_kv_cache=${enable_kv_cache:-true}"
 echo "enable_text_kv_cache=${enable_text_kv_cache:-${enable_kv_cache:-true}}"
 echo "use_taylor_cache=${use_taylor_cache:-false}"
+echo "hunyuan_cfg_mode=${hunyuan_cfg_mode:-batch}"
 echo "moe_impl=${moe_impl:-flashinfer}"
+echo "attn_impl=${attn_impl:-torch_sdpa}"
+echo "flashinfer_autotune_mode=${flashinfer_autotune_mode:-off}"
+echo "flashinfer_autotune_cache=${flashinfer_autotune_cache:-${lightx2v_path}/save_results/hunyuan_image3_flashinfer_autotune_${DEMO}.json}"
 
 source "${lightx2v_path}/scripts/base/base.sh"
 
@@ -70,7 +74,14 @@ python -m lightx2v.infer \
     --image_path "$image_path" \
     --save_result_path "$save_result_path" \
     --seed "$seed" \
+    --hunyuan_cfg_mode "${hunyuan_cfg_mode:-batch}" \
     --moe_impl "${moe_impl:-eager}" \
+    --attn_impl "${attn_impl:-torch_sdpa}" \
+    --flashinfer_autotune_mode "${flashinfer_autotune_mode:-tune}" \
+    --flashinfer_autotune_cache "${flashinfer_autotune_cache:-${lightx2v_path}/save_results/hunyuan_image3_flashinfer_autotune_${DEMO}.json}" \
+    --flashinfer_tune_max_num_tokens "${flashinfer_tune_max_num_tokens:-16384}" \
+    --flashinfer_tuning_buckets "${flashinfer_tuning_buckets:-128,256,512,1024,2048,4096,8192,12288,16384}" \
+    --flashinfer_autotune_round_up "${flashinfer_autotune_round_up:-true}" \
     --enable_kv_cache "${enable_kv_cache:-true}" \
     --enable_text_kv_cache "${enable_text_kv_cache:-${enable_kv_cache:-true}}" \
     --use_taylor_cache "${use_taylor_cache:-false}" \

@@ -1,13 +1,16 @@
 import importlib
 import os
 import sys
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from PIL import Image
 from loguru import logger
 from safetensors import safe_open
+from tqdm.auto import tqdm
 from transformers import GenerationConfig
 
 from lightx2v.models.networks.hunyuan_image3.infer.kv_cache import HunyuanImage3StaticKVCache
@@ -15,6 +18,11 @@ from lightx2v.models.networks.hunyuan_image3.model import HunyuanImage3Model
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.hunyuan_image3.scheduler import HunyuanImage3Scheduler
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+
+try:
+    from flashinfer.autotuner import autotune as flashinfer_autotune
+except Exception:
+    flashinfer_autotune = None
 
 
 @dataclass(frozen=True)
@@ -296,10 +304,27 @@ class HunyuanImage3Runner(DefaultRunner):
     def _build_attention_mask(self, input_ids, tokenizer_output):
         batch, seq_len = input_ids.shape
         attention_mask = torch.ones(seq_len, seq_len, dtype=torch.bool, device=input_ids.device).tril(diagonal=0).repeat(batch, 1, 1)
+        full_attn_slices = self._build_full_attn_slices(tokenizer_output, batch, seq_len=seq_len)
         for batch_idx in range(batch):
-            for image_slice in self.hunyuan_image_processor.prepare_full_attn_slices(tokenizer_output, batch_idx):
-                attention_mask[batch_idx, image_slice, image_slice] = True
+            for start, stop in full_attn_slices[batch_idx]:
+                attention_mask[batch_idx, start:stop, start:stop] = True
         return attention_mask.unsqueeze(1)
+
+    def _build_full_attn_slices(self, tokenizer_output, batch, seq_len=None):
+        batch_slices = []
+        for batch_idx in range(batch):
+            sample_slices = []
+            for image_slice in self.hunyuan_image_processor.prepare_full_attn_slices(tokenizer_output, batch_idx):
+                start = 0 if image_slice.start is None else int(image_slice.start)
+                stop = seq_len if image_slice.stop is None else int(image_slice.stop)
+                if seq_len is not None:
+                    start = max(0, min(start, seq_len))
+                    stop = max(0, min(stop, seq_len))
+                if stop > start:
+                    sample_slices.append((start, stop))
+            sample_slices.sort()
+            batch_slices.append(sample_slices)
+        return batch_slices
 
     def _hunyuan_kv_cache_enabled(self):
         return bool(self.config.get("enable_kv_cache", True))
@@ -317,6 +342,91 @@ class HunyuanImage3Runner(DefaultRunner):
 
     def _hunyuan_taylor_cache_enabled(self):
         return bool(self.config.get("use_taylor_cache", False))
+
+    @staticmethod
+    def _config_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("1", "true", "yes", "y", "on"):
+                return True
+            if lowered in ("0", "false", "no", "n", "off"):
+                return False
+        return bool(value)
+
+    def _resolve_flashinfer_autotune_mode(self):
+        mode = self.config.get("flashinfer_autotune_mode")
+        if mode is None and "flashinfer_autotune" in self.config:
+            mode = "tune" if self._config_bool(self.config.get("flashinfer_autotune")) else "off"
+        if mode is None:
+            return "off"
+        if isinstance(mode, bool):
+            return "tune" if mode else "off"
+        mode = str(mode).strip().lower()
+        bool_aliases = {
+            "1": "tune",
+            "true": "tune",
+            "yes": "tune",
+            "y": "tune",
+            "on": "tune",
+            "0": "off",
+            "false": "off",
+            "no": "off",
+            "n": "off",
+        }
+        mode = bool_aliases.get(mode, mode)
+        if mode not in ("off", "tune", "load"):
+            raise ValueError("flashinfer_autotune_mode must be one of: off, tune, load.")
+        return mode
+
+    def _parse_flashinfer_tuning_buckets(self):
+        value = self.config.get("flashinfer_tuning_buckets")
+        if value in (None, ""):
+            return None
+        if isinstance(value, int):
+            return (value,)
+        if isinstance(value, (list, tuple)):
+            buckets = tuple(int(v) for v in value if str(v).strip())
+        else:
+            buckets = tuple(int(v.strip()) for v in str(value).split(",") if v.strip())
+        if not buckets:
+            raise ValueError("flashinfer_tuning_buckets must contain at least one integer when provided.")
+        return tuple(sorted(set(buckets)))
+
+    def _flashinfer_autotune_context(self):
+        mode = self._resolve_flashinfer_autotune_mode()
+        if mode == "off":
+            return nullcontext()
+        if self.config.get("moe_impl", "eager") != "flashinfer":
+            logger.warning("flashinfer_autotune_mode is set but moe_impl is not 'flashinfer'; autotune is disabled for this run.")
+            return nullcontext()
+        if flashinfer_autotune is None:
+            raise ImportError("flashinfer_autotune_mode requires flashinfer.autotuner.autotune.")
+
+        cache_path = self.config.get("flashinfer_autotune_cache")
+        if cache_path:
+            cache_path = str(Path(cache_path).expanduser())
+            parent = Path(cache_path).parent
+            if str(parent):
+                parent.mkdir(parents=True, exist_ok=True)
+
+        buckets = self._parse_flashinfer_tuning_buckets()
+        round_up = self.config.get("flashinfer_autotune_round_up")
+        if round_up is not None:
+            round_up = self._config_bool(round_up)
+
+        logger.info(
+            "HunyuanImage3 FlashInfer autotune enabled: "
+            f"mode={mode}, cache={cache_path}, buckets={buckets}, round_up={round_up}, "
+            f"tune_max_num_tokens={self.config.get('flashinfer_tune_max_num_tokens', 8192)}"
+        )
+        return flashinfer_autotune(
+            tune_mode=(mode == "tune"),
+            cache=cache_path,
+            tuning_buckets=buckets,
+            round_up=round_up,
+        )
 
     def _build_taylor_cache_dic(self, num_steps):
         return {
@@ -400,6 +510,142 @@ class HunyuanImage3Runner(DefaultRunner):
             position_ids=position_ids,
         )
 
+    def _cfg_parallel_enabled(self):
+        return bool(self.config.get("cfg_parallel", False)) and bool(self.config.get("enable_cfg", False))
+
+    def _is_distributed_nonzero_rank(self):
+        return dist.is_available() and dist.is_initialized() and dist.get_rank() != 0
+
+    def _cfg_parallel_rank(self):
+        if not self._cfg_parallel_enabled():
+            return 0
+        if not dist.is_available() or not dist.is_initialized():
+            raise RuntimeError("HunyuanImage3 cfg_parallel requires torch.distributed to be initialized.")
+        cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+        assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+        return dist.get_rank(cfg_p_group)
+
+    def _slice_cfg_branch_value(self, value, branch_idx, cfg_batch_size):
+        if isinstance(value, torch.Tensor):
+            if value.ndim > 0 and value.shape[0] == cfg_batch_size:
+                return value[branch_idx : branch_idx + 1]
+            return value
+        if isinstance(value, list):
+            if len(value) == cfg_batch_size:
+                return [value[branch_idx]]
+            return [self._slice_cfg_branch_value(item, branch_idx, cfg_batch_size) for item in value]
+        if isinstance(value, tuple):
+            if len(value) == cfg_batch_size:
+                return (value[branch_idx],)
+            return tuple(self._slice_cfg_branch_value(item, branch_idx, cfg_batch_size) for item in value)
+        if isinstance(value, dict):
+            return {k: self._slice_cfg_branch_value(v, branch_idx, cfg_batch_size) for k, v in value.items()}
+        return value
+
+    def _resolve_denoise_cfg_mode(self, prepared_inputs):
+        if not prepared_inputs.get("do_cfg", False):
+            return "none"
+
+        mode = str(self.config.get("hunyuan_cfg_mode", "batch")).lower()
+        if mode not in ("batch", "serial", "parallel"):
+            raise ValueError(f"HunyuanImage3 hunyuan_cfg_mode must be one of batch/serial/parallel, got {mode!r}.")
+        if mode == "parallel" and not self._cfg_parallel_enabled():
+            raise ValueError(
+                "HunyuanImage3 hunyuan_cfg_mode='parallel' requires enable_cfg=true and "
+                "a distributed config with parallel.cfg_p_size=2."
+            )
+        return mode
+
+    def _prepare_cfg_parallel_branch_inputs(self, prepared_inputs, cfg_p_rank, mark_parallel_branch=True):
+        cfg_batch_size = int(prepared_inputs["input_ids"].shape[0])
+        if cfg_batch_size != 2:
+            raise ValueError(f"HunyuanImage3 CFG branch inputs expect packed cond/uncond batch size 2, got {cfg_batch_size}.")
+
+        branch_inputs = {}
+        for key, value in prepared_inputs.items():
+            if key in ("custom_pos_emb",):
+                continue
+            branch_inputs[key] = self._slice_cfg_branch_value(value, cfg_p_rank, cfg_batch_size)
+
+        branch_inputs["batch_size"] = 1
+        branch_inputs["do_cfg"] = False
+        if mark_parallel_branch:
+            branch_inputs["_cfg_parallel_branch"] = True
+        branch_inputs["custom_pos_emb"] = self._build_custom_pos_emb(branch_inputs["position_ids"], branch_inputs.get("rope_image_info"))
+        return branch_inputs
+
+    def _build_denoise_kv_state(self, prepared_inputs, use_kv_cache):
+        if not use_kv_cache:
+            return {
+                "kv_cache": None,
+                "cache_position_ids": None,
+                "cache_local_inputs": None,
+            }
+        cache_position_ids = self._build_denoise_cache_position_ids(prepared_inputs)
+        return {
+            "kv_cache": HunyuanImage3StaticKVCache(
+                num_layers=self._hunyuan_num_layers(),
+                max_cache_len=prepared_inputs["input_ids"].shape[1],
+            ),
+            "cache_position_ids": cache_position_ids,
+            "cache_local_inputs": self._build_denoise_cache_local_indices(prepared_inputs, cache_position_ids),
+        }
+
+    def _build_denoise_model_inputs(self, prepared_inputs, latent_model_input, timestep, step_index, use_kv_cache, kv_state, guidance_scale):
+        timestep_input = timestep.repeat(latent_model_input.shape[0])
+        first_step = step_index == 0 or not use_kv_cache
+        if first_step:
+            model_inputs = {
+                "input_ids": prepared_inputs["input_ids"],
+                "attention_mask": prepared_inputs["attention_mask"],
+                "full_attn_slices": prepared_inputs.get("full_attn_slices"),
+                "position_ids": prepared_inputs["position_ids"],
+                "custom_pos_emb": prepared_inputs["custom_pos_emb"],
+                "images": latent_model_input,
+                "image_mask": prepared_inputs["image_mask"],
+                "timesteps": timestep_input,
+                "timesteps_index": prepared_inputs["timesteps_index"],
+                "guidance_index": prepared_inputs["guidance_index"],
+                "timesteps_r_index": prepared_inputs["timesteps_r_index"],
+                "first_step": True,
+            }
+            if prepared_inputs.get("cond_vae_images") is not None:
+                model_inputs["cond_vae_images"] = prepared_inputs["cond_vae_images"]
+                model_inputs["cond_vae_image_mask"] = prepared_inputs.get("cond_vae_image_mask")
+                model_inputs["cond_timesteps"] = prepared_inputs.get("cond_timesteps")
+                model_inputs["cond_timestep_index"] = prepared_inputs.get("cond_timestep_index")
+            if prepared_inputs.get("cond_vit_embeds") is not None:
+                model_inputs["cond_vit_embeds"] = prepared_inputs["cond_vit_embeds"]
+                model_inputs["cond_vit_image_mask"] = prepared_inputs.get("cond_vit_image_mask")
+        else:
+            cache_position_ids = kv_state["cache_position_ids"]
+            cache_local_inputs = kv_state["cache_local_inputs"]
+            model_inputs = {
+                "input_ids": None,
+                "attention_mask": self._slice_denoise_cache_attention_mask(prepared_inputs["attention_mask"], cache_position_ids),
+                "full_attn_slices": prepared_inputs.get("full_attn_slices"),
+                "position_ids": cache_position_ids,
+                "custom_pos_emb": self._build_custom_pos_emb(cache_position_ids, prepared_inputs.get("rope_image_info")),
+                "images": latent_model_input,
+                "image_mask": cache_local_inputs["image_mask"],
+                "timesteps": timestep_input,
+                "timesteps_index": cache_local_inputs["timesteps_index"],
+                "guidance_index": cache_local_inputs["guidance_index"],
+                "timesteps_r_index": cache_local_inputs["timesteps_r_index"],
+                "first_step": False,
+            }
+
+        if prepared_inputs.get("_cfg_parallel_branch", False):
+            model_inputs["_cfg_parallel_branch"] = True
+        if use_kv_cache:
+            model_inputs["past_key_values"] = kv_state["kv_cache"]
+            model_inputs["use_cache"] = True
+        if self.config.get("cfg_distilled", False):
+            model_inputs["guidance"] = torch.tensor([1000.0 * guidance_scale], device=latent_model_input.device, dtype=torch.bfloat16)
+        if self.config.get("use_meanflow", False):
+            raise NotImplementedError("HunyuanImage3 native meanflow sampling is not implemented yet.")
+        return model_inputs
+
     def _attach_tokenizer_cond_masks(self, cond_inputs, tokenizer_output, device):
         if not cond_inputs:
             return cond_inputs
@@ -478,11 +724,13 @@ class HunyuanImage3Runner(DefaultRunner):
         custom_pos_emb = self.hunyuan_cached_rope(max_position, device, rope_image_info=None, position_ids=position_ids)
         if build_attention_mask and attention_mask is None:
             attention_mask = self._build_attention_mask(input_ids, tokenizer_output)
+        full_attn_slices = self._build_full_attn_slices(tokenizer_output, input_ids.shape[0], seq_len=input_ids.shape[1]) if attention_mask is not None else None
         model_inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "position_ids": position_ids,
             "custom_pos_emb": custom_pos_emb,
+            "full_attn_slices": full_attn_slices,
         }
         if use_cache:
             model_inputs["past_key_values"] = past_key_values
@@ -700,12 +948,14 @@ class HunyuanImage3Runner(DefaultRunner):
         position_ids = torch.arange(0, input_ids.shape[1], dtype=torch.long, device=latent_device)[None].expand(input_ids.shape[0], -1)
         rope_image_info = self._build_batch_rope_image_info(output, tokenizer_out["sections"])
         custom_pos_emb = self._build_custom_pos_emb(position_ids, rope_image_info)
+        full_attn_slices = self._build_full_attn_slices(output, input_ids.shape[0], seq_len=input_ids.shape[1])
 
         generator = torch.Generator(device=latent_device).manual_seed(int(seed))
         prepared_inputs = {
             "input_ids": input_ids,
             "position_ids": position_ids,
             "attention_mask": self._build_attention_mask(input_ids, output),
+            "full_attn_slices": full_attn_slices,
             "custom_pos_emb": custom_pos_emb,
             "rope_image_info": rope_image_info,
             "image_mask": output.gen_image_mask.to(latent_device),
@@ -866,89 +1116,98 @@ class HunyuanImage3Runner(DefaultRunner):
         return torch.randn(shape, generator=generator, device=latent_device, dtype=torch.bfloat16)
 
     def _denoise_latents(self, prepared_inputs, image_size):
+        cfg_mode = self._resolve_denoise_cfg_mode(prepared_inputs)
+        serial_branch_inputs = None
+        if cfg_mode == "parallel":
+            prepared_inputs = self._prepare_cfg_parallel_branch_inputs(prepared_inputs, self._cfg_parallel_rank(), mark_parallel_branch=True)
+        elif cfg_mode == "serial":
+            serial_branch_inputs = [
+                self._prepare_cfg_parallel_branch_inputs(prepared_inputs, 0, mark_parallel_branch=False),
+                self._prepare_cfg_parallel_branch_inputs(prepared_inputs, 1, mark_parallel_branch=False),
+            ]
+
         latents = self._prepare_latents(prepared_inputs["batch_size"], image_size, prepared_inputs["generator"])
         num_steps = int(self.config.get("infer_steps", self.config.get("diff_infer_steps", 50)))
         self.scheduler.set_timesteps(num_steps, device=latents.device)
         guidance_scale = float(self.config.get("sample_guide_scale", self.config.get("diff_guidance_scale", 1.0)))
         use_kv_cache = self._hunyuan_kv_cache_enabled()
         taylor_cache_dic = self._build_taylor_cache_dic(num_steps) if self._hunyuan_taylor_cache_enabled() else None
+        if taylor_cache_dic is not None and cfg_mode in ("serial", "parallel"):
+            raise NotImplementedError("HunyuanImage3 Taylor cache currently supports hunyuan_cfg_mode='batch' only.")
         if taylor_cache_dic is not None and hasattr(self.model, "reset_taylor_cache"):
             self.model.reset_taylor_cache()
         if taylor_cache_dic is not None:
             logger.info(f"HunyuanImage3 Taylor cache enabled: {taylor_cache_dic}")
-        kv_cache = None
-        cache_position_ids = None
-        cache_local_inputs = None
-        if use_kv_cache:
-            kv_cache = HunyuanImage3StaticKVCache(
-                num_layers=self._hunyuan_num_layers(),
-                max_cache_len=prepared_inputs["input_ids"].shape[1],
-            )
-            cache_position_ids = self._build_denoise_cache_position_ids(prepared_inputs)
-            cache_local_inputs = self._build_denoise_cache_local_indices(prepared_inputs, cache_position_ids)
 
-        for step_index, timestep in enumerate(self.scheduler.timesteps):
-            cfg_factor = 2 if prepared_inputs["do_cfg"] else 1
-            latent_model_input = torch.cat([latents] * cfg_factor) if cfg_factor > 1 else latents
-            timestep_input = timestep.repeat(latent_model_input.shape[0])
-            first_step = step_index == 0 or not use_kv_cache
-            if first_step:
-                model_inputs = {
-                    "input_ids": prepared_inputs["input_ids"],
-                    "attention_mask": prepared_inputs["attention_mask"],
-                    "position_ids": prepared_inputs["position_ids"],
-                    "custom_pos_emb": prepared_inputs["custom_pos_emb"],
-                    "images": latent_model_input,
-                    "image_mask": prepared_inputs["image_mask"],
-                    "timesteps": timestep_input,
-                    "timesteps_index": prepared_inputs["timesteps_index"],
-                    "guidance_index": prepared_inputs["guidance_index"],
-                    "timesteps_r_index": prepared_inputs["timesteps_r_index"],
-                    "first_step": True,
-                }
-                if prepared_inputs.get("cond_vae_images") is not None:
-                    model_inputs["cond_vae_images"] = prepared_inputs["cond_vae_images"]
-                    model_inputs["cond_vae_image_mask"] = prepared_inputs.get("cond_vae_image_mask")
-                    model_inputs["cond_timesteps"] = prepared_inputs.get("cond_timesteps")
-                    model_inputs["cond_timestep_index"] = prepared_inputs.get("cond_timestep_index")
-                if prepared_inputs.get("cond_vit_embeds") is not None:
-                    model_inputs["cond_vit_embeds"] = prepared_inputs["cond_vit_embeds"]
-                    model_inputs["cond_vit_image_mask"] = prepared_inputs.get("cond_vit_image_mask")
-            else:
-                model_inputs = {
-                    "input_ids": None,
-                    "attention_mask": self._slice_denoise_cache_attention_mask(prepared_inputs["attention_mask"], cache_position_ids),
-                    "position_ids": cache_position_ids,
-                    "custom_pos_emb": self._build_custom_pos_emb(cache_position_ids, prepared_inputs.get("rope_image_info")),
-                    "images": latent_model_input,
-                    "image_mask": cache_local_inputs["image_mask"],
-                    "timesteps": timestep_input,
-                    "timesteps_index": cache_local_inputs["timesteps_index"],
-                    "guidance_index": cache_local_inputs["guidance_index"],
-                    "timesteps_r_index": cache_local_inputs["timesteps_r_index"],
-                    "first_step": False,
-                }
-            if use_kv_cache:
-                model_inputs["past_key_values"] = kv_cache
-                model_inputs["use_cache"] = True
-            if taylor_cache_dic is not None:
-                taylor_cache_dic["current_step"] = step_index
-                model_inputs["cache_dic"] = taylor_cache_dic
-            if self.config.get("cfg_distilled", False):
-                model_inputs["guidance"] = torch.tensor([1000.0 * guidance_scale], device=latents.device, dtype=torch.bfloat16)
-            if self.config.get("use_meanflow", False):
-                raise NotImplementedError("HunyuanImage3 native meanflow sampling is not implemented yet.")
+        if cfg_mode == "serial":
+            kv_states = [self._build_denoise_kv_state(branch_inputs, use_kv_cache) for branch_inputs in serial_branch_inputs]
+        else:
+            kv_states = [self._build_denoise_kv_state(prepared_inputs, use_kv_cache)]
+        if hasattr(self.model, "transformer_infer") and hasattr(self.model.transformer_infer, "reset_moe_profile"):
+            self.model.transformer_infer.reset_moe_profile()
 
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=latents.device.type == "cuda"):
-                prediction = self.model.infer(model_inputs)["diffusion_prediction"].to(latents.device)
+        denoise_steps = tqdm(
+            self.scheduler.timesteps,
+            total=len(self.scheduler.timesteps),
+            desc="HunyuanImage3 denoise",
+            dynamic_ncols=True,
+            disable=bool(self.config.get("disable_progress_bar", False)),
+        )
+        with self._flashinfer_autotune_context():
+            for step_index, timestep in enumerate(denoise_steps):
+                if cfg_mode == "serial":
+                    cond_model_inputs = self._build_denoise_model_inputs(
+                        serial_branch_inputs[0],
+                        latents,
+                        timestep,
+                        step_index,
+                        use_kv_cache,
+                        kv_states[0],
+                        guidance_scale,
+                    )
+                    uncond_model_inputs = self._build_denoise_model_inputs(
+                        serial_branch_inputs[1],
+                        latents,
+                        timestep,
+                        step_index,
+                        use_kv_cache,
+                        kv_states[1],
+                        guidance_scale,
+                    )
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=latents.device.type == "cuda"):
+                        prediction = self.model.infer_cfg_serial(cond_model_inputs, uncond_model_inputs)["diffusion_prediction"].to(latents.device)
+                else:
+                    cfg_factor = 2 if cfg_mode == "batch" else 1
+                    latent_model_input = torch.cat([latents] * cfg_factor) if cfg_factor > 1 else latents
+                    model_inputs = self._build_denoise_model_inputs(
+                        prepared_inputs,
+                        latent_model_input,
+                        timestep,
+                        step_index,
+                        use_kv_cache,
+                        kv_states[0],
+                        guidance_scale,
+                    )
+                    if taylor_cache_dic is not None:
+                        taylor_cache_dic["current_step"] = step_index
+                        model_inputs["cache_dic"] = taylor_cache_dic
 
-            if prepared_inputs["do_cfg"]:
-                pred_cond, pred_uncond = prediction.chunk(2)
-                prediction = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=latents.device.type == "cuda"):
+                        prediction = self.model.infer(model_inputs)["diffusion_prediction"].to(latents.device)
 
-            sigma = self.scheduler.sigmas[step_index].to(latents.device)
-            sigma_next = self.scheduler.sigmas[step_index + 1].to(latents.device)
-            latents = latents.float() + prediction.float() * (sigma_next - sigma)
+                    if cfg_mode == "batch":
+                        pred_cond, pred_uncond = prediction.chunk(2)
+                        if hasattr(self.model, "combine_cfg_predictions"):
+                            prediction = self.model.combine_cfg_predictions(pred_cond, pred_uncond)
+                        else:
+                            prediction = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
+
+                sigma = self.scheduler.sigmas[step_index].to(latents.device)
+                sigma_next = self.scheduler.sigmas[step_index + 1].to(latents.device)
+                latents = latents.float() + prediction.float() * (sigma_next - sigma)
+
+        if hasattr(self.model, "transformer_infer") and hasattr(self.model.transformer_infer, "print_moe_profile"):
+            self.model.transformer_infer.print_moe_profile(reset=True)
 
         return latents
 
@@ -978,9 +1237,13 @@ class HunyuanImage3Runner(DefaultRunner):
         prompt = getattr(input_info, "prompt_enhanced", None) or getattr(input_info, "prompt", "")
         image_size = self._resolve_image_size(input_info)
         seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
-        cot_text = self._generate_cot_text(prompt, image_size)
-        prepared_inputs = self._prepare_text_to_image_inputs(prompt, image_size, seed, cot_text=cot_text)
+        # cot_text = self._generate_cot_text(prompt, image_size)
+        prepared_inputs = self._prepare_text_to_image_inputs(prompt, image_size, seed, 
+                                                            #  cot_text=cot_text
+                                                            )
         latents = self._denoise_latents(prepared_inputs, image_size)
+        if self._is_distributed_nonzero_rank():
+            return []
         return self._decode_latents(latents, prepared_inputs["generator"])
 
     @torch.no_grad()
@@ -995,7 +1258,7 @@ class HunyuanImage3Runner(DefaultRunner):
         image_size = self._resolve_ti2i_image_size(self._resolve_image_size(input_info), batch_cond_images)
 
         text_cond_inputs = self._prepare_cond_inputs(batch_cond_images, cfg_factor=1, seed=seed)
-        cot_text = self._generate_cot_text(prompt, image_size, batch_cond_images=batch_cond_images, cond_inputs=text_cond_inputs)
+        # cot_text = self._generate_cot_text(prompt, image_size, batch_cond_images=batch_cond_images, cond_inputs=text_cond_inputs)
 
         # in default, we enable CFG for i2i/ti2i, but disable CFG if cfg_distilled is True
         do_cfg = bool(self.config.get("enable_cfg", False)) and not bool(self.config.get("cfg_distilled", False))
@@ -1004,11 +1267,13 @@ class HunyuanImage3Runner(DefaultRunner):
             prompt,
             image_size,
             seed,
-            cot_text=cot_text,
+            # cot_text=cot_text,
             batch_cond_images=batch_cond_images,
             cond_inputs=gen_cond_inputs,
         )
         latents = self._denoise_latents(prepared_inputs, image_size)
+        if self._is_distributed_nonzero_rank():
+            return []
         images = self._decode_latents(latents, prepared_inputs["generator"])
         return self.hunyuan_image_processor.postprocess_outputs(
             images,
@@ -1030,7 +1295,7 @@ class HunyuanImage3Runner(DefaultRunner):
             return {"image": images}
 
         save_result_path = getattr(input_info, "save_result_path", None)
-        if save_result_path:
+        if save_result_path and (not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0):
             Path(save_result_path).parent.mkdir(parents=True, exist_ok=True)
             images[0].save(save_result_path)
             logger.info(f"HunyuanImage3 image saved successfully to: {save_result_path}")

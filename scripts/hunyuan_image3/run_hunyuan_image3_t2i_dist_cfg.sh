@@ -2,13 +2,10 @@
 set -e
 
 # 用法：
-#   bash run_hunyuan.sh 0
-#   bash run_hunyuan.sh 1,2
-#   bash run_hunyuan.sh 3,5,6
+#   bash run_hunyuan_image3_t2i_dist_cfg.sh 0,1,2,3
 #
-# 如果不传参数，则使用已有的 CUDA_VISIBLE_DEVICES
-# 如果也没有设置 CUDA_VISIBLE_DEVICES，则自动使用所有 GPU
-# Cache 开关直接写在 python 入口参数里，测试时改入口处的 true/false/数字即可。
+# 该脚本是 HunyuanImage3 t2i 的 CFG parallel 入口，结构参考 WAN:
+# 普通 t2i 使用 run_hunyuan_image3_t2i.sh；CFG parallel 使用本脚本和 configs/dist_infer 下的 dist cfg。
 
 GPU_IDS="${1:-${CUDA_VISIBLE_DEVICES:-}}"
 
@@ -27,20 +24,20 @@ elif command -v nvidia-smi >/dev/null 2>&1; then
 fi
 
 echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-not set}"
+echo "nproc_per_node=${nproc_per_node:-2}"
 echo "enable_kv_cache=${enable_kv_cache:-true}"
 echo "enable_text_kv_cache=${enable_text_kv_cache:-${enable_kv_cache:-true}}"
 echo "use_taylor_cache=${use_taylor_cache:-false}"
-echo "hunyuan_cfg_mode=${hunyuan_cfg_mode:-batch}"
+echo "hunyuan_cfg_mode=${hunyuan_cfg_mode:-parallel}"
 echo "moe_impl=${moe_impl:-flashinfer}"
-echo "attn_impl=${attn_impl:-torch_sdpa}"
-echo "flashinfer_autotune_mode=${flashinfer_autotune_mode:-off}"
+echo "flashinfer_autotune_mode=${flashinfer_autotune_mode:-tune}"
 echo "flashinfer_autotune_cache=${flashinfer_autotune_cache:-${lightx2v_path}/save_results/hunyuan_image3_flashinfer_autotune_t2i.json}"
 
 source ${lightx2v_path}/scripts/base/base.sh
 
-config_json="${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_t2i.json"
+config_json="${lightx2v_path}/configs/dist_infer/hunyuan_image3_t2i_dist_cfg.json"
 
-python -m lightx2v.infer \
+torchrun --nproc_per_node="${nproc_per_node:-2}" -m lightx2v.infer \
     --model_cls hunyuan_image3 \
     --task t2i \
     --model_path "$model_path" \
@@ -48,7 +45,7 @@ python -m lightx2v.infer \
     --prompt "生成图片：一辆汽车行驶在高速公路上，驾驶员在打电话，副驾驶坐着一只狗" \
     --save_result_path "${lightx2v_path}/save_results/hunyuan_image3_t2i.png" \
     --seed 42 \
-    --hunyuan_cfg_mode "${hunyuan_cfg_mode:-batch}" \
+    --hunyuan_cfg_mode "${hunyuan_cfg_mode:-parallel}" \
     --moe_impl "${moe_impl:-flashinfer}" \
     --attn_impl "${attn_impl:-sdpa}" \
     --flashinfer_autotune_mode "${flashinfer_autotune_mode:-tune}" \

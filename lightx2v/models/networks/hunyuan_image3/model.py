@@ -2,6 +2,7 @@ import os
 import re
 
 import torch
+import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
@@ -39,6 +40,22 @@ def resolve_pipeline_devices(config, fallback_device):
     if config.get("pipeline_parallel", False) and torch.cuda.is_available():
         device_count = torch.cuda.device_count()
         if device_count > 0:
+            if config.get("cfg_parallel", False):
+                cfg_p_size = int(config.get("parallel", {}).get("cfg_p_size", 1))
+                if cfg_p_size > 1:
+                    if not dist.is_available() or not dist.is_initialized():
+                        raise RuntimeError("HunyuanImage3 cfg_parallel pipeline split requires an initialized distributed process group.")
+                    if device_count % cfg_p_size != 0:
+                        raise ValueError(
+                            f"HunyuanImage3 cfg_parallel requires visible CUDA device count ({device_count}) "
+                            f"to be divisible by cfg_p_size ({cfg_p_size})."
+                        )
+                    cfg_p_group = config["device_mesh"].get_group(mesh_dim="cfg_p")
+                    cfg_p_rank = dist.get_rank(cfg_p_group)
+                    devices_per_cfg_rank = device_count // cfg_p_size
+                    start = cfg_p_rank * devices_per_cfg_rank
+                    stop = start + devices_per_cfg_rank
+                    return [f"cuda:{idx}" for idx in range(start, stop)]
             return [f"cuda:{idx}" for idx in range(device_count)]
 
     return [_normalize_device_name(fallback_device)]
@@ -215,9 +232,64 @@ class HunyuanImage3Model(BaseTransformerModel):
     def _seq_parallel_post_process(self, x):
         raise NotImplementedError("HunyuanImage3 native sequence parallel is not implemented yet.")
 
+    def _guidance_scale(self):
+        return float(self.config.get("sample_guide_scale", self.config.get("diff_guidance_scale", 1.0)))
+
+    def _set_cfg_scheduler_predictions(self, noise_pred_cond, noise_pred_uncond, noise_pred_guided):
+        if not hasattr(self, "scheduler"):
+            return
+        self.scheduler.noise_pred_cond = noise_pred_cond
+        self.scheduler.noise_pred_uncond = noise_pred_uncond
+        self.scheduler.noise_pred_guided = noise_pred_guided
+        self.scheduler.noise_pred = noise_pred_guided
+
+    def combine_cfg_predictions(self, noise_pred_cond, noise_pred_uncond):
+        return noise_pred_uncond + self._guidance_scale() * (noise_pred_cond - noise_pred_uncond)
+
+    @torch.no_grad()
+    def infer_branch(self, inputs, infer_condition=True):
+        output = self._infer_cond_uncond(inputs, infer_condition=infer_condition)
+        if hasattr(self, "scheduler") and "diffusion_prediction" in output:
+            self.scheduler.noise_pred = output["diffusion_prediction"]
+        return output
+
+    @torch.no_grad()
+    def infer_cfg_serial(self, cond_inputs, uncond_inputs):
+        cond_output = self._infer_cond_uncond(cond_inputs, infer_condition=True)
+        uncond_output = self._infer_cond_uncond(uncond_inputs, infer_condition=False)
+        noise_pred_cond = cond_output["diffusion_prediction"]
+        noise_pred_uncond = uncond_output["diffusion_prediction"]
+        noise_pred_guided = self.combine_cfg_predictions(noise_pred_cond, noise_pred_uncond)
+        output = dict(cond_output)
+        output["diffusion_prediction"] = noise_pred_guided
+        self._set_cfg_scheduler_predictions(noise_pred_cond, noise_pred_uncond, noise_pred_guided)
+        return output
+
     @torch.no_grad()
     def infer(self, inputs):
-        output = self._infer_cond_uncond(inputs, infer_condition=True)
-        if hasattr(self, "scheduler") and "diffusion_prediction" in output:
+        cfg_parallel_branch = bool(inputs.get("_cfg_parallel_branch", False))
+        infer_condition = True
+        cfg_p_group = None
+        if cfg_parallel_branch:
+            if not self.config.get("cfg_parallel", False):
+                raise RuntimeError("HunyuanImage3 received a cfg-parallel branch input, but config['cfg_parallel'] is not enabled.")
+            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+            assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+            infer_condition = dist.get_rank(cfg_p_group) == 0
+
+        output = self._infer_cond_uncond(inputs, infer_condition=infer_condition)
+
+        if cfg_parallel_branch and "diffusion_prediction" in output:
+            noise_pred = output["diffusion_prediction"].contiguous()
+            if noise_pred.device.type == "cuda":
+                torch.cuda.set_device(noise_pred.device)
+            noise_pred_list = [torch.empty_like(noise_pred) for _ in range(2)]
+            dist.all_gather(noise_pred_list, noise_pred, group=cfg_p_group)
+            noise_pred_cond = noise_pred_list[0]
+            noise_pred_uncond = noise_pred_list[1]
+            noise_pred_guided = self.combine_cfg_predictions(noise_pred_cond, noise_pred_uncond)
+            output["diffusion_prediction"] = noise_pred_guided
+            self._set_cfg_scheduler_predictions(noise_pred_cond, noise_pred_uncond, noise_pred_guided)
+        elif hasattr(self, "scheduler") and "diffusion_prediction" in output:
             self.scheduler.noise_pred = output["diffusion_prediction"]
         return output

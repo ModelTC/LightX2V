@@ -261,12 +261,56 @@ def test_hunyuan_image3_moe_impl_cli_arg_overrides_config_json(tmp_path):
     assert config["moe_impl"] == "flashinfer"
 
 
+def test_hunyuan_image3_attn_impl_cli_arg_overrides_config_json(tmp_path):
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    config_json = tmp_path / "runtime.json"
+    config_json.write_text(json.dumps({"attn_impl": "torch_sdpa"}))
+
+    args = argparse.Namespace(
+        seed=123,
+        model_cls="hunyuan_image3",
+        task="t2i",
+        support_tasks=[],
+        model_path=str(model_path),
+        config_json=str(config_json),
+        attn_impl="flash_attn3",
+    )
+
+    config = set_config(args)
+
+    assert config["attn_impl"] == "flash_attn3"
+
+
+def test_hunyuan_image3_cfg_mode_cli_arg_overrides_config_json(tmp_path):
+    model_path = tmp_path / "model"
+    model_path.mkdir()
+    config_json = tmp_path / "runtime.json"
+    config_json.write_text(json.dumps({"hunyuan_cfg_mode": "batch"}))
+
+    args = argparse.Namespace(
+        seed=123,
+        model_cls="hunyuan_image3",
+        task="t2i",
+        support_tasks=[],
+        model_path=str(model_path),
+        config_json=str(config_json),
+        hunyuan_cfg_mode="serial",
+    )
+
+    config = set_config(args)
+
+    assert config["hunyuan_cfg_mode"] == "serial"
+
+
 def test_hunyuan_image3_ti2i_script_passes_cache_args_in_python_entrypoint():
     script_source = Path("scripts/hunyuan_image3/run_hunyuan_image3_ti2i.sh").read_text()
     python_entry = script_source.split("python -m lightx2v.infer", maxsplit=1)[1]
 
     for cli_arg in [
         "--moe_impl",
+        "--hunyuan_cfg_mode",
+        "--attn_impl",
         "--enable_kv_cache",
         "--enable_text_kv_cache",
         "--use_taylor_cache",
@@ -288,6 +332,8 @@ def test_hunyuan_image3_t2i_script_passes_cache_args_in_python_entrypoint():
 
     for cli_arg in [
         "--moe_impl",
+        "--hunyuan_cfg_mode",
+        "--attn_impl",
         "--enable_kv_cache",
         "--enable_text_kv_cache",
         "--use_taylor_cache",
@@ -301,6 +347,22 @@ def test_hunyuan_image3_t2i_script_passes_cache_args_in_python_entrypoint():
         "--taylor_cache_high_freqs_order",
     ]:
         assert cli_arg in python_entry
+    assert "configs/hunyuan_image3/hunyuan_image3_t2i.json" in script_source
+    assert "torchrun" not in script_source
+
+
+def test_hunyuan_image3_t2i_dist_cfg_script_uses_torchrun_and_dist_json():
+    script_source = Path("scripts/hunyuan_image3/run_hunyuan_image3_t2i_dist_cfg.sh").read_text()
+    python_entry = script_source.split("torchrun", maxsplit=1)[1]
+
+    assert "-m lightx2v.infer" in python_entry
+    assert "configs/dist_infer/hunyuan_image3_t2i_dist_cfg.json" in script_source
+    assert "--nproc_per_node" in python_entry
+    assert "--moe_impl" in python_entry
+    assert "--hunyuan_cfg_mode" in python_entry
+    assert "--attn_impl" in python_entry
+    dist_config = json.loads(Path("configs/dist_infer/hunyuan_image3_t2i_dist_cfg.json").read_text())
+    assert dist_config["hunyuan_cfg_mode"] == "parallel"
 
 
 def test_hunyuan_image3_i2i_script_passes_moe_impl_in_python_entrypoint():
@@ -308,6 +370,81 @@ def test_hunyuan_image3_i2i_script_passes_moe_impl_in_python_entrypoint():
     python_entry = script_source.split("python -m lightx2v.infer", maxsplit=1)[1]
 
     assert "--moe_impl" in python_entry
+    assert "--hunyuan_cfg_mode" in python_entry
+    assert "--attn_impl" in python_entry
+
+
+class _FakeFlashAttentionKernel:
+    def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, causal=False, **kwargs):
+        del cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv, kwargs
+        q_t = q.transpose(1, 2)
+        k_t = k.transpose(1, 2)
+        v_t = v.transpose(1, 2)
+        attn_mask = None
+        if causal:
+            q_len = q_t.shape[-2]
+            kv_len = k_t.shape[-2]
+            q_pos = torch.arange(q_len, device=q.device).unsqueeze(-1) + (kv_len - q_len)
+            k_pos = torch.arange(kv_len, device=q.device).unsqueeze(0)
+            attn_mask = k_pos <= q_pos
+        out = torch.nn.functional.scaled_dot_product_attention(q_t, k_t, v_t, attn_mask=attn_mask, dropout_p=0.0)
+        return out.transpose(1, 2).reshape(q.shape[0] * q.shape[1], -1)
+
+
+def _fake_flash_hunyuan_transformer_infer():
+    from lightx2v.models.networks.hunyuan_image3.infer.transformer_infer import HunyuanImage3TransformerInfer
+
+    infer = HunyuanImage3TransformerInfer.__new__(HunyuanImage3TransformerInfer)
+    infer.attn_impl = "flash_attn2"
+    infer.attn_kernel = _FakeFlashAttentionKernel()
+    infer.num_heads = 2
+    infer.head_dim = 4
+    infer._attn_cu_seqlens_cache = {}
+    infer._attn_fallback_warnings = set()
+    return infer
+
+
+def _custom_full_slice_mask(batch, seq_len, full_slices):
+    mask = torch.ones(seq_len, seq_len, dtype=torch.bool).tril().repeat(batch, 1, 1)
+    for batch_idx, sample_slices in enumerate(full_slices):
+        for start, stop in sample_slices:
+            mask[batch_idx, start:stop, start:stop] = True
+    return mask.unsqueeze(1)
+
+
+def test_hunyuan_image3_segmented_flash_attention_matches_custom_mask_sdpa_full_prefill():
+    torch.manual_seed(1)
+    infer = _fake_flash_hunyuan_transformer_infer()
+    batch, heads, seq_len, head_dim = 2, 2, 8, 4
+    query = torch.randn(batch, heads, seq_len, head_dim)
+    key = torch.randn(batch, heads, seq_len, head_dim)
+    value = torch.randn(batch, heads, seq_len, head_dim)
+    full_slices = [[(3, 6)], [(2, 5)]]
+    attention_mask = _custom_full_slice_mask(batch, seq_len, full_slices)
+    position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch, -1)
+
+    expected = torch.nn.functional.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, dropout_p=0.0)
+    actual = infer._registered_attention(query, key, value, attention_mask, position_ids=position_ids, full_attn_slices=full_slices)
+
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
+
+def test_hunyuan_image3_segmented_flash_attention_matches_custom_mask_sdpa_cache_slice():
+    torch.manual_seed(2)
+    infer = _fake_flash_hunyuan_transformer_infer()
+    batch, heads, seq_len, q_len, head_dim = 1, 2, 8, 5, 4
+    query = torch.randn(batch, heads, q_len, head_dim)
+    key = torch.randn(batch, heads, seq_len, head_dim)
+    value = torch.randn(batch, heads, seq_len, head_dim)
+    full_slices = [[(3, 6)]]
+    position_ids = torch.tensor([[1, 3, 4, 5, 7]])
+    full_attention_mask = _custom_full_slice_mask(batch, seq_len, full_slices)
+    attention_mask = full_attention_mask.index_select(dim=2, index=position_ids.reshape(-1))
+
+    expected = torch.nn.functional.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, dropout_p=0.0)
+    actual = infer._registered_attention(query, key, value, attention_mask, position_ids=position_ids, full_attn_slices=full_slices)
+
+    assert torch.allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
 def test_hunyuan_image3_runner_is_not_upstream_pipeline_wrapper():
@@ -434,6 +571,25 @@ def test_hunyuan_image3_runner_pipeline_saves_ti2i_image(tmp_path):
     assert result == {"image": None}
     assert save_path.exists()
     assert Image.open(save_path).size == (4, 5)
+
+
+def test_hunyuan_image3_generate_t2i_skips_decode_on_nonzero_dist_rank(monkeypatch):
+    import lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner as runner_module
+    from lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner import HunyuanImage3Runner
+
+    runner = HunyuanImage3Runner.__new__(HunyuanImage3Runner)
+    runner.config = {"task": "t2i"}
+    runner._ensure_pipeline_modules = lambda: None
+    runner._resolve_image_size = lambda input_info: (8, 8)
+    runner._prepare_text_to_image_inputs = lambda prompt, image_size, seed: {"batch_size": 1, "generator": "generator"}
+    runner._denoise_latents = lambda prepared_inputs, image_size: "latents"
+    runner._decode_latents = lambda latents, generator: pytest.fail("nonzero distributed ranks must not decode images")
+
+    monkeypatch.setattr(runner_module.dist, "is_available", lambda: True)
+    monkeypatch.setattr(runner_module.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(runner_module.dist, "get_rank", lambda: 1)
+
+    assert runner.generate_t2i(SimpleNamespace(prompt="prompt", seed=123)) == []
 
 
 def test_hunyuan_image3_resolves_text_generation_plan_for_think_recaption():

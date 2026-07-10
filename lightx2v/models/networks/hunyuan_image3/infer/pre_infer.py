@@ -225,4 +225,5 @@ class HunyuanImage3PreInfer:
             timesteps=to_device(inputs.get("timesteps"), device),
             token_hw=token_hw,
             first_step=inputs.get("first_step"),
+            full_attn_slices=inputs.get("full_attn_slices"),
         )

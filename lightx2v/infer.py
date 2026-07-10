@@ -159,6 +159,56 @@ def main():
     hunyuan_cache_args.add_argument("--taylor_cache_high_freqs_order", "--taylor-cache-high-freqs-order", dest="taylor_cache_high_freqs_order", type=int, default=None)
     hunyuan_native_args = parser.add_argument_group("HunyuanImage3 native implementation options")
     hunyuan_native_args.add_argument("--moe_impl", "--moe-impl", dest="moe_impl", type=str, choices=["eager", "flashinfer"], default=None)
+    hunyuan_native_args.add_argument(
+        "--hunyuan_cfg_mode",
+        "--hunyuan-cfg-mode",
+        dest="hunyuan_cfg_mode",
+        type=str,
+        choices=["batch", "serial", "parallel"],
+        default=None,
+        help="HunyuanImage3 CFG execution mode: batch packs cond/uncond, serial runs two batch=1 forwards, parallel splits cond/uncond by cfg rank.",
+    )
+    hunyuan_native_args.add_argument(
+        "--attn_impl",
+        "--attn-impl",
+        dest="attn_impl",
+        type=str,
+        choices=[
+            "eager",
+            "sdpa",
+            "torch_sdpa",
+            "flash_attention_2",
+            "flash_attn2",
+            "flash_attention_3",
+            "flash_attn3",
+            "sage_attn2",
+            "sage_attn3",
+        ],
+        default=None,
+    )
+    hunyuan_flashinfer_args = parser.add_argument_group("HunyuanImage3 FlashInfer autotune options")
+    hunyuan_flashinfer_args.add_argument("--flashinfer_autotune", "--flashinfer-autotune", dest="flashinfer_autotune", type=_str2bool, nargs="?", const=True, default=None)
+    hunyuan_flashinfer_args.add_argument(
+        "--flashinfer_autotune_mode",
+        "--flashinfer-autotune-mode",
+        dest="flashinfer_autotune_mode",
+        type=str,
+        choices=["off", "tune", "load"],
+        default=None,
+        help="'tune' profiles missing FlashInfer fused MoE tactics and saves cache; 'load' only loads cache; 'off' disables autotune.",
+    )
+    hunyuan_flashinfer_args.add_argument("--flashinfer_autotune_cache", "--flashinfer-autotune-cache", dest="flashinfer_autotune_cache", type=str, default=None)
+    hunyuan_flashinfer_args.add_argument("--flashinfer_tuning_buckets", "--flashinfer-tuning-buckets", dest="flashinfer_tuning_buckets", type=str, default=None)
+    hunyuan_flashinfer_args.add_argument(
+        "--flashinfer_autotune_round_up",
+        "--flashinfer-autotune-round-up",
+        dest="flashinfer_autotune_round_up",
+        type=_str2bool,
+        nargs="?",
+        const=True,
+        default=None,
+    )
+    hunyuan_flashinfer_args.add_argument("--flashinfer_tune_max_num_tokens", "--flashinfer-tune-max-num-tokens", dest="flashinfer_tune_max_num_tokens", type=int, default=None)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")

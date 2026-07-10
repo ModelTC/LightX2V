@@ -15,3 +15,4 @@ class HunyuanImage3PreInferOutput:
     timesteps: torch.Tensor | None = None
     token_hw: tuple[int, int] | None = None
     first_step: bool | None = None
+    full_attn_slices: list | None = None
