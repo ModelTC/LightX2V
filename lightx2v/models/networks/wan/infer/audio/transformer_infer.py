@@ -129,6 +129,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
         super().__init__(config)
         self._setup_audio_post_adapter(config)
         self._audio_grid_meta_cache = {}
+        ar_config = config.get("ar_config", {})
+        self.rope_position_mode = ar_config.get("rope_position_mode", "local")
 
     def _audio_grid_meta(self, grid_sizes):
         key = (grid_sizes.data_ptr(), int(self.scheduler.seg_index), int(self.scheduler.step_index))
@@ -319,6 +321,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
         local_per_frame = num_new // frames if frames > 0 else 0
         cache_per_frame = local_per_frame if replicated_ref_prefill else local_per_frame * sp_world_size if seq_parallel else local_per_frame
         sink_tokens = self.kv_cache_manager.sink_size * cache_per_frame
+        use_local_cache_rope = self.rope_position_mode != "global"
 
         need_roll = self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and cache_num_new + local_end > self.kv_cache_size
         if need_roll:
@@ -348,14 +351,18 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 shard_heads = self.num_heads // sp_world_size
                 h0 = sp_rank * shard_heads
                 h1 = h0 + shard_heads
-                kv_cache.store_kv(k_rope[:, h0:h1], v[:, h0:h1], local_start_idx, local_end_idx, self.block_idx)
+                k_to_store = k[:, h0:h1] if use_local_cache_rope else k_rope[:, h0:h1]
+                kv_cache.store_kv(k_to_store, v[:, h0:h1], local_start_idx, local_end_idx, self.block_idx)
             else:
-                start_frame = self.kv_cache_manager.ref_num_frames + segment_idx * frames
+                if use_local_cache_rope:
+                    start_frame = local_start_idx // max(cache_per_frame, 1)
+                else:
+                    start_frame = self.kv_cache_manager.ref_num_frames + segment_idx * frames
                 q_rope, k_rope = self._apply_rope_sp(q, k, grid_sizes, freqs, start_frame)
                 use_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
                 use_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
                 k_to_store = all2all_seq2head(
-                    k_rope,
+                    k if use_local_cache_rope else k_rope,
                     group=self.seq_p_group,
                     use_fp8_comm=use_fp8_comm,
                     use_fp4_comm=use_fp4_comm,
@@ -390,6 +397,19 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             else:
                 attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
                 attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
+                if use_local_cache_rope:
+                    attn_k = self._apply_rope_with_cache_range(
+                        attn_k,
+                        freqs,
+                        h,
+                        w,
+                        1,
+                        0,
+                        attn_start,
+                        local_end_idx,
+                        cache_ref_tokens,
+                        cache_per_frame,
+                    )
                 attn_out = kv_cache.sp_kvcache_attn_head_shard(
                     q=q_rope,
                     k_cache=attn_k,
@@ -404,6 +424,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
             if self.config.get("ar_config", {}).get("kv_quant", {}).get("calibrate", False):
                 kv_cache.capture_attn(self.block_idx, attn_start, local_end_idx)
+            rope_global_end = None if use_local_cache_rope else current_end
+            rope_sink_tokens = 0 if use_local_cache_rope else sink_tokens
             q = self._apply_rope_with_cache_range(
                 q,
                 freqs,
@@ -415,8 +437,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 local_end_idx,
                 local_ref_tokens,
                 local_per_frame,
-                global_end=current_end,
-                sink_tokens=sink_tokens,
+                global_end=rope_global_end,
+                sink_tokens=rope_sink_tokens,
             )
             attn_k = self._apply_rope_with_cache_range(
                 attn_k,
@@ -429,8 +451,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 local_end_idx,
                 local_ref_tokens,
                 local_per_frame,
-                global_end=current_end,
-                sink_tokens=sink_tokens,
+                global_end=rope_global_end,
+                sink_tokens=rope_sink_tokens,
             )
             if isinstance(attn_k, tuple):
                 k_lens = torch.empty_like(seq_lens).fill_(attn_k[0].size(0))
