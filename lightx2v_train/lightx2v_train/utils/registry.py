@@ -94,6 +94,7 @@ _TRAINER_MODULES = {
     "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",
     "flow_matching": "lightx2v_train.trainers.flow_matching",
+    "one_forcing": "lightx2v_train.trainers.one_forcing",
     "phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
     "sgmd": "lightx2v_train.trainers.sgmd",
     "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",

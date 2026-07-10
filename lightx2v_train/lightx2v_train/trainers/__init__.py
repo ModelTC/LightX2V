@@ -16,6 +16,7 @@ _LAZY_EXPORTS = {
         ".flow_matching",
         "FlowMatchingTrainer",
     ),
+    "OneForcingTrainer": (".one_forcing", "OneForcingTrainer"),
     "PhasedDmdTrainer": (
         ".phased_dmd.trainer",
         "PhasedDmdTrainer",

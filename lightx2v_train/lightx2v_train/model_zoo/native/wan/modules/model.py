@@ -573,6 +573,7 @@ class WanModel(ModelMixin, ConfigMixin):
         register_tokens=None,
         cls_pred_branch=None,
         gan_ca_blocks=None,
+        gan_feature_layers=None,
         clip_fea=None,
         y=None,
     ):
@@ -648,6 +649,15 @@ class WanModel(ModelMixin, ConfigMixin):
             assert gan_ca_blocks is not None
             assert cls_pred_branch is not None
 
+            if gan_feature_layers is None:
+                gan_feature_layers = [13, 21, 29]
+            gan_feature_layers = tuple(int(layer) for layer in gan_feature_layers)
+            if len(gan_ca_blocks) != len(gan_feature_layers):
+                raise ValueError(
+                    f"len(gan_ca_blocks)={len(gan_ca_blocks)} must match "
+                    f"len(gan_feature_layers)={len(gan_feature_layers)}"
+                )
+
             final_x = []
             registers = repeat(register_tokens(), "n d -> b n d", b=x.shape[0])
             # x = torch.cat([registers, x], dim=1)
@@ -664,7 +674,7 @@ class WanModel(ModelMixin, ConfigMixin):
             else:
                 x = block(x, **kwargs)
 
-            if classify_mode and ii in [13, 21, 29]:
+            if classify_mode and ii in gan_feature_layers:
                 gan_token = registers[:, gan_idx : gan_idx + 1]
                 final_x.append(gan_ca_blocks[gan_idx](x, gan_token))
                 gan_idx += 1
