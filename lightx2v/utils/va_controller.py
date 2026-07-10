@@ -196,6 +196,9 @@ class VAController:
         if isinstance(self.reader, OmniVAReader):
             self.len_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)
             self.flag_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)
+            if self.is_seko_talk_ar:
+                self.prev_tensor = torch.full((1, 1, self.prev_frame_length), -1, dtype=torch.int64, device=AI_DEVICE)
+                return
             self.prev_tensor = torch.zeros((1, 3, self.prev_frame_length, self.tgt_h, self.tgt_w), dtype=torch.float, device=AI_DEVICE)
 
     def omni_reader_next_control(self):

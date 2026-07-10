@@ -676,7 +676,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
             )
 
         if self.va_controller.recorder is not None:
-            self.va_controller.pub_livestream(video_seg, audio_seg, self.gen_video[:, :, :useful_length], valid_duration=valid_duration)
+            gen_video = self.gen_video[:, :, :useful_length]
+            # only save segment idx for seko_talk_ar
+            if self.config.get("model_cls") == "seko_talk_ar":
+                gen_video = torch.full((1, 1, useful_length), int(segment_idx), dtype=torch.int64, device=AI_DEVICE)
+            self.va_controller.pub_livestream(video_seg, audio_seg, gen_video, valid_duration=valid_duration)
         elif self.input_info.return_result_tensor:
             self.gen_video_final[self.segment.start_frame : self.segment.end_frame].copy_(video_seg)
             self.cut_audio_final[self.segment.start_frame * self._audio_processor.audio_frame_rate : self.segment.end_frame * self._audio_processor.audio_frame_rate].copy_(audio_seg)
@@ -1489,8 +1493,25 @@ class WanAudioARRunner(WanAudioRunner):
         generator = torch.Generator("cpu").manual_seed(seed)
         return torch.randn(*latent_shape, dtype=GET_DTYPE(), device="cpu", generator=generator)
 
+    def _save_vae_feat_map(self, segment_idx: int) -> None:
+        feat_map = self.vae_decoder.model._feat_map
+        self.vae_feat_maps[segment_idx] = [None if item is None else item.detach().clone() for item in feat_map]
+        min_segment_idx = segment_idx - int(self.config.get("ar_vae_cache_chunk", 7))
+        for key in list(self.vae_feat_maps.keys()):
+            if key < min_segment_idx:
+                self.vae_feat_maps.pop(key, None)
+
+    def _restore_vae_feat_map(self, segment_idx: int) -> None:
+        feat_map = self.vae_feat_maps.get(segment_idx)
+        if feat_map is None:
+            logger.warning(f"missing VAE feat_map for restoring segment_idx={segment_idx}")
+            return
+        self.vae_decoder.model._feat_map = list(feat_map)
+        logger.debug(f"restored VAE feat_map for segment_idx={segment_idx}")
+
     def run_main(self):
         try:
+            self.vae_feat_maps = {}
             self.va_controller = None
             self.init_run()
             logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
@@ -1525,7 +1546,12 @@ class WanAudioARRunner(WanAudioRunner):
             while True:
                 control = self.va_controller.next_control()
                 if control.action == "blank_to_voice":
-                    self.prev_video = control.data
+                    restore_idx = int(control.data.view(-1)[0].item())
+                    # restor new idx must be less than current segment idx
+                    if restore_idx >= 0 and restore_idx + 1 < segment_idx:
+                        logger.warning(f"restore segment idx: {segment_idx} -> {restore_idx + 1}")
+                        self._restore_vae_feat_map(restore_idx)
+                        segment_idx = restore_idx + 1
                 elif control.action == "wait":
                     time.sleep(0.01)
                     continue
@@ -1554,6 +1580,7 @@ class WanAudioARRunner(WanAudioRunner):
                         # logger.debug(f"gen_video shape: {self.gen_video.shape}")
                         self.check_stop()
                         self.end_run_segment(segment_idx, valid_duration=valid_duration)
+                        self._save_vae_feat_map(segment_idx)
                         segment_idx += 1
                         fail_count = 0
                     except Exception as e:
@@ -1562,6 +1589,7 @@ class WanAudioARRunner(WanAudioRunner):
                         else:
                             raise
         finally:
+            self.vae_feat_maps = {}
             if hasattr(self.model, "inputs"):
                 self.end_run()
             if self.va_controller is not None:
