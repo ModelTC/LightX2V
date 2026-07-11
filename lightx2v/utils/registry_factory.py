@@ -1,10 +1,11 @@
+from collections.abc import MutableMapping
+
 from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER, PLATFORM_LAYERNORM_WEIGHT_REGISTER, PLATFORM_MM_WEIGHT_REGISTER, PLATFORM_RMS_WEIGHT_REGISTER, PLATFORM_ROPE_REGISTER
 
 
-class Register(dict):
+class Register(MutableMapping):
     def __init__(self, *args, **kwargs):
-        super(Register, self).__init__(*args, **kwargs)
-        self._dict = {}
+        self._dict = dict(*args, **kwargs)
 
     def __call__(self, target_or_name):
         if callable(target_or_name):
@@ -30,6 +31,15 @@ class Register(dict):
 
     def __getitem__(self, key):
         return self._dict[key]
+
+    def __delitem__(self, key):
+        del self._dict[key]
+
+    def __iter__(self):
+        return iter(self._dict)
+
+    def __len__(self):
+        return len(self._dict)
 
     def __contains__(self, key):
         return key in self._dict
