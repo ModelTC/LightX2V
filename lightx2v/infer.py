@@ -14,6 +14,7 @@ from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import Hid
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
+from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
@@ -106,6 +107,7 @@ def main():
             "dreamzero",
             "infinitetalk",
             "fastwam",
+            "lingbot_video",
         ],
         default="wan2.1",
     )
