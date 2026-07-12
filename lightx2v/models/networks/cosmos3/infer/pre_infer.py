@@ -145,7 +145,16 @@ class Cosmos3PreInfer:
             "sound_len": sound_len,
         }
 
-    def _prepare_action_segment(self, action_latents, text_segment, vision_segment, sound_segment, device, condition_frame_indexes=None):
+    def _prepare_action_segment(
+        self,
+        action_latents,
+        text_segment,
+        vision_segment,
+        sound_segment,
+        device,
+        condition_frame_indexes=None,
+        start_frame_offset=1,
+    ):
         action_len = int(action_latents.shape[0])
         condition_frame_indexes = [] if condition_frame_indexes is None else condition_frame_indexes
         cond_set = {int(idx) for idx in condition_frame_indexes if 0 <= int(idx) < action_len}
@@ -162,7 +171,7 @@ class Cosmos3PreInfer:
             base_fps=self.base_fps,
             temporal_compression_factor=1,
             base_temporal_compression_factor=self.config.get("vae_scale_factor_temporal", 4),
-            start_frame_offset=1,
+            start_frame_offset=int(start_frame_offset),
         )
         sequence_indexes = torch.arange(curr, curr + action_len, dtype=torch.long, device=device)
         return {
@@ -186,6 +195,7 @@ class Cosmos3PreInfer:
         action_latents=None,
         action_domain_id=None,
         action_condition_frame_indexes=None,
+        action_start_frame_offset=1,
         raw_action_dim=None,
     ):
         device = latents.device
@@ -196,7 +206,15 @@ class Cosmos3PreInfer:
         if sound_latents is not None:
             sound_segment = self._prepare_sound_segment(sound_latents, text_segment, vision_segment, device)
         if action_latents is not None:
-            action_segment = self._prepare_action_segment(action_latents, text_segment, vision_segment, sound_segment, device, condition_frame_indexes=action_condition_frame_indexes)
+            action_segment = self._prepare_action_segment(
+                action_latents,
+                text_segment,
+                vision_segment,
+                sound_segment,
+                device,
+                condition_frame_indexes=action_condition_frame_indexes,
+                start_frame_offset=action_start_frame_offset,
+            )
         sequence_length = text_segment["und_len"] + vision_segment["num_vision_tokens"] + sound_segment.get("sound_len", 0) + action_segment.get("action_len", 0)
 
         packed_text_embedding = weights.embed_tokens.apply(text_segment["input_ids"])

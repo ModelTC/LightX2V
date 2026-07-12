@@ -37,6 +37,10 @@ _ACTION_VIEWPOINT_TEMPLATES = {
     "concat_view": "This video contains concatenated views from multiple camera perspectives.",
 }
 
+_DROID_CONCAT_VIEW_DESCRIPTION = (
+    "The top row is from the wrist-mounted camera. The bottom row contains two horizontally concatenated third-person perspective views of the scene from opposite sides, with the robot visible."
+)
+
 _EMBODIMENT_TO_DOMAIN_ID = {
     "no_action": 0,
     "av": 1,
@@ -202,7 +206,7 @@ class Cosmos3Runner(DefaultRunner):
             self.input_info.target_fps = float(spec["fps"])
 
     @staticmethod
-    def _build_action_json_prompt(description, view_point, num_frames, fps, height, width):
+    def _build_action_json_prompt(description, view_point, num_frames, fps, height, width, additional_view_description=None):
         duration_seconds = num_frames / fps if fps > 0 else 0.0
         duration = int(duration_seconds) if duration_seconds >= 0 and np.isfinite(duration_seconds) else 0
         action_end = round(duration_seconds) if duration_seconds >= 0 and np.isfinite(duration_seconds) else 0
@@ -212,6 +216,8 @@ class Cosmos3Runner(DefaultRunner):
             desc = f"{desc}."
         prompt = {}
         framing = _ACTION_VIEWPOINT_TEMPLATES.get(view_point)
+        if framing and additional_view_description:
+            framing = f"{framing} {additional_view_description}"
         if framing:
             prompt["cinematography"] = {"framing": framing}
         ratio = width / height if height > 0 else 1.0
@@ -271,13 +277,19 @@ class Cosmos3Runner(DefaultRunner):
         cond_text = prompt
         uncond_text = negative_prompt
         if action_mode:
+            view_point = self._get_action_value("view_point", "ego_view")
+            domain_name = self._get_action_value("domain_name", None)
+            additional_view_description = None
+            if action_mode == "policy" and domain_name == "droid_lerobot" and view_point == "concat_view":
+                additional_view_description = _DROID_CONCAT_VIEW_DESCRIPTION
             cond_text = self._build_action_json_prompt(
                 prompt,
-                view_point=self._get_action_value("view_point", "ego_view"),
+                view_point=view_point,
                 num_frames=num_frames,
                 fps=fps,
                 height=height,
                 width=width,
+                additional_view_description=additional_view_description,
             )
         elif not is_image and self.config.get("add_duration_template", True):
             cond_text = self._append_prompt_template(cond_text, f"The video is {num_frames / fps:.1f} seconds long and is of {fps:.0f} FPS.")
@@ -419,6 +431,70 @@ class Cosmos3Runner(DefaultRunner):
             frame = np.asarray(image).astype(np.float32) / 127.5 - 1.0
         return torch.from_numpy(frame).permute(2, 0, 1).unsqueeze(0).to(device=AI_DEVICE, dtype=GET_DTYPE())
 
+    def _load_policy_image_tensor_by_path(self, image_path, height, width):
+        """Load a policy observation with the aspect-preserving bottom/right padding used for DROID."""
+        if not image_path or not os.path.isfile(image_path):
+            raise FileNotFoundError(f"Cosmos3 policy image_path does not exist: {image_path}")
+        with Image.open(image_path) as image:
+            image = image.convert("RGB")
+            source_width, source_height = image.size
+            scale = min(width / source_width, height / source_height, 1.0)
+            resized_width = max(1, int(scale * source_width + 0.5))
+            resized_height = max(1, int(scale * source_height + 0.5))
+            if (resized_width, resized_height) != image.size:
+                resample = getattr(Image, "Resampling", Image).BICUBIC
+                image = image.resize((resized_width, resized_height), resample=resample)
+            frame = np.asarray(image, dtype=np.uint8)
+
+        padding_right = width - resized_width
+        padding_bottom = height - resized_height
+        if padding_right < 0 or padding_bottom < 0:
+            raise ValueError(f"Cosmos3 policy resize produced {resized_height}x{resized_width} for target {height}x{width}.")
+        if padding_right or padding_bottom:
+            pad_mode = "edge" if padding_right >= resized_width or padding_bottom >= resized_height else "reflect"
+            frame = np.pad(frame, ((0, padding_bottom), (0, padding_right), (0, 0)), mode=pad_mode)
+        frame = frame.astype(np.float32) / 127.5 - 1.0
+        return torch.from_numpy(frame).permute(2, 0, 1).unsqueeze(0).to(device=AI_DEVICE, dtype=GET_DTYPE())
+
+    def _load_policy_state(self, raw_action_dim):
+        state_path = getattr(self.input_info, "state_path", None) or self.config.get("state_path", "")
+        if not state_path or not os.path.isfile(state_path):
+            raise FileNotFoundError(f"Cosmos3 policy state_path does not exist: {state_path}")
+
+        suffix = os.path.splitext(state_path)[1].lower()
+        if suffix == ".json":
+            with open(state_path, "r") as f:
+                payload = json.load(f)
+        elif suffix in (".npy", ".npz"):
+            payload = np.load(state_path, allow_pickle=True)
+            if isinstance(payload, np.lib.npyio.NpzFile):
+                payload = {key: payload[key] for key in payload.files}
+            elif isinstance(payload, np.ndarray) and payload.shape == () and isinstance(payload.item(), dict):
+                payload = payload.item()
+        else:
+            payload = np.loadtxt(state_path, delimiter=",", dtype=np.float32)
+
+        if isinstance(payload, dict):
+            if "state" in payload:
+                payload = payload["state"]
+            elif "joint_position" in payload and "gripper_position" in payload:
+                payload = np.concatenate(
+                    [
+                        np.asarray(payload["joint_position"], dtype=np.float32).reshape(-1),
+                        np.asarray(payload["gripper_position"], dtype=np.float32).reshape(-1),
+                    ]
+                )
+            else:
+                raise ValueError("Cosmos3 policy state JSON/NPZ must contain `state` or joint/gripper fields.")
+
+        state = np.asarray(payload, dtype=np.float32).reshape(-1)
+        if state.size != raw_action_dim:
+            raise ValueError(f"Cosmos3 policy state must contain {raw_action_dim} floats, got {state.size}.")
+        if self.config.get("policy_flip_gripper", True):
+            state = state.copy()
+            state[-1] = 1.0 - state[-1]
+        return torch.as_tensor(state, device=AI_DEVICE, dtype=GET_DTYPE())
+
     def _get_action_chunk_index(self):
         return int(getattr(self, "_action_chunk_index", self.config.get("action_chunk_index", 0)))
 
@@ -480,7 +556,7 @@ class Cosmos3Runner(DefaultRunner):
             raise ValueError("Cosmos3 action generation requires domain_name in config or action JSON.")
         if domain_name not in _EMBODIMENT_TO_DOMAIN_ID or domain_name not in _EMBODIMENT_TO_RAW_ACTION_DIM:
             raise ValueError(f"Unsupported Cosmos3 action domain_name={domain_name!r}")
-        raw_action_dim = int(_EMBODIMENT_TO_RAW_ACTION_DIM[domain_name])
+        raw_action_dim = int(self._get_action_value("raw_action_dim", _EMBODIMENT_TO_RAW_ACTION_DIM[domain_name]))
         if raw_action_dim > action_dim:
             raise ValueError(f"Cosmos3 raw_action_dim={raw_action_dim} exceeds model action_dim={action_dim}")
 
@@ -496,8 +572,18 @@ class Cosmos3Runner(DefaultRunner):
         if action_mode == "inverse_dynamics":
             video = self._load_video_tensor(video_path, num_frames, height, width, keep_first=False)
         elif image_path:
-            frame = self._load_image_tensor_by_path(image_path, height, width)
-            video = frame.unsqueeze(2).expand(-1, -1, num_frames, -1, -1).contiguous()
+            if action_mode == "policy":
+                frame = self._load_policy_image_tensor_by_path(image_path, height, width)
+                video = torch.full(
+                    (frame.shape[0], frame.shape[1], num_frames, frame.shape[2], frame.shape[3]),
+                    -1.0,
+                    device=frame.device,
+                    dtype=frame.dtype,
+                )
+                video[:, :, 0] = frame
+            else:
+                frame = self._load_image_tensor_by_path(image_path, height, width)
+                video = frame.unsqueeze(2).expand(-1, -1, num_frames, -1, -1).contiguous()
         else:
             video = self._load_video_tensor(video_path, num_frames, height, width, keep_first=True)
 
@@ -517,9 +603,19 @@ class Cosmos3Runner(DefaultRunner):
                 raw_actions = torch.cat([raw_actions, padding], dim=-1)
             self.input_info.action_latents = raw_actions
             self.input_info.action_condition_frame_indexes = list(range(chunk_size))
-        elif action_mode in ("inverse_dynamics", "policy"):
+        elif action_mode == "inverse_dynamics":
             self.input_info.action_latent_shape = (chunk_size, action_dim)
             self.input_info.action_condition_frame_indexes = []
+            self.input_info.action_start_frame_offset = 1
+        elif action_mode == "policy":
+            if not self.config.get("policy_use_state", True):
+                raise ValueError("Cosmos3-Nano-Policy-DROID requires policy_use_state=True.")
+            state = self._load_policy_state(raw_action_dim)
+            action_latents = torch.zeros((chunk_size + 1, action_dim), device=AI_DEVICE, dtype=GET_DTYPE())
+            action_latents[0, :raw_action_dim] = state
+            self.input_info.action_latents = action_latents
+            self.input_info.action_condition_frame_indexes = [0]
+            self.input_info.action_start_frame_offset = 0
         else:
             raise ValueError(f"Unsupported Cosmos3 action_mode={action_mode!r}")
 
@@ -538,6 +634,7 @@ class Cosmos3Runner(DefaultRunner):
             "action_condition_frame_indexes",
             "action_domain_id",
             "raw_action_dim",
+            "action_start_frame_offset",
         ):
             if hasattr(self.input_info, name):
                 delattr(self.input_info, name)
@@ -641,12 +738,21 @@ class Cosmos3Runner(DefaultRunner):
         if action_mode not in ("inverse_dynamics", "policy"):
             return None
         raw_action_dim = getattr(self.input_info, "raw_action_dim", None)
-        action = action_latents.detach().cpu()
+        # NumPy does not support torch.bfloat16. Policy actions are also more
+        # convenient for downstream robot code when persisted as float32.
+        action = action_latents.detach().float().cpu()
         if raw_action_dim is not None:
             action = action[:, : int(raw_action_dim)]
+        if action_mode == "policy":
+            history_length = int(self.config.get("policy_history_length", 1))
+            action = action[history_length:]
+            if self.config.get("policy_flip_gripper", True) and action.shape[-1] > 0:
+                action[:, -1] = 1.0 - action[:, -1]
         return action
 
     def _save_action_output(self, action):
+        if dist.is_initialized() and dist.get_rank() != 0:
+            return
         if action is None:
             return
         save_action_path = getattr(self.input_info, "save_action_path", None)
@@ -659,8 +765,11 @@ class Cosmos3Runner(DefaultRunner):
         save_dir = os.path.dirname(save_action_path)
         if save_dir:
             os.makedirs(save_dir, exist_ok=True)
-        with open(save_action_path, "w") as f:
-            json.dump(action.tolist(), f)
+        if save_action_path.endswith(".npy"):
+            np.save(save_action_path, action.numpy())
+        else:
+            with open(save_action_path, "w") as f:
+                json.dump(action.tolist(), f)
         logger.info(f"Action saved: {save_action_path}")
 
     def run(self, total_steps=None):
@@ -843,6 +952,15 @@ class Cosmos3Runner(DefaultRunner):
         action_latents = getattr(self.model.scheduler, "action_latents", None) if hasattr(self, "model") else None
         sound = self.run_sound_decoder(sound_latents)
         action = self._collect_action_output(action_latents)
+        if self._get_action_mode() == "policy" and not self.config.get("decode_video", False):
+            self._save_action_output(action)
+            del latents, generator
+            self.end_run()
+            torch_device_module.empty_cache()
+            gc.collect()
+            if input_info.return_result_tensor or not getattr(input_info, "save_action_path", None):
+                return {"action": action}
+            return {"action": None}
         images = self.run_vae_decoder(latents)
         self._save_images(images, input_info, log_prefix="Image saved", sound=sound)
         self._save_action_output(action)
