@@ -1,21 +1,15 @@
-import importlib.util
 import sys
-import types
 import unittest
 from collections.abc import MutableMapping
 from pathlib import Path
-from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "lightx2v_train"))
 
-
-def load_module(module_name, path):
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load module {module_name} from {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+import lightx2v.utils.registry_factory as runtime_registry
+import lightx2v_platform.registry_factory as platform_registry
+import lightx2v_train.utils.registry as training_registry
 
 
 def first_target():
@@ -24,25 +18,6 @@ def first_target():
 
 def second_target():
     return "second"
-
-
-platform_registry = load_module("_platform_registry_for_test", REPO_ROOT / "lightx2v_platform" / "registry_factory.py")
-
-platform_package = types.ModuleType("lightx2v_platform")
-platform_package.registry_factory = platform_registry
-with patch.dict(
-    sys.modules,
-    {
-        "lightx2v_platform": platform_package,
-        "lightx2v_platform.registry_factory": platform_registry,
-    },
-):
-    runtime_registry = load_module("_runtime_registry_for_test", REPO_ROOT / "lightx2v" / "utils" / "registry_factory.py")
-
-training_registry = load_module(
-    "_training_registry_for_test",
-    REPO_ROOT / "lightx2v_train" / "lightx2v_train" / "utils" / "registry.py",
-)
 
 
 REGISTER_CLASSES = {
