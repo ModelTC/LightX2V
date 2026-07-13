@@ -342,10 +342,13 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
 
         local_txt_heads = torch.stack([record[0] for record in records], dim=0)
         if local_txt_heads.shape[1] == 0:
-            gathered_txt_heads = None
+            txt_attn_all = None
         else:
             gathered_txt_heads = [torch.empty_like(local_txt_heads) for _ in range(ctx.world_size)]
             dist.all_gather(gathered_txt_heads, local_txt_heads, group=ctx.seq_p_group)
+            gathered_txt_heads = torch.stack(gathered_txt_heads, dim=0)
+            txt_attn_all = gathered_txt_heads.permute(1, 2, 0, 3).reshape(ctx.shard_heads, local_txt_heads.shape[1], ctx.world_size * ctx.hidden_dims)
+            del gathered_txt_heads
 
         head_outputs = []
         for local_head, record in enumerate(records):
@@ -353,10 +356,10 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
                 _txt_attn, _payload, _scale, a2a_payload, a2a_scale, attn_shape, attn_scale_shape, _payload_work, _scale_work = record
             else:
                 _txt_attn, _input_buf, a2a_output, _unused0, _unused1, _work = record
-            if gathered_txt_heads is None:
+            if txt_attn_all is None:
                 txt_attn = local_txt_heads.new_empty((0, ctx.world_size * ctx.hidden_dims))
             else:
-                txt_attn = torch.cat([rank_txt[local_head] for rank_txt in gathered_txt_heads], dim=1)
+                txt_attn = txt_attn_all[local_head]
             if ctx.use_fp8_comm:
                 head_out = attn_post_fp8(a2a_payload, a2a_scale, attn_shape, attn_scale_shape, txt_attn, ctx.img_first)
             else:
