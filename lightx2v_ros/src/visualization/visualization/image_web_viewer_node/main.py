@@ -1,21 +1,21 @@
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Condition, Thread
 
 import cv2
 import numpy as np
 import rclpy
+from common.contract import get_contract
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from .page import INDEX_HTML
+from .page import render_index
 
-AGENTVIEW_TOPIC = "/libero/agentview/image_raw"
-WRIST_TOPIC = "/libero/wrist/image_raw"
-FRONTVIEW_TOPIC = "/libero/frontview/image_raw"
-GALLERYVIEW_TOPIC = "/libero/galleryview/image_raw"
-TASK_TOPIC = "/libero/task_description"
-CAMERAS = ("agentview", "wrist", "frontview", "galleryview")
+# How long a stalled MJPEG stream waits before re-sending the last frame. This,
+# together with the simulator re-publishing the final frame after success, keeps
+# the page from going blank when no new frames arrive.
+STREAM_KEEPALIVE_S = 2.0
 
 
 class ImageHttpServer(ThreadingHTTPServer):
@@ -23,10 +23,11 @@ class ImageHttpServer(ThreadingHTTPServer):
 
 
 class FrameStore:
-    def __init__(self):
+    def __init__(self, cameras):
         self.condition = Condition()
-        self.frames = {name: (0, None) for name in CAMERAS}
+        self.frames = {name: (0, None) for name in cameras}
         self.task = ""
+        self.status = {}
 
     def update(self, name, jpeg):
         with self.condition:
@@ -34,9 +35,9 @@ class FrameStore:
             self.frames[name] = (seq + 1, jpeg)
             self.condition.notify_all()
 
-    def wait_next(self, name, last_seq):
+    def wait_next(self, name, last_seq, timeout=STREAM_KEEPALIVE_S):
         with self.condition:
-            self.condition.wait_for(lambda: self.frames[name][0] != last_seq)
+            self.condition.wait_for(lambda: self.frames[name][0] != last_seq, timeout=timeout)
             return self.frames[name]
 
     def update_task(self, task):
@@ -47,49 +48,63 @@ class FrameStore:
         with self.condition:
             return self.task
 
+    def update_status(self, status):
+        with self.condition:
+            self.status = status
+
+    def get_status(self):
+        with self.condition:
+            return self.status
+
 
 class ImageWebViewerNode(Node):
     def __init__(self):
         super().__init__("image_web_viewer")
 
+        self.declare_parameter("env", "libero")
         self.declare_parameter("host", "127.0.0.1")
         self.declare_parameter("port", 8080)
-        self.declare_parameter("agentview_topic", AGENTVIEW_TOPIC)
-        self.declare_parameter("wrist_topic", WRIST_TOPIC)
-        self.declare_parameter("frontview_topic", FRONTVIEW_TOPIC)
-        self.declare_parameter("galleryview_topic", GALLERYVIEW_TOPIC)
-        self.declare_parameter("task_topic", TASK_TOPIC)
         self.declare_parameter("jpeg_quality", 85)
+        self.declare_parameter("cameras", [])
+        self.declare_parameter("namespace", "")
+        self.declare_parameter("task_topic", "")
+
+        env = str(self.get_parameter("env").value).strip().lower()
+        contract = get_contract(env)
+        self.contract = contract
+
+        cameras_param = list(self.get_parameter("cameras").value or [])
+        self.cameras = cameras_param if cameras_param else list(contract.cameras)
+        namespace = str(self.get_parameter("namespace").value).strip() or contract.namespace
+        task_topic = str(self.get_parameter("task_topic").value).strip() or contract.task_topic
 
         self.jpeg_quality = int(self.get_parameter("jpeg_quality").value)
-        self.frame_store = FrameStore()
+        self.frame_store = FrameStore(self.cameras)
         self.http_server = None
         self.http_thread = None
 
-        for name in CAMERAS:
+        for name in self.cameras:
+            topic = f"{namespace}/{name}/image_raw"
             self.create_subscription(
                 Image,
-                self.get_parameter(f"{name}_topic").value,
+                topic,
                 lambda msg, camera_name=name: self.on_image(camera_name, msg),
                 10,
             )
-        self.create_subscription(
-            String,
-            self.get_parameter("task_topic").value,
-            self.on_task,
-            10,
-        )
+        self.create_subscription(String, task_topic, self.on_task, 10)
+        self.create_subscription(String, f"{namespace}/status", self.on_status, 10)
+        self.control_pub = self.create_publisher(String, f"{namespace}/control", 10)
 
         self.start_http_server()
 
     def start_http_server(self):
         host = str(self.get_parameter("host").value)
         port = int(self.get_parameter("port").value)
-        handler = make_handler(self.frame_store)
+        handler = make_handler(self.frame_store, self.cameras, self.contract.name, self.publish_control)
         self.http_server = ImageHttpServer((host, port), handler)
         self.http_thread = Thread(target=self.http_server.serve_forever, daemon=True)
         self.http_thread.start()
-        self.get_logger().info(f"image web viewer listening on http://{host}:{port}")
+        self.get_logger().info(f"[{self.contract.name}] image web viewer on http://{host}:{port} cameras={self.cameras}")
 
     def on_image(self, name, msg):
         try:
@@ -107,6 +122,18 @@ class ImageWebViewerNode(Node):
     def on_task(self, msg):
         self.frame_store.update_task(msg.data)
 
+    def on_status(self, msg):
+        try:
+            self.frame_store.update_status(json.loads(msg.data))
+        except Exception as exc:
+            self.get_logger().error(f"bad status message: {exc}")
+
+    def publish_control(self, command: dict):
+        msg = String()
+        msg.data = json.dumps(command)
+        self.control_pub.publish(msg)
+        self.get_logger().info(f"forwarded control command: {msg.data}")
+
     def destroy_node(self):
         try:
             if self.http_server is not None:
@@ -121,7 +148,10 @@ class ImageWebViewerNode(Node):
         super().destroy_node()
 
 
-def make_handler(frame_store):
+def make_handler(frame_store, cameras, title, publish_control):
+    camera_set = set(cameras)
+    index_html = render_index(cameras, title=f"LightX2V ROS · {title}")
+
     class ImageWebViewerHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path in {"/", "/index.html"}:
@@ -130,22 +160,45 @@ def make_handler(frame_store):
             if self.path == "/task.txt":
                 self.send_task()
                 return
-            if self.path == "/agentview.mjpg":
-                self.send_stream("agentview")
+            if self.path == "/status.json":
+                self.send_status()
                 return
-            if self.path == "/wrist.mjpg":
-                self.send_stream("wrist")
-                return
-            if self.path == "/frontview.mjpg":
-                self.send_stream("frontview")
-                return
-            if self.path == "/galleryview.mjpg":
-                self.send_stream("galleryview")
-                return
+            if self.path.endswith(".mjpg"):
+                name = self.path[1 : -len(".mjpg")]
+                if name in camera_set:
+                    self.send_stream(name)
+                    return
             self.send_error(404)
 
+        def do_POST(self):
+            if self.path != "/control":
+                self.send_error(404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                command = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(command, dict) or not command.get("cmd"):
+                    raise ValueError("control payload must be a JSON object with a `cmd` field")
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, code=400)
+                return
+            publish_control(command)
+            self.send_json({"ok": True})
+
+        def send_json(self, payload, code=200):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def send_status(self):
+            self.send_json(frame_store.get_status())
+
         def send_index(self):
-            body = INDEX_HTML.encode("utf-8")
+            body = index_html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
