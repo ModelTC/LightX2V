@@ -25,6 +25,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         self.head_dim = config["hidden_size"] // self.num_heads
         self.scheduler = None
         self.use_fused_qk_rms_norm = bool(config.get("use_fused_qk_rms_norm", False))
+        self.use_fused_qkv_attn = bool(config.get("use_fused_qkv_attn", False))
         self.fi_moe_autotune = MoeFiAutotune.from_hunyuan3d_config(config)
         if self.fi_moe_autotune.enabled:
             if flashinfer_autotune is None:
@@ -49,6 +50,10 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
     @staticmethod
     def _reshape_self_qkv(q, k, v, num_heads, head_dim, batch_size, seq_len):
         qkv = torch.cat((q, k, v), dim=-1)
+        return Hunyuan3DTransformerInfer._reshape_self_qkv_packed(qkv, num_heads, head_dim, batch_size, seq_len)
+
+    @staticmethod
+    def _reshape_self_qkv_packed(qkv, num_heads, head_dim, batch_size, seq_len):
         split_size = qkv.shape[-1] // num_heads // 3
         qkv = qkv.reshape(batch_size * seq_len, num_heads, split_size * 3)
         q, k, v = torch.split(qkv, split_size, dim=-1)
@@ -79,6 +84,14 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         k = to_k.apply(flat).reshape(batch_size, seq_len, hidden_dim)
         v = to_v.apply(flat).reshape(batch_size, seq_len, hidden_dim)
         query, key, value = self._reshape_self_qkv(q, k, v, self.num_heads, self.head_dim, batch_size, seq_len)
+        query, key = self._apply_qk_norm(query, key, norm_q, norm_k)
+        return query, key, value
+
+    def _project_fused_qkv(self, hidden_states, to_qkv, norm_q, norm_k):
+        batch_size, seq_len, hidden_dim = hidden_states.shape
+        flat = hidden_states.reshape(-1, hidden_dim)
+        qkv = to_qkv.apply(flat).reshape(batch_size, seq_len, hidden_dim * 3)
+        query, key, value = self._reshape_self_qkv_packed(qkv, self.num_heads, self.head_dim, batch_size, seq_len)
         query, key = self._apply_qk_norm(query, key, norm_q, norm_k)
         return query, key, value
 
@@ -145,14 +158,22 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
 
     def _infer_self_attention(self, block_weights, hidden_states):
         norm_hidden = self._flatten_norm(block_weights.norm1, hidden_states)
-        query, key, value = self._project_qkv(
-            norm_hidden,
-            block_weights.attn1.to_q,
-            block_weights.attn1.to_k,
-            block_weights.attn1.to_v,
-            block_weights.attn1.norm_q,
-            block_weights.attn1.norm_k,
-        )
+        if self.use_fused_qkv_attn and block_weights.attn1.has_fused_qkv:
+            query, key, value = self._project_fused_qkv(
+                norm_hidden,
+                block_weights.attn1.to_qkv,
+                block_weights.attn1.norm_q,
+                block_weights.attn1.norm_k,
+            )
+        else:
+            query, key, value = self._project_qkv(
+                norm_hidden,
+                block_weights.attn1.to_q,
+                block_weights.attn1.to_k,
+                block_weights.attn1.to_v,
+                block_weights.attn1.norm_q,
+                block_weights.attn1.norm_k,
+            )
         attn_output = self._run_attention(query, key, value, block_weights.attn1.calculate, merge_batch=False)
         batch_size, seq_len, _ = hidden_states.shape
         flat = attn_output.reshape(-1, attn_output.shape[-1])

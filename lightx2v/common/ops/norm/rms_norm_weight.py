@@ -443,15 +443,7 @@ def apply_qk_rms_norm(
     if norm_q is None and norm_k is None:
         return query, key
 
-    if (
-        use_triton
-        and norm_q is not None
-        and norm_k is not None
-        and norm_q.eps == norm_k.eps
-        and query.is_cuda
-        and key.is_cuda
-        and query.shape[-1] == key.shape[-1]
-    ):
+    if use_triton and norm_q is not None and norm_k is not None and norm_q.eps == norm_k.eps and query.is_cuda and key.is_cuda and query.shape[-1] == key.shape[-1]:
         q_shape = query.shape
         k_shape = key.shape
         head_dim = q_shape[-1]

@@ -95,10 +95,7 @@ class Hunyuan3DMoEWeights(WeightModule):
         for name, module in self._iter_moe_mm_weights():
             for attr in ("weight", "pin_weight", "weight_cuda_buffer"):
                 if self._is_fp8_tensor(getattr(module, attr, None)):
-                    raise ValueError(
-                        f"Hunyuan3D MoE FP8 is not supported yet, but {name}.{attr} is FP8. "
-                        "Regenerate the checkpoint so .moe. weights stay BF16."
-                    )
+                    raise ValueError(f"Hunyuan3D MoE FP8 is not supported yet, but {name}.{attr} is FP8. Regenerate the checkpoint so .moe. weights stay BF16.")
 
     def to_cuda(self, non_blocking=False):
         super().to_cuda(non_blocking=non_blocking)
@@ -140,10 +137,18 @@ class Hunyuan3DSelfAttentionWeights(WeightModule):
         self.num_heads = config["num_heads"]
         self.head_dim = config["hidden_size"] // self.num_heads
         self.qk_norm = config.get("qk_norm", True)
+        self.use_fused_qkv_attn = bool(config.get("use_fused_qkv_attn", False))
 
         self.add_module("to_q", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.to_q.weight", f"{prefix}.to_q.bias" if qkv_bias else None))
         self.add_module("to_k", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.to_k.weight", f"{prefix}.to_k.bias" if qkv_bias else None))
         self.add_module("to_v", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.to_v.weight", f"{prefix}.to_v.bias" if qkv_bias else None))
+        if self.use_fused_qkv_attn:
+            self.to_qkv = MM_WEIGHT_REGISTER[mm_type](
+                f"{prefix}.to_qkv.weight",
+                f"{prefix}.to_qkv.bias" if qkv_bias else None,
+            )
+        else:
+            self.to_qkv = None
         if self.qk_norm:
             self.add_module("norm_q", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.q_norm.weight"))
             self.add_module("norm_k", RMS_WEIGHT_REGISTER[rms_norm_type](f"{prefix}.k_norm.weight"))
@@ -152,6 +157,71 @@ class Hunyuan3DSelfAttentionWeights(WeightModule):
             self.norm_k = None
         self.add_module("out_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.out_proj.weight", f"{prefix}.out_proj.bias"))
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[attn_type]())
+
+    def load(self, weight_dict):
+        super().load(weight_dict)
+        self._build_fused_qkv()
+
+    def to_cuda(self, non_blocking=False):
+        super().to_cuda(non_blocking=non_blocking)
+        self._build_fused_qkv()
+
+    def to_cpu(self, non_blocking=False):
+        super().to_cpu(non_blocking=non_blocking)
+        self._build_fused_qkv()
+
+    @staticmethod
+    def _output_dim(module):
+        if hasattr(module, "weight_need_transpose"):
+            return 1 if module.weight_need_transpose else 0
+        return 1
+
+    @staticmethod
+    def _cat_optional_biases(biases):
+        if all(bias is None for bias in biases):
+            return None
+        if any(bias is None for bias in biases):
+            raise ValueError("Fused Hunyuan3D QKV requires either all QKV biases or no QKV biases")
+        return torch.cat([bias.contiguous() for bias in biases], dim=0)
+
+    def _cat_output_weights(self, modules, tensors):
+        dim = self._output_dim(modules[0])
+        if dim == 1:
+            return torch.cat([tensor.t().contiguous() for tensor in tensors], dim=0).t()
+        return torch.cat([tensor.contiguous() for tensor in tensors], dim=dim)
+
+    def _cat_output_scales(self, scales):
+        if scales[0].dim() == 1:
+            dim = 0
+        elif scales[0].shape[-1] == 1:
+            dim = 0
+        else:
+            dim = scales[0].dim() - 1
+        return torch.cat([scale.contiguous() for scale in scales], dim=dim)
+
+    def _build_fused_qkv(self):
+        if self.to_qkv is None:
+            return
+        modules = (self.to_q, self.to_k, self.to_v)
+        weights = [module._get_actual_weight() for module in modules]
+        if any(weight is None for weight in weights):
+            return
+
+        self.to_qkv.weight = self._cat_output_weights(modules, weights)
+        biases = [module._get_actual_bias() for module in modules]
+        self.to_qkv.bias = self._cat_optional_biases(biases)
+        self.to_qkv.has_lora_branch = False
+
+        if all(hasattr(module, "weight_scale") for module in modules):
+            scales = [module.weight_scale for module in modules]
+            if all(scale is not None for scale in scales):
+                self.to_qkv.weight_scale = self._cat_output_scales(scales)
+
+    @property
+    def has_fused_qkv(self):
+        if self.to_qkv is None or not hasattr(self.to_qkv, "weight"):
+            return False
+        return not any(getattr(module, "has_lora_branch", False) or getattr(module, "has_diff", False) for module in (self.to_q, self.to_k, self.to_v))
 
 
 class Hunyuan3DCrossAttentionWeights(WeightModule):
