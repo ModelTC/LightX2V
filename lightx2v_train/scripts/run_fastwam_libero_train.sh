@@ -1,10 +1,10 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-LIGHTX2V_ROOT="${LIGHTX2V_ROOT:-/data/nvme0/chendingyu/LightX2V}"
-CONFIG_PATH="${CONFIG_PATH:-${LIGHTX2V_ROOT}/lightx2v_train/configs/train/fastwam/libero_uncond_2cam224.yaml}"
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3}
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"
+NPROC_PER_NODE=${NPROC_PER_NODE:-4}
 
-cd "${LIGHTX2V_ROOT}"
-python lightx2v_train/train.py --config "${CONFIG_PATH}" "$@"
+torchrun \
+--standalone \
+--nproc_per_node="${NPROC_PER_NODE}" \
+train.py --config configs/train/fastwam/libero_uncond_2cam224.yaml
