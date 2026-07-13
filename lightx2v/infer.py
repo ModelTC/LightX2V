@@ -361,13 +361,36 @@ def main():
 
     validate_config_paths(config)
 
+    use_full_profiler = os.environ.get("LIGHTX2V_TORCH_PROFILER_FULL", "0") == "1"
+
     with ProfilingContext4DebugL1("Total Cost"):
         # init runner
         runner = init_runner(config)
         # start to infer
         data = args.__dict__
         update_input_info_from_dict(input_info, data)
-        runner.run_pipeline(input_info)
+        if use_full_profiler:
+            from torch.profiler import ProfilerActivity, profile, record_function
+
+            with profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                record_shapes=True,
+            ) as profiler:
+                with record_function("run_pipeline"):
+                    runner.run_pipeline(input_info)
+
+            trace_path = os.environ.get(
+                "LIGHTX2V_TORCH_PROFILER_FULL_TRACE",
+                "/tmp/lightx2v_full_trace.json",
+            )
+            trace_dir = os.path.dirname(trace_path)
+            if trace_dir:
+                os.makedirs(trace_dir, exist_ok=True)
+            profiler.export_chrome_trace(trace_path)
+            logger.info(f"[TorchProfiler] Full pipeline trace exported to {trace_path}")
+            print(profiler.key_averages().table(sort_by="cuda_time_total", row_limit=40))
+        else:
+            runner.run_pipeline(input_info)
 
     # Clean up distributed process group
     if dist.is_initialized():
