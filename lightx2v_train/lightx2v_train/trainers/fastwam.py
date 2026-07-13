@@ -49,9 +49,7 @@ def _atomic_torch_save(payload, path):
 
 def _sync_optimizer_group_options(source_groups, target_groups):
     if len(source_groups) != len(target_groups):
-        raise RuntimeError(
-            f"Optimizer parameter-group count mismatch: source={len(source_groups)} target={len(target_groups)}"
-        )
+        raise RuntimeError(f"Optimizer parameter-group count mismatch: source={len(source_groups)} target={len(target_groups)}")
     for source, target in zip(source_groups, target_groups):
         for key, value in source.items():
             if key != "params":
@@ -208,27 +206,20 @@ class FastWAMTrainer:
         optimizer_state_format = state.get("optimizer_state_format")
         expected_optimizer_sharding = "zero1" if self.zero1_enabled else "none"
         if state.get("optimizer_sharding") != expected_optimizer_sharding:
-            raise RuntimeError(
-                "Optimizer sharding mode mismatch: "
-                f"checkpoint={state.get('optimizer_sharding')!r} active={expected_optimizer_sharding!r}."
-            )
+            raise RuntimeError(f"Optimizer sharding mode mismatch: checkpoint={state.get('optimizer_sharding')!r} active={expected_optimizer_sharding!r}.")
         if optimizer_state_format == ZERO1_PER_RANK_FORMAT:
             if not self.zero1_enabled:
                 raise RuntimeError("A per-rank ZeRO-1 optimizer checkpoint requires distributed.zero1.enabled=true.")
             shard_files = state.get("optimizer_shard_files")
             if not isinstance(shard_files, list) or len(shard_files) != get_world_size():
-                raise RuntimeError(
-                    f"Invalid ZeRO-1 optimizer shard manifest: expected {get_world_size()} files, got {shard_files!r}."
-                )
+                raise RuntimeError(f"Invalid ZeRO-1 optimizer shard manifest: expected {get_world_size()} files, got {shard_files!r}.")
             shard_path = os.path.join(resume_ckpt_path, shard_files[get_rank()])
             if not os.path.isfile(shard_path):
                 raise RuntimeError(f"ZeRO-1 optimizer shard not found for rank {get_rank()}: {shard_path}")
             shard = torch.load(shard_path, map_location="cpu", weights_only=False)
             if shard.get("rank") != get_rank() or shard.get("world_size") != get_world_size():
                 raise RuntimeError(
-                    "ZeRO-1 optimizer shard metadata mismatch: "
-                    f"rank={shard.get('rank')} world_size={shard.get('world_size')} "
-                    f"expected_rank={get_rank()} expected_world_size={get_world_size()}."
+                    f"ZeRO-1 optimizer shard metadata mismatch: rank={shard.get('rank')} world_size={shard.get('world_size')} expected_rank={get_rank()} expected_world_size={get_world_size()}."
                 )
             self.optimizer.optim.load_state_dict(shard["optimizer"])
             _sync_optimizer_group_options(self.optimizer.optim.param_groups, self.optimizer.param_groups)
@@ -237,9 +228,7 @@ class FastWAMTrainer:
                 raise RuntimeError("A full optimizer checkpoint requires distributed.zero1.enabled=false.")
             self.optimizer.load_state_dict(state["optimizer"])
         else:
-            raise RuntimeError(
-                f"Unsupported optimizer checkpoint format {optimizer_state_format!r} in {state_path}."
-            )
+            raise RuntimeError(f"Unsupported optimizer checkpoint format {optimizer_state_format!r} in {state_path}.")
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
         logger.info(
             "[resume] restored FastWAM training state from {} (optimizer sharding: {}, state format: {})",
@@ -262,10 +251,7 @@ class FastWAMTrainer:
         optimizer_shard_files = None
         if self.zero1_enabled:
             optimizer_state_format = ZERO1_PER_RANK_FORMAT
-            optimizer_shard_files = [
-                _optimizer_shard_filename(rank, get_world_size())
-                for rank in range(get_world_size())
-            ]
+            optimizer_shard_files = [_optimizer_shard_filename(rank, get_world_size()) for rank in range(get_world_size())]
             _sync_optimizer_group_options(self.optimizer.param_groups, self.optimizer.optim.param_groups)
             shard_path = os.path.join(save_dir, optimizer_shard_files[get_rank()])
             shard_start_time = time.perf_counter()
@@ -514,11 +500,7 @@ class FastWAMTrainer:
         context_mask = sample.get("context_mask")
         prompt = sample.get("prompt", [None])[0]
         input_image = video0[:, 0].unsqueeze(0)
-        action_horizon = (
-            int(action.shape[1])
-            if action is not None
-            else int((video0.shape[1] - 1) * dataset.action_video_freq_ratio)
-        )
+        action_horizon = int(action.shape[1]) if action is not None else int((video0.shape[1] - 1) * dataset.action_video_freq_ratio)
         infer_kwargs = {
             "input_image": input_image,
             "num_frames": int(video0.shape[1]),
@@ -613,9 +595,7 @@ class FastWAMTrainer:
     @staticmethod
     def _validate_video_shapes(left, right, left_name, right_name):
         if left.shape != right.shape:
-            raise ValueError(
-                f"Eval {left_name}/{right_name} shape mismatch: {tuple(left.shape)} vs {tuple(right.shape)}"
-            )
+            raise ValueError(f"Eval {left_name}/{right_name} shape mismatch: {tuple(left.shape)} vs {tuple(right.shape)}")
         if left.shape[1] <= 1:
             raise ValueError(f"Eval video must contain at least one future frame, got {tuple(left.shape)}")
 
@@ -631,15 +611,7 @@ class FastWAMTrainer:
             canvas = Image.new("RGB", (frame_width * 3, frame_height + label_height), color=(18, 18, 18))
             draw = ImageDraw.Draw(canvas)
             for column, (label, video) in enumerate(zip(labels, videos)):
-                array = (
-                    video[:, frame_index]
-                    .permute(1, 2, 0)
-                    .clamp(0.0, 1.0)
-                    .mul(255.0)
-                    .round()
-                    .to(torch.uint8)
-                    .numpy()
-                )
+                array = video[:, frame_index].permute(1, 2, 0).clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8).numpy()
                 canvas.paste(Image.fromarray(np.ascontiguousarray(array)), (column * frame_width, label_height))
                 draw.text((column * frame_width + 8, 9), label, fill=(245, 245, 245))
             frames.append(canvas)
@@ -660,12 +632,5 @@ class FastWAMTrainer:
     def _summarize_eval_results(results):
         if not results:
             return {}
-        metric_keys = sorted(
-            key
-            for key, value in results[0].items()
-            if isinstance(value, float)
-        )
-        return {
-            key: float(sum(result[key] for result in results if key in result) / sum(key in result for result in results))
-            for key in metric_keys
-        }
+        metric_keys = sorted(key for key, value in results[0].items() if isinstance(value, float))
+        return {key: float(sum(result[key] for result in results if key in result) / sum(key in result for result in results)) for key in metric_keys}

@@ -68,10 +68,7 @@ class RobotVideoDataset(Dataset):
             sample = self.processor.preprocess(self.lerobot_dataset[index])
             if not self.skip_padding_as_possible:
                 return sample
-            has_padding = any(
-                bool(sample[key].any())
-                for key in ("action_is_pad", "image_is_pad", "proprio_is_pad")
-            )
+            has_padding = any(bool(sample[key].any()) for key in ("action_is_pad", "image_is_pad", "proprio_is_pad"))
             if not has_padding or attempt == self.max_padding_retry:
                 return sample
             index = np.random.randint(len(self))

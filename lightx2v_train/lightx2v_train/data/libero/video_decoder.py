@@ -19,9 +19,7 @@ def decode_video_frames(video_path, timestamps, tolerance_s, backend=None):
         try:
             return _decode_torchcodec(video_path, timestamps, tolerance_s)
         except Exception as error:
-            warnings.warn(
-                f"torchcodec decode failed ({type(error).__name__}: {error}); falling back to pyav."
-            )
+            warnings.warn(f"torchcodec decode failed ({type(error).__name__}: {error}); falling back to pyav.")
             backend = "pyav"
     if backend not in {"pyav", "video_reader"}:
         raise ValueError(f"Unsupported video backend: {backend}")

@@ -216,9 +216,7 @@ class WanContinuousFlowMatchScheduler:
         return weight.reshape(()) if weight.numel() == 1 else weight
 
     def add_noise(self, original_samples, noise, timestep):
-        sigma = (timestep / self.num_train_timesteps).to(
-            device=original_samples.device, dtype=original_samples.dtype
-        )
+        sigma = (timestep / self.num_train_timesteps).to(device=original_samples.device, dtype=original_samples.dtype)
         if sigma.ndim:
             sigma = sigma.view(-1, *([1] * (original_samples.ndim - 1)))
         return (1 - sigma) * original_samples + sigma * noise

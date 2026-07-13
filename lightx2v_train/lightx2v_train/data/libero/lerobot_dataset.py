@@ -86,10 +86,7 @@ class LiberoLeRobotDataset(Dataset):
         for dataset_dir in dataset_dirs:
             root = Path(dataset_dir).expanduser().resolve()
             info = _read_json(root / "meta" / "info.json")
-            tasks = {
-                int(item["task_index"]): item["task"]
-                for item in _read_jsonl(root / "meta" / "tasks.jsonl")
-            }
+            tasks = {int(item["task_index"]): item["task"] for item in _read_jsonl(root / "meta" / "tasks.jsonl")}
             episode_meta = _read_jsonl(root / "meta" / "episodes.jsonl")
             fps_values.add(int(info["fps"]))
             self._validate_features(root, info["features"])
@@ -163,12 +160,8 @@ class LiberoLeRobotDataset(Dataset):
         episode = self.episodes[episode_position]
         data = self._load_episode(episode_position)
 
-        state, state_is_pad, observation_indices = self._window(
-            data[self.state_key], frame_index, self.num_frames
-        )
-        action, action_is_pad, _ = self._window(
-            data[self.action_key], frame_index, self.num_frames - 1
-        )
+        state, state_is_pad, observation_indices = self._window(data[self.state_key], frame_index, self.num_frames)
+        action, action_is_pad, _ = self._window(data[self.action_key], frame_index, self.num_frames - 1)
         timestamps = data["timestamp"][observation_indices].float().tolist()
         tolerance = max(1e-4, 1.0 / self.fps - 1e-4)
         images = {
@@ -187,10 +180,7 @@ class LiberoLeRobotDataset(Dataset):
             "task": episode.tasks[task_index],
             "action": {"default": action.float()},
             "state": {"default": state.float()},
-            "images": {
-                key.removeprefix("observation.images."): value
-                for key, value in images.items()
-            },
+            "images": {key.removeprefix("observation.images."): value for key, value in images.items()},
             "action_is_pad": action_is_pad,
             "state_is_pad": state_is_pad,
             "image_is_pad": state_is_pad.clone(),

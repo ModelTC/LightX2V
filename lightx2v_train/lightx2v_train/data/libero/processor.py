@@ -67,9 +67,7 @@ class FastWAMProcessor:
                 actual = data[group][item["key"]].shape[-1]
                 expected = int(item["raw_shape"])
                 if actual != expected:
-                    raise ValueError(
-                        f"{group}.{item['key']} width mismatch: expected {expected}, got {actual}"
-                    )
+                    raise ValueError(f"{group}.{item['key']} width mismatch: expected {expected}, got {actual}")
 
     def _process_images(self, images):
         processed = []
@@ -97,9 +95,7 @@ class FastWAMProcessor:
             mask = action_is_pad[:, None] & self.delta_action_dim_mask[None, :]
             action[mask] = 0.0
 
-        transformed = self.normalizer.forward(
-            {"action": data["action"], "state": data["state"]}
-        )
+        transformed = self.normalizer.forward({"action": data["action"], "state": data["state"]})
         transformed = self.action_state_merger.forward(transformed)
         return {
             "idx": data["idx"],

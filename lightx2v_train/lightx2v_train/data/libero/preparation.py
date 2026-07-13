@@ -75,10 +75,7 @@ def _episode_field_stats(value):
 
 
 def _aggregate_field_stats(episode_stats):
-    values = {
-        name: torch.stack([stats[name] for stats in episode_stats])
-        for name in ("min", "max", "q01", "q99", "mean", "var")
-    }
+    values = {name: torch.stack([stats[name] for stats in episode_stats]) for name in ("min", "max", "q01", "q99", "mean", "var")}
     stepwise_mean = values["mean"].mean(0)
     stepwise_std = (values["var"] + (values["mean"] - stepwise_mean) ** 2).mean(0).sqrt()
     global_mean = values["mean"].mean((0, 1))
@@ -182,23 +179,13 @@ def _validate_text_caches(split_configs):
         cache_dir = _resolve_path(split_config["text_embedding_cache_dir"])
         context_len = int(split_config.get("context_len", 128))
         prompts = _collect_prompts([split_config])
-        missing = [
-            _text_cache_path(cache_dir, prompt, context_len)
-            for prompt in prompts
-            if not _valid_text_cache(_text_cache_path(cache_dir, prompt, context_len), context_len)
-        ]
+        missing = [_text_cache_path(cache_dir, prompt, context_len) for prompt in prompts if not _valid_text_cache(_text_cache_path(cache_dir, prompt, context_len), context_len)]
         if missing:
-            raise FileNotFoundError(
-                f"LIBERO text embedding cache is incomplete: missing={len(missing)}/{len(prompts)} first={missing[0]}"
-            )
+            raise FileNotFoundError(f"LIBERO text embedding cache is incomplete: missing={len(missing)}/{len(prompts)} first={missing[0]}")
 
 
 def precompute_text_embeddings(model_path, cache_dir, context_len, prompts):
-    missing_prompts = [
-        prompt
-        for prompt in prompts
-        if not _valid_text_cache(_text_cache_path(cache_dir, prompt, context_len), context_len)
-    ]
+    missing_prompts = [prompt for prompt in prompts if not _valid_text_cache(_text_cache_path(cache_dir, prompt, context_len), context_len)]
     if not missing_prompts:
         logger.info("[data-preflight] text embeddings already cached: prompts={} path={}", len(prompts), cache_dir)
         return

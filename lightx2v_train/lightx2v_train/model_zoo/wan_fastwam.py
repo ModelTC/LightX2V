@@ -35,11 +35,7 @@ class WanFastWAMModel:
 
         model_path = _resolve_local_path(self.model_config.get("model_path"), "model_path", directory=True)
         configured_action_dit_path = self.model_config.get("action_dit_pretrained_path")
-        action_dit_pretrained_path = (
-            _resolve_local_path(configured_action_dit_path, "action_dit_pretrained_path")
-            if configured_action_dit_path
-            else None
-        )
+        action_dit_pretrained_path = _resolve_local_path(configured_action_dit_path, "action_dit_pretrained_path") if configured_action_dit_path else None
         load_text_encoder = bool(self.model_config.get("load_text_encoder", False))
 
         video_scheduler = self.model_config.get("video_scheduler", {})

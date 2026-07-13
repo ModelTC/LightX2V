@@ -13,6 +13,8 @@ from ..modules.vae2_2 import Wan2_2_VAE
 from .video_dit import FastWAMVideoDiT
 
 logger = logging.getLogger(__name__)
+
+
 @dataclass
 class Wan22LoadedComponents:
     dit: FastWAMVideoDiT
@@ -26,11 +28,7 @@ def _validate_dit_config(dit_config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"video_dit_config must be a dict, got {type(dit_config)}")
     signature = inspect.signature(FastWAMVideoDiT.__init__)
     allowed = {name for name in signature.parameters if name != "self"}
-    required = {
-        name
-        for name, parameter in signature.parameters.items()
-        if name != "self" and parameter.default is inspect.Signature.empty
-    }
+    required = {name for name, parameter in signature.parameters.items() if name != "self" and parameter.default is inspect.Signature.empty}
     unknown = sorted(set(dit_config) - allowed)
     missing = sorted(required - set(dit_config))
     if unknown:

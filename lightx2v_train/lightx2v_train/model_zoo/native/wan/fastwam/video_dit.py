@@ -46,10 +46,7 @@ class FastWAMVideoDiT(WanModel):
         if action_conditioned:
             raise ValueError("FastWAM conditions actions through the MoT action expert, not the video expert.")
         if hidden_dim != num_heads * attn_head_dim:
-            raise ValueError(
-                f"hidden_dim must equal num_heads * attn_head_dim, got {hidden_dim} and "
-                f"{num_heads} * {attn_head_dim}"
-            )
+            raise ValueError(f"hidden_dim must equal num_heads * attn_head_dim, got {hidden_dim} and {num_heads} * {attn_head_dim}")
 
         super().__init__(
             model_type="ti2v",
@@ -98,9 +95,7 @@ class FastWAMVideoDiT(WanModel):
         if context_mask is None:
             context_mask = torch.ones(context.shape[:2], dtype=torch.bool, device=context.device)
         elif context_mask.shape != context.shape[:2]:
-            raise ValueError(
-                f"context_mask must have shape {tuple(context.shape[:2])}, got {tuple(context_mask.shape)}"
-            )
+            raise ValueError(f"context_mask must have shape {tuple(context.shape[:2])}, got {tuple(context_mask.shape)}")
         return x, timestep, context_mask
 
     def build_video_to_video_mask(self, video_seq_len, video_tokens_per_frame, device):
@@ -111,9 +106,7 @@ class FastWAMVideoDiT(WanModel):
         if self.video_attention_mask_mode == "per_frame_causal":
             frame_count = video_seq_len // video_tokens_per_frame
             mask = torch.tril(torch.ones((frame_count, frame_count), dtype=torch.bool, device=device))
-            return mask.repeat_interleave(video_tokens_per_frame, 0).repeat_interleave(
-                video_tokens_per_frame, 1
-            )
+            return mask.repeat_interleave(video_tokens_per_frame, 0).repeat_interleave(video_tokens_per_frame, 1)
         if self.video_attention_mask_mode == "first_frame_causal":
             mask = torch.ones((video_seq_len, video_seq_len), dtype=torch.bool, device=device)
             mask[:video_tokens_per_frame, video_tokens_per_frame:] = False
@@ -155,14 +148,10 @@ class FastWAMVideoDiT(WanModel):
         if x.shape[3] % patch_h or x.shape[4] % patch_w:
             raise ValueError("Latent spatial dimensions must be divisible by the Wan patch size.")
         tokens_per_frame = (x.shape[3] // patch_h) * (x.shape[4] // patch_w)
-        token_timesteps = timestep.view(batch_size, 1, 1).expand(
-            batch_size, x.shape[2], tokens_per_frame
-        ).clone()
+        token_timesteps = timestep.view(batch_size, 1, 1).expand(batch_size, x.shape[2], tokens_per_frame).clone()
         token_timesteps[:, 0] = 0
         token_timesteps = token_timesteps.reshape(batch_size, -1)
-        time_embedding = self.time_embedding(
-            timestep_embedding(self.freq_dim, token_timesteps.reshape(-1))
-        ).reshape(batch_size, -1, self.hidden_dim)
+        time_embedding = self.time_embedding(timestep_embedding(self.freq_dim, token_timesteps.reshape(-1))).reshape(batch_size, -1, self.hidden_dim)
         time_modulation = self.time_projection(time_embedding).unflatten(2, (6, self.hidden_dim))
 
         patches = self.patch_embedding(x)
@@ -186,12 +175,8 @@ class FastWAMVideoDiT(WanModel):
 
     def post_dit(self, tokens: torch.Tensor, pre_state: dict[str, Any]) -> torch.Tensor:
         time_embedding = pre_state["t"]
-        shift, scale = (
-            self.head.modulation.unsqueeze(0).to(time_embedding) + time_embedding.unsqueeze(2)
-        ).chunk(2, dim=2)
-        tokens = self.head.head(
-            self.head.norm(tokens) * (1 + scale.squeeze(2)) + shift.squeeze(2)
-        )
+        shift, scale = (self.head.modulation.unsqueeze(0).to(time_embedding) + time_embedding.unsqueeze(2)).chunk(2, dim=2)
+        tokens = self.head.head(self.head.norm(tokens) * (1 + scale.squeeze(2)) + shift.squeeze(2))
         frames, height, width = pre_state["meta"]["grid_size"]
         return rearrange(
             tokens,
@@ -215,10 +200,9 @@ class FastWAMVideoDiT(WanModel):
             fuse_vae_embedding_in_latents=fuse_vae_embedding_in_latents,
         )
         tokens = state["tokens"]
-        self_mask = self.build_video_to_video_mask(
-            tokens.shape[1], state["meta"]["tokens_per_frame"], tokens.device
-        )
+        self_mask = self.build_video_to_video_mask(tokens.shape[1], state["meta"]["tokens_per_frame"], tokens.device)
         for block in self.blocks:
+
             def run(value, current_block=block):
                 return expert_block_forward(
                     current_block,

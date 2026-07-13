@@ -58,9 +58,7 @@ def layer_norm(module, value: torch.Tensor) -> torch.Tensor:
         return module(value)
     weight = None if module.weight is None else module.weight.float()
     bias = None if module.bias is None else module.bias.float()
-    return F.layer_norm(
-        value.float(), module.normalized_shape, weight, bias, module.eps
-    ).to(value.dtype)
+    return F.layer_norm(value.float(), module.normalized_shape, weight, bias, module.eps).to(value.dtype)
 
 
 def masked_cross_attention(block, x, context, context_mask=None):
@@ -82,22 +80,14 @@ def expert_block_forward(
     context_mask: torch.Tensor | None = None,
     self_attention_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = split_modulation(
-        block, time_modulation
-    )
+    shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = split_modulation(block, time_modulation)
     attention_input = layer_norm(block.norm1, x) * (1 + scale_msa) + shift_msa
     batch_size, sequence_length = attention_input.shape[:2]
     num_heads = block.self_attn.num_heads
     head_dim = block.self_attn.head_dim
-    query = block.self_attn.norm_q(block.self_attn.q(attention_input)).view(
-        batch_size, sequence_length, num_heads, head_dim
-    )
-    key = block.self_attn.norm_k(block.self_attn.k(attention_input)).view(
-        batch_size, sequence_length, num_heads, head_dim
-    )
-    value = block.self_attn.v(attention_input).view(
-        batch_size, sequence_length, num_heads, head_dim
-    )
+    query = block.self_attn.norm_q(block.self_attn.q(attention_input)).view(batch_size, sequence_length, num_heads, head_dim)
+    key = block.self_attn.norm_k(block.self_attn.k(attention_input)).view(batch_size, sequence_length, num_heads, head_dim)
+    value = block.self_attn.v(attention_input).view(batch_size, sequence_length, num_heads, head_dim)
     attention = scaled_attention(
         apply_rope(query, frequencies),
         apply_rope(key, frequencies),

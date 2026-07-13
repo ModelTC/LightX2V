@@ -167,11 +167,7 @@ class ActionDiT(nn.Module):
 
     @classmethod
     def backbone_key_set(cls, keys) -> set[str]:
-        return {
-            key
-            for key in keys
-            if not any(key.startswith(prefix) for prefix in cls.ACTION_BACKBONE_SKIP_PREFIXES)
-        }
+        return {key for key in keys if not any(key.startswith(prefix) for prefix in cls.ACTION_BACKBONE_SKIP_PREFIXES)}
 
     @classmethod
     def from_video_expert(
@@ -206,8 +202,7 @@ class ActionDiT(nn.Module):
                 target.copy_(value.to(device=target.device, dtype=target.dtype))
 
         logger.info(
-            "Initialized ActionDiT backbone from Wan video expert "
-            "(copied=%d, interpolated=%d, random_kept_prefixes=%s).",
+            "Initialized ActionDiT backbone from Wan video expert (copied=%d, interpolated=%d, random_kept_prefixes=%s).",
             copied,
             interpolated,
             list(cls.ACTION_BACKBONE_SKIP_PREFIXES),
@@ -226,23 +221,19 @@ class ActionDiT(nn.Module):
         if action_dit_config is None:
             raise ValueError("`action_dit_config` is required for ActionDiT.from_pretrained().")
         if skip_dit_load_from_pretrain:
-            logger.info(
-                "Skipping ActionDiT pretrained load (`skip_dit_load_from_pretrain=True`); "
-                "initializing action expert randomly and expecting checkpoint override."
-            )
+            logger.info("Skipping ActionDiT pretrained load (`skip_dit_load_from_pretrain=True`); initializing action expert randomly and expecting checkpoint override.")
             return cls(**action_dit_config).to(device=device, dtype=torch_dtype)
         if not action_dit_pretrained_path:
             logger.info("No `action_dit_pretrained_path` provided, initializing ActionDiT with random weights.")
             return cls(**action_dit_config).to(device=device, dtype=torch_dtype)
         from pathlib import Path
+
         p = Path(action_dit_pretrained_path)
         if not p.is_absolute():
             p = Path(__file__).resolve().parents[4] / p
         action_dit_pretrained_path = str(p)
         if not os.path.isfile(action_dit_pretrained_path):
-            raise FileNotFoundError(
-                f"`action_dit_pretrained_path` does not exist: {action_dit_pretrained_path}"
-            )
+            raise FileNotFoundError(f"`action_dit_pretrained_path` does not exist: {action_dit_pretrained_path}")
 
         action_cfg = dict(action_dit_config)
         action_expert = cls(**action_cfg).to(device=device, dtype=torch_dtype)
@@ -251,10 +242,8 @@ class ActionDiT(nn.Module):
 
         payload = torch.load(action_dit_pretrained_path, map_location="cpu", weights_only=True)
         if not isinstance(payload, dict):
-            raise ValueError(
-                f"Invalid action backbone payload type from {action_dit_pretrained_path}: {type(payload)}"
-            )
-        
+            raise ValueError(f"Invalid action backbone payload type from {action_dit_pretrained_path}: {type(payload)}")
+
         policy = payload.get("policy", {})
         if policy:
             logger.info(f"ActionDiT backbone payload policy: {policy}")
@@ -277,22 +266,13 @@ class ActionDiT(nn.Module):
             got_value = meta[key]
             if key == "eps":
                 if abs(float(got_value) - float(expected_value)) > 1e-12:
-                    raise ValueError(
-                        f"`meta.{key}` mismatch in {action_dit_pretrained_path}: "
-                        f"expected {expected_value}, got {got_value}"
-                    )
+                    raise ValueError(f"`meta.{key}` mismatch in {action_dit_pretrained_path}: expected {expected_value}, got {got_value}")
             elif int(got_value) != int(expected_value):
-                raise ValueError(
-                    f"`meta.{key}` mismatch in {action_dit_pretrained_path}: "
-                    f"expected {expected_value}, got {got_value}"
-                )
+                raise ValueError(f"`meta.{key}` mismatch in {action_dit_pretrained_path}: expected {expected_value}, got {got_value}")
 
         backbone_state_dict = payload.get("backbone_state_dict")
         if not isinstance(backbone_state_dict, dict):
-            raise ValueError(
-                f"`backbone_state_dict` must be a dict in {action_dit_pretrained_path}, "
-                f"got {type(backbone_state_dict)}"
-            )
+            raise ValueError(f"`backbone_state_dict` must be a dict in {action_dit_pretrained_path}, got {type(backbone_state_dict)}")
 
         provided_keys = set(backbone_state_dict.keys())
         missing_keys = sorted(expected_backbone_keys - provided_keys)
@@ -308,16 +288,10 @@ class ActionDiT(nn.Module):
         for key in expected_backbone_keys:
             value = backbone_state_dict[key]
             if not isinstance(value, torch.Tensor):
-                raise ValueError(
-                    f"`backbone_state_dict[{key}]` must be torch.Tensor in {action_dit_pretrained_path}, "
-                    f"got {type(value)}"
-                )
+                raise ValueError(f"`backbone_state_dict[{key}]` must be torch.Tensor in {action_dit_pretrained_path}, got {type(value)}")
             target = merged_state[key]
             if tuple(value.shape) != tuple(target.shape):
-                raise ValueError(
-                    f"Shape mismatch for `{key}` in {action_dit_pretrained_path}: "
-                    f"expected {tuple(target.shape)}, got {tuple(value.shape)}"
-                )
+                raise ValueError(f"Shape mismatch for `{key}` in {action_dit_pretrained_path}: expected {tuple(target.shape)}, got {tuple(value.shape)}")
             merged_state[key] = value.to(device=target.device, dtype=target.dtype)
 
         action_expert.load_state_dict(merged_state, strict=True)
@@ -337,51 +311,35 @@ class ActionDiT(nn.Module):
         context_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         if action_tokens.ndim != 3:
-            raise ValueError(
-                f"`action_tokens` must be 3D [B, T, action_dim], got shape {tuple(action_tokens.shape)}"
-            )
+            raise ValueError(f"`action_tokens` must be 3D [B, T, action_dim], got shape {tuple(action_tokens.shape)}")
         if action_tokens.shape[2] != self.action_dim:
-            raise ValueError(
-                f"`action_tokens` last dim must be {self.action_dim}, got {action_tokens.shape[2]}"
-            )
+            raise ValueError(f"`action_tokens` last dim must be {self.action_dim}, got {action_tokens.shape[2]}")
         if timestep.ndim != 1:
             raise ValueError(f"`timestep` must be 1D [B] or [1], got shape {tuple(timestep.shape)}")
         if context.ndim != 3:
-            raise ValueError(
-                f"`context` must be 3D [B, L, D], got shape {tuple(context.shape)}"
-            )
+            raise ValueError(f"`context` must be 3D [B, L, D], got shape {tuple(context.shape)}")
 
         batch_size = action_tokens.shape[0]
         if context.shape[0] != batch_size:
-            raise ValueError(
-                f"Batch mismatch between action tokens and text context: {batch_size} vs {context.shape[0]}"
-            )
+            raise ValueError(f"Batch mismatch between action tokens and text context: {batch_size} vs {context.shape[0]}")
         if timestep.shape[0] not in (1, batch_size):
-            raise ValueError(
-                f"`timestep` length must be 1 or batch_size({batch_size}), got {timestep.shape[0]}"
-            )
+            raise ValueError(f"`timestep` length must be 1 or batch_size({batch_size}), got {timestep.shape[0]}")
         if timestep.shape[0] == 1 and batch_size > 1:
             if self.training:
                 raise ValueError("During training, action timestep length must match batch_size.")
             timestep = timestep.expand(batch_size)
 
         if context_mask is None:
-            context_mask = torch.ones(
-                (batch_size, context.shape[1]), dtype=torch.bool, device=context.device
-            )
+            context_mask = torch.ones((batch_size, context.shape[1]), dtype=torch.bool, device=context.device)
         else:
             if context_mask.ndim != 2:
                 raise ValueError(f"`context_mask` must be 2D [B, L], got shape {tuple(context_mask.shape)}")
             if context_mask.shape[0] != batch_size or context_mask.shape[1] != context.shape[1]:
-                raise ValueError(
-                    f"`context_mask` shape must match `context` shape [B, L], got {tuple(context_mask.shape)} vs {tuple(context.shape)}"
-                )
+                raise ValueError(f"`context_mask` shape must match `context` shape [B, L], got {tuple(context_mask.shape)} vs {tuple(context.shape)}")
 
         seq_len = action_tokens.shape[1]
         if seq_len > self.freqs.shape[0]:
-            raise ValueError(
-                f"Action token length {seq_len} exceeds RoPE cache {self.freqs.shape[0]}."
-            )
+            raise ValueError(f"Action token length {seq_len} exceeds RoPE cache {self.freqs.shape[0]}.")
 
         t = self.time_embedding(timestep_embedding(self.freq_dim, timestep))
         t_mod = self.time_projection(t).unflatten(1, (6, self.hidden_dim))
@@ -427,6 +385,7 @@ class ActionDiT(nn.Module):
         context_mask = pre_state["context_mask"]
 
         for block in self.blocks:
+
             def run(value, current_block=block):
                 return expert_block_forward(
                     current_block,

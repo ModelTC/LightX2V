@@ -51,11 +51,7 @@ class LinearNormalizer:
         for group in self.normalizers:
             for item in shape_meta[group]:
                 key = item["key"]
-                global_stats = {
-                    name.removeprefix("global_"): value
-                    for name, value in stats[group][key].items()
-                    if name.startswith("global_")
-                }
+                global_stats = {name.removeprefix("global_"): value for name, value in stats[group][key].items() if name.startswith("global_")}
                 self.normalizers[group][key] = FieldNormalizer(global_stats, mode=mode)
 
     def forward(self, batch):
