@@ -1,7 +1,7 @@
 model:
   name: wan_fastwam
   running_dtype: bf16
-  model_path: /data/nvme0/models/Wan-AI/Wan2.2-TI2V-5B
+  model_path: /path/to/Wan-AI/Wan2.2-TI2V-5B
 
 data:
   train: &libero_data
