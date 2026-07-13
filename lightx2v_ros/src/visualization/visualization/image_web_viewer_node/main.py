@@ -1,3 +1,4 @@
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Condition, Thread
 
@@ -26,6 +27,7 @@ class FrameStore:
         self.condition = Condition()
         self.frames = {name: (0, None) for name in cameras}
         self.task = ""
+        self.status = {}
 
     def update(self, name, jpeg):
         with self.condition:
@@ -45,6 +47,14 @@ class FrameStore:
     def get_task(self):
         with self.condition:
             return self.task
+
+    def update_status(self, status):
+        with self.condition:
+            self.status = status
+
+    def get_status(self):
+        with self.condition:
+            return self.status
 
 
 class ImageWebViewerNode(Node):
@@ -82,13 +92,15 @@ class ImageWebViewerNode(Node):
                 10,
             )
         self.create_subscription(String, task_topic, self.on_task, 10)
+        self.create_subscription(String, f"{namespace}/status", self.on_status, 10)
+        self.control_pub = self.create_publisher(String, f"{namespace}/control", 10)
 
         self.start_http_server()
 
     def start_http_server(self):
         host = str(self.get_parameter("host").value)
         port = int(self.get_parameter("port").value)
-        handler = make_handler(self.frame_store, self.cameras, self.contract.name)
+        handler = make_handler(self.frame_store, self.cameras, self.contract.name, self.publish_control)
         self.http_server = ImageHttpServer((host, port), handler)
         self.http_thread = Thread(target=self.http_server.serve_forever, daemon=True)
         self.http_thread.start()
@@ -110,6 +122,18 @@ class ImageWebViewerNode(Node):
     def on_task(self, msg):
         self.frame_store.update_task(msg.data)
 
+    def on_status(self, msg):
+        try:
+            self.frame_store.update_status(json.loads(msg.data))
+        except Exception as exc:
+            self.get_logger().error(f"bad status message: {exc}")
+
+    def publish_control(self, command: dict):
+        msg = String()
+        msg.data = json.dumps(command)
+        self.control_pub.publish(msg)
+        self.get_logger().info(f"forwarded control command: {msg.data}")
+
     def destroy_node(self):
         try:
             if self.http_server is not None:
@@ -124,7 +148,7 @@ class ImageWebViewerNode(Node):
         super().destroy_node()
 
 
-def make_handler(frame_store, cameras, title):
+def make_handler(frame_store, cameras, title, publish_control):
     camera_set = set(cameras)
     index_html = render_index(cameras, title=f"LightX2V ROS · {title}")
 
@@ -136,12 +160,42 @@ def make_handler(frame_store, cameras, title):
             if self.path == "/task.txt":
                 self.send_task()
                 return
+            if self.path == "/status.json":
+                self.send_status()
+                return
             if self.path.endswith(".mjpg"):
                 name = self.path[1 : -len(".mjpg")]
                 if name in camera_set:
                     self.send_stream(name)
                     return
             self.send_error(404)
+
+        def do_POST(self):
+            if self.path != "/control":
+                self.send_error(404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                command = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(command, dict) or not command.get("cmd"):
+                    raise ValueError("control payload must be a JSON object with a `cmd` field")
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, code=400)
+                return
+            publish_control(command)
+            self.send_json({"ok": True})
+
+        def send_json(self, payload, code=200):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def send_status(self):
+            self.send_json(frame_store.get_status())
 
         def send_index(self):
             body = index_html.encode("utf-8")

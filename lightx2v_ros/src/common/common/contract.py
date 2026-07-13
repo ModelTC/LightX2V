@@ -63,6 +63,16 @@ class EnvContract:
         # the simulator loops into a fresh episode.
         return f"{self.namespace}/episode"
 
+    @property
+    def control_topic(self) -> str:
+        # JSON control commands (start/pause/resume/restart/set_task) from UIs.
+        return f"{self.namespace}/control"
+
+    @property
+    def status_topic(self) -> str:
+        # JSON status snapshots (state machine, episode history, available tasks).
+        return f"{self.namespace}/status"
+
     def camera_topic(self, camera: str) -> str:
         if camera not in self.cameras:
             raise KeyError(f"camera '{camera}' is not part of contract '{self.name}': {self.cameras}")
@@ -90,7 +100,10 @@ LIBERO_CONTRACT = EnvContract(
 ROBOTWIN_CONTRACT = EnvContract(
     name="robotwin",
     namespace="/robotwin",
-    cameras=("head_camera", "left_camera", "right_camera"),
+    # front_camera is a static scene camera already rendered every frame by
+    # RoboTwin; observer_camera is an extra on-demand third-person view. Both are
+    # viewer-only: the policy consumes exactly `policy_input_cameras`.
+    cameras=("head_camera", "left_camera", "right_camera", "front_camera", "observer_camera"),
     policy_input_cameras=("head_camera", "left_camera", "right_camera"),
     action_dim=14,
     state_dim=14,

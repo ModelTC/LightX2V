@@ -54,6 +54,32 @@ class BaseSimEnv(ABC):
         """Optional per-episode step cap hint (None = let the node decide)."""
         return None
 
+    # ------------------------------------------------- optional capabilities
+    @property
+    def supports_task_switch(self) -> bool:
+        """Whether `set_task` can rebuild the env with a different task/config."""
+        return False
+
+    def list_tasks(self):
+        """Available task names for `set_task` (empty if unsupported)."""
+        return []
+
+    def list_task_configs(self):
+        """Available task-config/scenario names for `set_task` (empty if unsupported)."""
+        return []
+
+    def set_task(self, task_name: str, task_config: str = "", seed=None) -> Observation:
+        raise NotImplementedError(f"env '{self.contract.name}' does not support runtime task switching")
+
+    def set_frame_callback(self, callback) -> None:
+        """Register a callback(images: Dict[str, ndarray]) invoked with intermediate
+        frames rendered while an action is being executed (viewer-only frames).
+        Environments that cannot render mid-action may ignore this."""
+        return None
+
+    # Concrete envs may also expose plain attributes `task_name`, `task_config`
+    # and `seed`; the node reads them via getattr for status reporting.
+
     def close(self) -> None:
         return None
 
