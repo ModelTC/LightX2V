@@ -365,14 +365,12 @@ class MMWeight(MMWeightTemplate):
 
         lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-            weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
-            self.pin_weight = self.pin_weight.copy_(weight_tensor)
-            del weight_tensor
+            weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+            self.pin_weight = create_pin_tensor(weight_tensor, transpose=True)
 
             if self.bias_name is not None:
                 bias_tensor = lazy_load_file.get_tensor(self.bias_name)
-                self.pin_bias.copy_(bias_tensor)
-                del bias_tensor
+                self.pin_bias = create_pin_tensor(bias_tensor)
 
 
 @MM_WEIGHT_REGISTER("Default-ForceFp32")
@@ -579,22 +577,17 @@ class MMWeightQuantTemplate(MMWeightTemplate):
 
         lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-            if self.weight_need_transpose:
-                weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
-            else:
-                weight_tensor = lazy_load_file.get_tensor(self.weight_name)
-
-            self.pin_weight = self.pin_weight.copy_(weight_tensor)
-            del weight_tensor
+            weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+            self.pin_weight = create_pin_tensor(weight_tensor, transpose=self.weight_need_transpose)
 
             weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
-            self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
-            del weight_scale_tensor
+            scale_dtype = torch.float32 if self.scale_force_fp32 else None
+            self.pin_weight_scale = create_pin_tensor(weight_scale_tensor, dtype=scale_dtype)
 
             if self.bias_name is not None:
                 bias_tensor = lazy_load_file.get_tensor(self.bias_name)
-                self.pin_bias.copy_(bias_tensor)
-                del bias_tensor
+                bias_dtype = torch.float32 if self.bias_force_fp32 else self.infer_dtype
+                self.pin_bias = create_pin_tensor(bias_tensor, dtype=bias_dtype)
 
     def per_block_cast_to_fp8(self, x):
         assert x.dim() == 2
@@ -1148,23 +1141,15 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as source:
                 bias_tensor = source.get_tensor(self.bias_name)
-                if not self.bias_force_fp32:
-                    bias_tensor = bias_tensor.to(self.infer_dtype)
-                if self.bias_force_fp32:
-                    bias_tensor = bias_tensor.to(torch.float32)
-                return self._create_pin_tensor(bias_tensor)
+                bias_dtype = torch.float32 if self.bias_force_fp32 else self.infer_dtype
+                return self._create_pin_tensor(bias_tensor, dtype=bias_dtype)
         else:
             bias_tensor = source[self.bias_name]
-            if self.bias_force_fp32:
-                bias_tensor = bias_tensor.to(torch.float32)
-            return self._create_pin_tensor(bias_tensor)
+            bias_dtype = torch.float32 if self.bias_force_fp32 else None
+            return self._create_pin_tensor(bias_tensor, dtype=bias_dtype)
 
     def _create_pin_tensor(self, tensor, dtype=None):
-        dtype = dtype or tensor.dtype
-        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=dtype)
-        pin_tensor.copy_(tensor)
-        del tensor
-        return pin_tensor
+        return create_pin_tensor(tensor, dtype=dtype)
 
     def _load_default_tensors(self, weight_dict):
         if not self.lazy_load:
@@ -1261,13 +1246,13 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):
-            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
+            move_tensor_back_to_cpu(self, "weight", non_blocking=non_blocking)
             if hasattr(self, "weight_scale_name"):
-                self.weight_scale = self.pin_weight_scale.copy_(self.weight_scale, non_blocking=non_blocking).cpu()
-                self.input_global_scale = self.pin_input_global_scale.copy_(self.input_global_scale, non_blocking=non_blocking).cpu()
-                self.alpha = self.pin_alpha.copy_(self.alpha, non_blocking=non_blocking).cpu()
+                move_tensor_back_to_cpu(self, "weight_scale", non_blocking=non_blocking)
+                move_tensor_back_to_cpu(self, "input_global_scale", non_blocking=non_blocking)
+                move_tensor_back_to_cpu(self, "alpha", non_blocking=non_blocking)
             if self.bias is not None:
-                self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
+                move_tensor_back_to_cpu(self, "bias", non_blocking=non_blocking)
         else:
             self.weight = self.weight.to("cpu", non_blocking=non_blocking)
             if hasattr(self, "weight_scale"):
@@ -1321,17 +1306,11 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
 
         lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-            if self.weight_need_transpose:
-                weight_tensor = lazy_load_file.get_tensor(self.weight_name).t()
-            else:
-                weight_tensor = lazy_load_file.get_tensor(self.weight_name)
-
-            self.pin_weight = self.pin_weight.copy_(weight_tensor)
-            del weight_tensor
+            weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+            self.pin_weight = create_pin_tensor(weight_tensor, transpose=self.weight_need_transpose)
 
             weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
-            self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
-            del weight_scale_tensor
+            self.pin_weight_scale = create_pin_tensor(weight_scale_tensor)
 
 
 @MM_WEIGHT_REGISTER("CalibMax")
