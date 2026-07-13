@@ -15,6 +15,7 @@ class Flux2SchedulerCaching(Flux2Scheduler):
         self._refresh_caching_records()
 
     def clear(self):
+        super().clear()
         if self.transformer_infer is not None:
             self.transformer_infer.clear()
 
