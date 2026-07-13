@@ -2,7 +2,6 @@ from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
-from torch.profiler import record_function
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
@@ -52,6 +51,10 @@ class _UlyssesContext:
     max_seqlen_q: int
     max_seqlen_kv: int
 
+    @property
+    def txt_storage_len(self):
+        return self.txt_mask_len if self.txt_mask_len is not None else self.txt_len
+
 
 @ATTN_WEIGHT_REGISTER("ulysses-opt")
 class OptUlyssesAttnWeight(AttnWeightTemplate):
@@ -60,11 +63,7 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
 
-    def apply(self, *args, **kwargs):
-        with record_function("ulysses_opt/e2e"):
-            return self._apply_impl(*args, **kwargs)
-
-    def _apply_impl(
+    def apply(
         self,
         q,
         k,
@@ -187,39 +186,34 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
         for record in qkv_records:
             if ctx.use_fp8_comm:
                 local_head, _payload, _scale, output_payload, output_scale, qkv_shape, qkv_scale_shape, payload_work, scale_work = record
-                with record_function("ulysses_opt/head_qkv_wait"):
-                    payload_work.wait()
-                    scale_work.wait()
-                with record_function("ulysses_opt/head_qkv_post"):
-                    if ctx.q_only_img:
-                        q_h, k_h, v_h = qonly_qkv_post_head_fp8(
-                            output_payload, output_scale, qkv_shape, qkv_scale_shape, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_len, ctx.img_first, local_head, ctx.shard_heads
-                        )
-                    else:
-                        q_h, k_h, v_h = qkv_post_head_fp8(
-                            output_payload, output_scale, qkv_shape, qkv_scale_shape, q, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_len, ctx.img_first, local_head, ctx.shard_heads
-                        )
+                payload_work.wait()
+                scale_work.wait()
+                if ctx.q_only_img:
+                    q_h, k_h, v_h = qonly_qkv_post_head_fp8(
+                        output_payload, output_scale, qkv_shape, qkv_scale_shape, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_storage_len, ctx.img_first, local_head, ctx.shard_heads
+                    )
+                else:
+                    q_h, k_h, v_h = qkv_post_head_fp8(
+                        output_payload, output_scale, qkv_shape, qkv_scale_shape, q, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_storage_len, ctx.img_first, local_head, ctx.shard_heads
+                    )
             else:
                 local_head, _input_buf, output_buf, qkv_shape, qkv_scale_shape, work = record
-                with record_function("ulysses_opt/head_qkv_wait"):
-                    work.wait()
-                with record_function("ulysses_opt/head_qkv_post"):
-                    if ctx.q_only_img:
-                        q_h, k_h, v_h = qonly_qkv_post_head(output_buf, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_len, ctx.img_first, local_head, ctx.shard_heads)
-                    else:
-                        q_h, k_h, v_h = qkv_post_head(output_buf, q, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_len, ctx.img_first, local_head, ctx.shard_heads)
+                work.wait()
+                if ctx.q_only_img:
+                    q_h, k_h, v_h = qonly_qkv_post_head(output_buf, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_storage_len, ctx.img_first, local_head, ctx.shard_heads)
+                else:
+                    q_h, k_h, v_h = qkv_post_head(output_buf, q, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_storage_len, ctx.img_first, local_head, ctx.shard_heads)
 
-            with record_function("ulysses_opt/head_attention"):
-                head_attn = attention_module.apply(
-                    q=q_h,
-                    k=k_h,
-                    v=v_h,
-                    cu_seqlens_q=ctx.cu_seqlens_q,
-                    cu_seqlens_kv=ctx.cu_seqlens_kv,
-                    max_seqlen_q=ctx.max_seqlen_q,
-                    max_seqlen_kv=ctx.max_seqlen_kv,
-                    **attention_kwargs,
-                )
+            head_attn = attention_module.apply(
+                q=q_h,
+                k=k_h,
+                v=v_h,
+                cu_seqlens_q=ctx.cu_seqlens_q,
+                cu_seqlens_kv=ctx.cu_seqlens_kv,
+                max_seqlen_q=ctx.max_seqlen_q,
+                max_seqlen_kv=ctx.max_seqlen_kv,
+                **attention_kwargs,
+            )
             head_attn = head_attn.reshape(head_attn.shape[0], -1)
             if head_attn.shape[1] != ctx.hidden_dims:
                 raise ValueError(f"head_parallel attention output for local_head={local_head} must flatten to hidden_dims={ctx.hidden_dims}, got {tuple(head_attn.shape)}.")
@@ -241,12 +235,12 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
             output_qkv_scale = torch.empty_like(qkv_scale)
             dist.all_to_all_single(output_qkv_payload, qkv_payload, group=ctx.seq_p_group)
             dist.all_to_all_single(output_qkv_scale, qkv_scale, group=ctx.seq_p_group)
-            return qkv_post_fp8(output_qkv_payload, output_qkv_scale, qkv_shape, qkv_scale_shape, q, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_len, ctx.img_first)
+            return qkv_post_fp8(output_qkv_payload, output_qkv_scale, qkv_shape, qkv_scale_shape, q, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_storage_len, ctx.img_first)
 
         img_qkv = qkv_pre(q, k, v, ctx.img_start, ctx.img_len, ctx.world_size)
         output_qkv = torch.empty_like(img_qkv)
         dist.all_to_all_single(output_qkv, img_qkv, group=ctx.seq_p_group)
-        return qkv_post(output_qkv, q, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_len, ctx.img_first)
+        return qkv_post(output_qkv, q, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_storage_len, ctx.img_first)
 
     @staticmethod
     def _qonly_qkv_a2a(q, k, v, ctx):
@@ -257,12 +251,12 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
             output_qkv_scale = torch.empty_like(qkv_scale)
             dist.all_to_all_single(output_qkv_payload, qkv_payload, group=ctx.seq_p_group)
             dist.all_to_all_single(output_qkv_scale, qkv_scale, group=ctx.seq_p_group)
-            return qonly_qkv_post_fp8(output_qkv_payload, output_qkv_scale, qkv_shape, qkv_scale_shape, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_len, ctx.img_first)
+            return qonly_qkv_post_fp8(output_qkv_payload, output_qkv_scale, qkv_shape, qkv_scale_shape, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_storage_len, ctx.img_first)
 
         img_qkv = qonly_qkv_pre(q, k, v, ctx.img_start, ctx.img_len, ctx.world_size)
         output_qkv = torch.empty_like(img_qkv)
         dist.all_to_all_single(output_qkv, img_qkv, group=ctx.seq_p_group)
-        return qonly_qkv_post(output_qkv, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_len, ctx.img_first)
+        return qonly_qkv_post(output_qkv, k, v, ctx.cur_rank, ctx.txt_start, ctx.txt_storage_len, ctx.img_first)
 
     @staticmethod
     def _attn_a2a(attn, ctx):
@@ -271,8 +265,8 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
             txt_attn = attn[ctx.global_img_len :]
             attn_img_start = 0
         else:
-            txt_attn = attn[: ctx.txt_len]
-            attn_img_start = ctx.txt_len
+            txt_attn = attn[: ctx.txt_storage_len]
+            attn_img_start = ctx.txt_storage_len
 
         if ctx.use_fp8_comm:
             attn_payload, attn_scale, attn_shape, attn_scale_shape = attn_pre_fp8(attn, attn_img_start, ctx.img_len, ctx.world_size, ctx.shard_heads, ctx.hidden_dims)
@@ -317,22 +311,21 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
             txt_attn = head_attn[ctx.global_img_len :]
             attn_img_start = 0
         else:
-            txt_attn = head_attn[: ctx.txt_len]
-            attn_img_start = ctx.txt_len
+            txt_attn = head_attn[: ctx.txt_storage_len]
+            attn_img_start = ctx.txt_storage_len
 
-        with record_function("ulysses_opt/head_attn_a2a_launch"):
-            if ctx.use_fp8_comm:
-                attn_payload, attn_scale, attn_shape, attn_scale_shape = attn_pre_fp8(head_attn, attn_img_start, ctx.img_len, ctx.world_size, 1, ctx.hidden_dims)
-                a2a_payload = torch.empty_like(attn_payload)
-                a2a_scale = torch.empty_like(attn_scale)
-                payload_work = dist.all_to_all_single(a2a_payload, attn_payload, group=ctx.seq_p_group, async_op=True)
-                scale_work = dist.all_to_all_single(a2a_scale, attn_scale, group=ctx.seq_p_group, async_op=True)
-                return (txt_attn, attn_payload, attn_scale, a2a_payload, a2a_scale, attn_shape, attn_scale_shape, payload_work, scale_work)
+        if ctx.use_fp8_comm:
+            attn_payload, attn_scale, attn_shape, attn_scale_shape = attn_pre_fp8(head_attn, attn_img_start, ctx.img_len, ctx.world_size, 1, ctx.hidden_dims)
+            a2a_payload = torch.empty_like(attn_payload)
+            a2a_scale = torch.empty_like(attn_scale)
+            payload_work = dist.all_to_all_single(a2a_payload, attn_payload, group=ctx.seq_p_group, async_op=True)
+            scale_work = dist.all_to_all_single(a2a_scale, attn_scale, group=ctx.seq_p_group, async_op=True)
+            return (txt_attn, attn_payload, attn_scale, a2a_payload, a2a_scale, attn_shape, attn_scale_shape, payload_work, scale_work)
 
-            a2a_input = attn_pre(head_attn, attn_img_start, ctx.img_len, ctx.world_size, 1, ctx.hidden_dims)
-            a2a_output = torch.empty_like(a2a_input)
-            work = dist.all_to_all_single(a2a_output, a2a_input, group=ctx.seq_p_group, async_op=True)
-            return (txt_attn, a2a_input, a2a_output, None, None, work)
+        a2a_input = attn_pre(head_attn, attn_img_start, ctx.img_len, ctx.world_size, 1, ctx.hidden_dims)
+        a2a_output = torch.empty_like(a2a_input)
+        work = dist.all_to_all_single(a2a_output, a2a_input, group=ctx.seq_p_group, async_op=True)
+        return (txt_attn, a2a_input, a2a_output, None, None, work)
 
     @staticmethod
     def _finish_head_parallel_attn_a2a(records, ctx):
@@ -340,29 +333,34 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
         # Do not interleave text all-gather collectives with pending image
         # all-to-all work on the same process group. This keeps the old safe
         # phase boundary while letting image all-to-all be queued earlier.
-        with record_function("ulysses_opt/head_attn_a2a_wait"):
-            for record in records:
-                if ctx.use_fp8_comm:
-                    record[-2].wait()
-                    record[-1].wait()
-                else:
-                    record[-1].wait()
-
-        head_outputs = []
         for record in records:
             if ctx.use_fp8_comm:
-                txt_attn, _payload, _scale, a2a_payload, a2a_scale, attn_shape, attn_scale_shape, _payload_work, _scale_work = record
+                record[-2].wait()
+                record[-1].wait()
             else:
-                txt_attn, _input_buf, a2a_output, _unused0, _unused1, _work = record
-            with record_function("ulysses_opt/head_text_gather"):
-                gathered_txt_attn = [torch.empty_like(txt_attn) for _ in range(ctx.world_size)]
-                dist.all_gather(gathered_txt_attn, txt_attn, group=ctx.seq_p_group)
-                txt_attn = torch.cat(gathered_txt_attn, dim=1)
-            with record_function("ulysses_opt/head_attn_post"):
-                if ctx.use_fp8_comm:
-                    head_out = attn_post_fp8(a2a_payload, a2a_scale, attn_shape, attn_scale_shape, txt_attn, ctx.img_first)
-                else:
-                    head_out = attn_post(a2a_output, txt_attn, ctx.img_first)
+                record[-1].wait()
+
+        local_txt_heads = torch.stack([record[0] for record in records], dim=0)
+        if local_txt_heads.shape[1] == 0:
+            gathered_txt_heads = None
+        else:
+            gathered_txt_heads = [torch.empty_like(local_txt_heads) for _ in range(ctx.world_size)]
+            dist.all_gather(gathered_txt_heads, local_txt_heads, group=ctx.seq_p_group)
+
+        head_outputs = []
+        for local_head, record in enumerate(records):
+            if ctx.use_fp8_comm:
+                _txt_attn, _payload, _scale, a2a_payload, a2a_scale, attn_shape, attn_scale_shape, _payload_work, _scale_work = record
+            else:
+                _txt_attn, _input_buf, a2a_output, _unused0, _unused1, _work = record
+            if gathered_txt_heads is None:
+                txt_attn = local_txt_heads.new_empty((0, ctx.world_size * ctx.hidden_dims))
+            else:
+                txt_attn = torch.cat([rank_txt[local_head] for rank_txt in gathered_txt_heads], dim=1)
+            if ctx.use_fp8_comm:
+                head_out = attn_post_fp8(a2a_payload, a2a_scale, attn_shape, attn_scale_shape, txt_attn, ctx.img_first)
+            else:
+                head_out = attn_post(a2a_output, txt_attn, ctx.img_first)
             head_outputs.append(head_out.reshape(head_out.shape[0], ctx.world_size, ctx.hidden_dims))
 
         return torch.stack(head_outputs, dim=2).reshape(head_outputs[0].shape[0], ctx.world_size * len(head_outputs) * ctx.hidden_dims)
@@ -370,30 +368,28 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
     @staticmethod
     def _launch_head_parallel_img_attn_a2a(head_attn, ctx):
         """Launch one image-only local-head all-to-all for q_only_img."""
-        with record_function("ulysses_opt/head_attn_a2a_launch"):
-            if ctx.use_fp8_comm:
-                attn_payload, attn_scale, attn_shape, attn_scale_shape = attn_pre_fp8(head_attn, 0, ctx.img_len, ctx.world_size, 1, ctx.hidden_dims)
-                a2a_payload = torch.empty_like(attn_payload)
-                a2a_scale = torch.empty_like(attn_scale)
-                payload_work = dist.all_to_all_single(a2a_payload, attn_payload, group=ctx.seq_p_group, async_op=True)
-                scale_work = dist.all_to_all_single(a2a_scale, attn_scale, group=ctx.seq_p_group, async_op=True)
-                return (head_attn, attn_payload, attn_scale, a2a_payload, a2a_scale, attn_shape, attn_scale_shape, payload_work, scale_work)
+        if ctx.use_fp8_comm:
+            attn_payload, attn_scale, attn_shape, attn_scale_shape = attn_pre_fp8(head_attn, 0, ctx.img_len, ctx.world_size, 1, ctx.hidden_dims)
+            a2a_payload = torch.empty_like(attn_payload)
+            a2a_scale = torch.empty_like(attn_scale)
+            payload_work = dist.all_to_all_single(a2a_payload, attn_payload, group=ctx.seq_p_group, async_op=True)
+            scale_work = dist.all_to_all_single(a2a_scale, attn_scale, group=ctx.seq_p_group, async_op=True)
+            return (head_attn, attn_payload, attn_scale, a2a_payload, a2a_scale, attn_shape, attn_scale_shape, payload_work, scale_work)
 
-            a2a_input = attn_pre(head_attn, 0, ctx.img_len, ctx.world_size, 1, ctx.hidden_dims)
-            a2a_output = torch.empty_like(a2a_input)
-            work = dist.all_to_all_single(a2a_output, a2a_input, group=ctx.seq_p_group, async_op=True)
-            return (head_attn, a2a_input, a2a_output, None, None, work)
+        a2a_input = attn_pre(head_attn, 0, ctx.img_len, ctx.world_size, 1, ctx.hidden_dims)
+        a2a_output = torch.empty_like(a2a_input)
+        work = dist.all_to_all_single(a2a_output, a2a_input, group=ctx.seq_p_group, async_op=True)
+        return (head_attn, a2a_input, a2a_output, None, None, work)
 
     @staticmethod
     def _finish_head_parallel_img_attn_a2a(records, ctx):
         """Finish image-only per-head all-to-all for q_only_img."""
-        with record_function("ulysses_opt/head_attn_a2a_wait"):
-            for record in records:
-                if ctx.use_fp8_comm:
-                    record[-2].wait()
-                    record[-1].wait()
-                else:
-                    record[-1].wait()
+        for record in records:
+            if ctx.use_fp8_comm:
+                record[-2].wait()
+                record[-1].wait()
+            else:
+                record[-1].wait()
 
         head_outputs = []
         for record in records:
@@ -402,11 +398,10 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
             else:
                 head_attn, _input_buf, a2a_output, _unused0, _unused1, _work = record
             txt_attn = head_attn.new_empty((0, ctx.world_size * ctx.hidden_dims))
-            with record_function("ulysses_opt/head_attn_post"):
-                if ctx.use_fp8_comm:
-                    head_out = attn_post_fp8(a2a_payload, a2a_scale, attn_shape, attn_scale_shape, txt_attn, True)
-                else:
-                    head_out = attn_post(a2a_output, txt_attn, True)
+            if ctx.use_fp8_comm:
+                head_out = attn_post_fp8(a2a_payload, a2a_scale, attn_shape, attn_scale_shape, txt_attn, True)
+            else:
+                head_out = attn_post(a2a_output, txt_attn, True)
             head_outputs.append(head_out.reshape(head_out.shape[0], ctx.world_size, ctx.hidden_dims))
 
         return torch.stack(head_outputs, dim=2).reshape(head_outputs[0].shape[0], ctx.world_size * len(head_outputs) * ctx.hidden_dims)
@@ -426,8 +421,9 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
         seq_p_group,
     ):
         global_img_len = img_len * world_size
+        txt_storage_len = txt_mask_len if txt_mask_len is not None else txt_len
         cu_seqlens_kv = OptUlyssesAttnWeight._build_attention_cu_seqlens(txt_len, txt_mask_len, global_img_len)
-        max_seqlen_kv = global_img_len + txt_len
+        max_seqlen_kv = global_img_len + txt_storage_len
         if q_only_img:
             cu_seqlens_q = OptUlyssesAttnWeight._build_img_only_cu_seqlens(global_img_len)
             max_seqlen_q = global_img_len
@@ -444,7 +440,7 @@ class OptUlyssesAttnWeight(AttnWeightTemplate):
             shard_heads=q_heads // world_size,
             hidden_dims=hidden_dims,
             global_img_len=global_img_len,
-            img_start=0 if img_first else txt_len,
+            img_start=0 if img_first else txt_storage_len,
             txt_start=img_len if img_first else 0,
             img_first=img_first,
             q_only_img=q_only_img,
