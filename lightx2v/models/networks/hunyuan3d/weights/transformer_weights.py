@@ -117,6 +117,8 @@ class Hunyuan3DMoEWeights(WeightModule):
         return torch.stack([bias.contiguous() for bias in biases], dim=0)
 
     def _build_flashinfer_weights(self):
+        if self.experts[0].fc1._get_actual_weight() is None:
+            return
         fc1_list, fc2_list = [], []
         fc1_biases, fc2_biases = [], []
         for expert_w in self.experts:
