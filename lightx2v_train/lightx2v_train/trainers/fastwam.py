@@ -12,7 +12,16 @@ from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
 
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
-from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_distributed, is_main_process, reduce_mean
+from lightx2v_train.runtime.distributed import (
+    barrier,
+    get_data_parallel_group,
+    get_data_parallel_world_size,
+    get_rank,
+    get_world_size,
+    is_distributed,
+    is_main_process,
+    reduce_mean,
+)
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 from lightx2v_train.utils.video import pil_frames_to_video_tensor, save_mp4, video_psnr, video_ssim
 
@@ -50,6 +59,10 @@ class FastWAMTrainer:
         self.lr_warmup_iters = int(self.training_config.get("lr_warmup_iters", 0))
         self.train_log_every_iters = max(1, int(self.logging_config.get("train_log_every_iters", 10)))
 
+        zero1_config = self.config.get("distributed", {}).get("zero1", {})
+        self.zero1_requested = bool(zero1_config.get("enabled", False)) if isinstance(zero1_config, dict) else bool(zero1_config)
+        self.zero1_enabled = False
+
         self.eval_every_iters = int(self.evaluation_config.get("eval_every_iters", self.evaluation_config.get("infer_every_iters", 0)) or 0)
         self.eval_num_inference_steps = int(self.evaluation_config.get("eval_num_inference_steps", 5))
         self.eval_num_samples = max(1, int(self.evaluation_config.get("num_samples", 1)))
@@ -79,6 +92,35 @@ class FastWAMTrainer:
         self.dataloader_train = dataloader_train
         self.dataloader_eval = dataloader_eval
 
+    def _build_optimizer(self):
+        optimizer_kwargs = {
+            "lr": self.learning_rate,
+            "weight_decay": self.weight_decay,
+            "betas": (self.adam_beta1, self.adam_beta2),
+            "eps": self.adam_epsilon,
+        }
+        data_parallel_size = get_data_parallel_world_size()
+        if self.zero1_requested and data_parallel_size > 1:
+            from torch.distributed.optim import ZeroRedundancyOptimizer
+
+            self.zero1_enabled = True
+            logger.info("[optimizer] using ZeroRedundancyOptimizer with AdamW across {} data-parallel ranks", data_parallel_size)
+            return ZeroRedundancyOptimizer(
+                self.trainable_params,
+                optimizer_class=torch.optim.AdamW,
+                process_group=get_data_parallel_group(),
+                parameters_as_bucket_view=False,
+                overlap_with_ddp=False,
+                **optimizer_kwargs,
+            )
+
+        self.zero1_enabled = False
+        if self.zero1_requested:
+            logger.info("[optimizer] ZeroRedundancyOptimizer requested but data-parallel size is 1; using AdamW")
+        else:
+            logger.info("[optimizer] using AdamW without optimizer-state sharding")
+        return torch.optim.AdamW(self.trainable_params, **optimizer_kwargs)
+
     def setup(self, resume_ckpt_path=None):
         self.model.set_dit_only_trainable()
         self.model.log_model_structure()
@@ -86,13 +128,7 @@ class FastWAMTrainer:
         if not self.trainable_params:
             raise RuntimeError("FastWAM has no trainable parameters.")
 
-        self.optimizer = torch.optim.AdamW(
-            self.trainable_params,
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay,
-            betas=(self.adam_beta1, self.adam_beta2),
-            eps=self.adam_epsilon,
-        )
+        self.optimizer = self._build_optimizer()
         self.lr_scheduler = get_scheduler(
             self.lr_scheduler_name,
             optimizer=self.optimizer,
@@ -139,13 +175,22 @@ class FastWAMTrainer:
             raise RuntimeError(f"Cannot resume world_size={state.get('world_size')} checkpoint with world_size={get_world_size()}.")
         self.optimizer.load_state_dict(state["optimizer"])
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
-        logger.info("[resume] restored FastWAM training state from {}", resume_ckpt_path)
+        saved_optimizer_sharding = state.get("optimizer_sharding", "none")
+        active_optimizer_sharding = "zero1" if self.zero1_enabled else "none"
+        logger.info(
+            "[resume] restored FastWAM training state from {} (optimizer sharding: {} -> {})",
+            resume_ckpt_path,
+            saved_optimizer_sharding,
+            active_optimizer_sharding,
+        )
 
     def _save_checkpoint(self, iteration):
         if is_main_process():
             prune_checkpoints(self.output_train_dir, self.save_total_limit)
         save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
         logger.info("[checkpoint] saving FastWAM iter={} path={}", iteration, save_dir)
+        if self.zero1_enabled:
+            self.optimizer.consolidate_state_dict(to=0)
         if is_main_process():
             os.makedirs(save_dir, exist_ok=True)
             self.model.save_checkpoint(os.path.join(save_dir, "fastwam.pt"), step=iteration)
@@ -153,6 +198,7 @@ class FastWAMTrainer:
                 {
                     "iteration": iteration,
                     "world_size": get_world_size(),
+                    "optimizer_sharding": "zero1" if self.zero1_enabled else "none",
                     "optimizer": self.optimizer.state_dict(),
                     "lr_scheduler": self.lr_scheduler.state_dict(),
                 },
