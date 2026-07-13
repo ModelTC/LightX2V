@@ -15,23 +15,22 @@ data:
     text_embedding_cache_dir: /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/text_embeds_cache/libero
     pretrained_norm_stats: /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/dataset_stats.json
     batch_size: 1
-    num_workers: 0
+    num_workers: 4
   val:
     <<: *libero_data
 
 training:
   method: fastwam
-  output_dir: /data/nvme0/chendingyu/LightX2V/lightx2v_train/runs/fastwam_libero
-  # Smoke default: one optimizer step proves the LightX2V integration path.
-  # Increase this for a real training run.
-  max_train_iters: 1
-  gradient_accumulation_iters: 1
+  output_dir: /data/nvme0/chendingyu/LightX2V/lightx2v_train/runs/fastwam_libero_full
+  # Equivalent to the official 10-epoch, global-batch-128 LIBERO schedule.
+  max_train_iters: 21700
+  gradient_accumulation_iters: 32
   max_grad_norm: 1.0
-  save_every_iters: 0
+  save_every_iters: 2000
   save_total_limit: 2
   save_final: true
-  lr_scheduler: constant
-  lr_warmup_iters: 0
+  lr_scheduler: cosine
+  lr_warmup_iters: 1085
   optimizer:
     learning_rate: 1.0e-4
     weight_decay: 1.0e-2
@@ -40,7 +39,7 @@ training:
     adam_epsilon: 1.0e-8
 
 evaluation:
-  eval_every_iters: 1
+  eval_every_iters: 200
   eval_num_inference_steps: 5
   num_samples: 1
   run_inference: true
@@ -51,10 +50,10 @@ evaluation:
   seed: 42
 
 logging:
-  train_log_every_iters: 1
+  train_log_every_iters: 10
 
 resume:
-  auto_resume: false
+  auto_resume: true
   resume_ckpt_path: null
 
 distributed:
