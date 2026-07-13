@@ -1,0 +1,63 @@
+model:
+  name: wan_fastwam
+  running_dtype: bf16
+  model_path: /data/nvme0/models/Wan-AI/Wan2.2-TI2V-5B
+  action_dit_pretrained_path: /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt
+
+data:
+  train: &libero_data
+    name: libero_fastwam_dataset
+    dataset_dirs:
+      - /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/datasets/libero_spatial_no_noops_lerobot
+      - /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/datasets/libero_object_no_noops_lerobot
+      - /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/datasets/libero_goal_no_noops_lerobot
+      - /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/datasets/libero_10_no_noops_lerobot
+    text_embedding_cache_dir: /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/text_embeds_cache/libero
+    pretrained_norm_stats: /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/dataset_stats.json
+    batch_size: 1
+    num_workers: 0
+  val:
+    <<: *libero_data
+
+training:
+  method: fastwam
+  output_dir: /data/nvme0/chendingyu/LightX2V/lightx2v_train/runs/fastwam_libero
+  # Smoke default: one optimizer step proves the LightX2V integration path.
+  # Increase this for a real training run.
+  max_train_iters: 1
+  gradient_accumulation_iters: 1
+  max_grad_norm: 1.0
+  save_every_iters: 0
+  save_total_limit: 2
+  save_final: true
+  lr_scheduler: constant
+  lr_warmup_iters: 0
+  optimizer:
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-2
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_epsilon: 1.0e-8
+
+evaluation:
+  eval_every_iters: 1
+  eval_num_inference_steps: 5
+  num_samples: 1
+  run_inference: true
+  save_video: true
+  save_preview: true
+  fps: 8
+  tiled: false
+  seed: 42
+
+logging:
+  train_log_every_iters: 1
+
+resume:
+  auto_resume: false
+  resume_ckpt_path: null
+
+distributed:
+  backend: nccl
+  sequence_parallel:
+    enabled: false
