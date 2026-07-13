@@ -12,7 +12,7 @@ from loguru import logger
 
 from lightx2v_train.runtime.distributed import barrier, is_main_process
 
-from .dataset import DEFAULT_DATASET_DIRS, _default_shape_meta
+from .dataset import _default_shape_meta
 from .lerobot_dataset import LiberoLeRobotDataset
 from .robot_video_dataset import PROMPT_TEMPLATE
 
@@ -25,7 +25,7 @@ def _resolve_path(value):
 
 
 def _dataset_dirs(split_config):
-    values = split_config.get("dataset_dirs") or DEFAULT_DATASET_DIRS
+    values = split_config.get("dataset_dirs")
     if isinstance(values, (str, Path)):
         values = [values]
     return [_resolve_path(value) for value in values]

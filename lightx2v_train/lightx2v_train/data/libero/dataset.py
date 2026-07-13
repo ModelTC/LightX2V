@@ -11,17 +11,6 @@ from lightx2v_train.utils.registry import DATA_REGISTER
 from .processor import FastWAMProcessor
 from .robot_video_dataset import RobotVideoDataset
 
-ASSET_ROOT = Path(__file__).resolve().parents[3] / "assets" / "libero_fastwam"
-DEFAULT_DATASET_DIRS = [
-    ASSET_ROOT / "datasets" / name
-    for name in (
-        "libero_spatial_no_noops_lerobot",
-        "libero_object_no_noops_lerobot",
-        "libero_goal_no_noops_lerobot",
-        "libero_10_no_noops_lerobot",
-    )
-]
-
 
 def _default_shape_meta():
     return {
@@ -57,7 +46,7 @@ def _build_dataset(config, split):
     shape_meta = deepcopy(config.get("shape_meta") or _default_shape_meta())
     num_frames = int(config.get("num_frames", 33))
     processor = FastWAMProcessor(shape_meta, num_frames)
-    dataset_dirs = config.get("dataset_dirs") or DEFAULT_DATASET_DIRS
+    dataset_dirs = config.get("dataset_dirs")
     if isinstance(dataset_dirs, (str, Path)):
         dataset_dirs = [dataset_dirs]
 
