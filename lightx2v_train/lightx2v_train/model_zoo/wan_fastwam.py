@@ -1,6 +1,5 @@
 import os
 from contextlib import nullcontext
-from pathlib import Path
 
 import torch
 from loguru import logger
@@ -8,14 +7,6 @@ from loguru import logger
 from lightx2v_train.model_zoo.native.wan.fastwam import FastWAM
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
-
-DEFAULT_ACTION_DIT_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "assets"
-    / "libero_fastwam"
-    / "checkpoints"
-    / "ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt"
-)
 
 
 def _resolve_local_path(path, name, directory=False):
@@ -43,9 +34,11 @@ class WanFastWAMModel:
             raise ValueError("wan_fastwam does not support transformer_only loading.")
 
         model_path = _resolve_local_path(self.model_config.get("model_path"), "model_path", directory=True)
-        action_dit_pretrained_path = _resolve_local_path(
-            self.model_config.get("action_dit_pretrained_path", DEFAULT_ACTION_DIT_PATH),
-            "action_dit_pretrained_path",
+        configured_action_dit_path = self.model_config.get("action_dit_pretrained_path")
+        action_dit_pretrained_path = (
+            _resolve_local_path(configured_action_dit_path, "action_dit_pretrained_path")
+            if configured_action_dit_path
+            else None
         )
         load_text_encoder = bool(self.model_config.get("load_text_encoder", False))
 

@@ -65,13 +65,8 @@ def _build_dataset(config, split):
         dataset_dirs=[_path(item) for item in dataset_dirs],
         shape_meta=shape_meta,
         processor=processor,
-        text_embedding_cache_dir=_path(
-            config.get("text_embedding_cache_dir")
-            or ASSET_ROOT / "text_embeds_cache" / "libero"
-        ),
-        pretrained_norm_stats=_path(
-            config.get("pretrained_norm_stats") or ASSET_ROOT / "dataset_stats.json"
-        ),
+        text_embedding_cache_dir=_path(config["text_embedding_cache_dir"]),
+        pretrained_norm_stats=_path(config["pretrained_norm_stats"]),
         num_frames=num_frames,
         context_len=int(config.get("context_len", 128)),
         val_set_proportion=float(config.get("val_set_proportion", 0.0)),

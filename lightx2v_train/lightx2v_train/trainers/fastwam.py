@@ -25,6 +25,38 @@ from lightx2v_train.runtime.distributed import (
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 from lightx2v_train.utils.video import pil_frames_to_video_tensor, save_mp4, video_psnr, video_ssim
 
+ZERO1_PER_RANK_FORMAT = "zero1_per_rank_v1"
+FULL_OPTIMIZER_FORMAT = "full_v1"
+
+
+def _optimizer_shard_filename(rank, world_size):
+    return f"optimizer-rank-{rank:05d}-of-{world_size:05d}.pt"
+
+
+def _temporary_path(path):
+    return f"{path}.tmp-{os.getpid()}-{get_rank()}"
+
+
+def _atomic_torch_save(payload, path):
+    temporary_path = _temporary_path(path)
+    try:
+        torch.save(payload, temporary_path)
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+
+
+def _sync_optimizer_group_options(source_groups, target_groups):
+    if len(source_groups) != len(target_groups):
+        raise RuntimeError(
+            f"Optimizer parameter-group count mismatch: source={len(source_groups)} target={len(target_groups)}"
+        )
+    for source, target in zip(source_groups, target_groups):
+        for key, value in source.items():
+            if key != "params":
+                target[key] = value
+
 
 def _unwrap_dataset(dataset):
     while hasattr(dataset, "dataset"):
@@ -173,42 +205,118 @@ class FastWAMTrainer:
         state = torch.load(state_path, map_location="cpu", weights_only=False)
         if state.get("world_size") != get_world_size():
             raise RuntimeError(f"Cannot resume world_size={state.get('world_size')} checkpoint with world_size={get_world_size()}.")
-        self.optimizer.load_state_dict(state["optimizer"])
+        optimizer_state_format = state.get("optimizer_state_format")
+        expected_optimizer_sharding = "zero1" if self.zero1_enabled else "none"
+        if state.get("optimizer_sharding") != expected_optimizer_sharding:
+            raise RuntimeError(
+                "Optimizer sharding mode mismatch: "
+                f"checkpoint={state.get('optimizer_sharding')!r} active={expected_optimizer_sharding!r}."
+            )
+        if optimizer_state_format == ZERO1_PER_RANK_FORMAT:
+            if not self.zero1_enabled:
+                raise RuntimeError("A per-rank ZeRO-1 optimizer checkpoint requires distributed.zero1.enabled=true.")
+            shard_files = state.get("optimizer_shard_files")
+            if not isinstance(shard_files, list) or len(shard_files) != get_world_size():
+                raise RuntimeError(
+                    f"Invalid ZeRO-1 optimizer shard manifest: expected {get_world_size()} files, got {shard_files!r}."
+                )
+            shard_path = os.path.join(resume_ckpt_path, shard_files[get_rank()])
+            if not os.path.isfile(shard_path):
+                raise RuntimeError(f"ZeRO-1 optimizer shard not found for rank {get_rank()}: {shard_path}")
+            shard = torch.load(shard_path, map_location="cpu", weights_only=False)
+            if shard.get("rank") != get_rank() or shard.get("world_size") != get_world_size():
+                raise RuntimeError(
+                    "ZeRO-1 optimizer shard metadata mismatch: "
+                    f"rank={shard.get('rank')} world_size={shard.get('world_size')} "
+                    f"expected_rank={get_rank()} expected_world_size={get_world_size()}."
+                )
+            self.optimizer.optim.load_state_dict(shard["optimizer"])
+            _sync_optimizer_group_options(self.optimizer.optim.param_groups, self.optimizer.param_groups)
+        elif optimizer_state_format == FULL_OPTIMIZER_FORMAT:
+            if self.zero1_enabled:
+                raise RuntimeError("A full optimizer checkpoint requires distributed.zero1.enabled=false.")
+            self.optimizer.load_state_dict(state["optimizer"])
+        else:
+            raise RuntimeError(
+                f"Unsupported optimizer checkpoint format {optimizer_state_format!r} in {state_path}."
+            )
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
-        saved_optimizer_sharding = state.get("optimizer_sharding", "none")
-        active_optimizer_sharding = "zero1" if self.zero1_enabled else "none"
         logger.info(
-            "[resume] restored FastWAM training state from {} (optimizer sharding: {} -> {})",
+            "[resume] restored FastWAM training state from {} (optimizer sharding: {}, state format: {})",
             resume_ckpt_path,
-            saved_optimizer_sharding,
-            active_optimizer_sharding,
+            expected_optimizer_sharding,
+            optimizer_state_format,
         )
 
     def _save_checkpoint(self, iteration):
+        save_start_time = time.perf_counter()
         if is_main_process():
             prune_checkpoints(self.output_train_dir, self.save_total_limit)
         save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
         logger.info("[checkpoint] saving FastWAM iter={} path={}", iteration, save_dir)
-        if self.zero1_enabled:
-            self.optimizer.consolidate_state_dict(to=0)
         if is_main_process():
             os.makedirs(save_dir, exist_ok=True)
-            self.model.save_checkpoint(os.path.join(save_dir, "fastwam.pt"), step=iteration)
-            torch.save(
+        barrier()
+
+        optimizer_state_format = FULL_OPTIMIZER_FORMAT
+        optimizer_shard_files = None
+        if self.zero1_enabled:
+            optimizer_state_format = ZERO1_PER_RANK_FORMAT
+            optimizer_shard_files = [
+                _optimizer_shard_filename(rank, get_world_size())
+                for rank in range(get_world_size())
+            ]
+            _sync_optimizer_group_options(self.optimizer.param_groups, self.optimizer.optim.param_groups)
+            shard_path = os.path.join(save_dir, optimizer_shard_files[get_rank()])
+            shard_start_time = time.perf_counter()
+            _atomic_torch_save(
                 {
-                    "iteration": iteration,
+                    "rank": get_rank(),
                     "world_size": get_world_size(),
-                    "optimizer_sharding": "zero1" if self.zero1_enabled else "none",
-                    "optimizer": self.optimizer.state_dict(),
-                    "lr_scheduler": self.lr_scheduler.state_dict(),
+                    "optimizer": self.optimizer.optim.state_dict(),
                 },
-                os.path.join(save_dir, "training_state.pt"),
+                shard_path,
             )
+            logger.info(
+                "[checkpoint] saved optimizer shard rank={} duration={:.3f}s path={}",
+                get_rank(),
+                time.perf_counter() - shard_start_time,
+                shard_path,
+            )
+        barrier()
+
+        if is_main_process():
+            weights_path = os.path.join(save_dir, "fastwam.pt")
+            temporary_weights_path = _temporary_path(weights_path)
+            try:
+                self.model.save_checkpoint(temporary_weights_path, step=iteration)
+                os.replace(temporary_weights_path, weights_path)
+            finally:
+                if os.path.exists(temporary_weights_path):
+                    os.remove(temporary_weights_path)
+
+            training_state = {
+                "iteration": iteration,
+                "world_size": get_world_size(),
+                "optimizer_sharding": "zero1" if self.zero1_enabled else "none",
+                "optimizer_state_format": optimizer_state_format,
+                "lr_scheduler": self.lr_scheduler.state_dict(),
+            }
+            if self.zero1_enabled:
+                training_state["optimizer_shard_files"] = optimizer_shard_files
+            else:
+                training_state["optimizer"] = self.optimizer.state_dict()
+            _atomic_torch_save(training_state, os.path.join(save_dir, "training_state.pt"))
             config_path = self.config.get("config_path")
             if config_path is not None:
                 shutil.copy2(config_path, os.path.join(save_dir, "config.yaml"))
         barrier()
-        logger.info("[checkpoint] saved FastWAM iter={} path={}", iteration, save_dir)
+        logger.info(
+            "[checkpoint] saved FastWAM iter={} duration={:.3f}s path={}",
+            iteration,
+            time.perf_counter() - save_start_time,
+            save_dir,
+        )
 
     def _forward_loss(self, sample):
         with self.model.autocast_context():

@@ -4,11 +4,48 @@ from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from ..modules.model2_2 import rope_params
 from .layers import expert_block_forward, timestep_embedding
 
 logger = logging.getLogger(__name__)
+
+
+def _interpolate_last_dim(tensor: torch.Tensor, new_size: int) -> torch.Tensor:
+    if tensor.shape[-1] == new_size:
+        return tensor
+    flat = tensor.reshape(-1, 1, tensor.shape[-1]).to(torch.float32)
+    flat = F.interpolate(flat, size=new_size, mode="linear", align_corners=True)
+    return flat.reshape(*tensor.shape[:-1], new_size)
+
+
+def _resize_tensor_to_shape(source: torch.Tensor, target_shape: tuple[int, ...]) -> torch.Tensor:
+    if tuple(source.shape) == target_shape:
+        return source
+
+    output = source.to(torch.float32)
+    while output.ndim < len(target_shape):
+        output = output.unsqueeze(0)
+    while output.ndim > len(target_shape):
+        if output.shape[0] != 1:
+            raise ValueError(f"Cannot reduce tensor rank for resize: source={tuple(source.shape)} target={target_shape}")
+        output = output.squeeze(0)
+
+    for dimension, new_size in enumerate(target_shape):
+        if output.shape[dimension] == new_size:
+            continue
+        permutation = [index for index in range(output.ndim) if index != dimension] + [dimension]
+        inverse_permutation = [0] * output.ndim
+        for index, original_dimension in enumerate(permutation):
+            inverse_permutation[original_dimension] = index
+        permuted = output.permute(*permutation).contiguous()
+        permuted = _interpolate_last_dim(permuted, new_size)
+        output = permuted.permute(*inverse_permutation).contiguous()
+
+    if tuple(output.shape) != target_shape:
+        raise ValueError(f"Resize produced wrong shape: source={tuple(source.shape)} target={target_shape} got={tuple(output.shape)}")
+    return output.to(dtype=source.dtype)
 
 
 class RMSNorm(nn.Module):
@@ -135,6 +172,47 @@ class ActionDiT(nn.Module):
             for key in keys
             if not any(key.startswith(prefix) for prefix in cls.ACTION_BACKBONE_SKIP_PREFIXES)
         }
+
+    @classmethod
+    def from_video_expert(
+        cls,
+        action_dit_config: dict[str, Any],
+        video_expert: nn.Module,
+        device: str = "cuda",
+        torch_dtype: torch.dtype = torch.bfloat16,
+        apply_alpha_scaling: bool = True,
+    ) -> "ActionDiT":
+        action_expert = cls(**action_dit_config).to(device=device, dtype=torch_dtype)
+        action_state = action_expert.state_dict()
+        video_state = video_expert.state_dict()
+        copied = 0
+        interpolated = 0
+
+        with torch.no_grad():
+            for key in sorted(cls.backbone_key_set(action_state.keys())):
+                if key not in video_state:
+                    raise ValueError(f"ActionDiT backbone key `{key}` does not exist in the Wan video expert.")
+                source = video_state[key]
+                target = action_state[key]
+                if tuple(source.shape) == tuple(target.shape):
+                    value = source
+                    copied += 1
+                else:
+                    value = _resize_tensor_to_shape(source, tuple(target.shape))
+                    if apply_alpha_scaling and source.ndim >= 2 and source.shape[-1] != target.shape[-1]:
+                        alpha = (float(source.shape[-1]) / float(target.shape[-1])) ** 0.5
+                        value = value.to(torch.float32).mul_(alpha)
+                    interpolated += 1
+                target.copy_(value.to(device=target.device, dtype=target.dtype))
+
+        logger.info(
+            "Initialized ActionDiT backbone from Wan video expert "
+            "(copied=%d, interpolated=%d, random_kept_prefixes=%s).",
+            copied,
+            interpolated,
+            list(cls.ACTION_BACKBONE_SKIP_PREFIXES),
+        )
+        return action_expert
 
     @classmethod
     def from_pretrained(

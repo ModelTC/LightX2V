@@ -2,7 +2,6 @@ model:
   name: wan_fastwam
   running_dtype: bf16
   model_path: /data/nvme0/models/Wan-AI/Wan2.2-TI2V-5B
-  action_dit_pretrained_path: /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/checkpoints/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt
 
 data:
   train: &libero_data
@@ -12,8 +11,6 @@ data:
       - /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/datasets/libero_object_no_noops_lerobot
       - /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/datasets/libero_goal_no_noops_lerobot
       - /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/datasets/libero_10_no_noops_lerobot
-    text_embedding_cache_dir: /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/text_embeds_cache/libero
-    pretrained_norm_stats: /data/nvme0/chendingyu/LightX2V/lightx2v_train/assets/libero_fastwam/dataset_stats.json
     batch_size: 8
     num_workers: 8
   val:

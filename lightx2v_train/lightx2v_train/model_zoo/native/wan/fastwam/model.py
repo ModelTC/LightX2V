@@ -150,13 +150,21 @@ class FastWAM(torch.nn.Module):
         )
 
         video_expert = components.dit
-        action_expert = ActionDiT.from_pretrained(
-            action_dit_config=action_dit_config,
-            action_dit_pretrained_path=action_dit_pretrained_path,
-            skip_dit_load_from_pretrain=skip_dit_load_from_pretrain,
-            device=device,
-            torch_dtype=torch_dtype,
-        )
+        if action_dit_pretrained_path or skip_dit_load_from_pretrain:
+            action_expert = ActionDiT.from_pretrained(
+                action_dit_config=action_dit_config,
+                action_dit_pretrained_path=action_dit_pretrained_path,
+                skip_dit_load_from_pretrain=skip_dit_load_from_pretrain,
+                device=device,
+                torch_dtype=torch_dtype,
+            )
+        else:
+            action_expert = ActionDiT.from_video_expert(
+                action_dit_config=action_dit_config,
+                video_expert=video_expert,
+                device=device,
+                torch_dtype=torch_dtype,
+            )
         if int(action_expert.num_heads) != int(video_expert.num_heads):
             raise ValueError("ActionDiT `num_heads` must match video expert for MoT mixed attention.")
         if int(action_expert.attn_head_dim) != int(video_expert.attn_head_dim):
