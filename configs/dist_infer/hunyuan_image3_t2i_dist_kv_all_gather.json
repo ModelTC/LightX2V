@@ -1,0 +1,29 @@
+{
+    "infer_steps": 50,
+    "sample_guide_scale": 5.0,
+    "flow_shift": 1.0,
+    "target_height": 1024,
+    "target_width": 1024,
+    "feature_caching": "NoCaching",
+    "enable_kv_cache": true,
+    "enable_text_kv_cache": true,
+    "use_taylor_cache": false,
+    "pipeline_parallel": true,
+    "enable_cfg": true,
+    "hunyuan_cfg_mode": "serial",
+    "moe_impl": "flashinfer",
+    "attn_impl": "flash_attention_2",
+    "flashinfer_autotune_mode": "tune",
+    "parallel": {
+        "cfg_p_size": 1,
+        "seq_p_size": 2,
+        "seq_p_attn_type": "kv_all_gather"
+    },
+    "bot_task": "think_recaption",
+    "use_system_prompt": "en_unified",
+    "max_new_tokens": 2048,
+    "text_do_sample": true,
+    "text_top_k": 1024,
+    "text_top_p": 0.95,
+    "text_temperature": 0.6
+}

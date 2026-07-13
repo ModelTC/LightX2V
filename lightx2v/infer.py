@@ -186,6 +186,30 @@ def main():
         ],
         default=None,
     )
+    hunyuan_sp_args = parser.add_argument_group("HunyuanImage3 sequence parallel options")
+    hunyuan_sp_args.add_argument(
+        "--hunyuan_sp_size",
+        "--hunyuan-sp-size",
+        dest="hunyuan_sp_size",
+        type=int,
+        default=None,
+    )
+    hunyuan_sp_args.add_argument(
+        "--hunyuan_sp_attn_type",
+        "--hunyuan-sp-attn-type",
+        dest="hunyuan_sp_attn_type",
+        type=str,
+        choices=["kv_all_gather", "kv-all-gather", "ulysses"],
+        default=None,
+    )
+    hunyuan_sp_args.add_argument(
+        "--hunyuan_pipeline_layout",
+        "--hunyuan-pipeline-layout",
+        dest="hunyuan_image3_pipeline_layout",
+        type=str,
+        choices=["interleaved", "contiguous"],
+        default=None,
+    )
     hunyuan_flashinfer_args = parser.add_argument_group("HunyuanImage3 FlashInfer autotune options")
     hunyuan_flashinfer_args.add_argument("--flashinfer_autotune", "--flashinfer-autotune", dest="flashinfer_autotune", type=_str2bool, nargs="?", const=True, default=None)
     hunyuan_flashinfer_args.add_argument(

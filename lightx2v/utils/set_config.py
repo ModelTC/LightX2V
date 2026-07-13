@@ -65,6 +65,9 @@ def set_args2config(args):
         "flashinfer_tuning_buckets",
         "flashinfer_autotune_round_up",
         "flashinfer_tune_max_num_tokens",
+        "hunyuan_sp_size",
+        "hunyuan_sp_attn_type",
+        "hunyuan_image3_pipeline_layout",
     )
     config["_hunyuan_image3_cli_native_snapshot"] = {
         k: getattr(args, k, None) for k in _hunyuan_image3_cli_native_keys if hasattr(args, k) and getattr(args, k, None) is not None
@@ -293,6 +296,49 @@ def auto_calc_config(config):
             for k, v in _hunyuan_image3_cli_native_snapshot.items():
                 config[k] = v
 
+        sp_size_override = config.pop("hunyuan_sp_size", None)
+        sp_attn_override = config.pop("hunyuan_sp_attn_type", None)
+        parallel_config = config.get("parallel")
+        if sp_size_override is not None:
+            sp_size = int(sp_size_override)
+            if sp_size < 1:
+                raise ValueError(f"hunyuan_sp_size must be >= 1, got {sp_size}.")
+            if sp_size == 1:
+                config["parallel"] = False
+                parallel_config = None
+            else:
+                parallel_config = dict(parallel_config) if isinstance(parallel_config, dict) else {}
+                parallel_config["seq_p_size"] = sp_size
+                config["parallel"] = parallel_config
+
+        if isinstance(parallel_config, dict) and int(parallel_config.get("seq_p_size", 1)) > 1:
+            parallel_config = dict(parallel_config)
+            parallel_config.setdefault("cfg_p_size", 1)
+            if int(parallel_config["cfg_p_size"]) != 1:
+                raise ValueError("HunyuanImage3 sequence parallel requires parallel.cfg_p_size=1.")
+            attn_type = sp_attn_override or parallel_config.get("seq_p_attn_type", "kv_all_gather")
+            attn_type = str(attn_type).strip().lower().replace("-", "_")
+            if attn_type in ("kv_allgather", "kv_gather"):
+                attn_type = "kv_all_gather"
+            if attn_type not in ("kv_all_gather", "ulysses"):
+                raise ValueError(
+                    "HunyuanImage3 sequence parallel attention must be 'kv_all_gather' or 'ulysses', "
+                    f"got {attn_type!r}."
+                )
+            parallel_config["seq_p_attn_type"] = attn_type
+            config["parallel"] = parallel_config
+            if config.get("enable_cfg", False) and str(config.get("hunyuan_cfg_mode", "batch")).lower() != "serial":
+                raise ValueError("HunyuanImage3 sequence parallel requires hunyuan_cfg_mode='serial'.")
+            if attn_type == "ulysses":
+                sp_size = int(parallel_config["seq_p_size"])
+                q_heads = int(config["num_attention_heads"])
+                kv_heads = int(config.get("num_key_value_heads") or q_heads)
+                if q_heads % sp_size or kv_heads % sp_size:
+                    raise ValueError(
+                        "HunyuanImage3 Ulysses requires seq_p_size to divide Q and KV heads: "
+                        f"Q={q_heads}, KV={kv_heads}, seq_p_size={sp_size}."
+                    )
+
     config.pop("_hunyuan_image3_cli_cache_snapshot", None)
     config.pop("_hunyuan_image3_cli_native_snapshot", None)
 
@@ -354,7 +400,11 @@ def set_parallel_config(config):
                 config["cfg_parallel"] = True
 
         # warmup dist
-        _a = torch.zeros([1]).to(f"{AI_DEVICE}:{dist.get_rank()}")
+        if AI_DEVICE == "cuda":
+            warmup_device = f"{AI_DEVICE}:{torch.cuda.current_device()}"
+        else:
+            warmup_device = AI_DEVICE
+        _a = torch.zeros([1], device=warmup_device)
         dist.all_reduce(_a)
 
 

@@ -1,7 +1,7 @@
 import importlib
 import os
 import sys
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,8 +20,10 @@ from lightx2v.models.schedulers.hunyuan_image3.scheduler import HunyuanImage3Sch
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 try:
+    from flashinfer.autotuner import AutoTuner as FlashInferAutoTuner
     from flashinfer.autotuner import autotune as flashinfer_autotune
 except Exception:
+    FlashInferAutoTuner = None
     flashinfer_autotune = None
 
 
@@ -138,8 +140,18 @@ class HunyuanImage3Runner(DefaultRunner):
         self.hunyuan_vision_aligner_cls = modules["LightProjector"]
         self.hunyuan_get_system_prompt = modules["get_system_prompt"]
         
-        # todo: actually, self.vae_decoder is a complete VAE model, which includes both encoder and decoder. There is a name confusion here.
-        self.vae_decoder = self._load_vae_decoder()
+        # self.vae_decoder is a complete VAE model (encoder + decoder). T2I only
+        # decodes on rank 0, so other SP ranks do not need this extra allocation.
+        load_vae_on_this_rank = not (
+            self.config.get("task") == "t2i"
+            and self._sequence_parallel_enabled()
+            and not self._is_output_rank()
+        )
+        if load_vae_on_this_rank:
+            self.vae_decoder = self._load_vae_decoder()
+        else:
+            self.vae_decoder = None
+            logger.info("Skipping HunyuanImage3 VAE load on non-output SP rank for T2I.")
         self.vision_model = None
         self.vision_aligner = None
         self._hunyuan_pipeline_modules_ready = True
@@ -410,6 +422,8 @@ class HunyuanImage3Runner(DefaultRunner):
             parent = Path(cache_path).parent
             if str(parent):
                 parent.mkdir(parents=True, exist_ok=True)
+        if mode == "load" and not cache_path:
+            raise ValueError("flashinfer_autotune_mode='load' requires flashinfer_autotune_cache.")
 
         buckets = self._parse_flashinfer_tuning_buckets()
         round_up = self.config.get("flashinfer_autotune_round_up")
@@ -421,12 +435,104 @@ class HunyuanImage3Runner(DefaultRunner):
             f"mode={mode}, cache={cache_path}, buckets={buckets}, round_up={round_up}, "
             f"tune_max_num_tokens={self.config.get('flashinfer_tune_max_num_tokens', 8192)}"
         )
+        if self._sequence_parallel_enabled():
+            return self._distributed_flashinfer_autotune_context(
+                cache_path=cache_path,
+                tuning_buckets=buckets,
+                round_up=round_up,
+                tune_mode=(mode == "tune"),
+            )
+        if mode == "load" and not Path(cache_path).is_file():
+            raise FileNotFoundError(f"FlashInfer autotune cache does not exist for load mode: {cache_path}")
         return flashinfer_autotune(
             tune_mode=(mode == "tune"),
             cache=cache_path,
             tuning_buckets=buckets,
             round_up=round_up,
         )
+
+    @contextmanager
+    def _distributed_flashinfer_autotune_context(self, cache_path, tuning_buckets, round_up, tune_mode=True):
+        if FlashInferAutoTuner is None:
+            raise ImportError("Distributed FlashInfer autotune requires flashinfer.autotuner.AutoTuner.")
+        tuner = FlashInferAutoTuner.get()
+        group = self.model.seq_p_group
+        if dist.get_backend(group) == "nccl":
+            status_device = self._pipeline_latent_device()
+            torch.cuda.set_device(status_device)
+        else:
+            status_device = torch.device("cpu")
+        load_error = None
+        if cache_path:
+            if Path(cache_path).is_file():
+                try:
+                    cache_valid = tuner.load_configs(cache_path)
+                    if not cache_valid:
+                        load_error = RuntimeError(
+                            "FlashInfer autotune cache metadata does not match this runtime; "
+                            "choose a new cache path or remove the incompatible cache."
+                        )
+                except Exception as error:
+                    load_error = error
+            elif not tune_mode:
+                load_error = FileNotFoundError(f"FlashInfer autotune cache does not exist for load mode: {cache_path}")
+        elif not tune_mode:
+            load_error = ValueError("FlashInfer load mode requires a cache path.")
+
+        load_succeeded = torch.tensor([0 if load_error is not None else 1], device=status_device, dtype=torch.int32)
+        dist.all_reduce(load_succeeded, op=dist.ReduceOp.MIN, group=group)
+        if not bool(load_succeeded.item()):
+            raise RuntimeError(f"Distributed FlashInfer autotune cache preflight failed for {cache_path}.") from load_error
+
+        with flashinfer_autotune(
+            tune_mode=tune_mode,
+            cache=None,
+            tuning_buckets=tuning_buckets,
+            round_up=round_up,
+        ):
+            yield
+
+        save_error = None
+        if tune_mode and cache_path and self._is_output_rank():
+            try:
+                tuner.save_configs(cache_path)
+            except Exception as error:
+                save_error = error
+                logger.exception(f"Failed to persist distributed FlashInfer autotune cache: {cache_path}")
+
+        save_succeeded = torch.tensor([0 if save_error is not None else 1], device=status_device, dtype=torch.int32)
+        source_rank = dist.get_global_rank(group, 0)
+        dist.broadcast(save_succeeded, src=source_rank, group=group)
+        if not bool(save_succeeded.item()):
+            raise RuntimeError(f"Distributed FlashInfer autotune cache could not be saved to {cache_path}.") from save_error
+
+    def _sequence_parallel_enabled(self):
+        return bool(
+            self.config.get("seq_parallel", False)
+            and dist.is_available()
+            and dist.is_initialized()
+            and getattr(self.model, "seq_p_group", None) is not None
+        )
+
+    def _is_output_rank(self):
+        return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
+
+    def _broadcast_sequence_parallel_tensor(self, tensor):
+        if not self._sequence_parallel_enabled():
+            return tensor
+        group = self.model.seq_p_group
+        source_rank = dist.get_global_rank(group, 0)
+        dist.broadcast(tensor, src=source_rank, group=group)
+        return tensor
+
+    def _sequence_parallel_barrier(self):
+        if not self._sequence_parallel_enabled():
+            return
+        group = self.model.seq_p_group
+        if dist.get_backend(group) == "nccl":
+            dist.barrier(group=group, device_ids=[torch.cuda.current_device()])
+        else:
+            dist.barrier(group=group)
 
     def _build_taylor_cache_dic(self, num_steps):
         return {
@@ -806,7 +912,8 @@ class HunyuanImage3Runner(DefaultRunner):
         return self.hunyuan_tokenizer.decode(token_tensor)
 
     def _print_text_generation_chunk(self, text="", end=""):
-        print(text, end=end, flush=True)
+        if self._is_output_rank():
+            print(text, end=end, flush=True)
 
     @torch.no_grad()
     def _generate_text_tokens(self, input_ids, tokenizer_output, plan, stream_output=False, cond_inputs=None):
@@ -858,7 +965,8 @@ class HunyuanImage3Runner(DefaultRunner):
                     logits = self.model.infer(model_inputs)["logits"][:, -1, :]
                 next_token = self._sample_text_token(logits, generator)
                 next_token = next_token.to(device=device, dtype=input_ids.dtype)
-                next_token_id = int(next_token.item())
+            next_token = self._broadcast_sequence_parallel_tensor(next_token)
+            next_token_id = int(next_token.item())
 
             generated.append(next_token_id)
             if stream_output:
@@ -1127,6 +1235,7 @@ class HunyuanImage3Runner(DefaultRunner):
             ]
 
         latents = self._prepare_latents(prepared_inputs["batch_size"], image_size, prepared_inputs["generator"])
+        latents = self._broadcast_sequence_parallel_tensor(latents)
         num_steps = int(self.config.get("infer_steps", self.config.get("diff_infer_steps", 50)))
         self.scheduler.set_timesteps(num_steps, device=latents.device)
         guidance_scale = float(self.config.get("sample_guide_scale", self.config.get("diff_guidance_scale", 1.0)))
@@ -1151,7 +1260,7 @@ class HunyuanImage3Runner(DefaultRunner):
             total=len(self.scheduler.timesteps),
             desc="HunyuanImage3 denoise",
             dynamic_ncols=True,
-            disable=bool(self.config.get("disable_progress_bar", False)),
+            disable=bool(self.config.get("disable_progress_bar", False)) or not self._is_output_rank(),
         )
         with self._flashinfer_autotune_context():
             for step_index, timestep in enumerate(denoise_steps):
@@ -1202,10 +1311,12 @@ class HunyuanImage3Runner(DefaultRunner):
                         else:
                             prediction = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
 
+                prediction = self._broadcast_sequence_parallel_tensor(prediction)
                 sigma = self.scheduler.sigmas[step_index].to(latents.device)
                 sigma_next = self.scheduler.sigmas[step_index + 1].to(latents.device)
                 latents = latents.float() + prediction.float() * (sigma_next - sigma)
 
+        self._sequence_parallel_barrier()
         if hasattr(self.model, "transformer_infer") and hasattr(self.model.transformer_infer, "print_moe_profile"):
             self.model.transformer_infer.print_moe_profile(reset=True)
 
@@ -1242,7 +1353,7 @@ class HunyuanImage3Runner(DefaultRunner):
                                                             #  cot_text=cot_text
                                                             )
         latents = self._denoise_latents(prepared_inputs, image_size)
-        if self._is_distributed_nonzero_rank():
+        if not self._is_output_rank():
             return []
         return self._decode_latents(latents, prepared_inputs["generator"])
 
@@ -1272,7 +1383,7 @@ class HunyuanImage3Runner(DefaultRunner):
             cond_inputs=gen_cond_inputs,
         )
         latents = self._denoise_latents(prepared_inputs, image_size)
-        if self._is_distributed_nonzero_rank():
+        if not self._is_output_rank():
             return []
         images = self._decode_latents(latents, prepared_inputs["generator"])
         return self.hunyuan_image_processor.postprocess_outputs(
@@ -1291,11 +1402,13 @@ class HunyuanImage3Runner(DefaultRunner):
         else:
             raise NotImplementedError("HunyuanImage3 native runner currently supports task=t2i/i2i.")
 
+        if not self._is_output_rank():
+            return {"image": None}
         if getattr(input_info, "return_result_tensor", False):
             return {"image": images}
 
         save_result_path = getattr(input_info, "save_result_path", None)
-        if save_result_path and (not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0):
+        if save_result_path:
             Path(save_result_path).parent.mkdir(parents=True, exist_ok=True)
             images[0].save(save_result_path)
             logger.info(f"HunyuanImage3 image saved successfully to: {save_result_path}")
