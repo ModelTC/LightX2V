@@ -310,10 +310,7 @@ _SCRIPT = """
 
 def render_index(cameras, title="LightX2V ROS", policy_cameras=None):
     views = "\n".join(_VIEW_TEMPLATE.format(name=html.escape(str(cam)), label=html.escape(str(cam))) for cam in cameras)
-    toggles = "\n".join(
-        f'        <label><input type="checkbox" value="{html.escape(str(cam))}" checked> {html.escape(str(cam))}</label>'
-        for cam in cameras
-    )
+    toggles = "\n".join(f'        <label><input type="checkbox" value="{html.escape(str(cam))}" checked> {html.escape(str(cam))}</label>' for cam in cameras)
     safe_title = html.escape(str(title))
     script = _SCRIPT.replace("__POLICY_CAMS__", json.dumps(list(policy_cameras or [])))
     return f"""<!doctype html>
