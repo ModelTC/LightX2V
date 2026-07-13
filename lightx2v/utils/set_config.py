@@ -271,6 +271,19 @@ def auto_calc_config(config):
                 if q_heads % seq_p_size or kv_heads % seq_p_size:
                     raise ValueError(f"HunyuanImage3 Ulysses requires seq_p_size to divide Q and KV heads: Q={q_heads}, KV={kv_heads}, seq_p_size={seq_p_size}.")
 
+    if config["model_cls"] == "lingbot_va" and "target_video_length" not in config:
+        ar_config = config.get("ar_config", {})
+        required_keys = ("num_frame_per_chunk", "num_chunks")
+        missing_keys = [key for key in required_keys if key not in ar_config]
+        if missing_keys:
+            raise ValueError(f"LingBot-VA requires ar_config.{', ar_config.'.join(missing_keys)} to derive target_video_length.")
+        latent_frames = int(ar_config["num_frame_per_chunk"]) * int(ar_config["num_chunks"])
+        temporal_stride = int(config["vae_stride"][0])
+        if latent_frames <= 0 or temporal_stride <= 0:
+            raise ValueError(f"LingBot-VA requires positive latent frame count and VAE temporal stride, got latent_frames={latent_frames}, temporal_stride={temporal_stride}.")
+        config["target_video_length"] = (latent_frames - 1) * temporal_stride + 1
+        logger.info(f"Auto-set LingBot-VA target_video_length={config['target_video_length']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
+
     if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")

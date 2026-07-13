@@ -235,7 +235,7 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
         img_k_pre_rope = img_k.unsqueeze(0)
 
         # Apply RoPE for standard attention branch
-        img_q, img_k = self.apply_rope_func(img_q.unsqueeze(0), img_k.unsqueeze(0), cos_sin_cache=self.scheduler.cos_sin)
+        img_q, img_k = self.apply_rope_func(img_q.unsqueeze(0), img_k.unsqueeze(0), freqs=self.scheduler.cos_sin)
 
         return (
             img_q,
