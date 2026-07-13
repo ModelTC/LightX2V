@@ -1,7 +1,6 @@
 import argparse
 import json
 import multiprocessing as mp
-import os
 import queue
 import time
 import traceback
@@ -98,37 +97,78 @@ def test_hunyuan_sequence_parallel_rejects_nonserial_cfg(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("local_rank", "expected"),
+    ("seq_rank", "expected"),
     [
-        (0, "0,2,4"),
-        (1, "1,3,5"),
+        (0, ["cuda:0", "cuda:2", "cuda:4"]),
+        (1, ["cuda:1", "cuda:3", "cuda:5"]),
     ],
 )
-def test_hunyuan_sp_lane_wrapper_slices_interleaved_visible_devices(monkeypatch, local_rank, expected):
-    from scripts.dist_infer.hunyuan_image3_sp_entry import _configure_pipeline_lane
+def test_hunyuan_sp_model_selects_wan_style_interleaved_pipeline_lane(monkeypatch, seq_rank, expected):
+    import lightx2v.models.networks.hunyuan_image3.model as model_module
 
-    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
-    monkeypatch.setenv("LOCAL_RANK", str(local_rank))
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5")
-    monkeypatch.delenv("LIGHTX2V_CUDA_DEVICE_INDEX", raising=False)
-    monkeypatch.delenv("HUNYUAN_IMAGE3_PIPELINE_LANE_DEVICES", raising=False)
+    group = object()
+    config = {
+        "pipeline_parallel": True,
+        "seq_parallel": True,
+        "hunyuan_image3_pipeline_layout": "interleaved",
+        "device_mesh": SimpleNamespace(get_group=lambda mesh_dim: group),
+    }
+    monkeypatch.setattr(model_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(model_module.torch.cuda, "device_count", lambda: 6)
+    monkeypatch.setattr(model_module.torch.cuda, "current_device", lambda: seq_rank)
+    monkeypatch.setattr(model_module.dist, "is_available", lambda: True)
+    monkeypatch.setattr(model_module.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(model_module.dist, "get_world_size", lambda process_group=None: 2)
+    monkeypatch.setattr(model_module.dist, "get_rank", lambda process_group=None: seq_rank)
 
-    _configure_pipeline_lane()
-
-    assert os.environ["CUDA_VISIBLE_DEVICES"] == expected
-    assert os.environ["HUNYUAN_IMAGE3_PIPELINE_LANE_DEVICES"] == expected
-    assert os.environ["LIGHTX2V_CUDA_DEVICE_INDEX"] == "0"
+    assert model_module.resolve_pipeline_devices(config, "cuda") == expected
 
 
-def test_hunyuan_sp_lane_wrapper_rejects_non_divisible_device_count(monkeypatch):
-    from scripts.dist_infer.hunyuan_image3_sp_entry import _configure_pipeline_lane
+def test_hunyuan_sp_model_rejects_nondivisible_pipeline_device_count(monkeypatch):
+    import lightx2v.models.networks.hunyuan_image3.model as model_module
 
-    monkeypatch.setenv("LOCAL_WORLD_SIZE", "2")
-    monkeypatch.setenv("LOCAL_RANK", "0")
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2")
+    config = {
+        "pipeline_parallel": True,
+        "seq_parallel": True,
+        "device_mesh": SimpleNamespace(get_group=lambda mesh_dim: object()),
+    }
+    monkeypatch.setattr(model_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(model_module.torch.cuda, "device_count", lambda: 5)
+    monkeypatch.setattr(model_module.dist, "is_available", lambda: True)
+    monkeypatch.setattr(model_module.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(model_module.dist, "get_world_size", lambda process_group=None: 2)
+    monkeypatch.setattr(model_module.dist, "get_rank", lambda process_group=None: 0)
 
-    with pytest.raises(RuntimeError, match="Visible GPU count must be divisible"):
-        _configure_pipeline_lane()
+    with pytest.raises(ValueError, match="pipeline device count .* divisible by seq_p_size"):
+        model_module.resolve_pipeline_devices(config, "cuda")
+
+
+def test_hunyuan_sp_model_splits_explicit_pipeline_device_pool(monkeypatch):
+    import lightx2v.models.networks.hunyuan_image3.model as model_module
+
+    group = object()
+    config = {
+        "pipeline_parallel_devices": "cuda:0,cuda:1,cuda:2,cuda:3,cuda:4,cuda:5",
+        "seq_parallel": True,
+        "device_mesh": SimpleNamespace(get_group=lambda mesh_dim: group),
+    }
+    monkeypatch.setattr(model_module.torch.cuda, "current_device", lambda: 1)
+    monkeypatch.setattr(model_module.dist, "is_available", lambda: True)
+    monkeypatch.setattr(model_module.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(model_module.dist, "get_world_size", lambda process_group=None: 2)
+    monkeypatch.setattr(model_module.dist, "get_rank", lambda process_group=None: 1)
+
+    assert model_module.resolve_pipeline_devices(config, "cuda") == ["cuda:1", "cuda:3", "cuda:5"]
+
+
+def test_nvidia_parallel_init_remains_original_rank_based_implementation():
+    source = Path("lightx2v_platform/base/nvidia.py").read_text()
+
+    assert "pg_options.is_high_priority_stream = True" in source
+    assert "dist.init_process_group(backend=\"nccl\", pg_options=pg_options)" in source
+    assert "torch.cuda.set_device(dist.get_rank())" in source
+    assert source.index("dist.init_process_group") < source.index("torch.cuda.set_device(dist.get_rank())")
+    assert "LIGHTX2V_CUDA_DEVICE_INDEX" not in source
 
 
 def test_hunyuan_dist_sp_scripts_and_configs_expose_both_backends_flashinfer_and_cache():
@@ -138,7 +178,8 @@ def test_hunyuan_dist_sp_scripts_and_configs_expose_both_backends_flashinfer_and
 
     assert "SP_ATTN_TYPE=kv_all_gather" in kv_wrapper
     assert "SP_ATTN_TYPE=ulysses" in ulysses_wrapper
-    assert "hunyuan_image3_sp_entry.py" in script
+    assert "-m lightx2v.infer" in script
+    assert "hunyuan_image3_sp_entry.py" not in script
     assert '--hunyuan_sp_size "$SP_SIZE"' in script
     assert '--hunyuan_sp_attn_type "$SP_ATTN_TYPE"' in script
     assert '--moe_impl "${moe_impl:-flashinfer}"' in script
@@ -146,11 +187,12 @@ def test_hunyuan_dist_sp_scripts_and_configs_expose_both_backends_flashinfer_and
     assert '--enable_kv_cache "${enable_kv_cache:-true}"' in script
     assert "--hunyuan_cfg_mode serial" in script
 
+    expected_attention_impl = {"kv_all_gather": "flash_attention_2", "ulysses": "sdpa"}
     for backend in ("kv_all_gather", "ulysses"):
         config = json.loads(Path(f"configs/dist_infer/hunyuan_image3_t2i_dist_{backend}.json").read_text())
         assert config["hunyuan_cfg_mode"] == "serial"
         assert config["moe_impl"] == "flashinfer"
-        assert config["attn_impl"] == "flash_attention_2"
+        assert config["attn_impl"] == expected_attention_impl[backend]
         assert config["enable_kv_cache"] is True
         assert config["enable_text_kv_cache"] is True
         assert config["parallel"] == {

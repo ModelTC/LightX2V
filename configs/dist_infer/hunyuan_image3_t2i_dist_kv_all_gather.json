@@ -12,7 +12,7 @@
     "enable_cfg": true,
     "hunyuan_cfg_mode": "serial",
     "moe_impl": "flashinfer",
-    "attn_impl": "flash_attention_2",
+    "attn_impl": "sdpa",
     "flashinfer_autotune_mode": "tune",
     "parallel": {
         "cfg_p_size": 1,

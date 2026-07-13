@@ -29,6 +29,36 @@ def _normalize_device_name(device):
     return device
 
 
+def _resolve_sequence_parallel_pipeline_lane(config, devices):
+    if not dist.is_available() or not dist.is_initialized():
+        raise RuntimeError("HunyuanImage3 sequence-parallel pipeline split requires torch.distributed initialization.")
+
+    seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
+    seq_p_size = dist.get_world_size(seq_p_group)
+    seq_p_rank = dist.get_rank(seq_p_group)
+    if len(devices) % seq_p_size:
+        raise ValueError(
+            f"HunyuanImage3 sequence parallel requires pipeline device count ({len(devices)}) "
+            f"to be divisible by seq_p_size ({seq_p_size})."
+        )
+
+    layout = str(config.get("hunyuan_image3_pipeline_layout", "interleaved")).strip().lower()
+    if layout != "interleaved":
+        raise ValueError(
+            "HunyuanImage3 sequence parallel uses Wan-style rank/device initialization and currently requires "
+            f"hunyuan_image3_pipeline_layout='interleaved'; got {layout!r}."
+        )
+
+    lane = devices[seq_p_rank::seq_p_size]
+    expected_device = f"cuda:{torch.cuda.current_device()}"
+    if lane[0] != expected_device:
+        raise RuntimeError(
+            "HunyuanImage3 interleaved pipeline lane must start on the CUDA device selected by "
+            f"init_parallel_env: lane={lane}, current_device={expected_device}."
+        )
+    return lane
+
+
 def resolve_pipeline_devices(config, fallback_device):
     configured = config.get("pipeline_parallel_devices") or config.get("hunyuan_image3_pipeline_devices")
     if configured:
@@ -36,24 +66,17 @@ def resolve_pipeline_devices(config, fallback_device):
             devices = [item.strip() for item in configured.split(",") if item.strip()]
         else:
             devices = list(configured)
-        return [_normalize_device_name(device) for device in devices]
+        devices = [_normalize_device_name(device) for device in devices]
+        if config.get("seq_parallel", False):
+            return _resolve_sequence_parallel_pipeline_lane(config, devices)
+        return devices
 
     if config.get("pipeline_parallel", False) and torch.cuda.is_available():
         device_count = torch.cuda.device_count()
         if device_count > 0:
-            if (
-                config.get("seq_parallel", False)
-                and dist.is_available()
-                and dist.is_initialized()
-                and dist.get_world_size() > 1
-                and device_count > 1
-                and not os.getenv("HUNYUAN_IMAGE3_PIPELINE_LANE_DEVICES")
-            ):
-                raise RuntimeError(
-                    "HunyuanImage3 sequence parallel detected multiple visible pipeline GPUs per rank without lane isolation. "
-                    "Launch through scripts/dist_infer/hunyuan_image3_sp_entry.py. Custom launchers must isolate each rank's "
-                    "CUDA_VISIBLE_DEVICES and set HUNYUAN_IMAGE3_PIPELINE_LANE_DEVICES before importing torch."
-                )
+            if config.get("seq_parallel", False):
+                devices = [f"cuda:{idx}" for idx in range(device_count)]
+                return _resolve_sequence_parallel_pipeline_lane(config, devices)
             if config.get("cfg_parallel", False):
                 cfg_p_size = int(config.get("parallel", {}).get("cfg_p_size", 1))
                 if cfg_p_size > 1:

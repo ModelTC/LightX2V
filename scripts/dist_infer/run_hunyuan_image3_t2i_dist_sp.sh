@@ -7,7 +7,6 @@ set -euo pipefail
 GPU_IDS="${1:-${CUDA_VISIBLE_DEVICES:-}}"
 SP_SIZE="${SP_SIZE:-2}"
 SP_ATTN_TYPE="${SP_ATTN_TYPE:-ulysses}"
-SP_PIPELINE_LAYOUT="${SP_PIPELINE_LAYOUT:-interleaved}"
 
 export lightx2v_path="${lightx2v_path:-/data/nvme0/lhd_codes/LightX2V}"
 export model_path="${model_path:-/data/nvme0/lhd_codes/HunyuanImage-3.0-instruct/HunyuanImage-3-Instruct}"
@@ -31,11 +30,6 @@ if [ "$SP_ATTN_TYPE" != "kv_all_gather" ] && [ "$SP_ATTN_TYPE" != "ulysses" ]; t
     echo "SP_ATTN_TYPE must be kv_all_gather or ulysses, got: $SP_ATTN_TYPE" >&2
     exit 2
 fi
-if [ "$SP_PIPELINE_LAYOUT" != "interleaved" ] && [ "$SP_PIPELINE_LAYOUT" != "contiguous" ]; then
-    echo "SP_PIPELINE_LAYOUT must be interleaved or contiguous, got: $SP_PIPELINE_LAYOUT" >&2
-    exit 2
-fi
-
 IFS=',' read -r -a visible_gpu_ids <<< "${CUDA_VISIBLE_DEVICES:-}"
 visible_gpu_count=${#visible_gpu_ids[@]}
 if [ "$visible_gpu_count" -eq 0 ] || [ -z "${visible_gpu_ids[0]}" ]; then
@@ -99,15 +93,10 @@ else
 fi
 
 echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
-echo "SP_SIZE=${SP_SIZE}, SP_ATTN_TYPE=${SP_ATTN_TYPE}, layout=${SP_PIPELINE_LAYOUT}"
+echo "SP_SIZE=${SP_SIZE}, SP_ATTN_TYPE=${SP_ATTN_TYPE}, layout=interleaved"
 for ((rank=0; rank<SP_SIZE; rank++)); do
     lane=()
-    if [ "$SP_PIPELINE_LAYOUT" = "interleaved" ]; then
-        for ((idx=rank; idx<visible_gpu_count; idx+=SP_SIZE)); do lane+=("${visible_gpu_ids[$idx]}"); done
-    else
-        start=$((rank * pipeline_gpus_per_lane))
-        for ((idx=start; idx<start+pipeline_gpus_per_lane; idx++)); do lane+=("${visible_gpu_ids[$idx]}"); done
-    fi
+    for ((idx=rank; idx<visible_gpu_count; idx+=SP_SIZE)); do lane+=("${visible_gpu_ids[$idx]}"); done
     lane_csv=$(IFS=,; echo "${lane[*]}")
     echo "SP rank ${rank} pipeline lane: ${lane_csv}"
 done
@@ -116,7 +105,6 @@ echo "enable_kv_cache=${enable_kv_cache:-true}, flashinfer_autotune_mode=${resol
 echo "flashinfer_autotune_cache=${resolved_autotune_cache}"
 
 source "${lightx2v_path}/scripts/base/base.sh"
-export HUNYUAN_IMAGE3_PIPELINE_LAYOUT="$SP_PIPELINE_LAYOUT"
 
 log_root="${HUNYUAN_SP_LOG_DIR:-${lightx2v_path}/save_results/torchrun_logs}"
 mkdir -p "$log_root"
@@ -127,7 +115,7 @@ torchrun \
     --max_restarts=0 \
     --log-dir "$log_root" \
     --tee 3 \
-    "${lightx2v_path}/scripts/dist_infer/hunyuan_image3_sp_entry.py" \
+    -m lightx2v.infer \
     --model_cls hunyuan_image3 \
     --task t2i \
     --model_path "$model_path" \
@@ -137,7 +125,6 @@ torchrun \
     --seed 42 \
     --hunyuan_sp_size "$SP_SIZE" \
     --hunyuan_sp_attn_type "$SP_ATTN_TYPE" \
-    --hunyuan_pipeline_layout "$SP_PIPELINE_LAYOUT" \
     --hunyuan_cfg_mode serial \
     --moe_impl "${moe_impl:-flashinfer}" \
     --attn_impl "${attn_impl:-flash_attention_2}" \
