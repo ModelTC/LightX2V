@@ -56,6 +56,10 @@ def rope_flashinfer_fake(
 
 @ROPE_REGISTER("flashinfer_rope")
 class FlashInferRope(RopeTemplate):
+    @staticmethod
+    def is_available():
+        return apply_rope_with_cos_sin_cache_inplace is not None
+
     def _apply_eager(self, q: torch.Tensor, k: torch.Tensor, freqs: torch.Tensor, positions: torch.Tensor | None = None):
         if apply_rope_with_cos_sin_cache_inplace is None:
             raise ImportError("flashinfer is required for FlashInferRope.")

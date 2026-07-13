@@ -65,7 +65,7 @@ class WanPreInfer:
             ],
             dim=-1,
         )
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+        if self.config.get("rope_type", "flashinfer_rope") in {"flashinfer", "flashinfer_rope"}:
             cos_sin = cos_sin.reshape(seq_len, -1)
             # Extract cos and sin parts separately and concatenate
             cos_half = cos_sin.real.contiguous()

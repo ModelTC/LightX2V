@@ -34,8 +34,7 @@ class MotusTransformerInfer(BaseTransformerInfer):
         self.rope_module = build_rope_module(
             config,
             layout="interleaved",
-            torch_mode="complex",
-            default="flashinfer",
+            default="flashinfer_rope",
         )
         self.apply_rope_func = self.rope_module.apply
 

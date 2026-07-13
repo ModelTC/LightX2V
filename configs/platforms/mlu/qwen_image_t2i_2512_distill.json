@@ -13,7 +13,7 @@
         }
       ],
     "modulate_type": "torch",
-    "rope_type": "torch",
+    "rope_type": "torch_complex_rope",
     "layer_norm_type": "torch",
     "rms_norm_type": "mlu_rms_norm"
 }

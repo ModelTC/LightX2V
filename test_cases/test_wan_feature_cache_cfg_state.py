@@ -23,7 +23,7 @@ class WanFeatureCacheCfgStateTest(unittest.TestCase):
             "residual_diff_threshold": 0.1,
             "downsample_factor": 2,
             "modulate_type": "torch",
-            "rope_type": "torch",
+            "rope_type": "torch_complex_rope",
         }
 
         infer = transformer_infer.WanTransformerInferFirstBlock(config)

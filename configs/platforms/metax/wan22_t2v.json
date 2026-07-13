@@ -19,7 +19,7 @@
     "vae_cpu_offload": false,
     "boundary": 0.875,
     "modulate_type": "torch",
-    "rope_type": "torch",
+    "rope_type": "torch_complex_rope",
     "layer_norm_type": "torch",
     "rms_norm_type": "torch"
 }

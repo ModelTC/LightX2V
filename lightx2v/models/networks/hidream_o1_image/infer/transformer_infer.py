@@ -11,8 +11,7 @@ class HidreamO1ImageTransformerInfer:
         self.rope_module = build_rope_module(
             config,
             layout="split_half",
-            torch_mode="real",
-            default="flashinfer",
+            default="flashinfer_rope",
         )
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")

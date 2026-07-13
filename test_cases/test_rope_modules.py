@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from lightx2v.common.ops.rope import ChunkedRope, TorchComplexRope, TorchRealRope, get_rope_module
@@ -61,7 +62,9 @@ def test_chunked_rope_matches_inner_and_preserves_tail_tokens():
     torch.testing.assert_close(k_out[7:], k[7:])
 
 
-def test_builder_keeps_legacy_torch_meaning_configurable():
-    assert isinstance(get_rope_module("torch", torch_mode="complex"), TorchComplexRope)
-    assert isinstance(get_rope_module("torch", torch_mode="real"), TorchRealRope)
+def test_builder_uses_explicit_rope_module_names():
+    assert isinstance(get_rope_module("torch_complex_rope"), TorchComplexRope)
+    assert isinstance(get_rope_module("torch_real_rope"), TorchRealRope)
     assert isinstance(get_rope_module("torch_naive"), TorchRealRope)
+    with pytest.raises(ValueError, match="Unsupported rope_type: torch"):
+        get_rope_module("torch")

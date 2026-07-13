@@ -7,7 +7,6 @@ from lightx2v.common.ops.rope import FlashInferRope, TorchComplexRope
 from lightx2v.models.networks.wan.infer.dreamzero.pre_infer import _category_linear
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.models.networks.wan.infer.triton_ops import apply_rotary_embedding
-from lightx2v.models.networks.wan.infer.utils import apply_rope_with_cos_sin_cache_inplace
 from lightx2v.utils.envs import GET_DTYPE
 
 
@@ -26,7 +25,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         self.cross_attn_kv_caches = {}
         self._cu_seqlens_cache = {}
         self._rope_cache = {}
-        self.dreamzero_rope_type = config.get("dreamzero_rope_type", config.get("rope_type", "flashinfer"))
+        self.dreamzero_rope_type = config.get("dreamzero_rope_type", config.get("rope_type", "flashinfer_rope"))
         self.dreamzero_torch_rope = TorchComplexRope()
         self.dreamzero_flashinfer_rope = FlashInferRope(layout="interleaved")
 
@@ -217,7 +216,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         if freqs.shape[0] != q.shape[0]:
             raise ValueError(f"DreamZero RoPE length mismatch: freqs={freqs.shape[0]}, q={q.shape[0]}.")
 
-        if q.is_cuda and self.dreamzero_rope_type == "flashinfer" and apply_rope_with_cos_sin_cache_inplace is not None:
+        if q.is_cuda and self.dreamzero_rope_type in {"flashinfer", "flashinfer_rope"} and self.dreamzero_flashinfer_rope.is_available():
             return self.dreamzero_flashinfer_rope.apply(
                 q,
                 k,
@@ -225,7 +224,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
                 positions=self._get_rope_positions(q.shape[0], q.device),
             )
 
-        if q.is_cuda and self.dreamzero_rope_type in {"flashinfer", "triton"}:
+        if q.is_cuda and self.dreamzero_rope_type in {"flashinfer", "flashinfer_rope", "triton"}:
             cos, sin = self._get_rope_cos_sin(freqs)
             return (
                 apply_rotary_embedding(q.contiguous(), cos, sin, interleaved=False),

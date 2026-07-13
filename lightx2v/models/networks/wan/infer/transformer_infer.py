@@ -35,8 +35,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.rope_module = build_rope_module(
             config,
             layout="interleaved",
-            torch_mode="complex",
-            default="flashinfer",
+            default="flashinfer_rope",
         )
         self.apply_rope_func = self.rope_module.apply
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)

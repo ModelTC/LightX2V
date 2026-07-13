@@ -60,7 +60,7 @@ class Flux2PreInfer:
             freqs_cos = torch.cat([text_rope[0], image_rope[0]], dim=0)
             freqs_sin = torch.cat([text_rope[1], image_rope[1]], dim=0)
 
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+        if self.config.get("rope_type", "flashinfer_rope") in {"flashinfer", "flashinfer_rope"}:
             cos_half = freqs_cos[:, ::2].contiguous()  # [L, D/2]
             sin_half = freqs_sin[:, ::2].contiguous()  # [L, D/2]
             image_rotary_emb = torch.cat([cos_half, sin_half], dim=-1)  # [L, D]
@@ -118,7 +118,7 @@ class Flux2DevPreInfer(Flux2PreInfer):
             freqs_cos = torch.cat([text_rope[0], image_rope[0]], dim=0)
             freqs_sin = torch.cat([text_rope[1], image_rope[1]], dim=0)
 
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
+        if self.config.get("rope_type", "flashinfer_rope") in {"flashinfer", "flashinfer_rope"}:
             cos_half = freqs_cos[:, ::2].contiguous()
             sin_half = freqs_sin[:, ::2].contiguous()
             image_rotary_emb = torch.cat([cos_half, sin_half], dim=-1)

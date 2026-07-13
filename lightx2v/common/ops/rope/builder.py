@@ -7,7 +7,6 @@ from lightx2v.utils.registry_factory import ROPE_REGISTER
 from .chunked_rope import ChunkedRope
 from .template import RopeTemplate
 
-
 ROPE_TYPE_ALIASES = {
     "torch_complex": "torch_complex_rope",
     "torch_naive": "torch_real_rope",
@@ -16,8 +15,8 @@ ROPE_TYPE_ALIASES = {
 }
 
 
-def get_rope_module(rope_type: str, *, layout="interleaved", compute_dtype=torch.float32, torch_mode="complex"):
-    rope_type = f"torch_{torch_mode}_rope" if rope_type == "torch" else ROPE_TYPE_ALIASES.get(rope_type, rope_type)
+def get_rope_module(rope_type: str, *, layout="interleaved", compute_dtype=torch.float32):
+    rope_type = ROPE_TYPE_ALIASES.get(rope_type, rope_type)
     if rope_type not in ROPE_REGISTER:
         raise ValueError(f"Unsupported rope_type: {rope_type}")
     rope_class = ROPE_REGISTER[rope_type]
@@ -30,8 +29,8 @@ def get_rope_module(rope_type: str, *, layout="interleaved", compute_dtype=torch
     return rope_class()
 
 
-def build_rope_module(config, *, layout="interleaved", torch_mode="complex", default="flashinfer", compute_dtype=torch.float32):
-    module = get_rope_module(config.get("rope_type", default), layout=layout, compute_dtype=compute_dtype, torch_mode=torch_mode)
+def build_rope_module(config, *, layout="interleaved", default="flashinfer_rope", compute_dtype=torch.float32):
+    module = get_rope_module(config.get("rope_type", default), layout=layout, compute_dtype=compute_dtype)
     if hasattr(module, "set_config"):
         module.set_config(config)
     if config.get("rope_chunk", False):

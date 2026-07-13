@@ -19,15 +19,7 @@ class TorchComplexRope(RopeTemplate):
         super().__init__(layout="interleaved", compute_dtype=compute_dtype)
 
     def apply(self, q: torch.Tensor, k: torch.Tensor, freqs, **kwargs):
-        if (
-            q.ndim == 3
-            and k.ndim == 3
-            and self.compute_dtype == torch.float32
-            and torch.is_complex(freqs)
-            and use_magi_custom_ops()
-            and magi_register_custom_op is not None
-            and not kwargs
-        ):
+        if q.ndim == 3 and k.ndim == 3 and self.compute_dtype == torch.float32 and torch.is_complex(freqs) and use_magi_custom_ops() and magi_register_custom_op is not None and not kwargs:
             return torch.ops.lightx2v.rope_torch_complex(q, k, freqs)
         return super().apply(q, k, freqs, **kwargs)
 

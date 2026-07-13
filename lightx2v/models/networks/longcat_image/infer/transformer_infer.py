@@ -31,8 +31,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         self.rope_module = build_rope_module(
             config,
             layout="interleaved",
-            torch_mode="real",
-            default="flashinfer",
+            default="flashinfer_rope",
         )
         self.apply_rope_func = self.rope_module.apply
 

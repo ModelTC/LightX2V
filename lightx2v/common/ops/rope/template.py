@@ -4,7 +4,6 @@ from typing import Literal
 
 import torch
 
-
 RopeLayout = Literal["interleaved", "split_half"]
 
 

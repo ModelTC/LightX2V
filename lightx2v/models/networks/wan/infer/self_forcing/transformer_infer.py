@@ -50,7 +50,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
         else:
             self.infer_func = self.infer_with_kvcache
 
-        if self.config.get("causal_rope_type", "torch") == "triton":
+        if self.config.get("causal_rope_type", "torch_complex_rope") == "triton":
             self.causal_rope_apply_func = causal_rope_apply_triton
         else:
             self.causal_rope_apply_func = causal_rope_apply
