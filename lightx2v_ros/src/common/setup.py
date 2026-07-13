@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "simulator"
+package_name = "common"
 
 setup(
     name=package_name,
@@ -14,12 +14,9 @@ setup(
     zip_safe=True,
     maintainer="user",
     maintainer_email="user@example.com",
-    description="Simulation environment nodes.",
+    description="Shared environment contract for LightX2V ROS nodes.",
     license="Apache-2.0",
     entry_points={
-        "console_scripts": [
-            "libero_node = simulator.libero_node.main:main",
-            "robotwin_node = simulator.robotwin_node.main:main",
-        ],
+        "console_scripts": [],
     },
 )

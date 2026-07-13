@@ -368,12 +368,14 @@ class Flux2BaseRunner(DefaultRunner):
 
         latents, generator = self.run_dit()
         images = self.run_vae_decoder(latents)
+        self.end_run()
 
         if not input_info.return_result_tensor and is_main_process():
             image = images[0]
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")
 
+        del latents, generator
         torch_device_module.empty_cache()
         gc.collect()
 

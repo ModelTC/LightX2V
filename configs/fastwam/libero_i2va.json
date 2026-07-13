@@ -10,6 +10,9 @@
   "action_dim_hidden": 1024,
   "action_dim": 7,
   "robot_state_dim": 8,
+  "policy_profile": "libero",
+  "normalize_mode": "min-max",
   "binarize_gripper": true,
+  "gripper_postprocess": true,
   "default_prompt": "A video recorded from a robot's point of view executing the following instruction: {task_prompt}"
 }

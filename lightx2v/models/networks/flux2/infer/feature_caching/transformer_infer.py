@@ -106,6 +106,9 @@ class Flux2TransformerInferAdaCaching(Flux2TransformerInferCaching):
 
         cache = ada_args.previous_residual_tiny
         res = ada_args.now_residual_tiny
+        if cache.shape != res.shape:
+            ada_args.previous_residual_tiny = ada_args.now_residual_tiny
+            return 1
         self._update_spatial_dim(ada_args, res)
         norm_ord = ada_args.norm_ord
         cache_diff = (cache - res).norm(dim=(0, 1), p=norm_ord) / cache.norm(dim=(0, 1), p=norm_ord)
@@ -150,6 +153,7 @@ class Flux2TransformerInferAdaCaching(Flux2TransformerInferCaching):
         return self._calculate_skip_step_length_for_args(self.args_odd)
 
     def clear(self):
+        initial_spatial_dim = self.config.get("adacache_spatial_dim", 0)
         for ada_args in (self.args_even, self.args_odd):
             if ada_args.previous_residual is not None:
                 ada_args.previous_residual = ada_args.previous_residual.cpu()
@@ -161,5 +165,8 @@ class Flux2TransformerInferAdaCaching(Flux2TransformerInferCaching):
             ada_args.previous_residual = None
             ada_args.previous_residual_tiny = None
             ada_args.now_residual_tiny = None
+            ada_args.spatial_dim = initial_spatial_dim
+            ada_args.skipped_step_length = 1
+            ada_args.previous_moreg = 1.0
 
         torch.cuda.empty_cache()
