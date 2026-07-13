@@ -278,10 +278,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             global_end=global_end,
             sink_tokens=sink_tokens,
         )
-        n = x.size(1)
-        x_c = torch.view_as_complex(x.float().reshape(x.size(0), n, -1, 2))
-        out = torch.view_as_real(x_c * pos_freqs.to(torch.complex64)).flatten(2)
-        return out.to(orig_dtype)
+        return self.causal_torch_rope.apply_single(x, pos_freqs.to(torch.complex64)).to(orig_dtype)
 
     def infer_block_with_kvcache(self, block, x, pre_infer_out):
         if hasattr(block.compute_phases[0], "before_proj"):

@@ -1,14 +1,8 @@
-from typing import Tuple
-
 import torch
 import torch.nn.functional as F
 from einops import rearrange
 
-try:
-    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
-except Exception as e:
-    apply_rope_with_cos_sin_cache_inplace = None
-
+from lightx2v.common.ops.rope import FlashInferRope, TorchRealRope, build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
@@ -38,61 +32,24 @@ def apply_gate(x, gate=None, tanh=False):
         return x * gate.unsqueeze(1)
 
 
-def apply_hunyuan_rope_with_flashinfer(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    B, L, H, D = xq.shape
-
-    query = xq.reshape(B * L, H * D).contiguous()
-    key = xk.reshape(B * L, H * D).contiguous()
-
-    positions = torch.arange(B * L, device=xq.device, dtype=torch.long)
-
-    apply_rope_with_cos_sin_cache_inplace(
-        positions=positions,
-        query=query,
-        key=key,
-        head_size=D,
-        cos_sin_cache=cos_sin_cache,
-        is_neox=False,
-    )
-
-    xq_out = query.view(B, L, H, D)
-    xk_out = key.view(B, L, H, D)
-    return xq_out, xk_out
+_HUNYUAN_FLASH_ROPE = FlashInferRope(layout="interleaved")
+_HUNYUAN_TORCH_ROPE = TorchRealRope(layout="interleaved")
 
 
-def apply_hunyuan_rope_with_torch(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    B, L, H, D = xq.shape
+def _apply_hunyuan_rope(module, xq, xk, cos_sin_cache):
+    q_shape, k_shape = xq.shape, xk.shape
+    q = xq.reshape(-1, xq.shape[-2], xq.shape[-1])
+    k = xk.reshape(-1, xk.shape[-2], xk.shape[-1])
+    q, k = module.apply(q, k, cos_sin_cache)
+    return q.view(q_shape), k.view(k_shape)
 
-    cos = cos_sin_cache[:, : D // 2]
-    sin = cos_sin_cache[:, D // 2 :]
 
-    def _apply_rope(x: torch.Tensor) -> torch.Tensor:
-        x_flat = x.view(B * L, H, D)
-        x1 = x_flat[..., ::2]
-        x2 = x_flat[..., 1::2]
+def apply_hunyuan_rope_with_flashinfer(xq, xk, cos_sin_cache):
+    return _apply_hunyuan_rope(_HUNYUAN_FLASH_ROPE, xq, xk, cos_sin_cache)
 
-        cos_ = cos.unsqueeze(1)
-        sin_ = sin.unsqueeze(1)
 
-        o1 = x1.float() * cos_ - x2.float() * sin_
-        o2 = x2.float() * cos_ + x1.float() * sin_
-
-        out = torch.empty_like(x_flat)
-        out[..., ::2] = o1
-        out[..., 1::2] = o2
-        return out.view(B, L, H, D)
-
-    xq_out = _apply_rope(xq)
-    xk_out = _apply_rope(xk)
-    return xq_out, xk_out
+def apply_hunyuan_rope_with_torch(xq, xk, cos_sin_cache):
+    return _apply_hunyuan_rope(_HUNYUAN_TORCH_ROPE, xq, xk, cos_sin_cache)
 
 
 class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
@@ -115,10 +72,20 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = modulate
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            self.apply_rope_func = apply_hunyuan_rope_with_flashinfer
-        else:
-            self.apply_rope_func = apply_hunyuan_rope_with_torch
+        self.rope_module = build_rope_module(
+            config,
+            layout="interleaved",
+            torch_mode="real",
+            default="flashinfer",
+        )
+        self.apply_rope_func = self._apply_rope
+
+    def _apply_rope(self, q, k, freqs):
+        q_shape, k_shape = q.shape, k.shape
+        q_flat = q.reshape(-1, q.shape[-2], q.shape[-1])
+        k_flat = k.reshape(-1, k.shape[-2], k.shape[-1])
+        q_out, k_out = self.rope_module.apply(q_flat, k_flat, freqs)
+        return q_out.view(q_shape), k_out.view(k_shape)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

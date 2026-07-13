@@ -2,57 +2,18 @@ from typing import Tuple
 
 import torch
 
-try:
-    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
-except ImportError:
-    apply_rope_with_cos_sin_cache_inplace = None
+from lightx2v.common.ops.rope import FlashInferRope, TorchRealRope
+
+_Z_FLASH_ROPE = FlashInferRope(layout="interleaved")
+_Z_TORCH_ROPE = TorchRealRope(layout="interleaved")
 
 
-def apply_wan_rope_with_flashinfer(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-):
-    L, H, D = xq.shape
-
-    query = xq.reshape(L, H * D).contiguous()
-    key = xk.reshape(L, H * D).contiguous()
-
-    positions = torch.arange(L, device="cpu", dtype=torch.long).to(xq.device, non_blocking=True)
-
-    apply_rope_with_cos_sin_cache_inplace(
-        positions=positions,
-        query=query,
-        key=key,
-        head_size=D,
-        cos_sin_cache=cos_sin_cache,
-        is_neox=False,
-    )
-
-    xq_out = query.view(L, H, D)
-    xk_out = key.view(L, H, D)
-    return xq_out, xk_out
+def apply_wan_rope_with_flashinfer(xq, xk, cos_sin_cache):
+    return _Z_FLASH_ROPE.apply(xq, xk, cos_sin_cache)
 
 
-def apply_rotary_emb_qwen(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    head_dim = xq.shape[-1]
-    cos, sin = cos_sin_cache[..., : head_dim // 2], cos_sin_cache[..., head_dim // 2 :]
-    cos = cos.unsqueeze(1).to(dtype=xq.dtype)
-    sin = sin.unsqueeze(1).to(dtype=xq.dtype)
-
-    def rotate(x):
-        x_even = x[..., 0::2]
-        x_odd = x[..., 1::2]
-        x_out = torch.empty_like(x)
-        x_out[..., 0::2] = x_even * cos - x_odd * sin
-        x_out[..., 1::2] = x_odd * cos + x_even * sin
-        return x_out
-
-    return rotate(xq), rotate(xk)
+def apply_rotary_emb_qwen(xq, xk, cos_sin_cache) -> Tuple[torch.Tensor, torch.Tensor]:
+    return _Z_TORCH_ROPE.apply(xq, xk, cos_sin_cache)
 
 
 def patchify(hidden_states: torch.Tensor, patch_size: int = 2, f_patch_size: int = 1) -> torch.Tensor:

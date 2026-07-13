@@ -5,13 +5,13 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile, set_magi_custom_op_mode
+from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 from .triton_ops import (
     fuse_scale_shift_gate_select01_kernel,
     fuse_scale_shift_kernel,
 )
-from .utils import apply_qwen_rope_with_flashinfer, apply_qwen_rope_with_torch, apply_qwen_rope_with_torch_naive
 
 try:
     from magi_compiler import magi_compile
@@ -51,13 +51,13 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
-        rope_funcs = {
-            "flashinfer": apply_qwen_rope_with_flashinfer,
-            "torch": apply_qwen_rope_with_torch,
-            "torch_naive": apply_qwen_rope_with_torch_naive,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        self.apply_rope_func = rope_funcs.get(rope_type, apply_qwen_rope_with_torch)
+        self.rope_module = build_rope_module(
+            config,
+            layout="interleaved",
+            torch_mode="complex",
+            default="flashinfer",
+        )
+        self.apply_rope_func = self.rope_module.apply
 
         self.img_qkv_len1 = None
         self.cu_seqlens_qkv1 = None

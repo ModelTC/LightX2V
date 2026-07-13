@@ -2,9 +2,8 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
-
-from .utils import apply_rope_with_flashinfer, apply_rope_with_torch
 
 
 class Flux2TransformerInfer(BaseTransformerInfer):
@@ -34,12 +33,13 @@ class Flux2TransformerInfer(BaseTransformerInfer):
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
 
-        rope_funcs = {
-            "flashinfer": apply_rope_with_flashinfer,
-            "torch": apply_rope_with_torch,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        self.apply_rope_func = rope_funcs.get(rope_type, apply_rope_with_torch)
+        self.rope_module = build_rope_module(
+            config,
+            layout="interleaved",
+            torch_mode="real",
+            default="flashinfer",
+        )
+        self.apply_rope_func = self.rope_module.apply
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

@@ -1,16 +1,18 @@
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.ops.rope import TorchComplexRope
+
 
 def modulate(x, shift, scale):
     return x * (1 + scale) + shift
 
 
+_FASTWAM_ROPE = TorchComplexRope(compute_dtype=torch.float64)
+
+
 def rope_apply(x, freqs):
-    seq_len, num_heads, head_dim = x.shape
-    x_complex = torch.view_as_complex(x.to(torch.float64).reshape(seq_len, num_heads, head_dim // 2, 2))
-    x_out = torch.view_as_real(x_complex * freqs).flatten(2)
-    return x_out.to(x.dtype)
+    return _FASTWAM_ROPE.apply_single(x, freqs)
 
 
 class FastWAMTransformerInfer:

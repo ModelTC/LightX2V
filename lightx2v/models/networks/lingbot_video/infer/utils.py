@@ -2,6 +2,10 @@ import math
 
 import torch
 
+from lightx2v.common.ops.rope import TorchComplexRope
+
+_LINGBOT_VIDEO_ROPE = TorchComplexRope()
+
 
 def get_timestep_embedding(
     timesteps,
@@ -33,9 +37,7 @@ def get_timestep_embedding(
 
 def apply_rotary_emb(x, freqs_cis):
     with torch.amp.autocast(x.device.type, enabled=False):
-        x_c = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-        out = torch.view_as_real(x_c * freqs_cis.unsqueeze(1)).flatten(2)
-        return out.type_as(x)
+        return _LINGBOT_VIDEO_ROPE.apply_single(x, freqs_cis, unsqueeze_dim=1)
 
 
 def precompute_freqs_cis(dim, end, theta):

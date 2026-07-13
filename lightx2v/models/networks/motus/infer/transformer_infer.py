@@ -1,18 +1,11 @@
-from functools import partial
-
 import torch
 
+from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.wan.infer.triton_ops import fuse_scale_shift_kernel
-from lightx2v.models.networks.wan.infer.utils import (
-    apply_wan_rope_with_chunk,
-    apply_wan_rope_with_flashinfer,
-    apply_wan_rope_with_torch,
-    apply_wan_rope_with_torch_naive,
-)
 from lightx2v.models.networks.wan.weights.motus import apply_mm
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, ROPE_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -38,29 +31,13 @@ class MotusTransformerInfer(BaseTransformerInfer):
         self.head_dim = config["dim"] // config["num_heads"]
         self.modulate_func = fuse_scale_shift_kernel if config.get("modulate_type", "triton") == "triton" else modulate
 
-        rope_funcs = {
-            "flashinfer": apply_wan_rope_with_flashinfer,
-            "torch": apply_wan_rope_with_torch,
-            "torch_naive": apply_wan_rope_with_torch_naive,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        if rope_type in ROPE_REGISTER:
-            rope_class = ROPE_REGISTER[rope_type]
-            self.rope_instance = rope_class()
-
-            def rope_wrapper(xq, xk, cos_sin_cache):
-                return self.rope_instance.apply(xq, xk, cos_sin_cache)
-
-            rope_func = rope_wrapper
-        else:
-            rope_func = rope_funcs.get(rope_type, apply_wan_rope_with_torch)
-        if config.get("rope_chunk", False):
-            rope_func = partial(
-                apply_wan_rope_with_chunk,
-                chunk_size=config.get("rope_chunk_size", 100),
-                rope_func=rope_func,
-            )
-        self.apply_rope_func = rope_func
+        self.rope_module = build_rope_module(
+            config,
+            layout="interleaved",
+            torch_mode="complex",
+            default="flashinfer",
+        )
+        self.apply_rope_func = self.rope_module.apply
 
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")

@@ -1,23 +1,9 @@
 import torch
 from transformers.activations import ACT2FN
 
+from lightx2v.common.ops.rope import TorchRealRope
 
-def rotate_half(x):
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb_vision(q, k, cos, sin):
-    q_dtype = q.dtype
-    k_dtype = k.dtype
-    q = q.float()
-    k = k.float()
-    cos = cos.unsqueeze(-2).float()
-    sin = sin.unsqueeze(-2).float()
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed.to(q_dtype), k_embed.to(k_dtype)
+_HIDREAM_VISION_ROPE = TorchRealRope(layout="split_half")
 
 
 class HidreamO1ImageVisionInfer:
@@ -145,7 +131,7 @@ class HidreamO1ImageVisionInfer:
         qkv = weights.qkv.apply(hidden_states).reshape(seq_len, 3, weights.num_heads, weights.head_dim).permute(1, 0, 2, 3)
         q, k, v = qkv.unbind(0)
         cos, sin = position_embeddings
-        q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+        q, k = _HIDREAM_VISION_ROPE.apply(q, k, (cos, sin))
         lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
         outs = []
         start = 0

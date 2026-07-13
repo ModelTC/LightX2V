@@ -1,10 +1,8 @@
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
-from lightx2v.utils.registry_factory import ROPE_REGISTER
-
-from .utils import apply_rotary_emb_qwen, apply_wan_rope_with_flashinfer
 
 
 class ZImageTransformerInfer(BaseTransformerInfer):
@@ -28,26 +26,13 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             self.enable_head_parallel = False
             self.seq_p_tensor_fusion = False
 
-        rope_funcs = {
-            "flashinfer": apply_wan_rope_with_flashinfer,
-            "torch": apply_rotary_emb_qwen,
-        }
-
-        rope_type = self.config.get("rope_type", "flashinfer")
-        if rope_type in ROPE_REGISTER:
-            rope_class = ROPE_REGISTER[rope_type]
-            self.rope_instance = rope_class()
-
-            # Create a wrapper function that matches the expected signature
-            def rope_wrapper(xq, xk, cos_sin_cache):
-                return self.rope_instance.apply(xq, xk, cos_sin_cache)
-
-            rope_func = rope_wrapper
-        else:
-            if rope_type not in rope_funcs:
-                raise ValueError(f"Unsupported z-image rope_type: {rope_type}")
-            rope_func = rope_funcs[rope_type]
-        self.apply_rope_func = rope_func
+        self.rope_module = build_rope_module(
+            config,
+            layout="interleaved",
+            torch_mode="real",
+            default="flashinfer",
+        )
+        self.apply_rope_func = self.rope_module.apply
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

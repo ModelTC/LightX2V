@@ -1,21 +1,19 @@
 import torch
 import torch.distributed as dist
 
+from lightx2v.common.ops.rope import FlashInferRope, build_rope_module
 from lightx2v.models.networks.hidream_o1_image.infer.module_io import HidreamTransformerInferOutput
-from lightx2v.models.networks.hidream_o1_image.infer.rope import apply_hidream_rope_with_flashinfer, apply_hidream_rope_with_torch
 
 
 class HidreamO1ImageTransformerInfer:
     def __init__(self, config):
         self.config = config
-        rope_type = config.get("rope_type", "flashinfer")
-        rope_funcs = {
-            "flashinfer": apply_hidream_rope_with_flashinfer,
-            "torch": apply_hidream_rope_with_torch,
-        }
-        if rope_type not in rope_funcs:
-            raise ValueError(f"Unsupported HiDream rope_type={rope_type!r}. Supported values: {sorted(rope_funcs)}")
-        self.apply_rope_func = rope_funcs[rope_type]
+        self.rope_module = build_rope_module(
+            config,
+            layout="split_half",
+            torch_mode="real",
+            default="flashinfer",
+        )
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
@@ -26,6 +24,28 @@ class HidreamO1ImageTransformerInfer:
             self.seq_p_fp8_comm = False
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
+
+    def _apply_rope(self, q, k, rope_cos_sin):
+        cos, sin = rope_cos_sin[:2]
+        if isinstance(self.rope_module, FlashInferRope):
+            if q.shape[0] != 1:
+                raise NotImplementedError("HiDream FlashInfer RoPE expects batch=1 CFG forwards.")
+            head_dim = q.shape[-1]
+            cache = torch.cat(
+                [cos[0, :, : head_dim // 2].float(), sin[0, :, : head_dim // 2].float()],
+                dim=-1,
+            ).contiguous()
+            positions = rope_cos_sin[2] if len(rope_cos_sin) > 2 else None
+            q_out, k_out = self.rope_module.apply(q[0], k[0], cache, positions=positions)
+            return q_out.unsqueeze(0), k_out.unsqueeze(0)
+
+        q_out, k_out = self.rope_module.apply(
+            q.transpose(1, 2),
+            k.transpose(1, 2),
+            (cos, sin),
+            unsqueeze_dim=1,
+        )
+        return q_out.transpose(1, 2).contiguous(), k_out.transpose(1, 2).contiguous()
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -173,7 +193,7 @@ class HidreamO1ImageTransformerInfer:
         v = weights.v_proj.apply(flat_hidden).reshape(batch, seq_len, weights.kv_heads, weights.head_dim)
         q = weights.q_norm.apply(q)
         k = weights.k_norm.apply(k)
-        q, k = self.apply_rope_func(q, k, rope_cos_sin)
+        q, k = self._apply_rope(q, k, rope_cos_sin)
         return q, k, v
 
     def _two_pass_attn(self, weights, q, k, v, idx_ar):

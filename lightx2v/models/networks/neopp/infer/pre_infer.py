@@ -3,8 +3,11 @@ import math
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.ops.rope import TorchRealRope
 from lightx2v.models.networks.neopp.infer.module_io import NeoppPreInferModuleOutput
 from lightx2v.utils.envs import *
+
+_NEOPP_ROPE = TorchRealRope(layout="interleaved")
 
 
 def precompute_rope_freqs_sincos(dim: int, max_position: int, base: float = 10000.0, device=None):
@@ -46,30 +49,8 @@ def build_abs_positions_from_grid_hw(grid_hw: torch.Tensor, device=None):
     return abs_x, abs_y
 
 
-def apply_rotary_emb_1d(
-    x: torch.Tensor,
-    cos_cached: torch.Tensor,
-    sin_cached: torch.Tensor,
-    positions: torch.Tensor,
-):
-    """对输入张量的一部分应用1D RoPE。"""
-    # x: (..., seq_len, dim_part)
-    # positions: (..., seq_len)
-    # cos_cached: (max_pos, dim_part / 2)
-
-    cos = cos_cached[positions]  # Shape: (positions.shape, dim_part / 2)
-    sin = sin_cached[positions]  # Shape: (positions.shape, dim_part / 2)
-
-    x1 = x[..., 0::2]
-    x2 = x[..., 1::2]
-
-    rotated_x1 = x1 * cos - x2 * sin
-    rotated_x2 = x1 * sin + x2 * cos
-
-    x_rotated = torch.empty_like(x)
-    x_rotated[..., 0::2] = rotated_x1
-    x_rotated[..., 1::2] = rotated_x2
-    return x_rotated
+def apply_rotary_emb_1d(x, cos_cached, sin_cached, positions):
+    return _NEOPP_ROPE.apply_single(x, (cos_cached[positions], sin_cached[positions]))
 
 
 def apply_2d_rotary_pos_emb(

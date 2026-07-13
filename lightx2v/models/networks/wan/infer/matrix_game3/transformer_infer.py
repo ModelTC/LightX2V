@@ -23,6 +23,7 @@ except ImportError:
     except ImportError:
         FLASH_ATTN_3_AVAILABLE = False
 
+from lightx2v.common.ops.rope import TorchComplexRope
 from lightx2v.models.networks.wan.infer.matrix_game2.posemb_layers import apply_rotary_emb, get_nd_rotary_pos_embed
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.utils.envs import *
@@ -30,6 +31,8 @@ from lightx2v.utils.registry_factory import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
+
+_INDEXED_ROPE = TorchComplexRope()
 
 
 def rope_apply_with_indices(x, grid_sizes, freqs, indices):
@@ -85,11 +88,7 @@ def rope_apply_with_indices(x, grid_sizes, freqs, indices):
     else:
         raise ValueError(f"Unexpected freqs shape: {freqs.shape}")
 
-    cos_sin = cos_sin.to(x.device)
-    # Apply RoPE
-    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-    out = torch.view_as_real(x_complex * cos_sin).flatten(-2)
-    return out.type_as(x)
+    return _INDEXED_ROPE.apply_single(x, cos_sin.to(x.device), unsqueeze_dim=0)
 
 
 class WanMtxg3TransformerInfer(WanTransformerInfer):

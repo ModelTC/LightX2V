@@ -3,6 +3,7 @@ import math
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.ops.rope import FlashInferRope, TorchComplexRope
 from lightx2v.models.networks.wan.infer.dreamzero.pre_infer import _category_linear
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.models.networks.wan.infer.triton_ops import apply_rotary_embedding
@@ -26,6 +27,8 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         self._cu_seqlens_cache = {}
         self._rope_cache = {}
         self.dreamzero_rope_type = config.get("dreamzero_rope_type", config.get("rope_type", "flashinfer"))
+        self.dreamzero_torch_rope = TorchComplexRope()
+        self.dreamzero_flashinfer_rope = FlashInferRope(layout="interleaved")
 
     def create_empty_kv_cache(self, dtype, device):
         capacity = max(int(self.max_attention_size), 1)
@@ -210,31 +213,17 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
             return self.modulate_func(x, scale=scale_arg, shift=shift_arg).reshape_as(x)
         return (x.float() * (1.0 + scale.float()) + shift.float()).to(x.dtype)
 
-    @staticmethod
-    def _apply_rope_polar(x, freqs):
-        x_dtype = x.dtype
-        seq_len, num_heads, _ = x.shape
-        x_complex = torch.view_as_complex(x.to(torch.float32).reshape(seq_len, num_heads, -1, 2))
-        out = torch.view_as_real(x_complex * freqs.to(x.device)).flatten(2)
-        return out.to(x_dtype)
-
     def _apply_rope(self, q, k, freqs):
         if freqs.shape[0] != q.shape[0]:
             raise ValueError(f"DreamZero RoPE length mismatch: freqs={freqs.shape[0]}, q={q.shape[0]}.")
 
         if q.is_cuda and self.dreamzero_rope_type == "flashinfer" and apply_rope_with_cos_sin_cache_inplace is not None:
-            seq_len, num_heads, head_dim = q.shape
-            query = q.reshape(seq_len, num_heads * head_dim).contiguous()
-            key = k.reshape(seq_len, num_heads * head_dim).contiguous()
-            apply_rope_with_cos_sin_cache_inplace(
-                positions=self._get_rope_positions(seq_len, q.device),
-                query=query,
-                key=key,
-                head_size=head_dim,
-                cos_sin_cache=self._get_flashinfer_cos_sin(freqs),
-                is_neox=False,
+            return self.dreamzero_flashinfer_rope.apply(
+                q,
+                k,
+                self._get_flashinfer_cos_sin(freqs),
+                positions=self._get_rope_positions(q.shape[0], q.device),
             )
-            return query.view(seq_len, num_heads, head_dim), key.view(seq_len, num_heads, head_dim)
 
         if q.is_cuda and self.dreamzero_rope_type in {"flashinfer", "triton"}:
             cos, sin = self._get_rope_cos_sin(freqs)
@@ -243,7 +232,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
                 apply_rotary_embedding(k.contiguous(), cos, sin, interleaved=False),
             )
 
-        return self._apply_rope_polar(q, freqs), self._apply_rope_polar(k, freqs)
+        return self.dreamzero_torch_rope.apply(q, k, freqs.to(q.device))
 
     def infer_self_attn_with_cache(self, phase, x, shift_msa, scale_msa, pre_infer_out, kv_cache):
         seq_total = x.shape[0]

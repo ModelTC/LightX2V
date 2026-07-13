@@ -10,46 +10,18 @@ try:
 except ImportError:
     flash_attn_varlen_func = None
 
+from lightx2v.common.ops.rope import TorchRealRope
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.bagel.model_io import NaiveCache
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-
-# Copied from transformers.models.llama.modeling_llama.rotate_half
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
+_BAGEL_COMPAT_ROPE = TorchRealRope(layout="split_half")
 
 
-# Copied from transformers.models.llama.modeling_llama.apply_rotary_pos_emb
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
-    """Applies Rotary Position Embedding to the query and key tensors.
-
-    Args:
-        q (`torch.Tensor`): The query tensor.
-        k (`torch.Tensor`): The key tensor.
-        cos (`torch.Tensor`): The cosine part of the rotary embedding.
-        sin (`torch.Tensor`): The sine part of the rotary embedding.
-        position_ids (`torch.Tensor`, *optional*):
-            Deprecated and unused.
-        unsqueeze_dim (`int`, *optional*, defaults to 1):
-            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
-            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
-            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
-            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
-            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
-            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
-    Returns:
-        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
-    """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
+    del position_ids
+    return _BAGEL_COMPAT_ROPE.apply(q, k, (cos, sin), unsqueeze_dim=unsqueeze_dim)
 
 
 class BagelTransformerInfer(BaseTransformerInfer):
@@ -64,6 +36,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
         self.num_heads = llm_config["num_attention_heads"]
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = llm_config["num_key_value_heads"]
+        self.rope_module = TorchRealRope(layout="split_half")
         self.init_kv_cache()
 
     def set_scheduler(self, scheduler):
@@ -139,7 +112,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
             packed_key_states[packed_vae_token_indexes] = weights.k_norm_moe_gen.apply(packed_key_states[packed_vae_token_indexes])
 
         packed_cos, packed_sin = packed_query_position_embeddings
-        packed_query_states, packed_key_states = apply_rotary_pos_emb(packed_query_states, packed_key_states, packed_cos, packed_sin, unsqueeze_dim=1)
+        packed_query_states, packed_key_states = self.rope_module.apply(packed_query_states, packed_key_states, (packed_cos, packed_sin), unsqueeze_dim=1)
 
         packed_query_states = packed_query_states.to(torch.bfloat16)
         packed_key_states = packed_key_states.to(torch.bfloat16)

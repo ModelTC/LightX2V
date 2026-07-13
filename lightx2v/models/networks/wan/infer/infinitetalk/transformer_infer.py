@@ -3,6 +3,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
+from lightx2v.common.ops.rope import TorchRealRope
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import GET_DTYPE
 
@@ -11,12 +12,6 @@ def linear_interpolation(features, seq_len):
     features = features.transpose(1, 2)
     output_features = F.interpolate(features, size=seq_len, align_corners=True, mode="linear")
     return output_features.transpose(1, 2)
-
-
-def rotate_half(x):
-    x = rearrange(x, "... (d r) -> ... d r", r=2)
-    x1, x2 = x.unbind(dim=-1)
-    return rearrange(torch.stack((-x2, x1), dim=-1), "... d r -> ... (d r)")
 
 
 def normalize_and_scale(column, source_range, target_range, epsilon=1e-8):
@@ -37,8 +32,7 @@ class RotaryPositionalEmbedding1D:
         freqs = repeat(freqs, "... n -> ... (n r)", r=2)
         cos = rearrange(freqs.cos().float(), "n d -> 1 1 n d").to(x.device)
         sin = rearrange(freqs.sin().float(), "n d -> 1 1 n d").to(x.device)
-        x_float = x.float()
-        return (x_float * cos + rotate_half(x_float) * sin).type_as(x)
+        return TorchRealRope(layout="interleaved").apply_single(x, (cos, sin))
 
 
 class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):

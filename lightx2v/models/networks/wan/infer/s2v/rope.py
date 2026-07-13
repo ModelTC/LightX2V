@@ -3,6 +3,8 @@
 import numpy as np
 import torch
 
+from lightx2v.common.ops.rope import TorchComplexRope
+
 
 def rope_precompute(x, grid_sizes, freqs, start=None):
     b, s, n, c = x.size(0), x.size(1), x.size(2), x.size(3) // 2
@@ -58,19 +60,13 @@ def rope_precompute(x, grid_sizes, freqs, start=None):
     return output
 
 
+_S2V_ROPE = TorchComplexRope(compute_dtype=torch.float64)
+
+
 @torch.amp.autocast("cuda", enabled=False)
 def rope_apply(x, precomputed_freqs):
-    """Match Wan2.2/wan/modules/s2v/model_s2v.py rope_apply for precomputed freqs."""
-    output = []
-    for i in range(x.size(0)):
-        s = x.size(1)
-        x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(s, x.size(2), -1, 2))
-        freqs_i = precomputed_freqs[i, :s]
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        if s < x.size(1):
-            x_i = torch.cat([x_i, x[i, s:]])
-        output.append(x_i)
-    return torch.stack(output).float()
+    """Match Wan2.2 S2V precomputed RoPE."""
+    return _S2V_ROPE.apply_single(x, precomputed_freqs).float()
 
 
 @torch.amp.autocast("cuda", enabled=False)

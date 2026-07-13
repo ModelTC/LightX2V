@@ -2,6 +2,7 @@ from typing import List, Tuple, Union
 
 import torch
 
+from lightx2v.common.ops.rope import TorchRealRope
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -96,76 +97,18 @@ def reshape_for_broadcast(
     return freqs_cis[0].view(*shape), freqs_cis[1].view(*shape)
 
 
-def rotate_half(x):
-    x_real, x_imag = x.float().reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
-    return torch.stack([-x_imag, x_real], dim=-1).flatten(3)
+_HUNYUAN_POSEMB_ROPE = TorchRealRope(layout="interleaved")
+_HUNYUAN_POSEMB_BF16_ROPE = TorchRealRope(layout="interleaved", compute_dtype=torch.bfloat16)
 
 
-def apply_rotary_emb(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply rotary embeddings to input tensors using the given frequency tensor.
-
-    This function applies rotary embeddings to the given query 'xq' and key 'xk' tensors using the provided
-    frequency tensor 'freqs_cis'. The input tensors are reshaped as complex numbers, and the frequency tensor
-    is reshaped for broadcasting compatibility. The resulting tensors contain rotary embeddings and are
-    returned as real tensors.
-
-    Args:
-        xq (torch.Tensor): Query tensor to apply rotary embeddings. [B, S, H, D]
-        xk (torch.Tensor): Key tensor to apply rotary embeddings.   [B, S, H, D]
-        freqs_cis (torch.Tensor or tuple): Precomputed frequency tensor for complex exponential.
-        head_first (bool): head dimension first (except batch dim) or not.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
-
-    """
-    cos, sin = reshape_for_broadcast(freqs_cis, xq)  # [S, D]
-    # real * cos - imag * sin
-    # imag * cos + real * sin
-    xq_out = (xq.float() * cos + rotate_half(xq.float()) * sin).type_as(xq)
-    xk_out = (xk.float() * cos + rotate_half(xk.float()) * sin).type_as(xk)
-    return xq_out, xk_out
+def apply_rotary_emb(xq, xk, freqs_cis):
+    cos, sin = reshape_for_broadcast(freqs_cis, xq)
+    return _HUNYUAN_POSEMB_ROPE.apply(xq, xk, (cos, sin))
 
 
-def rotate_half_force_bf16(x):
-    x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
-    return torch.stack([-x_imag, x_real], dim=-1).flatten(3)
-
-
-def apply_rotary_emb_force_bf16(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply rotary embeddings to input tensors using the given frequency tensor.
-
-    This function applies rotary embeddings to the given query 'xq' and key 'xk' tensors using the provided
-    frequency tensor 'freqs_cis'. The input tensors are reshaped as complex numbers, and the frequency tensor
-    is reshaped for broadcasting compatibility. The resulting tensors contain rotary embeddings and are
-    returned as real tensors.
-
-    Args:
-        xq (torch.Tensor): Query tensor to apply rotary embeddings. [B, S, H, D]
-        xk (torch.Tensor): Key tensor to apply rotary embeddings.   [B, S, H, D]
-        freqs_cis (torch.Tensor or tuple): Precomputed frequency tensor for complex exponential.
-        head_first (bool): head dimension first (except batch dim) or not.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
-
-    """
-    cos, sin = reshape_for_broadcast(freqs_cis, xq)  # [S, D]
-    # real * cos - imag * sin
-    # imag * cos + real * sin
-    xq_out = xq * cos + rotate_half_force_bf16(xq) * sin
-    xk_out = xk * cos + rotate_half_force_bf16(xk) * sin
-    return xq_out, xk_out
+def apply_rotary_emb_force_bf16(xq, xk, freqs_cis):
+    cos, sin = reshape_for_broadcast(freqs_cis, xq)
+    return _HUNYUAN_POSEMB_BF16_ROPE.apply(xq, xk, (cos, sin))
 
 
 def get_nd_rotary_pos_embed(
