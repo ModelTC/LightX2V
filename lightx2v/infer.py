@@ -24,6 +24,7 @@ from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_dancer_runner import WanDancerRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_dreamzero_runner import WanDreamZeroRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_infinitetalk_runner import InfiniteTalkRunner  # noqa: F401
@@ -66,6 +67,7 @@ def main():
             "wan2.1",
             "wan2.1_distill",
             "wan2.1_mean_flow_distill",
+            "wan_dancer",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
