@@ -479,3 +479,85 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 next_prefetch=None,
             )
         return y
+
+    def infer_cross_attn_with_kvcache(self, phase, x, context, y_out, gate_msa):
+        num_frames = gate_msa.shape[0]
+        frame_seqlen = x.shape[0] // num_frames
+        seg_index = self.scheduler.seg_index
+
+        x.add_((y_out.unflatten(dim=0, sizes=(num_frames, frame_seqlen)) * gate_msa).flatten(0, 1))
+
+        norm3_out = phase.norm3.apply(x)
+
+        if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
+            context_img = context[:257]
+            context = context[257:]
+        else:
+            context_img = None
+
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            context = context.to(self.infer_dtype)
+            if context_img is not None:
+                context_img = context_img.to(self.infer_dtype)
+
+        n, d = self.num_heads, self.head_dim
+        q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
+
+        if self.config["ar_config"].get("use_cross_attn_kv_cache", False):
+            cross_kv_cache = self.kv_cache_manager.cross_attn_kv_cache
+            if seg_index == 0:
+                k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
+                v = phase.cross_attn_v.apply(context).view(-1, n, d)
+                cross_kv_cache.store_kv(k, v, self.block_idx)
+                self._cross_kv_len = k.size(0)
+            else:
+                L = self._cross_kv_len
+                k = cross_kv_cache.k_cache(self.block_idx)[:L]
+                v = cross_kv_cache.v_cache(self.block_idx)[:L]
+        else:
+            k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
+            v = phase.cross_attn_v.apply(context).view(-1, n, d)
+
+        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
+            q,
+            k_lens=torch.tensor([k.size(0)], dtype=torch.int32),
+        )
+        attn_out = phase.cross_attn_1.apply(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_kv=cu_seqlens_k,
+            max_seqlen_q=q.size(0),
+            max_seqlen_kv=k.size(0),
+        )
+
+        if context_img is not None:
+            k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
+            v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
+            cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
+                q,
+                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32),
+            )
+            attn_out.add_(
+                phase.cross_attn_2.apply(
+                    q=q,
+                    k=k_img,
+                    v=v_img,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_kv=cu_seqlens_k,
+                    max_seqlen_q=q.size(0),
+                    max_seqlen_kv=k_img.size(0),
+                )
+            )
+
+            if self.clean_cuda_cache:
+                del k_img, v_img
+                torch_device_module.empty_cache()
+
+        attn_out = phase.cross_attn_o.apply(attn_out)
+
+        if self.clean_cuda_cache:
+            del q, k, v, norm3_out, context, context_img
+            torch_device_module.empty_cache()
+        return x, attn_out
