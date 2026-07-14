@@ -216,7 +216,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         if freqs.shape[0] != q.shape[0]:
             raise ValueError(f"DreamZero RoPE length mismatch: freqs={freqs.shape[0]}, q={q.shape[0]}.")
 
-        if q.is_cuda and self.dreamzero_rope_type in {"flashinfer", "flashinfer_rope"} and self.dreamzero_flashinfer_rope.is_available():
+        if q.is_cuda and self.dreamzero_rope_type == "flashinfer_rope" and self.dreamzero_flashinfer_rope.is_available():
             return self.dreamzero_flashinfer_rope.apply(
                 q,
                 k,
@@ -224,7 +224,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
                 positions=self._get_rope_positions(q.shape[0], q.device),
             )
 
-        if q.is_cuda and self.dreamzero_rope_type in {"flashinfer", "flashinfer_rope", "triton"}:
+        if q.is_cuda and self.dreamzero_rope_type in {"flashinfer_rope", "triton"}:
             cos, sin = self._get_rope_cos_sin(freqs)
             return (
                 apply_rotary_embedding(q.contiguous(), cos, sin, interleaved=False),

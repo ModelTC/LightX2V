@@ -14,7 +14,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from lightx2v.common.ops.rope import build_rope_module, get_rope_module
+from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.models.networks.ltx2.infer.module_io import LTX2PreInferModuleOutput
 from lightx2v.models.networks.ltx2.infer.triton_ops import fuse_scale_shift_kernel, fused_rmsnorm_modulate
 from lightx2v.models.networks.ltx2.infer.utils import modulate_torch_naive, modulate_with_rmsnorm_torch_naive, rmsnorm_torch_naive
@@ -36,22 +36,14 @@ class LTX2TransformerInfer:
             config: Model configuration dictionary
         """
         self.config = config
-        rope_type = config.get("rope_type", "torch_real_rope")
-        legacy_layout = rope_type if rope_type in {"split", "interleaved"} else None
-        self.rope_layout = config.get("rope_layout", legacy_layout or "split_half")
-        if self.rope_layout == "split":
-            self.rope_layout = "split_half"
+        self.rope_layout = config.get("rope_layout", "split_half")
         if self.rope_layout not in {"interleaved", "split_half"}:
             raise ValueError(f"Unsupported rope_layout: {self.rope_layout}")
-        if legacy_layout is not None:
-            self.rope_module = get_rope_module("torch_real_rope", layout=self.rope_layout)
-            self.rope_module.set_config(config)
-        else:
-            self.rope_module = build_rope_module(
-                config,
-                layout=self.rope_layout,
-                default="torch_real_rope",
-            )
+        self.rope_module = build_rope_module(
+            config,
+            layout=self.rope_layout,
+            default="torch_real_rope",
+        )
         self.blocks_num = config.get("num_layers", 48)
         self.v_num_heads = config.get("num_attention_heads", 32)
         self.v_head_dim = config.get("attention_head_dim", 128)

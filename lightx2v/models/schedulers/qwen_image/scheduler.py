@@ -667,7 +667,7 @@ class QwenImageScheduler(BaseScheduler):
             self.prepare_i2i_denoise_strength_latents(input_info)
 
         self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
-        if self.config.get("rope_type", "flashinfer_rope") in {"flashinfer", "flashinfer_rope"}:
+        if self.config.get("rope_type", "flashinfer_rope") == "flashinfer_rope":
             cos_half_img = self.image_rotary_emb[0].real.contiguous()
             sin_half_img = self.image_rotary_emb[0].imag.contiguous()
             cos_half_txt = self.image_rotary_emb[1].real.contiguous()
@@ -685,7 +685,7 @@ class QwenImageScheduler(BaseScheduler):
 
         if self.config["enable_cfg"]:
             self.negative_image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[1], device=AI_DEVICE)
-            if self.config.get("rope_type", "flashinfer_rope") in {"flashinfer", "flashinfer_rope"}:
+            if self.config.get("rope_type", "flashinfer_rope") == "flashinfer_rope":
                 cos_half_img = self.negative_image_rotary_emb[0].real.contiguous()
                 sin_half_img = self.negative_image_rotary_emb[0].imag.contiguous()
                 cos_half_txt = self.negative_image_rotary_emb[1].real.contiguous()

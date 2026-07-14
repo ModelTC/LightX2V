@@ -90,7 +90,7 @@ def apply_split_half_rotary_triton(x: torch.Tensor, cos: torch.Tensor, sin: torc
 
 
 def apply_cosmos3_rotary(query: torch.Tensor, key: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, rope_type: str = "triton"):
-    if query.is_cuda and rope_type in {"flashinfer", "flashinfer_rope"} and apply_rope_with_cos_sin_cache_inplace is not None:
+    if query.is_cuda and rope_type == "flashinfer_rope" and apply_rope_with_cos_sin_cache_inplace is not None:
         head_dim = query.shape[-1]
         cache = torch.cat(
             [cos[:, : head_dim // 2].float(), sin[:, : head_dim // 2].float()],
@@ -98,7 +98,7 @@ def apply_cosmos3_rotary(query: torch.Tensor, key: torch.Tensor, cos: torch.Tens
         ).contiguous()
         return _COSMOS_FLASH_ROPE.apply(query, key, cache)
 
-    if query.is_cuda and rope_type in {"flashinfer", "flashinfer_rope", "triton"} and triton is not None:
+    if query.is_cuda and rope_type in {"flashinfer_rope", "triton"} and triton is not None:
         return apply_split_half_rotary_triton(query, cos, sin), apply_split_half_rotary_triton(key, cos, sin)
 
     return _COSMOS_TORCH_ROPE.apply(query, key, (cos, sin))

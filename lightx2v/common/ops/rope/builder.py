@@ -7,16 +7,8 @@ from lightx2v.utils.registry_factory import ROPE_REGISTER
 from .chunked_rope import ChunkedRope
 from .template import RopeTemplate
 
-ROPE_TYPE_ALIASES = {
-    "torch_complex": "torch_complex_rope",
-    "torch_naive": "torch_real_rope",
-    "torch_real": "torch_real_rope",
-    "flashinfer": "flashinfer_rope",
-}
-
 
 def get_rope_module(rope_type: str, *, layout="interleaved", compute_dtype=torch.float32):
-    rope_type = ROPE_TYPE_ALIASES.get(rope_type, rope_type)
     if rope_type not in ROPE_REGISTER:
         raise ValueError(f"Unsupported rope_type: {rope_type}")
     rope_class = ROPE_REGISTER[rope_type]
