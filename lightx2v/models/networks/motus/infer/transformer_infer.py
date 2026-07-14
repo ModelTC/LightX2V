@@ -1,6 +1,5 @@
 import torch
 
-from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.wan.infer.triton_ops import fuse_scale_shift_kernel
 from lightx2v.models.networks.wan.weights.motus import apply_mm
@@ -30,13 +29,6 @@ class MotusTransformerInfer(BaseTransformerInfer):
         self.num_heads = config["num_heads"]
         self.head_dim = config["dim"] // config["num_heads"]
         self.modulate_func = fuse_scale_shift_kernel if config.get("modulate_type", "triton") == "triton" else modulate
-
-        self.rope_module = build_rope_module(
-            config,
-            layout="interleaved",
-            default="flashinfer_rope",
-        )
-        self.apply_rope_func = self.rope_module.apply
 
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
@@ -146,13 +138,13 @@ class MotusTransformerInfer(BaseTransformerInfer):
             raise ValueError("Motus video rope expects q/k with shape [B, L, H, D].")
 
         if q.shape[0] == 1:
-            q_out, k_out = self.apply_rope_func(q.squeeze(0), k.squeeze(0), cos_sin_cache)
+            q_out, k_out = self.weights.rope.apply(q.squeeze(0), k.squeeze(0), cos_sin_cache)
             return q_out.unsqueeze(0), k_out.unsqueeze(0)
 
         q_list = []
         k_list = []
         for batch_idx in range(q.shape[0]):
-            q_i, k_i = self.apply_rope_func(q[batch_idx], k[batch_idx], cos_sin_cache)
+            q_i, k_i = self.weights.rope.apply(q[batch_idx], k[batch_idx], cos_sin_cache)
             q_list.append(q_i)
             k_list.append(k_i)
         return torch.stack(q_list, dim=0), torch.stack(k_list, dim=0)

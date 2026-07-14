@@ -5,7 +5,7 @@ import torch
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import *
 
-from ..utils import apply_rotary_emb, compute_freqs_causvid
+from ..utils import compute_freqs_causvid
 
 
 class WanTransformerInferCausVid(WanOffloadTransformerInfer):
@@ -109,8 +109,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
             # TODO: Implement parallel attention for causvid inference
             raise NotImplementedError("Parallel attention is not implemented for causvid inference")
 
-        q = apply_rotary_emb(q, freqs_i)
-        k = apply_rotary_emb(k, freqs_i)
+        q, k = weights.rope.apply(q, k, freqs_i)
 
         self.kv_cache[block_idx]["k"][kv_start:kv_end] = k
         self.kv_cache[block_idx]["v"][kv_start:kv_end] = v

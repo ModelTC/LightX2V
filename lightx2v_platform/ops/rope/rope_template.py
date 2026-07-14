@@ -47,3 +47,31 @@ class RopeTemplate(metaclass=ABCMeta):
     def set_config(self, config=None):
         if config is not None:
             self.config = config
+
+    def load(self, weight_dict):
+        pass
+
+    def to_cpu(self, non_blocking=False):
+        pass
+
+    def to_cuda(self, non_blocking=False):
+        pass
+
+    def state_dict(self, destination=None):
+        return {} if destination is None else destination
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        return {} if destination is None else destination
+
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        pass
+
+    def named_parameters(self, prefix=""):
+        return iter(())
+
+    def prepare_freqs(self, freqs):
+        return freqs
+
+    def apply_single(self, x: torch.Tensor, freqs, **kwargs):
+        output, _ = self.apply(x, x.clone(), freqs, **kwargs)
+        return output

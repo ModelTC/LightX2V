@@ -7,7 +7,6 @@ from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerI
 from lightx2v.models.networks.seedvr.utils import na
 from lightx2v.models.networks.seedvr.utils.attention import FlashAttentionVarlen
 from lightx2v.models.networks.seedvr.utils.ops import gather_heads_scatter_seq, gather_seq_scatter_heads_qkv, safe_pad_operation
-from lightx2v.models.networks.seedvr.utils.rope import get_na_rope
 from lightx2v.models.networks.seedvr.utils.window import get_window_op
 
 from .utils import apply_adaln_single, norm_no_weight
@@ -22,11 +21,8 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
         self.norm_type = config.get("norm", "fusedrms")
         self.qk_norm_type = config.get("qk_norm", "fusedrms")
         self.norm_eps = config.get("norm_eps", 1.0e-5)
-        self.rope_type = config.get("rope_type", None)
-        self.rope_dim = config.get("rope_dim", None)
         self.mlp_type = config.get("mlp_type", "swiglu")
 
-        self.rope = get_na_rope(rope_type=self.rope_type, dim=self.rope_dim) if self.rope_type else None
         self.attn = FlashAttentionVarlen()
 
     def set_scheduler(self, scheduler):
@@ -60,11 +56,10 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
         vid_k = norm_k_vid.apply(vid_k)
         txt_k = norm_k_txt.apply(txt_k)
 
-        if self.rope is not None:
-            if self.rope.mm:
-                vid_q, vid_k, txt_q, txt_k = self.rope(vid_q, vid_k, vid_shape, txt_q, txt_k, txt_shape, cache)
-            else:
-                vid_q, vid_k = self.rope(vid_q, vid_k, vid_shape, cache)
+        if block_weight.rope.multimodal:
+            vid_q, vid_k, txt_q, txt_k = block_weight.rope.apply(vid_q, vid_k, vid_shape, txt_q=txt_q, txt_k=txt_k, txt_shape=txt_shape, cache=cache)
+        else:
+            vid_q, vid_k = block_weight.rope.apply(vid_q, vid_k, vid_shape, cache=cache)
 
         vid_len = cache("vid_len", lambda: vid_shape.prod(-1))
         txt_len = cache("txt_len", lambda: txt_shape.prod(-1))
@@ -139,34 +134,33 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
         all_len_win = cache_win("all_len", lambda: vid_len_win + txt_len_win)
         concat_win, unconcat_win = cache_win("mm_pnp", lambda: na.repeat_concat_idx(vid_len_win, txt_len, window_count))
 
-        if self.rope is not None:
-            if self.rope.mm:
-                _, num_h, _ = txt_q.shape
-                txt_q_repeat = rearrange(txt_q, "l h d -> l (h d)")
-                txt_q_repeat = na.unflatten(txt_q_repeat, txt_shape)
-                txt_q_repeat = [[x] * n for x, n in zip(txt_q_repeat, window_count)]
-                txt_q_repeat = [t for sub in txt_q_repeat for t in sub]
-                txt_q_repeat, txt_shape_repeat = na.flatten(txt_q_repeat)
-                txt_q_repeat = rearrange(txt_q_repeat, "l (h d) -> l h d", h=num_h)
+        if block_weight.rope.multimodal:
+            _, num_h, _ = txt_q.shape
+            txt_q_repeat = rearrange(txt_q, "l h d -> l (h d)")
+            txt_q_repeat = na.unflatten(txt_q_repeat, txt_shape)
+            txt_q_repeat = [[x] * n for x, n in zip(txt_q_repeat, window_count)]
+            txt_q_repeat = [t for sub in txt_q_repeat for t in sub]
+            txt_q_repeat, txt_shape_repeat = na.flatten(txt_q_repeat)
+            txt_q_repeat = rearrange(txt_q_repeat, "l (h d) -> l h d", h=num_h)
 
-                txt_k_repeat = rearrange(txt_k, "l h d -> l (h d)")
-                txt_k_repeat = na.unflatten(txt_k_repeat, txt_shape)
-                txt_k_repeat = [[x] * n for x, n in zip(txt_k_repeat, window_count)]
-                txt_k_repeat = [t for sub in txt_k_repeat for t in sub]
-                txt_k_repeat, _ = na.flatten(txt_k_repeat)
-                txt_k_repeat = rearrange(txt_k_repeat, "l (h d) -> l h d", h=num_h)
+            txt_k_repeat = rearrange(txt_k, "l h d -> l (h d)")
+            txt_k_repeat = na.unflatten(txt_k_repeat, txt_shape)
+            txt_k_repeat = [[x] * n for x, n in zip(txt_k_repeat, window_count)]
+            txt_k_repeat = [t for sub in txt_k_repeat for t in sub]
+            txt_k_repeat, _ = na.flatten(txt_k_repeat)
+            txt_k_repeat = rearrange(txt_k_repeat, "l (h d) -> l h d", h=num_h)
 
-                vid_q, vid_k, txt_q, txt_k = self.rope(
-                    vid_q,
-                    vid_k,
-                    window_shape,
-                    txt_q_repeat,
-                    txt_k_repeat,
-                    txt_shape_repeat,
-                    cache_win,
-                )
-            else:
-                vid_q, vid_k = self.rope(vid_q, vid_k, window_shape, cache_win)
+            vid_q, vid_k, txt_q, txt_k = block_weight.rope.apply(
+                vid_q,
+                vid_k,
+                window_shape,
+                txt_q=txt_q_repeat,
+                txt_k=txt_k_repeat,
+                txt_shape=txt_shape_repeat,
+                cache=cache_win,
+            )
+        else:
+            vid_q, vid_k = block_weight.rope.apply(vid_q, vid_k, window_shape, cache=cache_win)
 
         out = self.attn(
             q=concat_win(vid_q, txt_q).bfloat16(),

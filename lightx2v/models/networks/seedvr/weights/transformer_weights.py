@@ -1,4 +1,8 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.rope import build_rope_weight
+from lightx2v.models.networks.seedvr.utils import rope as _seedvr_rope  # noqa: F401
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, TENSOR_REGISTER
 
 
@@ -24,6 +28,7 @@ class SeedVRTransformerWeights(WeightModule):
         last_layer_vid_only = bool(config.get("last_layer_vid_only"))
         blocks = WeightModuleList(
             SeedVRTransformerBlockWeights(
+                config=config,
                 block_index=i,
                 shared_weights=not ((i < mm_layers) if isinstance(mm_layers, int) else mm_layers[i]),
                 vid_only=(last_layer_vid_only and i == self.blocks_num - 1),
@@ -44,6 +49,7 @@ class SeedVRTransformerBlockWeights(WeightModule):
     def __init__(
         self,
         *,
+        config,
         block_index: int,
         shared_weights: bool,
         vid_only: bool,
@@ -64,6 +70,10 @@ class SeedVRTransformerBlockWeights(WeightModule):
         self.mlp_type = mlp_type
         self.norm_eps = norm_eps
         self.rms_norm_type = rms_norm_type
+        self.add_module(
+            "rope",
+            build_rope_weight(config, layout="interleaved", default="rope3d", compute_dtype=torch.float32),
+        )
 
         branches = ["all"] if shared_weights else ["vid", "txt"]
         self.branches = branches

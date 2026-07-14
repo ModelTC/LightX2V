@@ -15,15 +15,17 @@ from .template import RopeTemplate, broadcast_freqs
 
 @ROPE_REGISTER("torch_complex_rope")
 class TorchComplexRope(RopeTemplate):
-    def __init__(self, compute_dtype: torch.dtype = torch.float32):
-        super().__init__(layout="interleaved", compute_dtype=compute_dtype)
+    def __init__(self, layout="interleaved", compute_dtype: torch.dtype = torch.float32):
+        if layout != "interleaved":
+            raise ValueError("TorchComplexRope only supports interleaved layout.")
+        super().__init__(layout=layout, compute_dtype=compute_dtype)
 
     def apply(self, q: torch.Tensor, k: torch.Tensor, freqs, **kwargs):
         if q.ndim == 3 and k.ndim == 3 and self.compute_dtype == torch.float32 and torch.is_complex(freqs) and use_magi_custom_ops() and magi_register_custom_op is not None and not kwargs:
             return torch.ops.lightx2v.rope_torch_complex(q, k, freqs)
         return super().apply(q, k, freqs, **kwargs)
 
-    def apply_single(self, x: torch.Tensor, freqs: torch.Tensor, rotary_dim: int | None = None, unsqueeze_dim: int = -2):
+    def apply_single(self, x: torch.Tensor, freqs: torch.Tensor, rotary_dim: int | None = None, unsqueeze_dim: int = -2, **kwargs):
         if not torch.is_complex(freqs):
             raise TypeError("TorchComplexRope expects a complex frequency tensor.")
         rotary_dim = rotary_dim or x.shape[-1]
@@ -61,7 +63,7 @@ class TorchRealRope(RopeTemplate):
         first, second = x.chunk(2, dim=-1)
         return torch.cat((-second, first), dim=-1)
 
-    def apply_single(self, x: torch.Tensor, freqs, rotary_dim: int | None = None, unsqueeze_dim: int = -2):
+    def apply_single(self, x: torch.Tensor, freqs, rotary_dim: int | None = None, unsqueeze_dim: int = -2, **kwargs):
         rotary_dim = rotary_dim or x.shape[-1]
         if rotary_dim % 2:
             raise ValueError(f"rotary_dim must be even, got {rotary_dim}.")

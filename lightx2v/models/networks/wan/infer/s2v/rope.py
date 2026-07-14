@@ -3,8 +3,6 @@
 import numpy as np
 import torch
 
-from lightx2v.common.ops.rope import TorchComplexRope
-
 
 def rope_precompute(x, grid_sizes, freqs, start=None):
     b, s, n, c = x.size(0), x.size(1), x.size(2), x.size(3) // 2
@@ -58,17 +56,3 @@ def rope_precompute(x, grid_sizes, freqs, start=None):
                 output[i, seq_bucket[-1] : seq_bucket[-1] + seq_len] = freqs_i
         seq_bucket.append(seq_bucket[-1] + seq_len)
     return output
-
-
-_S2V_ROPE = TorchComplexRope(compute_dtype=torch.float64)
-
-
-@torch.amp.autocast("cuda", enabled=False)
-def rope_apply(x, precomputed_freqs):
-    """Match Wan2.2 S2V precomputed RoPE."""
-    return _S2V_ROPE.apply_single(x, precomputed_freqs).float()
-
-
-@torch.amp.autocast("cuda", enabled=False)
-def apply_precomputed_rope(x, precomputed_freqs):
-    return rope_apply(x, precomputed_freqs)

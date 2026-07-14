@@ -3,7 +3,8 @@ import math
 import torch
 import torch.nn.functional as F
 
-from lightx2v.common.ops.rope import FlashInferRope, TorchRealRope
+from lightx2v.common.ops.rope import RopeTemplate, TorchRealRope
+from lightx2v.utils.registry_factory import ROPE_REGISTER
 
 try:
     import triton  # type: ignore
@@ -12,13 +13,24 @@ except ImportError:
     triton = None
     tl = None
 
-try:
-    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
-except ImportError:
-    apply_rope_with_cos_sin_cache_inplace = None
 
-_COSMOS_TORCH_ROPE = TorchRealRope(layout="split_half")
-_COSMOS_FLASH_ROPE = FlashInferRope(layout="split_half")
+@ROPE_REGISTER("cosmos3_rope")
+class Cosmos3Rope(RopeTemplate):
+    def __init__(self, layout="split_half", compute_dtype=torch.float32):
+        super().__init__(layout=layout, compute_dtype=compute_dtype)
+        if layout != "split_half":
+            raise ValueError("Cosmos3Rope only supports split_half layout.")
+        self.torch_rope = TorchRealRope(layout=layout, compute_dtype=compute_dtype)
+
+    def apply(self, query, key, freqs, **kwargs):
+        cos, sin = freqs
+        if query.is_cuda and triton is not None:
+            return apply_split_half_rotary_triton(query, cos, sin), apply_split_half_rotary_triton(key, cos, sin)
+        return self.torch_rope.apply(query, key, freqs, **kwargs)
+
+    def apply_single(self, x, freqs, **kwargs):
+        output, _ = self.apply(x, x.clone(), freqs, **kwargs)
+        return output
 
 
 if triton is not None:
@@ -87,21 +99,6 @@ def apply_split_half_rotary_triton(x: torch.Tensor, cos: torch.Tensor, sin: torc
             BLOCK_HS_HALF=block_hs_half,
         )
     return output
-
-
-def apply_cosmos3_rotary(query: torch.Tensor, key: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, rope_type: str = "triton"):
-    if query.is_cuda and rope_type == "flashinfer_rope" and apply_rope_with_cos_sin_cache_inplace is not None:
-        head_dim = query.shape[-1]
-        cache = torch.cat(
-            [cos[:, : head_dim // 2].float(), sin[:, : head_dim // 2].float()],
-            dim=-1,
-        ).contiguous()
-        return _COSMOS_FLASH_ROPE.apply(query, key, cache)
-
-    if query.is_cuda and rope_type in {"flashinfer_rope", "triton"} and triton is not None:
-        return apply_split_half_rotary_triton(query, cos, sin), apply_split_half_rotary_triton(key, cos, sin)
-
-    return _COSMOS_TORCH_ROPE.apply(query, key, (cos, sin))
 
 
 def get_timestep_embedding(

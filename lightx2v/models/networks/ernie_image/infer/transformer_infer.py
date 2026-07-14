@@ -1,14 +1,11 @@
 import torch.nn.functional as F
 
-from lightx2v.common.ops.rope import TorchRealRope
-
 
 class ErnieImageTransformerInfer:
     def __init__(self, config):
         self.config = config
         self.num_heads = config["num_attention_heads"]
         self.head_dim = config["hidden_size"] // config["num_attention_heads"]
-        self.rope_module = TorchRealRope(layout="split_half")
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -20,8 +17,12 @@ class ErnieImageTransformerInfer:
 
         query = weights.norm_q.apply(query)
         key = weights.norm_k.apply(key)
-        query = self.rope_module.apply_single(query, (rotary_pos_emb.cos(), rotary_pos_emb.sin()), rotary_dim=rotary_pos_emb.shape[-1])
-        key = self.rope_module.apply_single(key, (rotary_pos_emb.cos(), rotary_pos_emb.sin()), rotary_dim=rotary_pos_emb.shape[-1])
+        query, key = weights.rope.apply(
+            query,
+            key,
+            (rotary_pos_emb.cos(), rotary_pos_emb.sin()),
+            rotary_dim=rotary_pos_emb.shape[-1],
+        )
 
         hidden_states = weights.attn.apply(
             query,

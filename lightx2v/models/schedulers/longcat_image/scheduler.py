@@ -284,11 +284,6 @@ class LongCatImageScheduler(BaseScheduler):
                 image_emb = F.pad(image_emb, (0, 0, 0, padding_size))
             return torch.chunk(image_emb, world_size, dim=0)[cur_rank]
 
-        if self.config.get("rope_type", "flashinfer_rope") == "flashinfer_rope":
-            txt_emb = rotary_emb[:txt_seq_len]
-            img_emb = chunk_image_emb(rotary_emb[txt_seq_len:])
-            return torch.cat([txt_emb, img_emb], dim=0)
-
         freqs_cos, freqs_sin = rotary_emb
         txt_cos, img_cos = freqs_cos[:txt_seq_len], freqs_cos[txt_seq_len:]
         txt_sin, img_sin = freqs_sin[:txt_seq_len], freqs_sin[txt_seq_len:]
@@ -388,15 +383,7 @@ class LongCatImageScheduler(BaseScheduler):
         ids = torch.cat([txt_ids, img_ids], dim=0).to(AI_DEVICE, dtype=torch.float32)
         freqs_cos, freqs_sin = self.pos_embed(ids)
 
-        # Convert to flashinfer format if needed
-        if self.config.get("rope_type", "flashinfer_rope") == "flashinfer_rope":
-            # pos_embed returns interleaved format: [c0, c0, c1, c1, ...]
-            # flashinfer needs: [c0, c1, ..., s0, s1, ...]
-            cos_half = freqs_cos[:, ::2].contiguous()  # [L, D/2]
-            sin_half = freqs_sin[:, ::2].contiguous()  # [L, D/2]
-            self.image_rotary_emb = torch.cat([cos_half, sin_half], dim=-1)  # [L, D]
-        else:
-            self.image_rotary_emb = (freqs_cos, freqs_sin)
+        self.image_rotary_emb = (freqs_cos, freqs_sin)
         self.image_rotary_emb = self._seq_parallel_rope(self.image_rotary_emb, txt_seq_len)
 
         # Handle CFG: prepare negative embeddings rotary
@@ -406,12 +393,7 @@ class LongCatImageScheduler(BaseScheduler):
             neg_ids = torch.cat([neg_txt_ids, img_ids], dim=0).to(AI_DEVICE, dtype=torch.float32)
             neg_freqs_cos, neg_freqs_sin = self.pos_embed(neg_ids)
 
-            if self.config.get("rope_type", "flashinfer_rope") == "flashinfer_rope":
-                neg_cos_half = neg_freqs_cos[:, ::2].contiguous()
-                neg_sin_half = neg_freqs_sin[:, ::2].contiguous()
-                self.negative_image_rotary_emb = torch.cat([neg_cos_half, neg_sin_half], dim=-1)
-            else:
-                self.negative_image_rotary_emb = (neg_freqs_cos, neg_freqs_sin)
+            self.negative_image_rotary_emb = (neg_freqs_cos, neg_freqs_sin)
             self.negative_image_rotary_emb = self._seq_parallel_rope(self.negative_image_rotary_emb, neg_txt_seq_len)
 
     def step_pre(self, step_index):
@@ -469,13 +451,7 @@ class LongCatImageScheduler(BaseScheduler):
         ids = torch.cat([txt_ids, combined_img_ids], dim=0).to(AI_DEVICE, dtype=torch.float32)
         freqs_cos, freqs_sin = self.pos_embed(ids)
 
-        # Convert to flashinfer format if needed
-        if self.config.get("rope_type", "flashinfer_rope") == "flashinfer_rope":
-            cos_half = freqs_cos[:, ::2].contiguous()
-            sin_half = freqs_sin[:, ::2].contiguous()
-            self.image_rotary_emb = torch.cat([cos_half, sin_half], dim=-1)
-        else:
-            self.image_rotary_emb = (freqs_cos, freqs_sin)
+        self.image_rotary_emb = (freqs_cos, freqs_sin)
         self.image_rotary_emb = self._seq_parallel_rope(self.image_rotary_emb, txt_seq_len)
 
         # Store output sequence length for later truncation
@@ -488,12 +464,7 @@ class LongCatImageScheduler(BaseScheduler):
             neg_ids = torch.cat([neg_txt_ids, combined_img_ids], dim=0).to(AI_DEVICE, dtype=torch.float32)
             neg_freqs_cos, neg_freqs_sin = self.pos_embed(neg_ids)
 
-            if self.config.get("rope_type", "flashinfer_rope") == "flashinfer_rope":
-                neg_cos_half = neg_freqs_cos[:, ::2].contiguous()
-                neg_sin_half = neg_freqs_sin[:, ::2].contiguous()
-                self.negative_image_rotary_emb = torch.cat([neg_cos_half, neg_sin_half], dim=-1)
-            else:
-                self.negative_image_rotary_emb = (neg_freqs_cos, neg_freqs_sin)
+            self.negative_image_rotary_emb = (neg_freqs_cos, neg_freqs_sin)
             self.negative_image_rotary_emb = self._seq_parallel_rope(self.negative_image_rotary_emb, neg_txt_seq_len)
 
     def _encode_image(self, image):

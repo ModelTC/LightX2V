@@ -1,4 +1,7 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, TENSOR_REGISTER
 
 
@@ -29,6 +32,10 @@ class LingBotVideoBlockWeights(WeightModule):
 class LingBotVideoAttentionWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
+        self.add_module(
+            "rope",
+            build_rope_weight(config, layout="interleaved", default="torch_complex_rope", compute_dtype=torch.float32),
+        )
         mm_type = config.get("dit_quant_scheme", "Default")
         if mm_type != "Default":
             raise NotImplementedError("LingBot-Video currently supports original BF16 transformer weights only.")

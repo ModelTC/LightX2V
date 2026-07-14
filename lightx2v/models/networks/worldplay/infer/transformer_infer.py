@@ -9,6 +9,7 @@ from lightx2v.models.networks.hunyuan_video.infer.module_io import (
 )
 from lightx2v.models.networks.hunyuan_video.infer.transformer_infer import (
     HunyuanVideo15TransformerInfer,
+    _apply_hunyuan_rope,
     apply_gate,
 )
 from lightx2v.models.networks.worldplay.prope.camera_rope import prope_qkv
@@ -137,7 +138,7 @@ class WorldPlayTransformerInfer(HunyuanVideo15TransformerInfer):
         img_k_pre_rope = img_k.unsqueeze(0)
 
         # Apply RoPE for standard attention branch
-        img_q, img_k = self.apply_rope_func(img_q.unsqueeze(0), img_k.unsqueeze(0), freqs=self.scheduler.cos_sin)
+        img_q, img_k = _apply_hunyuan_rope(weights.rope, img_q.unsqueeze(0), img_k.unsqueeze(0), self.scheduler.cos_sin)
 
         return (
             img_q,

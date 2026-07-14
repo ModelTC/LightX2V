@@ -1,4 +1,7 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanFFN,
     WanSelfAttention,
@@ -98,6 +101,16 @@ class WanActionModule(WeightModule):
         self.quant_method = config.get("quant_method", None)
 
         self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
+        self.add_module(
+            "rope",
+            build_rope_weight(
+                config,
+                config_key="action_rope_type",
+                layout="interleaved",
+                default="torch_real_rope",
+                compute_dtype=torch.float32,
+            ),
+        )
 
         self.add_module(
             "keyboard_embed_0",

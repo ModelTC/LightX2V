@@ -12,17 +12,20 @@ def get_rope_module(rope_type: str, *, layout="interleaved", compute_dtype=torch
     if rope_type not in ROPE_REGISTER:
         raise ValueError(f"Unsupported rope_type: {rope_type}")
     rope_class = ROPE_REGISTER[rope_type]
-    if rope_type == "torch_complex_rope":
-        if layout != "interleaved":
-            raise ValueError("TorchComplexRope only supports interleaved layout.")
-        return rope_class(compute_dtype=compute_dtype)
     if issubclass(rope_class, RopeTemplate):
         return rope_class(layout=layout, compute_dtype=compute_dtype)
     return rope_class()
 
 
-def build_rope_module(config, *, layout="interleaved", default="flashinfer_rope", compute_dtype=torch.float32):
-    module = get_rope_module(config.get("rope_type", default), layout=layout, compute_dtype=compute_dtype)
+def build_rope_weight(
+    config,
+    *,
+    config_key="rope_type",
+    layout="interleaved",
+    default="flashinfer_rope",
+    compute_dtype=torch.float32,
+):
+    module = get_rope_module(config.get(config_key, default), layout=layout, compute_dtype=compute_dtype)
     if hasattr(module, "set_config"):
         module.set_config(config)
     if config.get("rope_chunk", False):

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.cosmos3.infer.module_io import Cosmos3TransformerInferModuleOutput
-from lightx2v.models.networks.cosmos3.infer.utils import apply_cosmos3_rotary, build_rotary_embeddings
+from lightx2v.models.networks.cosmos3.infer.utils import build_rotary_embeddings
 
 
 class Cosmos3TransformerInfer(BaseTransformerInfer):
@@ -18,7 +18,6 @@ class Cosmos3TransformerInfer(BaseTransformerInfer):
         self.rope_theta = config.get("rope_theta", 5000000)
         rope_scaling = config.get("rope_scaling", None)
         self.rope_axes_dim = tuple(rope_scaling.get("mrope_section", [24, 20, 20]) if rope_scaling else [24, 20, 20])
-        self.rope_type = config.get("rope_type", "triton")
         if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
@@ -73,8 +72,8 @@ class Cosmos3TransformerInfer(BaseTransformerInfer):
         k_gen = block_weights.norm_added_k.apply(k_gen)
 
         cos_und, sin_und, cos_gen, sin_gen = rotary_emb
-        q_und, k_und = apply_cosmos3_rotary(q_und, k_und, cos_und, sin_und, rope_type=self.rope_type)
-        q_gen, k_gen = apply_cosmos3_rotary(q_gen, k_gen, cos_gen, sin_gen, rope_type=self.rope_type)
+        q_und, k_und = block_weights.rope.apply(q_und, k_und, (cos_und, sin_und))
+        q_gen, k_gen = block_weights.rope.apply(q_gen, k_gen, (cos_gen, sin_gen))
 
         k_und_full, v_und_full = self._repeat_kv_for_gqa(k_und, v_und)
         causal_out = self._infer_attn(block_weights.causal_self_attn, q_und, k_und_full, v_und_full, causal=True)

@@ -1,6 +1,8 @@
+import torch
 from transformers.activations import ACT2FN
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -46,6 +48,10 @@ class HidreamO1ImageDecoderBlockWeights(WeightModule):
         super().__init__()
         self.block_index = block_index
         self.config = config
+        self.add_module(
+            "rope",
+            build_rope_weight(config, layout="split_half", default="flashinfer_rope", compute_dtype=torch.float32),
+        )
         self.heads = None
         self.kv_heads = None
         self.head_dim = None

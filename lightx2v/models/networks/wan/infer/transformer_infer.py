@@ -1,7 +1,6 @@
 import torch
 from loguru import logger
 
-from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import *
@@ -32,12 +31,6 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = modulate
-        self.rope_module = build_rope_module(
-            config,
-            layout="interleaved",
-            default="flashinfer_rope",
-        )
-        self.apply_rope_func = self.rope_module.apply
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.mxfp8_fuse_enable = self.config.get("mxfp8_fuse_enable", True)
         self.infer_dtype = GET_DTYPE()
@@ -235,7 +228,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
             k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
             v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
-        q, k = self.apply_rope_func(q, k, cos_sin)
+        q, k = phase.rope.apply(q, k, cos_sin)
         img_qkv_len = q.shape[0]
 
         if self.clean_cuda_cache:

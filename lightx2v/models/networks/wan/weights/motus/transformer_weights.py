@@ -1,4 +1,7 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerWeights
 
 from ._shared import MotusJointExpertBlockWeights, MotusJointExpertTransformerWeights, load_prefixed_submodules
@@ -78,6 +81,10 @@ class MotusTransformerWeights(WeightModule):
         expert_configs = build_motus_expert_configs(config)
         wan_num_heads = config["num_heads"]
         wan_head_dim = config["dim"] // wan_num_heads
+        self.add_module(
+            "rope",
+            build_rope_weight(config, layout="interleaved", default="flashinfer_rope", compute_dtype=torch.float32),
+        )
         self.add_module("video", MotusWanTransformerWeights(config))
         self.add_module(
             "action",

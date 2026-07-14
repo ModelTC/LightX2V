@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 
-from lightx2v.common.ops.rope import FlashInferRope, TorchRealRope, build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 from .module_io import HunyuanVideo15ImgBranchOutput, HunyuanVideo15TxtBranchOutput
@@ -32,24 +31,12 @@ def apply_gate(x, gate=None, tanh=False):
         return x * gate.unsqueeze(1)
 
 
-_HUNYUAN_FLASH_ROPE = FlashInferRope(layout="interleaved")
-_HUNYUAN_TORCH_ROPE = TorchRealRope(layout="interleaved")
-
-
 def _apply_hunyuan_rope(module, xq, xk, cos_sin_cache):
     q_shape, k_shape = xq.shape, xk.shape
     q = xq.reshape(-1, xq.shape[-2], xq.shape[-1])
     k = xk.reshape(-1, xk.shape[-2], xk.shape[-1])
     q, k = module.apply(q, k, cos_sin_cache)
     return q.view(q_shape), k.view(k_shape)
-
-
-def apply_hunyuan_rope_with_flashinfer(xq, xk, cos_sin_cache):
-    return _apply_hunyuan_rope(_HUNYUAN_FLASH_ROPE, xq, xk, cos_sin_cache)
-
-
-def apply_hunyuan_rope_with_torch(xq, xk, cos_sin_cache):
-    return _apply_hunyuan_rope(_HUNYUAN_TORCH_ROPE, xq, xk, cos_sin_cache)
 
 
 class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
@@ -72,19 +59,6 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = modulate
-        self.rope_module = build_rope_module(
-            config,
-            layout="interleaved",
-            default="flashinfer_rope",
-        )
-        self.apply_rope_func = self._apply_rope
-
-    def _apply_rope(self, q, k, freqs):
-        q_shape, k_shape = q.shape, k.shape
-        q_flat = q.reshape(-1, q.shape[-2], q.shape[-1])
-        k_flat = k.reshape(-1, k.shape[-2], k.shape[-1])
-        q_out, k_out = self.rope_module.apply(q_flat, k_flat, freqs)
-        return q_out.view(q_shape), k_out.view(k_shape)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -139,7 +113,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         img_v = rearrange(img_v, "L (H D) -> L H D", H=self.heads_num)
         img_q = weights.img_branch.img_attn_q_norm.apply(img_q)
         img_k = weights.img_branch.img_attn_k_norm.apply(img_k)
-        img_q, img_k = self.apply_rope_func(img_q.unsqueeze(0), img_k.unsqueeze(0), freqs=infer_module_out.cos_sin)
+        img_q, img_k = _apply_hunyuan_rope(weights.rope, img_q.unsqueeze(0), img_k.unsqueeze(0), infer_module_out.cos_sin)
         return (
             img_q,
             img_k,

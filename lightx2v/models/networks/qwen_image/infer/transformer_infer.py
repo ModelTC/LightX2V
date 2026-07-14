@@ -5,7 +5,6 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile, set_magi_custom_op_mode
-from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 from .triton_ops import (
@@ -51,13 +50,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
-        self.rope_module = build_rope_module(
-            config,
-            layout="interleaved",
-            default="flashinfer_rope",
-        )
-        self.apply_rope_func = self.rope_module.apply
-
         self.img_qkv_len1 = None
         self.cu_seqlens_qkv1 = None
         self.img_qkv_len2 = None
@@ -133,7 +125,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         if img_attn_phase.norm_k is not None:
             img_key = img_attn_phase.norm_k.apply(img_key)
 
-        img_query, img_key = self.apply_rope_func(img_query, img_key, img_freqs)
+        img_query, img_key = img_attn_phase.rope.apply(img_query, img_key, img_freqs)
 
         return img_query, img_key, img_value, img_gate1, img_mod2
 
@@ -160,7 +152,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         if txt_attn_phase.norm_added_k is not None:
             txt_key = txt_attn_phase.norm_added_k.apply(txt_key)
 
-        txt_query, txt_key = self.apply_rope_func(txt_query, txt_key, txt_freqs)
+        txt_query, txt_key = txt_attn_phase.rope.apply(txt_query, txt_key, txt_freqs)
 
         return txt_query, txt_key, txt_value, seq_txt, txt_gate1, txt_mod2
 

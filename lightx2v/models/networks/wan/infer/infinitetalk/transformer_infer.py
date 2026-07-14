@@ -3,7 +3,6 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
-from lightx2v.common.ops.rope import TorchRealRope
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import GET_DTYPE
 
@@ -26,13 +25,13 @@ class RotaryPositionalEmbedding1D:
         self.head_dim = head_dim
         self.base = 10000
 
-    def __call__(self, x, pos_indices):
+    def __call__(self, rope, x, pos_indices):
         freqs = 1.0 / (self.base ** (torch.arange(0, self.head_dim, 2, device=pos_indices.device).float() / self.head_dim))
         freqs = torch.einsum("..., f -> ... f", pos_indices.float(), freqs)
         freqs = repeat(freqs, "... n -> ... (n r)", r=2)
         cos = rearrange(freqs.cos().float(), "n d -> 1 1 n d").to(x.device)
         sin = rearrange(freqs.sin().float(), "n d -> 1 1 n d").to(x.device)
-        return TorchRealRope(layout="interleaved").apply_single(x, (cos, sin))
+        return rope.apply_single(x, (cos, sin))
 
 
 class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
@@ -114,7 +113,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
         k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
         v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
-        q, k = self.apply_rope_func(q, k, cos_sin)
+        q, k = phase.rope.apply(q, k, cos_sin)
 
         x_ref_attn_map = None
         ref_target_masks = pre_infer_out.adapter_args.get("ref_target_masks")
@@ -270,7 +269,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         normalized_pos = normalized_map[range(x_ref_attn_map.size(1)), max_indices]
 
         q_rope = rearrange(q, "t s h d -> 1 h (t s) d")
-        q_rope = self.rope_1d(q_rope, normalized_pos)
+        q_rope = self.rope_1d(phase.rope_1d, q_rope, normalized_pos)
         q = rearrange(q_rope, "1 h (t s) d -> t s h d", t=grid_t)
 
         audio_tokens = encoder_k.shape[1]
@@ -283,6 +282,6 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             per_frame[start:end] = rope_centers[idx]
         encoder_pos = torch.concat([per_frame] * grid_t, dim=0)
         k_rope = rearrange(encoder_k, "t s h d -> 1 h (t s) d")
-        k_rope = self.rope_1d(k_rope, encoder_pos)
+        k_rope = self.rope_1d(phase.rope_1d, k_rope, encoder_pos)
         encoder_k = rearrange(k_rope, "1 h (t s) d -> t s h d", t=grid_t)
         return q, encoder_k

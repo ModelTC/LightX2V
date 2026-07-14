@@ -1,4 +1,7 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerWeights
 from lightx2v.utils.registry_factory import (
     LN_WEIGHT_REGISTER,
@@ -11,6 +14,18 @@ class WanAudioTransformerWeights(WanTransformerWeights):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__(config, lazy_load_path, lora_path)
         self.adapter_mm_type = self.mm_type if config.get("adapter_quantized", False) else "Default"
+        for phase in self.iter_self_attention_phases():
+            if not hasattr(phase, "causal_rope"):
+                phase.add_module(
+                    "causal_rope",
+                    build_rope_weight(
+                        config,
+                        config_key="causal_rope_type",
+                        layout="interleaved",
+                        default="wan_causal_rope",
+                        compute_dtype=torch.float64,
+                    ),
+                )
         for i in range(self.blocks_num):
             self.blocks[i].compute_phases.append(
                 WanAudioAdapterCA(

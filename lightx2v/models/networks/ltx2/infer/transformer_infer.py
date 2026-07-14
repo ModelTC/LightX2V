@@ -14,7 +14,6 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.models.networks.ltx2.infer.module_io import LTX2PreInferModuleOutput
 from lightx2v.models.networks.ltx2.infer.triton_ops import fuse_scale_shift_kernel, fused_rmsnorm_modulate
 from lightx2v.models.networks.ltx2.infer.utils import modulate_torch_naive, modulate_with_rmsnorm_torch_naive, rmsnorm_torch_naive
@@ -36,14 +35,6 @@ class LTX2TransformerInfer:
             config: Model configuration dictionary
         """
         self.config = config
-        self.rope_layout = config.get("rope_layout", "split_half")
-        if self.rope_layout not in {"interleaved", "split_half"}:
-            raise ValueError(f"Unsupported rope_layout: {self.rope_layout}")
-        self.rope_module = build_rope_module(
-            config,
-            layout=self.rope_layout,
-            default="torch_real_rope",
-        )
         self.blocks_num = config.get("num_layers", 48)
         self.v_num_heads = config.get("num_attention_heads", 32)
         self.v_head_dim = config.get("attention_head_dim", 128)
@@ -83,14 +74,14 @@ class LTX2TransformerInfer:
         self.reset_infer_states()
         self.reset_guidance_perturbation()
 
-    def _apply_rope(self, tensor, freqs):
+    def _apply_rope(self, rope, tensor, freqs):
         cos, _ = freqs
-        if self.rope_layout == "split_half" and tensor.ndim != 4 and cos.ndim == 4:
+        if tensor.ndim != 4 and cos.ndim == 4:
             batch, heads, tokens, _ = cos.shape
             tensor = tensor.reshape(batch, tokens, heads, -1).swapaxes(1, 2)
-            output = self.rope_module.apply_single(tensor, freqs)
+            output = rope.apply_single(tensor, freqs)
             return output.swapaxes(1, 2).reshape(batch, tokens, -1)
-        return self.rope_module.apply_single(tensor, freqs)
+        return rope.apply_single(tensor, freqs)
 
     def set_scheduler(self, scheduler):
         """Set the scheduler for inference."""
@@ -283,8 +274,8 @@ class LTX2TransformerInfer:
         q = attn_phase.q_norm.apply(q)
         k = attn_phase.k_norm.apply(k)
         if pe is not None:
-            q = self._apply_rope(q, pe)
-            k = self._apply_rope(k, pe if k_pe is None else k_pe)
+            q = self._apply_rope(attn_phase.rope, q, pe)
+            k = self._apply_rope(attn_phase.rope, k, pe if k_pe is None else k_pe)
 
         q = q.view(-1, num_heads_effective, head_dim)
         k = k.view(-1, num_heads_effective, head_dim)

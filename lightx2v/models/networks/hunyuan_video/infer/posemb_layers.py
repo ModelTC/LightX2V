@@ -2,7 +2,6 @@ from typing import List, Tuple, Union
 
 import torch
 
-from lightx2v.common.ops.rope import TorchRealRope
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -64,51 +63,6 @@ def get_meshgrid_nd(start, *args, dim=2):
 #                   Rotary Positional Embedding Functions                       #
 #################################################################################
 # https://github.com/meta-llama/llama/blob/be327c427cc5e89cc1d3ab3d3fec4484df771245/llama/model.py#L80
-
-
-def reshape_for_broadcast(
-    freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor]],
-    x: torch.Tensor,
-):
-    """
-    Reshape frequency tensor for broadcasting it with another tensor.
-
-    This function reshapes the frequency tensor to have the same shape as the target tensor 'x'
-    for the purpose of broadcasting the frequency tensor during element-wise operations.
-
-    Notes:
-        When using FlashMHAModified, head_first should be False.
-        When using Attention, head_first should be True.
-
-    Args:
-        freqs_cis (Union[torch.Tensor, Tuple[torch.Tensor]]): Frequency tensor to be reshaped.
-        x (torch.Tensor): Target tensor for broadcasting compatibility.
-        head_first (bool): head dimension first (except batch dim) or not.
-
-    Returns:
-        torch.Tensor: Reshaped frequency tensor.
-
-    Raises:
-        AssertionError: If the frequency tensor doesn't match the expected shape.
-        AssertionError: If the target tensor 'x' doesn't have the expected number of dimensions.
-    """
-    ndim = x.ndim
-    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
-    return freqs_cis[0].view(*shape), freqs_cis[1].view(*shape)
-
-
-_HUNYUAN_POSEMB_ROPE = TorchRealRope(layout="interleaved")
-_HUNYUAN_POSEMB_BF16_ROPE = TorchRealRope(layout="interleaved", compute_dtype=torch.bfloat16)
-
-
-def apply_rotary_emb(xq, xk, freqs_cis):
-    cos, sin = reshape_for_broadcast(freqs_cis, xq)
-    return _HUNYUAN_POSEMB_ROPE.apply(xq, xk, (cos, sin))
-
-
-def apply_rotary_emb_force_bf16(xq, xk, freqs_cis):
-    cos, sin = reshape_for_broadcast(freqs_cis, xq)
-    return _HUNYUAN_POSEMB_BF16_ROPE.apply(xq, xk, (cos, sin))
 
 
 def get_nd_rotary_pos_embed(

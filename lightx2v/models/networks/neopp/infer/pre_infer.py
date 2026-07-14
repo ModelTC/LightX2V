@@ -3,11 +3,8 @@ import math
 import torch
 import torch.nn.functional as F
 
-from lightx2v.common.ops.rope import TorchRealRope
 from lightx2v.models.networks.neopp.infer.module_io import NeoppPreInferModuleOutput
 from lightx2v.utils.envs import *
-
-_NEOPP_ROPE = TorchRealRope(layout="interleaved")
 
 
 def precompute_rope_freqs_sincos(dim: int, max_position: int, base: float = 10000.0, device=None):
@@ -49,12 +46,12 @@ def build_abs_positions_from_grid_hw(grid_hw: torch.Tensor, device=None):
     return abs_x, abs_y
 
 
-def apply_rotary_emb_1d(x, cos_cached, sin_cached, positions):
-    return _NEOPP_ROPE.apply_single(x, (cos_cached[positions], sin_cached[positions]))
+def apply_rotary_emb_1d(rope, x, cos_cached, sin_cached, positions):
+    return rope.apply_single(x, (cos_cached[positions], sin_cached[positions]))
 
 
 def apply_2d_rotary_pos_emb(
-    x: torch.Tensor, cos_cached_x: torch.Tensor, sin_cached_x: torch.Tensor, cos_cached_y: torch.Tensor, sin_cached_y: torch.Tensor, abs_positions_x: torch.Tensor, abs_positions_y: torch.Tensor
+    rope, x: torch.Tensor, cos_cached_x: torch.Tensor, sin_cached_x: torch.Tensor, cos_cached_y: torch.Tensor, sin_cached_y: torch.Tensor, abs_positions_x: torch.Tensor, abs_positions_y: torch.Tensor
 ):
     """应用2D RoPE到输入张量x。"""
     dim = x.shape[-1]
@@ -66,9 +63,9 @@ def apply_2d_rotary_pos_emb(
     x_part_2 = x[..., dim_half:]
 
     # 将与 abs_positions_x 相关的旋转应用于 x_part_1
-    rotated_part_1 = apply_rotary_emb_1d(x_part_1, cos_cached_x, sin_cached_x, abs_positions_x)
+    rotated_part_1 = apply_rotary_emb_1d(rope, x_part_1, cos_cached_x, sin_cached_x, abs_positions_x)
     # 将与 abs_positions_y 相关的旋转应用于 x_part_2
-    rotated_part_2 = apply_rotary_emb_1d(x_part_2, cos_cached_y, sin_cached_y, abs_positions_y)
+    rotated_part_2 = apply_rotary_emb_1d(rope, x_part_2, cos_cached_y, sin_cached_y, abs_positions_y)
 
     # 将它们重新拼接起来。确保顺序与你分割时一致。
     return torch.cat((rotated_part_1, rotated_part_2), dim=-1)
@@ -143,12 +140,13 @@ class NeoppPreInfer:
         x = x.reshape(shape=(images.shape[0], h * w, patch_size**2 * 3))
         return x
 
-    def _apply_2d_rotary_pos_emb(self, patch_embeds, grid_hw):
+    def _apply_2d_rotary_pos_emb(self, rope, patch_embeds, grid_hw):
         """
         Apply 2D Rotary Position Embedding to the patch embeddings.
         """
         abs_pos_x, abs_pos_y = build_abs_positions_from_grid_hw(grid_hw, device=patch_embeds.device)
         embeddings = apply_2d_rotary_pos_emb(
+            rope,
             patch_embeds.to(torch.float32),  # RoPE calculations are often more stable in float32
             self.cos_cached_x,
             self.sin_cached_x,
@@ -171,7 +169,7 @@ class NeoppPreInfer:
         self.sin_cached_x = self.sin_cached_x.to(patch_embeds.device)
         self.cos_cached_y = self.cos_cached_y.to(patch_embeds.device)
         self.sin_cached_y = self.sin_cached_y.to(patch_embeds.device)
-        patch_embeds = self._apply_2d_rotary_pos_emb(patch_embeds, grid_hw)  # [28072, 1024]
+        patch_embeds = self._apply_2d_rotary_pos_emb(weights.rope, patch_embeds, grid_hw)  # [28072, 1024]
         assert (grid_hw[:, 0] * grid_hw[:, 1]).sum() == patch_embeds.shape[0]
 
         patches_list = []

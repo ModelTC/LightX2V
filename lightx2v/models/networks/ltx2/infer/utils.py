@@ -5,8 +5,6 @@ from typing import Callable
 import numpy as np
 import torch
 
-from lightx2v.common.ops.rope import TorchRealRope
-
 
 def rmsnorm_torch_naive(x, weight=None, bias=None, eps=1e-6):
     return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
@@ -69,33 +67,6 @@ def get_timestep_embedding(
     if embedding_dim % 2 == 1:
         emb = torch.nn.functional.pad(emb, (0, 1, 0, 0))
     return emb
-
-
-_LTX_INTERLEAVED_ROPE = TorchRealRope(layout="interleaved")
-_LTX_SPLIT_ROPE = TorchRealRope(layout="split_half")
-
-
-def apply_rotary_emb(input_tensor, freqs_cis, rope_type="split"):
-    if rope_type == "interleaved":
-        return _LTX_INTERLEAVED_ROPE.apply_single(input_tensor, freqs_cis)
-    if rope_type == "split":
-        return apply_split_rotary_emb(input_tensor, *freqs_cis)
-    raise ValueError(f"Invalid rope type: {rope_type}")
-
-
-def apply_interleaved_rotary_emb(input_tensor, cos_freqs, sin_freqs):
-    return _LTX_INTERLEAVED_ROPE.apply_single(input_tensor, (cos_freqs, sin_freqs))
-
-
-def apply_split_rotary_emb(input_tensor, cos_freqs, sin_freqs):
-    needs_reshape = input_tensor.ndim != 4 and cos_freqs.ndim == 4
-    if needs_reshape:
-        batch, heads, tokens, _ = cos_freqs.shape
-        input_tensor = input_tensor.reshape(batch, tokens, heads, -1).swapaxes(1, 2)
-    output = _LTX_SPLIT_ROPE.apply_single(input_tensor, (cos_freqs, sin_freqs))
-    if needs_reshape:
-        output = output.swapaxes(1, 2).reshape(batch, tokens, -1)
-    return output
 
 
 @functools.lru_cache(maxsize=5)

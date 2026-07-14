@@ -12,7 +12,7 @@
     "enable_cfg": false,
     "cpu_offload": false,
     "dit_original_ckpt": "/Self-Forcing/checkpoints/self_forcing_dmd.pt",
-    "causal_rope_type": "triton",
+    "causal_rope_type": "wan_causal_rope",
     "ar_config": {
         "local_attn_size": -1,
         "num_frame_per_chunk": 3,

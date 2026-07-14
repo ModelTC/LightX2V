@@ -10,18 +10,10 @@ try:
 except ImportError:
     flash_attn_varlen_func = None
 
-from lightx2v.common.ops.rope import TorchRealRope
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.bagel.model_io import NaiveCache
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
-
-_BAGEL_COMPAT_ROPE = TorchRealRope(layout="split_half")
-
-
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
-    del position_ids
-    return _BAGEL_COMPAT_ROPE.apply(q, k, (cos, sin), unsqueeze_dim=unsqueeze_dim)
 
 
 class BagelTransformerInfer(BaseTransformerInfer):
@@ -36,7 +28,6 @@ class BagelTransformerInfer(BaseTransformerInfer):
         self.num_heads = llm_config["num_attention_heads"]
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = llm_config["num_key_value_heads"]
-        self.rope_module = TorchRealRope(layout="split_half")
         self.init_kv_cache()
 
     def set_scheduler(self, scheduler):
@@ -112,7 +103,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
             packed_key_states[packed_vae_token_indexes] = weights.k_norm_moe_gen.apply(packed_key_states[packed_vae_token_indexes])
 
         packed_cos, packed_sin = packed_query_position_embeddings
-        packed_query_states, packed_key_states = self.rope_module.apply(packed_query_states, packed_key_states, (packed_cos, packed_sin), unsqueeze_dim=1)
+        packed_query_states, packed_key_states = weights.rope.apply(packed_query_states, packed_key_states, (packed_cos, packed_sin), unsqueeze_dim=1)
 
         packed_query_states = packed_query_states.to(torch.bfloat16)
         packed_key_states = packed_key_states.to(torch.bfloat16)

@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 
-from lightx2v.common.ops.rope import build_rope_module
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
 
@@ -25,13 +24,6 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
             self.seq_p_tensor_fusion = False
-
-        self.rope_module = build_rope_module(
-            config,
-            layout="interleaved",
-            default="flashinfer_rope",
-        )
-        self.apply_rope_func = self.rope_module.apply
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -78,7 +70,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         if attn_phase.norm_k is not None:
             key = attn_phase.norm_k.apply(key)
 
-        query, key = self.apply_rope_func(query, key, freqs_cis)
+        query, key = attn_phase.rope.apply(query, key, freqs_cis)
 
         total_seq_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu")

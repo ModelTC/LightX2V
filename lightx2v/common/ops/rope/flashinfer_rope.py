@@ -60,6 +60,31 @@ class FlashInferRope(RopeTemplate):
     def is_available():
         return apply_rope_with_cos_sin_cache_inplace is not None
 
+    def prepare_freqs(self, freqs, rotary_dim: int | None = None):
+        if torch.is_tensor(freqs) and torch.is_complex(freqs):
+            while freqs.ndim > 2 and freqs.shape[-2] == 1:
+                freqs = freqs.squeeze(-2)
+            return torch.cat([freqs.real, freqs.imag], dim=-1).float().contiguous()
+
+        if isinstance(freqs, tuple):
+            cos, sin = freqs[:2]
+            if rotary_dim is None:
+                raise ValueError("rotary_dim is required for tuple RoPE frequencies.")
+            if cos.shape[-1] == rotary_dim:
+                if self.layout == "interleaved":
+                    cos, sin = cos[..., ::2], sin[..., ::2]
+                else:
+                    cos, sin = cos[..., : rotary_dim // 2], sin[..., : rotary_dim // 2]
+            elif cos.shape[-1] != rotary_dim // 2:
+                raise ValueError(f"RoPE frequency width must be {rotary_dim // 2} or {rotary_dim}, got {cos.shape[-1]}.")
+            while cos.ndim > 2 and cos.shape[0] == 1:
+                cos, sin = cos.squeeze(0), sin.squeeze(0)
+            return torch.cat([cos, sin], dim=-1).float().contiguous()
+
+        if torch.is_tensor(freqs):
+            return freqs.float().contiguous()
+        raise TypeError(f"Unsupported RoPE frequency type: {type(freqs)!r}")
+
     def _apply_eager(self, q: torch.Tensor, k: torch.Tensor, freqs: torch.Tensor, positions: torch.Tensor | None = None):
         if apply_rope_with_cos_sin_cache_inplace is None:
             raise ImportError("flashinfer is required for FlashInferRope.")
@@ -85,10 +110,18 @@ class FlashInferRope(RopeTemplate):
             )
         return query.view_as(q), key.view_as(k)
 
-    def apply(self, q: torch.Tensor, k: torch.Tensor, freqs: torch.Tensor, positions: torch.Tensor | None = None, **kwargs):
+    def apply(self, q: torch.Tensor, k: torch.Tensor, freqs, positions: torch.Tensor | None = None, **kwargs):
+        squeeze_batch = q.ndim == 4 and q.shape[0] == 1 and k.ndim == 4 and k.shape[0] == 1
+        if squeeze_batch:
+            q, k = q[0], k[0]
+        freqs = self.prepare_freqs(freqs, rotary_dim=q.shape[-1])
         if positions is None and self.layout == "interleaved" and use_magi_custom_ops() and magi_register_custom_op is not None and apply_rope_with_cos_sin_cache_inplace is not None:
-            return torch.ops.lightx2v.rope_flashinfer(q, k, freqs)
-        return self._apply_eager(q, k, freqs, positions=positions)
+            q_out, k_out = torch.ops.lightx2v.rope_flashinfer(q, k, freqs)
+        else:
+            q_out, k_out = self._apply_eager(q, k, freqs, positions=positions)
+        if squeeze_batch:
+            return q_out.unsqueeze(0), k_out.unsqueeze(0)
+        return q_out, k_out
 
     def apply_single(self, x: torch.Tensor, freqs, **kwargs):
         output, _ = self.apply(x, x.clone(), freqs, **kwargs)

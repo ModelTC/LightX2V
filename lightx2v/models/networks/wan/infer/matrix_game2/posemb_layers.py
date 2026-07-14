@@ -2,8 +2,6 @@ from typing import List, Tuple, Union
 
 import torch
 
-from lightx2v.common.ops.rope import TorchComplexRope, TorchRealRope
-
 
 def _to_tuple(x, dim=2):
     if isinstance(x, int):
@@ -128,11 +126,8 @@ def reshape_for_broadcast(
         return freqs_cis.view(*shape)
 
 
-_ACTION_COMPLEX_ROPE = TorchComplexRope()
-_ACTION_REAL_ROPE = TorchRealRope(layout="interleaved")
-
-
 def apply_rotary_emb(
+    rope,
     xq: torch.Tensor,
     xk: torch.Tensor,
     freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
@@ -148,7 +143,7 @@ def apply_rotary_emb(
         else:
             cos = cos[start_offset : start_offset + xq.shape[1]].view(1, xq.shape[1], 1, cos.shape[-1])
             sin = sin[start_offset : start_offset + xq.shape[1]].view(1, xq.shape[1], 1, sin.shape[-1])
-        return _ACTION_REAL_ROPE.apply(xq, xk, (cos.to(xq.device), sin.to(xq.device)))
+        return rope.apply(xq, xk, (cos.to(xq.device), sin.to(xq.device)))
 
     if head_first:
         shape = [1] * xq.ndim
@@ -156,7 +151,7 @@ def apply_rotary_emb(
         freqs_cis = freqs_cis.view(*shape)
     else:
         freqs_cis = freqs_cis.view(1, freqs_cis.shape[0], 1, freqs_cis.shape[1])
-    return _ACTION_COMPLEX_ROPE.apply(xq, xk, freqs_cis.to(xq.device))
+    return rope.apply(xq, xk, freqs_cis.to(xq.device))
 
 
 def get_nd_rotary_pos_embed(

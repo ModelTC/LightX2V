@@ -176,7 +176,7 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
             q = q0 * torch.rsqrt(q0.pow(2).mean(dim=-1, keepdim=True) + 1e-6)
             k = k0 * torch.rsqrt(k0.pow(2).mean(dim=-1, keepdim=True) + 1e-6)
 
-            q, k = apply_rotary_emb(q, k, freqs_cis, start_offset=start_frame, head_first=False)
+            q, k = apply_rotary_emb(phase.rope, q, k, freqs_cis, start_offset=start_frame, head_first=False)
 
             if is_causal:
                 action_mouse_kv_cache = self.kv_cache_manager.action_mouse_kv_cache
@@ -250,7 +250,7 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
                 B, TS, H, D = q.shape
                 T_ = TS // S
                 q = q.view(B, T_, S, H, D).transpose(1, 2).reshape(B * S, T_, H, D)
-                q, k = apply_rotary_emb(q, k, freqs_cis, start_offset=start_frame, head_first=False)
+                q, k = apply_rotary_emb(phase.rope, q, k, freqs_cis, start_offset=start_frame, head_first=False)
 
                 k = k.expand(S, k.shape[1], k.shape[2], k.shape[3])
                 v = v.expand(S, v.shape[1], v.shape[2], v.shape[3])

@@ -1,4 +1,7 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
@@ -52,6 +55,10 @@ class MMDoubleStreamBlock(WeightModule):
         self.block_index = block_index
         self.task = task
         self.config = config
+        self.add_module(
+            "rope",
+            build_rope_weight(config, layout="interleaved", default="flashinfer_rope", compute_dtype=torch.float32),
+        )
         self.create_cuda_buffer = create_cuda_buffer
         self.create_cpu_buffer = create_cpu_buffer
 

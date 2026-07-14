@@ -507,9 +507,7 @@ class ZImageScheduler(BaseScheduler):
             device = position_ids.device
 
         position_ids = position_ids.to(device)
-        rope_type = self.config.get("rope_type", "flashinfer_rope")
         cache_key = (
-            rope_type,
             str(device),
             str(position_ids.dtype),
             tuple(position_ids.shape),
@@ -520,11 +518,7 @@ class ZImageScheduler(BaseScheduler):
         if cached_freqs_cis is not None:
             return cached_freqs_cis
 
-        if rope_type in {"flashinfer_rope", "torch_real_rope"}:
-            freqs_cos, freqs_sin = self.rope_embedder(position_ids, return_real=True)
-            freqs_cis = torch.cat([freqs_cos, freqs_sin], dim=-1).float()
-        else:
-            freqs_cis = self.rope_embedder(position_ids)
+        freqs_cis = self.rope_embedder(position_ids)
 
         self.freqs_cis_cache[cache_key] = freqs_cis
         return freqs_cis
@@ -577,13 +571,6 @@ class ZImageScheduler(BaseScheduler):
 
         self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
 
-        if self.config.get("rope_type", "flashinfer_rope") == "flashinfer_rope":
-            cos_half_img = self.image_rotary_emb[0].real.contiguous()
-            sin_half_img = self.image_rotary_emb[0].imag.contiguous()
-            cos_half_txt = self.image_rotary_emb[1].real.contiguous()
-            sin_half_txt = self.image_rotary_emb[1].imag.contiguous()
-            self.image_rotary_emb[0] = torch.cat([cos_half_img, sin_half_img], dim=-1)
-            self.image_rotary_emb[1] = torch.cat([cos_half_txt, sin_half_txt], dim=-1)
         if self.seq_p_group is not None:
             world_size = dist.get_world_size(self.seq_p_group)
             cur_rank = dist.get_rank(self.seq_p_group)
@@ -595,13 +582,6 @@ class ZImageScheduler(BaseScheduler):
 
         if self.config["enable_cfg"]:
             self.negative_image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[1], device=AI_DEVICE)
-            if self.config.get("rope_type", "flashinfer_rope") == "flashinfer_rope":
-                cos_half_img = self.negative_image_rotary_emb[0].real.contiguous()
-                sin_half_img = self.negative_image_rotary_emb[0].imag.contiguous()
-                cos_half_txt = self.negative_image_rotary_emb[1].real.contiguous()
-                sin_half_txt = self.negative_image_rotary_emb[1].imag.contiguous()
-                self.negative_image_rotary_emb[0] = torch.cat([cos_half_img, sin_half_img], dim=-1)
-                self.negative_image_rotary_emb[1] = torch.cat([cos_half_txt, sin_half_txt], dim=-1)
             if self.seq_p_group is not None:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)

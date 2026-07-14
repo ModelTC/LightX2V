@@ -1,18 +1,9 @@
 import torch
 import torch.nn.functional as F
 
-from lightx2v.common.ops.rope import TorchComplexRope
-
 
 def modulate(x, shift, scale):
     return x * (1 + scale) + shift
-
-
-_FASTWAM_ROPE = TorchComplexRope(compute_dtype=torch.float64)
-
-
-def rope_apply(x, freqs):
-    return _FASTWAM_ROPE.apply_single(x, freqs)
 
 
 class FastWAMTransformerInfer:
@@ -48,8 +39,7 @@ class FastWAMTransformerInfer:
         q = self._reshape_heads(self_attn.norm_q.apply(self_attn.q.apply(attn_input)))
         k = self._reshape_heads(self_attn.norm_k.apply(self_attn.k.apply(attn_input)))
         v = self._reshape_heads(self_attn.v.apply(attn_input))
-        q = rope_apply(q, freqs)
-        k = rope_apply(k, freqs)
+        q, k = self_attn.rope.apply(q, k, freqs)
         return q, k, v, x, gate_msa, shift_mlp, scale_mlp, gate_mlp
 
     def _cross_attn(self, block, x, context, context_mask):
