@@ -3,6 +3,7 @@ from .fast_ulysses_attn import FastUlyssesAttnWeight
 from .flash_attn import FlashAttn2Weight, FlashAttn3Weight, FlashAttn4Weight, SparseFlashAttn4Weight
 from .general_sparse_attn import GeneralSparseAttnWeight
 from .nbhd_attn import NbhdAttnWeight, NbhdAttnWeightFlashInfer
+from .opt_ulysses_attn import OptUlyssesAttnWeight
 from .radial_attn import RadialAttnWeight
 from .rainfusion_attn import RainfusionAttnWeight
 from .ring_attn import RingAttnWeight
