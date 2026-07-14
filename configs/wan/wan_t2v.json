@@ -10,5 +10,6 @@
     "sample_guide_scale": 6,
     "sample_shift": 8,
     "enable_cfg": true,
-    "cpu_offload": false
+    "cpu_offload": false,
+    "use_compile": true
 }

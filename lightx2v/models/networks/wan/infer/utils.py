@@ -9,6 +9,42 @@ except ImportError:
 from lightx2v.utils.envs import *
 
 
+# FlashInfer's Python wrapper performs JIT/cache bookkeeping that Dynamo cannot
+# trace. Keep it behind an opaque, in-place torch operator while compiling.
+@torch.library.custom_op(
+    "lightx2v::wan_rope_flashinfer_",
+    mutates_args=("query", "key"),
+    device_types="cuda",
+    schema=("(Tensor positions, Tensor(a!) query, Tensor(b!) key, Tensor cos_sin_cache, int head_size) -> ()"),
+)
+def wan_rope_flashinfer_(
+    positions: torch.Tensor,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    head_size: int,
+) -> None:
+    apply_rope_with_cos_sin_cache_inplace(
+        positions=positions,
+        query=query,
+        key=key,
+        head_size=head_size,
+        cos_sin_cache=cos_sin_cache,
+        is_neox=False,
+    )
+
+
+@wan_rope_flashinfer_.register_fake
+def wan_rope_flashinfer_fake(
+    positions: torch.Tensor,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    cos_sin_cache: torch.Tensor,
+    head_size: int,
+) -> None:
+    return None
+
+
 def apply_wan_rope_with_torch(
     xq: torch.Tensor,
     xk: torch.Tensor,
@@ -108,16 +144,19 @@ def apply_wan_rope_with_flashinfer(
     query = xq.reshape(L, H * D).contiguous()
     key = xk.reshape(L, H * D).contiguous()
 
-    positions = torch.arange(L, device="cpu", dtype=torch.long).to(xq.device, non_blocking=True)
+    positions = torch.arange(L, device=xq.device, dtype=torch.long)
 
-    apply_rope_with_cos_sin_cache_inplace(
-        positions=positions,
-        query=query,
-        key=key,
-        head_size=D,
-        cos_sin_cache=cos_sin_cache,
-        is_neox=False,
-    )
+    if torch.compiler.is_compiling():
+        wan_rope_flashinfer_(positions, query, key, cos_sin_cache, D)
+    else:
+        apply_rope_with_cos_sin_cache_inplace(
+            positions=positions,
+            query=query,
+            key=key,
+            head_size=D,
+            cos_sin_cache=cos_sin_cache,
+            is_neox=False,
+        )
 
     xq_out = query.view(L, H, D)
     xk_out = key.view(L, H, D)

@@ -37,6 +37,7 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import T2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -73,12 +74,66 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
 
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
+    _COMPILE_WARMUP_RESOLUTIONS = ((480, 480), (720, 720))
+
     def __init__(self, config):
         super().__init__(config)
         self.vae_cls = WanVAE
         self.tiny_vae_cls = WanVAE_tiny
         self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
+
+    def warmup_compile(self):
+        if (
+            self.config.get("disagg_mode")
+            or self.config.get("model_cls") != "wan2.1"
+            or self.config.get("task") != "t2v"
+            or not self.config.get("use_compile", False)
+            or self.config.get("feature_caching", "NoCaching") != "NoCaching"
+            or any(self.config.get(key, False) for key in ("cpu_offload", "lazy_load", "unload_modules"))
+        ):
+            return
+
+        self.run_warmup_compile()
+
+    @ProfilingContext4DebugL1("Compile dynamic-shape warmup")
+    def run_warmup_compile(self):
+        input_info = T2VInputInfo(prompt="compile warmup", prompt_enhanced="compile warmup")
+        inputs = {
+            "text_encoder_output": self.run_text_encoder(input_info),
+            "image_encoder_output": None,
+        }
+        scheduler = self.model.scheduler
+        original_generator = scheduler.generator
+        _, stride_h, stride_w = self.config["vae_stride"]
+
+        try:
+            for height, width in self._COMPILE_WARMUP_RESOLUTIONS:
+                latent_shape = self.get_latent_shape_with_lat_hw(height // stride_h, width // stride_w)
+                logger.info(f"Compile warmup: {height}x{width}")
+                try:
+                    scheduler.generator = None
+                    scheduler.prepare(seed=input_info.seed, latent_shape=latent_shape, image_encoder_output=None)
+                    scheduler.step_pre(step_index=0)
+                    self.model.infer(inputs)
+                    torch_device_module.synchronize()
+                finally:
+                    self.clear_warmup_compile_state()
+        finally:
+            scheduler.generator = original_generator
+            del inputs
+            torch_device_module.empty_cache()
+
+        logger.info("Compile dynamic-shape warmup completed")
+
+    def clear_warmup_compile_state(self):
+        scheduler = self.model.scheduler
+        for name in ("latents", "noise_pred", "noise_pred_cond", "noise_pred_uncond", "noise_pred_guided"):
+            setattr(scheduler, name, None)
+
+        self.model.transformer_infer.cos_sin = None
+        self.model.pre_infer.cos_sin = None
+        self.model.pre_infer.grid_sizes = (0, 0, 0)
 
     def load_transformer(self):
         wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
@@ -264,6 +319,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("disagg_mode"):
             self.init_disagg(self.config)
         super().init_modules()
+        self.warmup_compile()
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):

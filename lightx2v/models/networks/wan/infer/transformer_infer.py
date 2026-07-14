@@ -1,6 +1,7 @@
 from functools import partial
 
 import torch
+from loguru import logger
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
@@ -76,6 +77,10 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
+        self.use_compile = config.get("use_compile", False)
+        if self.use_compile:
+            self.compiled_blocks = {}
+            logger.info("Using torch.compile for WanTransformerInfer blocks")
 
         self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
 
@@ -91,6 +96,18 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         if self.has_post_adapter:
             self.reset_post_adapter_states()
 
+    def prepare_compiled_attention_states(self, x, context):
+        query_len = x.shape[0]
+        context_len = context.shape[0]
+        has_image_context = self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True)
+
+        self.self_attn_cu_seqlens_qkv = torch.tensor([0, query_len], dtype=torch.int32)
+        self.cross_attn_cu_seqlens_q = torch.tensor([0, query_len], dtype=torch.int32)
+        if has_image_context:
+            self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, 257], dtype=torch.int32)
+            context_len -= 257
+        self.cross_attn_cu_seqlens_kv = torch.tensor([0, context_len], dtype=torch.int32)
+
     def reset_attention_states(self, blocks):
         for block in blocks:
             self_attn = block.compute_phases[0].self_attn_1
@@ -103,6 +120,8 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.cos_sin = pre_infer_out.cos_sin
         self.reset_infer_states()
         self.reset_attention_states(weights.blocks)
+        if self.use_compile:
+            self.prepare_compiled_attention_states(pre_infer_out.x, pre_infer_out.context)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
@@ -134,10 +153,26 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             torch_device_module.empty_cache()
         return x
 
+    def get_compiled_block(self, block_idx, block):
+        cached = self.compiled_blocks.get(block_idx)
+        if cached is not None and cached[0] is block:
+            return cached[1]
+
+        def block_runner(x, pre_infer_out):
+            return self.infer_block(block, x, pre_infer_out)
+
+        compiled = torch.compile(block_runner, dynamic=None)
+        self.compiled_blocks[block_idx] = (block, compiled)
+        return compiled
+
     def infer_without_offload(self, blocks, x, pre_infer_out):
-        for block_idx in range(len(blocks)):
+        for block_idx, block in enumerate(blocks):
             self.block_idx = block_idx
-            x = self.infer_block(blocks[block_idx], x, pre_infer_out)
+            if self.use_compile:
+                compiled_block = self.get_compiled_block(block_idx, block)
+                x = compiled_block(x, pre_infer_out)
+            else:
+                x = self.infer_block(block, x, pre_infer_out)
         return x
 
     def infer_block(self, block, x, pre_infer_out):
