@@ -53,6 +53,7 @@ class LiberoEnv(BaseSimEnv):
         return self.observer.task_description
 
     def reset(self) -> Observation:
+        self.observer.reset()
         return self._observation()
 
     def step(self, action):

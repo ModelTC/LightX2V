@@ -20,7 +20,8 @@ The node is a small state machine driven by JSON commands on
   ``observation_ready`` indices) goes quiet. The scene itself stays put.
 - ``resume``/``start`` bumps the observation counter so the policy sees a fresh
   observation and continues from the current physical state.
-- ``restart`` tears the episode down and rebuilds it with a new seed.
+- ``restart`` tears the episode down, rebuilds it, and waits in ``ready`` until
+  the user explicitly starts the new episode.
 - ``set_task`` rebuilds the env with a different task/scenario (may take tens of
   seconds; the node publishes a "switching" status first).
 """
@@ -254,7 +255,7 @@ class SimulatorNode(Node):
         if self.loop:
             self._start_next_episode()
 
-    def _start_next_episode(self):
+    def _start_next_episode(self, *, wait_for_start=False):
         self.state = SWITCHING
         self.publish_status()
         try:
@@ -265,7 +266,25 @@ class SimulatorNode(Node):
             self.state = FAILURE
             self.publish_status()
             raise
-        self._begin_episode()
+        if wait_for_start:
+            self._ready_episode()
+        else:
+            self._begin_episode()
+
+    def _ready_episode(self):
+        """Publish a fresh episode without allowing the policy to act yet."""
+        self.episode_index += 1
+        self.episode_step = 0
+        self.step_index += 1
+        self.success = False
+        self.state = READY
+        self._refresh_max_steps()
+        self.get_logger().info(
+            f"episode {self.episode_index} reset and waiting for start "
+            f"(global step {self.step_index}): {self.env.task_description!r}"
+        )
+        self.publish_observation()
+        self.publish_status()
 
     def _begin_episode(self):
         self.episode_index += 1
@@ -346,7 +365,7 @@ class SimulatorNode(Node):
         self.publish_status()
 
     def _cmd_restart(self):
-        self._start_next_episode()
+        self._start_next_episode(wait_for_start=True)
 
     def _cmd_set_task(self, command):
         if not self.env.supports_task_switch:

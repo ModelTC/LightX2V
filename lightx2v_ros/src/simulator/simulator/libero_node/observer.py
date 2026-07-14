@@ -78,7 +78,9 @@ class LiberoActionObserver:
         task = task_suite.get_task(task_id)
         self.task_description = task.language
         bddl_file = Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-        init_state = load_init_states(get_libero_path, task, init_state_id)
+        # Keep an owned copy: every restart must restore this exact MuJoCo state,
+        # rather than returning the observation cached after the last action.
+        self.init_state = np.asarray(load_init_states(get_libero_path, task, init_state_id)).copy()
 
         self.env = env_cls(
             bddl_file_name=str(bddl_file),
@@ -87,8 +89,13 @@ class LiberoActionObserver:
             camera_names=["robot0_eye_in_hand", "agentview", "frontview", "galleryview"],
         )
         self.env.seed(seed)
+        self.reset()
+
+    def reset(self):
+        """Reset simulator internals and restore the configured initial state."""
         self.env.reset()
-        self.obs = self.env.set_init_state(init_state)
+        self.obs = self.env.set_init_state(self.init_state.copy())
+        return self.obs
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
