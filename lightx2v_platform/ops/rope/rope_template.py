@@ -25,7 +25,11 @@ def GET_DTYPE():
 
 
 class RopeTemplate(metaclass=ABCMeta):
-    def __init__(self):
+    def __init__(self, layout="interleaved", compute_dtype=torch.float32):
+        if layout not in {"interleaved", "split_half"}:
+            raise ValueError(f"Unsupported RoPE layout: {layout}")
+        self.layout = layout
+        self.compute_dtype = compute_dtype
         self.infer_dtype = GET_DTYPE()
         self.config = {}
 

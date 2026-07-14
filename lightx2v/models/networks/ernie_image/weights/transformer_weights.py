@@ -1,8 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.rope import build_rope_weight
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 class ErnieImageTransformerWeights(WeightModule):
@@ -45,7 +44,7 @@ class ErnieImageTransformerBlockWeights(WeightModule):
         super().__init__()
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="split_half", default="torch_real_rope", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="split_half", compute_dtype=torch.float32),
         )
         prefix = f"layers.{block_index}"
         eps = config.get("eps", 1e-6)

@@ -2,11 +2,11 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
     TENSOR_REGISTER,
 )
 
@@ -333,7 +333,7 @@ class LTX2Attention(WeightModule):
         self.apply_gated_attention = self.config.get("apply_gated_attention", False)
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="split_half", default="torch_real_rope", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="split_half", compute_dtype=torch.float32),
         )
 
         block_lora_prefix = "model.diffusion_model.blocks"
@@ -535,7 +535,7 @@ class LTX2AttentionTP(WeightModule):
         self.apply_gated_attention = self.config.get("apply_gated_attention", False)
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="split_half", default="torch_real_rope", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="split_half", compute_dtype=torch.float32),
         )
 
         block_lora_prefix = "model.diffusion_model.blocks"

@@ -1,9 +1,8 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.cosmos3.infer.utils import Cosmos3Rope  # noqa: F401
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 class Cosmos3TransformerWeights(WeightModule):
@@ -193,7 +192,7 @@ class Cosmos3PackedMoTAttentionWeights(WeightModule):
         super().__init__()
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="split_half", default="cosmos3_rope", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "cosmos3_rope")](layout="split_half", compute_dtype=torch.float32),
         )
         lora_prefix = "layers"
         attn_type = config.get("self_attn_type", "torch_sdpa")

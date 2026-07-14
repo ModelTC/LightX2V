@@ -1,10 +1,10 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.utils.registry_factory import (
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
 )
 
 
@@ -140,7 +140,7 @@ class PackedAttentionMoT(WeightModule):
         self.config = config
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="split_half", default="torch_real_rope", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="split_half", compute_dtype=torch.float32),
         )
         # q
         self.add_module(

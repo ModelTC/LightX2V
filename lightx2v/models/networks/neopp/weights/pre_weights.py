@@ -1,8 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.common.ops.rope import build_rope_weight
-from lightx2v.utils.registry_factory import CONV2D_WEIGHT_REGISTER, MM_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import CONV2D_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 class NeoppPreWeights(WeightModule):
@@ -14,7 +13,7 @@ class NeoppPreWeights(WeightModule):
         self.mm_type = "Default"
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="interleaved", default="torch_real_rope", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="interleaved", compute_dtype=torch.float32),
         )
 
         self.add_module(

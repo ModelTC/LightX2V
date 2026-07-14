@@ -1,13 +1,13 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
     TENSOR_REGISTER,
 )
 
@@ -261,18 +261,12 @@ class WanSelfAttention(WeightModule):
         self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="interleaved", default="flashinfer_rope", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
         )
         if config.get("causal_rope_type") is not None:
             self.add_module(
                 "causal_rope",
-                build_rope_weight(
-                    config,
-                    config_key="causal_rope_type",
-                    layout="interleaved",
-                    default="wan_causal_rope",
-                    compute_dtype=torch.float64,
-                ),
+                ROPE_REGISTER[config.get("causal_rope_type", "wan_causal_rope")](layout="interleaved", compute_dtype=torch.float64),
             )
 
         self.add_module(

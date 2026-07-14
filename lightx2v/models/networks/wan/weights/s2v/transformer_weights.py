@@ -1,9 +1,8 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerWeights
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 class WanS2VAudioInjectPhase(WeightModule):
@@ -57,13 +56,7 @@ class WanS2VTransformerWeights(WanTransformerWeights):
         for phase in self.iter_self_attention_phases():
             phase.add_module(
                 "s2v_rope",
-                build_rope_weight(
-                    config,
-                    config_key="s2v_rope_type",
-                    layout="interleaved",
-                    default="torch_complex_rope",
-                    compute_dtype=torch.float64,
-                ),
+                ROPE_REGISTER[config.get("s2v_rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float64),
             )
         inject_layers = config.get("audio_inject_layers", [])
         self.injected_block_id = {layer_idx: idx for idx, layer_idx in enumerate(inject_layers)}

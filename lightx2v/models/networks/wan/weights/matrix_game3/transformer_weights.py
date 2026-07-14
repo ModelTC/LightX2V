@@ -1,7 +1,6 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanFFN,
     WanSelfAttention,
@@ -11,6 +10,7 @@ from lightx2v.utils.registry_factory import (
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
     TENSOR_REGISTER,
 )
 
@@ -83,13 +83,7 @@ class WanMtxg3TransformerBlock(WeightModule):
         self_attn = WanSelfAttention(block_index, block_prefix, task, mm_type, config)
         self_attn.add_module(
             "indexed_rope",
-            build_rope_weight(
-                config,
-                config_key="indexed_rope_type",
-                layout="interleaved",
-                default="torch_complex_rope",
-                compute_dtype=torch.float32,
-            ),
+            ROPE_REGISTER[config.get("indexed_rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float32),
         )
         phases = [
             self_attn,
@@ -235,13 +229,7 @@ class WanMtxg3ActionModule(WeightModule):
         self.config = config
         self.add_module(
             "rope",
-            build_rope_weight(
-                config,
-                config_key="action_rope_type",
-                layout="interleaved",
-                default="torch_complex_rope",
-                compute_dtype=torch.float32,
-            ),
+            ROPE_REGISTER[config.get("action_rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float32),
         )
 
         attn_rms_norm_type = config.get("rms_norm_type", "sgl-kernel")

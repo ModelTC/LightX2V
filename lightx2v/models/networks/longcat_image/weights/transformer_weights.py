@@ -1,8 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.rope import build_rope_weight
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 class LongCatImageDoubleBlockWeights(WeightModule):
@@ -19,7 +18,7 @@ class LongCatImageDoubleBlockWeights(WeightModule):
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="interleaved", default="flashinfer_rope", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
         )
 
         p = f"transformer_blocks.{self.block_idx}"
@@ -234,7 +233,7 @@ class LongCatImageSingleBlockWeights(WeightModule):
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="interleaved", default="flashinfer_rope", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
         )
 
         p = f"single_transformer_blocks.{self.block_idx}"

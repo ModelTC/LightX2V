@@ -1,11 +1,11 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerWeights
 from lightx2v.utils.registry_factory import (
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
+    ROPE_REGISTER,
     TENSOR_REGISTER,
 )
 
@@ -18,13 +18,7 @@ class WanAudioTransformerWeights(WanTransformerWeights):
             if not hasattr(phase, "causal_rope"):
                 phase.add_module(
                     "causal_rope",
-                    build_rope_weight(
-                        config,
-                        config_key="causal_rope_type",
-                        layout="interleaved",
-                        default="wan_causal_rope",
-                        compute_dtype=torch.float64,
-                    ),
+                    ROPE_REGISTER[config.get("causal_rope_type", "wan_causal_rope")](layout="interleaved", compute_dtype=torch.float64),
                 )
         for i in range(self.blocks_num):
             self.blocks[i].compute_phases.append(

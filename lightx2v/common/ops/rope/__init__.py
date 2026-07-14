@@ -1,4 +1,3 @@
-from .builder import build_rope_weight, get_rope_module
 from .chunked_rope import ChunkedRope
 from .flashinfer_rope import FlashInferRope
 from .template import RopeLayout, RopeTemplate

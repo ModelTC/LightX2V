@@ -1,9 +1,8 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.seedvr.utils import rope as _seedvr_rope  # noqa: F401
-from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, TENSOR_REGISTER
+from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER, TENSOR_REGISTER
 
 
 class SeedVRTransformerWeights(WeightModule):
@@ -72,8 +71,9 @@ class SeedVRTransformerBlockWeights(WeightModule):
         self.rms_norm_type = rms_norm_type
         self.add_module(
             "rope",
-            build_rope_weight(config, layout="interleaved", default="rope3d", compute_dtype=torch.float32),
+            ROPE_REGISTER[config.get("rope_type", "rope3d")](layout="interleaved", compute_dtype=torch.float32),
         )
+        self.rope.set_config(config)
 
         branches = ["all"] if shared_weights else ["vid", "txt"]
         self.branches = branches

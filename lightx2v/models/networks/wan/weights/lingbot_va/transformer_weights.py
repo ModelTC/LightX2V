@@ -1,8 +1,7 @@
 import torch
 
-from lightx2v.common.ops.rope import build_rope_weight
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerWeights
-from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 class LingbotVATransformerWeights(WanTransformerWeights):
@@ -13,13 +12,7 @@ class LingbotVATransformerWeights(WanTransformerWeights):
         for phase in self.iter_self_attention_phases():
             phase.add_module(
                 "lingbot_rope",
-                build_rope_weight(
-                    config,
-                    config_key="lingbot_rope_type",
-                    layout="interleaved",
-                    default="torch_complex_rope",
-                    compute_dtype=torch.float64,
-                ),
+                ROPE_REGISTER[config.get("lingbot_rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float64),
             )
         mm_type = config.get("dit_quant_scheme", "Default")
         if mm_type != "Default":
