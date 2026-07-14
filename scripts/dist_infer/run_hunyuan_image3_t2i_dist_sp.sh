@@ -9,7 +9,7 @@ SP_SIZE="${SP_SIZE:-2}"
 SP_ATTN_TYPE="${SP_ATTN_TYPE:-ulysses}"
 
 export lightx2v_path="${lightx2v_path:-/data/nvme0/lhd_codes/LightX2V}"
-export model_path="${model_path:-/data/nvme0/lhd_codes/HunyuanImage-3.0-instruct/HunyuanImage-3-Instruct}"
+export model_path="${model_path:-/data/nvme0/models/tencent/HunyuanImage-3.0}"
 export HUNYUAN_IMAGE3_REPO_PATH="${HUNYUAN_IMAGE3_REPO_PATH:-/data/nvme0/lhd_codes/HunyuanImage-3.0}"
 export PYTHONPATH="${HUNYUAN_IMAGE3_REPO_PATH}:${PYTHONPATH:-}"
 
@@ -127,7 +127,7 @@ torchrun \
     --hunyuan_sp_attn_type "$SP_ATTN_TYPE" \
     --hunyuan_cfg_mode serial \
     --moe_impl "${moe_impl:-flashinfer}" \
-    --attn_impl "${attn_impl:-flash_attention_2}" \
+    --attn_impl "${attn_impl:-sdpa}" \
     --flashinfer_autotune_mode "$resolved_autotune_mode" \
     --flashinfer_autotune_cache "$resolved_autotune_cache" \
     --flashinfer_tune_max_num_tokens "${flashinfer_tune_max_num_tokens:-16384}" \

@@ -435,6 +435,10 @@ class HunyuanImage3Runner(DefaultRunner):
             f"mode={mode}, cache={cache_path}, buckets={buckets}, round_up={round_up}, "
             f"tune_max_num_tokens={self.config.get('flashinfer_tune_max_num_tokens', 8192)}"
         )
+        # The known-good pure-CFG path lets both CFG ranks use FlashInfer's
+        # regular context independently.  Distributed coordination is needed
+        # only when sequence parallelism shards one logical forward across
+        # multiple ranks (including CFG+SP).
         if self._sequence_parallel_enabled():
             return self._distributed_flashinfer_autotune_context(
                 cache_path=cache_path,
@@ -456,7 +460,9 @@ class HunyuanImage3Runner(DefaultRunner):
         if FlashInferAutoTuner is None:
             raise ImportError("Distributed FlashInfer autotune requires flashinfer.autotuner.AutoTuner.")
         tuner = FlashInferAutoTuner.get()
-        group = self.model.seq_p_group
+        group = self._parallel_control_group()
+        if group is None:
+            raise RuntimeError("Distributed FlashInfer autotune requires an initialized CFG or sequence parallel group.")
         if dist.get_backend(group) == "nccl":
             status_device = self._pipeline_latent_device()
             torch.cuda.set_device(status_device)
@@ -514,23 +520,46 @@ class HunyuanImage3Runner(DefaultRunner):
             and getattr(self.model, "seq_p_group", None) is not None
         )
 
+    def _parallel_control_group(self):
+        """Return the group used to keep replicated runner state identical.
+
+        Attention collectives remain scoped to ``seq_p_group`` and CFG prediction
+        exchange remains scoped to ``cfg_p_group``. Runner state such as sampled
+        tokens and latents is synchronized only for sequence-parallel runs.
+        Hybrid runs use WORLD so the state also spans the CFG dimension. Pure
+        CFG deliberately returns no runner control group: its only collective
+        is the prediction all-gather in the model, matching the known-good CFG
+        implementation and avoiding cfg_p collectives on both ends of a
+        multi-device pipeline.
+        """
+        if not self._sequence_parallel_enabled():
+            return None
+        if self._cfg_parallel_enabled():
+            return dist.group.WORLD
+        return self.model.seq_p_group
+
     def _is_output_rank(self):
         return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
 
-    def _broadcast_sequence_parallel_tensor(self, tensor):
-        if not self._sequence_parallel_enabled():
+    def _broadcast_parallel_tensor(self, tensor):
+        group = self._parallel_control_group()
+        if group is None:
             return tensor
-        group = self.model.seq_p_group
         source_rank = dist.get_global_rank(group, 0)
         dist.broadcast(tensor, src=source_rank, group=group)
         return tensor
 
-    def _sequence_parallel_barrier(self):
-        if not self._sequence_parallel_enabled():
+    def _parallel_barrier(self):
+        group = self._parallel_control_group()
+        if group is None:
             return
-        group = self.model.seq_p_group
         if dist.get_backend(group) == "nccl":
-            dist.barrier(group=group, device_ids=[torch.cuda.current_device()])
+            barrier_device = self._pipeline_latent_device()
+            torch.cuda.set_device(barrier_device)
+            device_index = barrier_device.index
+            if device_index is None:
+                device_index = torch.cuda.current_device()
+            dist.barrier(group=group, device_ids=[device_index])
         else:
             dist.barrier(group=group)
 
@@ -965,7 +994,7 @@ class HunyuanImage3Runner(DefaultRunner):
                     logits = self.model.infer(model_inputs)["logits"][:, -1, :]
                 next_token = self._sample_text_token(logits, generator)
                 next_token = next_token.to(device=device, dtype=input_ids.dtype)
-            next_token = self._broadcast_sequence_parallel_tensor(next_token)
+            next_token = self._broadcast_parallel_tensor(next_token)
             next_token_id = int(next_token.item())
 
             generated.append(next_token_id)
@@ -1235,7 +1264,7 @@ class HunyuanImage3Runner(DefaultRunner):
             ]
 
         latents = self._prepare_latents(prepared_inputs["batch_size"], image_size, prepared_inputs["generator"])
-        latents = self._broadcast_sequence_parallel_tensor(latents)
+        latents = self._broadcast_parallel_tensor(latents)
         num_steps = int(self.config.get("infer_steps", self.config.get("diff_infer_steps", 50)))
         self.scheduler.set_timesteps(num_steps, device=latents.device)
         guidance_scale = float(self.config.get("sample_guide_scale", self.config.get("diff_guidance_scale", 1.0)))
@@ -1311,12 +1340,12 @@ class HunyuanImage3Runner(DefaultRunner):
                         else:
                             prediction = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
 
-                prediction = self._broadcast_sequence_parallel_tensor(prediction)
+                prediction = self._broadcast_parallel_tensor(prediction)
                 sigma = self.scheduler.sigmas[step_index].to(latents.device)
                 sigma_next = self.scheduler.sigmas[step_index + 1].to(latents.device)
                 latents = latents.float() + prediction.float() * (sigma_next - sigma)
 
-        self._sequence_parallel_barrier()
+        self._parallel_barrier()
         if hasattr(self.model, "transformer_infer") and hasattr(self.model.transformer_infer, "print_moe_profile"):
             self.model.transformer_infer.print_moe_profile(reset=True)
 

@@ -81,6 +81,123 @@ def test_hunyuan_sequence_parallel_size_one_disables_parallel(tmp_path):
     assert config["parallel"] is False
 
 
+def test_hunyuan_sequence_parallel_size_one_preserves_cfg_parallel(tmp_path):
+    model_path, runtime_path = _write_tiny_hunyuan_configs(tmp_path)
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "enable_cfg": True,
+                "hunyuan_cfg_mode": "parallel",
+                "parallel": {
+                    "cfg_p_size": 2,
+                    "seq_p_size": 2,
+                    "seq_p_attn_type": "ulysses",
+                },
+            }
+        )
+    )
+
+    config = set_config(_sp_args(model_path, runtime_path, size=1, attn_type="ulysses"))
+
+    assert config["parallel"] == {"cfg_p_size": 2, "seq_p_size": 1}
+    assert config["hunyuan_cfg_mode"] == "parallel"
+
+
+@pytest.mark.parametrize("attn_type", ["kv_all_gather", "ulysses"])
+def test_hunyuan_hybrid_cfg_sequence_parallel_config_is_supported(tmp_path, attn_type):
+    model_path, runtime_path = _write_tiny_hunyuan_configs(tmp_path)
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "enable_cfg": True,
+                "hunyuan_cfg_mode": "parallel",
+                "parallel": {"cfg_p_size": 2, "seq_p_size": 2},
+            }
+        )
+    )
+
+    config = set_config(_sp_args(model_path, runtime_path, size=2, attn_type=attn_type))
+
+    assert config["parallel"] == {
+        "cfg_p_size": 2,
+        "seq_p_size": 2,
+        "seq_p_attn_type": attn_type,
+    }
+    assert config["hunyuan_cfg_mode"] == "parallel"
+
+
+def test_hunyuan_cfg_parallel_requires_cfg_and_parallel_mode(tmp_path):
+    model_path, runtime_path = _write_tiny_hunyuan_configs(tmp_path)
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "enable_cfg": False,
+                "hunyuan_cfg_mode": "parallel",
+                "parallel": {"cfg_p_size": 2, "seq_p_size": 2},
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="cfg_p_size=2 requires enable_cfg=true"):
+        set_config(_sp_args(model_path, runtime_path, size=2, attn_type="kv_all_gather"))
+
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "enable_cfg": True,
+                "hunyuan_cfg_mode": "serial",
+                "parallel": {"cfg_p_size": 2, "seq_p_size": 2},
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="cfg_p_size=2 requires hunyuan_cfg_mode='parallel'"):
+        set_config(_sp_args(model_path, runtime_path, size=2, attn_type="kv_all_gather"))
+
+
+def test_hunyuan_cfg_parallel_size_is_limited_to_cond_uncond_pair(tmp_path):
+    model_path, runtime_path = _write_tiny_hunyuan_configs(tmp_path)
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "enable_cfg": True,
+                "hunyuan_cfg_mode": "parallel",
+                "parallel": {"cfg_p_size": 3, "seq_p_size": 2},
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="cfg_p_size must be 1 or 2"):
+        set_config(_sp_args(model_path, runtime_path, size=2, attn_type="kv_all_gather"))
+
+
+def test_hunyuan_hybrid_parallel_config_builds_two_dimensional_mesh(monkeypatch):
+    import lightx2v.utils.set_config as config_module
+
+    mesh = object()
+    init_calls = []
+    monkeypatch.setattr(config_module, "AI_DEVICE", "cpu")
+    monkeypatch.setattr(config_module.dist, "get_world_size", lambda: 4)
+    monkeypatch.setattr(config_module.dist, "all_reduce", lambda tensor: tensor)
+    monkeypatch.setattr(
+        config_module,
+        "init_device_mesh",
+        lambda device, shape, mesh_dim_names: init_calls.append((device, shape, mesh_dim_names)) or mesh,
+    )
+    config = {
+        "parallel": {"cfg_p_size": 2, "seq_p_size": 2, "seq_p_attn_type": "ulysses"},
+        "enable_cfg": True,
+        "seq_parallel": False,
+        "cfg_parallel": False,
+    }
+
+    config_module.set_parallel_config(config)
+
+    assert init_calls == [("cpu", (2, 2), ("cfg_p", "seq_p"))]
+    assert config["device_mesh"] is mesh
+    assert config["seq_parallel"] is True
+    assert config["cfg_parallel"] is True
+    assert config["tensor_parallel"] is False
+
+
 def test_hunyuan_ulysses_rejects_world_size_that_does_not_divide_gqa_heads(tmp_path):
     model_path, runtime_path = _write_tiny_hunyuan_configs(tmp_path, q_heads=32, kv_heads=8)
 
@@ -139,7 +256,7 @@ def test_hunyuan_sp_model_rejects_nondivisible_pipeline_device_count(monkeypatch
     monkeypatch.setattr(model_module.dist, "get_world_size", lambda process_group=None: 2)
     monkeypatch.setattr(model_module.dist, "get_rank", lambda process_group=None: 0)
 
-    with pytest.raises(ValueError, match="pipeline device count .* divisible by seq_p_size"):
+    with pytest.raises(ValueError, match=r"pipeline device count .* divisible by cfg_p_size \* seq_p_size"):
         model_module.resolve_pipeline_devices(config, "cuda")
 
 
@@ -159,6 +276,76 @@ def test_hunyuan_sp_model_splits_explicit_pipeline_device_pool(monkeypatch):
     monkeypatch.setattr(model_module.dist, "get_rank", lambda process_group=None: 1)
 
     assert model_module.resolve_pipeline_devices(config, "cuda") == ["cuda:1", "cuda:3", "cuda:5"]
+
+
+@pytest.mark.parametrize(
+    ("global_rank", "expected"),
+    [
+        (0, ["cuda:0", "cuda:4"]),
+        (1, ["cuda:1", "cuda:5"]),
+        (2, ["cuda:2", "cuda:6"]),
+        (3, ["cuda:3", "cuda:7"]),
+    ],
+)
+def test_hunyuan_hybrid_model_uses_disjoint_global_rank_pipeline_lanes(monkeypatch, global_rank, expected):
+    import lightx2v.models.networks.hunyuan_image3.model as model_module
+
+    config = {
+        "pipeline_parallel": True,
+        "seq_parallel": True,
+        "cfg_parallel": True,
+        "hunyuan_image3_pipeline_layout": "interleaved",
+    }
+    monkeypatch.setattr(model_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(model_module.torch.cuda, "device_count", lambda: 8)
+    monkeypatch.setattr(model_module.torch.cuda, "current_device", lambda: global_rank)
+    monkeypatch.setattr(model_module.dist, "is_available", lambda: True)
+    monkeypatch.setattr(model_module.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(model_module.dist, "get_world_size", lambda process_group=None: 4)
+    monkeypatch.setattr(model_module.dist, "get_rank", lambda process_group=None: global_rank)
+
+    assert model_module.resolve_pipeline_devices(config, "cuda") == expected
+
+
+def test_hunyuan_pure_cfg_model_keeps_contiguous_pipeline_lane(monkeypatch):
+    import lightx2v.models.networks.hunyuan_image3.model as model_module
+
+    cfg_group = object()
+    config = {
+        "pipeline_parallel": True,
+        "seq_parallel": False,
+        "cfg_parallel": True,
+        "parallel": {"cfg_p_size": 2, "seq_p_size": 1},
+        "device_mesh": SimpleNamespace(get_group=lambda mesh_dim: cfg_group),
+    }
+    monkeypatch.setattr(model_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(model_module.torch.cuda, "device_count", lambda: 8)
+    monkeypatch.setattr(model_module.dist, "is_available", lambda: True)
+    monkeypatch.setattr(model_module.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(model_module.dist, "get_rank", lambda process_group=None: 1)
+
+    assert model_module.resolve_pipeline_devices(config, "cuda") == ["cuda:4", "cuda:5", "cuda:6", "cuda:7"]
+
+
+def test_hunyuan_model_accepts_parallel_cfg_branch_with_sequence_parallel(monkeypatch):
+    import lightx2v.models.networks.hunyuan_image3.model as model_module
+
+    model = model_module.HunyuanImage3Model.__new__(model_module.HunyuanImage3Model)
+    model.config = {
+        "seq_parallel": True,
+        "cfg_parallel": True,
+        "enable_cfg": True,
+        "hunyuan_cfg_mode": "parallel",
+        "use_taylor_cache": False,
+        "enable_kv_cache": True,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
+    }
+    model.seq_p_group = object()
+    model.sequence_parallel_attn_type = "ulysses"
+    monkeypatch.setattr(model_module.dist, "get_world_size", lambda process_group=None: 2)
+
+    model._validate_sequence_parallel_config()
 
 
 def test_nvidia_parallel_init_remains_original_rank_based_implementation():
@@ -197,6 +384,47 @@ def test_hunyuan_dist_sp_scripts_and_configs_expose_both_backends_flashinfer_and
         assert config["enable_text_kv_cache"] is True
         assert config["parallel"] == {
             "cfg_p_size": 1,
+            "seq_p_size": 2,
+            "seq_p_attn_type": backend,
+        }
+
+
+def test_hunyuan_hybrid_cfg_sp_scripts_and_configs_contract():
+    script = Path("scripts/dist_infer/run_hunyuan_image3_t2i_dist_cfg_sp.sh").read_text()
+    wrappers = {
+        "kv_all_gather": Path("scripts/dist_infer/run_hunyuan_image3_t2i_dist_cfg_kv_all_gather.sh").read_text(),
+        "ulysses": Path("scripts/dist_infer/run_hunyuan_image3_t2i_dist_cfg_ulysses.sh").read_text(),
+    }
+
+    assert "world_size=$((CFG_SIZE * SP_SIZE))" in script
+    assert "visible_gpu_count % world_size" in script
+    assert '--nproc_per_node="$world_size"' in script
+    assert "--hunyuan_cfg_mode parallel" in script
+    assert '--hunyuan_sp_size "$SP_SIZE"' in script
+    assert '--hunyuan_sp_attn_type "$SP_ATTN_TYPE"' in script
+    assert '--moe_impl "${moe_impl:-flashinfer}"' in script
+    assert '--flashinfer_autotune_mode "$resolved_autotune_mode"' in script
+    assert '--enable_kv_cache "${enable_kv_cache:-true}"' in script
+    assert '--enable_text_kv_cache "${enable_text_kv_cache:-${enable_kv_cache:-true}}"' in script
+    assert "MIN_PIPELINE_GPUS_PER_LANE" not in script
+    assert "MIN_FREE_GPU_MEMORY_MIB" not in script
+    assert "--query-compute-apps" not in script
+
+    expected_attention_impl = {"kv_all_gather": "flash_attention_2", "ulysses": "sdpa"}
+    for backend, wrapper in wrappers.items():
+        assert f"SP_ATTN_TYPE={backend}" in wrapper
+        assert "run_hunyuan_image3_t2i_dist_cfg_sp.sh" in wrapper
+        config = json.loads(Path(f"configs/dist_infer/hunyuan_image3_t2i_dist_cfg_{backend}.json").read_text())
+        assert config["enable_cfg"] is True
+        assert config["hunyuan_cfg_mode"] == "parallel"
+        assert config["moe_impl"] == "flashinfer"
+        assert config["attn_impl"] == expected_attention_impl[backend]
+        assert config["flashinfer_autotune_mode"] == "tune"
+        assert config["enable_kv_cache"] is True
+        assert config["enable_text_kv_cache"] is True
+        assert config["use_taylor_cache"] is False
+        assert config["parallel"] == {
+            "cfg_p_size": 2,
             "seq_p_size": 2,
             "seq_p_attn_type": backend,
         }
@@ -261,14 +489,19 @@ def test_hunyuan_distributed_flashinfer_autotune_uses_single_cache_writer(monkey
 
     monkeypatch.setattr(runner_module, "FlashInferAutoTuner", FakeAutoTuner)
     monkeypatch.setattr(runner_module, "flashinfer_autotune", fake_autotune)
+    monkeypatch.setattr(runner_module.dist, "is_available", lambda: True)
+    monkeypatch.setattr(runner_module.dist, "is_initialized", lambda: True)
+    world_group = object()
+    monkeypatch.setattr(runner_module.dist, "group", SimpleNamespace(WORLD=world_group))
     monkeypatch.setattr(runner_module.dist, "get_backend", lambda group: "gloo")
     monkeypatch.setattr(runner_module.dist, "get_global_rank", lambda group, rank: rank)
-    monkeypatch.setattr(runner_module.dist, "all_reduce", lambda tensor, op, group: events.append(("all_reduce", int(tensor.item()))))
-    monkeypatch.setattr(runner_module.dist, "broadcast", lambda tensor, src, group: events.append(("broadcast", src)))
+    monkeypatch.setattr(runner_module.dist, "all_reduce", lambda tensor, op, group: events.append(("all_reduce", int(tensor.item()), group)))
+    monkeypatch.setattr(runner_module.dist, "broadcast", lambda tensor, src, group: events.append(("broadcast", src, group)))
 
     cache_path = tmp_path / "autotune.json"
     cache_path.write_text("{}")
     runner = HunyuanImage3Runner.__new__(HunyuanImage3Runner)
+    runner.config = {"seq_parallel": True, "cfg_parallel": True, "enable_cfg": True}
     runner.model = SimpleNamespace(seq_p_group=object())
     runner._is_output_rank = lambda: output_rank
 
@@ -277,7 +510,8 @@ def test_hunyuan_distributed_flashinfer_autotune_uses_single_cache_writer(monkey
 
     assert ("load", str(cache_path)) in events
     assert any(event[0] == "enter" and event[1]["cache"] is None for event in events)
-    assert any(event[0] == "broadcast" for event in events)
+    assert any(event[0] == "all_reduce" and event[2] is world_group for event in events)
+    assert any(event[0] == "broadcast" and event[2] is world_group for event in events)
     assert (("save", str(cache_path)) in events) is output_rank
 
 

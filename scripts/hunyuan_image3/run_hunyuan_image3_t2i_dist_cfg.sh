@@ -10,7 +10,7 @@ set -e
 GPU_IDS="${1:-${CUDA_VISIBLE_DEVICES:-}}"
 
 export lightx2v_path="/data/nvme0/lhd_codes/LightX2V"
-export model_path="/data/nvme0/lhd_codes/HunyuanImage-3.0-instruct/HunyuanImage-3-Instruct"
+export model_path="${model_path:-/data/nvme0/models/tencent/HunyuanImage-3.0}"
 export HUNYUAN_IMAGE3_REPO_PATH="${HUNYUAN_IMAGE3_REPO_PATH:-/data/nvme0/lhd_codes/HunyuanImage-3.0}"
 export PYTHONPATH="${HUNYUAN_IMAGE3_REPO_PATH}:${PYTHONPATH:-}"
 
@@ -31,7 +31,7 @@ echo "use_taylor_cache=${use_taylor_cache:-false}"
 echo "hunyuan_cfg_mode=${hunyuan_cfg_mode:-parallel}"
 echo "moe_impl=${moe_impl:-flashinfer}"
 echo "flashinfer_autotune_mode=${flashinfer_autotune_mode:-tune}"
-echo "flashinfer_autotune_cache=${flashinfer_autotune_cache:-${lightx2v_path}/save_results/hunyuan_image3_flashinfer_autotune_t2i.json}"
+echo "flashinfer_autotune_cache=${flashinfer_autotune_cache:-${lightx2v_path}/save_results/hunyuan_image3_flashinfer_autotune_t2i_dist_cfg.json}"
 
 source ${lightx2v_path}/scripts/base/base.sh
 

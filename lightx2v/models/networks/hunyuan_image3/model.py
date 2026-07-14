@@ -33,13 +33,16 @@ def _resolve_sequence_parallel_pipeline_lane(config, devices):
     if not dist.is_available() or not dist.is_initialized():
         raise RuntimeError("HunyuanImage3 sequence-parallel pipeline split requires torch.distributed initialization.")
 
-    seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
-    seq_p_size = dist.get_world_size(seq_p_group)
-    seq_p_rank = dist.get_rank(seq_p_group)
-    if len(devices) % seq_p_size:
+    # In pure SP, global rank/world are identical to seq rank/world.  In a
+    # CFG+SP mesh, however, using seq rank would make both CFG rows select the
+    # same physical pipeline devices.  Allocate one disjoint lane per global
+    # process instead; collectives themselves still use the seq_p group.
+    parallel_world_size = dist.get_world_size()
+    global_rank = dist.get_rank()
+    if len(devices) % parallel_world_size:
         raise ValueError(
             f"HunyuanImage3 sequence parallel requires pipeline device count ({len(devices)}) "
-            f"to be divisible by seq_p_size ({seq_p_size})."
+            f"to be divisible by cfg_p_size * seq_p_size ({parallel_world_size})."
         )
 
     layout = str(config.get("hunyuan_image3_pipeline_layout", "interleaved")).strip().lower()
@@ -49,7 +52,7 @@ def _resolve_sequence_parallel_pipeline_lane(config, devices):
             f"hunyuan_image3_pipeline_layout='interleaved'; got {layout!r}."
         )
 
-    lane = devices[seq_p_rank::seq_p_size]
+    lane = devices[global_rank::parallel_world_size]
     expected_device = f"cuda:{torch.cuda.current_device()}"
     if lane[0] != expected_device:
         raise RuntimeError(
@@ -186,10 +189,13 @@ class HunyuanImage3Model(BaseTransformerModel):
             return
         if self.seq_p_group is None:
             raise RuntimeError("HunyuanImage3 sequence parallel requires an initialized seq_p process group.")
-        if self.config.get("cfg_parallel", False):
-            raise ValueError("HunyuanImage3 sequence parallel requires parallel.cfg_p_size=1.")
         cfg_mode = str(self.config.get("hunyuan_cfg_mode", "batch")).strip().lower()
-        if self.config.get("enable_cfg", False) and cfg_mode != "serial":
+        if self.config.get("cfg_parallel", False):
+            if not self.config.get("enable_cfg", False):
+                raise ValueError("HunyuanImage3 cfg_parallel requires enable_cfg=true.")
+            if cfg_mode != "parallel":
+                raise ValueError("HunyuanImage3 CFG+SP requires hunyuan_cfg_mode='parallel'.")
+        elif self.config.get("enable_cfg", False) and cfg_mode != "serial":
             raise ValueError(
                 "HunyuanImage3 sequence parallel requires hunyuan_cfg_mode='serial' so every transformer forward has batch size 1."
             )
@@ -320,7 +326,7 @@ class HunyuanImage3Model(BaseTransformerModel):
         if pre_infer_out.hidden_states.shape[0] != 1:
             raise ValueError(
                 "HunyuanImage3 sequence parallel expects batch size 1 per transformer forward; "
-                "set hunyuan_cfg_mode='serial'."
+                "use hunyuan_cfg_mode='serial' for pure SP or 'parallel' for CFG+SP."
             )
 
         world_size = dist.get_world_size(self.seq_p_group)
@@ -448,6 +454,10 @@ class HunyuanImage3Model(BaseTransformerModel):
         output = self._infer_cond_uncond(inputs, infer_condition=infer_condition)
 
         if cfg_parallel_branch and "diffusion_prediction" in output:
+            # Keep the CFG collective on the device that produced the
+            # diffusion prediction (the last device of each pipeline lane).
+            # This matches the proven pure-CFG path and avoids an extra
+            # cross-device copy immediately before the NCCL collective.
             noise_pred = output["diffusion_prediction"].contiguous()
             if noise_pred.device.type == "cuda":
                 torch.cuda.set_device(noise_pred.device)

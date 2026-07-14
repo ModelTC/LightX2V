@@ -560,7 +560,10 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
 
     def _sequence_parallel_ulysses_seq_to_head(self, query_states, key_states, value_states, state):
         if query_states.shape[0] != 1:
-            raise ValueError("HunyuanImage3 Ulysses expects batch size 1; set hunyuan_cfg_mode='serial'.")
+            raise ValueError(
+                "HunyuanImage3 Ulysses expects batch size 1; use hunyuan_cfg_mode='serial' "
+                "for pure SP or 'parallel' for CFG+SP."
+            )
         query = all2all_seq2head(query_states[0].transpose(0, 1).contiguous(), group=self.seq_p_group)
         key = all2all_seq2head(key_states[0].transpose(0, 1).contiguous(), group=self.seq_p_group)
         value = all2all_seq2head(value_states[0].transpose(0, 1).contiguous(), group=self.seq_p_group)
