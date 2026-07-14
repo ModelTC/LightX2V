@@ -4,6 +4,14 @@ from pathlib import Path
 
 import numpy as np
 
+LIBERO_BENCHMARKS = (
+    "libero_spatial",
+    "libero_object",
+    "libero_goal",
+    "libero_10",
+    "libero_90",
+)
+
 
 def default_libero_root():
     return Path(__file__).resolve().parent / "LIBERO"
@@ -55,10 +63,40 @@ def load_libero(libero_root):
 
 
 def load_init_states(get_libero_path, task, init_state_id):
+    state, _ = load_init_state(get_libero_path, task, init_state_id)
+    return state
+
+
+def load_init_state(get_libero_path, task, init_state_id):
     import torch
 
     init_states_path = Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
-    return torch.load(init_states_path, weights_only=False)[init_state_id]
+    init_states = torch.load(init_states_path, map_location="cpu", weights_only=False)
+    index = int(init_state_id)
+    if index < 0 or index >= len(init_states):
+        raise ValueError(f"init_state_id {index} is out of range for {task.name!r}; expected 0..{len(init_states) - 1}")
+    return init_states[index], len(init_states)
+
+
+def build_task_catalog(benchmark_module):
+    """Return stable UI task ids mapped to their LIBERO suite/task metadata."""
+    factories = benchmark_module.get_benchmark_dict()
+    catalog = {}
+    for benchmark_name in LIBERO_BENCHMARKS:
+        factory = factories.get(benchmark_name)
+        if factory is None:
+            continue
+        task_suite = factory()
+        for task_id in range(task_suite.get_num_tasks()):
+            task = task_suite.get_task(task_id)
+            key = f"{benchmark_name}/{task_id}"
+            catalog[key] = {
+                "benchmark": benchmark_name,
+                "task_id": task_id,
+                "task_name": task.name,
+                "language": task.language,
+            }
+    return catalog
 
 
 class LiberoActionObserver:
@@ -74,22 +112,39 @@ class LiberoActionObserver:
         self.libero_root = Path(libero_root or default_libero_root()).expanduser()
         benchmark, get_libero_path, env_cls = load_libero(self.libero_root)
 
-        task_suite = benchmark.get_benchmark_dict()[benchmark_name.lower()]()
-        task = task_suite.get_task(task_id)
+        self.benchmark_module = benchmark
+        self.benchmark_name = str(benchmark_name).strip().lower()
+        factories = benchmark.get_benchmark_dict()
+        if self.benchmark_name not in factories or self.benchmark_name not in LIBERO_BENCHMARKS:
+            raise ValueError(f"unknown LIBERO benchmark {benchmark_name!r}; available: {', '.join(LIBERO_BENCHMARKS)}")
+        task_suite = factories[self.benchmark_name]()
+        self.task_id = int(task_id)
+        if self.task_id < 0 or self.task_id >= task_suite.get_num_tasks():
+            raise ValueError(f"task_id {self.task_id} is out of range for {self.benchmark_name!r}; expected 0..{task_suite.get_num_tasks() - 1}")
+        task = task_suite.get_task(self.task_id)
+        self.task = task
         self.task_description = task.language
         bddl_file = Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
         # Keep an owned copy: every restart must restore this exact MuJoCo state,
         # rather than returning the observation cached after the last action.
-        self.init_state = np.asarray(load_init_states(get_libero_path, task, init_state_id)).copy()
+        self.init_state_id = int(init_state_id)
+        init_state, self.num_init_states = load_init_state(get_libero_path, task, self.init_state_id)
+        self.init_state = np.asarray(init_state).copy()
+        self.image_size = int(image_size)
+        self.seed = int(seed)
 
         self.env = env_cls(
             bddl_file_name=str(bddl_file),
-            camera_heights=image_size,
-            camera_widths=image_size,
+            camera_heights=self.image_size,
+            camera_widths=self.image_size,
             camera_names=["robot0_eye_in_hand", "agentview", "frontview", "galleryview"],
         )
-        self.env.seed(seed)
+        self.env.seed(self.seed)
         self.reset()
+
+    @property
+    def task_key(self):
+        return f"{self.benchmark_name}/{self.task_id}"
 
     def reset(self):
         """Reset simulator internals and restore the configured initial state."""

@@ -6,7 +6,7 @@ import numpy as np
 from common.contract import EnvContract
 
 from ..sim.base_env import BaseSimEnv, Observation
-from .observer import LiberoActionObserver, default_libero_root
+from .observer import LiberoActionObserver, build_task_catalog, default_libero_root
 
 
 def quat_to_axis_angle(quat):
@@ -39,14 +39,26 @@ class LiberoEnv(BaseSimEnv):
         libero_root=None,
     ):
         super().__init__(contract)
+        self.image_size = int(image_size)
+        self.libero_root = libero_root
         self.observer = LiberoActionObserver(
             benchmark_name=benchmark,
             task_id=int(task_id),
             init_state_id=int(init_state_id),
-            image_size=int(image_size),
+            image_size=self.image_size,
             seed=int(seed),
-            libero_root=libero_root,
+            libero_root=self.libero_root,
         )
+        self._task_catalog = build_task_catalog(self.observer.benchmark_module)
+        self._sync_metadata()
+
+    def _sync_metadata(self):
+        self.benchmark = self.observer.benchmark_name
+        self.task_id = self.observer.task_id
+        self.init_state_id = self.observer.init_state_id
+        self.task_name = self.observer.task_key
+        self.task_config = str(self.init_state_id)
+        self.seed = self.observer.seed
 
     @property
     def task_description(self) -> str:
@@ -71,6 +83,50 @@ class LiberoEnv(BaseSimEnv):
         axis_angle = quat_to_axis_angle(np.asarray(obs["robot0_eef_quat"], dtype=np.float32))
         gripper = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
         return np.concatenate([pos, axis_angle, gripper]).astype(np.float32)
+
+    @property
+    def supports_task_switch(self) -> bool:
+        return True
+
+    def list_tasks(self):
+        return [
+            {
+                "value": key,
+                "label": f"[{item['benchmark']} {item['task_id']}] {item['language']}",
+            }
+            for key, item in self._task_catalog.items()
+        ]
+
+    def list_task_configs(self):
+        return [str(index) for index in range(self.observer.num_init_states)]
+
+    def set_task(self, task_name: str, task_config: str = "", seed=None) -> Observation:
+        task_key = str(task_name).strip()
+        task = self._task_catalog.get(task_key)
+        if task is None:
+            raise ValueError(f"unknown LIBERO task {task_key!r}")
+
+        init_state_id = self.init_state_id if str(task_config).strip() == "" else int(task_config)
+        new_seed = self.seed + 1 if seed is None or str(seed).strip() == "" else int(seed)
+
+        # Construct the replacement first so an invalid task/config leaves the
+        # currently displayed environment alive and usable.
+        new_observer = LiberoActionObserver(
+            benchmark_name=task["benchmark"],
+            task_id=task["task_id"],
+            init_state_id=init_state_id,
+            image_size=self.image_size,
+            seed=new_seed,
+            libero_root=self.libero_root,
+        )
+        old_observer = self.observer
+        self.observer = new_observer
+        self._sync_metadata()
+        try:
+            old_observer.close()
+        except Exception:
+            pass
+        return self._observation()
 
     def close(self) -> None:
         self.observer.close()

@@ -112,9 +112,7 @@ class RoboTwinEnv(BaseSimEnv):
             "envs/": (root / "envs").is_dir(),
             "task_config/": (root / "task_config").is_dir(),
             "assets/": (root / "assets").is_dir(),
-            "assets/objects/objaverse/list.json": (
-                root / "assets" / "objects" / "objaverse" / "list.json"
-            ).is_file(),
+            "assets/objects/objaverse/list.json": (root / "assets" / "objects" / "objaverse" / "list.json").is_file(),
             "assets/objects/same.json": (root / "assets" / "objects" / "same.json").is_file(),
         }
         missing = [name for name, exists in required_paths.items() if not exists]

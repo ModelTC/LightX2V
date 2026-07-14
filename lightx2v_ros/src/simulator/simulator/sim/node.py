@@ -279,10 +279,7 @@ class SimulatorNode(Node):
         self.success = False
         self.state = READY
         self._refresh_max_steps()
-        self.get_logger().info(
-            f"episode {self.episode_index} reset and waiting for start "
-            f"(global step {self.step_index}): {self.env.task_description!r}"
-        )
+        self.get_logger().info(f"episode {self.episode_index} reset and waiting for start (global step {self.step_index}): {self.env.task_description!r}")
         self.publish_observation()
         self.publish_status()
 
