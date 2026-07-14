@@ -38,7 +38,7 @@
 | `lightx2v/utils/op_shape_trace.py` | 写出逻辑 op shape JSONL |
 | `tools/profile/region_event_trace.py` | 解析 torch trace + op trace，生成 block report |
 | `tools/profile/trace_correlation.py` | kernel 与 CPU launch / region 的关联辅助 |
-| `tools/profile/profiler_step_gap.py` | 解析 `gpu_user_annotation` ProfilerStep，快速统计 wall/gpu_active/self_gap/raw_gpu_sum 和 GPU event 数量 |
+| `tools/profile/profiler_step_gap.py` | 解析 ProfilerStep，快速统计 wall/gpu_active/self_gap/raw_gpu_sum、GPU event 数量和 CUDA sync runtime API 数量 |
 
 模型侧文件：
 
@@ -146,7 +146,7 @@ bash scripts/<model>/run_<model>.sh
 python tools/profile/profiler_step_gap.py --brief prof_results/<model>_transformer_profile/full_step_10_*/*.pt.trace.json
 ```
 
-其中 `wall/gpu_active/self_gap/raw_gpu_sum` 使用 `gpu_user_annotation` 的 `ProfilerStep#N` 窗口统计，不影响 `block` report 中基于 CPU launch timestamp 的 kernel/region 归属逻辑。
+其中 `wall/gpu_active/self_gap/raw_gpu_sum` 使用 `gpu_user_annotation` 的 `ProfilerStep#N` 窗口统计，不影响 `block` report 中基于 CPU launch timestamp 的 kernel/region 归属逻辑。`cudaStreamSynchronize/cudaDeviceSynchronize` 使用 trace 里的 `cuda_runtime` 事件直接计数，按 CPU `user_annotation` 的 `ProfilerStep#N` 窗口归属。
 
 ## Kernel / Region 归属口径
 

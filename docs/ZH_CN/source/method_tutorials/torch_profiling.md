@@ -68,10 +68,11 @@ python tools/profile/profiler_step_gap.py --brief \
 输出示例：
 
 ```text
-ProfilerStep#0: wall=56.154 ms, gpu_active=43.612 ms, self_gap=12.542 ms, raw_gpu_sum=43.613 ms, gpu_memcpy=24, gpu_memset=131, kernel=1733
+ProfilerStep#0: wall=56.154 ms, gpu_active=43.612 ms, self_gap=12.542 ms, raw_gpu_sum=43.613 ms, gpu_memcpy=24, gpu_memset=131, kernel=1733, cudaStreamSynchronize=3, cudaDeviceSynchronize=2
 ```
 
 该工具使用 trace 中的 `gpu_user_annotation` 作为 `ProfilerStep#N` 窗口，`gpu_active` 是窗口内 GPU activity 区间 merge 后的耗时，`self_gap = wall - gpu_active`。`raw_gpu_sum` 是未 merge 的 GPU activity 耗时求和，后面的 `gpu_memcpy/gpu_memset/kernel` 是窗口内事件数量，适合对比两次 trace 的 gap 和 memcpy 数量变化。
+`cudaStreamSynchronize/cudaDeviceSynchronize` 是 trace 中 `cuda_runtime` 事件的直接计数，按 CPU `user_annotation` 的 `ProfilerStep#N` 窗口归属。
 
 ---
 
