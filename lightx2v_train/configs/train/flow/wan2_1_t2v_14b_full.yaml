@@ -29,7 +29,7 @@ distributed:
 
 data:
     train:
-        name: wan_t2v_video_dataset
+        name: video_dataset
         data_path:
             - /data/nvme5/gushiqiao/datatets/OpenVid-1M.csv
         video_root: /data/nvme5/gushiqiao/datatets/video

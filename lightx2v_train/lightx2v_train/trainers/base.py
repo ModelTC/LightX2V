@@ -52,7 +52,9 @@ class BaseTrainer:
         self.save_every_iters = self.training_config["save_every_iters"]
         self.save_total_limit = self.training_config["save_total_limit"]
 
-        self.infer_every_iters = self.infer_config.get("infer_every_iters", None)
+        self.infer_every_iters = None
+        if self.infer_config.get("method", "none") != "none":
+            self.infer_every_iters = self.infer_config.get("infer_every_iters", None)
         logging_config = self.config.get("logging", {})
         self.train_log_every_iters = max(1, int(logging_config.get("train_log_every_iters", 10)))
 
@@ -233,11 +235,14 @@ class BaseTrainer:
         iter_output_dir = os.path.join(base_output_dir, f"iter-{current_iter:09d}")
 
         self.inferencer.output_infer_dir = iter_output_dir
-        os.makedirs(iter_output_dir, exist_ok=True)
-        logger.info("[train] running inference iter={} output_dir={}", current_iter, iter_output_dir)
+        if is_main_process():
+            os.makedirs(iter_output_dir, exist_ok=True)
+            logger.info("[train] running inference iter={} output_dir={}", current_iter, iter_output_dir)
+        barrier()
         self.inferencer.infer()
         barrier()
-        logger.info("[train] finished inference iter={}", current_iter)
+        if is_main_process():
+            logger.info("[train] finished inference iter={}", current_iter)
 
         self._restore_trainable_model(self.model)
 

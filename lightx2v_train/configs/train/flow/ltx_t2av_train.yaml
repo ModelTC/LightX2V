@@ -1,0 +1,108 @@
+model:
+    name: ltx_t2av
+    pretrained_model_name_or_path: /data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
+    running_dtype: bf16
+    transformer_param_dtype: fp32
+    embeddings_dtype: bf16
+    load_transformer: true
+    load_embeddings_processor: true
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: latent_dataset
+        data_path: /data/nvme5/gushiqiao/datatets/x2v_online/lightx2v_ltx_t2av/.precomputed
+        dataset_repeat: 1
+        batch_size: 1
+        num_workers: 4
+        pin_memory: true
+        shuffle: true
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: shifted_logit_normal
+    logitnormal_std: 1.0
+    logitnormal_eps: 0.001
+    logitnormal_uniform_prob: 0.1
+
+training:
+    method: ltx_t2av_flow
+    train_type: lora
+    max_train_iters: 3000
+    gradient_accumulation_iters: 2
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 10
+    save_every_iters: 100
+    save_total_limit: 6
+    ltx2:
+        default_fps: 25
+        video_loss_weight: 1.0
+        audio_loss_weight: 1.0
+    lora:
+        rank: 128
+        alpha: 128
+        target_modules:
+            - attn1.to_q
+            - attn1.to_k
+            - attn1.to_v
+            - attn1.to_out.0
+            - attn2.to_q
+            - attn2.to_k
+            - attn2.to_v
+            - attn2.to_out.0
+            - ff.net.0.proj
+            - ff.net.2
+            - audio_attn1.to_q
+            - audio_attn1.to_k
+            - audio_attn1.to_v
+            - audio_attn1.to_out.0
+            - audio_attn2.to_q
+            - audio_attn2.to_k
+            - audio_attn2.to_v
+            - audio_attn2.to_out.0
+            - audio_ff.net.0.proj
+            - audio_ff.net.2
+            - audio_to_video_attn.to_q
+            - audio_to_video_attn.to_k
+            - audio_to_video_attn.to_v
+            - audio_to_video_attn.to_out.0
+            - video_to_audio_attn.to_q
+            - video_to_audio_attn.to_k
+            - video_to_audio_attn.to_v
+            - video_to_audio_attn.to_out.0
+    optimizer:
+        learning_rate: 0.0001
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.01
+        adam_epsilon: 0.00000001
+    output_dir: /data/nvme5/gushiqiao/codes/LightX2V/lightx2v_train/output_train/ltx_t2av
+
+inference:
+    method: none
+    infer_every_iters: null
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+
+resume:
+    auto_resume: false

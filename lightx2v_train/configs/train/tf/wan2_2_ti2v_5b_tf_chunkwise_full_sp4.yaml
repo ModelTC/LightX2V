@@ -40,8 +40,8 @@ distributed:
 
 data:
     train:
-        name: wan_t2v_cached_dataset
-        cache_path: ./cache_data/wan2_2_ti2v_5b_tf_96f
+        name: latent_dataset
+        data_path: ./cache_data/wan2_2_ti2v_5b_tf_96f
         dataset_repeat: 1
         batch_size: 1
         num_workers: 8

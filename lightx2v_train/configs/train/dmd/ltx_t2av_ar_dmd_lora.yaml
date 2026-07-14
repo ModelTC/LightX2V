@@ -1,0 +1,136 @@
+model:
+    name: ltx_t2av
+    pretrained_model_name_or_path: /data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
+    text_encoder_path: /data/nvme0/gushiqiao/models/official_models/LTX-2
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    embeddings_dtype: bf16
+    text_encoder_dtype: bf16
+    text_encoder_cpu: false
+    load_transformer: true
+    load_embeddings_processor: true
+    load_text_encoder: false
+    num_frame_per_chunk: 1
+    local_attn_size: -1
+    sink_size: 0
+    defer_kv_cache_updates: false
+    detach_kv_cache_updates: false
+    fake:
+        name: ltx_t2av
+        pretrained_model_name_or_path: /data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
+    teacher:
+        name: ltx_t2av
+        pretrained_model_name_or_path: /data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
+        transformer_param_dtype: bf16
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: latent_dataset
+        data_path: /data/nvme5/gushiqiao/datatets/x2v_online/lightx2v_ltx_t2av/prompt_cache
+        negative_condition_path: /data/nvme5/gushiqiao/datatets/x2v_online/lightx2v_ltx_t2av/prompt_cache/negative_condition.pt
+        batch_size: 1
+        num_workers: 4
+        pin_memory: true
+        shuffle: true
+        drop_last: true
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: linear
+        time_shift_mu: 5.0
+        time_shift_power: 1.0
+        sigma_min: 0.0
+        extra_one_step: true
+
+training:
+    method: ltx_t2av_ar_dmd
+    max_train_iters: 1000
+    gradient_accumulation_iters: 4
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 0
+    save_every_iters: 100
+    save_total_limit: 10
+    ltx2:
+        default_fps: 25
+        video_loss_weight: 1.0
+        audio_loss_weight: 1.0
+    dmd:
+        generator_ckpt: ./output_train/ltx_t2av_teacher_forcing/checkpoint-000100
+        checkpoint_strict: false
+        num_frame_per_chunk: 1
+        context_noise: 0.0
+        num_inference_steps: 4
+        fake_update_ratio: 5
+        height: 768
+        width: 512
+        num_frames: 241
+        fps: 25
+        video_latent_shape: [128, 31, 24, 16]
+        audio_latent_shape: [8, 241, 16]
+        renoise_sigma_min: 0.02
+        renoise_sigma_max: 0.98
+        renoise_discrete_samples: 1000
+        renoise_shift: 5.0
+    student:
+        train_type: lora
+        lora:
+            rank: 128
+            alpha: 128
+        optimizer:
+            learning_rate: 0.0001
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    fake:
+        train_type: lora
+        lora:
+            rank: 128
+            alpha: 128
+        optimizer:
+            learning_rate: 0.00002
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    teacher:
+        guidance_scale: 3.0
+        negative_prompt: " "
+        cfg_norm: none
+    output_dir: ./output_train/ltx_t2av_ar_dmd_lora
+
+inference:
+    method: none
+    infer_every_iters: null
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+
+resume:
+    auto_resume: false

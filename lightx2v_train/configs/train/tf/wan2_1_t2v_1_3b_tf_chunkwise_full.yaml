@@ -1,6 +1,6 @@
 model:
     name: wan_t2v
-    pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
+    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
     causal: true
     max_sequence_length: 512
     running_dtype: bf16
@@ -17,7 +17,7 @@ distributed:
         enabled: false
         size: 1
     fsdp2:
-        enabled: true
+        enabled: false
         size: ${oc.env:WORLD_SIZE,1}
         reshard_after_forward:
             root_reshard: false
@@ -30,8 +30,8 @@ distributed:
 
 data:
     train:
-        name: causal_forcing_lmdb_dataset
-        data_path: /path/to/causal_forcing_data/dataset/clean_data
+        name: latent_dataset
+        data_path: /data/nvme5/gushiqiao/datatets/causal_forcing_data/dataset/clean_data
         dataset_repeat: 1
         batch_size: 1
         num_workers: 8
@@ -41,7 +41,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /path/to/wan_t2v_prompts.txt
+            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0

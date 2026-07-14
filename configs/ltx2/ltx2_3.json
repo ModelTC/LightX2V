@@ -1,12 +1,12 @@
 {
-    "infer_steps": 30,
+    "infer_steps": 4,
     "target_video_length": 121,
     "target_height": 512,
     "target_width": 768,
     "attn_type": "sage_attn2",
     "sample_guide_scale": 3.0,
     "sample_shift": [2.05, 0.95],
-    "enable_cfg": true,
+    "enable_cfg": false,
     "cpu_offload": false,
     "num_channels_latents": 128,
     "fps": 24,
@@ -14,7 +14,7 @@
     "audio_mel_bins":16,
     "double_precision_rope": true,
     "use_tiling_vae": false,
-    "dit_original_ckpt": "Lightricks/LTX-2.3/ltx-2.3-22b-dev.safetensors",
+    "dit_original_ckpt": "/data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors",
     "caption_proj_before_connector": true,
     "cross_attention_adaln": true,
     "apply_gated_attention": true,
@@ -36,5 +36,12 @@
             "rescale_scale": 0.7,
             "skip_step": 0
         }
-    }
+    },
+    "lora_configs": [
+        {
+            "path": "/data/nvme5/gushiqiao/codes/LightX2V/lightx2v_train/output_train/ltx_t2av_dmd_lora/checkpoint-000001000/pytorch_lora_weights.safetensors",
+            "strength": 0.8
+        }
+    ],
+    "distilled_sigma_values": [1.0, 0.75, 0.5, 0.25, 0.0]
 }

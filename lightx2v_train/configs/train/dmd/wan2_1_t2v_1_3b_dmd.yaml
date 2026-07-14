@@ -23,8 +23,8 @@ distributed:
         enabled: false
         size: 1
     fsdp2:
-        enabled: true
-        size: 4
+        enabled: false
+        size: 1
         reshard_after_forward:
             root_reshard: false
             block_reshard: true
@@ -69,7 +69,7 @@ scheduler:
 training:
     method: video_dmd
     max_train_iters: 1000
-    gradient_accumulation_iters: 2
+    gradient_accumulation_iters: 1
     gradient_checkpointing: true
     max_grad_norm: 10.0
     lr_scheduler: constant
@@ -93,7 +93,6 @@ training:
         min_step_ratio: 0.02
         max_step_ratio: 0.98
         same_step_across_blocks: true
-        num_frame_per_chunk: 3
         num_training_frames: 21
         context_noise: 0
         renoise_sigma_min: 0.02

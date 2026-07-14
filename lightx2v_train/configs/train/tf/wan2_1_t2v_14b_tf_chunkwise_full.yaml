@@ -30,7 +30,7 @@ distributed:
 
 data:
     train:
-        name: causal_forcing_lmdb_dataset
+        name: latent_dataset
         data_path: /data/nvme5/gushiqiao/datatets/causal_forcing_data/dataset/clean_data/
         dataset_repeat: 1
         batch_size: 1

@@ -30,7 +30,8 @@ distributed:
 
 data:
     val:
-        name: prompt_dataset
+        name: latent_dataset
+        format: prompt
         data_path:
             - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
         max_samples: 2

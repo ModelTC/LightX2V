@@ -28,7 +28,7 @@ distributed:
 
 data:
     train:
-        name: wan_t2v_video_dataset
+        name: video_dataset
         data_path:
             - /path/to/OpenVid-1M/OpenVid-1M.csv
         video_root: /path/to/OpenVid-1M/video

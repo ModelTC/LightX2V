@@ -30,6 +30,13 @@ def _target_hw_for_sample(sample, default_height, default_width):
     return default_height, default_width
 
 
+def _sample_prompt(sample, default_prompt=""):
+    prompt = sample.get("prompt", default_prompt)
+    if isinstance(prompt, (list, tuple)):
+        prompt = prompt[0] if prompt else default_prompt
+    return str(prompt or default_prompt)
+
+
 @INFERENCER_REGISTER("wan_ti2v_5b_infer")
 @INFERENCER_REGISTER("wan_t2v_14b_infer")
 @INFERENCER_REGISTER("wan_t2v_infer")

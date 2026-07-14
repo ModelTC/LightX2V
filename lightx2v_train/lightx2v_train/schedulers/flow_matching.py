@@ -18,11 +18,17 @@ class RectifiedFlowMatchingScheduler:
 
         self.logitnormal_mean = scheduler_config.get("logitnormal_mean", 0.0)
         self.logitnormal_std = scheduler_config.get("logitnormal_std", 1.0)
+        self.logitnormal_eps = scheduler_config.get("logitnormal_eps", 1e-3)
+        self.logitnormal_uniform_prob = scheduler_config.get("logitnormal_uniform_prob", 0.1)
 
         self.min_t = scheduler_config.get("min_t", 0.001)
         self.max_t = scheduler_config.get("max_t", 1.0)
 
-        time_shift_settings = scheduler_config["time_shift_settings"]
+        time_shift_settings = scheduler_config.get("time_shift_settings", {})
+        if time_shift_settings is None:
+            time_shift_settings = {}
+        if not isinstance(time_shift_settings, dict):
+            raise ValueError("scheduler.time_shift_settings must be a mapping.")
         self.do_time_shift = time_shift_settings.get("do_time_shift", False)
         self.time_shift_power = time_shift_settings.get("time_shift_power", 1.0)
         self.shift_type = time_shift_settings.get("shift_type", "linear")
@@ -37,7 +43,7 @@ class RectifiedFlowMatchingScheduler:
         self.infer_timesteps = None
         self.num_inference_steps = None
 
-    def sample_timestep_or_sigma(self, num_samples, latent_hw=None):
+    def sample_timestep_or_sigma(self, num_samples, latent_hw=None, seq_len=None):
         if self.timestep_distribution == "logitnormal":
             timestep_or_sigma = torch.randn((num_samples,), device=self.device, dtype=torch.float32) * self.logitnormal_std + self.logitnormal_mean
             timestep_or_sigma = torch.sigmoid(timestep_or_sigma)
@@ -45,11 +51,35 @@ class RectifiedFlowMatchingScheduler:
         elif self.timestep_distribution == "uniform":
             timestep_or_sigma = torch.rand((num_samples,), device=self.device)
             timestep_or_sigma = timestep_or_sigma * (self.max_t - self.min_t) + self.min_t  # [0, 1] -> [min_t, max_t]
+        elif self.timestep_distribution in {"shifted_logit_normal", "shifted_logitnormal"}:
+            if seq_len is None:
+                raise ValueError("scheduler.timestep_distribution='shifted_logit_normal' requires seq_len.")
+            timestep_or_sigma = self._sample_shifted_logit_normal(num_samples, seq_len)
         else:
             raise ValueError(f"Unsupported timestep distribution: {self.timestep_distribution}")
         if self.do_time_shift:
             timestep_or_sigma = self.time_shift(timestep_or_sigma, latent_hw=latent_hw)
         return timestep_or_sigma.to(self.running_dtype)
+
+    def _sample_shifted_logit_normal(self, num_samples, seq_len):
+        mu = self._get_shift_for_sequence_length(seq_len)
+        normal = torch.randn((num_samples,), device=self.device, dtype=torch.float32) * self.logitnormal_std + mu
+        samples = torch.sigmoid(normal)
+
+        upper = torch.sigmoid(torch.tensor(mu + 3.0902 * self.logitnormal_std, device=self.device, dtype=torch.float32))
+        lower = torch.sigmoid(torch.tensor(mu - 2.5758 * self.logitnormal_std, device=self.device, dtype=torch.float32))
+        stretched = (samples - lower) / (upper - lower)
+        stretched = torch.where(stretched >= self.logitnormal_eps, stretched, 2 * self.logitnormal_eps - stretched)
+        stretched = torch.clamp(stretched, 0, 1)
+
+        uniform = (1 - self.logitnormal_eps) * torch.rand((num_samples,), device=self.device, dtype=torch.float32) + self.logitnormal_eps
+        choose_shifted = torch.rand((num_samples,), device=self.device) > self.logitnormal_uniform_prob
+        return torch.where(choose_shifted, stretched, uniform)
+
+    @staticmethod
+    def _get_shift_for_sequence_length(seq_len, min_tokens=1024, max_tokens=4096, min_shift=0.95, max_shift=2.05):
+        slope = (max_shift - min_shift) / (max_tokens - min_tokens)
+        return slope * seq_len + (min_shift - slope * min_tokens)
 
     def time_shift(self, t, latent_hw=None, num_steps=None):
         mu = self.time_shift_mu(latent_hw=latent_hw, num_steps=num_steps)
