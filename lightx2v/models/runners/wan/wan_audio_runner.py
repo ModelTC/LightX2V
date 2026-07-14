@@ -1004,6 +1004,10 @@ class WanAudioARRunner(WanAudioRunner):
         super().__init__(config)
         self.prompt_travel_segments = None
         self.prompt_travel_text_encoder_outputs = None
+        self._voice_text_encoder_output = None
+        self._silence_text_encoder_output = None
+        self._voice_prompt_text = None
+        self._silence_prompt_text = None
         self.audio_sliding_processor = CausalAudioSlidingProcessor(
             audio_window=self.config.get("audio_window", 1.0),
             look_ahead=self.config.get("look_ahead", 0.0),
@@ -1198,6 +1202,35 @@ class WanAudioARRunner(WanAudioRunner):
             f"start_latent={self.prompt_travel_segments[prompt_idx].start_latent}"
         )
 
+    def _prepare_silence_voice_prompts(self, voice_text_encoder_output):
+        """Optional stream mode: voice uses input_info.prompt, silence uses config silence_prompt."""
+        self._voice_text_encoder_output = None
+        self._silence_text_encoder_output = None
+        self._voice_prompt_text = None
+        self._silence_prompt_text = None
+        silence_prompt = self.config.get("silence_prompt")
+        if not isinstance(silence_prompt, str) or not silence_prompt.strip():
+            return
+        self._voice_text_encoder_output = voice_text_encoder_output
+        self._voice_prompt_text = self.input_info.prompt
+        orig_prompt = self.input_info.prompt
+        self.input_info.prompt = silence_prompt
+        self._silence_text_encoder_output = self.run_text_encoder(self.input_info)
+        self.input_info.prompt = orig_prompt
+        self._silence_prompt_text = silence_prompt
+        logger.info(f"prompt: {orig_prompt}, silence_prompt: {silence_prompt}")
+
+    def _apply_silence_voice_prompt(self, is_silence):
+        if self._silence_text_encoder_output is None or self._voice_text_encoder_output is None:
+            return False
+        if is_silence:
+            self.inputs["text_encoder_output"] = self._silence_text_encoder_output
+            self.input_info.prompt = self._silence_prompt_text
+        else:
+            self.inputs["text_encoder_output"] = self._voice_text_encoder_output
+            self.input_info.prompt = self._voice_prompt_text
+        return True
+
     def _validate_prompt_travel_schedule(self, allow_open_ended=False):
         if not self.prompt_travel_segments:
             return
@@ -1234,6 +1267,7 @@ class WanAudioARRunner(WanAudioRunner):
             self.input_info.prompt = self.prompt_travel_segments[0].text
         else:
             text_encoder_output = self.run_text_encoder(self.input_info)
+            self._prepare_silence_voice_prompts(text_encoder_output)
 
         torch.cuda.empty_cache()
         gc.collect()
@@ -1539,7 +1573,6 @@ class WanAudioARRunner(WanAudioRunner):
             self.input_info.latent_shape = latent_shape
             self._enable_ar_chunk_noise(self.input_info.seed, latent_shape)
             self.model.scheduler.prepare(seed=self._ar_chunk_seed(0), latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
-            self._validate_prompt_travel_schedule(allow_open_ended=True)
             self.init_kv_cache_manager()
             self.prefill_reference_kv()
 
@@ -1569,8 +1602,7 @@ class WanAudioARRunner(WanAudioRunner):
                         # reset pause signal
                         self.pause_signal = False
                         self.can_pause = valid_duration <= 1e-5
-                        chunk_size = int(self.model.scheduler.chunk_size)
-                        self._apply_prompt_travel_for_latent(segment_idx * chunk_size)
+                        self._apply_silence_voice_prompt(self.can_pause)
                         self.init_run_segment(segment_idx, origin_audio, latent_audio)
                         self.model.scheduler.prepare(seed=self._ar_chunk_seed(segment_idx), latent_shape=latent_shape, infer_steps=self.config.get("infer_steps"))
                         self.check_stop()
