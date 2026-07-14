@@ -43,7 +43,7 @@ class WanMtxg3TransformerWeights(WeightModule):
         self.add_module("blocks", self.blocks)
 
         # Non-block weights (head)
-        self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
+        self.register_parameter("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
         self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
@@ -154,7 +154,7 @@ class WanMtxg3CrossAttention(WeightModule):
         # norm3 with elementwise_affine=True for cross_attn_norm
         self.add_module(
             "norm3",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{block_index}.norm3.weight",
                 f"{block_prefix}.{block_index}.norm3.bias",
             ),
@@ -255,7 +255,7 @@ class WanMtxg3ActionModule(WeightModule):
         )
         self.add_module(
             "mouse_mlp_3",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{block_index}.action_model.mouse_mlp.3.weight",
                 f"{block_prefix}.{block_index}.action_model.mouse_mlp.3.bias",
                 eps=1e-5,

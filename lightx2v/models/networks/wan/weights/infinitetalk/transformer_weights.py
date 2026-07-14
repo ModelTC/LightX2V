@@ -29,7 +29,7 @@ class WanInfiniteTalkTransformerWeights(WeightModule):
         self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.add_module("blocks", self.blocks)
 
-        self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
+        self.register_parameter("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
         self.add_module(
             "head",
             MM_WEIGHT_REGISTER["Default"](
@@ -186,7 +186,7 @@ class WanInfiniteTalkAudioCrossAttention(WeightModule):
         self.config = config
         self.add_module(
             "norm_x",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{block_index}.norm_x.weight",
                 f"{block_prefix}.{block_index}.norm_x.bias",
                 create_cuda_buffer,
