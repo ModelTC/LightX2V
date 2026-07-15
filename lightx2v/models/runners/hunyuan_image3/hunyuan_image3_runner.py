@@ -135,7 +135,7 @@ class HunyuanImage3Runner(DefaultRunner):
         self.hunyuan_vision_cls = modules["Siglip2VisionTransformer"]
         self.hunyuan_vision_aligner_cls = modules["LightProjector"]
         self.hunyuan_get_system_prompt = modules["get_system_prompt"]
-        
+
         # self.vae_decoder is a complete VAE model (encoder + decoder). T2I only
         # decodes on rank 0, so other SP ranks do not need this extra allocation.
         load_vae_on_this_rank = not (
@@ -1295,7 +1295,7 @@ class HunyuanImage3Runner(DefaultRunner):
         image_size = self._resolve_image_size(input_info)
         seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
         # cot_text = self._generate_cot_text(prompt, image_size)
-        prepared_inputs = self._prepare_text_to_image_inputs(prompt, image_size, seed, 
+        prepared_inputs = self._prepare_text_to_image_inputs(prompt, image_size, seed,
                                                             #  cot_text=cot_text
                                                             )
         latents = self._denoise_latents(prepared_inputs, image_size)
