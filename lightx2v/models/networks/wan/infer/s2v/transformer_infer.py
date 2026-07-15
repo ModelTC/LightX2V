@@ -27,7 +27,7 @@ class WanS2VTransformerInfer(WanTransformerInfer):
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
-        self.reset_infer_states()
+        self.reset_infer_states(pre_infer_out.x[0], pre_infer_out.context[0])
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         global_seq_len = pre_infer_out.s2v_extra.get("global_original_seq_len", pre_infer_out.original_seq_len)
         if self.config["seq_parallel"]:
@@ -97,8 +97,6 @@ class WanS2VTransformerInfer(WanTransformerInfer):
             v = mm_weight_autocast_nd(phase0.self_attn_v, norm_x).view(b, s, n, d)
             q = apply_precomputed_rope(q, freqs)
             k = apply_precomputed_rope(k, freqs)
-            if self.self_attn_cu_seqlens_qkv is None:
-                self.self_attn_cu_seqlens_qkv = torch.tensor([0, s], dtype=torch.int32, device=norm_x.device)
             attn_out = (
                 phase0.self_attn_1_parallel.apply(
                     q=q.squeeze(0).to(self.infer_dtype),
