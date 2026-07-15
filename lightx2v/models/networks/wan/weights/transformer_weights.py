@@ -368,15 +368,15 @@ class WanSelfAttention(WeightModule):
         if self.config["self_attn_1_type"] == "draft_attn":
             attention_weights_cls.sparsity_ratio = self.config.get("draft_attn_sparsity_ratio", 0.75)
 
-        # sla_attn setting
-        if self.config["self_attn_1_type"] == "sla_attn":
-            sla_config = self.config.get("sla_attn_setting", {})
-            if "sparsity_ratio" in sla_config:
-                attention_weights_cls.sparsity_ratio = sla_config["sparsity_ratio"]
-            if "per_block_mean" in sla_config:
-                attention_weights_cls.per_block_mean = sla_config["per_block_mean"]
-            if "operator" in sla_config:
-                attention_weights_cls.operator = sla_config["operator"]
+        # dynamic_sparse_attn setting
+        if self.config["self_attn_1_type"] == "dynamic_sparse_attn":
+            dynamic_sparse_config = self.config.get("dynamic_sparse_attn_setting", {})
+            if "sparsity_ratio" in dynamic_sparse_config:
+                attention_weights_cls.sparsity_ratio = dynamic_sparse_config["sparsity_ratio"]
+            if "per_block_mean" in dynamic_sparse_config:
+                attention_weights_cls.per_block_mean = dynamic_sparse_config["per_block_mean"]
+            if "operator" in dynamic_sparse_config:
+                attention_weights_cls.operator = dynamic_sparse_config["operator"]
 
         # spas_sage_attn2 setting
         if self.config["self_attn_1_type"] == "sparge_attn":

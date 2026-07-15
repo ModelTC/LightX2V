@@ -4,10 +4,10 @@
     "text_len": 512,
     "target_height": 480,
     "target_width": 832,
-    "self_attn_1_type": "sla_attn",
-    "sla_attn_setting": {
-        "sparsity_ratio": 0.8,
-        "operator": "triton"
+    "self_attn_1_type": "dynamic_sparse_attn",
+    "dynamic_sparse_attn_setting": {
+        "sparsity_ratio": 0.9,
+        "operator": "sage2"
     },
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -17,8 +17,7 @@
     ],
     "sample_shift": 7.0,
     "enable_cfg": false,
-    "cpu_offload": true,
-    "offload_granularity": "block",
+    "cpu_offload": false,
     "t5_cpu_offload": true,
     "vae_cpu_offload": true,
     "use_image_encoder": false,
