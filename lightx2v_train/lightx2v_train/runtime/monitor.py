@@ -28,14 +28,12 @@ class SwanLabMonitor:
         if not self._enabled:
             return
 
-        try:
-            import swanlab
-        except ImportError as exc:
-            raise RuntimeError("SwanLab is enabled but not installed. Install 'swanlab' or set logging.swanlab.enable=false.") from exc
+        import swanlab
 
         api_key = swanlab_config.get("api_key")
-        if api_key:
-            swanlab.login(api_key=api_key)
+        if not api_key:
+            raise ValueError("logging.swanlab.api_key must be set when logging.swanlab.enable=true.")
+        swanlab.login(api_key=api_key)
 
         init_kwargs = {}
         if swanlab_config.get("project") is not None:
