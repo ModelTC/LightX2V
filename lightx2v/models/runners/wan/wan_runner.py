@@ -83,25 +83,19 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
 
-    def warmup(self):
-        if (
-            not self.config.get("warmup", False)
-            or self.config.get("disagg_mode")
-            or self.config.get("model_cls") not in ["wan2.1", "wan2.1_distill", "wan2.1_mean_flow_distill", "wan2.1_sf", "wan2.2_moe", "wan2.2", "wan2.2_moe_distill"]
-            or self.config.get("task") not in ("t2v", "i2v")
-            or self.config.get("feature_caching", "NoCaching") != "NoCaching"
-            or any(self.config.get(key, False) for key in ("cpu_offload", "lazy_load", "unload_modules"))
-        ):
-            return
-
-        self.run_warmup()
-
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
+        if self.config.get("task") not in ("t2v", "i2v") or self.config.get("feature_caching", "NoCaching") != "NoCaching":
+            return
+
+        self._run_warmup()
+
+    def _run_warmup(self):
         input_info = T2VInputInfo(prompt="warmup", prompt_enhanced="warmup")
         inputs = {"text_encoder_output": self.run_text_encoder(input_info)}
         scheduler = self.model.scheduler
         original_generator = scheduler.generator
+        original_guide_scale = scheduler.sample_guide_scale
         _, stride_h, stride_w = self.config["vae_stride"]
 
         try:
@@ -112,8 +106,9 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 try:
                     scheduler.generator = None
                     scheduler.prepare(seed=input_info.seed, latent_shape=latent_shape, image_encoder_output=inputs["image_encoder_output"])
-                    scheduler.step_pre(step_index=0)
-                    self.model.infer(inputs)
+                    for step_index in self.get_warmup_step_indices(scheduler):
+                        scheduler.step_pre(step_index=step_index)
+                        self.model.infer(inputs)
                     self.run_vae_decoder(scheduler.latents)
                     torch_device_module.synchronize()
                 finally:
@@ -121,10 +116,16 @@ class WanRunner(DisaggMixin, DefaultRunner):
                     inputs.pop("image_encoder_output", None)
         finally:
             scheduler.generator = original_generator
+            scheduler.sample_guide_scale = original_guide_scale
             del inputs
-            torch_device_module.empty_cache()
 
         logger.info("Warmup completed")
+
+    def get_warmup_step_indices(self, scheduler):
+        return (0,)
+
+    def get_warmup_models(self):
+        return (self.model,)
 
     def get_warmup_image_encoder_output(self, latent_shape):
         if self.config["task"] == "t2v":
@@ -150,9 +151,10 @@ class WanRunner(DisaggMixin, DefaultRunner):
         for name in ("latents", "noise_pred", "noise_pred_cond", "noise_pred_uncond", "noise_pred_guided"):
             setattr(scheduler, name, None)
 
-        self.model.transformer_infer.cos_sin = None
-        self.model.pre_infer.cos_sin = None
-        self.model.pre_infer.grid_sizes = (0, 0, 0)
+        for model in self.get_warmup_models():
+            model.transformer_infer.cos_sin = None
+            model.pre_infer.cos_sin = None
+            model.pre_infer.grid_sizes = (0, 0, 0)
 
     def load_transformer(self):
         wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
@@ -817,6 +819,31 @@ class Wan22MoeRunner(WanRunner):
             self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
             if not os.path.isdir(self.low_noise_model_path):
                 raise FileNotFoundError(f"Low Noise Model does not find")
+
+    @ProfilingContext4DebugL1("Warmup")
+    def run_warmup(self):
+        if self.config.get("task") not in ("t2v", "i2v") or self.config.get("feature_caching", "NoCaching") != "NoCaching":
+            return
+
+        self._run_warmup()
+
+    def get_warmup_step_indices(self, scheduler):
+        timesteps = scheduler.timesteps
+        boundary = self.model.boundary_timestep
+        high_noise_steps = torch.nonzero(timesteps >= boundary, as_tuple=True)[0]
+        low_noise_steps = torch.nonzero(timesteps < boundary, as_tuple=True)[0]
+        return high_noise_steps[0].item(), low_noise_steps[0].item()
+
+    def get_warmup_models(self):
+        return tuple(self.model.model)
+
+    def clear_warmup_state(self):
+        super().clear_warmup_state()
+        scheduler = self.model.scheduler
+        scheduler.step_index = 0
+        scheduler.infer_condition = True
+        scheduler.timestep_input = None
+        self.model.cur_model_index = -1
 
     def load_transformer(self):
         # encoder -> high_noise_model -> low_noise_model -> vae -> video_output

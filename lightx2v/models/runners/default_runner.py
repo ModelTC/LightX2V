@@ -98,6 +98,21 @@ class DefaultRunner(BaseRunner):
         self.set_init_device()
         self.init_scheduler()
 
+    def warmup(self):
+        if (
+            not self.config.get("warmup", False)
+            or self.config.get("disagg_mode")
+            or self.config.get("lazy_load", False)
+            or self.config.get("unload_modules", False)
+            or self.config.get("cpu_offload", False)
+        ):
+            return
+
+        self.run_warmup()
+
+    def run_warmup(self):
+        logger.warning(f"Warmup is not implemented for {type(self).__name__}")
+
     def init_modules(self):
         logger.info("Initializing runner modules...")
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
