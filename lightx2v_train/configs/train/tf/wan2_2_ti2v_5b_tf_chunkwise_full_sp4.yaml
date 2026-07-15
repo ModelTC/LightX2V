@@ -1,0 +1,117 @@
+model:
+    name: wan_ti2v_5b
+    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B
+    causal: true
+    latent_channels: 48
+    max_sequence_length: 512
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    vae_dtype: fp32
+    t5_dtype: bf16
+    load_vae: false
+    load_text_encoder: false
+    load_transformer: true
+    vae_stride:
+        - 4
+        - 16
+        - 16
+    patch_size:
+        - 1
+        - 2
+        - 2
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel:
+        enabled: true
+        size: 4
+    fsdp2:
+        enabled: true
+        size: 1
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: wan_t2v_cached_dataset
+        cache_path: ./cache_data/wan2_2_ti2v_5b_tf_96f
+        dataset_repeat: 1
+        batch_size: 1
+        num_workers: 8
+        pin_memory: true
+        shuffle: true
+        drop_last: true
+    val:
+        name: prompt_dataset
+        data_path:
+            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+        max_samples: 1
+        batch_size: 1
+        num_workers: 0
+        shuffle: false
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: linear
+        time_shift_mu: 5.0
+        time_shift_power: 1.0
+        sigma_min: 0.0
+        extra_one_step: true
+
+training:
+    method: teacher_forcing
+    train_type: full
+    max_train_iters: 5000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 10.0
+    lr_scheduler: constant
+    lr_warmup_iters: 0
+    save_every_iters: 100
+    save_total_limit: 2
+    teacher_forcing:
+        enabled: true
+        mode: chunkwise
+        num_frame_per_chunk: 8
+        noise_augmentation_max_timestep: 0
+    optimizer:
+        learning_rate: 0.000002
+        adam_beta1: 0.0
+        adam_beta2: 0.999
+        weight_decay: 0.01
+        adam_epsilon: 0.00000001
+    output_dir: ./output_train/wan2_2_ti2v_5b_tf_chunkwise_full_sp4
+
+inference:
+    method: wan_ti2v_5b_infer
+    default_width: 1280
+    default_height: 704
+    num_frames: 381
+    num_inference_steps: 50
+    fps: 24
+    enable_cfg: true
+    cfg_guidance_scale: 3.0
+    negative_prompt: " "
+    seed: 42
+    output_dir: ./output_infer/wan2_2_ti2v_5b_tf_chunkwise_full_sp4
+    infer_every_iters: null
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+    infer_log_every_steps: 10
+
+resume:
+    auto_resume: true

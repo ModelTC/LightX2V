@@ -11,6 +11,7 @@ from lightx2v.common.ops.attn import FlashAttn2Weight, FlashAttn3Weight  # noqa:
 from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightFusedQKNorm3DRope
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
+    CONV2D_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
 )
@@ -44,7 +45,7 @@ class NeoppTransformerWeights(WeightModule):
 
         self.add_module(
             "fm_head",
-            NeoppFmHeadWeights(self.mm_type),
+            NeoppFmHeadWeights(self.mm_type, config=self.config),
         )
 
 
@@ -212,23 +213,49 @@ class NeoppMlpWeights(WeightModule):
 
 
 class NeoppFmHeadWeights(WeightModule):
-    def __init__(self, mm_type):
+    def __init__(self, mm_type, config=None):
         super().__init__()
         lora_prefix = "fm_modules"
-        self.add_module(
-            "fm_head_0",
-            MM_WEIGHT_REGISTER["Default"](
-                "fm_modules.fm_head.0.weight",
-                "fm_modules.fm_head.0.bias",
-                lora_prefix=lora_prefix,
-            ),
-        )
+        # New "pixel head" variant (use_pixel_head=True): fm_head is a ConvDecoder
+        # (PixelShuffle + Conv2d) that decodes hidden states directly to RGB pixels,
+        # instead of the legacy per-token MLP head (fm_head.0 / fm_head.2).
+        self.use_pixel_head = bool(config.get("use_pixel_head", False)) if config is not None else False
+        if self.use_pixel_head:
+            # Conv2d(k=3, p=1). in/out channels are inferred from PixelShuffle upstream,
+            # weights carry the true shapes: conv1[1024,1024,3,3], conv2[192,256,3,3].
+            self.add_module(
+                "conv1",
+                CONV2D_WEIGHT_REGISTER["Default"](
+                    "fm_modules.fm_head.conv1.weight",
+                    "fm_modules.fm_head.conv1.bias",
+                    stride=1,
+                    padding=1,
+                ),
+            )
+            self.add_module(
+                "conv2",
+                CONV2D_WEIGHT_REGISTER["Default"](
+                    "fm_modules.fm_head.conv2.weight",
+                    "fm_modules.fm_head.conv2.bias",
+                    stride=1,
+                    padding=1,
+                ),
+            )
+        else:
+            self.add_module(
+                "fm_head_0",
+                MM_WEIGHT_REGISTER["Default"](
+                    "fm_modules.fm_head.0.weight",
+                    "fm_modules.fm_head.0.bias",
+                    lora_prefix=lora_prefix,
+                ),
+            )
 
-        self.add_module(
-            "fm_head_2",
-            MM_WEIGHT_REGISTER["Default"](
-                "fm_modules.fm_head.2.weight",
-                "fm_modules.fm_head.2.bias",
-                lora_prefix=lora_prefix,
-            ),
-        )
+            self.add_module(
+                "fm_head_2",
+                MM_WEIGHT_REGISTER["Default"](
+                    "fm_modules.fm_head.2.weight",
+                    "fm_modules.fm_head.2.bias",
+                    lora_prefix=lora_prefix,
+                ),
+            )

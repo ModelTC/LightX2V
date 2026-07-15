@@ -4,6 +4,7 @@ import torch
 from loguru import logger
 
 from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, reduce_mean
+from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value, sync_sequence_parallel_gradients
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from .base import BaseTrainer
@@ -16,12 +17,16 @@ class FlowMatchingTrainer(BaseTrainer):
     def compute_loss_on_sample(self, sample):
         with torch.no_grad():
             latent = self.model.encode_to_latent(sample)
+            latent = broadcast_sequence_parallel_value(latent)
             n = latent.shape[0]
             noise = torch.randn_like(latent, dtype=self.running_dtype)
+            noise = broadcast_sequence_parallel_value(noise)
             latent_hw = (latent.shape[-2], latent.shape[-1])
             timestep_or_sigma = self.noise_scheduler.sample_timestep_or_sigma(n, latent_hw=latent_hw)
+            timestep_or_sigma = broadcast_sequence_parallel_value(timestep_or_sigma)
             noisy_latent = self.noise_scheduler.add_noise(latent, noise, timestep_or_sigma)
             condition = self.model.encode_condition(sample)
+            condition = broadcast_sequence_parallel_value(condition)
 
         denoiser_input = self.model.prepare_denoiser_input(noisy_latent, condition=condition)
         prediction = self.model.denoise(denoiser_input, timestep_or_sigma, condition)
@@ -79,6 +84,7 @@ class FlowMatchingTrainer(BaseTrainer):
                 if grad_accum_counter % grad_accum_iters != 0:
                     continue
 
+                self._after_backward()
                 torch.nn.utils.clip_grad_norm_(self.trainable_params, max_grad_norm)
                 self.optimizer.step()
                 self.lr_scheduler.step()
@@ -103,3 +109,6 @@ class FlowMatchingTrainer(BaseTrainer):
             epoch += 1
 
         logger.info("[train] finished iter={}/{}", current_iter, max_train_iters)
+
+    def _after_backward(self):
+        sync_sequence_parallel_gradients(self.trainable_params)

@@ -1,0 +1,19 @@
+{
+  "adapter_model_path": "/data/nvme7/yongyang/fastwam_release/robotwin_uncond_3cam_384.pt",
+  "dataset_stats_path": "/data/nvme7/yongyang/fastwam_release/robotwin_uncond_3cam_384_dataset_stats.json",
+  "camera_size": 384,
+  "action_chunk_size": 32,
+  "actions_per_plan": 8,
+  "num_steps_wait": 0,
+  "action_infer_steps": 20,
+  "action_sample_shift": 5.0,
+  "action_dim_hidden": 1024,
+  "action_dim": 14,
+  "robot_state_dim": 14,
+  "policy_profile": "robotwin",
+  "normalize_mode": "z-score",
+  "target_video_length": 9,
+  "binarize_gripper": false,
+  "gripper_postprocess": false,
+  "default_prompt": "A video recorded from a robot's point of view executing the following instruction: {task_prompt}"
+}

@@ -15,6 +15,7 @@ from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DSh
 from lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner import HunyuanImage3Runner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
+from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
@@ -24,6 +25,7 @@ from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_dancer_runner import WanDancerRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_dreamzero_runner import WanDreamZeroRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_infinitetalk_runner import InfiniteTalkRunner  # noqa: F401
@@ -77,6 +79,7 @@ def main():
             "wan2.1",
             "wan2.1_distill",
             "wan2.1_mean_flow_distill",
+            "wan_dancer",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
@@ -119,6 +122,7 @@ def main():
             "dreamzero",
             "infinitetalk",
             "fastwam",
+            "lingbot_video",
         ],
         default="wan2.1",
     )
@@ -316,6 +320,11 @@ def main():
         default=None,
         help="Directory path for lingbot camera/action control files (poses.npy, intrinsics.npy, optional action.npy).",
     )
+    parser.add_argument("--action_mode", type=str, default=None, choices=["forward_dynamics", "inverse_dynamics", "policy"], help="Cosmos3 action mode.")
+    parser.add_argument("--domain_name", type=str, default=None, help="Cosmos3 action embodiment domain name.")
+    parser.add_argument("--view_point", type=str, default=None, help="Cosmos3 action viewpoint label.")
+    parser.add_argument("--action_chunk_size", type=int, default=None, help="Cosmos3 action chunk size.")
+    parser.add_argument("--action_chunk_index", type=int, default=None, help="Cosmos3 action chunk index when action_path contains action_chunks.")
     parser.add_argument(
         "--action_ckpt",
         type=str,

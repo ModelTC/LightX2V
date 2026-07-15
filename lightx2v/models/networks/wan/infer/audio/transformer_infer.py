@@ -167,25 +167,65 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             spatial_freqs = torch.cat([spatial_freqs, pad], dim=0)
         return torch.chunk(spatial_freqs, world_size, dim=0)[rank][:local_per_frame]
 
-    def _rope_freqs_for_cache_range(self, freqs, h, w, world_size, rank, token_start, token_end, ref_tokens, local_per_frame):
+    def _cache_positions_for_range(self, token_start, token_end, device, global_end=None, sink_tokens=0):
+        token_idx = torch.arange(token_start, token_end, device=device, dtype=torch.long)
+        if global_end is None:
+            return token_idx
+
+        sink_tokens = int(sink_tokens)
+        recent_local_tokens = max(0, token_end - sink_tokens)
+        recent_global_start = int(global_end) - recent_local_tokens
+        recent_idx = recent_global_start + token_idx - sink_tokens
+        return torch.where(token_idx < sink_tokens, token_idx, recent_idx)
+
+    def _rope_freqs_for_cache_range(
+        self,
+        freqs,
+        h,
+        w,
+        world_size,
+        rank,
+        token_start,
+        token_end,
+        ref_tokens,
+        local_per_frame,
+        global_end=None,
+        sink_tokens=0,
+    ):
         c = self.head_dim // 2
         temporal_dim = c - 2 * (c // 3)
         freqs_split = freqs.split([temporal_dim, c // 3, c // 3], dim=1)
         spatial_freqs = self._spatial_freqs_for_rank(freqs, h, w, local_per_frame, world_size, rank)
 
-        token_idx = torch.arange(token_start, token_end, device=freqs.device, dtype=torch.long)
-        is_ref = token_idx < ref_tokens
-        gen_idx = torch.clamp(token_idx - ref_tokens, min=0)
-        frame_idx = gen_idx // local_per_frame
-        ref_spatial_idx = token_idx % local_per_frame
+        position_idx = self._cache_positions_for_range(token_start, token_end, freqs.device, global_end=global_end, sink_tokens=sink_tokens)
+        is_ref = position_idx < ref_tokens
+        gen_idx = torch.clamp(position_idx - ref_tokens, min=0)
+        ref_frames = ref_tokens // local_per_frame
+        ref_frame_idx = position_idx // local_per_frame
+        gen_frame_idx = ref_frames + gen_idx // local_per_frame
+        frame_idx = torch.where(is_ref, ref_frame_idx, gen_frame_idx)
+        ref_spatial_idx = position_idx % local_per_frame
         gen_spatial_idx = gen_idx % local_per_frame
         spatial_idx = torch.where(is_ref, ref_spatial_idx, gen_spatial_idx)
 
         temporal_freqs = freqs_split[0][frame_idx]
-        temporal_freqs = torch.where(is_ref.unsqueeze(-1), torch.ones_like(temporal_freqs), temporal_freqs)
         return torch.cat([temporal_freqs, spatial_freqs[spatial_idx]], dim=-1).unsqueeze(1)
 
-    def _apply_rope_with_cache_range(self, x, freqs, h, w, world_size, rank, token_start, token_end, ref_tokens, local_per_frame):
+    def _apply_rope_with_cache_range(
+        self,
+        x,
+        freqs,
+        h,
+        w,
+        world_size,
+        rank,
+        token_start,
+        token_end,
+        ref_tokens,
+        local_per_frame,
+        global_end=None,
+        sink_tokens=0,
+    ):
         orig_dtype = x.dtype
         if self.config.get("causal_rope_type", "triton") == "triton":
             return apply_audio_cache_rope(
@@ -198,8 +238,22 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 local_per_frame=local_per_frame,
                 world_size=world_size,
                 rank=rank,
+                global_end=global_end,
+                sink_tokens=sink_tokens,
             ).to(orig_dtype)
-        pos_freqs = self._rope_freqs_for_cache_range(freqs, h, w, world_size, rank, token_start, token_end, ref_tokens, local_per_frame)
+        pos_freqs = self._rope_freqs_for_cache_range(
+            freqs,
+            h,
+            w,
+            world_size,
+            rank,
+            token_start,
+            token_end,
+            ref_tokens,
+            local_per_frame,
+            global_end=global_end,
+            sink_tokens=sink_tokens,
+        )
         n = x.size(1)
         x_c = torch.view_as_complex(x.float().reshape(x.size(0), n, -1, 2))
         out = torch.view_as_real(x_c * pos_freqs.to(torch.complex64)).flatten(2)
@@ -296,7 +350,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 h1 = h0 + shard_heads
                 kv_cache.store_kv(k_rope[:, h0:h1], v[:, h0:h1], local_start_idx, local_end_idx, self.block_idx)
             else:
-                start_frame = segment_idx * frames
+                start_frame = self.kv_cache_manager.ref_num_frames + segment_idx * frames
                 q_rope, k_rope = self._apply_rope_sp(q, k, grid_sizes, freqs, start_frame)
                 use_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
                 use_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
@@ -350,8 +404,34 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
             if self.config.get("ar_config", {}).get("kv_quant", {}).get("calibrate", False):
                 kv_cache.capture_attn(self.block_idx, attn_start, local_end_idx)
-            q = self._apply_rope_with_cache_range(q, freqs, h, w, sp_world_size, sp_rank, local_start_idx, local_end_idx, local_ref_tokens, local_per_frame)
-            attn_k = self._apply_rope_with_cache_range(attn_k, freqs, h, w, sp_world_size, sp_rank, attn_start, local_end_idx, local_ref_tokens, local_per_frame)
+            q = self._apply_rope_with_cache_range(
+                q,
+                freqs,
+                h,
+                w,
+                sp_world_size,
+                sp_rank,
+                local_start_idx,
+                local_end_idx,
+                local_ref_tokens,
+                local_per_frame,
+                global_end=current_end,
+                sink_tokens=sink_tokens,
+            )
+            attn_k = self._apply_rope_with_cache_range(
+                attn_k,
+                freqs,
+                h,
+                w,
+                sp_world_size,
+                sp_rank,
+                attn_start,
+                local_end_idx,
+                local_ref_tokens,
+                local_per_frame,
+                global_end=current_end,
+                sink_tokens=sink_tokens,
+            )
             if isinstance(attn_k, tuple):
                 k_lens = torch.empty_like(seq_lens).fill_(attn_k[0].size(0))
             else:

@@ -1,5 +1,7 @@
 import torch
 
+from lightx2v.models.networks.cosmos3.infer.module_io import Cosmos3PostInferModuleOutput
+
 
 class Cosmos3PostInfer:
     def __init__(self, config):
@@ -46,6 +48,27 @@ class Cosmos3PostInfer:
             unpatchified_latents.append(output_tensor.unsqueeze(0))
         return unpatchified_latents
 
+    @staticmethod
+    def _unpack_sound(preds_sound_packed):
+        return preds_sound_packed.transpose(0, 1).contiguous()
+
+    @staticmethod
+    def _unpack_action(preds_action_packed, token_shapes_action, noisy_frame_indexes_action, raw_action_dim):
+        action_len = token_shapes_action[0][0]
+        noisy_frame_indexes = noisy_frame_indexes_action[0]
+        if len(noisy_frame_indexes) == 0:
+            return None
+        action_dim = preds_action_packed.shape[-1] if preds_action_packed.numel() > 0 else int(raw_action_dim or 0)
+        if action_dim == 0:
+            return None
+        output_tensor = torch.zeros(
+            (action_len, action_dim),
+            device=preds_action_packed.device,
+            dtype=preds_action_packed.dtype,
+        )
+        output_tensor[noisy_frame_indexes] = preds_action_packed
+        return output_tensor
+
     def infer(self, weights, transformer_out, pre_infer_out):
         last_hidden_state = torch.cat(
             [
@@ -61,4 +84,25 @@ class Cosmos3PostInfer:
             noisy_frame_indexes_vision=pre_infer_out.vision_noisy_frame_indexes,
             original_latent_shapes=pre_infer_out.original_latent_shapes,
         )
-        return preds_vision[0]
+        preds_sound = None
+        if pre_infer_out.sound_mse_loss_indexes is not None:
+            preds_sound_packed = weights.audio_proj_out.apply(last_hidden_state[pre_infer_out.sound_mse_loss_indexes])
+            preds_sound = self._unpack_sound(preds_sound_packed)
+
+        preds_action = None
+        if pre_infer_out.action_mse_loss_indexes is not None and pre_infer_out.action_domain_ids is not None:
+            noisy_action_indexes = pre_infer_out.action_noisy_frame_indexes[0]
+            if len(noisy_action_indexes) > 0:
+                action_domain_ids = pre_infer_out.action_domain_ids[noisy_action_indexes]
+                preds_action_packed = weights.action_proj_out.apply(
+                    last_hidden_state[pre_infer_out.action_mse_loss_indexes],
+                    action_domain_ids,
+                )
+                preds_action = self._unpack_action(
+                    preds_action_packed,
+                    pre_infer_out.action_token_shapes,
+                    pre_infer_out.action_noisy_frame_indexes,
+                    pre_infer_out.raw_action_dim,
+                )
+
+        return Cosmos3PostInferModuleOutput(vision=preds_vision[0], sound=preds_sound, action=preds_action)

@@ -1,14 +1,14 @@
 #!/bin/bash
 
-lightx2v_path=/data/nvme4/gushiqiao/new/LightX2V
-model_path=/data/nvme5/gushiqiao/models/SekoTalk-Distill-AR/
+lightx2v_path=/data/nvme5/gushiqiao/codes/LightX2V
+model_path=/data/nvme5/gushiqiao/models/SekoTalk-Distill-AR-0703/
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
 
-python -m lightx2v.infer \
+torchrun --nproc-per-node 4 -m lightx2v.infer \
 --model_cls seko_talk_ar \
 --task rs2v \
 --model_path $model_path \
@@ -17,5 +17,5 @@ python -m lightx2v.infer \
 --negative_prompt "low quality,blurry,pixelated,low resolution,noise,artifacts,poor lighting, overexposed, underexposed, distorted, unnatural, deformed, weird,scared,anatomy,mutated, wrong proportions, extra limbs,floating objects, disconnected, gravity-defying, impossible shadows,wrong lighting,non-existent reflections,inconsistent perspective, repetitive, monotonous, monotonous, generic, watermark, ugly, high contrast, bad photo, font, username, error, logo, words, letters, digits, autograph, trademark, name, twisted face, (poorly drawn hands, malformed hands, missing fingers, unnatural hand positions, blur hand, multiple fingers, multiple arms), static, naked, artifacts, oversaturated" \
 --image_path "/data/nvme4/gushiqiao/new/example/1_素材图.png" \
 --audio_path "/data/nvme4/gushiqiao/new/example/1_素材图.mp3" \
---save_result_path ${lightx2v_path}/save_results/output_lightx2v_seko_talk_ar_sp2.mp4 \
+--save_result_path ${lightx2v_path}/save_results/output_lightx2v_seko_talk_ar_sp4.mp4 \
 --seed 0

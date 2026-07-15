@@ -91,10 +91,18 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         if self.has_post_adapter:
             self.reset_post_adapter_states()
 
+    def reset_attention_states(self, blocks):
+        for block in blocks:
+            self_attn = block.compute_phases[0].self_attn_1
+            reset_state = getattr(self_attn, "reset_state", None)
+            if reset_state is not None:
+                reset_state()
+
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
         self.reset_infer_states()
+        self.reset_attention_states(weights.blocks)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
@@ -145,6 +153,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             x,
             shift_msa,
             scale_msa,
+            grid_sizes=pre_infer_out.grid_sizes.tuple if getattr(pre_infer_out, "grid_sizes", None) is not None else None,
         )
         x, attn_out = self.infer_cross_attn(
             block.compute_phases[1],
@@ -177,7 +186,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         return shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
 
-    def infer_self_attn(self, phase, x, shift_msa, scale_msa):
+    def infer_self_attn(self, phase, x, shift_msa, scale_msa, grid_sizes=None):
         cos_sin = self.cos_sin
         norm1_quant = None
         norm1_scale = None
@@ -231,6 +240,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         attn_running_args = {
             "block_idx": self.block_idx,
             "scheduler": self.scheduler,
+            "grid_sizes": grid_sizes,
         }
 
         if self.config["seq_parallel"]:

@@ -1,6 +1,6 @@
 model:
     name: wan_t2v_ar
-    pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
+    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -9,23 +9,29 @@ model:
     load_text_encoder: true
     load_transformer: true
     num_frame_per_chunk: 3
+    defer_kv_cache_updates: false
+    detach_kv_cache_updates: true
     fake:
         name: wan_t2v
-        pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
+        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
     teacher:
         name: wan_t2v
-        pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
+        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
         transformer_param_dtype: bf16
-    student:
-        # checkpoint_path: /path/to/Causal-Forcing/checkpoints/chunkwise/causal_cd.pt
-        checkpoint_path: /path/to/wan2_1_t2v_1_3b_tf_chunkwise_full_fp32param/checkpoint-000002400
-        checkpoint_strict: true
+    # student:
+    #     # checkpoint_path: /data/nvme4/gushiqiao/new/Causal-Forcing/checkpoints/chunkwise/causal_cd.pt
+    #     checkpoint_path: /data/nvme4/gushiqiao/new/recon/LightX2V/lightx2v_train/output_train/wan2_1_t2v_1_3b_tf_chunkwise_full_fp32param/checkpoint-000002400
+    #     checkpoint_strict: true
 
 distributed:
     backend: nccl
     timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
     fsdp2:
         enabled: true
+        size: 4
         reshard_after_forward:
             root_reshard: false
             block_reshard: true
@@ -39,7 +45,7 @@ data:
     train:
         name: prompt_dataset
         data_path:
-            - /path/to/Causal-Forcing/prompts/vidprom_filtered_extended.txt
+            - /data/nvme4/gushiqiao/new/Causal-Forcing/prompts/vidprom_filtered_extended.txt
         batch_size: 1
         num_workers: 8
         pin_memory: true
@@ -48,7 +54,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /path/to/wan_t2v_prompts.txt
+            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0
@@ -69,7 +75,6 @@ scheduler:
 
 training:
     method: video_ar_dmd
-    train_type: full
     max_train_iters: 1000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
@@ -103,6 +108,7 @@ training:
         renoise_discrete_samples: 1000
         renoise_shift: 5.0
     student:
+        train_type: full
         optimizer:
             learning_rate: 0.000002
             adam_beta1: 0.0
@@ -110,6 +116,7 @@ training:
             weight_decay: 0.01
             adam_epsilon: 0.00000001
     fake:
+        train_type: full
         optimizer:
             learning_rate: 0.0000004
             adam_beta1: 0.0

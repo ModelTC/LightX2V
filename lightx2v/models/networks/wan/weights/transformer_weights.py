@@ -359,6 +359,11 @@ class WanSelfAttention(WeightModule):
                 if "min_width" in self.config["nbhd_attn_setting"]:
                     attention_weights_cls.min_width = self.config["nbhd_attn_setting"]["min_width"]
 
+        # rainfusion_attn setting
+        if self.config["self_attn_1_type"] == "rainfusion_attn":
+            rainfusion_config = self.config.get("rainfusion_attn_setting", self.config.get("rainfusion", {}))
+            attention_weights_cls.configure(rainfusion_config)
+
         # draft_attn setting
         if self.config["self_attn_1_type"] == "draft_attn":
             attention_weights_cls.sparsity_ratio = self.config.get("draft_attn_sparsity_ratio", 0.75)

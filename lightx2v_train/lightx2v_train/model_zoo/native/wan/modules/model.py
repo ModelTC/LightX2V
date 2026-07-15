@@ -7,6 +7,8 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat
 
+from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, all_to_all_4d, is_sequence_parallel_enabled, shrink_sequence
+
 from .attention import flash_attention
 
 __all__ = ["WanModel"]
@@ -127,7 +129,15 @@ class WanSelfAttention(nn.Module):
 
         q, k, v = qkv_fn(x)
 
+        if is_sequence_parallel_enabled():
+            q = all_to_all_4d(q, scatter_dim=2, gather_dim=1)
+            k = all_to_all_4d(k, scatter_dim=2, gather_dim=1)
+            v = all_to_all_4d(v, scatter_dim=2, gather_dim=1)
+
         x = flash_attention(q=rope_apply(q, grid_sizes, freqs), k=rope_apply(k, grid_sizes, freqs), v=v, k_lens=seq_lens, window_size=self.window_size)
+
+        if is_sequence_parallel_enabled():
+            x = all_to_all_4d(x, scatter_dim=1, gather_dim=2)
 
         # output
         x = x.flatten(2)
@@ -604,6 +614,7 @@ class WanModel(ModelMixin, ConfigMixin):
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
         assert seq_lens.max() <= seq_len
         x = torch.cat([torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))], dim=1) for u in x])
+        x = shrink_sequence(x, dim=1)
 
         # time embeddings
         # with amp.autocast(dtype=torch.float32):
@@ -631,6 +642,8 @@ class WanModel(ModelMixin, ConfigMixin):
         # TODO: Tune the number of blocks for feature extraction
         final_x = None
         if classify_mode:
+            if is_sequence_parallel_enabled():
+                raise NotImplementedError("Wan classify_mode is not supported with sequence parallel training.")
             assert register_tokens is not None
             assert gan_ca_blocks is not None
             assert cls_pred_branch is not None
@@ -665,6 +678,7 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # head
         x = self.head(x, e)
+        x = all_gather_sequence(x, dim=1)
 
         # unpatchify
         x = self.unpatchify(x, grid_sizes)
@@ -723,6 +737,7 @@ class WanModel(ModelMixin, ConfigMixin):
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
         assert seq_lens.max() <= seq_len
         x = torch.cat([torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))], dim=1) for u in x])
+        x = shrink_sequence(x, dim=1)
 
         # time embeddings
         # with amp.autocast(dtype=torch.float32):
@@ -760,6 +775,7 @@ class WanModel(ModelMixin, ConfigMixin):
                 x = block(x, **kwargs)
 
         # unpatchify
+        x = all_gather_sequence(x, dim=1)
         x = self.unpatchify(x, grid_sizes, c=self.dim // 4)
         return torch.stack(x)
 

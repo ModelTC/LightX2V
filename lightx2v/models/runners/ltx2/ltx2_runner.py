@@ -30,6 +30,21 @@ def _ltx2_parse_image_paths(image_path: str) -> list[str]:
     return [p.strip() for p in image_path.split(",") if p.strip()]
 
 
+def _ltx2_audio_to_stereo(audio: Audio) -> Audio:
+    waveform = audio.waveform
+    if waveform.dim() == 3:
+        if waveform.shape[1] == 1:
+            waveform = waveform.expand(waveform.shape[0], 2, waveform.shape[2]).contiguous()
+        elif waveform.shape[1] > 2:
+            waveform = waveform[:, :2, :].contiguous()
+    elif waveform.dim() == 2:
+        if waveform.shape[0] == 1:
+            waveform = waveform.expand(2, waveform.shape[1]).contiguous()
+        elif waveform.shape[0] > 2:
+            waveform = waveform[:2, :].contiguous()
+    return Audio(waveform=waveform, sampling_rate=audio.sampling_rate)
+
+
 def _ltx2_normalize_image_strengths(image_strength, n: int) -> list[float]:
     if not isinstance(image_strength, list):
         return [float(image_strength)] * n
@@ -483,6 +498,7 @@ class LTX2Runner(DefaultRunner):
         decoded = decode_audio_from_file(ap, enc_device, 0.0, max_duration)
         if decoded is None:
             raise ValueError(f"ltx2_s2v: failed to decode audio from {ap!r}.")
+        decoded = _ltx2_audio_to_stereo(decoded)
 
         with torch.no_grad():
             encoded = encode_audio(decoded, self.audio_vae.encoder)

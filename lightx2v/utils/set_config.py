@@ -200,6 +200,19 @@ def auto_calc_config(config):
         config.setdefault("target_video_length", 1)
         config.setdefault("target_fps", config.get("base_fps", 24))
         config.setdefault("enable_cfg", True)
+    elif config["model_cls"] == "lingbot_video":
+        transformer_config_path = os.path.join(config["model_path"], "transformer", "config.json")
+        if os.path.exists(transformer_config_path):
+            with open(transformer_config_path, "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        config.setdefault("target_video_length", 1)
+        config.setdefault("target_fps", 24)
+        config.setdefault("enable_cfg", True)
+        config.setdefault("vae_stride", (4, 8, 8))
+        config.setdefault("vae_scale_factor_spatial", 8)
+        config.setdefault("vae_scale_factor_temporal", 4)
+        config.setdefault("vae_scale_factor", 8)
     else:
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -388,6 +401,15 @@ def auto_calc_config(config):
         config["vae_scale_factor_spatial"] = int(vae_config.get("scale_factor_spatial", 16))
         config["vae_scale_factor_temporal"] = int(vae_config.get("scale_factor_temporal", 4))
         config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
+    if config["model_cls"] == "lingbot_video":
+        config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
+        config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
+        config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
+    if config["model_cls"] == "cosmos3" and os.path.exists(os.path.join(config["model_path"], "sound_tokenizer", "config.json")):
+        with open(os.path.join(config["model_path"], "sound_tokenizer", "config.json"), "r") as f:
+            sound_config = json.load(f)
+        config["sound_sampling_rate"] = int(sound_config.get("sampling_rate", 48000))
+        config["sound_hop_size"] = int(sound_config.get("hop_size", 1920))
 
     return config
 
