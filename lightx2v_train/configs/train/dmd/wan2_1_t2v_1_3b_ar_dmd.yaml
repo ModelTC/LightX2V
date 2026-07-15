@@ -1,6 +1,6 @@
 model:
     name: wan_t2v_ar
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
+    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -13,14 +13,14 @@ model:
     detach_kv_cache_updates: true
     fake:
         name: wan_t2v
-        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
+        pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
     teacher:
         name: wan_t2v
-        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
+        pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
         transformer_param_dtype: bf16
     # student:
-    #     # checkpoint_path: /data/nvme4/gushiqiao/new/Causal-Forcing/checkpoints/chunkwise/causal_cd.pt
-    #     checkpoint_path: /data/nvme4/gushiqiao/new/recon/LightX2V/lightx2v_train/output_train/wan2_1_t2v_1_3b_tf_chunkwise_full_fp32param/checkpoint-000002400
+    #     # checkpoint_path: /path/to/checkpoints/chunkwise/causal_cd.pt
+    #     checkpoint_path: /path/to/LightX2V/lightx2v_train/output_train/wan2_1_t2v_1_3b_tf_chunkwise_full_fp32param/checkpoint-000002400
     #     checkpoint_strict: true
 
 distributed:
@@ -45,7 +45,7 @@ data:
     train:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/Causal-Forcing/prompts/vidprom_filtered_extended.txt
+            - /path/to/prompts/vidprom_filtered_extended.txt
         batch_size: 1
         num_workers: 8
         pin_memory: true
@@ -54,7 +54,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+            - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0
@@ -125,7 +125,6 @@ training:
             adam_epsilon: 0.00000001
     teacher:
         guidance_scale: 3.0
-        negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
         cfg_norm: none
     output_dir: ./output_train1/wan2_1_t2v_1_3b_ar_dmd_chunkwise_full
 
@@ -144,7 +143,6 @@ inference:
     fps: 16
     enable_cfg: false
     cfg_guidance_scale: 1.0
-    negative_prompt: " "
     seed: 42
     output_dir: ./output_infer1/wan2_1_t2v_1_3b_ar_dmd_chunkwise_full
     infer_every_iters: ${training.save_every_iters}

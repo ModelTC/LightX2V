@@ -95,7 +95,7 @@ class LTX2PreInfer:
         # 3b. Prompt AdaLN timestep (global sigma) for cross-attention AdaLN — matches ltx_core TransformerArgsPreprocessor
         v_prompt_timestep = None
         if self.cross_attention_adaln:
-            sigma = self.scheduler.sigmas[self.scheduler.step_index].reshape(1).to(device=v_latent.device, dtype=v_latent.dtype)
+            sigma = self.scheduler.current_sigma().reshape(1).to(device=v_latent.device, dtype=v_latent.dtype)
             p_scaled = sigma * self.timestep_scale_multiplier
             p_proj = get_timestep_embedding(p_scaled.flatten()).to(GET_DTYPE())
             p_e1 = weights.prompt_adaln_single_emb_timestep_embedder_linear_1.apply(p_proj)
@@ -126,7 +126,7 @@ class LTX2PreInfer:
         # 6. Cross-attention timestep embeddings — match ltx_core MultiModalTransformerArgsPreprocessor:
         # uses *global* step sigma (broadcast), not one embedding row per video token. Shapes are
         # like [1, 4*D] / [1, D] and broadcast in the block; numerically same as repeating when mask is all-1.
-        sigma_step = self.scheduler.sigmas[self.scheduler.step_index].to(device=v_latent.device, dtype=torch.float32)
+        sigma_step = self.scheduler.current_sigma().to(device=v_latent.device, dtype=torch.float32)
         cross_scaled = (sigma_step * self.timestep_scale_multiplier).reshape(1)
         v_cross_proj = get_timestep_embedding(cross_scaled).to(GET_DTYPE())
         v_cross_emb_1 = weights.av_ca_video_scale_shift_adaln_single_emb_linear_1.apply(v_cross_proj)
@@ -187,7 +187,7 @@ class LTX2PreInfer:
 
         a_prompt_timestep = None
         if self.cross_attention_adaln:
-            sigma = self.scheduler.sigmas[self.scheduler.step_index].reshape(1).to(device=a_latent.device, dtype=a_latent.dtype)
+            sigma = self.scheduler.current_sigma().reshape(1).to(device=a_latent.device, dtype=a_latent.dtype)
             p_scaled = sigma * self.timestep_scale_multiplier
             p_proj = get_timestep_embedding(p_scaled.flatten()).to(GET_DTYPE())
             p_e1 = weights.audio_prompt_adaln_single_emb_timestep_embedder_linear_1.apply(p_proj)
@@ -217,7 +217,7 @@ class LTX2PreInfer:
         )
 
         # 6. Audio cross-attention timestep — same global sigma as video (ltx pipeline passes same sigma)
-        sigma_step = self.scheduler.sigmas[self.scheduler.step_index].to(device=a_latent.device, dtype=torch.float32)
+        sigma_step = self.scheduler.current_sigma().to(device=a_latent.device, dtype=torch.float32)
         cross_scaled = (sigma_step * self.timestep_scale_multiplier).reshape(1)
         a_cross_proj = get_timestep_embedding(cross_scaled).to(GET_DTYPE())
         a_cross_emb_1 = weights.av_ca_audio_scale_shift_adaln_single_emb_linear_1.apply(a_cross_proj)

@@ -1,6 +1,6 @@
 model:
     name: wan_ti2v_5b_ar
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B
+    pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
     latent_channels: 48
     max_sequence_length: 512
     running_dtype: bf16
@@ -26,14 +26,14 @@ model:
         - 2
     fake:
         name: wan_ti2v_5b
-        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B
+        pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
         transformer_param_dtype: bf16
     teacher:
         name: wan_ti2v_5b
-        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B
+        pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
         transformer_param_dtype: bf16
     student:
-        checkpoint_path: /data/nvme4/gushiqiao/new/LightX2V/lightx2v_train/output_train/wan2_2_ti2v_5b_tf_cache_96f_sp4/checkpoint-000005000
+        checkpoint_path: /path/to/LightX2V/lightx2v_train/output_train/wan2_2_ti2v_5b_tf_cache_96f_sp4/checkpoint-000005000
         checkpoint_strict: true
 
 distributed:
@@ -58,7 +58,7 @@ data:
     train:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/Causal-Forcing/prompts/vidprom_filtered_extended.txt
+            - /path/to/prompts/vidprom_filtered_extended.txt
         batch_size: 1
         num_workers: 8
         pin_memory: true
@@ -67,7 +67,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+            - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0
@@ -141,7 +141,6 @@ training:
             adam_epsilon: 0.00000001
     teacher:
         guidance_scale: 3.0
-        negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
         cfg_norm: none
     output_dir: ./output_train4/wan2_2_ti2v_5b_ar_dmd
 
@@ -160,7 +159,6 @@ inference:
     fps: 24
     enable_cfg: false
     cfg_guidance_scale: 1.0
-    negative_prompt: " "
     seed: 42
     save_latents_only: false
     output_dir: ./output_infer4/wan2_2_ti2v_5b_ar_dmd

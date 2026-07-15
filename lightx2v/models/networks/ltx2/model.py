@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.ltx2.infer.ar_transformer_infer import LTX2ARTransformerInfer
 from lightx2v.models.networks.ltx2.infer.offload.transformer_infer import (
     LTX2OffloadTransformerInfer,
 )
@@ -377,8 +378,9 @@ class LTX2Model(BaseTransformerModel):
         sch = self.scheduler
         step_i = sch.step_index
         v_p, a_p = sch.mm_guider_video, sch.mm_guider_audio
-        v_skip = _mm_guider_should_skip_step(v_p["skip_step"], step_i)
-        a_skip = _mm_guider_should_skip_step(a_p["skip_step"], step_i)
+        is_rerun = bool(getattr(sch, "is_rerun", False))
+        v_skip = False if is_rerun else _mm_guider_should_skip_step(v_p["skip_step"], step_i)
+        a_skip = False if is_rerun else _mm_guider_should_skip_step(a_p["skip_step"], step_i)
 
         need_neg = (not math.isclose(v_p["cfg_scale"], 1.0)) or (not math.isclose(a_p["cfg_scale"], 1.0))
         need_ptb = (not math.isclose(v_p["stg_scale"], 0.0)) or (not math.isclose(a_p["stg_scale"], 0.0))
@@ -712,3 +714,46 @@ class LTX2Model(BaseTransformerModel):
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
                 self.post_weight.to_cpu()
+
+
+class LTX2ARModel(LTX2Model):
+    """LTX2.3 model variant for chunkwise autoregressive inference."""
+
+    def _init_infer_class(self):
+        if self.cpu_offload:
+            raise NotImplementedError("ltx2_ar does not support cpu_offload yet.")
+        if self.config.get("seq_parallel", False):
+            raise NotImplementedError("ltx2_ar does not support sequence parallel; tensor parallel is supported.")
+        self.pre_infer_class = LTX2PreInfer
+        self.post_infer_class = LTX2PostInfer
+        self.transformer_infer_class = LTX2ARTransformerInfer
+
+    def _load_ckpt(self, unified_dtype, sensitive_layer):
+        weight_dict = super()._load_ckpt(unified_dtype, sensitive_layer)
+        normalized = {}
+        for key, value in weight_dict.items():
+            while key.startswith("module.") or key.startswith("_fsdp_wrapped_module."):
+                key = key.split(".", 1)[1]
+            if not key.startswith("model.diffusion_model."):
+                key = f"model.diffusion_model.{key}"
+            normalized[key] = value
+        return normalized
+
+    def configure_ar_cache(self, **kwargs):
+        self.transformer_infer.configure_ar_cache(**kwargs)
+
+    def set_ar_chunk(self, *, video_start: int, audio_start: int):
+        self.transformer_infer.set_ar_chunk(video_start=video_start, audio_start=audio_start)
+
+    @torch.no_grad()
+    def _infer_cond_uncond(self, inputs, infer_condition=True, mm_perturb=None):
+        if not infer_condition:
+            branch = "negative"
+        elif not mm_perturb:
+            branch = "positive"
+        elif mm_perturb.get("skip_a2v", False) or mm_perturb.get("skip_v2a", False):
+            branch = "modality"
+        else:
+            branch = "perturbed"
+        self.transformer_infer.set_ar_branch(branch)
+        return super()._infer_cond_uncond(inputs, infer_condition=infer_condition, mm_perturb=mm_perturb)

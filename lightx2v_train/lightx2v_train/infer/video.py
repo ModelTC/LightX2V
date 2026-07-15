@@ -16,6 +16,7 @@ from lightx2v_train.runtime.distributed import (
 )
 from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
+from lightx2v_train.utils.constants import WAN_NEGATIVE_PROMPT
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
 from ..model_zoo.native.wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
@@ -65,8 +66,7 @@ class WanT2VInferencer(BaseInferencer):
         self.enable_cfg = self.infer_config.get("enable_cfg", True)
         if self.enable_cfg:
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 5.0)
-            negative_prompt = self.infer_config.get("negative_prompt", " ")
-            neg_cond = self.model.encode_condition({"prompt": negative_prompt})
+            neg_cond = self.model.encode_prompt_condition(WAN_NEGATIVE_PROMPT)
             neg_cond = broadcast_sequence_parallel_value(neg_cond)
         else:
             self.guidance_scale = None
@@ -95,7 +95,7 @@ class WanT2VInferencer(BaseInferencer):
                 height, width = _target_hw_for_sample(sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_condition({"prompt": prompt})
+                pos_cond = self.model.encode_prompt_condition(prompt)
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 pos_cond = broadcast_sequence_parallel_value(pos_cond)
                 latent = broadcast_sequence_parallel_value(latent)
@@ -172,7 +172,6 @@ class WanT2VARInferencer(BaseInferencer):
         macro_block_size = self.infer_config.get("macro_block_size", 16)
         enable_cfg = self.infer_config.get("enable_cfg", True)
         guidance_scale = self.infer_config.get("cfg_guidance_scale", 3.0)
-        negative_prompt = self.infer_config.get("negative_prompt", " ")
         base_seed = self.infer_config.get("seed", 42)
         save_latents_only = bool(self.infer_config.get("save_latents_only", False))
 
@@ -207,8 +206,8 @@ class WanT2VARInferencer(BaseInferencer):
                 height, width = _target_hw_for_sample(sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_condition({"prompt": prompt})
-                neg_cond = self.model.encode_condition({"prompt": negative_prompt}) if enable_cfg else None
+                pos_cond = self.model.encode_prompt_condition(prompt)
+                neg_cond = self.model.encode_prompt_condition(WAN_NEGATIVE_PROMPT) if enable_cfg else None
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 pos_cond = broadcast_sequence_parallel_value(pos_cond)
                 neg_cond = broadcast_sequence_parallel_value(neg_cond) if neg_cond is not None else None

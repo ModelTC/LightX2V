@@ -1,6 +1,6 @@
 model:
     name: wan_t2v_14b
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-14B/
+    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-14B/
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -29,10 +29,10 @@ distributed:
 
 data:
     train:
-        name: wan_t2v_video_dataset
+        name: video_dataset
         data_path:
-            - /data/nvme5/gushiqiao/datatets/OpenVid-1M.csv
-        video_root: /data/nvme5/gushiqiao/datatets/video
+            - /path/to/datasets/OpenVid-1M.csv
+        video_root: /path/to/datasets/video
         video_column: video
         prompt_column: caption
         height: 480
@@ -52,7 +52,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+            - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 5
         batch_size: 1
         num_workers: 0
@@ -108,7 +108,6 @@ training:
 
 inference:
     method: wan_t2v_14b_infer
-    negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards"
     default_width: 832
     default_height: 480
     num_frames: 81
