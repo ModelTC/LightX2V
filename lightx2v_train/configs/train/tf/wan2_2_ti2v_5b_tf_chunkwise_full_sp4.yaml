@@ -103,7 +103,6 @@ inference:
     fps: 24
     enable_cfg: true
     cfg_guidance_scale: 3.0
-    negative_prompt: " "
     seed: 42
     output_dir: ./output_infer/wan2_2_ti2v_5b_tf_chunkwise_full_sp4
     infer_every_iters: null

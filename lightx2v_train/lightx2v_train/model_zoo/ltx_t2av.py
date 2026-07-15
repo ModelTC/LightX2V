@@ -7,7 +7,7 @@ from peft import LoraConfig, inject_adapter_in_model
 from peft.utils import set_peft_model_state_dict
 from safetensors.torch import load_file
 
-from lightx2v_train.utils.ltx2_native import (
+from lightx2v_train.model_zoo.native.ltx2 import (
     EMBEDDINGS_PROCESSOR_KEY_OPS,
     GEMMA_LLM_KEY_OPS,
     GEMMA_MODEL_OPS,
@@ -235,7 +235,6 @@ class LTX2T2AVModel(BaseModel):
         if self.embeddings_processor is None:
             raise RuntimeError("LTX2 embeddings processor is not loaded. Set model.load_embeddings_processor=True.")
 
-        conditions = self._nested_to_device(conditions)
         if "video_prompt_embeds" in conditions:
             video_features = conditions["video_prompt_embeds"]
             audio_features = conditions.get("audio_prompt_embeds", video_features)
@@ -243,10 +242,10 @@ class LTX2T2AVModel(BaseModel):
             video_features = conditions["prompt_embeds"]
             audio_features = conditions["prompt_embeds"]
         mask = conditions["prompt_attention_mask"]
-        video_features = self._ensure_prompt_feature_batch(video_features, "video prompt embeds")
+        video_features = self._ensure_prompt_feature_batch(video_features, "video prompt embeds").to(device=self.device)
         if audio_features is not None:
-            audio_features = self._ensure_prompt_feature_batch(audio_features, "audio prompt embeds")
-        mask = self._ensure_prompt_mask_batch(mask)
+            audio_features = self._ensure_prompt_feature_batch(audio_features, "audio prompt embeds").to(device=self.device)
+        mask = self._ensure_prompt_mask_batch(mask).to(device=self.device)
         additive_mask = convert_to_additive_mask(mask, video_features.dtype)
         with torch.no_grad():
             video_embeds, audio_embeds, attention_mask = self.embeddings_processor.create_embeddings(
@@ -308,14 +307,3 @@ class LTX2T2AVModel(BaseModel):
             audio_encoding.to(dtype=self.running_dtype),
             processed.attention_mask,
         )
-
-    def _nested_to_device(self, value):
-        if torch.is_tensor(value):
-            return value.to(device=self.device)
-        if isinstance(value, dict):
-            return {key: self._nested_to_device(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [self._nested_to_device(item) for item in value]
-        if isinstance(value, tuple):
-            return tuple(self._nested_to_device(item) for item in value)
-        return value

@@ -13,7 +13,6 @@ from safetensors.torch import load_file
 
 from lightx2v_train.runtime.distributed import get_sequence_parallel_world_size
 from lightx2v_train.utils.registry import MODEL_REGISTER
-from lightx2v_train.utils.sample import sample_condition, sample_input, sample_prompt
 from lightx2v_train.utils.utils import get_running_dtype
 
 from .base import BaseModel
@@ -244,7 +243,8 @@ class WanT2VModel(BaseModel):
         ]
 
     def encode_to_latent(self, sample):
-        latent = sample_input(sample, "latents")
+        inputs = sample["inputs"]
+        latent = inputs.get("latents")
         if latent is not None:
             latent = latent.to(device=self.device, dtype=self.running_dtype)
             if latent.ndim == 4:
@@ -254,7 +254,7 @@ class WanT2VModel(BaseModel):
         if self.vae is None:
             raise RuntimeError("Wan VAE is not loaded. Use cached latents or set model.load_vae=True.")
 
-        video = sample_input(sample, "video")
+        video = inputs.get("video")
         if video is None:
             raise KeyError("Wan encode_to_latent expects inputs.video or inputs.latents.")
         video = video.to(device=self.device, dtype=self.vae_dtype)
@@ -262,7 +262,8 @@ class WanT2VModel(BaseModel):
         return latent.to(dtype=self.running_dtype)
 
     def encode_condition(self, sample):
-        positive = sample_condition(sample, "positive")
+        conditioning = sample["conditioning"]
+        positive = conditioning.get("positive")
         if positive is not None:
             if torch.is_tensor(positive):
                 prompt_embed = positive
@@ -278,7 +279,7 @@ class WanT2VModel(BaseModel):
         if self.text_encoder is None:
             raise RuntimeError("Wan text encoder is not loaded. Use cached prompt embeds or set model.load_text_encoder=True.")
 
-        prompt = sample_prompt(sample)
+        prompt = conditioning.get("prompt", "")
         prompts = [prompt] if isinstance(prompt, str) else list(prompt)
         text_device = torch.device("cpu") if self.t5_cpu else self.device
         contexts = self.text_encoder(prompts, text_device)
@@ -286,7 +287,7 @@ class WanT2VModel(BaseModel):
         return {"prompt_embed": prompt_embed}
 
     def encode_prompt_condition(self, prompt):
-        return self.encode_condition({"prompt": prompt})
+        return self.encode_condition({"inputs": {}, "conditioning": {"prompt": prompt}, "meta": {}})
 
     def prepare_denoiser_input(self, noisy_latent, condition=None):
         return WanT2VDenoiserInput(hidden_states=noisy_latent)

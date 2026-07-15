@@ -11,6 +11,15 @@ from loguru import logger
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
 
 from lightx2v_train.model_zoo import build_model
+from lightx2v_train.model_zoo.native.ltx2 import (
+    AudioLatentShape,
+    AudioPatchifier,
+    Modality,
+    SpatioTemporalScaleFactors,
+    VideoLatentPatchifier,
+    VideoLatentShape,
+    get_pixel_coords,
+)
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
 from lightx2v_train.runtime.distributed import (
     barrier,
@@ -26,23 +35,16 @@ from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradien
 from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, broadcast_sequence_parallel_value, sync_sequence_parallel_gradients
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
-from lightx2v_train.utils.ltx2_native import (
-    AudioLatentShape,
-    AudioPatchifier,
-    Modality,
-    SpatioTemporalScaleFactors,
-    VideoLatentPatchifier,
-    VideoLatentShape,
-    get_pixel_coords,
-)
+from lightx2v_train.utils.constants import LTX2_NEGATIVE_PROMPT, WAN_NEGATIVE_PROMPT
 from lightx2v_train.utils.registry import TRAINER_REGISTER
-from lightx2v_train.utils.sample import first_scalar, sample_condition, sample_input, sample_meta_value, sample_prompt
 
 from .base import BaseTrainer
 
 
 @TRAINER_REGISTER("dmd")
 class DmdTrainer(BaseTrainer):
+    default_negative_prompt = None
+
     def _resolve_train_type(self):
         if "train_type" in self.training_config:
             raise ValueError("DMD trainers use training.student.train_type and training.fake.train_type; remove training.train_type.")
@@ -82,7 +84,13 @@ class DmdTrainer(BaseTrainer):
         self.num_inference_steps = int(self.dmd_config.get("num_inference_steps", 4))
         self.fake_update_ratio = max(1, int(self.dmd_config.get("fake_update_ratio", 1)))
         self.guidance_scale = float(teacher_config["guidance_scale"] if "guidance_scale" in teacher_config else self.dmd_config.get("guidance_scale", 3.0))
-        self.negative_prompt = teacher_config["negative_prompt"] if "negative_prompt" in teacher_config else self.dmd_config.get("negative_prompt", " ")
+        configured_negative_prompt = teacher_config.get("negative_prompt", self.dmd_config.get("negative_prompt"))
+        if self.default_negative_prompt is not None:
+            self.negative_prompt = self.default_negative_prompt
+        elif configured_negative_prompt is not None:
+            self.negative_prompt = configured_negative_prompt
+        else:
+            raise ValueError("DMD training requires training.teacher.negative_prompt for this model.")
         self.cfg_norm = teacher_config["cfg_norm"] if "cfg_norm" in teacher_config else self.dmd_config.get("cfg_norm", "layer_norm")
         self.image_sizes = self.dmd_config.get("image_sizes", [])
 
@@ -273,9 +281,9 @@ class DmdTrainer(BaseTrainer):
         return progress * self.cdm_weight
 
     def _latent_shape(self, sample):
-        image = sample_input(sample, "target_image")
+        image = sample["inputs"].get("target_image")
         if image is None:
-            raise KeyError("DMD image latent shape expects inputs.target_image or target_image.")
+            raise KeyError("DMD image latent shape expects inputs.target_image.")
         batch_size = image.shape[0]
         if self.image_sizes:
             image_size_index = int(torch.randint(0, len(self.image_sizes), (1,), device=self.model.device).item())
@@ -296,7 +304,7 @@ class DmdTrainer(BaseTrainer):
         )
 
     def _encode_conditions(self, sample):
-        prompt = sample_prompt(sample)
+        prompt = sample["conditioning"].get("prompt", "")
         with torch.no_grad():
             condition = self.model.encode_prompt_condition(prompt)
             if self.guidance_scale > 1:
@@ -761,6 +769,8 @@ class DmdTrainer(BaseTrainer):
 class _LTX2T2AVDmdMixin:
     trainer_name = "ltx_t2av_dmd"
     allowed_model_names = {"ltx_t2av"}
+    default_negative_prompt = LTX2_NEGATIVE_PROMPT
+    default_lora_target_modules = None
 
     def __init__(self, config):
         super().__init__(config)
@@ -774,58 +784,23 @@ class _LTX2T2AVDmdMixin:
         self.video_patchifier = VideoLatentPatchifier(patch_size=1)
         self.audio_patchifier = AudioPatchifier(patch_size=1)
 
-        default_lora_target_modules = [
-            "attn1.to_q",
-            "attn1.to_k",
-            "attn1.to_v",
-            "attn1.to_out.0",
-            "attn2.to_q",
-            "attn2.to_k",
-            "attn2.to_v",
-            "attn2.to_out.0",
-            "ff.net.0.proj",
-            "ff.net.2",
-            "audio_attn1.to_q",
-            "audio_attn1.to_k",
-            "audio_attn1.to_v",
-            "audio_attn1.to_out.0",
-            "audio_attn2.to_q",
-            "audio_attn2.to_k",
-            "audio_attn2.to_v",
-            "audio_attn2.to_out.0",
-            "audio_ff.net.0.proj",
-            "audio_ff.net.2",
-            "audio_to_video_attn.to_q",
-            "audio_to_video_attn.to_k",
-            "audio_to_video_attn.to_v",
-            "audio_to_video_attn.to_out.0",
-            "video_to_audio_attn.to_q",
-            "video_to_audio_attn.to_k",
-            "video_to_audio_attn.to_v",
-            "video_to_audio_attn.to_out.0",
-        ]
-        wan_default_lora_target_modules = ["q", "k", "v", "o", "ffn.0", "ffn.2"]
-        if self.student_lora_config is not None and ("target_modules" not in self.student_lora_config or self.student_lora_config.get("target_modules") == wan_default_lora_target_modules):
-            self.student_lora_config["target_modules"] = list(default_lora_target_modules)
-        if self.fake_lora_config is not None and ("target_modules" not in self.fake_lora_config or self.fake_lora_config.get("target_modules") == wan_default_lora_target_modules):
-            self.fake_lora_config["target_modules"] = list(default_lora_target_modules)
-
         if self.cdm_enabled:
             raise ValueError("ltx_t2av_dmd does not support training.dmd.cdm yet.")
 
     def _encode_conditions(self, sample):
-        positive = sample_condition(sample, "positive")
+        conditioning = sample["conditioning"]
+        positive = conditioning.get("positive")
         if positive is None:
             return super()._encode_conditions(sample)
 
         with torch.no_grad():
             condition = self._prepare_cached_condition(positive)
             if self.guidance_scale > 1:
-                negative = sample_condition(sample, "negative")
+                negative = conditioning.get("negative")
                 if negative is not None:
                     negative_condition = self._prepare_cached_condition(negative)
                 else:
-                    prompt = sample_prompt(sample)
+                    prompt = conditioning.get("prompt", "")
                     negative_prompt = self.negative_prompt if isinstance(prompt, str) else [self.negative_prompt] * len(prompt)
                     try:
                         negative_condition = self.model.encode_prompt_condition(negative_prompt)
@@ -859,7 +834,7 @@ class _LTX2T2AVDmdMixin:
         return self.model.prepare_text_condition(conditions)
 
     def _latent_shape(self, sample):
-        prompt = sample_prompt(sample)
+        prompt = sample["conditioning"].get("prompt", "")
         batch_size = 1 if isinstance(prompt, str) else len(prompt)
         dmd_config = self.dmd_config
 
@@ -867,8 +842,9 @@ class _LTX2T2AVDmdMixin:
         if video_shape is not None:
             video_shape = self._shape_with_batch(video_shape, batch_size, "video_latent_shape")
         else:
-            height = first_scalar(sample_meta_value(sample, "target_height"), dmd_config.get("height", 512))
-            width = first_scalar(sample_meta_value(sample, "target_width"), dmd_config.get("width", 768))
+            meta = sample["meta"]
+            height = int(meta["target_height"][0].item()) if "target_height" in meta else int(dmd_config.get("height", 512))
+            width = int(meta["target_width"][0].item()) if "target_width" in meta else int(dmd_config.get("width", 768))
             num_frames = int(dmd_config.get("num_frames", 241))
             latent_frames = (num_frames - 1) // int(dmd_config.get("video_temporal_scale", 8)) + 1
             latent_height = int(height) // int(dmd_config.get("video_spatial_scale", 32))
@@ -1114,6 +1090,8 @@ class _LTX2T2AVDmdMixin:
 class VideoDmdTrainer(DmdTrainer):
     trainer_name = "video_dmd"
     allowed_model_names = {"wan_t2v", "wan_t2v_14b", "wan_ti2v_5b"}
+    default_negative_prompt = WAN_NEGATIVE_PROMPT
+    default_lora_target_modules = ("q", "k", "v", "o", "ffn.0", "ffn.2")
 
     def __init__(self, config):
         super().__init__(config)
@@ -1121,11 +1099,12 @@ class VideoDmdTrainer(DmdTrainer):
         if model_name not in self.allowed_model_names:
             allowed = ", ".join(repr(name) for name in sorted(self.allowed_model_names))
             raise ValueError(f"{self.trainer_name} trainer currently requires model.name in {{{allowed}}}.")
-        default_lora_target_modules = ["q", "k", "v", "o", "ffn.0", "ffn.2"]
-        if self.student_lora_config is not None and "target_modules" not in self.student_lora_config:
-            self.student_lora_config["target_modules"] = list(default_lora_target_modules)
-        if self.fake_lora_config is not None and "target_modules" not in self.fake_lora_config:
-            self.fake_lora_config["target_modules"] = list(default_lora_target_modules)
+        for role, lora_config in (("student", self.student_lora_config), ("fake", self.fake_lora_config)):
+            if lora_config is None or "target_modules" in lora_config:
+                continue
+            if self.default_lora_target_modules is None:
+                raise ValueError(f"training.{role}.lora.target_modules must be set for {self.trainer_name} training.")
+            lora_config["target_modules"] = list(self.default_lora_target_modules)
 
         scheduler_config = self.config["scheduler"]
         self.num_train_timestep = int(self.dmd_config["num_train_timestep"] if "num_train_timestep" in self.dmd_config else scheduler_config.get("num_train_timesteps", 1000))
@@ -1177,14 +1156,15 @@ class VideoDmdTrainer(DmdTrainer):
         return {"prompt_embed": prompt_embed}
 
     def _encode_conditions(self, sample):
-        positive = sample_condition(sample, "positive")
+        conditioning = sample["conditioning"]
+        positive = conditioning.get("positive")
         if positive is None:
             return super()._encode_conditions(sample)
 
         with torch.no_grad():
             condition = self._prepare_cached_condition(positive)
             if self.guidance_scale > 1:
-                negative = sample_condition(sample, "negative")
+                negative = conditioning.get("negative")
                 if negative is not None:
                     negative_condition = self._prepare_cached_condition(negative)
                 else:
@@ -1383,7 +1363,7 @@ class VideoDmdTrainer(DmdTrainer):
         return timesteps[indices]
 
     def _latent_shape(self, sample):
-        prompt = sample_prompt(sample)
+        prompt = sample["conditioning"].get("prompt", "")
         batch_size = 1 if isinstance(prompt, str) else len(prompt)
         if "image_or_video_shape" in self.dmd_config:
             configured_shape = self.dmd_config["image_or_video_shape"]

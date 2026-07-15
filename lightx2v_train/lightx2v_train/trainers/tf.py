@@ -1,12 +1,11 @@
 import torch
 import torch.distributed as dist
 
+from lightx2v_train.model_zoo.native.ltx2 import Modality
 from lightx2v_train.runtime.distributed import get_sequence_parallel_group, get_sequence_parallel_world_size, is_sequence_parallel_enabled
 from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value, sequence_parallel_frame_slice, sync_sequence_parallel_gradients
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
-from lightx2v_train.utils.ltx2_native import Modality
 from lightx2v_train.utils.registry import TRAINER_REGISTER
-from lightx2v_train.utils.sample import first_scalar, nested_to_device, sample_condition, sample_input
 
 from .flow import FlowMatchingTrainer, LTX2T2AVFlowTrainer
 
@@ -103,7 +102,7 @@ class TFTrainer(FlowMatchingTrainer):
         return weighted_loss / (batch_size * num_frames)
 
     def _teacher_forcing_latent(self, sample):
-        latent = sample_input(sample, "latents")
+        latent = sample["inputs"].get("latents")
         if latent is None:
             latent = self.model.encode_to_latent(sample)
         latent = latent.to(device=self.model.device, dtype=self.running_dtype)
@@ -146,9 +145,10 @@ class LTX2T2AVTeacherForcingTrainer(LTX2T2AVFlowTrainer):
         if is_sequence_parallel_enabled():
             raise ValueError("ltx_t2av_teacher_forcing does not support sequence parallel yet.")
 
-        video_data = nested_to_device(sample_input(sample, "video_latents"), self.model.device)
-        audio_data = nested_to_device(sample_input(sample, "audio_latents"), self.model.device)
-        conditions = sample_condition(sample, "positive")
+        inputs = sample["inputs"]
+        video_data = inputs.get("video_latents")
+        audio_data = inputs.get("audio_latents")
+        conditions = sample["conditioning"].get("positive")
         if video_data is None or audio_data is None or conditions is None:
             raise KeyError("ltx_t2av_teacher_forcing expects inputs.video_latents, inputs.audio_latents and conditioning.positive.")
 
@@ -194,10 +194,10 @@ class LTX2T2AVTeacherForcingTrainer(LTX2T2AVFlowTrainer):
 
             video_positions = self._get_video_positions(
                 num_frames=video_num_frames,
-                height=int(first_scalar(video_data.get("height"), video_latents.shape[3])),
-                width=int(first_scalar(video_data.get("width"), video_latents.shape[4])),
+                height=int(video_data["height"][0].item()) if "height" in video_data else video_latents.shape[3],
+                width=int(video_data["width"][0].item()) if "width" in video_data else video_latents.shape[4],
                 batch_size=video_tokens.shape[0],
-                fps=float(first_scalar(video_data.get("fps"), self.default_fps)),
+                fps=float(video_data["fps"][0].item()) if "fps" in video_data else self.default_fps,
                 device=video_tokens.device,
             )
             video_positions = torch.cat([video_positions, video_positions], dim=2)

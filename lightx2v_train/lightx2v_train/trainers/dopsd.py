@@ -211,22 +211,22 @@ class DopsdTrainer(BaseTrainer):
             return
         self._train_reference_map = {}
         train_dataset = self.dataloader_train.dataset
-        for sample in train_dataset.samples:
-            target_image = sample.get("target_image")
-            prompt = sample.get("prompt")
+        for record in train_dataset.samples:
+            target_image = record.get("target_image")
+            prompt = record.get("prompt")
             if target_image is None or prompt is None:
                 continue
             self._train_reference_map[str(prompt).strip()] = target_image
 
-    def _resolve_teacher_reference_image(self, sample, dataset):
-        target_image = sample.get("target_image")
+    def _resolve_teacher_reference_image(self, record, dataset):
+        target_image = record.get("target_image")
         if target_image is not None:
             if isinstance(target_image, (str, os.PathLike)):
                 return dataset.load_image(target_image)
             return target_image
 
         self._build_train_reference_map()
-        fallback_path = self._train_reference_map.get(str(sample.get("prompt", "")).strip())
+        fallback_path = self._train_reference_map.get(str(record.get("prompt", "")).strip())
         if fallback_path is None:
             return None
         return dataset.load_image(fallback_path)
@@ -243,10 +243,11 @@ class DopsdTrainer(BaseTrainer):
             raise RuntimeError(f"Cannot resume checkpoint with iteration={checkpoint_iteration} in {state_path}, expected iteration={expected_iteration} from {resume_ckpt_path}")
 
     def compute_loss_on_sample(self, sample, collect_trajectory=False):
-        if sample.get("target_image") is None:
-            raise ValueError("D-OPSD training requires target_image in each sample.")
+        image = sample["inputs"].get("target_image")
+        if image is None:
+            raise ValueError("D-OPSD training requires inputs.target_image in each sample.")
 
-        image = sample["target_image"].to(device=self.model.device, dtype=self.running_dtype)
+        image = image.to(device=self.model.device, dtype=self.running_dtype)
         bsz = image.shape[0]
         height, width = image.shape[2], image.shape[3]
         latent_hw = (height // 16, width // 16)
@@ -254,7 +255,7 @@ class DopsdTrainer(BaseTrainer):
 
         with torch.no_grad():
             student_condition = self.model.encode_condition(sample)
-            teacher_condition = self.model.encode_prompt_text(self._teacher_edit_prompts(sample["prompt"]))
+            teacher_condition = self.model.encode_prompt_text(self._teacher_edit_prompts(sample["conditioning"]["prompt"]))
             teacher_image_latents, teacher_image_latent_ids = self.model.prepare_reference_image_latents(image)
             latents_begin, latent_ids = self.model.prepare_dopsd_initial_latents(height, width, bsz)
 
@@ -499,8 +500,8 @@ class DopsdTrainer(BaseTrainer):
             if i >= len(samples):
                 continue
 
-            sample = samples[i]
-            reference_image = self._resolve_teacher_reference_image(sample, dataset)
+            record = samples[i]
+            reference_image = self._resolve_teacher_reference_image(record, dataset)
             if reference_image is None:
                 skipped_count += 1
                 logger.warning(
@@ -514,7 +515,7 @@ class DopsdTrainer(BaseTrainer):
             height, width = image.shape[2], image.shape[3]
             latent_hw = (height // 16, width // 16)
 
-            teacher_prompts = self._teacher_edit_prompts(sample["prompt"])
+            teacher_prompts = self._teacher_edit_prompts(record["prompt"])
             teacher_condition = self.model.encode_prompt_text(teacher_prompts)
             teacher_image_latents, teacher_image_latent_ids = self.model.prepare_reference_image_latents(image)
 

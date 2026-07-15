@@ -23,17 +23,25 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import imageio.v2 as imageio
+import numpy as np
+import torch
+from PIL import Image
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from lightx2v_train.data.utils import prompt_text, read_records, record_value, resolve_data_path  # noqa: E402
-from lightx2v_train.utils.preprocess import atomic_write_jsonl  # noqa: E402
+from lightx2v_train.model_zoo.native.wan.modules.t5 import T5EncoderModel  # noqa: E402
+from lightx2v_train.model_zoo.native.wan.modules.vae2_2 import Wan2_2_VAE  # noqa: E402
+from lightx2v_train.utils.constants import WAN_NEGATIVE_PROMPT  # noqa: E402
 
-DEFAULT_MODEL_DIR = "/data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B"
-torch = None
-imageio = None
-Image = None
+TORCH_DTYPES = {
+    "fp32": torch.float32,
+    "fp16": torch.float16,
+    "bf16": torch.bfloat16,
+}
 
 
 @dataclass
@@ -52,7 +60,7 @@ def parse_args():
     parser.add_argument("metadata", nargs="+", help="CSV/JSON/JSONL metadata file(s), or video directory.")
     parser.add_argument("--output-dir", required=True, help="Output latent_dataset directory.")
     parser.add_argument("--cache-components", default="all", choices=["all", "video", "prompt"], help="Build video latents, prompt conditions, or both.")
-    parser.add_argument("--model-dir", default=DEFAULT_MODEL_DIR, help="Wan2.2 model directory.")
+    parser.add_argument("--model-dir", default="/path/to/models/Wan2.2-TI2V-5B", help="Wan2.2 model directory.")
     parser.add_argument("--vae-checkpoint", default=None, help="Override Wan VAE checkpoint path.")
     parser.add_argument("--t5-checkpoint", default=None, help="Override T5 checkpoint path.")
     parser.add_argument("--tokenizer-path", default=None, help="Override tokenizer path.")
@@ -82,7 +90,6 @@ def parse_args():
     parser.add_argument("--max-sequence-length", type=int, default=512)
     parser.add_argument("--vae-chunk-latent-frames", type=int, default=16, help="Use 0 to encode the full video in one VAE call.")
     parser.add_argument("--vae-halo-latents", type=int, default=28)
-    parser.add_argument("--negative-prompt", default=" ", help="Negative prompt cached to negative_condition.pt when prompt cache is built.")
     parser.add_argument("--skip-negative-cache", action="store_true")
     parser.add_argument("--skip-missing", action="store_true", default=True)
     parser.add_argument("--no-skip-missing", dest="skip_missing", action="store_false")
@@ -94,34 +101,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def ensure_torch():
-    global torch
-    if torch is None:
-        import torch as torch_module
-
-        torch = torch_module
-
-
-def torch_dtype(name):
-    ensure_torch()
-    return {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}[name]
-
-
-def resolve_torchrun_device(device, local_rank):
-    if str(device) == "cuda":
-        return f"cuda:{local_rank}"
-    return device
-
-
-def normalize_args(args):
-    if args.raw_frames is None:
-        args.raw_frames = 1 + args.temporal_compression_ratio * (args.latent_frames - 1)
-    args.device = resolve_torchrun_device(args.device, args.local_rank)
-    if args.text_device is not None:
-        args.text_device = resolve_torchrun_device(args.text_device, args.local_rank)
-    return args
-
-
 def need_video(args):
     return args.cache_components in {"all", "video"}
 
@@ -130,42 +109,18 @@ def need_prompt(args):
     return args.cache_components in {"all", "prompt"}
 
 
-def ensure_video_imports():
-    global imageio, Image
-    if imageio is None:
-        try:
-            import imageio.v2 as imageio_module
-        except ModuleNotFoundError:
-            import imageio as imageio_module
-
-        imageio = imageio_module
-    if Image is None:
-        from PIL import Image as image_module
-
-        Image = image_module
-
-
-def pil_resampling(name):
-    if hasattr(Image, "Resampling"):
-        return getattr(Image.Resampling, name)
-    return getattr(Image, name)
-
-
 def crop_and_resize(image, target_height, target_width):
     width, height = image.size
     scale = max(target_width / width, target_height / height)
     resized_width = round(width * scale)
     resized_height = round(height * scale)
-    image = image.resize((resized_width, resized_height), pil_resampling("BILINEAR"))
+    image = image.resize((resized_width, resized_height), Image.Resampling.BILINEAR)
     left = max(0, (resized_width - target_width) // 2)
     top = max(0, (resized_height - target_height) // 2)
     return image.crop((left, top, left + target_width, top + target_height))
 
 
 def frame_to_tensor(frame):
-    ensure_torch()
-    import numpy as np
-
     array = np.array(frame, dtype=np.uint8, copy=True)
     return torch.from_numpy(array).permute(2, 0, 1).contiguous()
 
@@ -303,7 +258,6 @@ def iter_frame_ids(reader, args):
 
 
 def iter_video_frames(video_path, args):
-    ensure_video_imports()
     reader = imageio.get_reader(video_path)
     try:
         for frame_id in iter_frame_ids(reader, args):
@@ -356,7 +310,6 @@ def iter_group_windows(group, args):
 def count_group_frames(group, args):
     if all(clip.frame_count is not None for clip in group):
         return sum(clip.frame_count for clip in group)
-    ensure_video_imports()
     total = 0
     for clip in group:
         try:
@@ -379,9 +332,8 @@ def latent_range_to_raw_window(latent_start, latent_end, ratio):
 
 
 def encode_video_latent(vae, video_cpu, args):
-    ensure_torch()
     device = torch.device(args.device)
-    vae_dtype = torch_dtype(args.vae_dtype)
+    vae_dtype = TORCH_DTYPES[args.vae_dtype]
     latent_parts = []
 
     def prepare_video_chunk(chunk_cpu):
@@ -410,11 +362,10 @@ def encode_video_latent(vae, video_cpu, args):
 
 
 def encode_prompt_embed(text_encoder, prompt, args):
-    ensure_torch()
     device = torch.device(args.text_device or args.device)
     with torch.inference_mode():
         contexts = text_encoder([prompt], device)
-        context = contexts[0][: args.max_sequence_length].to(dtype=torch_dtype(args.save_dtype)).cpu()
+        context = contexts[0][: args.max_sequence_length].to(dtype=TORCH_DTYPES[args.save_dtype]).cpu()
         if context.shape[0] < args.max_sequence_length:
             pad = context.new_zeros(args.max_sequence_length - context.shape[0], context.shape[1])
             context = torch.cat([context, pad], dim=0)
@@ -422,22 +373,16 @@ def encode_prompt_embed(text_encoder, prompt, args):
 
 
 def load_vae(args):
-    ensure_torch()
-    from lightx2v_train.model_zoo.native.wan.modules.vae2_2 import Wan2_2_VAE
-
     device = torch.device(args.device)
     if device.type == "cuda":
         torch.cuda.set_device(device)
     model_dir = Path(args.model_dir)
     checkpoint = args.vae_checkpoint or str(model_dir / "Wan2.2_VAE.pth")
     print(f"loading Wan VAE: {checkpoint}", flush=True)
-    return Wan2_2_VAE(vae_pth=checkpoint, dtype=torch_dtype(args.vae_dtype), device=device)
+    return Wan2_2_VAE(vae_pth=checkpoint, dtype=TORCH_DTYPES[args.vae_dtype], device=device)
 
 
 def load_text_encoder(args):
-    ensure_torch()
-    from lightx2v_train.model_zoo.native.wan.modules.t5 import T5EncoderModel
-
     model_dir = Path(args.model_dir)
     checkpoint = args.t5_checkpoint or str(model_dir / "models_t5_umt5-xxl-enc-bf16.pth")
     tokenizer_path = args.tokenizer_path or str(model_dir / "google" / "umt5-xxl")
@@ -445,7 +390,7 @@ def load_text_encoder(args):
     print(f"loading Wan T5: {checkpoint}", flush=True)
     return T5EncoderModel(
         text_len=args.max_sequence_length,
-        dtype=torch_dtype(args.t5_dtype),
+        dtype=TORCH_DTYPES[args.t5_dtype],
         device=device,
         checkpoint_path=checkpoint,
         tokenizer_path=tokenizer_path,
@@ -453,7 +398,6 @@ def load_text_encoder(args):
 
 
 def save_pt(path, payload, overwrite):
-    ensure_torch()
     if path.exists() and not overwrite:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -486,7 +430,7 @@ def manifest_path(output_dir, args):
 def build_prompt_only(entries, args, text_encoder, output_dir):
     rows = []
     conditions_dir = output_dir / "conditions"
-    save_dtype = torch_dtype(args.save_dtype)
+    save_dtype = TORCH_DTYPES[args.save_dtype]
     for idx, entry in enumerate(entries):
         if idx % args.world_size != args.rank:
             continue
@@ -501,7 +445,13 @@ def build_prompt_only(entries, args, text_encoder, output_dir):
 
 
 def main():
-    args = normalize_args(parse_args())
+    args = parse_args()
+    if args.raw_frames is None:
+        args.raw_frames = 1 + args.temporal_compression_ratio * (args.latent_frames - 1)
+    if args.device == "cuda":
+        args.device = f"cuda:{args.local_rank}"
+    if args.text_device == "cuda":
+        args.text_device = f"cuda:{args.local_rank}"
     validate_args(args)
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -534,13 +484,13 @@ def main():
 
     vae = load_vae(args) if need_video(args) else None
     text_encoder = load_text_encoder(args) if need_prompt(args) else None
-    save_dtype = torch_dtype(args.save_dtype)
+    save_dtype = TORCH_DTYPES[args.save_dtype]
     rows = []
 
     if need_prompt(args) and not args.skip_negative_cache:
         negative_path = output_dir / "negative_condition.pt"
-        prompt_embed = encode_prompt_embed(text_encoder, args.negative_prompt, args).to(dtype=save_dtype)
-        save_pt(negative_path, condition_payload(prompt_embed, args.negative_prompt), args.overwrite)
+        prompt_embed = encode_prompt_embed(text_encoder, WAN_NEGATIVE_PROMPT, args).to(dtype=save_dtype)
+        save_pt(negative_path, condition_payload(prompt_embed, WAN_NEGATIVE_PROMPT), args.overwrite)
 
     if not need_video(args):
         rows = build_prompt_only(entries, args, text_encoder, output_dir)
@@ -587,7 +537,11 @@ def main():
                 break
 
     out_manifest = manifest_path(output_dir, args)
-    atomic_write_jsonl(out_manifest, rows)
+    tmp_manifest = out_manifest.with_suffix(f"{out_manifest.suffix}.tmp.{os.getpid()}")
+    with tmp_manifest.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    os.replace(tmp_manifest, out_manifest)
     print(f"Wrote manifest: {out_manifest} ({len(rows)} samples)", flush=True)
 
 

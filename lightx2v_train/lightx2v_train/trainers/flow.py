@@ -4,9 +4,7 @@ import torch
 from loguru import logger
 from torch import Tensor
 
-from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, reduce_mean
-from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value, sync_sequence_parallel_gradients
-from lightx2v_train.utils.ltx2_native import (
+from lightx2v_train.model_zoo.native.ltx2 import (
     AudioLatentShape,
     AudioPatchifier,
     Modality,
@@ -15,8 +13,9 @@ from lightx2v_train.utils.ltx2_native import (
     VideoLatentShape,
     get_pixel_coords,
 )
+from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process, reduce_mean
+from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value, sync_sequence_parallel_gradients
 from lightx2v_train.utils.registry import TRAINER_REGISTER
-from lightx2v_train.utils.sample import first_scalar, nested_to_device, sample_condition, sample_input
 
 from .base import BaseTrainer
 
@@ -139,9 +138,10 @@ class LTX2T2AVFlowTrainer(FlowMatchingTrainer):
         self.audio_patchifier = AudioPatchifier(patch_size=1)
 
     def compute_loss_on_sample(self, sample):
-        video_data = nested_to_device(sample_input(sample, "video_latents"), self.model.device)
-        audio_data = nested_to_device(sample_input(sample, "audio_latents"), self.model.device)
-        conditions = sample_condition(sample, "positive")
+        inputs = sample["inputs"]
+        video_data = inputs.get("video_latents")
+        audio_data = inputs.get("audio_latents")
+        conditions = sample["conditioning"].get("positive")
         if video_data is None or audio_data is None or conditions is None:
             raise KeyError("ltx_t2av_flow expects inputs.video_latents, inputs.audio_latents and conditioning.positive.")
 
@@ -155,11 +155,11 @@ class LTX2T2AVFlowTrainer(FlowMatchingTrainer):
         audio_input, audio_target, audio_timesteps, audio_loss_mask, audio_sigmas = self._initialize_noisy_target(audio_tokens, sigmas=video_sigmas)
 
         video_positions = self._get_video_positions(
-            num_frames=int(first_scalar(video_data.get("num_frames"), video_latents.shape[2])),
-            height=int(first_scalar(video_data.get("height"), video_latents.shape[3])),
-            width=int(first_scalar(video_data.get("width"), video_latents.shape[4])),
+            num_frames=int(video_data["num_frames"][0].item()) if "num_frames" in video_data else video_latents.shape[2],
+            height=int(video_data["height"][0].item()) if "height" in video_data else video_latents.shape[3],
+            width=int(video_data["width"][0].item()) if "width" in video_data else video_latents.shape[4],
             batch_size=video_tokens.shape[0],
-            fps=float(first_scalar(video_data.get("fps"), self.default_fps)),
+            fps=float(video_data["fps"][0].item()) if "fps" in video_data else self.default_fps,
             device=video_tokens.device,
         )
         audio_positions = self._get_audio_positions(

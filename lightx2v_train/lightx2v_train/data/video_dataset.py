@@ -9,22 +9,78 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from lightx2v_train.data.utils import (
     VideoFrameSampler,
-    condition_payload,
-    load_pt,
     load_video_tensor,
     prompt_text,
     read_records,
     record_value,
     resolve_data_path,
     to_list,
-    video_latent_payload,
 )
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
-from lightx2v_train.utils.sample import make_sample
 
 METADATA_SUFFIXES = {".jsonl", ".json", ".csv"}
 PROMPT_SUFFIXES = {".txt", ".list"}
+CONDITION_KEYS = (
+    "prompt_embed",
+    "video_prompt_embeds",
+    "audio_prompt_embeds",
+    "prompt_embeds",
+    "prompt_attention_mask",
+    "video_context",
+    "audio_context",
+    "context_mask",
+)
+
+
+def _strip_condition_batch(value):
+    if torch.is_tensor(value):
+        if value.ndim >= 2 and value.shape[0] == 1:
+            return value[0]
+        return value
+    if isinstance(value, dict):
+        return {key: _strip_condition_batch(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_strip_condition_batch(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_condition_batch(item) for item in value)
+    return value
+
+
+def _condition_payload(item):
+    if isinstance(item, (list, tuple)):
+        return _strip_condition_batch(item)
+    if not isinstance(item, dict):
+        raise TypeError(f"Condition payload must be a dict/list/tuple, got {type(item)!r}.")
+    if "conditioning" in item:
+        item = item["conditioning"]
+    if "positive" in item:
+        conditions = item["positive"]
+    elif "conditions" in item:
+        conditions = item["conditions"]
+    elif "condition" in item:
+        conditions = item["condition"]
+    else:
+        conditions = {key: item[key] for key in CONDITION_KEYS if key in item}
+    if conditions is None or (isinstance(conditions, (dict, list, tuple)) and not conditions):
+        raise KeyError("Condition payload must contain positive/conditions/condition or prompt embedding tensors.")
+    return _strip_condition_batch(conditions)
+
+
+def _video_latent_payload(data):
+    if torch.is_tensor(data):
+        return {"latents": data}
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    latents = normalized.get("latents")
+    if not torch.is_tensor(latents) or latents.dim() != 2:
+        return normalized
+    num_frames = int(normalized["num_frames"])
+    height = int(normalized["height"])
+    width = int(normalized["width"])
+    normalized["latents"] = latents.reshape(num_frames, height, width, latents.shape[-1]).permute(3, 0, 1, 2).contiguous()
+    return normalized
 
 
 def _metadata_path(path):
@@ -154,11 +210,11 @@ class VideoDataset(torch.utils.data.Dataset):
                 prompt = record["prompt"]
                 if random.random() < self.prompt_dropout_rate:
                     prompt = " "
-                return make_sample(
-                    inputs={"video": self._load_video(meta["video_path"])},
-                    conditioning={"prompt": prompt},
-                    meta=meta,
-                )
+                return {
+                    "inputs": {"video": self._load_video(meta["video_path"])},
+                    "conditioning": {"prompt": prompt},
+                    "meta": meta,
+                }
             except Exception as error:
                 last_error = error
                 logger.warning("Failed to load video {}: {}", meta.get("video_path"), error)
@@ -207,7 +263,7 @@ class PromptDataset(torch.utils.data.Dataset):
         prompt = sample["prompt"]
         if random.random() < self.prompt_dropout_rate:
             prompt = " "
-        return make_sample(conditioning={"prompt": prompt}, meta=dict(sample["meta"]))
+        return {"inputs": {}, "conditioning": {"prompt": prompt}, "meta": dict(sample["meta"])}
 
     def __len__(self):
         return len(self.samples) * self.dataset_repeat
@@ -258,7 +314,7 @@ class LatentDataset(torch.utils.data.Dataset):
                     break
         if negative_condition_path is None:
             return None
-        return condition_payload(load_pt(negative_condition_path, weights_only=False))
+        return _condition_payload(torch.load(negative_condition_path, map_location="cpu", weights_only=False))
 
     def _index_metadata(self, metadata_path):
         for row in read_records(metadata_path, prompt_column=self.prompt_column, prompt_index=self.prompt_index):
@@ -343,7 +399,7 @@ class LatentDataset(torch.utils.data.Dataset):
 
         video_latent_path = _resolve_required_path(record_value(row, "video_latent_path"), base_dir, "video_latent_path")
         if video_latent_path is not None:
-            video_payload = video_latent_payload(load_pt(video_latent_path, weights_only=True))
+            video_payload = _video_latent_payload(torch.load(video_latent_path, map_location="cpu", weights_only=True))
             inputs["video_latents"] = video_payload
             if torch.is_tensor(video_payload):
                 inputs["latents"] = video_payload
@@ -353,13 +409,13 @@ class LatentDataset(torch.utils.data.Dataset):
 
         audio_latent_path = _resolve_required_path(record_value(row, "audio_latent_path"), base_dir, "audio_latent_path")
         if audio_latent_path is not None:
-            inputs["audio_latents"] = load_pt(audio_latent_path, weights_only=True)
+            inputs["audio_latents"] = torch.load(audio_latent_path, map_location="cpu", weights_only=True)
             meta["audio_latent_path"] = str(audio_latent_path)
 
         condition_path = _resolve_required_path(record_value(row, "condition_path"), base_dir, "condition_path")
         if condition_path is not None:
-            condition_item = load_pt(condition_path, weights_only=False)
-            positive = condition_payload(condition_item)
+            condition_item = torch.load(condition_path, map_location="cpu", weights_only=False)
+            positive = _condition_payload(condition_item)
             conditioning["positive"] = positive
             meta["condition_path"] = str(condition_path)
             self._add_negative_condition(conditioning, condition_item)
@@ -368,12 +424,12 @@ class LatentDataset(torch.utils.data.Dataset):
 
         row_negative_path = _resolve_required_path(record_value(row, "negative_condition_path"), base_dir, "negative_condition_path")
         if row_negative_path is not None:
-            conditioning["negative"] = condition_payload(load_pt(row_negative_path, weights_only=False))
+            conditioning["negative"] = _condition_payload(torch.load(row_negative_path, map_location="cpu", weights_only=False))
             meta["negative_condition_path"] = str(row_negative_path)
 
         if not inputs and "positive" not in conditioning:
             raise ValueError(f"Latent metadata row must contain video_latent_path and/or condition_path: {row}")
-        return make_sample(inputs=inputs, conditioning=conditioning, meta=meta)
+        return {"inputs": inputs, "conditioning": conditioning, "meta": meta}
 
     def _load_lmdb_sample(self, record):
         source = self.lmdb_envs[record["env_index"]]
@@ -387,11 +443,11 @@ class LatentDataset(torch.utils.data.Dataset):
             if row_bytes is None:
                 raise KeyError(f"{data_key!r} not found in LMDB dataset.")
             sample = torch.load(io.BytesIO(row_bytes), map_location="cpu", weights_only=False)
-            sample = make_sample(
-                inputs=sample.get("inputs", {}),
-                conditioning=sample.get("conditioning", {}),
-                meta=sample.get("meta", {}),
-            )
+            sample = {
+                "inputs": sample.get("inputs", {}),
+                "conditioning": sample.get("conditioning", {}),
+                "meta": sample.get("meta", {}),
+            }
             sample["meta"].setdefault("row_index", row_index)
             sample["meta"].setdefault("lmdb_path", source.get("path"))
             return sample
@@ -402,19 +458,19 @@ class LatentDataset(torch.utils.data.Dataset):
             latents = latents[None, ...]
         latent_tchw = torch.tensor(latents, dtype=torch.float32)[-1]
         prompt = self._retrieve_lmdb_row(env, "prompts", str, row_index)
-        return make_sample(
-            inputs={"latents": latent_tchw.permute(1, 0, 2, 3).contiguous()},
-            conditioning={"prompt": prompt},
-            meta={"row_index": row_index, "lmdb_path": source.get("path")},
-        )
+        return {
+            "inputs": {"latents": latent_tchw.permute(1, 0, 2, 3).contiguous()},
+            "conditioning": {"prompt": prompt},
+            "meta": {"row_index": row_index, "lmdb_path": source.get("path")},
+        }
 
     def _add_negative_condition(self, conditioning, item):
         if self.negative_condition is not None:
             conditioning["negative"] = self.negative_condition
         elif isinstance(item, dict) and "negative" in item:
-            conditioning["negative"] = condition_payload({"positive": item["negative"]})
+            conditioning["negative"] = _condition_payload({"positive": item["negative"]})
         elif isinstance(item, dict) and "negative_conditions" in item:
-            conditioning["negative"] = condition_payload({"positive": item["negative_conditions"]})
+            conditioning["negative"] = _condition_payload({"positive": item["negative_conditions"]})
 
     def __len__(self):
         return len(self.samples) * self.dataset_repeat

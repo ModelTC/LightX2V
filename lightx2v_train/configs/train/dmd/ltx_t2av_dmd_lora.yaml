@@ -84,6 +84,35 @@ training:
         lora:
             rank: 128
             alpha: 128
+            target_modules:
+                - attn1.to_q
+                - attn1.to_k
+                - attn1.to_v
+                - attn1.to_out.0
+                - attn2.to_q
+                - attn2.to_k
+                - attn2.to_v
+                - attn2.to_out.0
+                - ff.net.0.proj
+                - ff.net.2
+                - audio_attn1.to_q
+                - audio_attn1.to_k
+                - audio_attn1.to_v
+                - audio_attn1.to_out.0
+                - audio_attn2.to_q
+                - audio_attn2.to_k
+                - audio_attn2.to_v
+                - audio_attn2.to_out.0
+                - audio_ff.net.0.proj
+                - audio_ff.net.2
+                - audio_to_video_attn.to_q
+                - audio_to_video_attn.to_k
+                - audio_to_video_attn.to_v
+                - audio_to_video_attn.to_out.0
+                - video_to_audio_attn.to_q
+                - video_to_audio_attn.to_k
+                - video_to_audio_attn.to_v
+                - video_to_audio_attn.to_out.0
         optimizer:
             learning_rate: 0.0001
             adam_beta1: 0.9
@@ -95,6 +124,35 @@ training:
         lora:
             rank: 128
             alpha: 128
+            target_modules:
+                - attn1.to_q
+                - attn1.to_k
+                - attn1.to_v
+                - attn1.to_out.0
+                - attn2.to_q
+                - attn2.to_k
+                - attn2.to_v
+                - attn2.to_out.0
+                - ff.net.0.proj
+                - ff.net.2
+                - audio_attn1.to_q
+                - audio_attn1.to_k
+                - audio_attn1.to_v
+                - audio_attn1.to_out.0
+                - audio_attn2.to_q
+                - audio_attn2.to_k
+                - audio_attn2.to_v
+                - audio_attn2.to_out.0
+                - audio_ff.net.0.proj
+                - audio_ff.net.2
+                - audio_to_video_attn.to_q
+                - audio_to_video_attn.to_k
+                - audio_to_video_attn.to_v
+                - audio_to_video_attn.to_out.0
+                - video_to_audio_attn.to_q
+                - video_to_audio_attn.to_k
+                - video_to_audio_attn.to_v
+                - video_to_audio_attn.to_out.0
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9
@@ -103,7 +161,6 @@ training:
             adam_epsilon: 0.00000001
     teacher:
         guidance_scale: 3.0
-        negative_prompt: " "
         cfg_norm: none
     output_dir: /path/to/LightX2V/lightx2v_train/output_train/ltx_t2av_dmd_lora
 

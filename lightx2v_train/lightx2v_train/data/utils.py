@@ -5,45 +5,13 @@ import random
 import sys
 from pathlib import Path
 
+import imageio
+import numpy as np
+import torch
+from PIL import Image
+
 PROMPT_KEYS = ("prompt", "caption", "text")
-CONDITION_KEYS = (
-    "prompt_embed",
-    "video_prompt_embeds",
-    "audio_prompt_embeds",
-    "prompt_embeds",
-    "prompt_attention_mask",
-    "video_context",
-    "audio_context",
-    "context_mask",
-)
-
-
-def resize_to_max_side(image, max_side):
-    width, height = image.size
-    if width >= height:
-        new_width = max_side
-        new_height = int(max_side * height / width)
-    else:
-        new_height = max_side
-        new_width = int(max_side * width / height)
-    return image.resize((new_width, new_height))
-
-
-def resize_to_target_area(image, target_area):
-    w, h = image.size
-    ratio = w / h
-    new_w = round(math.sqrt(target_area * ratio) / 16) * 16
-    new_h = round(math.sqrt(target_area / ratio) / 16) * 16
-    # Scale so that both dimensions are at least the target size, then crop.
-    scale = max(new_w / w, new_h / h)
-    scaled_w = round(w * scale)
-    scaled_h = round(h * scale)
-    image = image.resize((scaled_w, scaled_h), resample=3)  # BICUBIC=3
-    # Center crop to exact (new_w, new_h)
-    left = (scaled_w - new_w) // 2
-    top = (scaled_h - new_h) // 2
-    image = image.crop((left, top, left + new_w, top + new_h))
-    return image
+_BILINEAR = getattr(Image, "Resampling", Image).BILINEAR
 
 
 def to_list(value):
@@ -165,99 +133,6 @@ def resolve_data_path(value, base_dir, roots=(), subdirs=()):
     return candidates[0]
 
 
-def condition_payload(item):
-    if isinstance(item, (list, tuple)):
-        return _strip_leading_batch(item)
-    if not isinstance(item, dict):
-        raise TypeError(f"Condition payload must be a dict/list/tuple, got {type(item)!r}.")
-    if "conditioning" in item:
-        item = item["conditioning"]
-    if "positive" in item:
-        conditions = item["positive"]
-    elif "conditions" in item:
-        conditions = item["conditions"]
-    elif "condition" in item:
-        conditions = item["condition"]
-    else:
-        conditions = {key: item[key] for key in CONDITION_KEYS if key in item}
-    if conditions is None or (isinstance(conditions, (dict, list, tuple)) and not conditions):
-        raise KeyError("Condition payload must contain positive/conditions/condition or prompt embedding tensors.")
-    return _strip_leading_batch(conditions)
-
-
-def is_condition_payload(item):
-    if isinstance(item, (list, tuple)):
-        return True
-    if not isinstance(item, dict):
-        return False
-    return bool({"conditioning", "positive", "conditions", "condition", *CONDITION_KEYS}.intersection(item.keys()))
-
-
-def _strip_leading_batch(value):
-    import torch
-
-    if torch.is_tensor(value):
-        if value.ndim >= 2 and value.shape[0] == 1:
-            return value[0]
-        return value
-    if isinstance(value, dict):
-        return {key: _strip_leading_batch(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_strip_leading_batch(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_strip_leading_batch(item) for item in value)
-    return value
-
-
-def video_latent_payload(data):
-    import torch
-
-    if torch.is_tensor(data):
-        return {"latents": data}
-    if not isinstance(data, dict):
-        return data
-    normalized = dict(data)
-    latents = normalized.get("latents")
-    if not torch.is_tensor(latents) or latents.dim() != 2:
-        return normalized
-    num_frames = int(normalized["num_frames"])
-    height = int(normalized["height"])
-    width = int(normalized["width"])
-    normalized["latents"] = latents.reshape(num_frames, height, width, latents.shape[-1]).permute(3, 0, 1, 2).contiguous()
-    return normalized
-
-
-def load_pt(path, weights_only=False):
-    import torch
-
-    return torch.load(path, map_location="cpu", weights_only=weights_only)
-
-
-def crop_resize_exact(image, target_height, target_width, resampling="BILINEAR"):
-    from PIL import Image
-
-    width, height = image.size
-    scale = max(target_width / width, target_height / height)
-    resized_width = round(width * scale)
-    resized_height = round(height * scale)
-    if hasattr(Image, "Resampling"):
-        resample = getattr(Image.Resampling, resampling)
-    else:
-        resample = getattr(Image, resampling)
-    image = image.resize((resized_width, resized_height), resample)
-    left = max(0, (resized_width - target_width) // 2)
-    top = max(0, (resized_height - target_height) // 2)
-    return image.crop((left, top, left + target_width, top + target_height))
-
-
-def frame_to_normalized_tensor(frame):
-    import numpy as np
-    import torch
-
-    array = np.asarray(frame, dtype=np.float32) / 127.5 - 1.0
-    return torch.from_numpy(array).permute(2, 0, 1)
-
-
 class VideoFrameSampler:
     def __init__(
         self,
@@ -309,17 +184,21 @@ class VideoFrameSampler:
 
 
 def load_video_tensor(video_path, height, width, frame_sampler):
-    import imageio
-    import torch
-    from PIL import Image
-
     reader = imageio.get_reader(video_path)
     try:
         frames = []
         for frame_id in frame_sampler.frame_ids(reader):
             frame = Image.fromarray(reader.get_data(frame_id)).convert("RGB")
-            frame = crop_resize_exact(frame, height, width)
-            frames.append(frame_to_normalized_tensor(frame))
+            frame_width, frame_height = frame.size
+            scale = max(width / frame_width, height / frame_height)
+            resized_width = round(frame_width * scale)
+            resized_height = round(frame_height * scale)
+            frame = frame.resize((resized_width, resized_height), _BILINEAR)
+            left = max(0, (resized_width - width) // 2)
+            top = max(0, (resized_height - height) // 2)
+            frame = frame.crop((left, top, left + width, top + height))
+            array = np.asarray(frame, dtype=np.float32) / 127.5 - 1.0
+            frames.append(torch.from_numpy(array).permute(2, 0, 1))
     finally:
         reader.close()
     return torch.stack(frames, dim=1)

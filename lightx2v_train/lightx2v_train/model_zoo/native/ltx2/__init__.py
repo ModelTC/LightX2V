@@ -1,9 +1,7 @@
 import sys
 from pathlib import Path
 
-import torch
-
-_NATIVE_LTX2_ROOT = Path(__file__).resolve().parents[1] / "model_zoo" / "native" / "ltx2"
+_NATIVE_LTX2_ROOT = Path(__file__).resolve().parent
 
 
 def ensure_ltx2_native_path():
@@ -26,10 +24,6 @@ def ensure_ltx2_native_path():
         raise RuntimeError(f"ltx_core is already loaded from a non-native path: {origin}") from exc
 
 
-def convert_to_additive_mask(attention_mask: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
-    return (attention_mask.to(torch.int64) - 1).to(dtype).reshape((attention_mask.shape[0], 1, -1, attention_mask.shape[-1])) * torch.finfo(dtype).max
-
-
 ensure_ltx2_native_path()
 
 from ltx_core.components.patchifiers import AudioPatchifier, VideoLatentPatchifier, get_pixel_coords  # noqa: E402
@@ -45,13 +39,13 @@ from ltx_core.text_encoders.gemma import (  # noqa: E402
     GEMMA_MODEL_OPS,
     EmbeddingsProcessorConfigurator,
     GemmaTextEncoderConfigurator,
+    convert_to_additive_mask,
     module_ops_from_gemma_root,
 )
-from ltx_core.types import Audio, AudioLatentShape, SpatioTemporalScaleFactors, VideoLatentShape  # noqa: E402
+from ltx_core.types import AudioLatentShape, SpatioTemporalScaleFactors, VideoLatentShape  # noqa: E402
 from ltx_core.utils import find_matching_file  # noqa: E402
 
 __all__ = [
-    "Audio",
     "AudioLatentShape",
     "AudioPatchifier",
     "EMBEDDINGS_PROCESSOR_KEY_OPS",
