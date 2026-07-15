@@ -319,6 +319,7 @@ class HunyuanImage3Model(BaseTransformerModel):
             hidden_states = self._infer_transformer_with_taylor_cache(pre_infer_out, inputs["cache_dic"])
         else:
             hidden_states = self._infer_transformer(pre_infer_out)
+        # for seq_parallel, the _seq_parallel_post_process function is run in _infer_transformer
         return self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out)
 
     @torch.no_grad()
@@ -444,6 +445,7 @@ class HunyuanImage3Model(BaseTransformerModel):
         cfg_parallel_branch = bool(inputs.get("_cfg_parallel_branch", False))
         infer_condition = True
         cfg_p_group = None
+        # 当当前 forward 属于 CFG parallel 时，找到当前进程对应的 CFG 通信组，并判断它负责 conditional 还是 unconditional 分支。
         if cfg_parallel_branch:
             if not self.config.get("cfg_parallel", False):
                 raise RuntimeError("HunyuanImage3 received a cfg-parallel branch input, but config['cfg_parallel'] is not enabled.")

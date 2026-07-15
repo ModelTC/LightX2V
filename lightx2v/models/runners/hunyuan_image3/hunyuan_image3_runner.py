@@ -1,7 +1,6 @@
 import importlib
 import os
 import sys
-from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,15 +15,12 @@ from transformers import GenerationConfig
 from lightx2v.models.networks.hunyuan_image3.infer.kv_cache import HunyuanImage3StaticKVCache
 from lightx2v.models.networks.hunyuan_image3.model import HunyuanImage3Model
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.hunyuan_image3.flashinfer_autotune import (
+    DistributedAutotuneContext,
+    FlashInferAutotuneController,
+)
 from lightx2v.models.schedulers.hunyuan_image3.scheduler import HunyuanImage3Scheduler
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-
-try:
-    from flashinfer.autotuner import AutoTuner as FlashInferAutoTuner
-    from flashinfer.autotuner import autotune as flashinfer_autotune
-except Exception:
-    FlashInferAutoTuner = None
-    flashinfer_autotune = None
 
 
 @dataclass(frozen=True)
@@ -355,162 +351,18 @@ class HunyuanImage3Runner(DefaultRunner):
     def _hunyuan_taylor_cache_enabled(self):
         return bool(self.config.get("use_taylor_cache", False))
 
-    @staticmethod
-    def _config_bool(value):
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in ("1", "true", "yes", "y", "on"):
-                return True
-            if lowered in ("0", "false", "no", "n", "off"):
-                return False
-        return bool(value)
-
-    def _resolve_flashinfer_autotune_mode(self):
-        mode = self.config.get("flashinfer_autotune_mode")
-        if mode is None and "flashinfer_autotune" in self.config:
-            mode = "tune" if self._config_bool(self.config.get("flashinfer_autotune")) else "off"
-        if mode is None:
-            return "off"
-        if isinstance(mode, bool):
-            return "tune" if mode else "off"
-        mode = str(mode).strip().lower()
-        bool_aliases = {
-            "1": "tune",
-            "true": "tune",
-            "yes": "tune",
-            "y": "tune",
-            "on": "tune",
-            "0": "off",
-            "false": "off",
-            "no": "off",
-            "n": "off",
-        }
-        mode = bool_aliases.get(mode, mode)
-        if mode not in ("off", "tune", "load"):
-            raise ValueError("flashinfer_autotune_mode must be one of: off, tune, load.")
-        return mode
-
-    def _parse_flashinfer_tuning_buckets(self):
-        value = self.config.get("flashinfer_tuning_buckets")
-        if value in (None, ""):
-            return None
-        if isinstance(value, int):
-            return (value,)
-        if isinstance(value, (list, tuple)):
-            buckets = tuple(int(v) for v in value if str(v).strip())
-        else:
-            buckets = tuple(int(v.strip()) for v in str(value).split(",") if v.strip())
-        if not buckets:
-            raise ValueError("flashinfer_tuning_buckets must contain at least one integer when provided.")
-        return tuple(sorted(set(buckets)))
-
-    def _flashinfer_autotune_context(self):
-        mode = self._resolve_flashinfer_autotune_mode()
-        if mode == "off":
-            return nullcontext()
-        if self.config.get("moe_impl", "eager") != "flashinfer":
-            logger.warning("flashinfer_autotune_mode is set but moe_impl is not 'flashinfer'; autotune is disabled for this run.")
-            return nullcontext()
-        if flashinfer_autotune is None:
-            raise ImportError("flashinfer_autotune_mode requires flashinfer.autotuner.autotune.")
-
-        cache_path = self.config.get("flashinfer_autotune_cache")
-        if cache_path:
-            cache_path = str(Path(cache_path).expanduser())
-            parent = Path(cache_path).parent
-            if str(parent):
-                parent.mkdir(parents=True, exist_ok=True)
-        if mode == "load" and not cache_path:
-            raise ValueError("flashinfer_autotune_mode='load' requires flashinfer_autotune_cache.")
-
-        buckets = self._parse_flashinfer_tuning_buckets()
-        round_up = self.config.get("flashinfer_autotune_round_up")
-        if round_up is not None:
-            round_up = self._config_bool(round_up)
-
-        logger.info(
-            "HunyuanImage3 FlashInfer autotune enabled: "
-            f"mode={mode}, cache={cache_path}, buckets={buckets}, round_up={round_up}, "
-            f"tune_max_num_tokens={self.config.get('flashinfer_tune_max_num_tokens', 8192)}"
+    def _build_flashinfer_autotune_controller(self):
+        sequence_parallel_active = self._sequence_parallel_enabled()
+        distributed_context = DistributedAutotuneContext(
+            coordination_required=sequence_parallel_active,
+            process_group=self._parallel_control_group() if sequence_parallel_active else None,
+            status_device_resolver=self._pipeline_latent_device if sequence_parallel_active else None,
+            is_cache_writer=self._is_output_rank() if sequence_parallel_active else False,
         )
-        # The known-good pure-CFG path lets both CFG ranks use FlashInfer's
-        # regular context independently.  Distributed coordination is needed
-        # only when sequence parallelism shards one logical forward across
-        # multiple ranks (including CFG+SP).
-        if self._sequence_parallel_enabled():
-            return self._distributed_flashinfer_autotune_context(
-                cache_path=cache_path,
-                tuning_buckets=buckets,
-                round_up=round_up,
-                tune_mode=(mode == "tune"),
-            )
-        if mode == "load" and not Path(cache_path).is_file():
-            raise FileNotFoundError(f"FlashInfer autotune cache does not exist for load mode: {cache_path}")
-        return flashinfer_autotune(
-            tune_mode=(mode == "tune"),
-            cache=cache_path,
-            tuning_buckets=buckets,
-            round_up=round_up,
+        return FlashInferAutotuneController.from_config(
+            config=self.config,
+            distributed_context=distributed_context,
         )
-
-    @contextmanager
-    def _distributed_flashinfer_autotune_context(self, cache_path, tuning_buckets, round_up, tune_mode=True):
-        if FlashInferAutoTuner is None:
-            raise ImportError("Distributed FlashInfer autotune requires flashinfer.autotuner.AutoTuner.")
-        tuner = FlashInferAutoTuner.get()
-        group = self._parallel_control_group()
-        if group is None:
-            raise RuntimeError("Distributed FlashInfer autotune requires an initialized CFG or sequence parallel group.")
-        if dist.get_backend(group) == "nccl":
-            status_device = self._pipeline_latent_device()
-            torch.cuda.set_device(status_device)
-        else:
-            status_device = torch.device("cpu")
-        load_error = None
-        if cache_path:
-            if Path(cache_path).is_file():
-                try:
-                    cache_valid = tuner.load_configs(cache_path)
-                    if not cache_valid:
-                        load_error = RuntimeError(
-                            "FlashInfer autotune cache metadata does not match this runtime; "
-                            "choose a new cache path or remove the incompatible cache."
-                        )
-                except Exception as error:
-                    load_error = error
-            elif not tune_mode:
-                load_error = FileNotFoundError(f"FlashInfer autotune cache does not exist for load mode: {cache_path}")
-        elif not tune_mode:
-            load_error = ValueError("FlashInfer load mode requires a cache path.")
-
-        load_succeeded = torch.tensor([0 if load_error is not None else 1], device=status_device, dtype=torch.int32)
-        dist.all_reduce(load_succeeded, op=dist.ReduceOp.MIN, group=group)
-        if not bool(load_succeeded.item()):
-            raise RuntimeError(f"Distributed FlashInfer autotune cache preflight failed for {cache_path}.") from load_error
-
-        with flashinfer_autotune(
-            tune_mode=tune_mode,
-            cache=None,
-            tuning_buckets=tuning_buckets,
-            round_up=round_up,
-        ):
-            yield
-
-        save_error = None
-        if tune_mode and cache_path and self._is_output_rank():
-            try:
-                tuner.save_configs(cache_path)
-            except Exception as error:
-                save_error = error
-                logger.exception(f"Failed to persist distributed FlashInfer autotune cache: {cache_path}")
-
-        save_succeeded = torch.tensor([0 if save_error is not None else 1], device=status_device, dtype=torch.int32)
-        source_rank = dist.get_global_rank(group, 0)
-        dist.broadcast(save_succeeded, src=source_rank, group=group)
-        if not bool(save_succeeded.item()):
-            raise RuntimeError(f"Distributed FlashInfer autotune cache could not be saved to {cache_path}.") from save_error
 
     def _sequence_parallel_enabled(self):
         return bool(
@@ -1291,8 +1143,10 @@ class HunyuanImage3Runner(DefaultRunner):
             dynamic_ncols=True,
             disable=bool(self.config.get("disable_progress_bar", False)) or not self._is_output_rank(),
         )
-        with self._flashinfer_autotune_context():
+        autotune_controller = self._build_flashinfer_autotune_controller()
+        with autotune_controller.context():
             for step_index, timestep in enumerate(denoise_steps):
+                # ==================== CFG serial Processing ====================
                 if cfg_mode == "serial":
                     cond_model_inputs = self._build_denoise_model_inputs(
                         serial_branch_inputs[0],
@@ -1314,9 +1168,17 @@ class HunyuanImage3Runner(DefaultRunner):
                     )
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=latents.device.type == "cuda"):
                         prediction = self.model.infer_cfg_serial(cond_model_inputs, uncond_model_inputs)["diffusion_prediction"].to(latents.device)
-                else:
-                    cfg_factor = 2 if cfg_mode == "batch" else 1
-                    latent_model_input = torch.cat([latents] * cfg_factor) if cfg_factor > 1 else latents
+
+                elif cfg_mode == "batch":
+                    # ==================== CFG Batch Processing ====================
+                    # prepared_inputs 中是 packed CFG batch：
+                    #   batch[0] = conditional
+                    #   batch[1] = unconditional
+                    #
+                    # latents 原本是 batch=1，需要复制为 batch=2，
+                    # 让 cond/uncond 在一次 transformer forward 中完成。
+                    latent_model_input = torch.cat([latents, latents], dim=0)
+
                     model_inputs = self._build_denoise_model_inputs(
                         prepared_inputs,
                         latent_model_input,
@@ -1326,19 +1188,74 @@ class HunyuanImage3Runner(DefaultRunner):
                         kv_states[0],
                         guidance_scale,
                     )
+
                     if taylor_cache_dic is not None:
                         taylor_cache_dic["current_step"] = step_index
                         model_inputs["cache_dic"] = taylor_cache_dic
 
-                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=latents.device.type == "cuda"):
-                        prediction = self.model.infer(model_inputs)["diffusion_prediction"].to(latents.device)
+                    with torch.autocast(
+                        device_type="cuda",
+                        dtype=torch.bfloat16,
+                        enabled=latents.device.type == "cuda",
+                    ):
+                        prediction = self.model.infer(model_inputs)[
+                            "diffusion_prediction"
+                        ].to(latents.device)
 
-                    if cfg_mode == "batch":
-                        pred_cond, pred_uncond = prediction.chunk(2)
-                        if hasattr(self.model, "combine_cfg_predictions"):
-                            prediction = self.model.combine_cfg_predictions(pred_cond, pred_uncond)
-                        else:
-                            prediction = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
+                    # Transformer 返回 batch=2 prediction，
+                    # 在 runner 中拆分并完成 CFG guidance。
+                    pred_cond, pred_uncond = prediction.chunk(2, dim=0)
+
+                    if hasattr(self.model, "combine_cfg_predictions"):
+                        prediction = self.model.combine_cfg_predictions(
+                            pred_cond,
+                            pred_uncond,
+                        )
+                    else:
+                        prediction = pred_uncond + guidance_scale * (
+                            pred_cond - pred_uncond
+                        )
+
+                else:
+                    # ==================== CFG Parallel Processing ====================
+                    # cfg_mode == "parallel" 时：
+                    #   prepared_inputs 已经按照 cfg_p_rank 切成 batch=1
+                    #   cfg rank 0 负责 conditional
+                    #   cfg rank 1 负责 unconditional
+                    #
+                    # cfg_mode == "none" 也会复用此单 batch forward 路径。
+                    latent_model_input = latents
+
+                    model_inputs = self._build_denoise_model_inputs(
+                        prepared_inputs,
+                        latent_model_input,
+                        timestep,
+                        step_index,
+                        use_kv_cache,
+                        kv_states[0],
+                        guidance_scale,
+                    )
+
+                    # parallel 模式前面已经禁止 Taylor cache；
+                    # 这里保留判断是为了兼容 cfg_mode == "none"。
+                    if taylor_cache_dic is not None:
+                        taylor_cache_dic["current_step"] = step_index
+                        model_inputs["cache_dic"] = taylor_cache_dic
+
+                    with torch.autocast(
+                        device_type="cuda",
+                        dtype=torch.bfloat16,
+                        enabled=latents.device.type == "cuda",
+                    ):
+                        prediction = self.model.infer(model_inputs)[
+                            "diffusion_prediction"
+                        ].to(latents.device)
+
+                    # CFG parallel 不需要在 runner 中 chunk/combine。
+                    # model.infer() 内部已经通过 cfg_p_group：
+                    #   1. all-gather cond/uncond prediction
+                    #   2. 完成 CFG guidance
+                    # 最终返回的 prediction 已经是 guided prediction。
 
                 prediction = self._broadcast_parallel_tensor(prediction)
                 sigma = self.scheduler.sigmas[step_index].to(latents.device)
