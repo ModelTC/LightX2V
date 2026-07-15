@@ -121,6 +121,7 @@ def main():
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
+    parser.add_argument("--warmup", action="store_true", help="Warm up the model before inference. Disabled by default.")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")
 
@@ -271,6 +272,7 @@ def main():
 
     # set config
     config = set_config(args)
+    config["warmup"] = args.warmup
     # init input_info
     input_info = init_empty_input_info(args.task, args.support_tasks)
 
