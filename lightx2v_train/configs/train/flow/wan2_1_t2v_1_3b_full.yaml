@@ -1,6 +1,6 @@
 model:
     name: wan_t2v
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
+    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -31,8 +31,8 @@ data:
     train:
         name: video_dataset
         data_path:
-            - /data/nvme5/gushiqiao/datatets/OpenVid-1M.csv
-        video_root: /data/nvme5/gushiqiao/datatets/video
+            - /path/to/datasets/OpenVid-1M.csv
+        video_root: /path/to/datasets/video
         video_column: video
         prompt_column: caption
         height: 480
@@ -52,7 +52,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+            - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 2
         batch_size: 1
         num_workers: 0

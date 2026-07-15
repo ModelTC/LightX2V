@@ -32,8 +32,17 @@ def _torch_default_sdpa_priority() -> list[SDPBackend]:
 memory_efficient_attention = None
 flash_attn_interface = None
 flash_attn_4_func = None
+flex_attention_autotuned = flex_attention
+flex_attention_default = flex_attention
 try:
-    flex_attention = torch.compile(flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
+    flex_attention_autotuned = torch.compile(flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
+except Exception:
+    pass
+try:
+    # LTX cross-attention has large rectangular audio/video sequence shapes.
+    # Avoid per-rank kernel benchmarking for this path while FSDP collectives
+    # are queued; square self-attention keeps the same autotuned path as WAN.
+    flex_attention_default = torch.compile(flex_attention, dynamic=False, mode="default")
 except Exception:
     pass
 try:
@@ -323,7 +332,15 @@ def _sdpa_shaped(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Ten
     return out.transpose(1, 2)
 
 
-def _flex_attention_flat(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int, block_mask: BlockMask) -> torch.Tensor:
+def _flex_attention_flat(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    heads: int,
+    block_mask: BlockMask,
+    *,
+    use_autotune: bool,
+) -> torch.Tensor:
     q = _heads_view(q, heads)
     k = _heads_view(k, heads)
     v = _heads_view(v, heads)
@@ -336,7 +353,8 @@ def _flex_attention_flat(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, head
         pad_shape = (k.shape[0], kv_padded_length, k.shape[2], k.shape[3])
         k = torch.cat([k, torch.zeros(pad_shape, device=k.device, dtype=k.dtype)], dim=1)
         v = torch.cat([v, torch.zeros(pad_shape, device=v.device, dtype=v.dtype)], dim=1)
-    out = flex_attention(query=q.transpose(1, 2), key=k.transpose(1, 2), value=v.transpose(1, 2), block_mask=block_mask)
+    flex_fn = flex_attention_autotuned if use_autotune else flex_attention_default
+    out = flex_fn(query=q.transpose(1, 2), key=k.transpose(1, 2), value=v.transpose(1, 2), block_mask=block_mask)
     if q_padded_length > 0:
         out = out[:, :, :-q_padded_length]
     return out.transpose(1, 2).flatten(2)
@@ -575,7 +593,7 @@ class Attention(torch.nn.Module):
                 if isinstance(out, tuple):
                     out, cache_update_info = out
             elif isinstance(mask, BlockMask):
-                out = _flex_attention_flat(q, k, v, self.heads, mask)
+                out = _flex_attention_flat(q, k, v, self.heads, mask, use_autotune=is_self_attention)
             elif mask is None:
                 out = self.attention_function(q, k, v, self.heads)  # (B, T, H*D)
             else:

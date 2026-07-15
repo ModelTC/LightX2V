@@ -1,6 +1,6 @@
 model:
     name: wan_t2v_14b
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-14B/
+    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-14B/
     causal: true
     max_sequence_length: 512
     running_dtype: bf16
@@ -31,7 +31,7 @@ distributed:
 data:
     train:
         name: latent_dataset
-        data_path: /data/nvme5/gushiqiao/datatets/causal_forcing_data/dataset/clean_data/
+        data_path: /path/to/datasets/causal_forcing_data/dataset/clean_data/
         dataset_repeat: 1
         batch_size: 1
         num_workers: 8
@@ -41,7 +41,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+            - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0

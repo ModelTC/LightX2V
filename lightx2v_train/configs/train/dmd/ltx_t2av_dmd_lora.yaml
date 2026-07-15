@@ -1,7 +1,7 @@
 model:
     name: ltx_t2av
-    pretrained_model_name_or_path: /data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
-    text_encoder_path: /data/nvme0/gushiqiao/models/official_models/LTX-2
+    pretrained_model_name_or_path: /path/to/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
+    text_encoder_path: /path/to/models/LTX-2
     running_dtype: bf16
     transformer_param_dtype: bf16
     embeddings_dtype: bf16
@@ -12,10 +12,10 @@ model:
     load_text_encoder: false
     fake:
         name: ltx_t2av
-        pretrained_model_name_or_path: /data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
+        pretrained_model_name_or_path: /path/to/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
     teacher:
         name: ltx_t2av
-        pretrained_model_name_or_path: /data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
+        pretrained_model_name_or_path: /path/to/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
         transformer_param_dtype: bf16
 
 distributed:
@@ -39,7 +39,7 @@ distributed:
 data:
     train:
         name: latent_dataset
-        data_path: /data/nvme5/gushiqiao/datatets/x2v_online/lightx2v_ltx_t2av/prompt_cache
+        data_path: /path/to/datasets/x2v_online/lightx2v_ltx_t2av/prompt_cache
         batch_size: 1
         num_workers: 4
         pin_memory: true
@@ -105,7 +105,7 @@ training:
         guidance_scale: 3.0
         negative_prompt: " "
         cfg_norm: none
-    output_dir: /data/nvme5/gushiqiao/codes/LightX2V/lightx2v_train/output_train/ltx_t2av_dmd_lora
+    output_dir: /path/to/LightX2V/lightx2v_train/output_train/ltx_t2av_dmd_lora
 
 inference:
     method: none

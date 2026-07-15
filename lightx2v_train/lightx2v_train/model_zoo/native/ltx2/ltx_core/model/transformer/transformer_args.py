@@ -2,6 +2,7 @@ from dataclasses import dataclass, replace
 
 import torch
 from torch.nn.attention.flex_attention import BlockMask
+from torch.utils import _pytree
 
 from ltx_core.guidance.perturbations import BatchedPerturbationConfig, PerturbationType
 from ltx_core.model.transformer.adaln import AdaLayerNormSingle
@@ -38,6 +39,11 @@ class TransformerArgs:
     self_attn_all_perturbed: bool = False
     cross_attn_perturbation_mask: torch.Tensor | None = None
     cross_attn_skip_all: bool = False
+
+
+# FSDP2 locates tensors in module outputs through pytree flattening before
+# registering its pre-backward all-gather hooks.
+_pytree.register_dataclass(TransformerArgs)
 
 
 class BlockPerturbationsProcessor:

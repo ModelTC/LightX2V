@@ -408,19 +408,23 @@ class LTXModel(torch.nn.Module):
 
             if self._enable_gradient_checkpointing and self.training:
                 checkpoint_tensors = []
+                video_template = None
+                audio_template = None
                 if video is not None:
                     checkpoint_tensors.append(video.x)
+                    video_template = replace(video, x=None)
                 if audio is not None:
                     checkpoint_tensors.append(audio.x)
+                    audio_template = replace(audio, x=None)
 
                 video_kv_cache = kv_cache["video"][block_idx] if kv_cache is not None and kv_cache.get("video") is not None else None
                 audio_kv_cache = kv_cache["audio"][block_idx] if kv_cache is not None and kv_cache.get("audio") is not None else None
 
                 def block_forward(
-                    *args,
+                    *tensor_args,
                     block=block,
-                    base_video=video,
-                    base_audio=audio,
+                    video_template=video_template,
+                    audio_template=audio_template,
                     video_kv_cache=video_kv_cache,
                     audio_kv_cache=audio_kv_cache,
                     video_current_start=video_current_start,
@@ -429,13 +433,13 @@ class LTXModel(torch.nn.Module):
                     detach_cache_updates=detach_cache_updates,
                 ):
                     arg_idx = 0
-                    video_args = base_video
-                    audio_args = base_audio
+                    video_args = video_template
+                    audio_args = audio_template
                     if video_args is not None:
-                        video_args = replace(video_args, x=args[arg_idx])
+                        video_args = replace(video_args, x=tensor_args[arg_idx])
                         arg_idx += 1
                     if audio_args is not None:
-                        audio_args = replace(audio_args, x=args[arg_idx])
+                        audio_args = replace(audio_args, x=tensor_args[arg_idx])
                     return block(
                         video=video_args,
                         audio=audio_args,
@@ -447,7 +451,18 @@ class LTXModel(torch.nn.Module):
                         detach_cache_update=detach_cache_updates,
                     )
 
-                block_out = torch.utils.checkpoint.checkpoint(block_forward, *checkpoint_tensors, use_reentrant=False)
+                has_block_mask = any(
+                    isinstance(mask, BlockMask)
+                    for args in (video, audio)
+                    if args is not None
+                    for mask in (args.self_attention_mask, args.cross_attention_mask)
+                )
+                with torch.utils.checkpoint.set_checkpoint_early_stop(not has_block_mask):
+                    block_out = torch.utils.checkpoint.checkpoint(
+                        block_forward,
+                        *checkpoint_tensors,
+                        use_reentrant=False,
+                    )
             else:
                 block_out = block(
                     video=video,
@@ -683,10 +698,13 @@ class LTXModel(torch.nn.Module):
             kv_is_noisy = kv_idx >= clean_k_length
             q_block = all_query_block_ids[q_idx]
             kv_block = all_key_block_ids[kv_idx]
-            clean_to_clean = (~q_is_noisy) & (~kv_is_noisy) & (kv_block <= q_block)
-            noisy_to_clean = q_is_noisy & (~kv_is_noisy) & (kv_block < q_block)
-            noisy_to_noisy = q_is_noisy & kv_is_noisy & (kv_block == q_block)
-            return is_real_q & is_real_k & (clean_to_clean | noisy_to_clean | noisy_to_noisy)
+            same_stream = (q_is_noisy & kv_is_noisy) | ((~q_is_noisy) & (~kv_is_noisy))
+            same_block = q_block == kv_block
+            # AR inference keeps independent video/audio self-attention caches;
+            # A2V and V2A attention only exchange the current chunk. Restricting
+            # cross attention to the same stream and block makes parallel TF
+            # expose exactly that cross-modal context.
+            return is_real_q & is_real_k & same_stream & same_block
 
         return create_block_mask(
             attention_mask,

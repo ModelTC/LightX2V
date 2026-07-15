@@ -1,6 +1,6 @@
 model:
     name: wan_ti2v_5b_ar
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B
+    pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
     latent_channels: 48
     max_sequence_length: 512
     running_dtype: bf16
@@ -26,14 +26,14 @@ model:
         - 2
     fake:
         name: wan_ti2v_5b
-        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B
+        pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
         transformer_param_dtype: bf16
     teacher:
         name: wan_ti2v_5b
-        pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B
+        pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
         transformer_param_dtype: bf16
     student:
-        checkpoint_path: /data/nvme4/gushiqiao/new/LightX2V/lightx2v_train/output_train/wan2_2_ti2v_5b_tf_cache_96f_sp4/checkpoint-000005000
+        checkpoint_path: /path/to/LightX2V/lightx2v_train/output_train/wan2_2_ti2v_5b_tf_cache_96f_sp4/checkpoint-000005000
         checkpoint_strict: true
 
 distributed:
@@ -58,7 +58,7 @@ data:
     train:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/Causal-Forcing/prompts/vidprom_filtered_extended.txt
+            - /path/to/prompts/vidprom_filtered_extended.txt
         batch_size: 1
         num_workers: 8
         pin_memory: true
@@ -67,7 +67,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+            - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0

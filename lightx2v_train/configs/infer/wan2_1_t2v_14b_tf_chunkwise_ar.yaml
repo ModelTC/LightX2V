@@ -1,6 +1,6 @@
 model:
     name: wan_t2v_14b
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-14B/
+    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-14B/
     checkpoint_path: ./output_train/wan2_1_t2v_14b_tf_chunkwise_full/checkpoint-000005000
     checkpoint_strict: true
     causal: true
@@ -36,7 +36,7 @@ data:
         name: latent_dataset
         format: prompt
         data_path:
-            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+            - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0

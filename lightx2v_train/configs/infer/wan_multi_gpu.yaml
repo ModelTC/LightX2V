@@ -1,6 +1,6 @@
 model:
     name: wan_ti2v_5b
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/wan2.2/Wan2.2-TI2V-5B
+    pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: bf16
@@ -33,7 +33,7 @@ data:
         name: latent_dataset
         format: prompt
         data_path:
-            - /data/nvme4/gushiqiao/new/wan_t2v_prompts.txt
+            - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 2
         batch_size: 1
         num_workers: 0

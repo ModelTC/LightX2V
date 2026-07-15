@@ -1,6 +1,6 @@
 model:
     name: ltx_t2av
-    pretrained_model_name_or_path: /data/nvme4/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
+    pretrained_model_name_or_path: /path/to/models/ltx-2.3/ltx-2.3-22b-dev.safetensors
     running_dtype: bf16
     transformer_param_dtype: bf16
     embeddings_dtype: bf16
@@ -28,7 +28,7 @@ distributed:
 data:
     train:
         name: latent_dataset
-        data_path: /data/nvme2/gushiqiao/datatets/lightx2v_ltx_t2av/.precomputed/metadata.jsonl
+        data_path: /path/to/datasets/lightx2v_ltx_t2av/.precomputed/metadata.jsonl
         dataset_repeat: 1
         batch_size: 1
         num_workers: 4

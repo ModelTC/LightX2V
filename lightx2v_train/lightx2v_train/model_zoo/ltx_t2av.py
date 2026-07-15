@@ -33,6 +33,7 @@ class LTX2T2AVModel(BaseModel):
     def load_components(self, transformer_only=False, reference_model=None):
         model_config = self.config["model"]
         model_path = model_config["pretrained_model_name_or_path"]
+        self._fsdp2_activation_checkpointing = False
 
         self.transformer_param_dtype = get_running_dtype(model_config.get("transformer_param_dtype", "bf16"))
         self.embeddings_dtype = get_running_dtype(model_config.get("embeddings_dtype", "bf16"))
@@ -188,10 +189,30 @@ class LTX2T2AVModel(BaseModel):
         self._infer_lora_adapter_name = adapter_name
 
     def enable_gradient_checkpointing(self):
+        if self._fsdp2_activation_checkpointing:
+            return
         if hasattr(self.denoiser_module(), "set_gradient_checkpointing"):
             self.denoiser_module().set_gradient_checkpointing(True)
 
+    def _wrap_transformer_blocks_for_fsdp_checkpointing(self):
+        if self._fsdp2_activation_checkpointing:
+            return
+
+        from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import CheckpointImpl, checkpoint_wrapper
+
+        blocks = self.transformer.transformer_blocks
+        for block_idx, block in enumerate(blocks):
+            blocks[block_idx] = checkpoint_wrapper(
+                block,
+                checkpoint_impl=CheckpointImpl.NO_REENTRANT,
+            )
+        self._fsdp2_activation_checkpointing = True
+        logger.info("Enabled FSDP2 activation checkpoint wrappers for {} LTX2 transformer blocks", len(blocks))
+
     def fsdp2_shard_plan(self, fsdp_config):
+        training_config = self.config.get("training", {})
+        if training_config.get("gradient_checkpointing", True):
+            self._wrap_transformer_blocks_for_fsdp_checkpointing()
         reshard_config = fsdp_config.get(
             "reshard_after_forward",
             {

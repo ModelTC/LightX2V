@@ -1,8 +1,8 @@
 model:
     name: wan_t2v
-    pretrained_model_name_or_path: /data/nvme0/gushiqiao/models/official_models/Wan2.1-T2V-1.3B/
+    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
     # May be either a checkpoint directory containing model_state.pt or the model_state.pt file itself.
-    checkpoint_path: /data/nvme4/gushiqiao/new/Causal-Forcing/checkpoints/chunkwise/ar_diffusion.pt
+    checkpoint_path: /path/to/checkpoints/chunkwise/ar_diffusion.pt
     checkpoint_strict: true
     causal: true
     max_sequence_length: 512
