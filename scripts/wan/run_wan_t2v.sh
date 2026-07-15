@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path="/data/nvme0/lhd_codes/LightX2V"
-model_path="/data/nvme0/models/Wan-AI/Wan2.1-T2V-1.3B"
+lightx2v_path=/data/nvme1/wushuo/LightX2V
+model_path=/data/nvme1/wushuo/hf_models/models/Wan2.1-T2V-1.3B
 
 export CUDA_VISIBLE_DEVICES=0
 
