@@ -2,7 +2,6 @@ import json
 
 import safetensors
 import torch
-
 from ltx_core.loader.primitives import StateDict, StateDictLoader
 from ltx_core.loader.sd_ops import SDOps
 

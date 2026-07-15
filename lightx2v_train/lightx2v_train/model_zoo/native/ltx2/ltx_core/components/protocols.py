@@ -1,7 +1,6 @@
 from typing import Protocol, Tuple
 
 import torch
-
 from ltx_core.types import AudioLatentShape, VideoLatentShape
 
 

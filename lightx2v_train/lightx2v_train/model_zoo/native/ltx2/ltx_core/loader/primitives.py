@@ -4,15 +4,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, TypeVar
 
 import torch
-
 from ltx_core.loader.module_ops import ModuleOps
 from ltx_core.loader.sd_ops import SDOps
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
-
     from ltx_core.loader.fuse_loras import FuseRule
     from ltx_core.loader.registry import Registry
+    from typing_extensions import Self
 
 BuiltType = TypeVar("BuiltType", covariant=True)  # noqa: PLC0105
 

@@ -37,15 +37,14 @@ from typing import TYPE_CHECKING
 
 import torch
 from einops import rearrange
-from torch import nn
-from torch.nn import functional as F
-
 from ltx_core.loader.module_ops import ModuleOps
 from ltx_core.model.common.normalization import PixelNorm
 from ltx_core.model.video_vae.convolution import CausalConv3d
 from ltx_core.model.video_vae.ops import unpatchify
 from ltx_core.model.video_vae.resnet import ResnetBlock3D, UNetMidBlock3D
 from ltx_core.model.video_vae.sampling import DepthToSpaceUpsample
+from torch import nn
+from torch.nn import functional as F
 
 if TYPE_CHECKING:
     from ltx_core.model.video_vae.video_vae import VideoDecoder

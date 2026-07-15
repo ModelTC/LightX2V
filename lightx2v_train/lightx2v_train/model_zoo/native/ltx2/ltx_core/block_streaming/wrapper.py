@@ -6,10 +6,9 @@ import itertools
 from typing import Any
 
 import torch
-from torch import nn
-
 from ltx_core.block_streaming.provider import WeightsProvider
 from ltx_core.block_streaming.utils import assign_tensor_to_module
+from torch import nn
 
 
 class BlockStreamingWrapper(nn.Module):

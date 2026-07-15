@@ -17,10 +17,9 @@ from __future__ import annotations
 from typing import Any
 
 import torch
-from torch import nn
-
 from ltx_core.guidance.perturbations import BatchedPerturbationConfig
 from ltx_core.model.transformer.modality import Modality
+from torch import nn
 
 
 def _split_perturbations(config: BatchedPerturbationConfig, sizes: list[int]) -> list[BatchedPerturbationConfig]:

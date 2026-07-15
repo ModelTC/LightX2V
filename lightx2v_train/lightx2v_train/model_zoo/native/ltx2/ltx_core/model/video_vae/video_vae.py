@@ -3,8 +3,6 @@ from typing import Any, Callable, Iterator, List, Tuple
 
 import torch
 from einops import rearrange
-from torch import nn
-
 from ltx_core.model.common.normalization import PixelNorm
 from ltx_core.model.transformer.timestep_embedding import PixArtAlphaCombinedTimestepSizeEmbeddings
 from ltx_core.model.video_vae.convolution import make_conv_nd
@@ -31,6 +29,7 @@ from ltx_core.tiling import (
     split_temporal_causal as split_in_temporal,
 )
 from ltx_core.types import VIDEO_SCALE_FACTORS, SpatioTemporalScaleFactors, VideoLatentShape
+from torch import nn
 
 logger: logging.Logger = logging.getLogger(__name__)
 

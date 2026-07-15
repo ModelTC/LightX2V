@@ -5,8 +5,6 @@ import logging
 from typing import TYPE_CHECKING, Final, Generic
 
 import torch
-from torch import nn
-
 from ltx_core.loader.fuse_loras import FuseRule, apply_loras, bf16_fuse_rule
 from ltx_core.loader.helpers import create_meta_model, load_state_dict, read_model_config
 from ltx_core.loader.module_ops import ModuleOps
@@ -22,6 +20,7 @@ from ltx_core.loader.registry import DummyRegistry, Registry
 from ltx_core.loader.sd_ops import SDOps
 from ltx_core.loader.sft_loader import SafetensorsModelStateDictLoader
 from ltx_core.model.model_protocol import ModelConfigurator, ModelType
+from torch import nn
 
 if TYPE_CHECKING:
     from typing_extensions import Self

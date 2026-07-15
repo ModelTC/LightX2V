@@ -3,7 +3,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 import torch
-
 from ltx_core.components.protocols import GuiderProtocol
 
 

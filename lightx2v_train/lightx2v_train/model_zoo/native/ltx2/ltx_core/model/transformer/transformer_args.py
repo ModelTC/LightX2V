@@ -1,9 +1,6 @@
 from dataclasses import dataclass, replace
 
 import torch
-from torch.nn.attention.flex_attention import BlockMask
-from torch.utils import _pytree
-
 from ltx_core.guidance.perturbations import BatchedPerturbationConfig, PerturbationType
 from ltx_core.model.transformer.adaln import AdaLayerNormSingle
 from ltx_core.model.transformer.modality import Modality
@@ -13,6 +10,8 @@ from ltx_core.model.transformer.rope import (
     generate_freq_grid_pytorch,
     precompute_freqs_cis,
 )
+from torch.nn.attention.flex_attention import BlockMask
+from torch.utils import _pytree
 
 
 @dataclass(frozen=True)

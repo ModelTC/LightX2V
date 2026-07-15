@@ -1,9 +1,8 @@
 from typing import NamedTuple
 
 import torch
-from torch import nn
-
 from ltx_core.text_encoders.gemma.embeddings_connector import Embeddings1DConnector
+from torch import nn
 
 
 class EmbeddingsProcessorOutput(NamedTuple):

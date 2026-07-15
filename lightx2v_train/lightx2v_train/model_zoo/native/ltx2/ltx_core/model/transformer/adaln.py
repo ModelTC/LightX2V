@@ -1,7 +1,6 @@
 from typing import Optional, Tuple
 
 import torch
-
 from ltx_core.model.transformer.timestep_embedding import PixArtAlphaCombinedTimestepSizeEmbeddings
 
 # Number of AdaLN modulation parameters per transformer block.

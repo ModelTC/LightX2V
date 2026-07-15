@@ -1,5 +1,4 @@
 import torch
-
 from ltx_core.components.protocols import DiffusionStepProtocol
 from ltx_core.utils import to_velocity
 

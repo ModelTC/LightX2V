@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field, replace
 
 import torch
-
 from ltx_core.model.transformer.adaln import adaln_embedding_coefficient
 from ltx_core.model.transformer.attention import (
     Attention,

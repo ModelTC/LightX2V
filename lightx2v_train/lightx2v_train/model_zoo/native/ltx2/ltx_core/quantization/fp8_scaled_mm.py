@@ -3,14 +3,13 @@ import struct
 from typing import Callable
 
 import torch
-from torch import nn
-
 from ltx_core.loader.fuse_loras import FuseRule, bf16_fuse_rule
 from ltx_core.loader.module_ops import ModuleOps
 from ltx_core.loader.primitives import StateDict
 from ltx_core.model.transformer import LTXModel
 from ltx_core.quantization.policy import QuantizationPolicy
 from ltx_core.quantization.trtllm_scaled_usable import trtllm_scaled_mm_usable
+from torch import nn
 
 
 def _read_safetensors_dtypes(path: str) -> dict[str, str]:

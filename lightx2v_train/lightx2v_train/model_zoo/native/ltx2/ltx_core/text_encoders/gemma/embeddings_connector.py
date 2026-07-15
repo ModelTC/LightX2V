@@ -1,5 +1,4 @@
 import torch
-
 from ltx_core.model.model_protocol import ModelConfigurator
 from ltx_core.model.transformer.attention import Attention
 from ltx_core.model.transformer.feed_forward import FeedForward

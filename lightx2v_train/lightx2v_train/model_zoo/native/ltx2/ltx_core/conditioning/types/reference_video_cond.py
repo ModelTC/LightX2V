@@ -1,7 +1,6 @@
 """Reference video conditioning for IC-LoRA inference."""
 
 import torch
-
 from ltx_core.components.patchifiers import get_pixel_coords
 from ltx_core.conditioning.item import ConditioningItem
 from ltx_core.conditioning.mask_utils import update_attention_mask

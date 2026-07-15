@@ -4,7 +4,6 @@ from functools import lru_cache
 import numpy
 import scipy
 import torch
-
 from ltx_core.components.protocols import SchedulerProtocol
 
 BASE_SHIFT_ANCHOR = 1024

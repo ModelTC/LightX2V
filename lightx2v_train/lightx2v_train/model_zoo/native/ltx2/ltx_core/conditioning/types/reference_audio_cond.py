@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import torch
-
 from ltx_core.conditioning.mask_utils import update_attention_mask
 from ltx_core.tools import LatentTools
 from ltx_core.types import LatentState

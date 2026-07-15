@@ -2,8 +2,6 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 import torch
-from torch._prims_common import DeviceLikeType
-
 from ltx_core.components.patchifiers import (
     AudioLatentShape,
     AudioPatchifier,
@@ -13,6 +11,7 @@ from ltx_core.components.patchifiers import (
 )
 from ltx_core.components.protocols import Patchifier
 from ltx_core.types import LatentState, SpatioTemporalScaleFactors
+from torch._prims_common import DeviceLikeType
 
 DEFAULT_SCALE_FACTORS = SpatioTemporalScaleFactors.default()
 

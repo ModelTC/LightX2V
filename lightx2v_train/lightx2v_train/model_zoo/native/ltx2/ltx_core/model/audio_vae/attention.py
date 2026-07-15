@@ -1,7 +1,6 @@
 from enum import Enum
 
 import torch
-
 from ltx_core.model.common.normalization import NormType, build_normalization_layer
 
 

@@ -1,7 +1,6 @@
 """Builder ops for swapping attention backends on a meta model before load."""
 
 import torch
-
 from ltx_core.loader.module_ops import ModuleOps
 from ltx_core.model.transformer.attention import (
     Attention,

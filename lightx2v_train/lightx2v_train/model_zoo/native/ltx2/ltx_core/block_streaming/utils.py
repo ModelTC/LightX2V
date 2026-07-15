@@ -8,9 +8,8 @@ from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 import torch
-from torch import nn
-
 from ltx_core.loader.primitives import TensorLayout
+from torch import nn
 
 FP8_DTYPES = frozenset({torch.float8_e4m3fn, torch.float8_e5m2})
 

@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING, Final, Generic
 
 import safetensors
 import torch
-from torch import nn
-
 from ltx_core.block_streaming import utils as bs_utils
 from ltx_core.block_streaming.block_fetcher import BlockFetcher
 from ltx_core.block_streaming.disk import DiskBlockReader, DiskTensorReader, LoraSource
@@ -40,6 +38,7 @@ from ltx_core.loader.registry import DummyRegistry, Registry
 from ltx_core.loader.sd_ops import SDOps
 from ltx_core.loader.sft_loader import SafetensorsModelStateDictLoader
 from ltx_core.model.model_protocol import ModelConfigurator, ModelType
+from torch import nn
 
 if TYPE_CHECKING:
     from typing_extensions import Self

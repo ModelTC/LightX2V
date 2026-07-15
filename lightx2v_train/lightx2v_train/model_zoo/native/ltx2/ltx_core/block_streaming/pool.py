@@ -6,7 +6,6 @@ from collections import deque
 from typing import Callable
 
 import torch
-
 from ltx_core.block_streaming import utils
 
 

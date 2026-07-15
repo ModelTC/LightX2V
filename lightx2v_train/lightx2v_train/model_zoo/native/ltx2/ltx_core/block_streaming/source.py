@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import NamedTuple, Protocol
 
 import torch
-
 from ltx_core.block_streaming.block_fetcher import BlockFetcher, FetchHandle
 from ltx_core.block_streaming.pool import BufferPool
 from ltx_core.block_streaming.utils import carve_buffer, layout_nbytes

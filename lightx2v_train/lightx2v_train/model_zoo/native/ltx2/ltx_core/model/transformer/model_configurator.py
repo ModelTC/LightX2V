@@ -1,5 +1,4 @@
 import torch
-
 from ltx_core.loader.sd_ops import SDOps
 from ltx_core.model.model_protocol import ModelConfigurator
 from ltx_core.model.transformer.model import LTXModel, LTXModelType

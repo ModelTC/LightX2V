@@ -1,7 +1,6 @@
 from typing import Set, Tuple
 
 import torch
-
 from ltx_core.model.audio_vae.attention import AttentionType, make_attn
 from ltx_core.model.audio_vae.causality_axis import CausalityAxis
 from ltx_core.model.audio_vae.resnet import ResnetBlock

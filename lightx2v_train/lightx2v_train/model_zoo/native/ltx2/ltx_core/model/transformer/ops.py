@@ -1,10 +1,9 @@
 from typing import List, Protocol
 
 import torch
-from torch import nn
-
 from ltx_core.model.transformer.rope import apply_rotary_emb
 from ltx_core.utils import rms_norm
+from torch import nn
 
 
 class PreAttentionCallable(Protocol):

@@ -3,7 +3,6 @@
 from dataclasses import replace
 
 import torch
-
 from ltx_core.conditioning.item import ConditioningItem
 from ltx_core.conditioning.mask_utils import update_attention_mask
 from ltx_core.tools import LatentTools

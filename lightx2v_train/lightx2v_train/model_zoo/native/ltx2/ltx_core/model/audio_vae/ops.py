@@ -1,8 +1,7 @@
 import torch
 import torchaudio
-from torch import nn
-
 from ltx_core.types import Audio
+from torch import nn
 
 
 class AudioProcessor(nn.Module):

@@ -2,7 +2,6 @@ from typing import Set, Tuple
 
 import torch
 import torch.nn.functional as F
-
 from ltx_core.components.patchifiers import AudioPatchifier
 from ltx_core.model.audio_vae.attention import AttentionType, make_attn
 from ltx_core.model.audio_vae.causal_conv_2d import make_conv2d

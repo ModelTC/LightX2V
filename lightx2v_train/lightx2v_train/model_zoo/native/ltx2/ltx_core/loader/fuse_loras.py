@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 import torch
-
 from ltx_core.loader.primitives import LoraStateDictWithStrength, StateDict
 
 

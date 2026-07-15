@@ -8,7 +8,6 @@ import threading
 from dataclasses import dataclass
 
 import torch
-
 from ltx_core.block_streaming.disk import DiskBlockReader
 
 logger = logging.getLogger(__name__)

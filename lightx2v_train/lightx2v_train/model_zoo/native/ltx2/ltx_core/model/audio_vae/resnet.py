@@ -1,7 +1,6 @@
 from typing import Tuple
 
 import torch
-
 from ltx_core.model.audio_vae.causal_conv_2d import make_conv2d
 from ltx_core.model.audio_vae.causality_axis import CausalityAxis
 from ltx_core.model.common.normalization import NormType, build_normalization_layer

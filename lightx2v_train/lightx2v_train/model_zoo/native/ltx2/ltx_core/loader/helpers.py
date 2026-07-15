@@ -5,13 +5,12 @@ from __future__ import annotations
 from typing import TypeVar
 
 import torch
-from torch import nn
-
 from ltx_core.loader.module_ops import ModuleOps
 from ltx_core.loader.primitives import StateDict, StateDictLoader
 from ltx_core.loader.registry import Registry
 from ltx_core.loader.sd_ops import SDOps
 from ltx_core.model.model_protocol import ModelConfigurator
+from torch import nn
 
 _M = TypeVar("_M", bound=nn.Module)
 

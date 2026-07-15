@@ -5,9 +5,6 @@ from enum import Enum
 from typing import Protocol
 
 import torch
-from torch.nn.attention import SDPBackend, sdpa_kernel
-from torch.nn.attention.flex_attention import BlockMask, flex_attention
-
 from ltx_core.model.transformer.ops import (
     GatedAttentionCallable,
     PreAttentionCallable,
@@ -15,6 +12,8 @@ from ltx_core.model.transformer.ops import (
     PytorchPreAttention,
 )
 from ltx_core.model.transformer.rope import LTXRopeType
+from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.nn.attention.flex_attention import BlockMask, flex_attention
 
 
 def _torch_default_sdpa_priority() -> list[SDPBackend]:

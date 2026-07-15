@@ -4,8 +4,6 @@ from dataclasses import replace
 from enum import Enum
 
 import torch
-from torch.nn.attention.flex_attention import BlockMask, create_block_mask
-
 from ltx_core.guidance.perturbations import BatchedPerturbationConfig, PerturbationType
 from ltx_core.model.model_protocol import LTXModelProtocol
 from ltx_core.model.transformer.adaln import AdaLayerNormSingle, adaln_embedding_coefficient
@@ -25,6 +23,7 @@ from ltx_core.model.transformer.transformer_args import (
     TransformerArgsPreprocessor,
 )
 from ltx_core.utils import to_denoised
+from torch.nn.attention.flex_attention import BlockMask, create_block_mask
 
 logger = logging.getLogger(__name__)
 
@@ -451,12 +450,7 @@ class LTXModel(torch.nn.Module):
                         detach_cache_update=detach_cache_updates,
                     )
 
-                has_block_mask = any(
-                    isinstance(mask, BlockMask)
-                    for args in (video, audio)
-                    if args is not None
-                    for mask in (args.self_attention_mask, args.cross_attention_mask)
-                )
+                has_block_mask = any(isinstance(mask, BlockMask) for args in (video, audio) if args is not None for mask in (args.self_attention_mask, args.cross_attention_mask))
                 with torch.utils.checkpoint.set_checkpoint_early_stop(not has_block_mask):
                     block_out = torch.utils.checkpoint.checkpoint(
                         block_forward,

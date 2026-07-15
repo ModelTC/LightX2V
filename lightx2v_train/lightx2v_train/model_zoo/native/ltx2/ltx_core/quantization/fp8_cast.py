@@ -2,7 +2,6 @@ from pathlib import Path
 
 import safetensors
 import torch
-
 from ltx_core.loader.fuse_loras import FuseRule, bf16_fuse_rule
 from ltx_core.loader.kernels import TRITON_AVAILABLE
 from ltx_core.loader.module_ops import ModuleOps
@@ -22,7 +21,6 @@ def fused_add_round_launch(target_weight: torch.Tensor, original_weight: torch.T
             "deterministic-rounding fallback instead."
         )
     import triton  # noqa: PLC0415
-
     from ltx_core.loader.kernels import fused_add_round_kernel  # noqa: PLC0415
 
     if original_weight.dtype == torch.float8_e4m3fn:

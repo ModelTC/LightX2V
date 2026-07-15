@@ -1,5 +1,4 @@
 import torch
-
 from ltx_core.model.transformer.gelu_approx import GELUApprox
 
 

@@ -2,7 +2,6 @@ from dataclasses import replace
 from typing import Protocol
 
 import torch
-
 from ltx_core.types import LatentState
 
 

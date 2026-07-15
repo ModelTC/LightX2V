@@ -3,7 +3,6 @@ from typing import Optional, Tuple
 
 import einops
 import torch
-
 from ltx_core.components.protocols import Patchifier
 from ltx_core.types import AudioLatentShape, SpatioTemporalScaleFactors, VideoLatentShape
 
