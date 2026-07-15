@@ -33,8 +33,7 @@ distributed:
 
 data:
     val:
-        name: latent_dataset
-        format: prompt
+        name: prompt_dataset
         data_path:
             - /path/to/wan_t2v_prompts.txt
         max_samples: 1
