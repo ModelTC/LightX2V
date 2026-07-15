@@ -405,7 +405,6 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
-        self.reset_infer_states()
         kv_cache = self.get_kv_cache(pre_infer_out.cache_name, dtype=pre_infer_out.x.dtype, device=pre_infer_out.x.device)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out, kv_cache)
         video_noise_pred = self.infer_video_head(weights, x, pre_infer_out).to(GET_DTYPE())

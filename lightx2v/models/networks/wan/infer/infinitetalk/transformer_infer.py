@@ -57,8 +57,8 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         self.rope_h2 = (self.class_range - self.class_interval, self.class_range)
         self.rope_bak = int(self.class_range // 2)
 
-    def reset_infer_states(self):
-        super().reset_infer_states()
+    def reset_infer_states(self, x, context):
+        super().reset_infer_states(x, context)
         self.audio_attn_cu_seqlens_q = None
         self.audio_attn_cu_seqlens_kv = None
 
@@ -134,8 +134,6 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             x_ref_attn_map = self._get_attn_map_with_target(map_q.unsqueeze(0), map_k.unsqueeze(0), pre_infer_out.grid_sizes.tuple, ref_target_masks)
 
         img_qkv_len = q.shape[0]
-        if self.self_attn_cu_seqlens_qkv is None:
-            self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
         attn_running_args = {
             "block_idx": self.block_idx,
             "scheduler": self.scheduler,
