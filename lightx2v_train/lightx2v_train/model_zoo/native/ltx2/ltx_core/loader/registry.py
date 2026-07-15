@@ -55,7 +55,7 @@ class StateDictRegistry(Registry):
     _state_dicts: dict[str, StateDict] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def _generate_id(self, paths: list[str], sd_ops: SDOps) -> str:
+    def _generate_id(self, paths: list[str], sd_ops: SDOps | None) -> str:
         m = hashlib.sha256()
         parts = [str(Path(p).resolve()) for p in paths]
         if sd_ops is not None:
