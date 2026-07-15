@@ -16,7 +16,7 @@ from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner impor
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
-from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
+from lightx2v.models.runners.ltx2.ltx2_runner import LTX2ARRunner, LTX2Runner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
@@ -99,6 +99,7 @@ def main():
             "flux2_klein",
             "flux2_dev",
             "ltx2",
+            "ltx2_ar",
             "bagel",
             "seedvr2",
             "neopp",

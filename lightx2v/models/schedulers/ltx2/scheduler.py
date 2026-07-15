@@ -373,6 +373,9 @@ class LTX2Scheduler(BaseScheduler):
     def step_pre(self, step_index):
         self.step_index = step_index
 
+    def current_sigma(self) -> torch.Tensor:
+        return self.sigmas[self.step_index]
+
     def prepare(
         self,
         seed: int,
@@ -919,14 +922,14 @@ class LTX2Scheduler(BaseScheduler):
         Multiplies the denoise mask by sigma to produce timesteps for each position
         in the latent state. Areas where the mask is 0 will have zero timesteps.
         """
-        return self.video_latent_state.denoise_mask * self.sigmas[self.step_index]
+        return self.video_latent_state.denoise_mask * self.current_sigma()
 
     def audio_timesteps_from_mask(self) -> torch.Tensor:
         """Compute timesteps from a denoise mask and sigma value.
         Multiplies the denoise mask by sigma to produce timesteps for each position
         in the latent state. Areas where the mask is 0 will have zero timesteps.
         """
-        return self.audio_latent_state.denoise_mask * self.sigmas[self.step_index]
+        return self.audio_latent_state.denoise_mask * self.current_sigma()
 
     def reset_sigmas(self, sigmas: torch.Tensor):
         self.sigmas = sigmas.to(torch.float32).to(AI_DEVICE)
@@ -934,3 +937,36 @@ class LTX2Scheduler(BaseScheduler):
 
     def reset_latents(self, video_latent: torch.Tensor):
         self.video_latent_state.latent = video_latent
+
+
+class LTX2ARScheduler(LTX2Scheduler):
+    """LTX2 scheduler variant that keeps each completed AR chunk patchified."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.context_noise = float(config.get("ar_config", {}).get("context_noise", 0.0))
+        self.is_rerun = False
+
+    def step_pre(self, step_index, is_rerun=False):
+        self.step_index = step_index
+        self.is_rerun = is_rerun
+
+    def current_sigma(self) -> torch.Tensor:
+        if not self.is_rerun:
+            return super().current_sigma()
+        return torch.as_tensor(self.context_noise, dtype=self.sigmas.dtype, device=self.sigmas.device)
+
+    def step_post(self):
+        self.v_noise_pred = self.post_process_latent(self.v_noise_pred, self.video_latent_state.denoise_mask, self.video_latent_state.clean_latent)
+        self.a_noise_pred = self.post_process_latent(self.a_noise_pred, self.audio_latent_state.denoise_mask, self.audio_latent_state.clean_latent)
+
+        sigma = self.sigmas[self.step_index]
+        sigma_next = self.sigmas[self.step_index + 1]
+        dt = sigma_next - sigma
+
+        v_velocity = self.to_velocity(self.video_latent_state.latent, sigma, self.v_noise_pred)
+        a_velocity = self.to_velocity(self.audio_latent_state.latent, sigma, self.a_noise_pred)
+        v_latent = self.video_latent_state.latent.to(torch.float32) + v_velocity.to(torch.float32) * dt
+        a_latent = self.audio_latent_state.latent.to(torch.float32) + a_velocity.to(torch.float32) * dt
+        self.video_latent_state.latent = v_latent.to(self.video_latent_state.latent.dtype)
+        self.audio_latent_state.latent = a_latent.to(self.audio_latent_state.latent.dtype)

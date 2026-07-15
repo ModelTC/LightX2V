@@ -1,3 +1,4 @@
+import json
 import os
 from contextlib import nullcontext
 
@@ -5,6 +6,7 @@ import torch
 from loguru import logger
 from peft import LoraConfig, inject_adapter_in_model
 from peft.utils import set_peft_model_state_dict
+from safetensors import safe_open
 from safetensors.torch import load_file
 
 from lightx2v_train.model_zoo.native.ltx2 import (
@@ -33,6 +35,7 @@ class LTX2T2AVModel(BaseModel):
     def load_components(self, transformer_only=False, reference_model=None):
         model_config = self.config["model"]
         model_path = model_config["pretrained_model_name_or_path"]
+        self.pretrained_model_path = os.path.abspath(os.path.expanduser(str(model_path)))
         self._fsdp2_activation_checkpointing = False
 
         self.transformer_param_dtype = get_running_dtype(model_config.get("transformer_param_dtype", "bf16"))
@@ -84,12 +87,45 @@ class LTX2T2AVModel(BaseModel):
             self.text_encoder.eval()
 
     def _load_transformer(self, model_path):
-        transformer = SingleGPUModelBuilder(
+        builder = SingleGPUModelBuilder(
             model_path=str(model_path),
             model_class_configurator=LTXModelConfigurator,
             model_sd_ops=LTXV_MODEL_COMFY_RENAMING_MAP,
-        ).build(device=self.device, dtype=self.transformer_param_dtype)
+        )
+        self.transformer_checkpoint_config = builder.model_config()
+        transformer = builder.build(device=self.device, dtype=self.transformer_param_dtype)
         return transformer.to(self.device, dtype=self.transformer_param_dtype)
+
+    def prepare_consolidated_state_dict(self, state_dict):
+        consolidated = {}
+        for key, value in state_dict.items():
+            while key.startswith("module.") or key.startswith("_fsdp_wrapped_module."):
+                key = key.split(".", 1)[1]
+            key = key.replace("._checkpoint_wrapped_module.", ".")
+            if not key.startswith("model.diffusion_model."):
+                key = f"model.diffusion_model.{key}"
+            if key in consolidated:
+                raise ValueError(f"Duplicate LTX2 consolidated checkpoint key: {key}")
+            consolidated[key] = value
+
+        if not os.path.isfile(self.pretrained_model_path):
+            raise FileNotFoundError(f"Official LTX checkpoint not found: {self.pretrained_model_path}")
+        added = 0
+        with safe_open(self.pretrained_model_path, framework="pt", device="cpu") as handle:
+            for key in handle.keys():
+                if key in consolidated:
+                    continue
+                consolidated[key] = handle.get_tensor(key).contiguous()
+                added += 1
+        logger.info("[checkpoint] added {} non-trained component tensors from {}", added, self.pretrained_model_path)
+        return consolidated
+
+    def consolidated_safetensors_metadata(self):
+        metadata = super().consolidated_safetensors_metadata()
+        checkpoint_config = getattr(self, "transformer_checkpoint_config", None)
+        if checkpoint_config:
+            metadata["config"] = json.dumps(checkpoint_config, ensure_ascii=False, separators=(",", ":"))
+        return metadata
 
     def _configure_causal_transformer(self):
         self.transformer.num_frame_per_block = self.num_frame_per_chunk
