@@ -9,9 +9,9 @@ set -e
 
 GPU_IDS="${1:-${CUDA_VISIBLE_DEVICES:-}}"
 
-export lightx2v_path="/data/nvme0/lhd_codes/LightX2V"
-export model_path="${model_path:-/data/nvme0/models/tencent/HunyuanImage-3.0}"
-export HUNYUAN_IMAGE3_REPO_PATH="${HUNYUAN_IMAGE3_REPO_PATH:-/data/nvme0/lhd_codes/HunyuanImage-3.0}"
+export lightx2v_path="${lightx2v_path:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+export model_path="${model_path:-/path/to/HunyuanImage-3.0-model}"
+export HUNYUAN_IMAGE3_REPO_PATH="${HUNYUAN_IMAGE3_REPO_PATH:-/path/to/HunyuanImage-3.0-repo}"
 export PYTHONPATH="${HUNYUAN_IMAGE3_REPO_PATH}:${PYTHONPATH:-}"
 
 if [ -n "$GPU_IDS" ]; then
