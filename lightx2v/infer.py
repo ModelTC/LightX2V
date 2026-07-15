@@ -55,21 +55,26 @@ def init_runner(config):
     runner.init_modules()
     return runner
 
+
 def distributed_barrier():
     import torch.distributed as dist
+
     if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() <= 1:
         return False
 
     from lightx2v_platform.base.global_var import AI_DEVICE
+
     if AI_DEVICE == "cuda" and torch.cuda.is_available():
         torch.cuda.synchronize()
         dist.barrier(device_ids=[torch.cuda.current_device()])
     else:
         dist.barrier()
-    
+
     from loguru import logger
+
     logger.info(f"[Barrier] synchronized all ranks")
     return True
+
 
 def main():
     parser = argparse.ArgumentParser()
