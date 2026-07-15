@@ -87,7 +87,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if (
             not self.config.get("warmup", False)
             or self.config.get("disagg_mode")
-            or self.config.get("model_cls") != "wan2.1"
+            or self.config.get("model_cls") not in ["wan2.1", "wan2.1_distill", "wan2.1_mean_flow_distill", "wan2.1_sf", "wan2.2_moe", "wan2.2", "wan2.2_moe_distill"]
             or self.config.get("task") not in ("t2v", "i2v")
             or self.config.get("feature_caching", "NoCaching") != "NoCaching"
             or any(self.config.get(key, False) for key in ("cpu_offload", "lazy_load", "unload_modules"))
