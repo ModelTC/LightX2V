@@ -366,7 +366,7 @@ def auto_calc_config(config):
     config.pop("_hunyuan_image3_cli_cache_snapshot", None)
     config.pop("_hunyuan_image3_cli_native_snapshot", None)
 
-    if config["task"] in ["i2v", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
+    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
