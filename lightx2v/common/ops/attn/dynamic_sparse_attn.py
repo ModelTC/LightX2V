@@ -28,8 +28,8 @@ except ImportError:
     magi_ffa_func = None
 
 
-@ATTN_WEIGHT_REGISTER("sla_attn")
-class SlaAttnWeight(AttnWeightTemplate):
+@ATTN_WEIGHT_REGISTER("dynamic_sparse_attn")
+class DynamicSparseAttnWeight(AttnWeightTemplate):
     sparsity_ratio = 0.8
     operator = "triton"
     per_block_mean = False
@@ -63,7 +63,7 @@ class SlaAttnWeight(AttnWeightTemplate):
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
 
-        logger.info(f"SlaAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
+        logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
 
     def apply(
         self,

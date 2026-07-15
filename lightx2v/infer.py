@@ -24,6 +24,7 @@ from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_dancer_runner import WanDancerRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_dreamzero_runner import WanDreamZeroRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_infinitetalk_runner import InfiniteTalkRunner  # noqa: F401
@@ -55,6 +56,26 @@ def init_runner(config):
     return runner
 
 
+def distributed_barrier():
+    import torch.distributed as dist
+
+    if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() <= 1:
+        return False
+
+    from lightx2v_platform.base.global_var import AI_DEVICE
+
+    if AI_DEVICE == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
+        dist.barrier(device_ids=[torch.cuda.current_device()])
+    else:
+        dist.barrier()
+
+    from loguru import logger
+
+    logger.info(f"[Barrier] synchronized all ranks")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42, help="The seed for random generator")
@@ -66,6 +87,7 @@ def main():
             "wan2.1",
             "wan2.1_distill",
             "wan2.1_mean_flow_distill",
+            "wan_dancer",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
@@ -119,6 +141,7 @@ def main():
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
+    parser.add_argument("--warmup", action="store_true", help="Warm up the model before inference. Disabled by default.")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")
 
@@ -269,6 +292,7 @@ def main():
 
     # set config
     config = set_config(args)
+    config["warmup"] = args.warmup
     # init input_info
     input_info = init_empty_input_info(args.task, args.support_tasks)
 

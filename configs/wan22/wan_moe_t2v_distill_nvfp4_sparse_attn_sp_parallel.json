@@ -2,8 +2,8 @@
     "infer_steps": 4,
     "target_video_length": 81,
     "text_len": 512,
-    "target_height": 480,
-    "target_width": 832,
+    "target_height": 720,
+    "target_width": 1280,
     "self_attn_1_type": "dynamic_sparse_attn",
     "dynamic_sparse_attn_setting": {
         "sparsity_ratio": 0.9,
@@ -32,5 +32,12 @@
     "high_noise_quantized_ckpt": "path to high_nvfp4.safetensors",
     "low_noise_quantized_ckpt": "path to low_nvfp4.safetensors",
     "high_noise_original_ckpt": null,
-    "low_noise_original_ckpt": null
+    "low_noise_original_ckpt": null,
+    "parallel": {
+        "seq_p_size": 8,
+        "seq_p_fp8_comm": true,
+        "seq_p_head_parallel": true,
+        "seq_p_tensor_fusion": true,
+        "seq_p_attn_type": "ulysses-opt"
+    }
 }
