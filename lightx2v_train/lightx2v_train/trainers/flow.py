@@ -105,6 +105,13 @@ class FlowMatchingTrainer(BaseTrainer):
                 current_lr = self.lr_scheduler.get_last_lr()[0]
                 if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
                     logger.info("[train] iter={}/{} loss={:.6f} lr={:.8f}", current_iter, max_train_iters, display_loss, current_lr)
+                    self.log_metrics(
+                        {
+                            "train/loss": display_loss,
+                            "train/lr": current_lr,
+                        },
+                        step=current_iter,
+                    )
                 running_loss = 0.0
 
                 if save_every_iters and current_iter % save_every_iters == 0:
