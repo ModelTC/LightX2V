@@ -19,6 +19,7 @@ setup(
     entry_points={
         "console_scripts": [
             "libero_node = simulator.libero_node.main:main",
+            "robotwin_node = simulator.robotwin_node.main:main",
         ],
     },
 )

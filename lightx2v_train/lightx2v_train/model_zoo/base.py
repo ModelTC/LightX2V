@@ -27,6 +27,9 @@ class BaseModel:
     def load_components(self, transformer_only=False, reference_model=None):
         raise NotImplementedError
 
+    def dmd_latent_shape(self, batch_size, height, width):
+        raise NotImplementedError(f"{self.__class__.__name__} must define dmd_latent_shape().")
+
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
 

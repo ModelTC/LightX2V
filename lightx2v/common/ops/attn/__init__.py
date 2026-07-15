@@ -2,7 +2,9 @@ from .draft_attn import DraftAttnWeight
 from .flash_attn import FlashAttn2Weight, FlashAttn3Weight, FlashAttn4Weight, SparseFlashAttn4Weight
 from .general_sparse_attn import GeneralSparseAttnWeight
 from .nbhd_attn import NbhdAttnWeight, NbhdAttnWeightFlashInfer
+from .opt_ulysses_attn import OptUlyssesAttnWeight
 from .radial_attn import RadialAttnWeight
+from .rainfusion_attn import RainfusionAttnWeight
 from .ring_attn import RingAttnWeight
 from .sage_attn import SageAttn2KInt8VFP8Weight, SageAttn2Weight, SageAttn3Weight, SparseSageAttn2Weight, SparseSageAttn3Weight
 from .sla_attn import SlaAttnWeight
