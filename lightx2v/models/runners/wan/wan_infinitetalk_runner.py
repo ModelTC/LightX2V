@@ -366,12 +366,7 @@ class InfiniteTalkRunner(WanRunner):
         first_speech = available_speeches[0]
         if audio_type == "para":
             target_len = max(speech.shape[0] for speech in available_speeches)
-            prepared = [
-                self._pad_audio_array(speech, target_len)
-                if speech is not None
-                else np.zeros(target_len, dtype=first_speech.dtype)
-                for speech in speeches
-            ]
+            prepared = [self._pad_audio_array(speech, target_len) if speech is not None else np.zeros(target_len, dtype=first_speech.dtype) for speech in speeches]
         elif audio_type == "add":
             lengths = [speech.shape[0] if speech is not None else 0 for speech in speeches]
             target_len = sum(lengths)
