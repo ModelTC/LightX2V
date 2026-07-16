@@ -151,11 +151,6 @@ class WanRunner(DisaggMixin, DefaultRunner):
         for name in ("latents", "noise_pred", "noise_pred_cond", "noise_pred_uncond", "noise_pred_guided"):
             setattr(scheduler, name, None)
 
-        for model in self.get_warmup_models():
-            model.transformer_infer.cos_sin = None
-            model.pre_infer.cos_sin = None
-            model.pre_infer.grid_sizes = (0, 0, 0)
-
     def load_transformer(self):
         wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
         lora_configs = self.config.get("lora_configs")

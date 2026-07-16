@@ -255,7 +255,6 @@ class DefaultRunner(BaseRunner):
 
         if segment_idx is not None and segment_idx == self.video_segment_num - 1:
             del self.inputs
-            torch_device_module.empty_cache()
 
         return self.model.scheduler.latents
 
@@ -267,6 +266,32 @@ class DefaultRunner(BaseRunner):
             self.config_sr["is_sr_running"] = False
 
         self.run_main(total_steps=1)
+
+    def maybe_empty_cache(self, force: bool = False) -> bool:
+        gib = 1024**3
+        min_free_bytes = float(self.config.get("empty_cache_min_free_gib", 4)) * gib
+        min_reclaimable_bytes = float(self.config.get("empty_cache_min_reclaimable_gib", 2)) * gib
+
+        free_bytes, _ = torch_device_module.mem_get_info()
+
+        if not force and free_bytes >= min_free_bytes:
+            return False
+
+        gc.collect()
+        allocated_bytes = torch_device_module.memory_allocated()
+        reserved_bytes = torch_device_module.memory_reserved()
+        reclaimable_bytes = max(reserved_bytes - allocated_bytes, 0)
+
+        if force or reclaimable_bytes >= min_reclaimable_bytes:
+            logger.info(
+                f"[Memory] Emptying device cache: free={free_bytes / gib:.2f} GiB, "
+                f"allocated={allocated_bytes / gib:.2f} GiB, reserved={reserved_bytes / gib:.2f} GiB, "
+                f"reclaimable={reclaimable_bytes / gib:.2f} GiB, force={force}"
+            )
+            torch_device_module.empty_cache()
+            return True
+
+        return False
 
     def end_run(self):
         if self.model is not None:
@@ -294,8 +319,7 @@ class DefaultRunner(BaseRunner):
             calib_path = os.path.join(os.getcwd(), "calib.pt")
             torch.save(CALIB, calib_path)
             logger.info(f"[CALIB] Saved calibration data successfully to: {calib_path}")
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
 
     def read_image_input(self, img_path):
         if isinstance(img_path, Image.Image):
@@ -358,8 +382,6 @@ class DefaultRunner(BaseRunner):
     def _run_input_encoder_local_t2v(self):
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": None,
