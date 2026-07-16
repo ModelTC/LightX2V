@@ -54,7 +54,11 @@ struct Fp4GemmSm120 {
     static constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
     // Kernel functional config
     using ElementAccumulator  = float;                                          // Element type for internal accumulation
-    using ArchTag             = cutlass::arch::Sm120;                           // Tag indicating the minimum SM that supports the intended feature
+#if defined(LIGHTX2V_THOR_NVFP4_ONLY)
+    using ArchTag             = cutlass::arch::Sm100;
+#else
+    using ArchTag             = cutlass::arch::Sm120;
+#endif
     using OperatorClass       = cutlass::arch::OpClassBlockScaledTensorOp;      // Operator class tag
 
     // Kernel Perf config

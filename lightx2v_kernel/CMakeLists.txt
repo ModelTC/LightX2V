@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22 FATAL_ERROR)
 project(lightx2v-kernel LANGUAGES CXX CUDA)
 
+option(LIGHTX2V_THOR_NVFP4_ONLY "Build only NVFP4 operators for NVIDIA Thor" OFF)
+
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/utils.cmake)
 
 # Python
@@ -71,30 +73,38 @@ set(LIGHTX2V_KERNEL_CUDA_FLAGS
 )
 
 
-list(APPEND LIGHTX2V_KERNEL_CUDA_FLAGS
-    # "-gencode=arch=compute_90,code=sm_90"
-    # "-gencode=arch=compute_90a,code=sm_90a"
-    # "-gencode=arch=compute_100,code=sm_100"
-    # "-gencode=arch=compute_100a,code=sm_100a"
-    # "-gencode=arch=compute_120,code=sm_120"
-    "-gencode=arch=compute_120a,code=sm_120a"
-)
-
-
-set(SOURCES
-    "csrc/gemm/nvfp4_scaled_mm_kernels_sm120.cu"
-    "csrc/gemm/nvfp4_quant_kernels_sm120.cu"
-    "csrc/gemm/mxfp4_quant_kernels_sm120.cu"
-    "csrc/gemm/mxfp8_quant_kernels_sm120.cu"
-    "csrc/gemm/mxfp6_quant_kernels_sm120.cu"
-    "csrc/gemm/mxfp4_scaled_mm_kernels_sm120.cu"
-    "csrc/gemm/mxfp6_mxfp8_scaled_mm_kernels_sm120.cu"
-    "csrc/gemm/mxfp8_scaled_mm_kernels_sm120.cu"
-    "csrc/kvcache/kv_dequant_cuda.cu"
-    "csrc/common_extension.cc"
-)
+if(LIGHTX2V_THOR_NVFP4_ONLY)
+    list(APPEND LIGHTX2V_KERNEL_CUDA_FLAGS
+        "-gencode=arch=compute_110a,code=sm_110a"
+    )
+    set(SOURCES
+        "csrc/gemm/nvfp4_scaled_mm_kernels_sm120.cu"
+        "csrc/gemm/nvfp4_quant_kernels_sm120.cu"
+        "csrc/common_extension.cc"
+    )
+else()
+    list(APPEND LIGHTX2V_KERNEL_CUDA_FLAGS
+        "-gencode=arch=compute_120a,code=sm_120a"
+    )
+    set(SOURCES
+        "csrc/gemm/nvfp4_scaled_mm_kernels_sm120.cu"
+        "csrc/gemm/nvfp4_quant_kernels_sm120.cu"
+        "csrc/gemm/mxfp4_quant_kernels_sm120.cu"
+        "csrc/gemm/mxfp8_quant_kernels_sm120.cu"
+        "csrc/gemm/mxfp6_quant_kernels_sm120.cu"
+        "csrc/gemm/mxfp4_scaled_mm_kernels_sm120.cu"
+        "csrc/gemm/mxfp6_mxfp8_scaled_mm_kernels_sm120.cu"
+        "csrc/gemm/mxfp8_scaled_mm_kernels_sm120.cu"
+        "csrc/kvcache/kv_dequant_cuda.cu"
+        "csrc/common_extension.cc"
+    )
+endif()
 
 Python_add_library(common_ops MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
+
+if(LIGHTX2V_THOR_NVFP4_ONLY)
+    target_compile_definitions(common_ops PRIVATE LIGHTX2V_THOR_NVFP4_ONLY=1)
+endif()
 
 message(STATUS "LIGHTX2V_KERNEL_CUDA_FLAGS: ${LIGHTX2V_KERNEL_CUDA_FLAGS}")
 
