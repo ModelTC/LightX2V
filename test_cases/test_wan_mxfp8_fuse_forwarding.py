@@ -38,7 +38,7 @@ def make_config(**overrides):
         "seq_parallel": False,
         "cpu_offload": False,
         "modulate_type": "torch",
-        "rope_type": "torch_complex_rope",
+        "rope_type": "torch",
         "dit_quant_scheme": "mxfp8",
         "mxfp8_fuse_enable": True,
         "infer_steps": 4,
