@@ -23,10 +23,6 @@ except ImportError:
 
 class BackgroundRemover:
     def __init__(self):
-        if new_session is None or remove is None:
-            raise RuntimeError(
-                "Background removal is enabled, but the optional 'rembg' dependency is unavailable. Install rembg and onnxruntime, or set 'enable_rembg' to false in the Hunyuan3D config."
-            )
         self.session = new_session()
 
     def __call__(self, image: Image.Image):

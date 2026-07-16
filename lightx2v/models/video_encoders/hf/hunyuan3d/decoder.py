@@ -97,6 +97,4 @@ class Hunyuan3DShapeVAEDecoder:
         mesh = export_to_trimesh(outputs)
         if isinstance(mesh, list):
             mesh = mesh[0]
-        if mesh is None:
-            raise RuntimeError("Hunyuan3D surface extraction failed and produced no mesh")
         return mesh

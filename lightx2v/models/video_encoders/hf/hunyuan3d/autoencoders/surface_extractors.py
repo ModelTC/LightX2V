@@ -124,8 +124,6 @@ class MCSurfaceExtractor(SurfaceExtractor):
                   box coordinates.
                 - faces (np.ndarray): Extracted mesh faces (triangles).
         """
-        if measure is None:
-            raise ImportError("Hunyuan3D marching cubes requires scikit-image. Install scikit-image==0.24.0 in the selected Python environment.") from _measure_import_error
         vertices, faces, normals, _ = measure.marching_cubes(grid_logit.cpu().numpy(), mc_level, method="lewiner")
         grid_size, bbox_min, bbox_size = self._compute_box_stat(bounds, octree_resolution)
         vertices = vertices / grid_size * bbox_size + bbox_min
