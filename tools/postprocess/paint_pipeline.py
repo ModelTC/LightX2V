@@ -116,6 +116,8 @@ def build_paint_config(
     realesrgan_ckpt_path: str | None = None,
     custom_pipeline: str | None = None,
     dino_ckpt_path: str = "facebook/dinov2-giant",
+    render_size: int = 2048,
+    texture_size: int = 4096,
 ):
     hy3dpaint_root = resolve_hy3dpaint_root(hy_repo)
     tgp = _load_texture_gen_pipeline_module(hy3dpaint_root)
@@ -128,6 +130,8 @@ def build_paint_config(
     paint_conf.realesrgan_ckpt_path = realesrgan_ckpt_path or os.path.join(hy3dpaint_root, "ckpt", "RealESRGAN_x4plus.pth")
     paint_conf.custom_pipeline = custom_pipeline or os.path.join(hy3dpaint_root, "hunyuanpaintpbr")
     paint_conf.dino_ckpt_path = dino_ckpt_path
+    paint_conf.render_size = render_size
+    paint_conf.texture_size = texture_size
     return paint_conf, tgp
 
 
@@ -143,6 +147,8 @@ class PaintPipeline:
         realesrgan_ckpt_path: str | None = None,
         custom_pipeline: str | None = None,
         dino_ckpt_path: str = "facebook/dinov2-giant",
+        render_size: int = 2048,
+        texture_size: int = 4096,
     ):
         try:
             apply_fix()
@@ -159,6 +165,8 @@ class PaintPipeline:
             realesrgan_ckpt_path=realesrgan_ckpt_path,
             custom_pipeline=custom_pipeline,
             dino_ckpt_path=dino_ckpt_path,
+            render_size=render_size,
+            texture_size=texture_size,
         )
         if not os.path.isfile(paint_conf.realesrgan_ckpt_path):
             raise FileNotFoundError(
@@ -174,6 +182,8 @@ class PaintPipeline:
             "max_num_view": max_num_view,
             "resolution": resolution,
             "device": device,
+            "render_size": render_size,
+            "texture_size": texture_size,
         }
         with _use_local_paint_weights(model_path):
             self._pipeline = tgp.Hunyuan3DPaintPipeline(paint_conf)
