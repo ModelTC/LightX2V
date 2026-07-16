@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import torch
 
+from lightx2v.utils.registry_factory import ROPE_REGISTER
+
 from .template import RopeTemplate
 
 
@@ -11,6 +13,7 @@ def _slice_freqs(freqs, start: int, end: int):
     return freqs[start:end]
 
 
+@ROPE_REGISTER("chunked_rope")
 class ChunkedRope(RopeTemplate):
     def __init__(self, inner: RopeTemplate, chunk_size: int):
         super().__init__(layout=getattr(inner, "layout", "interleaved"), compute_dtype=getattr(inner, "compute_dtype", torch.float32))

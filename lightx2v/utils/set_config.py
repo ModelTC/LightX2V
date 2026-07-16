@@ -199,7 +199,11 @@ def auto_calc_config(config):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-            if config["model_cls"] == "z_image":
+            if config["model_cls"] == "ltx2":
+                # Upstream LTX2 uses rope_type for the layout name ("split"),
+                # while LightX2V uses it as the registered RoPE implementation.
+                model_config.pop("rope_type", None)
+            elif config["model_cls"] == "z_image":
                 # https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/transformer/config.json
                 z_image_patch_size = model_config.pop("all_patch_size", [2])
                 z_image_f_patch_size = model_config.pop("all_f_patch_size", [1])

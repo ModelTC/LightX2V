@@ -259,10 +259,10 @@ class WanSelfAttention(WeightModule):
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
         self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
-        self.add_module(
-            "rope",
-            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
-        )
+        rope = ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32)
+        if config.get("rope_chunk", False):
+            rope = ROPE_REGISTER["chunked_rope"](inner=rope, chunk_size=config.get("rope_chunk_size", 100))
+        self.add_module("rope", rope)
         if config.get("causal_rope_type") is not None:
             self.add_module(
                 "causal_rope",
