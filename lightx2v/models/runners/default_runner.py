@@ -105,6 +105,7 @@ class DefaultRunner(BaseRunner):
             or self.config.get("lazy_load", False)
             or self.config.get("unload_modules", False)
             or self.config.get("cpu_offload", False)
+            or self.config.get("feature_caching", "NoCaching") != "NoCaching"
         ):
             return
 
@@ -374,14 +375,14 @@ class DefaultRunner(BaseRunner):
         vae_encode_out, latent_shape = self.run_vae_encoder(img_ori if self.vae_encoder_need_img_original else img)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output, img)
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": None,
@@ -395,8 +396,7 @@ class DefaultRunner(BaseRunner):
         vae_encode_out, latent_shape = self.run_vae_encoder(first_frame, last_frame)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output)
 
     @ProfilingContext4DebugL2("Run Encoders")
