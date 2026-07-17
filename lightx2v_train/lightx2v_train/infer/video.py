@@ -16,9 +16,10 @@ from lightx2v_train.runtime.distributed import (
 )
 from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
-from lightx2v_train.utils.constants import WAN_NEGATIVE_PROMPT
+from lightx2v_train.utils.constants import LINGBOT_VIDEO_NEGATIVE_PROMPT, WAN_NEGATIVE_PROMPT
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
+from ..model_zoo.native.lingbot_video.scheduling_flow_unipc import FlowUniPCMultistepScheduler as LingBotVideoFlowUniPCMultistepScheduler
 from ..model_zoo.native.wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from .base import BaseInferencer
 
@@ -35,6 +36,11 @@ def _target_hw_for_sample(sample, default_height, default_width):
 @INFERENCER_REGISTER("wan_t2v_14b_infer")
 @INFERENCER_REGISTER("wan_t2v_infer")
 class WanT2VInferencer(BaseInferencer):
+    negative_prompt = WAN_NEGATIVE_PROMPT
+
+    def _inference_sigmas(self, num_inference_steps):
+        return None
+
     @torch.no_grad()
     def infer(self):
         samples = self.dataloader_eval.dataset.samples
@@ -66,7 +72,7 @@ class WanT2VInferencer(BaseInferencer):
         self.enable_cfg = self.infer_config.get("enable_cfg", True)
         if self.enable_cfg:
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 5.0)
-            neg_cond = self.model.encode_prompt_condition(WAN_NEGATIVE_PROMPT)
+            neg_cond = self.model.encode_prompt_condition(self.negative_prompt)
             neg_cond = broadcast_sequence_parallel_value(neg_cond)
         else:
             self.guidance_scale = None
@@ -100,7 +106,11 @@ class WanT2VInferencer(BaseInferencer):
                 pos_cond = broadcast_sequence_parallel_value(pos_cond)
                 latent = broadcast_sequence_parallel_value(latent)
                 latent_hw = (latent.shape[-2], latent.shape[-1])
-                self.scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
+                self.scheduler.set_timesteps(
+                    num_inference_steps,
+                    sigmas=self._inference_sigmas(num_inference_steps),
+                    latent_hw=latent_hw,
+                )
                 total_steps = len(self.scheduler.infer_timesteps)
 
                 if should_log_sample:
@@ -147,6 +157,236 @@ class WanT2VInferencer(BaseInferencer):
             torch.distributed.all_reduce(saved_count_tensor, op=torch.distributed.ReduceOp.SUM)
             saved_count = saved_count_tensor.item()
         logger.info("[infer] finished saved={}", saved_count)
+        return saved_paths
+
+
+@INFERENCER_REGISTER("lingbot_video_t2v_infer")
+class LingBotVideoT2VInferencer(BaseInferencer):
+    negative_prompt = LINGBOT_VIDEO_NEGATIVE_PROMPT
+
+    def _euler_sigmas(self, num_inference_steps):
+        denoising_steps = self.infer_config.get("denoising_step_list")
+        if denoising_steps is None:
+            sigmas = torch.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps, dtype=torch.float32)
+        else:
+            if len(denoising_steps) != num_inference_steps:
+                raise ValueError(f"LingBot-Video inference.denoising_step_list length must match num_inference_steps, got {len(denoising_steps)} and {num_inference_steps}.")
+            sigmas = torch.tensor(denoising_steps, dtype=torch.float32) / self.scheduler.num_train_timesteps
+
+        if self.infer_config.get("warp_denoising_step", True):
+            shift = float(self.infer_config.get("shift", 3.0))
+            sigmas = shift * sigmas / (1.0 + (shift - 1.0) * sigmas)
+        return sigmas.tolist()
+
+    def _predict_source_flow(self, latents, timestep, condition):
+        transformer = self.model.denoiser_module()
+        try:
+            transformer_dtype = next(transformer.parameters()).dtype
+        except StopIteration:
+            transformer_dtype = torch.float32
+
+        sigma = timestep.float() / self.scheduler.num_train_timesteps
+        if transformer_dtype in {torch.bfloat16, torch.float16}:
+            sigma = sigma.to(transformer_dtype)
+        timestep_batch = (sigma * self.scheduler.num_train_timesteps).float().reshape(1).expand(latents.shape[0]).to(self.model.device)
+        prompt_embed = condition["prompt_embed"].to(device=self.model.device, dtype=transformer_dtype)
+        prompt_mask = condition["prompt_attention_mask"].to(device=self.model.device)
+        autocast_context = torch.autocast(device_type="cuda", dtype=transformer_dtype) if self.model.device.type == "cuda" and transformer_dtype in {torch.bfloat16, torch.float16} else nullcontext()
+        with autocast_context:
+            return transformer(
+                latents,
+                timestep_batch,
+                prompt_embed,
+                encoder_attention_mask=prompt_mask,
+                return_dict=False,
+            )[0].float()
+
+    @staticmethod
+    def _pad_prompt_condition(condition, target_length):
+        prompt_embed = condition["prompt_embed"]
+        prompt_mask = condition["prompt_attention_mask"]
+        pad_length = target_length - prompt_embed.shape[1]
+        if pad_length < 0:
+            raise ValueError(f"Cannot pad LingBot-Video prompt length {prompt_embed.shape[1]} to {target_length}.")
+        if pad_length == 0:
+            return prompt_embed, prompt_mask
+        embed_padding = torch.zeros(
+            prompt_embed.shape[0],
+            pad_length,
+            prompt_embed.shape[2],
+            dtype=prompt_embed.dtype,
+            device=prompt_embed.device,
+        )
+        mask_padding = torch.zeros(
+            prompt_mask.shape[0],
+            pad_length,
+            dtype=prompt_mask.dtype,
+            device=prompt_mask.device,
+        )
+        return torch.cat([prompt_embed, embed_padding], dim=1), torch.cat([prompt_mask, mask_padding], dim=1)
+
+    def _batch_cfg_condition(self, pos_cond, neg_cond):
+        target_length = max(pos_cond["prompt_embed"].shape[1], neg_cond["prompt_embed"].shape[1])
+        pos_embed, pos_mask = self._pad_prompt_condition(pos_cond, target_length)
+        neg_embed, neg_mask = self._pad_prompt_condition(neg_cond, target_length)
+        return {
+            "prompt_embed": torch.cat([pos_embed, neg_embed], dim=0),
+            "prompt_attention_mask": torch.cat([pos_mask, neg_mask], dim=0),
+        }
+
+    def _run_unipc(self, latent, pos_cond, neg_cond, num_inference_steps, generator, log_progress):
+        if self.infer_config.get("denoising_step_list") is not None:
+            raise ValueError("LingBot-Video UniPC base inference does not use denoising_step_list; remove it from inference config.")
+
+        shift = float(self.infer_config.get("shift", 3.0))
+        scheduler = LingBotVideoFlowUniPCMultistepScheduler(
+            num_train_timesteps=self.scheduler.num_train_timesteps,
+            shift=1.0,
+            use_dynamic_shifting=False,
+        )
+        scheduler.set_timesteps(num_inference_steps, device=self.model.device, shift=shift)
+        total_steps = len(scheduler.timesteps)
+        for step_idx, timestep in enumerate(scheduler.timesteps):
+            if self.enable_cfg and self.batch_cfg:
+                cfg_condition = self._batch_cfg_condition(pos_cond, neg_cond)
+                cfg_latent = torch.cat([latent, latent], dim=0)
+                flow_cond, flow_uncond = self._predict_source_flow(cfg_latent, timestep, cfg_condition).chunk(2, dim=0)
+                flow_pred = flow_uncond + self.guidance_scale * (flow_cond - flow_uncond)
+            else:
+                flow_cond = self._predict_source_flow(latent, timestep, pos_cond)
+            if self.enable_cfg and not self.batch_cfg:
+                flow_uncond = self._predict_source_flow(latent, timestep, neg_cond)
+                flow_pred = flow_uncond + self.guidance_scale * (flow_cond - flow_uncond)
+            elif not self.enable_cfg:
+                flow_pred = flow_cond
+            latent = scheduler.step(flow_pred, timestep, latent, return_dict=False, generator=generator)[0]
+            step = step_idx + 1
+            if log_progress and (step == 1 or step % self.infer_log_every_steps == 0 or step == total_steps):
+                logger.info("[lingbot-infer] step={}/{}", step, total_steps)
+        return latent
+
+    def _run_euler(self, latent, pos_cond, neg_cond, num_inference_steps, log_progress):
+        latent_hw = (latent.shape[-2], latent.shape[-1])
+        self.scheduler.set_timesteps(
+            num_inference_steps,
+            sigmas=self._euler_sigmas(num_inference_steps),
+            latent_hw=latent_hw,
+        )
+        total_steps = len(self.scheduler.infer_timesteps)
+        for step_idx, _ in enumerate(self.scheduler.infer_timesteps):
+            sigma = self.scheduler.infer_sigmas[step_idx].unsqueeze(0)
+            flow_pred = self.cfg_guided_denoise(
+                latents=latent,
+                timestep_or_sigma=sigma,
+                pos_cond=pos_cond,
+                neg_cond=neg_cond,
+            )
+            latent = self.scheduler.step(flow_pred, step_idx, latent)
+            step = step_idx + 1
+            if log_progress and (step == 1 or step % self.infer_log_every_steps == 0 or step == total_steps):
+                logger.info("[lingbot-infer] step={}/{}", step, total_steps)
+        return latent
+
+    @torch.no_grad()
+    def infer(self):
+        samples = self.dataloader_eval.dataset.samples
+        prompts = [sample["prompt"] for sample in samples]
+        rank = get_data_parallel_rank()
+        world_size = get_data_parallel_world_size()
+        sp_rank = get_sequence_parallel_rank()
+        sp_world_size = get_sequence_parallel_world_size()
+        is_sp_leader = sp_rank == 0
+
+        default_height = self.infer_config.get("default_height", self.infer_config.get("height", 480))
+        default_width = self.infer_config.get("default_width", self.infer_config.get("width", 832))
+        num_inference_steps = int(self.infer_config.get("num_inference_steps", 40))
+        scheduler_type = self.infer_config.get("scheduler_type", "unipc")
+        if scheduler_type not in {"unipc", "euler"}:
+            raise ValueError(f"Unsupported LingBot-Video inference.scheduler_type={scheduler_type!r}; expected 'unipc' or 'euler'.")
+        fps = int(self.infer_config.get("fps", 24))
+        video_quality = float(self.infer_config.get("video_quality", 6.0))
+        macro_block_size = int(self.infer_config.get("macro_block_size", 16))
+        base_seed = int(self.infer_config.get("seed", 42))
+        self.infer_log_every_steps = max(1, int(self.config.get("logging", {}).get("infer_log_every_steps", 10)))
+
+        lora_config = self.infer_config.get("lora_config")
+        lora_path = lora_config.get("path") if lora_config else None
+        should_load_lora = lora_path and getattr(self.model, "_infer_lora_adapter_name", None) is None
+        if should_load_lora:
+            self.model.load_lora_for_infer(lora_path)
+
+        self.guidance_scale = float(self.infer_config.get("cfg_guidance_scale", 3.0))
+        self.enable_cfg = bool(self.infer_config.get("enable_cfg", self.guidance_scale > 1.0))
+        self.batch_cfg = bool(self.infer_config.get("batch_cfg", False))
+        if self.infer_config.get("allow_tf32", True) and torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
+        saved_paths = []
+        self.model.set_denoiser_eval()
+        num_slots = (len(prompts) + world_size - 1) // world_size
+        if get_rank() == 0:
+            logger.info(
+                "[lingbot-infer] start samples={} steps={} scheduler={} cfg={} batch_cfg={} guidance={} dp_world={} sp_world={} output_dir={}",
+                len(prompts),
+                num_inference_steps,
+                scheduler_type,
+                self.enable_cfg,
+                self.batch_cfg,
+                self.guidance_scale,
+                world_size,
+                sp_world_size,
+                self.output_infer_dir,
+            )
+
+        for slot in range(num_slots):
+            i = slot * world_size + rank
+            has_sample = i < len(prompts)
+            prompt = prompts[i] if has_sample else " "
+            sample = samples[i] if has_sample else {}
+            should_log_sample = has_sample and is_sp_leader
+            height, width = _target_hw_for_sample(sample, default_height, default_width)
+            seed = base_seed + i if has_sample else base_seed
+            generator = torch.Generator(device=self.model.device).manual_seed(seed)
+
+            pos_cond = broadcast_sequence_parallel_value(self.model.encode_prompt_condition(prompt))
+            neg_cond = None
+            if self.enable_cfg:
+                negative_prompt = sample.get("negative_prompt") or self.negative_prompt
+                neg_cond = broadcast_sequence_parallel_value(self.model.encode_prompt_condition(negative_prompt))
+            latent = broadcast_sequence_parallel_value(self.model.prepare_infer_latents(height, width, generator))
+
+            if should_log_sample:
+                logger.info("[lingbot-infer] sample={}/{} seed={} size={}x{} start", i + 1, len(prompts), seed, height, width)
+            if scheduler_type == "unipc":
+                latent = self._run_unipc(latent, pos_cond, neg_cond, num_inference_steps, generator, should_log_sample)
+            else:
+                latent = self._run_euler(latent, pos_cond, neg_cond, num_inference_steps, should_log_sample)
+
+            if not has_sample or not is_sp_leader:
+                continue
+            videos = self.model.decode_latent(latent)
+            if self.output_infer_dir is not None:
+                save_path = Path(self.output_infer_dir) / f"{i:05d}.mp4"
+                export_to_video(
+                    videos[0],
+                    str(save_path),
+                    fps=fps,
+                    quality=video_quality,
+                    macro_block_size=macro_block_size,
+                )
+                logger.info("[lingbot-infer] sample={}/{} saved path={}", i + 1, len(prompts), save_path)
+                saved_paths.append(str(save_path))
+
+        barrier()
+        if should_load_lora:
+            self.model.unload_lora_for_infer()
+
+        saved_count = len(saved_paths)
+        if is_distributed():
+            saved_count_tensor = torch.tensor(saved_count, device=self.model.device, dtype=torch.int64)
+            torch.distributed.all_reduce(saved_count_tensor, op=torch.distributed.ReduceOp.SUM)
+            saved_count = saved_count_tensor.item()
+        logger.info("[lingbot-infer] finished saved={}", saved_count)
         return saved_paths
 
 
