@@ -19,7 +19,7 @@
     "enable_cfg": false,
     "cpu_offload": false,
     "t5_cpu_offload": true,
-    "vae_cpu_offload": true,
+    "vae_cpu_offload": false,
     "boundary_step_index": 2,
     "denoising_step_list": [
         1000,

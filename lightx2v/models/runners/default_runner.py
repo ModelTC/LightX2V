@@ -370,12 +370,17 @@ class DefaultRunner(BaseRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2v(self):
-        img, img_ori = self.read_image_input(self.input_info.image_path)
-        clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
-        vae_encode_out, latent_shape = self.run_vae_encoder(img_ori if self.vae_encoder_need_img_original else img)
-        self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
-        text_encoder_output = self.run_text_encoder(self.input_info)
-        self.maybe_empty_cache()
+        with ProfilingContext4DebugL2("read_image_input"):
+            img, img_ori = self.read_image_input(self.input_info.image_path)
+        with ProfilingContext4DebugL2("run_image_encoder"):
+            clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
+        with ProfilingContext4DebugL2("run_vae_encoder"):
+            vae_encode_out, latent_shape = self.run_vae_encoder(img_ori if self.vae_encoder_need_img_original else img)
+            self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
+        with ProfilingContext4DebugL2("run_text_encoder"):
+            text_encoder_output = self.run_text_encoder(self.input_info)
+        with ProfilingContext4DebugL2("maybe_empty_cache"):
+            self.maybe_empty_cache()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output, img)
 
     @ProfilingContext4DebugL2("Run Encoders")
