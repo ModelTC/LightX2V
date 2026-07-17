@@ -522,7 +522,17 @@ class DefaultRunner(BaseRunner):
                     return enhanced_prompt
 
     def process_images_after_vae_decoder(self):
-        self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
+        return_result_tensor = self.input_info.return_result_tensor
+        save_result = self.input_info.save_result_path is not None
+        main_process = not dist.is_initialized() or dist.get_rank() == 0
+
+        should_process = return_result_tensor or (save_result and main_process)
+        if not should_process:
+            self.gen_video_final = None
+            return {"video": None}
+
+        with ProfilingContext4DebugL2("wan_vae_to_comfy"):
+            self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
 
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
@@ -534,36 +544,38 @@ class DefaultRunner(BaseRunner):
                 target_fps=target_fps,
             )
 
-        if self.input_info.return_result_tensor:
+        if return_result_tensor:
+            self.gen_video_final = self.gen_video_final.cpu()
             return {"video": self.gen_video_final}
-        elif self.input_info.save_result_path is not None:
-            if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
-                fps = self.config["video_frame_interpolation"]["target_fps"]
-            else:
-                fps = self.config.get("fps", 16)
 
-            if not dist.is_initialized() or dist.get_rank() == 0:
-                out_path = self.input_info.save_result_path
-                img_in = (getattr(self.input_info, "image_path", None) or "").strip()
-                vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
-                sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
+        # Reaching here means should_process was true because this is the main
+        # process and a save path was provided.
+        if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
+            fps = self.config["video_frame_interpolation"]["target_fps"]
+        else:
+            fps = self.config.get("fps", 16)
 
-                if sr_from_image_only:
-                    logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
-                    save_to_image(self.gen_video_final, out_path)
-                    logger.info(f"✅ Image saved successfully to: {out_path} ✅")
-                else:
-                    logger.info(f"🎬 Start to save video 🎬")
+        out_path = self.input_info.save_result_path
+        img_in = (getattr(self.input_info, "image_path", None) or "").strip()
+        vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
+        sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
 
-                    save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
-                    if self.config.get("task") in ("sr", "animate"):
-                        input_video_path = getattr(self.input_info, "video_path", "")
-                        if input_video_path:
-                            muxed_path = mux_audio_from_video(input_video_path, out_path)
-                            if muxed_path:
-                                logger.info(f"Audio muxed from input video: {input_video_path}")
-                    logger.info(f"✅ Video saved successfully to: {out_path} ✅")
-            return {"video": None}
+        if sr_from_image_only:
+            logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
+            save_to_image(self.gen_video_final, out_path)
+            logger.info(f"✅ Image saved successfully to: {out_path} ✅")
+        else:
+            logger.info(f"🎬 Start to save video 🎬")
+
+            save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
+            if self.config.get("task") in ("sr", "animate"):
+                input_video_path = getattr(self.input_info, "video_path", "")
+                if input_video_path:
+                    muxed_path = mux_audio_from_video(input_video_path, out_path)
+                    if muxed_path:
+                        logger.info(f"Audio muxed from input video: {input_video_path}")
+            logger.info(f"✅ Video saved successfully to: {out_path} ✅")
+        return {"video": None}
 
     @ProfilingContext4DebugL1("RUN pipeline", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_worker_request_duration, metrics_labels=["DefaultRunner"])
     def run_pipeline(self, input_info):
