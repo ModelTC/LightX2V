@@ -28,6 +28,7 @@ from lightx2v_train.utils.utils import get_running_dtype
 from .base import BaseModel
 
 
+@MODEL_REGISTER("ltx_t2av_ar")
 @MODEL_REGISTER("ltx_t2av")
 class LTX2T2AVModel(BaseModel):
     pipeline_cls = None
@@ -67,8 +68,9 @@ class LTX2T2AVModel(BaseModel):
                 self.text_encoder_path = getattr(reference_model, "text_encoder_path", self.text_encoder_path)
                 self.text_encoder_cpu = getattr(reference_model, "text_encoder_cpu", self.text_encoder_cpu)
 
+        transformer_path = self._resolve_transformer_path(model_path, model_config, transformer_only)
         if self.load_transformer:
-            self.transformer = self._load_transformer(model_path)
+            self.transformer = self._load_transformer(transformer_path)
             self._configure_causal_transformer()
         else:
             self.transformer = None
@@ -95,6 +97,30 @@ class LTX2T2AVModel(BaseModel):
         self.transformer_checkpoint_config = builder.model_config()
         transformer = builder.build(device=self.device, dtype=self.transformer_param_dtype)
         return transformer.to(self.device, dtype=self.transformer_param_dtype)
+
+    def _resolve_transformer_path(self, model_path, model_config, transformer_only):
+        self.loaded_student_checkpoint_path = None
+        if transformer_only or model_config.get("name") != "ltx_t2av_ar":
+            return model_path
+
+        student_config = model_config.get("student", {})
+        checkpoint_path = student_config.get("checkpoint_path") if isinstance(student_config, dict) else None
+        if checkpoint_path is None:
+            return model_path
+
+        checkpoint_path = os.path.abspath(os.path.expanduser(str(checkpoint_path)))
+        candidates = [checkpoint_path]
+        if os.path.isdir(checkpoint_path):
+            candidates = [
+                os.path.join(checkpoint_path, "consolidated.safetensors"),
+                os.path.join(checkpoint_path, "student_consolidated.safetensors"),
+            ]
+        for candidate in candidates:
+            if os.path.isfile(candidate) and candidate.endswith(".safetensors"):
+                self.loaded_student_checkpoint_path = checkpoint_path
+                logger.info("[train] loading LTX2 AR student transformer from {}", candidate)
+                return candidate
+        return model_path
 
     def prepare_consolidated_state_dict(self, state_dict):
         consolidated = {}

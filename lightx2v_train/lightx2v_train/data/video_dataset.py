@@ -1,4 +1,5 @@
 import io
+import json
 import random
 from pathlib import Path
 
@@ -246,16 +247,27 @@ class PromptDataset(torch.utils.data.Dataset):
     def _load_prompts(self):
         samples = []
         for path in self.prompt_paths:
-            if path.suffix.lower() not in PROMPT_SUFFIXES:
-                raise ValueError(f"prompt_dataset only accepts .txt/.list files, got: {path}")
-            with path.open("r", encoding="utf-8") as handle:
-                for row_index, line in enumerate(handle):
-                    prompt = line.strip()
-                    if not prompt:
-                        continue
-                    samples.append({"prompt": prompt, "meta": {"prompt_path": str(path), "row_index": row_index}})
-                    if self.max_samples is not None and len(samples) >= self.max_samples:
-                        return samples
+            suffix = path.suffix.lower()
+            if suffix not in PROMPT_SUFFIXES | {".json", ".jsonl"}:
+                raise ValueError(f"prompt_dataset only accepts .txt/.list/.json/.jsonl files, got: {path}")
+            for row_index, record in enumerate(read_records(path)):
+                prompt = prompt_text(record)
+                if not prompt:
+                    continue
+                negative_prompt = record_value(record, "negative_prompt", default="")
+                if isinstance(negative_prompt, (dict, list)):
+                    negative_prompt = json.dumps(negative_prompt, ensure_ascii=False, separators=(",", ":"))
+                else:
+                    negative_prompt = str(negative_prompt).strip()
+                samples.append(
+                    {
+                        "prompt": prompt,
+                        "negative_prompt": negative_prompt,
+                        "meta": {"prompt_path": str(path), "row_index": row_index},
+                    }
+                )
+                if self.max_samples is not None and len(samples) >= self.max_samples:
+                    return samples
         return samples
 
     def __getitem__(self, index):
@@ -263,7 +275,14 @@ class PromptDataset(torch.utils.data.Dataset):
         prompt = sample["prompt"]
         if random.random() < self.prompt_dropout_rate:
             prompt = " "
-        return {"inputs": {}, "conditioning": {"prompt": prompt}, "meta": dict(sample["meta"])}
+        return {
+            "inputs": {},
+            "conditioning": {
+                "prompt": prompt,
+                "negative_prompt": sample["negative_prompt"],
+            },
+            "meta": dict(sample["meta"]),
+        }
 
     def __len__(self):
         return len(self.samples) * self.dataset_repeat

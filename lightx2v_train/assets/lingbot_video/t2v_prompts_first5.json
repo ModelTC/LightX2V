@@ -1,0 +1,612 @@
+[
+  {
+    "caption": {
+      "comprehensive_description": {
+        "scene_content_description": "The video presents a first-person perspective of a workspace, likely a desk, viewed from a fixed, slightly elevated angle. The environment is well-lit with neutral, even lighting, creating a clear and focused atmosphere. The desk surface is a light grey color. On the left side of the desk, there is a black game controller with a glowing blue light bar, resting on a black mousepad. In the center of the desk lies a pair of black over-ear headphones. To the right, there is an open, empty black box with a white interior. In the foreground, two robotic arms are visible. The left robotic arm, featuring a black and silver body with a two-fingered gripper, remains completely stationary throughout the video. The right robotic arm, similar in design, is the active subject. It begins by moving forward and to the left, positioning its gripper over the game controller. It then grasps the controller, lifts it off the desk, and transports it to the right, moving it over the open box. Finally, the right robotic arm lowers the controller into the box and releases it. The headphones and the left robotic arm remain undisturbed during this entire sequence.",
+        "camera_movement_description": ""
+      },
+      "camera_info": {
+        "color": "Cyan",
+        "frame_size": "Wide",
+        "shot_type_angle": "High angle",
+        "lens_size": "Ultra Wide / Fisheye",
+        "composition": "Balanced",
+        "lighting": "Soft light",
+        "lighting_type": "Artificial light"
+      },
+      "world_knowledge": [],
+      "prominent_elements": [
+        {
+          "name": "right robotic arm",
+          "description": "A mechanical arm with a black and silver body, equipped with a two-fingered gripper and visible wiring.",
+          "actions": [
+            {
+              "timestamp": "[0.0s - 1.5s]",
+              "action": "Moves forward and to the left towards the game controller."
+            },
+            {
+              "timestamp": "[1.5s - 2.5s]",
+              "action": "Grasps the game controller and lifts it upward."
+            },
+            {
+              "timestamp": "[2.5s - 4.0s]",
+              "action": "Moves to the right, carrying the game controller over the open box."
+            },
+            {
+              "timestamp": "[4.0s - 5.0s]",
+              "action": "Lowers the game controller into the box and releases it."
+            }
+          ],
+          "location": "Originates from the bottom right, moves to the center, then to the right.",
+          "relative_size": "large",
+          "shape_and_color": "Cylindrical and angular segments, black and silver.",
+          "texture": "Metallic and matte plastic.",
+          "appearance_details": "Visible joints, wiring, and a two-fingered gripper mechanism.",
+          "relationship": "Interacts directly with the game controller.",
+          "orientation": "Extends forward and slightly upward from the bottom right.",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "is_cluster": false,
+          "number_of_objects": ""
+        },
+        {
+          "name": "left robotic arm",
+          "description": "A mechanical arm with a black and silver body, equipped with a two-fingered gripper.",
+          "actions": [
+            {
+              "timestamp": "[0.0s - 5.0s]",
+              "action": "Remains stationary."
+            }
+          ],
+          "location": "Bottom left corner of the frame.",
+          "relative_size": "large",
+          "shape_and_color": "Cylindrical and angular segments, black and silver.",
+          "texture": "Metallic and matte plastic.",
+          "appearance_details": "Visible joints and a two-fingered gripper mechanism.",
+          "relationship": "Positioned opposite the right robotic arm, not interacting with other objects.",
+          "orientation": "Extends forward and slightly upward from the bottom left.",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "is_cluster": false,
+          "number_of_objects": ""
+        },
+        {
+          "name": "game controller",
+          "description": "A standard video game controller with joysticks, buttons, and a glowing light bar.",
+          "actions": [
+            {
+              "timestamp": "[0.0s - 1.5s]",
+              "action": "Rests stationary on the desk."
+            },
+            {
+              "timestamp": "[1.5s - 2.5s]",
+              "action": "Is grasped and lifted upward by the right robotic arm."
+            },
+            {
+              "timestamp": "[2.5s - 4.0s]",
+              "action": "Is moved to the right by the right robotic arm."
+            },
+            {
+              "timestamp": "[4.0s - 5.0s]",
+              "action": "Is lowered into the open box and released."
+            }
+          ],
+          "location": "Initially on the left side of the desk, moved to the right side inside the box.",
+          "relative_size": "medium",
+          "shape_and_color": "Contoured shape, black with a blue light bar.",
+          "texture": "Matte plastic.",
+          "appearance_details": "Two joysticks, directional pad, action buttons, and a glowing blue light bar in the center.",
+          "relationship": "Initially on the desk, then grasped and moved by the right robotic arm, finally placed in the open box.",
+          "orientation": "Horizontal on the desk, then tilted while being carried.",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "is_cluster": false,
+          "number_of_objects": ""
+        },
+        {
+          "name": "headphones",
+          "description": "A pair of over-ear headphones with a headband and ear cups.",
+          "actions": [
+            {
+              "timestamp": "[0.0s - 5.0s]",
+              "action": "Remains stationary on the desk."
+            }
+          ],
+          "location": "Center of the desk.",
+          "relative_size": "medium",
+          "shape_and_color": "Curved headband with circular ear cups, black.",
+          "texture": "Matte plastic and soft ear cushions.",
+          "appearance_details": "Visible ear cushions and a headband.",
+          "relationship": "Rests on the desk, untouched by the robotic arms.",
+          "orientation": "Lying flat on the desk.",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "is_cluster": false,
+          "number_of_objects": ""
+        },
+        {
+          "name": "open box",
+          "description": "A rectangular box with the lid open, revealing a white interior.",
+          "actions": [
+            {
+              "timestamp": "[0.0s - 5.0s]",
+              "action": "Remains stationary on the desk."
+            }
+          ],
+          "location": "Right side of the desk.",
+          "relative_size": "medium",
+          "shape_and_color": "Rectangular, black exterior with a white interior.",
+          "texture": "Smooth cardboard or plastic.",
+          "appearance_details": "Open lid, empty interior.",
+          "relationship": "Serves as the receptacle for the game controller.",
+          "orientation": "Horizontal on the desk.",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "is_cluster": false,
+          "number_of_objects": ""
+        }
+      ]
+    },
+    "duration": 5
+  },
+  {
+    "caption": {
+      "comprehensive_description": {
+        "scene_content_description": "A stylish woman walks confidently along a busy Tokyo street at night. She wears a sleek black leather jacket over a flowing red dress, black ankle boots, sunglasses, bold red lipstick, and a black purse over one shoulder. Saturated neon signs and animated storefront displays cast warm red, magenta, cyan, and golden reflections across the damp pavement. Passing pedestrians and layered city signage create a lively metropolitan background while the woman remains the clear focal subject.",
+        "camera_movement_description": "The camera tracks smoothly alongside and slightly in front of the woman at eye level, maintaining a dynamic medium shot as she walks. The framing keeps her slightly off center while the illuminated street and moving pedestrians slide through the background with a moderate depth of field."
+      },
+      "camera_info": {
+        "color": "Warm",
+        "frame_size": "Medium",
+        "shot_type_angle": "Eye level",
+        "lens_size": "Medium",
+        "composition": "Rule of thirds",
+        "lighting": "Mixed light",
+        "lighting_type": "Neon night lighting"
+      },
+      "world_knowledge": [],
+      "prominent_elements": [
+        {
+          "name": "stylish woman",
+          "description": "A confident woman walking through the Tokyo nightlife in a fashionable black and red outfit.",
+          "actions": [
+            {"timestamp": "[0.0s - 1.5s]", "action": "walks forward with relaxed, confident strides while looking ahead"},
+            {"timestamp": "[1.5s - 3.5s]", "action": "continues walking as her red dress and purse move naturally with each step"},
+            {"timestamp": "[3.5s - 5.0s]", "action": "passes bright storefront signs while maintaining her steady pace and confident posture"}
+          ],
+          "location": "slightly right of center in the foreground",
+          "relative_size": "dominant",
+          "shape_and_color": "slender figure wearing a black jacket and vivid red dress",
+          "texture": "glossy leather jacket, soft flowing dress fabric, polished boots",
+          "appearance_details": "dark hair, sunglasses, red lipstick, black shoulder purse",
+          "relationship": "the main subject moving through the crowded illuminated street",
+          "orientation": "upright and walking forward",
+          "pose": "confident walking stride with relaxed arms",
+          "expression": "calm and self-assured",
+          "clothing": "black leather jacket, flowing red dress, black ankle boots",
+          "gender": "female",
+          "skin_tone_and_texture": "natural skin tone with smooth texture"
+        },
+        {
+          "name": "pedestrians",
+          "description": "Groups of pedestrians moving in both directions along the active city street.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "walk naturally through the background at varied speeds"}
+          ],
+          "location": "middle ground and background on both sides of the woman",
+          "relative_size": "medium to small",
+          "shape_and_color": "varied silhouettes in dark urban clothing",
+          "texture": "mixed coats, jackets, and streetwear fabrics",
+          "appearance_details": "partially softened by depth of field and colorful reflected light",
+          "relationship": "surround the main subject and establish the busy Tokyo atmosphere",
+          "orientation": "walking in multiple directions",
+          "pose": "natural walking poses",
+          "expression": "indistinct",
+          "clothing": "varied contemporary city clothing",
+          "gender": "mixed",
+          "skin_tone_and_texture": "varied",
+          "is_cluster": true,
+          "number_of_objects": "numerous"
+        },
+        {
+          "name": "neon-lit wet street",
+          "description": "A damp Tokyo street lined with animated signs and storefront lights.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "shimmers continuously as neon colors reflect across the wet pavement"}
+          ],
+          "location": "spanning the full environment",
+          "relative_size": "large",
+          "shape_and_color": "deep gray pavement with red, magenta, cyan, and gold reflections",
+          "texture": "wet, glossy, and mirror-like",
+          "appearance_details": "dense illuminated signage, storefront displays, and elongated reflections",
+          "relationship": "surrounds the woman and supplies the scene's colorful nighttime illumination",
+          "orientation": "street receding into the background",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        }
+      ]
+    },
+    "negative_prompt": {
+      "universal_negative": {
+        "visual_quality": ["low quality", "worst quality", "blurry", "pixelated", "jpeg artifacts", "low resolution", "unstable color", "color flicker", "overexposed", "washed out", "poor color balance", "invisible subject", "blown-out highlights", "macroblocking", "rolling shutter", "temporal aliasing", "color banding", "edge halos", "chromatic aberration", "moiré patterns", "high-frequency noise", "grainy texture", "low frame rate"],
+        "lighting_failure": ["harsh flat lighting", "uniformly lit without variation", "no atmosphere or depth", "inconsistent light direction", "hard-edged unrealistic shadows"],
+        "physical_plausibility": ["physically implausible motion", "objects defying gravity", "violates real-world physics", "impossible contact or penetration", "nonsensical interactions", "illogical scene"],
+        "artistic_style": ["painting", "illustration", "drawing", "cartoon", "3d render", "cgi", "sketch", "digital art"],
+        "composition_and_content": ["text", "watermark", "signature", "logo", "subtitles", "pillarboxed", "side bars", "portrait image in landscape frame"],
+        "temporal_and_motion_stability": ["flickering", "jittery", "motion blur", "temporal inconsistency", "warping", "morphing", "incoherent motion", "unnatural movement", "static object with sudden jump", "frame-to-frame inconsistency", "shaky footage", "jump cuts", "hard cut", "unnatural scene transitions"],
+        "material_and_structure": ["plastic-like glass", "unrealistic texture", "deformed bottle", "liquid freezing improperly", "distorted reflections"]
+      }
+    },
+    "duration": 5
+  },
+  {
+    "caption": {
+      "comprehensive_description": {
+        "scene_content_description": "A mysterious cloaked figure soars high through a nighttime city canyon formed by towering glass-and-steel skyscrapers. The cloak conceals most of the figure's body while two outstretched arms, a determined face, and the wind-whipped edges of the dark fabric remain visible. Thousands of windows and distant city lights sparkle far below, while patches of cloud drift across a deep blue-black sky. The rapid aerial movement conveys freedom, scale, and controlled power.",
+        "camera_movement_description": "A high-angle aerial camera tracks the flying figure from above and slightly behind, moving forward at matching speed. The camera gradually arcs toward the figure's side while nearby towers sweep past with strong parallax and the distant city remains softly motion-blurred."
+      },
+      "camera_info": {
+        "color": "Cool",
+        "frame_size": "Wide",
+        "shot_type_angle": "High angle",
+        "lens_size": "Wide Lens",
+        "composition": "Center",
+        "lighting": "Low key",
+        "lighting_type": "City night lighting"
+      },
+      "world_knowledge": [],
+      "prominent_elements": [
+        {
+          "name": "cloaked flying figure",
+          "description": "A human-like figure concealed in a dark cloak, flying with deliberate control between skyscrapers.",
+          "actions": [
+            {"timestamp": "[0.0s - 1.5s]", "action": "glides forward between two tall towers with both arms extended"},
+            {"timestamp": "[1.5s - 3.5s]", "action": "accelerates through the city canyon as the cloak streams and ripples violently in the wind"},
+            {"timestamp": "[3.5s - 5.0s]", "action": "banks slightly to one side and continues toward the illuminated skyline"}
+          ],
+          "location": "center of the frame above the city",
+          "relative_size": "medium and dominant",
+          "shape_and_color": "human silhouette wrapped in a broad dark charcoal cloak",
+          "texture": "heavy woven fabric fluttering in strong wind",
+          "appearance_details": "outstretched arms, partially visible determined face, cloak obscuring the lower body",
+          "relationship": "flies between and above the surrounding skyscrapers",
+          "orientation": "horizontal and facing forward through the city",
+          "pose": "arms extended with body held in a streamlined flight pose",
+          "expression": "focused and determined",
+          "clothing": "large dark hooded cloak",
+          "gender": "ambiguous",
+          "skin_tone_and_texture": "partially visible natural skin"
+        },
+        {
+          "name": "skyscraper cityscape",
+          "description": "A dense field of immense glass-and-steel towers illuminated by countless windows.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "rushes past beneath and beside the flying figure with strong aerial parallax"}
+          ],
+          "location": "surrounding the figure and extending far below",
+          "relative_size": "massive",
+          "shape_and_color": "vertical geometric towers in blue-gray steel and reflective glass",
+          "texture": "smooth glass facades, rigid steel edges, grids of glowing windows",
+          "appearance_details": "twinkling lights receding into a softly blurred distant skyline",
+          "relationship": "establishes the figure's height, speed, and scale",
+          "orientation": "vertical towers rising from the city below",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        },
+        {
+          "name": "cloudy night sky",
+          "description": "A dark blue-black sky with thin illuminated clouds above the city.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "cloud wisps drift slowly while the figure moves rapidly beneath them"}
+          ],
+          "location": "upper background",
+          "relative_size": "large",
+          "shape_and_color": "soft irregular clouds against a deep navy sky",
+          "texture": "misty and diffuse",
+          "appearance_details": "faint city glow catches the lower edges of the clouds",
+          "relationship": "frames the aerial flight above the illuminated skyline",
+          "orientation": "horizontal atmospheric layer",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        }
+      ]
+    },
+    "negative_prompt": {
+      "universal_negative": {
+        "visual_quality": ["low quality", "worst quality", "blurry", "pixelated", "jpeg artifacts", "low resolution", "unstable color", "color flicker", "overexposed", "washed out", "over-saturation", "poor color balance", "invisible subject", "blown-out highlights", "macroblocking", "rolling shutter", "temporal aliasing", "color banding", "edge halos", "chromatic aberration", "moiré patterns", "high-frequency noise", "grainy texture", "low frame rate"],
+        "lighting_failure": ["harsh flat lighting", "uniformly lit without variation", "no atmosphere or depth", "inconsistent light direction", "hard-edged unrealistic shadows"],
+        "physical_plausibility": ["impossible contact or penetration", "nonsensical interactions", "illogical scene"],
+        "artistic_style": ["painting", "illustration", "drawing", "cartoon", "3d render", "cgi", "sketch", "digital art"],
+        "composition_and_content": ["text", "watermark", "signature", "logo", "subtitles", "pillarboxed", "side bars", "portrait image in landscape frame"],
+        "temporal_and_motion_stability": ["flickering", "jittery", "temporal inconsistency", "warping", "morphing", "incoherent motion", "unnatural movement", "static object with sudden jump", "frame-to-frame inconsistency", "shaky footage", "jump cuts", "hard cut", "unnatural scene transitions"],
+        "material_and_structure": ["plastic-like glass", "unrealistic texture", "deformed bottle", "liquid freezing improperly", "distorted reflections"]
+      }
+    },
+    "duration": 5
+  },
+  {
+    "caption": {
+      "comprehensive_description": {
+        "scene_content_description": "An animated oil painting depicts a tranquil autumn forest filled with richly colored maple trees. Thick painterly foliage in deep crimson, scarlet, amber, and bright orange fills the foreground, while tall trunks and branching canopies form the middle ground. A misty distance rendered in softer green and brown tones recedes behind the trees. Warm golden sunlight filters through the canopy and illuminates layered brushstrokes, creating a serene, inviting atmosphere with cinematic depth.",
+        "camera_movement_description": "The camera performs a slow panoramic glide through the painted forest with cinematic parallax: foreground leaves move noticeably across the frame, middle-ground trunks shift more slowly, and the misty background remains nearly stationary. The wide-angle composition carries a subtle rightward tilt throughout the movement."
+      },
+      "camera_info": {
+        "color": "Warm",
+        "frame_size": "Wide",
+        "shot_type_angle": "Dutch angle",
+        "lens_size": "Wide Lens",
+        "composition": "Layered panoramic",
+        "lighting": "Soft light",
+        "lighting_type": "Golden daylight"
+      },
+      "world_knowledge": [],
+      "prominent_elements": [
+        {
+          "name": "foreground maple leaves",
+          "description": "Large clusters of vivid maple leaves rendered with expressive oil-paint brushstrokes.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "drift laterally across the frame with the strongest parallax as the camera glides"}
+          ],
+          "location": "foreground along the left, right, and upper edges",
+          "relative_size": "large",
+          "shape_and_color": "pointed maple leaves in crimson, red, orange, and amber",
+          "texture": "thick layered oil paint with visible brushstrokes",
+          "appearance_details": "bright golden highlights along selected leaf edges",
+          "relationship": "frames the deeper forest and creates the nearest parallax layer",
+          "orientation": "overlapping clusters angled toward the center",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        },
+        {
+          "name": "autumn maple trees",
+          "description": "Tall majestic maple trees forming a richly layered middle ground.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "shift slowly across the composition as warm light flickers gently through the canopy"}
+          ],
+          "location": "middle ground across the full frame",
+          "relative_size": "large",
+          "shape_and_color": "vertical brown trunks supporting red and orange branching canopies",
+          "texture": "rough painted bark and dense impasto foliage",
+          "appearance_details": "branches reach upward and overlap in layered silhouettes",
+          "relationship": "forms the main forest structure between the foreground leaves and distant mist",
+          "orientation": "upright with spreading branches",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        },
+        {
+          "name": "misty forest distance",
+          "description": "A soft atmospheric background of distant trees fading into autumn mist.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "remains nearly stationary while subtle mist drifts between distant trunks"}
+          ],
+          "location": "deep background",
+          "relative_size": "large",
+          "shape_and_color": "soft green, muted brown, and pale gold layers",
+          "texture": "thin translucent paint and hazy blended edges",
+          "appearance_details": "low-contrast silhouettes receding into warm atmospheric light",
+          "relationship": "provides the deepest parallax layer and enhances visual depth",
+          "orientation": "receding toward the center of the forest",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        }
+      ]
+    },
+    "negative_prompt": {
+      "universal_negative": {
+        "visual_quality": ["low quality", "worst quality", "blurry", "pixelated", "jpeg artifacts", "low resolution", "unstable color", "color flicker", "underexposed", "overexposed", "washed out", "over-saturation", "poor color balance", "invisible subject", "subject hidden in darkness", "crushed blacks", "blown-out highlights", "macroblocking", "rolling shutter", "temporal aliasing", "color banding", "edge halos", "chromatic aberration", "moiré patterns", "high-frequency noise", "grainy texture", "low frame rate"],
+        "lighting_failure": ["harsh flat lighting", "uniformly lit without variation", "no atmosphere or depth", "inconsistent light direction", "hard-edged unrealistic shadows"],
+        "physical_plausibility": ["physically implausible motion", "objects defying gravity", "violates real-world physics", "impossible contact or penetration", "nonsensical interactions", "illogical scene"],
+        "artistic_style": [],
+        "composition_and_content": ["text", "watermark", "signature", "logo", "subtitles", "pillarboxed", "side bars", "portrait image in landscape frame"],
+        "temporal_and_motion_stability": ["jittery", "motion blur", "temporal inconsistency", "warping", "morphing", "incoherent motion", "unnatural movement", "static object with sudden jump", "frame-to-frame inconsistency", "shaky footage", "jump cuts", "hard cut", "unnatural scene transitions"],
+        "material_and_structure": ["plastic-like glass", "unrealistic texture", "deformed bottle", "liquid freezing improperly", "distorted reflections"]
+      }
+    },
+    "duration": 5
+  },
+  {
+    "caption": {
+      "comprehensive_description": {
+        "scene_content_description": "A grainy vintage-film nighttime scene shows a gigantic otherworldly creature walking slowly down a deserted, decaying city street. Its massive body has rough, irregular skin covered with strange organic growths, and its glowing eyes catch the weak light from a single flickering streetlamp. Crumbling buildings, shattered windows, dark alleyways, and trash-strewn sidewalks surround it. The muted palette, heavy film grain, and deep wavering shadows create an eerie sense of silence and dread.",
+        "camera_movement_description": "A slightly tilted medium shot tracks backward at a slow pace as the creature advances. The handheld vintage camera exhibits restrained mechanical jitter and subtle exposure breathing while preserving the creature's imposing scale in the center of the frame."
+      },
+      "camera_info": {
+        "color": "Muted",
+        "frame_size": "Medium",
+        "shot_type_angle": "Low angle",
+        "lens_size": "Medium",
+        "composition": "Center",
+        "lighting": "Low key",
+        "lighting_type": "Flickering streetlight"
+      },
+      "world_knowledge": [],
+      "prominent_elements": [
+        {
+          "name": "giant otherworldly creature",
+          "description": "A towering alien creature with a massive humanoid form, rough skin, peculiar growths, and luminous eyes.",
+          "actions": [
+            {"timestamp": "[0.0s - 1.5s]", "action": "emerges from deep shadow and plants one heavy foot onto the abandoned street"},
+            {"timestamp": "[1.5s - 3.5s]", "action": "takes another slow deliberate step as its shoulders and skin growths shift with the weight"},
+            {"timestamp": "[3.5s - 5.0s]", "action": "continues approaching while turning its glowing eyes slightly toward the camera"}
+          ],
+          "location": "center of the street in the foreground and middle ground",
+          "relative_size": "massive and dominant",
+          "shape_and_color": "towering broad silhouette in muted gray-brown tones",
+          "texture": "coarse cracked skin with knotted organic protrusions",
+          "appearance_details": "bright reflective eyes, oversized limbs, uneven growths across the torso and shoulders",
+          "relationship": "the only moving subject in the desolate city environment",
+          "orientation": "upright and advancing toward the camera",
+          "pose": "slow heavy walking stance",
+          "expression": "unreadable and threatening",
+          "clothing": "none",
+          "gender": "ambiguous",
+          "skin_tone_and_texture": "rough gray-brown skin with irregular growths"
+        },
+        {
+          "name": "flickering streetlamp",
+          "description": "A single old streetlamp providing the only direct illumination.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "flickers unevenly and throws moving shadows across the creature and ruined facades"}
+          ],
+          "location": "upper left middle ground",
+          "relative_size": "small",
+          "shape_and_color": "thin dark metal pole with a dim yellow lamp",
+          "texture": "rusted metal and dusty glass",
+          "appearance_details": "weak bulb pulsing irregularly",
+          "relationship": "reveals fragments of the creature while leaving most of the street in darkness",
+          "orientation": "upright",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        },
+        {
+          "name": "ruined city street",
+          "description": "A deserted street bordered by crumbling buildings, broken windows, dark alleys, and scattered trash.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "remains still while loose debris trembles subtly with each heavy footstep"}
+          ],
+          "location": "entire background and ground plane",
+          "relative_size": "large",
+          "shape_and_color": "narrow gray street enclosed by dark damaged facades",
+          "texture": "cracked concrete, shattered glass, peeling walls, and coarse film grain",
+          "appearance_details": "trash-strewn sidewalks and empty black windows",
+          "relationship": "creates the abandoned setting around the creature",
+          "orientation": "street receding behind the creature",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        }
+      ]
+    },
+    "negative_prompt": {
+      "universal_negative": {
+        "visual_quality": ["low quality", "worst quality", "blurry", "pixelated", "jpeg artifacts", "low resolution", "overexposed", "washed out", "over-saturation", "poor color balance", "invisible subject", "blown-out highlights", "macroblocking", "rolling shutter", "temporal aliasing", "color banding", "edge halos", "chromatic aberration", "moiré patterns", "low frame rate"],
+        "lighting_failure": ["harsh flat lighting", "uniformly lit without variation", "no atmosphere or depth", "inconsistent light direction", "hard-edged unrealistic shadows"],
+        "physical_plausibility": ["physically implausible motion", "objects defying gravity", "violates real-world physics", "impossible contact or penetration", "nonsensical interactions", "illogical scene"],
+        "artistic_style": ["painting", "illustration", "drawing", "cartoon", "3d render", "cgi", "sketch", "digital art"],
+        "composition_and_content": ["text", "watermark", "signature", "logo", "subtitles", "pillarboxed", "side bars", "portrait image in landscape frame"],
+        "temporal_and_motion_stability": ["motion blur", "warping", "morphing", "incoherent motion", "unnatural movement", "static object with sudden jump", "jump cuts", "hard cut", "unnatural scene transitions"],
+        "material_and_structure": ["plastic-like glass", "unrealistic texture", "deformed bottle", "liquid freezing improperly", "distorted reflections"]
+      }
+    },
+    "duration": 5
+  },
+  {
+    "caption": {
+      "comprehensive_description": {
+        "scene_content_description": "A full-body rock man walks confidently through a dense, ancient forest. His entire humanoid form is assembled from rugged interlocking stones in varied shades of gray and earthy brown, with small seams and fragments shifting around his joints. Lush green foliage, tall trees with intricate bark, moss, ferns, and tiny wildflowers fill the environment. Shafts of sunlight filter through the canopy and cast moving dappled shadows over his rocky body and the forest floor, giving the scene a mystical fantasy atmosphere.",
+        "camera_movement_description": "The camera tracks backward smoothly at a low eye-level angle while maintaining a centered full-body view of the rock man. A gentle forward drift through foreground leaves creates depth as the background trees move with natural parallax."
+      },
+      "camera_info": {
+        "color": "Natural",
+        "frame_size": "Full shot",
+        "shot_type_angle": "Slight low angle",
+        "lens_size": "Medium",
+        "composition": "Center",
+        "lighting": "Dappled light",
+        "lighting_type": "Daylight"
+      },
+      "world_knowledge": [],
+      "prominent_elements": [
+        {
+          "name": "rock man",
+          "description": "A powerful humanoid figure constructed entirely from layered natural stones.",
+          "actions": [
+            {"timestamp": "[0.0s - 1.5s]", "action": "steps forward confidently as stone plates shift naturally around the hips, knees, and shoulders"},
+            {"timestamp": "[1.5s - 3.5s]", "action": "continues walking with a steady arm swing while small pebbles and leaves move beneath each foot"},
+            {"timestamp": "[3.5s - 5.0s]", "action": "takes another heavy stride through a shaft of sunlight and looks calmly ahead"}
+          ],
+          "location": "center foreground",
+          "relative_size": "dominant",
+          "shape_and_color": "broad humanoid form made of gray and brown rock masses",
+          "texture": "rugged cracked stone with patches of moss and dusty seams",
+          "appearance_details": "interlocking stone plates, pebble-like joints, heavy hands and feet, faint moss in crevices",
+          "relationship": "the main subject moving through the living forest",
+          "orientation": "upright and facing toward the camera's direction of travel",
+          "pose": "strong balanced walking stride",
+          "expression": "calm and resolute stone face",
+          "clothing": "none",
+          "gender": "male",
+          "skin_tone_and_texture": "layered gray-brown rock with coarse fractured surfaces"
+        },
+        {
+          "name": "dense ancient forest",
+          "description": "A vibrant forest of tall old trees, dense green undergrowth, moss, ferns, and wildflowers.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "foliage sways gently while sunlight and shadows shift across the path"}
+          ],
+          "location": "surrounding the rock man across the full frame",
+          "relative_size": "large",
+          "shape_and_color": "vertical brown trunks surrounded by layered emerald and yellow-green foliage",
+          "texture": "deeply ridged bark, soft moss, delicate leaves, and fine grasses",
+          "appearance_details": "intricate bark patterns, ferns, vines, and scattered colorful wildflowers",
+          "relationship": "forms the mystical environment through which the rock man walks",
+          "orientation": "upright trees framing a central path",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        },
+        {
+          "name": "forest floor",
+          "description": "A soft uneven path covered with soil, moss, leaves, roots, and small stones.",
+          "actions": [
+            {"timestamp": "[0.0s - 5.0s]", "action": "compresses beneath the rock man's footsteps as loose leaves, dust, and tiny pebbles ripple outward"}
+          ],
+          "location": "lower foreground and middle ground",
+          "relative_size": "large",
+          "shape_and_color": "irregular brown-green ground plane with scattered colorful details",
+          "texture": "soft moss, dry leaves, exposed roots, compact soil, and loose gravel",
+          "appearance_details": "small wildflowers and fern tips border the walking path",
+          "relationship": "supports the rock man's heavy movement and reacts to each step",
+          "orientation": "horizontal path receding into the forest",
+          "pose": "",
+          "expression": "",
+          "clothing": "",
+          "gender": "",
+          "skin_tone_and_texture": ""
+        }
+      ]
+    },
+    "negative_prompt": {
+      "universal_negative": {
+        "visual_quality": ["low quality", "worst quality", "blurry", "pixelated", "jpeg artifacts", "low resolution", "unstable color", "color flicker", "underexposed", "overexposed", "washed out", "over-saturation", "poor color balance", "invisible subject", "subject hidden in darkness", "crushed blacks", "blown-out highlights", "macroblocking", "rolling shutter", "temporal aliasing", "color banding", "edge halos", "chromatic aberration", "moiré patterns", "high-frequency noise", "grainy texture", "low frame rate"],
+        "lighting_failure": ["harsh flat lighting", "uniformly lit without variation", "no atmosphere or depth", "inconsistent light direction", "hard-edged unrealistic shadows"],
+        "physical_plausibility": [],
+        "artistic_style": ["painting", "illustration", "drawing", "cartoon", "3d render", "cgi", "sketch", "digital art"],
+        "composition_and_content": ["text", "watermark", "signature", "logo", "subtitles", "pillarboxed", "side bars", "portrait image in landscape frame"],
+        "temporal_and_motion_stability": ["flickering", "jittery", "motion blur", "temporal inconsistency", "warping", "morphing", "incoherent motion", "unnatural movement", "static object with sudden jump", "frame-to-frame inconsistency", "shaky footage", "jump cuts", "hard cut", "unnatural scene transitions"],
+        "material_and_structure": ["plastic-like glass", "unrealistic texture", "deformed bottle", "liquid freezing improperly", "distorted reflections"]
+      }
+    },
+    "duration": 5
+  }
+]

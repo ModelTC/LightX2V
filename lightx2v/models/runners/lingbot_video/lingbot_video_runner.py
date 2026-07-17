@@ -10,6 +10,7 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.lingbot_video.qwen3vl import LingBotVideoQwen3VLTextEncoder
 from lightx2v.models.networks.lingbot_video.model import LingBotVideoTransformerModel
+from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.lingbot_video.scheduler import LingBotVideoScheduler
 from lightx2v.models.video_encoders.hf.lingbot_video.vae import LingBotVideoWanVAE
@@ -24,6 +25,22 @@ IMAGE_MIN_TOKEN_NUM = 4
 IMAGE_MAX_TOKEN_NUM = 16384
 MAX_RATIO = 200
 SPATIAL_MERGE_SIZE = 2
+
+
+def build_lingbot_video_model_with_lora(model_kwargs, config, lora_configs):
+    if config.get("lora_dynamic_apply", False):
+        if len(lora_configs) != 1:
+            raise ValueError("LingBot-Video dynamic LoRA mode requires exactly one lora_configs entry.")
+        lora_config = lora_configs[0]
+        model_kwargs["lora_path"] = lora_config["path"]
+        model_kwargs["lora_strength"] = lora_config.get("strength", 1.0)
+        return LingBotVideoTransformerModel(**model_kwargs)
+
+    if config.get("dit_quantized", False):
+        raise ValueError("LingBot-Video merged LoRA inference requires original, non-quantized DiT weights.")
+    model = LingBotVideoTransformerModel(**model_kwargs)
+    LoraAdapter(model).apply_lora(lora_configs, model_type="lingbot_video")
+    return model
 
 
 def _round_by_factor(number, factor):
@@ -75,11 +92,15 @@ class LingBotVideoRunner(DefaultRunner):
         self.vae = self.load_vae()
 
     def load_transformer(self):
-        return LingBotVideoTransformerModel(
-            model_path=os.path.join(self.config["model_path"], self.config.get("transformer_subfolder", "transformer")),
-            config=self.config,
-            device=self.init_device,
-        )
+        model_kwargs = {
+            "model_path": os.path.join(self.config["model_path"], self.config.get("transformer_subfolder", "transformer")),
+            "config": self.config,
+            "device": self.init_device,
+        }
+        lora_configs = self.config.get("lora_configs")
+        if lora_configs:
+            return build_lingbot_video_model_with_lora(model_kwargs, self.config, lora_configs)
+        return LingBotVideoTransformerModel(**model_kwargs)
 
     def load_text_encoder(self):
         return [LingBotVideoQwen3VLTextEncoder(self.config)]

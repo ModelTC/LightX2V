@@ -65,6 +65,7 @@ training:
     lr_warmup_iters: 0
     save_every_iters: 100
     save_total_limit: 10
+    save_consolidated_weights: true
     teacher_forcing:
         enabled: true
         mode: chunkwise

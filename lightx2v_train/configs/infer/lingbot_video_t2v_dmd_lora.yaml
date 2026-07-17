@@ -1,0 +1,76 @@
+model:
+    name: lingbot_video
+    pretrained_model_name_or_path: /data/nvme5/gushiqiao/models/lingbot-video-moe-30b-a3b
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    text_encoder_dtype: bf16
+    vae_dtype: fp32
+    text_encoder_cpu: false
+    max_sequence_length: 37698
+    load_transformer: true
+    load_text_encoder: true
+    load_vae: true
+
+distributed:
+    backend: nccl
+    timeout_minutes: 120
+    sequence_parallel:
+        enabled: false
+        size: 1
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        mixed_precision:
+            param_dtype: null
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    val:
+        name: prompt_dataset
+        data_path: /data/nvme5/gushiqiao/datatets/lingbot_video/vidprom_filtered_extended_first5k_auto_negative.jsonl
+        max_samples: 5
+        batch_size: 1
+        num_workers: 0
+        pin_memory: true
+        shuffle: false
+        drop_last: false
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: linear
+        time_shift_mu: 3.0
+        time_shift_power: 1.0
+        sigma_min: 0.0
+        extra_one_step: true
+
+inference:
+    method: lingbot_video_t2v_infer
+    scheduler_type: unipc
+    default_width: 832
+    default_height: 480
+    num_frames: 121
+    num_inference_steps: 40
+    shift: 3.0
+    enable_cfg: true
+    batch_cfg: true
+    cfg_guidance_scale: 3.0
+    allow_tf32: true
+    seed: 42
+    fps: 24
+    video_quality: 6.0
+    macro_block_size: 16
+    output_dir: ${oc.env:INFER_OUTPUT_DIR,./output_infer/lingbot_video_t2v_base}
+
+logging:
+    rank_zero_only: true
+    infer_log_every_steps: 1

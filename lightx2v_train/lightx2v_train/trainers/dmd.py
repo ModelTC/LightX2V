@@ -8,7 +8,7 @@ import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 import torch.nn.functional as F
 from loguru import logger
-from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, get_state_dict, set_model_state_dict, set_state_dict
 
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.model_zoo.native.ltx2 import (
@@ -35,7 +35,7 @@ from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradien
 from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, broadcast_sequence_parallel_value, sync_sequence_parallel_gradients
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
-from lightx2v_train.utils.constants import LTX2_NEGATIVE_PROMPT, WAN_NEGATIVE_PROMPT
+from lightx2v_train.utils.constants import LINGBOT_VIDEO_NEGATIVE_PROMPT, LTX2_NEGATIVE_PROMPT, WAN_NEGATIVE_PROMPT
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from .base import BaseTrainer
@@ -304,20 +304,43 @@ class DmdTrainer(BaseTrainer):
         )
 
     def _encode_conditions(self, sample):
-        prompt = sample["conditioning"].get("prompt", "")
+        conditioning = sample["conditioning"]
+        prompt = conditioning.get("prompt", "")
         with torch.no_grad():
             condition = self.model.encode_prompt_condition(prompt)
             if self.guidance_scale > 1:
-                if isinstance(prompt, str):
-                    negative_prompt = self.negative_prompt
-                else:
-                    negative_prompt = [self.negative_prompt] * len(prompt)
+                is_scalar_prompt = isinstance(prompt, str)
+                batch_size = 1 if is_scalar_prompt else len(prompt)
+                negative_prompt = self._negative_prompt_for_conditioning(
+                    conditioning,
+                    batch_size,
+                    return_scalar=is_scalar_prompt,
+                )
                 negative_condition = self.model.encode_prompt_condition(negative_prompt)
             else:
                 negative_condition = None
         condition = broadcast_sequence_parallel_value(condition)
         negative_condition = broadcast_sequence_parallel_value(negative_condition) if negative_condition is not None else None
         return condition, negative_condition
+
+    def _negative_prompt_for_conditioning(self, conditioning, batch_size, return_scalar=False):
+        negative_prompt = conditioning.get("negative_prompt")
+        if negative_prompt is None:
+            values = []
+        elif isinstance(negative_prompt, str):
+            values = [negative_prompt]
+        else:
+            values = list(negative_prompt)
+
+        if not values:
+            values = [self.negative_prompt] * batch_size
+        elif len(values) == 1 and batch_size > 1:
+            values *= batch_size
+        elif len(values) != batch_size:
+            raise ValueError(f"Expected {batch_size} negative prompts, got {len(values)}.")
+
+        values = [value if isinstance(value, str) and value.strip() else self.negative_prompt for value in values]
+        return values[0] if return_scalar else values
 
     def _predict_velocity(self, model, latents, sigma, condition):
         denoiser_input = model.prepare_denoiser_input(latents)
@@ -774,8 +797,10 @@ class _LTX2T2AVDmdMixin:
 
     def __init__(self, config):
         super().__init__(config)
-        if self.model_config["name"] != "ltx_t2av":
-            raise ValueError("ltx_t2av_dmd trainer requires model.name='ltx_t2av'.")
+        model_name = self.model_config["name"]
+        if model_name not in self.allowed_model_names:
+            allowed = ", ".join(repr(name) for name in sorted(self.allowed_model_names))
+            raise ValueError(f"{self.trainer_name} trainer requires model.name in {{{allowed}}}.")
 
         ltx2_config = self.training_config.get("ltx2", {})
         self.video_loss_weight = float(ltx2_config.get("video_loss_weight", 1.0))
@@ -786,6 +811,14 @@ class _LTX2T2AVDmdMixin:
 
         if self.cdm_enabled:
             raise ValueError("ltx_t2av_dmd does not support training.dmd.cdm yet.")
+
+    def _load_student_checkpoint(self, checkpoint_path, strict=True):
+        loaded_path = getattr(self.model, "loaded_student_checkpoint_path", None)
+        requested_path = os.path.abspath(os.path.expanduser(str(checkpoint_path)))
+        if loaded_path == requested_path:
+            logger.info("[train] LTX2 AR student checkpoint was loaded during model construction: {}", requested_path)
+            return
+        super()._load_student_checkpoint(checkpoint_path, strict=strict)
 
     def _encode_conditions(self, sample):
         conditioning = sample["conditioning"]
@@ -801,7 +834,13 @@ class _LTX2T2AVDmdMixin:
                     negative_condition = self._prepare_cached_condition(negative)
                 else:
                     prompt = conditioning.get("prompt", "")
-                    negative_prompt = self.negative_prompt if isinstance(prompt, str) else [self.negative_prompt] * len(prompt)
+                    is_scalar_prompt = isinstance(prompt, str)
+                    batch_size = 1 if is_scalar_prompt else len(prompt)
+                    negative_prompt = self._negative_prompt_for_conditioning(
+                        conditioning,
+                        batch_size,
+                        return_scalar=is_scalar_prompt,
+                    )
                     try:
                         negative_condition = self.model.encode_prompt_condition(negative_prompt)
                     except RuntimeError as exc:
@@ -1111,7 +1150,6 @@ class VideoDmdTrainer(DmdTrainer):
         default_denoising_steps = [int(round(self.num_train_timestep * (1.0 - step_idx / self.num_inference_steps))) for step_idx in range(self.num_inference_steps)]
         self.denoising_step_list = list(self.dmd_config.get("denoising_step_list", default_denoising_steps))
         self.num_inference_steps = len(self.denoising_step_list)
-        self.num_training_frames = int(self.dmd_config.get("num_training_frames", 21))
         self.warp_denoising_step = bool(self.dmd_config.get("warp_denoising_step", True))
         self.min_step = int(float(self.dmd_config.get("min_step_ratio", 0.02)) * self.num_train_timestep)
         self.max_step = int(float(self.dmd_config.get("max_step_ratio", 0.98)) * self.num_train_timestep)
@@ -1169,7 +1207,11 @@ class VideoDmdTrainer(DmdTrainer):
                     negative_condition = self._prepare_cached_condition(negative)
                 else:
                     batch_size = int(condition["prompt_embed"].shape[0])
-                    negative_prompt = self.negative_prompt if batch_size == 1 else [self.negative_prompt] * batch_size
+                    negative_prompt = self._negative_prompt_for_conditioning(
+                        conditioning,
+                        batch_size,
+                        return_scalar=batch_size == 1,
+                    )
                     try:
                         negative_condition = self.model.encode_prompt_condition(negative_prompt)
                     except RuntimeError as exc:
@@ -1209,6 +1251,20 @@ class VideoDmdTrainer(DmdTrainer):
     def _load_student_checkpoint(self, checkpoint_path, strict=True):
         model_state_path = checkpoint_path
         if os.path.isdir(model_state_path):
+            dist_state_path = os.path.join(model_state_path, "dist_state")
+            if os.path.isdir(dist_state_path):
+                module = self.model.fsdp2_state_module()
+                options = StateDictOptions(ignore_frozen_params=False, strict=strict)
+                model_state = get_model_state_dict(module, options=options)
+                state = {"model": model_state}
+                dcp.load(state, checkpoint_id=dist_state_path)
+                set_model_state_dict(
+                    module,
+                    model_state_dict=state["model"],
+                    options=options,
+                )
+                logger.info("[train] loaded {} student checkpoint from distributed state {}", self.trainer_name, dist_state_path)
+                return
             model_state_path = os.path.join(model_state_path, "model_state.pt")
         if not os.path.exists(model_state_path):
             raise RuntimeError(f"{self.trainer_name} student checkpoint not found: {checkpoint_path}")
@@ -1376,10 +1432,12 @@ class VideoDmdTrainer(DmdTrainer):
             shape[0] = batch_size
             return tuple(int(dim) for dim in shape)
 
-        infer_config = self.config["inference"] if "inference" in self.config else {}
-        height = infer_config["default_height"] if "default_height" in infer_config else infer_config.get("height", 480)
-        width = infer_config["default_width"] if "default_width" in infer_config else infer_config.get("width", 832)
-        num_frames = infer_config.get("num_frames", 81)
+        missing_shape_keys = [key for key in ("height", "width", "num_frames") if key not in self.dmd_config]
+        if missing_shape_keys:
+            raise ValueError(f"training.dmd must define video shape fields: {', '.join(missing_shape_keys)}.")
+        height = int(self.dmd_config["height"])
+        width = int(self.dmd_config["width"])
+        num_frames = int(self.dmd_config["num_frames"])
         num_latent_frames = (int(num_frames) - 1) // self.model.vae_scale_factor_temporal + 1
         return (
             batch_size,
@@ -1485,6 +1543,17 @@ class VideoDmdTrainer(DmdTrainer):
         timesteps = self.denoising_scheduler.timesteps.to(device=warped_step.device, dtype=torch.float32)
         index = torch.argmin((timesteps - warped_step.float()).abs(), dim=0).item()
         return self.denoising_scheduler.num_train_timesteps - int(index)
+
+
+@TRAINER_REGISTER("lingbot_video_dmd")
+class LingBotVideoDmdTrainer(VideoDmdTrainer):
+    trainer_name = "lingbot_video_dmd"
+    allowed_model_names = {"lingbot_video"}
+    default_negative_prompt = LINGBOT_VIDEO_NEGATIVE_PROMPT
+    default_lora_target_modules = None
+
+    def _prepare_cached_condition(self, condition):
+        return self.model.prepare_text_condition(condition)
 
 
 @TRAINER_REGISTER("video_ar_dmd")
@@ -1734,6 +1803,7 @@ class LTX2T2AVDmdTrainer(_LTX2T2AVDmdMixin, VideoDmdTrainer):
 @TRAINER_REGISTER("ltx_t2av_ar_dmd")
 class LTX2T2AVArDmdTrainer(_LTX2T2AVDmdMixin, VideoArDmdTrainer):
     trainer_name = "ltx_t2av_ar_dmd"
+    allowed_model_names = {"ltx_t2av_ar"}
 
     def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
         transformer = self.model.denoiser_module()
@@ -1950,8 +2020,8 @@ class LTX2T2AVArDmdTrainer(_LTX2T2AVDmdMixin, VideoArDmdTrainer):
 
     @staticmethod
     def _audio_token_range(block_idx, num_blocks, audio_total_tokens):
-        start = (block_idx * audio_total_tokens) // num_blocks
-        end = ((block_idx + 1) * audio_total_tokens) // num_blocks
+        start = (block_idx * audio_total_tokens + num_blocks - 1) // num_blocks
+        end = ((block_idx + 1) * audio_total_tokens + num_blocks - 1) // num_blocks
         if end <= start:
             end = min(audio_total_tokens, start + 1)
         return start, end

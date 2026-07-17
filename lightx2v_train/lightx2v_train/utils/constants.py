@@ -17,3 +17,15 @@ LTX2_NEGATIVE_PROMPT = (
     "inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, "
     "or AI artifacts."
 )
+
+LINGBOT_VIDEO_NEGATIVE_PROMPT = (
+    '{"universal_negative": {"visual_quality": ["low quality", "worst quality", "blurry", "pixelated", '
+    '"jpeg artifacts", "low resolution", "unstable color", "color flicker", "underexposed", "overexposed", '
+    '"invisible subject", "subject hidden in darkness"], "artistic_style": ["painting", "illustration", "drawing", '
+    '"cartoon", "3d render", "cgi", "sketch", "digital art"], "composition_and_content": ["text", "watermark", '
+    '"signature", "logo", "subtitles", "pillarboxed", "side bars", "portrait image in landscape frame"], '
+    '"temporal_and_motion_stability": ["flickering", "jittery", "motion blur", "temporal inconsistency", "warping", '
+    '"morphing", "incoherent motion", "unnatural movement", "static object with sudden jump", '
+    '"frame-to-frame inconsistency"], "material_and_structure": ["plastic-like glass", "unrealistic texture", '
+    '"deformed bottle", "liquid freezing improperly", "distorted reflections"]}}'
+)

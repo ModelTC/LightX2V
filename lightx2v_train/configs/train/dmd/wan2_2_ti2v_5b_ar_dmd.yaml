@@ -101,6 +101,9 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 5
+        height: 704
+        width: 1280
+        num_frames: 125
         denoising_step_list:
             - 1000
             - 750
@@ -117,7 +120,6 @@ training:
         same_step_across_blocks: true
         sp_cache: true
         num_frame_per_chunk: 8
-        num_training_frames: 8
         context_noise: 0
         renoise_sigma_min: 0.02
         renoise_sigma_max: 0.98
