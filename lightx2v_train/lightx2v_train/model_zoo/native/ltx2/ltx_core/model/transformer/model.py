@@ -382,8 +382,10 @@ class LTXModel(torch.nn.Module):
             perturbations = BatchedPerturbationConfig.empty(batch_size)
         if defer_cache_updates is None:
             defer_cache_updates = bool(self.defer_kv_cache_updates)
+        defer_cache_updates = bool(defer_cache_updates and torch.is_grad_enabled())
         if detach_cache_updates is None:
             detach_cache_updates = bool(self.detach_kv_cache_updates)
+        detach_cache_updates = bool(detach_cache_updates and torch.is_grad_enabled() and not defer_cache_updates)
 
         cache_update_infos = []
 

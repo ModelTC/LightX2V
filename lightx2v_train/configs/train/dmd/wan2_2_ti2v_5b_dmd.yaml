@@ -88,6 +88,9 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 5
+        height: 704
+        width: 1280
+        num_frames: 121
         denoising_step_list:
             - 1000
             - 750

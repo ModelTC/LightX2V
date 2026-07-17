@@ -36,7 +36,11 @@ def prompt_text(record, prompt_column="prompt", prompt_index=0):
         value = record[prompt_index] if prompt_index < len(record) else ""
     else:
         value = record
-    return "" if value is None else str(value).strip()
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return str(value).strip()
 
 
 def read_records(path, prompt_column="prompt", prompt_index=0):
