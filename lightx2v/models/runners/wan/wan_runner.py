@@ -74,7 +74,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
 
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
-    _WARMUP_RESOLUTIONS = ((480, 480), (720, 720))
+    _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
 
     def __init__(self, config):
         super().__init__(config)
@@ -85,7 +85,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
-        if self.config.get("task") not in ("t2v", "i2v") or self.config.get("feature_caching", "NoCaching") != "NoCaching":
+        if self.config.get("task") not in ("t2v", "i2v", "flf2v"):
+            logger.warning(f"Warmup is not implemented for {self.config.get('task')}")
             return
 
         self._run_warmup()
@@ -118,6 +119,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             scheduler.generator = original_generator
             scheduler.sample_guide_scale = original_guide_scale
             del inputs
+            self._maybe_freeze_gc()
 
         logger.info("Warmup completed")
 
@@ -128,7 +130,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
         return (self.model,)
 
     def get_warmup_image_encoder_output(self, latent_shape):
-        if self.config["task"] == "t2v":
+        task = self.config["task"]
+        if task == "t2v":
             return None
 
         _, stride_h, stride_w = self.config["vae_stride"]
@@ -139,8 +142,9 @@ class WanRunner(DisaggMixin, DefaultRunner):
             latent_shape[-1] * stride_w,
             device=self.init_device,
         )
-        clip_encoder_out = self.run_image_encoder(first_frame) if self.config.get("use_image_encoder", True) else None
-        vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_shape[-2], latent_shape[-1])
+        last_frame = torch.zeros_like(first_frame) if task == "flf2v" else None
+        clip_encoder_out = self.run_image_encoder(first_frame, last_frame) if self.config.get("use_image_encoder", True) else None
+        vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_shape[-2], latent_shape[-1], last_frame)
         return {
             "clip_encoder_out": clip_encoder_out,
             "vae_encoder_out": vae_encoder_out,
@@ -335,7 +339,6 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("disagg_mode"):
             self.init_disagg(self.config)
         super().init_modules()
-        self.warmup()
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -814,13 +817,6 @@ class Wan22MoeRunner(WanRunner):
             self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
             if not os.path.isdir(self.low_noise_model_path):
                 raise FileNotFoundError(f"Low Noise Model does not find")
-
-    @ProfilingContext4DebugL1("Warmup")
-    def run_warmup(self):
-        if self.config.get("task") not in ("t2v", "i2v") or self.config.get("feature_caching", "NoCaching") != "NoCaching":
-            return
-
-        self._run_warmup()
 
     def get_warmup_step_indices(self, scheduler):
         timesteps = scheduler.timesteps
