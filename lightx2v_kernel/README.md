@@ -27,6 +27,29 @@ uv build --wheel \
     --no-build-isolation
 ```
 
+### NVIDIA Thor NVFP4 + CuTe DSL ViT FMHA
+
+The Thor-only ViT FMHA bridge links the AArch64 SM110 CUDA 13 artifact shipped
+by TensorRT-Edge-LLM. It implements dense, bidirectional self-attention and
+converts LightX2V BF16 Q/K/V tensors to the FP16 AOT kernel interface.
+
+```bash
+MAX_JOBS=$(nproc) && CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) \
+uv build --wheel \
+    -Cbuild-dir=build-thor-cutedsl . \
+    -Ccmake.define.CUTLASS_PATH=/path/to/cutlass \
+    -Ccmake.define.LIGHTX2V_THOR_NVFP4_ONLY=ON \
+    -Ccmake.define.LIGHTX2V_ENABLE_CUTEDSL_VIT_FMHA=ON \
+    -Ccmake.define.TENSORRT_EDGE_LLM_ROOT=/path/to/TensorRT-Edge-LLM \
+    --verbose \
+    --color=always \
+    --no-build-isolation
+```
+
+The TensorRT-Edge-LLM checkout must contain
+`kernelSrcs/cuteDSLPrebuilt/cutedsl_aarch64_sm_110_cuda13.tar.gz` or an already
+extracted `cpp/kernels/cuteDSLArtifact/aarch64/sm_110` directory.
+
 
 ### Install whl
 ```

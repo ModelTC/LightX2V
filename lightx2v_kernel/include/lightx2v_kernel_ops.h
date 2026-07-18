@@ -39,6 +39,16 @@ limitations under the License.
   }
 
 
+#ifdef LIGHTX2V_CUTEDSL_VIT_FMHA_SM110
+torch::Tensor cute_dsl_vit_fmha_sm110(
+    torch::Tensor const& q,
+    torch::Tensor const& k,
+    torch::Tensor const& v,
+    torch::Tensor const& cu_seqlens,
+    int64_t max_seqlen);
+#endif
+
+
 /*
  * From csrc/gemm
  */

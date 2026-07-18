@@ -6,6 +6,12 @@
 
 TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
 
+#ifdef LIGHTX2V_CUTEDSL_VIT_FMHA_SM110
+  m.def(
+      "cute_dsl_vit_fmha_sm110(Tensor q, Tensor k, Tensor v, Tensor cu_seqlens, int max_seqlen) -> Tensor");
+  m.impl("cute_dsl_vit_fmha_sm110", torch::kCUDA, &cute_dsl_vit_fmha_sm110);
+#endif
+
   m.def(
       "cutlass_scaled_nvfp4_mm_sm120(Tensor! out, Tensor mat_a, Tensor mat_b, Tensor scales_a, Tensor scales_b, Tensor "
       "alpha, Tensor? bias) -> ()");
