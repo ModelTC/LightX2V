@@ -783,10 +783,14 @@ def _resolve_block_m(block_size, hidden_dims, default):
     approximate row count while small values are treated as explicit block_m.
     """
     if block_size is None:
-        return default
-    if block_size >= 256:
-        return max(1, int(block_size) // int(hidden_dims))
-    return int(block_size)
+        block_m = int(default)
+    elif block_size >= 256:
+        block_m = max(1, int(block_size) // int(hidden_dims))
+    else:
+        block_m = int(block_size)
+    if block_m <= 0:
+        raise ValueError(f"block_size must resolve to a positive row count, got block_m={block_m}")
+    return _next_power_of_2(block_m)
 
 
 def _numel_from_shape(shape):
