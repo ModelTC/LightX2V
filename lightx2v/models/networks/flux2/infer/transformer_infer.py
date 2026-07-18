@@ -63,10 +63,10 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         (shift_msa, scale_msa, gate_msa), (shift_mlp, scale_mlp, gate_mlp) = self._split_double_modulation(temb_mod_img)
         (c_shift_msa, c_scale_msa, c_gate_msa), (c_shift_mlp, c_scale_mlp, c_gate_mlp) = self._split_double_modulation(temb_mod_txt)
-        norm_hidden_states = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states = block_weights.norm1.apply(hidden_states)
         norm_hidden_states = (norm_hidden_states * (1 + scale_msa) + shift_msa).squeeze(0)
 
-        norm_encoder_hidden_states = F.layer_norm(encoder_hidden_states, (encoder_hidden_states.shape[-1],))
+        norm_encoder_hidden_states = block_weights.norm1_context.apply(encoder_hidden_states)
         norm_encoder_hidden_states = (norm_encoder_hidden_states * (1 + c_scale_msa) + c_shift_msa).squeeze(0)
 
         img_query = block_weights.to_q.apply(norm_hidden_states)
@@ -140,7 +140,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
             img_attn_hook(gated_img_attn)
         hidden_states = hidden_states + gated_img_attn
         encoder_hidden_states = encoder_hidden_states + c_gate_msa * txt_attn_output
-        norm_hidden_states2 = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states2 = block_weights.norm2.apply(hidden_states)
         norm_hidden_states2 = (norm_hidden_states2 * (1 + scale_mlp) + shift_mlp).squeeze(0)
         ff_output = block_weights.ff_net_0.apply(norm_hidden_states2)
         ff_1, ff_2 = ff_output.chunk(2, dim=-1)
@@ -148,7 +148,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         ff_output = block_weights.ff_net_2.apply(ff_output)
         hidden_states = hidden_states + gate_mlp * ff_output
 
-        norm_encoder_hidden_states2 = F.layer_norm(encoder_hidden_states, (encoder_hidden_states.shape[-1],))
+        norm_encoder_hidden_states2 = block_weights.norm2_context.apply(encoder_hidden_states)
         norm_encoder_hidden_states2 = (norm_encoder_hidden_states2 * (1 + c_scale_mlp) + c_shift_mlp).squeeze(0)
         context_ff_output = block_weights.ff_context_net_0.apply(norm_encoder_hidden_states2)
         ctx_ff_1, ctx_ff_2 = context_ff_output.chunk(2, dim=-1)
@@ -179,7 +179,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         shift_msa, scale_msa, gate_msa = self._split_single_modulation(temb_mod)
 
-        norm_combined = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_combined = block_weights.norm.apply(hidden_states)
         norm_combined = (norm_combined * (1 + scale_msa) + shift_msa).squeeze(0)
 
         hidden_states_proj = block_weights.to_qkv_mlp_proj.apply(norm_combined)

@@ -6,7 +6,7 @@ from lightx2v_platform.registry_factory import PLATFORM_LAYERNORM_WEIGHT_REGISTE
 
 @PLATFORM_LAYERNORM_WEIGHT_REGISTER("gcu_layer_norm")
 class GcuLayerNormWeight(LayerNormWeightTemplate):
-    def __init__(self, weight_name=None, bias_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6):
+    def __init__(self, weight_name=None, bias_name=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, is_post_adapter=False, eps=1e-6, **kwargs):
         super().__init__(weight_name, bias_name, create_cuda_buffer, create_cpu_buffer, lazy_load, lazy_load_file, is_post_adapter, eps)
 
     def apply(self, input_tensor):

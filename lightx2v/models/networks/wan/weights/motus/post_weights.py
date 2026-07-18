@@ -9,7 +9,7 @@ class MotusActionPostWeights(WeightModule):
     def __init__(self, config, action_config):
         super().__init__()
         self.action_config = action_config
-        self.add_module("norm", LN_WEIGHT_REGISTER["torch"]())
+        self.add_module("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
         self.add_module(
             "action_head",
             SequentialLinearWeights(

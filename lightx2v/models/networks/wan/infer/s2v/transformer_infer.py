@@ -10,8 +10,6 @@ from lightx2v.models.networks.wan.infer.s2v.wan_ops import (
     s2v_self_attn_forward,
     segment_gate_bld,
     segment_modulate_bld,
-    wan_layer_norm,
-    wan_layer_norm_float,
     wan_rms_norm,
 )
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
@@ -42,7 +40,7 @@ class WanS2VTransformerInfer(WanTransformerInfer):
         modulation = weights.head_modulation.tensor
         with torch.amp.autocast(AI_DEVICE, dtype=torch.float32):
             e = (modulation + e.unsqueeze(1)).chunk(2, dim=1)
-            norm_x = wan_layer_norm(weights.norm, x).float()
+            norm_x = weights.norm.apply(x).float()
             x = norm_x * (1 + e[1]) + e[0]
             x = mm_weight_fp32_nd(weights.head, x)
         if x.dim() == 3:
@@ -131,7 +129,7 @@ class WanS2VTransformerInfer(WanTransformerInfer):
         seq_lens = torch.tensor([x.size(1)], dtype=torch.long, device=x.device)
 
         # norm1 + modulate (Wan 212-217)
-        norm_x = wan_layer_norm_float(phase0.norm1, x)
+        norm_x = phase0.norm1.apply(x).float()
         norm_x = segment_modulate_bld(norm_x, e[0], e[1], seg_idx)
 
         # self-attention (Wan 219-225)
@@ -143,9 +141,9 @@ class WanS2VTransformerInfer(WanTransformerInfer):
         # cross-attention & ffn (Wan cross_attn_ffn 228-243)
         context = pre_infer_out.context
         ctx_lens = pre_infer_out.s2v_extra.get("context_lens")
-        x = x + cross_attn_forward(phase1, wan_layer_norm(phase1.norm3, x), context, ctx_lens, self.num_heads, self.head_dim)
+        x = x + cross_attn_forward(phase1, phase1.norm3.apply(x), context, ctx_lens, self.num_heads, self.head_dim)
 
-        norm2_x = wan_layer_norm_float(phase2.norm2, x)
+        norm2_x = phase2.norm2.apply(x).float()
         norm2_x = segment_modulate_bld(norm2_x, e[3], e[4], seg_idx)
         y = mm_weight_autocast_nd(phase2.ffn_0, norm2_x)
         y = torch.nn.functional.gelu(y, approximate="tanh")
