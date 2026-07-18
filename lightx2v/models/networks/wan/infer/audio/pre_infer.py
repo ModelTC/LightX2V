@@ -280,9 +280,14 @@ class WanAudioARPreInfer(WanSFPreInfer):
 
         audio_encoder_output = inputs.get("audio_encoder_output")
         if audio_encoder_output is not None and not is_ref_prefill:
-            segment_idx = self.scheduler.seg_index
-            chunk_size = self.scheduler.chunk_size
-            audio_encoder_output = audio_encoder_output[:, segment_idx * chunk_size : segment_idx * chunk_size + grid_sizes_t]
+            if inputs.get("audio_encoder_output_is_chunk", False):
+                if audio_encoder_output.shape[1] < grid_sizes_t:
+                    raise ValueError(f"stream audio feature is too short: got {audio_encoder_output.shape[1]}, need {grid_sizes_t}")
+                audio_encoder_output = audio_encoder_output[:, :grid_sizes_t]
+            else:
+                segment_idx = self.scheduler.seg_index
+                chunk_size = self.scheduler.chunk_size
+                audio_encoder_output = audio_encoder_output[:, segment_idx * chunk_size : segment_idx * chunk_size + grid_sizes_t]
         elif is_ref_prefill:
             audio_encoder_output = None
 
