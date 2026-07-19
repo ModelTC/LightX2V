@@ -33,6 +33,14 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         rope_type = config.get("rope_type", "flashinfer")
         self.apply_rope_func = rope_funcs.get(rope_type, apply_rope_with_torch)
 
+    def _maybe_apply_stale_kv(self, key, value, num_txt_tokens, block_idx):
+        """Hook for stale-KV cache in PipeFusion mode.  No-op in base class.
+
+        Subclasses (PipeFusion) override this to cache image KV across patches
+        while keeping text KV fresh.
+        """
+        return key, value
+
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
@@ -95,8 +103,14 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         query, key = self.apply_rope_func(query, key, image_rotary_emb)
 
+        # Stale-KV hook (no-op in base class; PipeFusion subclass overrides)
+        num_txt_tokens = encoder_hidden_states.shape[0]
+        key, value = self._maybe_apply_stale_kv(key, value, num_txt_tokens, block_weights.block_idx)
+
         total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
+        kv_len = key.shape[0]  # may differ from total_len in PipeFusion (stale-KV)
+        cu_seqlens_q = torch.tensor([0, total_len], dtype=torch.int32)
+        cu_seqlens_kv = torch.tensor([0, kv_len], dtype=torch.int32)
 
         model_cls = self.config.get("model_cls", "flux2_klein")
 
@@ -107,7 +121,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 k=key,
                 v=value,
                 slice_qkv_len=txt_len,
-                cu_seqlens_qkv=cu_seqlens,
+                cu_seqlens_qkv=cu_seqlens_q,
                 attention_module=block_weights.calculate,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
@@ -121,10 +135,10 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 q=query,
                 k=key,
                 v=value,
-                cu_seqlens_q=cu_seqlens,
-                cu_seqlens_kv=cu_seqlens,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_kv,
                 max_seqlen_q=total_len,
-                max_seqlen_kv=total_len,
+                max_seqlen_kv=kv_len,
                 model_cls=model_cls,
             )
 
@@ -196,8 +210,13 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         query, key = self.apply_rope_func(query, key, image_rotary_emb)
 
+        # Stale-KV hook (no-op in base class; PipeFusion subclass overrides)
+        key, value = self._maybe_apply_stale_kv(key, value, num_txt_tokens, block_weights.block_idx)
+
         total_len = query.shape[0]
-        cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
+        kv_len = key.shape[0]  # may differ from total_len in PipeFusion (stale-KV)
+        cu_seqlens_q = torch.tensor([0, total_len], dtype=torch.int32)
+        cu_seqlens_kv = torch.tensor([0, kv_len], dtype=torch.int32)
 
         model_cls = self.config.get("model_cls", "flux2_klein")
 
@@ -207,7 +226,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 k=key,
                 v=value,
                 slice_qkv_len=num_txt_tokens,
-                cu_seqlens_qkv=cu_seqlens,
+                cu_seqlens_qkv=cu_seqlens_q,
                 attention_module=block_weights.calculate,
                 seq_p_group=self.seq_p_group,
                 use_fp8_comm=self.seq_p_fp8_comm,
@@ -221,10 +240,10 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 q=query,
                 k=key,
                 v=value,
-                cu_seqlens_q=cu_seqlens,
-                cu_seqlens_kv=cu_seqlens,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_kv,
                 max_seqlen_q=total_len,
-                max_seqlen_kv=total_len,
+                max_seqlen_kv=kv_len,
                 model_cls=model_cls,
             )
 

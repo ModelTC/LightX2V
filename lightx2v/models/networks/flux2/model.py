@@ -26,6 +26,10 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         self.attention_kwargs = {}
         self._init_infer_class()
         self._init_weights()
+        # In PipeFusion mode, weights were loaded to CPU to avoid OOM;
+        # move only this stage's subset to GPU.
+        if self.config.get("pipefusion_parallel", False):
+            self.to_cuda()
         self._init_infer()
 
     def _init_infer(self):
@@ -105,7 +109,13 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
 
     def _init_infer_class(self):
         feature_caching = self.config.get("feature_caching", "NoCaching")
-        if feature_caching in ("NoCaching", "None"):
+        if self.config.get("pipefusion_parallel", False):
+            from lightx2v.models.networks.flux2.infer.pipefusion.transformer_infer import (
+                Flux2PipeFusionTransformerInfer,
+            )
+
+            self.transformer_infer_class = Flux2PipeFusionTransformerInfer
+        elif feature_caching in ("NoCaching", "None"):
             if self.cpu_offload and self.offload_granularity == "block":
                 self.transformer_infer_class = Flux2OffloadTransformerInfer
             else:
