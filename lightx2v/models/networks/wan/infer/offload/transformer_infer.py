@@ -50,12 +50,15 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             "feature_caching": "NoCaching",
             "self_attn_1_type": "sla_attn",
             "sla_attn_setting": {"sparsity_ratio": 0.8, "operator": "triton"},
-            "cross_attn_1_type": "sage_attn2",
-            "cross_attn_2_type": "sage_attn2",
             "dit_quantized": True,
             "dit_quant_scheme": "nvfp4",
         }
         errors = [f"{key}={self.config.get(key)!r} (expected {value!r})" for key, value in expected.items() if self.config.get(key) != value]
+
+        supported_cross_attn_types = ("sage_attn2", "flash_attn4")
+        for key in ("cross_attn_1_type", "cross_attn_2_type"):
+            if self.config.get(key) not in supported_cross_attn_types:
+                errors.append(f"{key}={self.config.get(key)!r} (expected one of {supported_cross_attn_types!r})")
 
         required_false = (
             "enable_cfg",
