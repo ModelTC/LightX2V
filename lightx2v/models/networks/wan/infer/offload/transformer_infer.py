@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.models.networks.wan.infer.offload.cuda_graph import WanOffloadCudaGraphRunner
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -36,6 +37,55 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             self.lazy_load = self.config.get("lazy_load", False)
             if self.lazy_load:
                 self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 4))
+
+            if self.config.get("enable_cuda_graph", False):
+                self._validate_cuda_graph_config(offload_granularity)
+                self.cuda_graph_runner = WanOffloadCudaGraphRunner(self, self.offload_manager)
+                self.infer_func = self.cuda_graph_runner.run
+
+    def _validate_cuda_graph_config(self, offload_granularity):
+        expected = {
+            "model_cls": "wan2.2_moe_distill",
+            "task": "i2v",
+            "feature_caching": "NoCaching",
+            "self_attn_1_type": "sla_attn",
+            "sla_attn_setting": {"sparsity_ratio": 0.8, "operator": "triton"},
+            "cross_attn_1_type": "sage_attn2",
+            "cross_attn_2_type": "sage_attn2",
+            "dit_quantized": True,
+            "dit_quant_scheme": "nvfp4",
+        }
+        errors = [f"{key}={self.config.get(key)!r} (expected {value!r})" for key, value in expected.items() if self.config.get(key) != value]
+
+        required_false = (
+            "enable_cfg",
+            "seq_parallel",
+            "cfg_parallel",
+            "lazy_load",
+            "unload_modules",
+            "clean_cuda_cache",
+            "compile",
+            "changing_resolution",
+            "do_mm_calib",
+        )
+        errors.extend(f"{key}=True is unsupported" for key in required_false if self.config.get(key, False))
+
+        if AI_DEVICE != "cuda":
+            errors.append(f"PLATFORM={AI_DEVICE!r} (expected 'cuda')")
+        if not self.config.get("cpu_offload", False):
+            errors.append("cpu_offload must be enabled")
+        if offload_granularity != "block":
+            errors.append(f"offload_granularity={offload_granularity!r} (expected 'block')")
+        if self.config.get("parallel", False):
+            errors.append("parallel execution is unsupported")
+        if self.config.get("use_image_encoder", True):
+            errors.append("use_image_encoder must be false")
+        if self.config.get("lora_configs"):
+            errors.append("LoRA is unsupported")
+
+        if errors:
+            details = "; ".join(errors)
+            raise ValueError(f"Unsupported Wan CUDA Graph configuration: {details}")
 
     def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):
