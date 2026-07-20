@@ -202,6 +202,42 @@ class WanMxfp8FuseForwardingTest(unittest.TestCase):
         infer.infer_block_with_kvcache(block, torch.zeros(1, 8), pre_infer_out)
         self.assertIs(seen["gate"], gate)
 
+    def test_audio_ar_rope_modes(self):
+        ensure_lightx2v_pipeline_stub()
+        ensure_local_lightx2v_kernel()
+        audio = import_module("lightx2v.models.networks.wan.infer.audio.transformer_infer")
+
+        local = audio.WanAudioARTransformerInfer(make_config())
+        self.assertEqual(local.rope_position_mode, "local")
+        self.assertIsNone(local.rope_max_frames)
+        self.assertTrue(torch.equal(local._cache_positions_for_range(2, 5, "cpu"), torch.tensor([2, 3, 4])))
+
+        global_rope = audio.WanAudioARTransformerInfer(
+            make_config(ar_config={"num_frame_per_chunk": 1, "rope_position_mode": "global", "rope_max_frames": 40})
+        )
+        self.assertEqual(global_rope.rope_position_mode, "global")
+        self.assertEqual(global_rope._global_rope_start_frame(80, 1, 1), 40)
+        self.assertTrue(
+            torch.equal(
+                global_rope._cache_positions_for_range(2, 5, "cpu", global_end=51, sink_tokens=2),
+                torch.tensor([48, 49, 50]),
+            )
+        )
+
+    def test_audio_ar_rope_mode_validation(self):
+        ensure_lightx2v_pipeline_stub()
+        ensure_local_lightx2v_kernel()
+        audio = import_module("lightx2v.models.networks.wan.infer.audio.transformer_infer")
+
+        with self.assertRaisesRegex(ValueError, "rope_position_mode"):
+            audio.WanAudioARTransformerInfer(make_config(ar_config={"rope_position_mode": "invalid"}))
+        with self.assertRaisesRegex(ValueError, "requires"):
+            audio.WanAudioARTransformerInfer(make_config(ar_config={"rope_position_mode": "local", "rope_max_frames": 40}))
+        with self.assertRaisesRegex(ValueError, "at least"):
+            audio.WanAudioARTransformerInfer(
+                make_config(ar_config={"num_frame_per_chunk": 2, "rope_position_mode": "global", "rope_max_frames": 1})
+            )
+
     def test_feature_caching_variants_forward_c_gate_msa(self):
         ensure_lightx2v_pipeline_stub()
         ensure_local_lightx2v_kernel()

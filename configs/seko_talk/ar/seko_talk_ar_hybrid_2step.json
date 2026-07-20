@@ -35,6 +35,7 @@
         "step_kv_cache": true,
         "sink_size": 2,
         "hybrid_attn": "W2-W2-W2-W2-W21",
+        "rope_position_mode": "global",
         "rope_max_frames": 40,
         "kv_offload": false,
         "async_vae_decode": false

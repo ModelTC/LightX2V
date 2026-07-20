@@ -105,6 +105,7 @@ class DefaultRunner(BaseRunner):
             or self.config.get("lazy_load", False)
             or self.config.get("unload_modules", False)
             or self.config.get("cpu_offload", False)
+            or self.config.get("feature_caching", "NoCaching") != "NoCaching"
         ):
             return
 
@@ -374,14 +375,14 @@ class DefaultRunner(BaseRunner):
         vae_encode_out, latent_shape = self.run_vae_encoder(img_ori if self.vae_encoder_need_img_original else img)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output, img)
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": None,
@@ -395,8 +396,7 @@ class DefaultRunner(BaseRunner):
         vae_encode_out, latent_shape = self.run_vae_encoder(first_frame, last_frame)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output)
 
     @ProfilingContext4DebugL2("Run Encoders")
@@ -522,7 +522,17 @@ class DefaultRunner(BaseRunner):
                     return enhanced_prompt
 
     def process_images_after_vae_decoder(self):
-        self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
+        return_result_tensor = self.input_info.return_result_tensor
+        save_result = self.input_info.save_result_path is not None
+        main_process = not dist.is_initialized() or dist.get_rank() == 0
+
+        should_process = return_result_tensor or (save_result and main_process)
+        if not should_process:
+            self.gen_video_final = None
+            return {"video": None}
+
+        with ProfilingContext4DebugL2("wan_vae_to_comfy"):
+            self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
 
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
@@ -534,36 +544,38 @@ class DefaultRunner(BaseRunner):
                 target_fps=target_fps,
             )
 
-        if self.input_info.return_result_tensor:
+        if return_result_tensor:
+            self.gen_video_final = self.gen_video_final.cpu()
             return {"video": self.gen_video_final}
-        elif self.input_info.save_result_path is not None:
-            if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
-                fps = self.config["video_frame_interpolation"]["target_fps"]
-            else:
-                fps = self.config.get("fps", 16)
 
-            if not dist.is_initialized() or dist.get_rank() == 0:
-                out_path = self.input_info.save_result_path
-                img_in = (getattr(self.input_info, "image_path", None) or "").strip()
-                vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
-                sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
+        # Reaching here means should_process was true because this is the main
+        # process and a save path was provided.
+        if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
+            fps = self.config["video_frame_interpolation"]["target_fps"]
+        else:
+            fps = self.config.get("fps", 16)
 
-                if sr_from_image_only:
-                    logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
-                    save_to_image(self.gen_video_final, out_path)
-                    logger.info(f"✅ Image saved successfully to: {out_path} ✅")
-                else:
-                    logger.info(f"🎬 Start to save video 🎬")
+        out_path = self.input_info.save_result_path
+        img_in = (getattr(self.input_info, "image_path", None) or "").strip()
+        vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
+        sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
 
-                    save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
-                    if self.config.get("task") in ("sr", "animate"):
-                        input_video_path = getattr(self.input_info, "video_path", "")
-                        if input_video_path:
-                            muxed_path = mux_audio_from_video(input_video_path, out_path)
-                            if muxed_path:
-                                logger.info(f"Audio muxed from input video: {input_video_path}")
-                    logger.info(f"✅ Video saved successfully to: {out_path} ✅")
-            return {"video": None}
+        if sr_from_image_only:
+            logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
+            save_to_image(self.gen_video_final, out_path)
+            logger.info(f"✅ Image saved successfully to: {out_path} ✅")
+        else:
+            logger.info(f"🎬 Start to save video 🎬")
+
+            save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
+            if self.config.get("task") in ("sr", "animate"):
+                input_video_path = getattr(self.input_info, "video_path", "")
+                if input_video_path:
+                    muxed_path = mux_audio_from_video(input_video_path, out_path)
+                    if muxed_path:
+                        logger.info(f"Audio muxed from input video: {input_video_path}")
+            logger.info(f"✅ Video saved successfully to: {out_path} ✅")
+        return {"video": None}
 
     @ProfilingContext4DebugL1("RUN pipeline", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_worker_request_duration, metrics_labels=["DefaultRunner"])
     def run_pipeline(self, input_info):

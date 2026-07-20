@@ -1,4 +1,5 @@
 import gc
+import json
 import math
 import os
 import subprocess
@@ -117,6 +118,8 @@ class InfiniteTalkRunner(WanRunner):
         self.cond_static_image = None
         self.cond_static_image_path = None
         self.cond_frame_cache = {}
+        self.cond_video_fps = None
+        self.cond_video_frame_count = None
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
@@ -187,17 +190,17 @@ class InfiniteTalkRunner(WanRunner):
             data["cond_audio"] = dict(data["cond_audio"])
         else:
             cond_audio = self.config.get("cond_audio", None)
+            mask_files = {}
+            bbox = None
             if cond_audio is not None:
                 cond_audio = dict(cond_audio)
             else:
                 audio_path = getattr(self.input_info, "audio_path", "") or self.config.get("audio_path", "")
-                audio_paths = [item.strip() for item in audio_path.split(",") if item.strip()]
-                if len(audio_paths) == 1:
-                    cond_audio = {"person1": audio_paths[0]}
-                elif len(audio_paths) == 2:
-                    cond_audio = {"person1": audio_paths[0], "person2": audio_paths[1]}
+                if audio_path and os.path.isdir(audio_path):
+                    cond_audio, mask_files, bbox = self._load_directory_audio_input(audio_path)
                 else:
-                    cond_audio = {}
+                    audio_paths = [item.strip() for item in str(audio_path).split(",") if item.strip()]
+                    cond_audio = {f"person{idx + 1}": path for idx, path in enumerate(audio_paths)}
 
             cond_video = getattr(self.input_info, "src_video", "") or getattr(self.input_info, "image_path", "") or self.config.get("cond_video", "") or self.config.get("image_path", "")
             data = {
@@ -205,6 +208,10 @@ class InfiniteTalkRunner(WanRunner):
                 "cond_video": cond_video,
                 "cond_audio": cond_audio,
             }
+            if mask_files:
+                data["mask_files"] = mask_files
+            if bbox:
+                data["bbox"] = bbox
             if self.config.get("audio_type", None):
                 data["audio_type"] = self.config["audio_type"]
             if self.config.get("bbox", None):
@@ -222,6 +229,51 @@ class InfiniteTalkRunner(WanRunner):
             raise ValueError("InfiniteTalk requires cond_audio from --audio_path or config.")
 
         return data
+
+    @staticmethod
+    def _person_sort_key(person_name):
+        suffix = str(person_name or "").replace("person", "")
+        return int(suffix) if suffix.isdigit() else 9999
+
+    @classmethod
+    def _sorted_person_items(cls, person_map):
+        return sorted(person_map.items(), key=lambda item: cls._person_sort_key(item[0]))
+
+    @staticmethod
+    def _load_directory_audio_input(audio_dir):
+        config_path = os.path.join(audio_dir, "config.json")
+        if not os.path.exists(config_path):
+            raise ValueError(f"InfiniteTalk audio directory requires config.json: {audio_dir}")
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        talk_objects = config.get("talk_objects") or []
+        if not isinstance(talk_objects, list) or not talk_objects:
+            raise ValueError(f"InfiniteTalk audio directory config.json must contain non-empty talk_objects: {config_path}")
+
+        cond_audio = {}
+        mask_files = {}
+        bbox = {}
+        for idx, item in enumerate(talk_objects):
+            if not isinstance(item, dict):
+                raise ValueError(f"Invalid talk object at index {idx}: {item!r}")
+
+            person_name = item.get("person") or item.get("name") or f"person{idx + 1}"
+            audio_name = item.get("audio")
+            if not audio_name:
+                raise ValueError(f"Missing audio in talk object {person_name}: {item!r}")
+            cond_audio[person_name] = os.path.join(audio_dir, audio_name)
+
+            mask_name = item.get("mask")
+            if mask_name:
+                mask_files[person_name] = os.path.join(audio_dir, mask_name)
+
+            person_bbox = item.get("bbox")
+            if person_bbox:
+                bbox[person_name] = person_bbox
+
+        return cond_audio, mask_files, bbox
 
     @staticmethod
     def _loudness_norm(audio_array, sr=16000, lufs=-23):
@@ -297,6 +349,40 @@ class InfiniteTalkRunner(WanRunner):
             raise ValueError(f"Unsupported InfiniteTalk audio_type: {audio_type}")
         return new_speech1, new_speech2, new_speech1 + new_speech2
 
+    @staticmethod
+    def _pad_audio_array(audio_array, target_len):
+        if audio_array.shape[0] >= target_len:
+            return audio_array[:target_len]
+        padding = np.zeros(target_len - audio_array.shape[0], dtype=audio_array.dtype)
+        return np.concatenate([audio_array, padding])
+
+    def _audio_prepare_many(self, audio_paths, audio_type):
+        speeches = [None if audio_path == "None" else self._audio_prepare_single(audio_path) for audio_path in audio_paths]
+        available_speeches = [speech for speech in speeches if speech is not None]
+
+        if not available_speeches:
+            raise ValueError("InfiniteTalk requires at least one non-empty person audio.")
+
+        first_speech = available_speeches[0]
+        if audio_type == "para":
+            target_len = max(speech.shape[0] for speech in available_speeches)
+            prepared = [self._pad_audio_array(speech, target_len) if speech is not None else np.zeros(target_len, dtype=first_speech.dtype) for speech in speeches]
+        elif audio_type == "add":
+            lengths = [speech.shape[0] if speech is not None else 0 for speech in speeches]
+            target_len = sum(lengths)
+            prepared = []
+            offset = 0
+            for speech, length in zip(speeches, lengths):
+                track = np.zeros(target_len, dtype=first_speech.dtype)
+                if speech is not None and length > 0:
+                    track[offset : offset + length] = speech[:length]
+                prepared.append(track)
+                offset += length
+        else:
+            raise ValueError(f"Unsupported InfiniteTalk audio_type: {audio_type}")
+
+        return prepared, np.sum(np.stack(prepared, axis=0), axis=0)
+
     def _write_sum_audio(self, input_data, audio_arrays):
         self.video_audio_array = np.asarray(audio_arrays, dtype=np.float32)
         if sf is not None:
@@ -312,6 +398,10 @@ class InfiniteTalkRunner(WanRunner):
         audio_path = self.video_audio_path
         self.video_audio_path = None
         if audio_path and os.path.isfile(audio_path):
+            basename = os.path.basename(audio_path)
+            if not (basename.startswith("infinitetalk_sum_") and basename.endswith(".wav")):
+                logger.warning(f"Skip removing unexpected InfiniteTalk temp audio path: {audio_path}")
+                return
             try:
                 os.remove(audio_path)
             except OSError as exc:
@@ -392,13 +482,15 @@ class InfiniteTalkRunner(WanRunner):
 
     def _prepare_audio_embeddings(self, input_data):
         cond_audio = input_data["cond_audio"]
-        if len(cond_audio) == 2:
+        audio_items = self._sorted_person_items(cond_audio)
+        if len(audio_items) > 1:
             audio_type = input_data.get("audio_type", "para")
-            speech1, speech2, sum_speech = self._audio_prepare_multi(cond_audio["person1"], cond_audio["person2"], audio_type)
+            audio_paths = [path for _, path in audio_items]
+            speeches, sum_speech = self._audio_prepare_many(audio_paths, audio_type)
             self._write_sum_audio(input_data, sum_speech)
-            return [self._load_or_encode_audio(speech1), self._load_or_encode_audio(speech2)]
+            return [self._load_or_encode_audio(speech) for speech in speeches]
 
-        speech = self._audio_prepare_single(cond_audio["person1"])
+        speech = self._audio_prepare_single(audio_items[0][1])
         self._write_sum_audio(input_data, speech)
         return [self._load_or_encode_audio(speech)]
 
@@ -453,6 +545,8 @@ class InfiniteTalkRunner(WanRunner):
         return self._cache_cond_frame(frame_id, Image.fromarray(frame))
 
     def _get_cond_video_duration(self, video_path):
+        self.cond_video_fps = None
+        self.cond_video_frame_count = None
         if not _is_video(video_path):
             return None
         vr = self._get_cond_video_reader(video_path)
@@ -460,7 +554,20 @@ class InfiniteTalkRunner(WanRunner):
         fps = float(vr.get_avg_fps() or self.target_fps)
         if frame_count <= 0 or fps <= 0:
             return None
+        self.cond_video_fps = fps
+        self.cond_video_frame_count = frame_count
         return frame_count / fps
+
+    def _map_target_frame_to_cond_frame(self, frame_id):
+        if self.cond_video_fps is None or self.cond_video_fps <= 0 or self.target_fps <= 0:
+            source_frame_id = int(frame_id)
+        else:
+            target_time = float(frame_id) / float(self.target_fps)
+            source_frame_id = int(round(target_time * float(self.cond_video_fps)))
+
+        if self.cond_video_frame_count is not None and self.cond_video_frame_count > 0:
+            source_frame_id = min(source_frame_id, int(self.cond_video_frame_count) - 1)
+        return max(0, source_frame_id)
 
     @staticmethod
     def _resize_and_centercrop(cond_image, target_size):
@@ -492,7 +599,8 @@ class InfiniteTalkRunner(WanRunner):
         return src_h, src_w, target_h, target_w
 
     def _prepare_cond_image(self, frame_id):
-        image = self._extract_specific_frame(self.cond_file_path, frame_id)
+        source_frame_id = self._map_target_frame_to_cond_frame(frame_id) if _is_video(self.cond_file_path) else frame_id
+        image = self._extract_specific_frame(self.cond_file_path, source_frame_id)
         image = self._resize_and_centercrop(image, (self.target_h, self.target_w))
         image = image.float() / 255.0
         image = (image - 0.5) * 2
@@ -506,15 +614,29 @@ class InfiniteTalkRunner(WanRunner):
             human_mask2 = torch.ones([self.src_h, self.src_w])
             human_masks = [human_mask1, human_mask2, background_mask]
         else:
-            if "bbox" in self.input_data:
+            if "mask_files" in self.input_data:
+                if len(self.input_data["mask_files"]) < human_num:
+                    raise ValueError("InfiniteTalk multi-person input requires one mask file for each person audio.")
                 background_mask = torch.zeros([self.src_h, self.src_w])
-                for _, person_bbox in self.input_data["bbox"].items():
+                for _, mask_file in self._sorted_person_items(self.input_data["mask_files"]):
+                    mask_image = Image.open(mask_file).convert("L")
+                    if mask_image.size != (self.src_w, self.src_h):
+                        mask_image = mask_image.resize((self.src_w, self.src_h), resample=Image.NEAREST)
+                    mask_array = np.array(mask_image)
+                    human_mask = torch.from_numpy((mask_array > 127).astype(np.float32))
+                    background_mask += human_mask
+                    human_masks.append(human_mask)
+            elif "bbox" in self.input_data:
+                background_mask = torch.zeros([self.src_h, self.src_w])
+                for _, person_bbox in self._sorted_person_items(self.input_data["bbox"]):
                     x_min, y_min, x_max, y_max = person_bbox
                     human_mask = torch.zeros([self.src_h, self.src_w])
-                    human_mask[int(x_min) : int(x_max), int(y_min) : int(y_max)] = 1
+                    human_mask[int(y_min) : int(y_max), int(x_min) : int(x_max)] = 1
                     background_mask += human_mask
                     human_masks.append(human_mask)
             else:
+                if human_num > 2:
+                    raise ValueError("InfiniteTalk 3+ person input requires mask_files or bbox for each person.")
                 face_scale = float(self.config.get("face_scale", 0.05))
                 x_min, x_max = int(self.src_h * face_scale), int(self.src_h * (1 - face_scale))
                 human_mask1 = torch.zeros([self.src_h, self.src_w])
@@ -827,29 +949,69 @@ class InfiniteTalkRunner(WanRunner):
                 logger.info(f"Video saved to {self.input_info.save_result_path}")
             return {"video": None}
 
+        return_result_tensor = self.input_info.return_result_tensor
+        save_result = self.input_info.save_result_path is not None
+        main_process = is_main_process()
+
+        should_process = return_result_tensor or (save_result and main_process)
+        if not should_process:
+            self.gen_video_final = None
+            return {"video": None}
+
         self.gen_video_final = wan_vae_to_comfy(self.gen_video)
-        if self.input_info.return_result_tensor:
+        if return_result_tensor:
+            self.gen_video_final = self.gen_video_final.cpu()
             return {"video": self.gen_video_final}
-        if self.input_info.save_result_path is not None and is_main_process():
-            out_path = self.input_info.save_result_path
-            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-            save_to_video(self.gen_video_final, out_path, fps=self.target_fps, method="ffmpeg")
-            # Prefer original input audio (full quality) over the 16kHz resampled wav
-            original_audio = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
-            original_audio = original_audio.split(",")[0].strip() if original_audio else None
-            mux_audio = original_audio if (original_audio and os.path.isfile(original_audio)) else self.video_audio_path
-            if mux_audio and os.path.isfile(mux_audio):
-                try:
-                    self._mux_audio(out_path, mux_audio)
-                finally:
-                    self._remove_video_audio_path()
-            logger.info(f"Video saved to {out_path}")
+
+        # Reaching here means should_process was true because this is the main
+        # process and a save path was provided.
+        out_path = self.input_info.save_result_path
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        logger.info(f"Saving InfiniteTalk video to {out_path}")
+        save_to_video(self.gen_video_final, out_path, fps=self.target_fps, method="ffmpeg")
+        audio_input = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
+        mux_audio = self._resolve_mux_audio_path()
+        if not mux_audio or not os.path.isfile(mux_audio):
+            self._remove_video_audio_path()
+            raise FileNotFoundError(f"InfiniteTalk mux audio is unavailable for audio input: {audio_input}")
+        try:
+            logger.info(f"Muxing InfiniteTalk audio {mux_audio} into {out_path}")
+            self._mux_audio(out_path, mux_audio)
+        finally:
+            self._remove_video_audio_path()
+        logger.info(f"Video saved to {out_path}")
         return {"video": None}
 
+    def _resolve_mux_audio_path(self):
+        input_data = getattr(self, "input_data", {})
+        cond_audio = input_data.get("cond_audio", {}) if isinstance(input_data, dict) else {}
+        person_count = len(cond_audio) if isinstance(cond_audio, dict) else 0
+        audio_input = getattr(self.input_info, "audio_path", None)
+        if audio_input is UNSET or audio_input is None:
+            audio_input = self.config.get("audio_path", "")
+        if person_count <= 1 and audio_input:
+            audio_input = str(audio_input)
+            if not os.path.isdir(audio_input):
+                original_audio = audio_input.split(",")[0].strip()
+                if original_audio and os.path.isfile(original_audio):
+                    return original_audio
+        return self.video_audio_path
+
     @staticmethod
-    def _mux_audio(video_path, audio_path):
+    def _is_same_file(path_a, path_b):
+        try:
+            return os.path.samefile(path_a, path_b)
+        except OSError:
+            return os.path.abspath(path_a) == os.path.abspath(path_b)
+
+    @staticmethod
+    def _mux_audio(video_path, audio_path, timeout=600):
+        if InfiniteTalkRunner._is_same_file(video_path, audio_path):
+            logger.warning(f"Skip audio mux because audio path is the output video itself: {audio_path}")
+            return
+
         tmp_path = video_path + ".tmp.mp4"
-        cmd = [
+        base_cmd = [
             ffmpeg.get_ffmpeg_exe(),
             "-y",
             "-i",
@@ -858,21 +1020,40 @@ class InfiniteTalkRunner(WanRunner):
             audio_path,
             "-c:v",
             "copy",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-shortest",
+        ]
+        cmd = [
+            *base_cmd,
             "-c:a",
             "copy",
-            "-shortest",
             tmp_path,
         ]
         try:
-            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
             if res.returncode != 0:
                 # Fallback to aac re-encoding (e.g. for WAV/PCM inputs)
-                cmd[9] = "aac"
-                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                cmd = [
+                    *base_cmd,
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "192k",
+                    tmp_path,
+                ]
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
             os.replace(tmp_path, video_path)
             logger.info(f"Muxed audio from {audio_path}")
+        except subprocess.TimeoutExpired as exc:
+            logger.error(f"Audio mux timed out after {timeout}s: {audio_path}")
+            raise RuntimeError(f"Audio mux timed out after {timeout}s: {audio_path}") from exc
         except Exception as exc:
-            logger.warning(f"Audio mux failed: {exc}")
+            logger.error(f"Audio mux failed: {exc}")
+            raise
+        finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 

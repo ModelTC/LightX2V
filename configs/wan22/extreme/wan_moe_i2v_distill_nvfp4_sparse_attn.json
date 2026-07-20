@@ -19,7 +19,7 @@
     "enable_cfg": false,
     "cpu_offload": false,
     "t5_cpu_offload": true,
-    "vae_cpu_offload": true,
+    "vae_cpu_offload": false,
     "use_image_encoder": false,
     "boundary_step_index": 2,
     "denoising_step_list": [
@@ -33,12 +33,5 @@
     "high_noise_quantized_ckpt": "path to i2v high_nvfp4.safetensors",
     "low_noise_quantized_ckpt": "path to i2v low_nvfp4.safetensors",
     "high_noise_original_ckpt": null,
-    "low_noise_original_ckpt": null,
-    "parallel": {
-        "seq_p_size": 8,
-        "seq_p_fp8_comm": true,
-        "seq_p_head_parallel": true,
-        "seq_p_tensor_fusion": true,
-        "seq_p_attn_type": "ulysses-opt"
-    }
+    "low_noise_original_ckpt": null
 }
