@@ -50,17 +50,6 @@ from lightx2v.utils.utils import seed_all, validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
-def _str2bool(value):
-    if isinstance(value, bool):
-        return value
-    lowered = value.lower()
-    if lowered in ("1", "true", "yes", "y", "on"):
-        return True
-    if lowered in ("0", "false", "no", "n", "off"):
-        return False
-    raise argparse.ArgumentTypeError(f"Expected a boolean value, got {value!r}")
-
-
 def init_runner(config):
     torch.set_grad_enabled(False)
     runner = RUNNER_REGISTER[config["model_cls"]](config)
@@ -133,110 +122,6 @@ def main():
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
-    hunyuan_cache_args = parser.add_argument_group("HunyuanImage3 cache options")
-    hunyuan_cache_args.add_argument("--enable_kv_cache", "--enable-kv-cache", dest="enable_kv_cache", type=_str2bool, nargs="?", const=True, default=None)
-    hunyuan_cache_args.add_argument("--enable_text_kv_cache", "--enable-text-kv-cache", dest="enable_text_kv_cache", type=_str2bool, nargs="?", const=True, default=None)
-    hunyuan_cache_args.add_argument("--use_taylor_cache", "--use-taylor-cache", dest="use_taylor_cache", type=_str2bool, nargs="?", const=True, default=None)
-    hunyuan_cache_args.add_argument("--taylor_cache_interval", "--taylor-cache-interval", dest="taylor_cache_interval", type=int, default=None)
-    hunyuan_cache_args.add_argument("--taylor_cache_order", "--taylor-cache-order", dest="taylor_cache_order", type=int, default=None)
-    hunyuan_cache_args.add_argument(
-        "--taylor_cache_enable_first_enhance",
-        "--taylor-cache-enable-first-enhance",
-        dest="taylor_cache_enable_first_enhance",
-        type=_str2bool,
-        nargs="?",
-        const=True,
-        default=None,
-    )
-    hunyuan_cache_args.add_argument("--taylor_cache_first_enhance_steps", "--taylor-cache-first-enhance-steps", dest="taylor_cache_first_enhance_steps", type=int, default=None)
-    hunyuan_cache_args.add_argument(
-        "--taylor_cache_enable_tailing_enhance",
-        "--taylor-cache-enable-tailing-enhance",
-        dest="taylor_cache_enable_tailing_enhance",
-        type=_str2bool,
-        nargs="?",
-        const=True,
-        default=None,
-    )
-    hunyuan_cache_args.add_argument("--taylor_cache_tailing_enhance_steps", "--taylor-cache-tailing-enhance-steps", dest="taylor_cache_tailing_enhance_steps", type=int, default=None)
-    hunyuan_cache_args.add_argument("--taylor_cache_low_freqs_order", "--taylor-cache-low-freqs-order", dest="taylor_cache_low_freqs_order", type=int, default=None)
-    hunyuan_cache_args.add_argument("--taylor_cache_high_freqs_order", "--taylor-cache-high-freqs-order", dest="taylor_cache_high_freqs_order", type=int, default=None)
-    hunyuan_native_args = parser.add_argument_group("HunyuanImage3 native implementation options")
-    hunyuan_native_args.add_argument("--moe_impl", "--moe-impl", dest="moe_impl", type=str, choices=["eager", "flashinfer"], default=None)
-    hunyuan_native_args.add_argument(
-        "--hunyuan_cfg_mode",
-        "--hunyuan-cfg-mode",
-        dest="hunyuan_cfg_mode",
-        type=str,
-        choices=["batch", "serial", "parallel"],
-        default=None,
-        help="HunyuanImage3 CFG execution mode: batch packs cond/uncond, serial runs two batch=1 forwards, parallel splits cond/uncond by cfg rank.",
-    )
-    hunyuan_native_args.add_argument(
-        "--attn_impl",
-        "--attn-impl",
-        dest="attn_impl",
-        type=str,
-        choices=[
-            "eager",
-            "sdpa",
-            "torch_sdpa",
-            "flash_attention_2",
-            "flash_attn2",
-            "flash_attention_3",
-            "flash_attn3",
-            "sage_attn2",
-            "sage_attn3",
-        ],
-        default=None,
-    )
-    hunyuan_sp_args = parser.add_argument_group("HunyuanImage3 sequence parallel options")
-    hunyuan_sp_args.add_argument(
-        "--hunyuan_sp_size",
-        "--hunyuan-sp-size",
-        dest="hunyuan_sp_size",
-        type=int,
-        default=None,
-    )
-    hunyuan_sp_args.add_argument(
-        "--hunyuan_sp_attn_type",
-        "--hunyuan-sp-attn-type",
-        dest="hunyuan_sp_attn_type",
-        type=str,
-        choices=["kv_all_gather", "kv-all-gather", "ulysses"],
-        default=None,
-    )
-    hunyuan_sp_args.add_argument(
-        "--hunyuan_pipeline_layout",
-        "--hunyuan-pipeline-layout",
-        dest="hunyuan_image3_pipeline_layout",
-        type=str,
-        choices=["interleaved", "contiguous"],
-        default=None,
-    )
-    hunyuan_flashinfer_args = parser.add_argument_group("HunyuanImage3 FlashInfer autotune options")
-    hunyuan_flashinfer_args.add_argument("--flashinfer_autotune", "--flashinfer-autotune", dest="flashinfer_autotune", type=_str2bool, nargs="?", const=True, default=None)
-    hunyuan_flashinfer_args.add_argument(
-        "--flashinfer_autotune_mode",
-        "--flashinfer-autotune-mode",
-        dest="flashinfer_autotune_mode",
-        type=str,
-        choices=["off", "tune", "load"],
-        default=None,
-        help="'tune' profiles missing FlashInfer fused MoE tactics and saves cache; 'load' only loads cache; 'off' disables autotune.",
-    )
-    hunyuan_flashinfer_args.add_argument("--flashinfer_autotune_cache", "--flashinfer-autotune-cache", dest="flashinfer_autotune_cache", type=str, default=None)
-    hunyuan_flashinfer_args.add_argument("--flashinfer_tuning_buckets", "--flashinfer-tuning-buckets", dest="flashinfer_tuning_buckets", type=str, default=None)
-    hunyuan_flashinfer_args.add_argument(
-        "--flashinfer_autotune_round_up",
-        "--flashinfer-autotune-round-up",
-        dest="flashinfer_autotune_round_up",
-        type=_str2bool,
-        nargs="?",
-        const=True,
-        default=None,
-    )
-    hunyuan_flashinfer_args.add_argument("--flashinfer_tune_max_num_tokens", "--flashinfer-tune-max-num-tokens", dest="flashinfer_tune_max_num_tokens", type=int, default=None)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
     parser.add_argument("--warmup", action="store_true", help="Warm up the model before inference. Disabled by default.")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")

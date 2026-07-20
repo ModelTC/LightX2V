@@ -11,14 +11,18 @@
     "pipeline_parallel": true,
     "hunyuan_image3_pipeline_layout": "interleaved",
     "enable_cfg": true,
-    "hunyuan_cfg_mode": "parallel",
+    "hunyuan_cfg_mode": "serial",
     "moe_impl": "flashinfer",
-    "attn_impl": "flash_attention_2",
+    "attn_impl": "sdpa",
     "flashinfer_autotune_mode": "tune",
+    "flashinfer_autotune_cache": "save_results/hunyuan_image3_flashinfer_ulysses_sp2_t2i.json",
+    "flashinfer_tune_max_num_tokens": 16384,
+    "flashinfer_tuning_buckets": [128, 256, 512, 1024, 2048, 4096, 8192, 12288, 16384],
+    "flashinfer_autotune_round_up": true,
     "parallel": {
-        "cfg_p_size": 2,
+        "cfg_p_size": 1,
         "seq_p_size": 2,
-        "seq_p_attn_type": "kv_all_gather"
+        "seq_p_attn_type": "ulysses"
     },
     "bot_task": "think_recaption",
     "use_system_prompt": "en_unified",

@@ -39,40 +39,6 @@ def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS and v is not None})
 
-    _hunyuan_image3_cli_cache_keys = (
-        "enable_kv_cache",
-        "enable_text_kv_cache",
-        "use_taylor_cache",
-        "taylor_cache_interval",
-        "taylor_cache_order",
-        "taylor_cache_enable_first_enhance",
-        "taylor_cache_first_enhance_steps",
-        "taylor_cache_enable_tailing_enhance",
-        "taylor_cache_tailing_enhance_steps",
-        "taylor_cache_low_freqs_order",
-        "taylor_cache_high_freqs_order",
-    )
-    config["_hunyuan_image3_cli_cache_snapshot"] = {
-        k: getattr(args, k, None) for k in _hunyuan_image3_cli_cache_keys if hasattr(args, k) and getattr(args, k, None) is not None
-    }
-    _hunyuan_image3_cli_native_keys = (
-        "moe_impl",
-        "hunyuan_cfg_mode",
-        "attn_impl",
-        "flashinfer_autotune",
-        "flashinfer_autotune_mode",
-        "flashinfer_autotune_cache",
-        "flashinfer_tuning_buckets",
-        "flashinfer_autotune_round_up",
-        "flashinfer_tune_max_num_tokens",
-        "hunyuan_sp_size",
-        "hunyuan_sp_attn_type",
-        "hunyuan_image3_pipeline_layout",
-    )
-    config["_hunyuan_image3_cli_native_snapshot"] = {
-        k: getattr(args, k, None) for k in _hunyuan_image3_cli_native_keys if hasattr(args, k) and getattr(args, k, None) is not None
-    }
-
     # Snapshot worldmirror-specific CLI flags so they can win over JSON
     # defaults after auto_calc_config merges the JSON in. See the
     # ``worldmirror`` branch of ``auto_calc_config`` for the replay logic.
@@ -300,39 +266,7 @@ def auto_calc_config(config):
             vae_downsample_factor = config.get("vae_downsample_factor")
             if isinstance(vae_downsample_factor, list) and vae_downsample_factor:
                 config["vae_scale_factor"] = int(vae_downsample_factor[0])
-        _hunyuan_image3_cli_cache_snapshot = config.pop("_hunyuan_image3_cli_cache_snapshot", None)
-        if isinstance(_hunyuan_image3_cli_cache_snapshot, dict):
-            for k, v in _hunyuan_image3_cli_cache_snapshot.items():
-                config[k] = v
-        _hunyuan_image3_cli_native_snapshot = config.pop("_hunyuan_image3_cli_native_snapshot", None)
-        if isinstance(_hunyuan_image3_cli_native_snapshot, dict):
-            for k, v in _hunyuan_image3_cli_native_snapshot.items():
-                config[k] = v
-
-        sp_size_override = config.pop("hunyuan_sp_size", None)
-        sp_attn_override = config.pop("hunyuan_sp_attn_type", None)
         parallel_config = config.get("parallel")
-        if sp_size_override is not None:
-            sp_size = int(sp_size_override)
-            if sp_size < 1:
-                raise ValueError(f"hunyuan_sp_size must be >= 1, got {sp_size}.")
-            if sp_size == 1:
-                # Only collapse the sequence-parallel dimension.  A hybrid
-                # CFG+SP config may still need its cfg_p_size=2 process mesh
-                # when SP is disabled from the CLI.
-                if isinstance(parallel_config, dict) and int(parallel_config.get("cfg_p_size", 1)) > 1:
-                    parallel_config = dict(parallel_config)
-                    parallel_config["seq_p_size"] = 1
-                    parallel_config.pop("seq_p_attn_type", None)
-                    config["parallel"] = parallel_config
-                else:
-                    config["parallel"] = False
-                    parallel_config = None
-            else:
-                parallel_config = dict(parallel_config) if isinstance(parallel_config, dict) else {}
-                parallel_config["seq_p_size"] = sp_size
-                config["parallel"] = parallel_config
-
         if isinstance(parallel_config, dict):
             parallel_config = dict(parallel_config)
             cfg_p_size = int(parallel_config.get("cfg_p_size", 1))
@@ -348,7 +282,7 @@ def auto_calc_config(config):
             parallel_config["seq_p_size"] = seq_p_size
 
             if seq_p_size > 1:
-                attn_type = sp_attn_override or parallel_config.get("seq_p_attn_type", "kv_all_gather")
+                attn_type = parallel_config.get("seq_p_attn_type", "kv_all_gather")
                 attn_type = str(attn_type).strip().lower().replace("-", "_")
                 if attn_type in ("kv_allgather", "kv_gather"):
                     attn_type = "kv_all_gather"
@@ -375,9 +309,6 @@ def auto_calc_config(config):
                         "HunyuanImage3 Ulysses requires seq_p_size to divide Q and KV heads: "
                         f"Q={q_heads}, KV={kv_heads}, seq_p_size={seq_p_size}."
                     )
-
-    config.pop("_hunyuan_image3_cli_cache_snapshot", None)
-    config.pop("_hunyuan_image3_cli_native_snapshot", None)
 
     if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:

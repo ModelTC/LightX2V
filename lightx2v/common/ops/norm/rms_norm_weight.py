@@ -66,7 +66,7 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         self.weight_diff = torch.tensor(0.0, dtype=GET_DTYPE(), device=AI_DEVICE)
 
     def _get_actual_weight(self):
-        if not hasattr(self, "weight_diff") or not self.has_diff:
+        if not hasattr(self, "weight_diff"):
             return self.weight
         if self.weight_diff.device != self.weight.device or self.weight_diff.dtype != self.weight.dtype:
             self.weight_diff = self.weight_diff.to(device=self.weight.device, dtype=self.weight.dtype)
@@ -76,7 +76,6 @@ class RMSWeightTemplate(metaclass=ABCMeta):
         if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
             if self.weight_diff_name in weight_dict:
                 self.weight_diff = weight_dict[self.weight_diff_name]
-                self.has_diff = True
                 logger.debug(f"Register Diff to {self.weight_name}")
 
     def load(self, weight_dict):

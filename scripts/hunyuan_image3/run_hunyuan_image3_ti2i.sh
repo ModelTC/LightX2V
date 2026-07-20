@@ -52,18 +52,11 @@ fi
 
 echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-not set}"
 echo "Running HunyuanImage3 ${DEMO}"
-echo "enable_kv_cache=${enable_kv_cache:-true}"
-echo "enable_text_kv_cache=${enable_text_kv_cache:-${enable_kv_cache:-true}}"
-echo "use_taylor_cache=${use_taylor_cache:-false}"
-echo "hunyuan_cfg_mode=${hunyuan_cfg_mode:-batch}"
-echo "moe_impl=${moe_impl:-flashinfer}"
-echo "attn_impl=${attn_impl:-torch_sdpa}"
-echo "flashinfer_autotune_mode=${flashinfer_autotune_mode:-off}"
-echo "flashinfer_autotune_cache=${flashinfer_autotune_cache:-${lightx2v_path}/save_results/hunyuan_image3_flashinfer_autotune_${DEMO}.json}"
 
 source "${lightx2v_path}/scripts/base/base.sh"
 
-config_json="${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_i2i.json"
+config_json="${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_ti2i.json"
+echo "config_json=${config_json}"
 
 python -m lightx2v.infer \
     --model_cls hunyuan_image3 \
@@ -73,23 +66,4 @@ python -m lightx2v.infer \
     --prompt "$prompt" \
     --image_path "$image_path" \
     --save_result_path "$save_result_path" \
-    --seed "$seed" \
-    --hunyuan_cfg_mode "${hunyuan_cfg_mode:-batch}" \
-    --moe_impl "${moe_impl:-eager}" \
-    --attn_impl "${attn_impl:-torch_sdpa}" \
-    --flashinfer_autotune_mode "${flashinfer_autotune_mode:-tune}" \
-    --flashinfer_autotune_cache "${flashinfer_autotune_cache:-${lightx2v_path}/save_results/hunyuan_image3_flashinfer_autotune_${DEMO}.json}" \
-    --flashinfer_tune_max_num_tokens "${flashinfer_tune_max_num_tokens:-16384}" \
-    --flashinfer_tuning_buckets "${flashinfer_tuning_buckets:-128,256,512,1024,2048,4096,8192,12288,16384}" \
-    --flashinfer_autotune_round_up "${flashinfer_autotune_round_up:-true}" \
-    --enable_kv_cache "${enable_kv_cache:-true}" \
-    --enable_text_kv_cache "${enable_text_kv_cache:-${enable_kv_cache:-true}}" \
-    --use_taylor_cache "${use_taylor_cache:-false}" \
-    --taylor_cache_interval "${taylor_cache_interval:-5}" \
-    --taylor_cache_order "${taylor_cache_order:-2}" \
-    --taylor_cache_enable_first_enhance "${taylor_cache_enable_first_enhance:-false}" \
-    --taylor_cache_first_enhance_steps "${taylor_cache_first_enhance_steps:-3}" \
-    --taylor_cache_enable_tailing_enhance "${taylor_cache_enable_tailing_enhance:-false}" \
-    --taylor_cache_tailing_enhance_steps "${taylor_cache_tailing_enhance_steps:-1}" \
-    --taylor_cache_low_freqs_order "${taylor_cache_low_freqs_order:-2}" \
-    --taylor_cache_high_freqs_order "${taylor_cache_high_freqs_order:-2}"
+    --seed "$seed"

@@ -5,13 +5,35 @@ set -euo pipefail
 # Prefer the backend-specific wrappers next to this file for normal use.
 
 GPU_IDS="${1:-${CUDA_VISIBLE_DEVICES:-}}"
-SP_SIZE="${SP_SIZE:-2}"
 SP_ATTN_TYPE="${SP_ATTN_TYPE:-ulysses}"
 
 export lightx2v_path="${lightx2v_path:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 export model_path="${model_path:-/path/to/HunyuanImage-3.0-model}"
 export HUNYUAN_IMAGE3_REPO_PATH="${HUNYUAN_IMAGE3_REPO_PATH:-/path/to/HunyuanImage-3.0-repo}"
 export PYTHONPATH="${HUNYUAN_IMAGE3_REPO_PATH}:${PYTHONPATH:-}"
+
+if [ "$SP_ATTN_TYPE" = "ulysses" ]; then
+    config_json="${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_t2i_dist_ulysses.json"
+elif [ "$SP_ATTN_TYPE" = "kv_all_gather" ]; then
+    config_json="${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_t2i_dist_kv_all_gather.json"
+else
+    echo "SP_ATTN_TYPE must select either the ulysses or kv_all_gather JSON config, got: $SP_ATTN_TYPE" >&2
+    exit 2
+fi
+
+read -r SP_SIZE configured_sp_attn_type < <(python - "$config_json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r") as f:
+    parallel = json.load(f)["parallel"]
+print(parallel["seq_p_size"], parallel["seq_p_attn_type"])
+PY
+)
+if [ "$SP_ATTN_TYPE" != "$configured_sp_attn_type" ]; then
+    echo "Selected SP backend ($SP_ATTN_TYPE) does not match config parallel.seq_p_attn_type ($configured_sp_attn_type)." >&2
+    exit 2
+fi
 
 if [ -n "$GPU_IDS" ]; then
     export CUDA_VISIBLE_DEVICES="$GPU_IDS"
@@ -23,11 +45,7 @@ elif command -v nvidia-smi >/dev/null 2>&1; then
 fi
 
 if ! [[ "$SP_SIZE" =~ ^[1-9][0-9]*$ ]]; then
-    echo "SP_SIZE must be a positive integer, got: $SP_SIZE" >&2
-    exit 2
-fi
-if [ "$SP_ATTN_TYPE" != "kv_all_gather" ] && [ "$SP_ATTN_TYPE" != "ulysses" ]; then
-    echo "SP_ATTN_TYPE must be kv_all_gather or ulysses, got: $SP_ATTN_TYPE" >&2
+    echo "parallel.seq_p_size in $config_json must be a positive integer, got: $SP_SIZE" >&2
     exit 2
 fi
 IFS=',' read -r -a visible_gpu_ids <<< "${CUDA_VISIBLE_DEVICES:-}"
@@ -77,21 +95,6 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     done
 fi
 
-if [ "$SP_ATTN_TYPE" = "ulysses" ]; then
-    config_json="${lightx2v_path}/configs/dist_infer/hunyuan_image3_t2i_dist_ulysses.json"
-else
-    config_json="${lightx2v_path}/configs/dist_infer/hunyuan_image3_t2i_dist_kv_all_gather.json"
-fi
-default_autotune_cache="${lightx2v_path}/save_results/hunyuan_image3_flashinfer_${SP_ATTN_TYPE}_sp${SP_SIZE}_t2i.json"
-resolved_autotune_cache="${flashinfer_autotune_cache:-$default_autotune_cache}"
-if [ -n "${flashinfer_autotune_mode:-}" ]; then
-    resolved_autotune_mode="$flashinfer_autotune_mode"
-elif [ "${flashinfer_autotune:-true}" = "false" ] || [ "${flashinfer_autotune:-true}" = "0" ]; then
-    resolved_autotune_mode="off"
-else
-    resolved_autotune_mode="tune"
-fi
-
 echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 echo "SP_SIZE=${SP_SIZE}, SP_ATTN_TYPE=${SP_ATTN_TYPE}, layout=interleaved"
 for ((rank=0; rank<SP_SIZE; rank++)); do
@@ -100,9 +103,7 @@ for ((rank=0; rank<SP_SIZE; rank++)); do
     lane_csv=$(IFS=,; echo "${lane[*]}")
     echo "SP rank ${rank} pipeline lane: ${lane_csv}"
 done
-echo "hunyuan_cfg_mode=serial, moe_impl=${moe_impl:-flashinfer}, attn_impl=${attn_impl:-flash_attention_2}"
-echo "enable_kv_cache=${enable_kv_cache:-true}, flashinfer_autotune_mode=${resolved_autotune_mode}"
-echo "flashinfer_autotune_cache=${resolved_autotune_cache}"
+echo "config_json=${config_json}"
 
 source "${lightx2v_path}/scripts/base/base.sh"
 
@@ -122,17 +123,4 @@ torchrun \
     --config_json "$config_json" \
     --prompt "生成图片：一辆汽车行驶在高速公路上，驾驶员在打电话，副驾驶坐着一只狗" \
     --save_result_path "${lightx2v_path}/save_results/hunyuan_image3_t2i_${SP_ATTN_TYPE}_sp${SP_SIZE}.png" \
-    --seed 42 \
-    --hunyuan_sp_size "$SP_SIZE" \
-    --hunyuan_sp_attn_type "$SP_ATTN_TYPE" \
-    --hunyuan_cfg_mode serial \
-    --moe_impl "${moe_impl:-flashinfer}" \
-    --attn_impl "${attn_impl:-sdpa}" \
-    --flashinfer_autotune_mode "$resolved_autotune_mode" \
-    --flashinfer_autotune_cache "$resolved_autotune_cache" \
-    --flashinfer_tune_max_num_tokens "${flashinfer_tune_max_num_tokens:-16384}" \
-    --flashinfer_tuning_buckets "${flashinfer_tuning_buckets:-128,256,512,1024,2048,4096,8192,12288,16384}" \
-    --flashinfer_autotune_round_up "${flashinfer_autotune_round_up:-true}" \
-    --enable_kv_cache "${enable_kv_cache:-true}" \
-    --enable_text_kv_cache "${enable_text_kv_cache:-${enable_kv_cache:-true}}" \
-    --use_taylor_cache false
+    --seed 42
