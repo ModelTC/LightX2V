@@ -129,6 +129,8 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
         cleanup only and should NOT be called between timesteps in async mode.
         """
         self._kv_cache.clear()
+        self._full_k_bufs.clear()
+        self._full_v_bufs.clear()
 
     # ------------------------------------------------------------------
     # PipeFusion forward
