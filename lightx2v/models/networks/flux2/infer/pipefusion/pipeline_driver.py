@@ -315,7 +315,7 @@ class Flux2PipelineDriver:
                 if self._is_last:
                     noise_pred = result
                     scheduler.scheduler._step_index = i + self.state.warmup_steps
-                    patch_latents[patch_idx] = scheduler.scheduler.step(noise_pred, t, last_patch_latents[patch_idx], return_dict=False)[0]
+                    patch_latents[patch_idx] = scheduler.step_post_patch(noise_pred, last_patch_latents[patch_idx], t)
                     if i != total_steps - 1:
                         req = self.pp_comm.pipeline_isend(patch_latents[patch_idx], name="latent", segment_idx=patch_idx)
                         pending_isends.append((req, patch_latents[patch_idx]))
