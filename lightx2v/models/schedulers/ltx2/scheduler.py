@@ -940,7 +940,7 @@ class LTX2Scheduler(BaseScheduler):
 
 
 class LTX2ARScheduler(LTX2Scheduler):
-    """LTX2 scheduler variant that keeps each completed AR chunk patchified."""
+    """LTX2 self-forcing scheduler that keeps completed AR chunks patchified."""
 
     def __init__(self, config):
         super().__init__(config)
@@ -956,17 +956,42 @@ class LTX2ARScheduler(LTX2Scheduler):
             return super().current_sigma()
         return torch.as_tensor(self.context_noise, dtype=self.sigmas.dtype, device=self.sigmas.device)
 
+    @staticmethod
+    def self_forcing_renoise(denoised: torch.Tensor, noise: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+        """Sample the next self-forcing state from a predicted clean latent."""
+        sigma = sigma.to(device=denoised.device, dtype=torch.float32)
+        while sigma.ndim < denoised.ndim:
+            sigma = sigma.unsqueeze(-1)
+        return ((1.0 - sigma) * denoised.float() + sigma * noise.float()).to(denoised.dtype)
+
+    def _next_self_forcing_latent(self, denoised, denoise_mask, clean, sigma_next):
+        noise = torch.randn(
+            denoised.shape,
+            dtype=denoised.dtype,
+            device=denoised.device,
+            generator=self.generator,
+        )
+        latent = self.self_forcing_renoise(denoised, noise, sigma_next)
+        return self.post_process_latent(latent, denoise_mask, clean)
+
     def step_post(self):
         self.v_noise_pred = self.post_process_latent(self.v_noise_pred, self.video_latent_state.denoise_mask, self.video_latent_state.clean_latent)
         self.a_noise_pred = self.post_process_latent(self.a_noise_pred, self.audio_latent_state.denoise_mask, self.audio_latent_state.clean_latent)
 
-        sigma = self.sigmas[self.step_index]
         sigma_next = self.sigmas[self.step_index + 1]
-        dt = sigma_next - sigma
-
-        v_velocity = self.to_velocity(self.video_latent_state.latent, sigma, self.v_noise_pred)
-        a_velocity = self.to_velocity(self.audio_latent_state.latent, sigma, self.a_noise_pred)
-        v_latent = self.video_latent_state.latent.to(torch.float32) + v_velocity.to(torch.float32) * dt
-        a_latent = self.audio_latent_state.latent.to(torch.float32) + a_velocity.to(torch.float32) * dt
-        self.video_latent_state.latent = v_latent.to(self.video_latent_state.latent.dtype)
-        self.audio_latent_state.latent = a_latent.to(self.audio_latent_state.latent.dtype)
+        if self.step_index < self.infer_steps - 1:
+            self.video_latent_state.latent = self._next_self_forcing_latent(
+                self.v_noise_pred,
+                self.video_latent_state.denoise_mask,
+                self.video_latent_state.clean_latent,
+                sigma_next,
+            )
+            self.audio_latent_state.latent = self._next_self_forcing_latent(
+                self.a_noise_pred,
+                self.audio_latent_state.denoise_mask,
+                self.audio_latent_state.clean_latent,
+                sigma_next,
+            )
+        else:
+            self.video_latent_state.latent = self.v_noise_pred
+            self.audio_latent_state.latent = self.a_noise_pred
