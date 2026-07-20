@@ -283,12 +283,8 @@ class Flux2BaseRunner(DefaultRunner):
         height = self.input_info.latent_shape[1]  # packed_h * packed_w tokens
         # Reconstruct actual height/width from latent_image_ids
         latent_image_ids = self.model.scheduler.latent_image_ids
-        if latent_image_ids is not None:
-            packed_h = int((latent_image_ids[0, :, 1].max() + 1).item()) if latent_image_ids.ndim == 3 else int((latent_image_ids[:, 1].max() + 1).item())
-            packed_w = int((latent_image_ids[0, :, 2].max() + 1).item()) if latent_image_ids.ndim == 3 else int((latent_image_ids[:, 2].max() + 1).item())
-            vae_scale_factor = self.config.get("vae_scale_factor", 16)
-            actual_height = packed_h * vae_scale_factor * 2
-            actual_width = packed_w * vae_scale_factor * 2
+        if self.input_info.target_shape is not None:
+            actual_height, actual_width = self.input_info.target_shape
         else:
             actual_height = actual_width = 1024
 
