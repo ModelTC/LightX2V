@@ -12,7 +12,6 @@
   "robot_state_dim": 14,
   "policy_profile": "robotwin",
   "normalize_mode": "z-score",
-  "target_video_length": 9,
   "binarize_gripper": false,
   "gripper_postprocess": false,
   "default_prompt": "A video recorded from a robot's point of view executing the following instruction: {task_prompt}"

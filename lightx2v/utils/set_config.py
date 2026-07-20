@@ -271,7 +271,7 @@ def auto_calc_config(config):
                 if q_heads % seq_p_size or kv_heads % seq_p_size:
                     raise ValueError(f"HunyuanImage3 Ulysses requires seq_p_size to divide Q and KV heads: Q={q_heads}, KV={kv_heads}, seq_p_size={seq_p_size}.")
 
-    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
+    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1

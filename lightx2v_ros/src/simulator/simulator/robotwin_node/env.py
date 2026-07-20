@@ -20,7 +20,9 @@ lazily inside ``reset``/construction, so the ROS package builds and imports even
 on machines where the RoboTwin runtime is not installed yet.
 """
 
+import contextlib
 import importlib
+import io
 import os
 import sys
 from pathlib import Path
@@ -33,8 +35,52 @@ from ..sim.base_env import BaseSimEnv, Observation
 FALLBACK_INSTRUCTION = "Complete the {task} task."
 
 
+def _quat_multiply_xyzw(left, right):
+    """Compose two quaternions in scipy's [x, y, z, w] convention."""
+    lx, ly, lz, lw = np.asarray(left, dtype=np.float64)
+    rx, ry, rz, rw = np.asarray(right, dtype=np.float64)
+    quat = np.array(
+        [
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw,
+            lw * rw - lx * rx - ly * ry - lz * rz,
+        ],
+        dtype=np.float64,
+    )
+    norm = np.linalg.norm(quat)
+    if norm < 1e-8:
+        raise ValueError("LingBot-VA produced a zero-norm end-effector quaternion.")
+    return quat / norm
+
+
+def add_relative_eef_pose(relative_pose, initial_pose):
+    """Convert LingBot-VA's relative dual-arm pose into absolute EE targets."""
+    relative_pose = np.asarray(relative_pose, dtype=np.float64).reshape(-1)
+    initial_pose = np.asarray(initial_pose, dtype=np.float64).reshape(-1)
+    if relative_pose.size != 16 or initial_pose.size != 16:
+        raise ValueError("Dual-arm end-effector poses must contain 16 values.")
+
+    output = []
+    for offset in (0, 8):
+        relative = relative_pose[offset : offset + 8]
+        initial = initial_pose[offset : offset + 8]
+        translation = initial[:3] + relative[:3]
+        quaternion = _quat_multiply_xyzw(initial[3:7], relative[3:7])
+        output.extend(np.concatenate([translation, quaternion, relative[7:8]]))
+    return np.asarray(output, dtype=np.float32)
+
+
 def default_robotwin_root() -> Path:
     return Path(__file__).resolve().parent / "RoboTwin"
+
+
+def resolve_robotwin_root(path=None) -> Path:
+    """Return a normalized RoboTwin root supplied by ROS or the default."""
+    raw_path = str(path).strip() if path is not None else ""
+    if not raw_path:
+        return default_robotwin_root().resolve()
+    return Path(os.path.expandvars(raw_path)).expanduser().resolve()
 
 
 def _add_python_path(path) -> None:
@@ -63,7 +109,7 @@ class RoboTwinEnv(BaseSimEnv):
         logger=None,
     ):
         super().__init__(contract)
-        self.robotwin_root = Path(robotwin_root or default_robotwin_root()).expanduser()
+        self.robotwin_root = resolve_robotwin_root(robotwin_root)
         self.task_name = str(task_name)
         self.task_config = str(task_config)
         self.embodiment = str(embodiment).strip()
@@ -98,18 +144,118 @@ class RoboTwinEnv(BaseSimEnv):
     # ------------------------------------------------------------------ setup
     def _prepare_runtime(self) -> None:
         root = self.robotwin_root
-        if not (root / "envs").is_dir():
-            raise FileNotFoundError(f"RoboTwin is not vendored at {root}. See robotwin_node/RoboTwin/README and run the RoboTwin install/asset-download steps.")
+        required_paths = {
+            "envs/": (root / "envs").is_dir(),
+            "task_config/": (root / "task_config").is_dir(),
+            "assets/": (root / "assets").is_dir(),
+            "assets/objects/objaverse/list.json": (root / "assets" / "objects" / "objaverse" / "list.json").is_file(),
+            "assets/objects/same.json": (root / "assets" / "objects" / "same.json").is_file(),
+        }
+        missing = [name for name, exists in required_paths.items() if not exists]
+        if missing:
+            raise FileNotFoundError(
+                f"Invalid or incomplete RoboTwin root '{root}': missing {', '.join(missing)}. "
+                "Pass the directory containing envs/, task_config/, and assets/ "
+                "with '--ros-args -p robotwin_root:=/path/to/RoboTwin'."
+            )
+
         # RoboTwin source uses root-relative imports such as `from envs import ...`
-        # and `from generate_episode_instructions import *`.
+        # and `from generate_episode_instructions import *`. It also resolves many
+        # resources from the process working directory (for example
+        # `./assets/objects/objaverse/list.json`), so the dedicated simulator node
+        # must run from the selected RoboTwin root for its entire lifetime.
+        os.chdir(root)
         _add_python_path(root)
         _add_python_path(root / "description" / "utils")
+        self._log(f"using RoboTwin root: {root}")
 
     def _require_config(self, *parts) -> Path:
         path = self._configs_path.joinpath(*parts)
         if not path.exists():
             raise FileNotFoundError(f"Missing RoboTwin config: {path}. Populate `task_config/` (and `assets/`) from the official RoboTwin repo (see robotwin_node/RoboTwin/script).")
         return path
+
+    def _prepare_planner_runtime(self) -> None:
+        """Make RoboTwin importable when its optional Curobo planner is absent.
+
+        RoboTwin catches the Curobo import error in ``planner.py``, but then
+        ``robot.py`` unconditionally imports ``CuroboPlanner`` from that module.
+        The ROS adapter only executes qpos actions, so it can safely use a small
+        compatibility planner for scene initialization and gripper interpolation.
+        The scripted expert remains disabled through ``CUROBO_AVAILABLE=False``.
+        """
+        planner_module = sys.modules.get("envs.robot.planner")
+        if planner_module is not None and hasattr(planner_module, "CuroboPlanner"):
+            if not hasattr(planner_module, "CUROBO_AVAILABLE"):
+                planner_module.CUROBO_AVAILABLE = True
+            return
+
+        # Importing this submodule first executes envs.robot.__init__, whose
+        # unconditional CuroboPlanner import is precisely the upstream bug. Keep
+        # its expected warning/traceback out of the ROS log and inspect the
+        # successfully loaded planner submodule after that import fails.
+        captured_stdout = io.StringIO()
+        captured_stderr = io.StringIO()
+        import_error = None
+        try:
+            with contextlib.redirect_stdout(captured_stdout), contextlib.redirect_stderr(captured_stderr):
+                importlib.import_module("envs.robot.planner")
+        except ImportError as exc:
+            import_error = exc
+
+        planner_module = sys.modules.get("envs.robot.planner")
+        if planner_module is None:
+            captured = captured_stdout.getvalue() + captured_stderr.getvalue()
+            if captured:
+                print(captured, file=sys.stderr, end="")
+            if import_error is not None:
+                raise import_error
+            raise ImportError("RoboTwin did not load envs.robot.planner")
+
+        if hasattr(planner_module, "CuroboPlanner"):
+            planner_module.CUROBO_AVAILABLE = True
+            return
+
+        class CuroboPlanner:
+            """No-Curobo compatibility planner for qpos-only simulation."""
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            @staticmethod
+            def plan_grippers(now_val, target_val):
+                num_step = 200
+                return {
+                    "num_step": num_step,
+                    "per_step": (target_val - now_val) / num_step,
+                    "result": np.linspace(now_val, target_val, num_step),
+                }
+
+            @staticmethod
+            def plan_path(*args, **kwargs):
+                return {"status": "Fail"}
+
+            @staticmethod
+            def plan_batch(*args, **kwargs):
+                return {"status": np.array(["Failure"], dtype=object)}
+
+            @staticmethod
+            def update_point_cloud(*args, **kwargs):
+                return None
+
+        CuroboPlanner.__module__ = planner_module.__name__
+        planner_module.CuroboPlanner = CuroboPlanner
+        planner_module.CUROBO_AVAILABLE = False
+
+        # Python removes the failed parent imports automatically. Clear any
+        # remaining partial modules so the next task import sees the patched
+        # planner and constructs envs.robot normally.
+        sys.modules.pop("envs.robot.robot", None)
+        sys.modules.pop("envs.robot", None)
+        envs_module = sys.modules.get("envs")
+        if envs_module is not None and hasattr(envs_module, "robot"):
+            delattr(envs_module, "robot")
+        self._log("curobo is unavailable: using qpos-only planner compatibility mode")
 
     def _build_task_args(self) -> dict:
         """Replicates third_party/RoboTwin/script/eval_policy.py:main() arg assembly."""
@@ -168,6 +314,7 @@ class RoboTwinEnv(BaseSimEnv):
         return args
 
     def _instantiate_task(self):
+        self._prepare_planner_runtime()
         module = importlib.import_module(f"envs.{self.task_name}")
         task_cls = getattr(module, self.task_name)
         task = task_cls()
@@ -192,7 +339,16 @@ class RoboTwinEnv(BaseSimEnv):
         instruction = self._resolve_instruction(episode_info)
         self.env.set_instruction(instruction=instruction)
         self._task_description = instruction
+        self._lingbot_initial_eef_pose = self._current_eef_pose()
         self._log(f"episode ready: task={self.task_name} config={self.task_config} seed={self.seed} instruction={instruction!r}")
+
+    def _current_eef_pose(self):
+        observation = self.env.get_obs()
+        endpose = observation["endpose"]
+        return np.asarray(
+            list(endpose["left_endpose"]) + [endpose["left_gripper"]] + list(endpose["right_endpose"]) + [endpose["right_gripper"]],
+            dtype=np.float64,
+        )
 
     @property
     def _expert_planner_available(self) -> bool:
@@ -310,6 +466,11 @@ class RoboTwinEnv(BaseSimEnv):
         # RoboTwin sets a per-task rollout cap (`step_lim`) during setup_demo.
         return getattr(self.env, "step_lim", None)
 
+    @property
+    def accepted_action_dims(self):
+        # 14-D absolute qpos (FastWAM) or 16-D relative EE pose (LingBot-VA).
+        return (self.contract.action_dim, 16)
+
     def new_episode(self, max_setup_retries: int = 5) -> Observation:
         """Tear down the current episode and set up a fresh one (new layout).
 
@@ -370,6 +531,7 @@ class RoboTwinEnv(BaseSimEnv):
             try:
                 self._setup_demo()
                 self.env.set_instruction(instruction=self._task_description)
+                self._lingbot_initial_eef_pose = self._current_eef_pose()
             except Exception:
                 pass
             raise
@@ -420,8 +582,16 @@ class RoboTwinEnv(BaseSimEnv):
     # ------------------------------------------------------------------- step
     def step(self, action):
         action = np.asarray(action, dtype=np.float32).reshape(-1)
-        # RoboTwin policies output absolute joint targets (qpos), matching FastWAM.
-        self.env.take_action(action, action_type="qpos")
+        if action.size == self.contract.action_dim:
+            # FastWAM outputs absolute joint targets.
+            self.env.take_action(action, action_type="qpos")
+        elif action.size == 16:
+            # LingBot-VA outputs dual-arm relative EE pose:
+            # [xyz, quaternion_xyzw, gripper] x 2, relative to episode start.
+            ee_action = add_relative_eef_pose(action, self._lingbot_initial_eef_pose)
+            self.env.take_action(ee_action, action_type="ee")
+        else:
+            raise ValueError(f"RoboTwin expects a 14-D qpos or 16-D relative EE action, got {action.size}.")
         obs = self._observation()
         success = bool(getattr(self.env, "eval_success", False)) or bool(self.env.check_success())
         return obs, success
