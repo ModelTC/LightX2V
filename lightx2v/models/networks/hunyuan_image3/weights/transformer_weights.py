@@ -9,7 +9,7 @@ class HunyuanImage3TransformerWeights(WeightModule):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
         self.config = config
-        self.blocks_num = config["num_layers"]
+        self.blocks_num = int(config.get("num_layers") or config["num_hidden_layers"])
         self.mm_type = config.get("dit_quant_scheme", "Default")
         if self.mm_type != "Default":
             assert config.get("dit_quantized") is True

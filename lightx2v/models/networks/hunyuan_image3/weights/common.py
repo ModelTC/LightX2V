@@ -22,6 +22,18 @@ def _moe_value(config, name, block_index, default=None):
     return value
 
 
+def _patch_size(config):
+    patch_size = config.get("patch_size")
+    if not patch_size or isinstance(patch_size, (list, tuple)):
+        return 1
+    return int(patch_size)
+
+
+def _patch_embed_hidden_dim(config):
+    hidden_dim = config.get("patch_embed_hidden_dim")
+    return 1024 if hidden_dim is None else int(hidden_dim)
+
+
 class TensorPairWeight:
     def __init__(self, weight_name, bias_name=None):
         self.weight_name = weight_name
@@ -172,8 +184,8 @@ class HunyuanImage3ResBlockWeights(WeightModule):
 class HunyuanImage3UNetDownWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
-        patch_size = int(config.get("patch_size", 1) or 1)
-        hidden_channels = int(config["patch_embed_hidden_dim"])
+        patch_size = _patch_size(config)
+        hidden_channels = _patch_embed_hidden_dim(config)
         out_channels = int(config["hidden_size"])
         in_channels = int(config.get("vae", {}).get("latent_channels", config.get("latent_channels", 32)))
         self.patch_size = patch_size
@@ -201,8 +213,8 @@ class HunyuanImage3UNetDownWeights(WeightModule):
 class HunyuanImage3UNetUpWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
-        patch_size = int(config.get("patch_size", 1) or 1)
-        hidden_channels = int(config["patch_embed_hidden_dim"])
+        patch_size = _patch_size(config)
+        hidden_channels = _patch_embed_hidden_dim(config)
         in_channels = int(config["hidden_size"])
         out_channels = int(config.get("vae", {}).get("latent_channels", config.get("latent_channels", 32)))
         self.patch_size = patch_size
@@ -419,7 +431,7 @@ class HunyuanImage3AttentionWeights(WeightModule):
         super().__init__()
         prefix = f"{block_prefix}.{block_index}"
         rms_type = config.get("rms_norm_type", "fp32_variance")
-        self.heads = int(config["num_attention_heads"])
+        self.heads = int(config.get("num_attention_heads") or config["num_heads"])
         self.kv_heads = int(config.get("num_key_value_heads") or self.heads)
         self.head_dim = int(config.get("attention_head_dim", config["hidden_size"] // self.heads))
         self.add_module(

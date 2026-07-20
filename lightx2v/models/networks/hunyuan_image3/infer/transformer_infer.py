@@ -35,9 +35,9 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
 
     def __init__(self, config):
         self.config = config
-        self.num_layers = config["num_layers"]
+        self.num_layers = int(config.get("num_layers") or config["num_hidden_layers"])
         self.hidden_size = config["hidden_size"]
-        self.num_heads = config["num_attention_heads"]
+        self.num_heads = int(config.get("num_attention_heads") or config["num_heads"])
         self.num_key_value_heads = config.get("num_key_value_heads") or self.num_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.head_dim = config.get("attention_head_dim", self.hidden_size // self.num_heads)

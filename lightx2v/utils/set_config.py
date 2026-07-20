@@ -229,27 +229,6 @@ def auto_calc_config(config):
         config["infer_steps"] = config["num_inference_steps"]
 
     if config["model_cls"] == "hunyuan_image3":
-        if "num_layers" not in config and "num_hidden_layers" in config:
-            config["num_layers"] = config["num_hidden_layers"]
-        if "num_heads" not in config and "num_attention_heads" in config:
-            config["num_heads"] = config["num_attention_heads"]
-        if "num_attention_heads" not in config and "num_heads" in config:
-            config["num_attention_heads"] = config["num_heads"]
-        if "attention_head_dim" not in config and "hidden_size" in config and "num_attention_heads" in config:
-            config["attention_head_dim"] = config["hidden_size"] // config["num_attention_heads"]
-        if "infer_steps" not in config and "diff_infer_steps" in config:
-            config["infer_steps"] = config["diff_infer_steps"]
-        if "sample_guide_scale" not in config and "diff_guidance_scale" in config:
-            config["sample_guide_scale"] = config["diff_guidance_scale"]
-        if "sample_shift" not in config and "flow_shift" in config:
-            config["sample_shift"] = config["flow_shift"]
-        config.setdefault("img_proj_type", "unet")
-        if config.get("patch_size") is None or isinstance(config.get("patch_size"), (list, tuple)):
-            config["patch_size"] = 1
-        if config.get("patch_embed_hidden_dim") is None:
-            config["patch_embed_hidden_dim"] = 1024
-        config["cfg_distilled"] = bool(config.get("cfg_distilled", False))
-        config["use_meanflow"] = bool(config.get("use_meanflow", False))
         if "vae_scale_factor" not in config:
             vae_downsample_factor = config.get("vae_downsample_factor")
             if isinstance(vae_downsample_factor, list) and vae_downsample_factor:
@@ -290,7 +269,7 @@ def auto_calc_config(config):
                 raise ValueError("HunyuanImage3 sequence parallel with cfg_p_size=1 requires hunyuan_cfg_mode='serial'.")
 
             if seq_p_size > 1 and parallel_config["seq_p_attn_type"] == "ulysses":
-                q_heads = int(config["num_attention_heads"])
+                q_heads = int(config.get("num_attention_heads") or config["num_heads"])
                 kv_heads = int(config.get("num_key_value_heads") or q_heads)
                 if q_heads % seq_p_size or kv_heads % seq_p_size:
                     raise ValueError(

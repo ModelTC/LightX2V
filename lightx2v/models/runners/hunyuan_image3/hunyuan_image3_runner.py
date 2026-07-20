@@ -346,7 +346,8 @@ class HunyuanImage3Runner(DefaultRunner):
 
     def _hunyuan_num_layers(self):
         hunyuan_config = getattr(self, "hunyuan_config", None)
-        return int(self.config.get("num_layers", getattr(hunyuan_config, "num_hidden_layers", 1)))
+        fallback = self.config.get("num_hidden_layers", getattr(hunyuan_config, "num_hidden_layers", 1))
+        return int(self.config.get("num_layers") or fallback)
 
     def _hunyuan_taylor_cache_enabled(self):
         return bool(self.config.get("use_taylor_cache", False))

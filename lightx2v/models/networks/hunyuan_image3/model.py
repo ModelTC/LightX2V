@@ -109,7 +109,7 @@ def resolve_pipeline_device_for_key(key, config, devices):
     layer_match = re.match(r"model\.layers\.(\d+)\.", key)
     if layer_match is not None:
         layer_idx = int(layer_match.group(1))
-        num_layers = int(config["num_layers"])
+        num_layers = int(config.get("num_layers") or config["num_hidden_layers"])
         stage_idx = min(layer_idx * len(devices) // num_layers, len(devices) - 1)
         return devices[stage_idx]
 
@@ -203,7 +203,7 @@ class HunyuanImage3Model(BaseTransformerModel):
             raise ValueError("HunyuanImage3 sequence parallel does not support enabling Taylor cache and KV cache together.")
         if self.sequence_parallel_attn_type == "ulysses":
             world_size = dist.get_world_size(self.seq_p_group)
-            q_heads = int(self.config["num_attention_heads"])
+            q_heads = int(self.config.get("num_attention_heads") or self.config["num_heads"])
             kv_heads = int(self.config.get("num_key_value_heads") or q_heads)
             if q_heads % world_size or kv_heads % world_size:
                 raise ValueError(
