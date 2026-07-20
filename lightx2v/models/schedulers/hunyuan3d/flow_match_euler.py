@@ -209,7 +209,9 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         else:
             sigmas = self.config.shift * sigmas / (1 + (self.config.shift - 1) * sigmas)
 
-        sigmas = torch.from_numpy(sigmas).to(dtype=torch.float32, device=device)
+        # Cast on the host before the transfer: MLU590 has no native float64
+        # path and would otherwise issue a device-side forced conversion.
+        sigmas = torch.from_numpy(np.asarray(sigmas, dtype=np.float32)).to(device=device)
         timesteps = sigmas * self.config.num_train_timesteps
 
         self.timesteps = timesteps.to(device=device)

@@ -13,7 +13,7 @@
     "lora_dynamic_apply": false,
     "lora_configs": [
         {
-            "path": "/path/to/lingbot_video_4steps_rank128_v1.safetensors",
+            "path": "/path/to/lingbot_video_4steps_rank128_v2.safetensors",
             "strength": 1.0
         }
     ]

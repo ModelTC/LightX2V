@@ -75,6 +75,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
     _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
+    _WARMUP_TASKS = ("t2v", "i2v", "flf2v")
 
     def __init__(self, config):
         super().__init__(config)
@@ -85,11 +86,20 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
-        if self.config.get("task") not in ("t2v", "i2v", "flf2v"):
+        if self.config.get("task") not in self._WARMUP_TASKS:
             logger.warning(f"Warmup is not implemented for {self.config.get('task')}")
             return
 
-        self._run_warmup()
+        if not self.config.get("lazy_load", False):
+            return self._run_warmup()
+
+        # Lazy-load warmup.
+        try:
+            self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
+            self._run_warmup()
+        finally:
+            self.clean_lazy_load_warmup()
 
     def _run_warmup(self):
         input_info = T2VInputInfo(prompt="warmup", prompt_enhanced="warmup")
@@ -97,19 +107,25 @@ class WanRunner(DisaggMixin, DefaultRunner):
         scheduler = self.model.scheduler
         original_generator = scheduler.generator
         original_guide_scale = scheduler.sample_guide_scale
-        _, stride_h, stride_w = self.config["vae_stride"]
 
         try:
             for height, width in self._WARMUP_RESOLUTIONS:
-                latent_shape = self.get_latent_shape_with_lat_hw(height // stride_h, width // stride_w)
+                latent_shape = self.get_warmup_latent_shape(height, width)
                 inputs["image_encoder_output"] = self.get_warmup_image_encoder_output(latent_shape)
                 logger.info(f"Warmup: {height}x{width}")
                 try:
                     scheduler.generator = None
                     scheduler.prepare(seed=input_info.seed, latent_shape=latent_shape, image_encoder_output=inputs["image_encoder_output"])
-                    for step_index in self.get_warmup_step_indices(scheduler):
-                        scheduler.step_pre(step_index=step_index)
-                        self.model.infer(inputs)
+                    if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
+                        inputs["image_encoder_output"]["vae_encoder_out"] = None
+                    try:
+                        for step_index in self.get_warmup_step_indices(scheduler):
+                            scheduler.step_pre(step_index=step_index)
+                            self.model.infer(inputs)
+                    finally:
+                        if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
+                            for model in filter(None, self.get_warmup_models()):
+                                model.to_cpu()
                     self.run_vae_decoder(scheduler.latents)
                     torch_device_module.synchronize()
                 finally:
@@ -122,6 +138,13 @@ class WanRunner(DisaggMixin, DefaultRunner):
             self._maybe_freeze_gc()
 
         logger.info("Warmup completed")
+
+    def get_warmup_latent_shape(self, target_height, target_width):
+        _, stride_h, stride_w = self.config["vae_stride"]
+        _, patch_h, patch_w = self.config.get("patch_size", (1, 2, 2))
+        latent_h = max(1, target_height // stride_h // patch_h) * patch_h
+        latent_w = max(1, target_width // stride_w // patch_w) * patch_w
+        return self.get_latent_shape_with_lat_hw(latent_h, latent_w)
 
     def get_warmup_step_indices(self, scheduler):
         return (0,)
@@ -152,8 +175,24 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     def clear_warmup_state(self):
         scheduler = self.model.scheduler
-        for name in ("latents", "noise_pred", "noise_pred_cond", "noise_pred_uncond", "noise_pred_guided"):
+        for name in ("latents", "noise_pred", "noise_pred_cond", "noise_pred_uncond", "noise_pred_guided", "vae_encoder_out", "mask"):
             setattr(scheduler, name, None)
+
+    def clean_lazy_load_warmup(self):
+        models = tuple(filter(None, self.get_warmup_models())) if getattr(self, "model", None) is not None else ()
+
+        if models:
+            torch_device_module.synchronize()
+        for model in models:
+            transformer_infer = getattr(model, "transformer_infer", None)
+            if hasattr(transformer_infer, "offload_manager"):
+                del transformer_infer.offload_manager
+        self.model = None
+        for name in ("text_encoders", "image_encoder", "vae_encoder", "vae_decoder"):
+            if hasattr(self, name):
+                delattr(self, name)
+        gc.collect()
+        torch_device_module.empty_cache()
 
     def load_transformer(self):
         wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
@@ -1072,6 +1111,23 @@ class Wan22DenseRunner(WanRunner):
             return self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
 
+    def get_warmup_image_encoder_output(self, latent_shape):
+        if self.config["task"] == "t2v":
+            return None
+
+        _, stride_h, stride_w = self.config["vae_stride"]
+        first_frame = torch.zeros(
+            3,
+            1,
+            latent_shape[-2] * stride_h,
+            latent_shape[-1] * stride_w,
+            device=AI_DEVICE,
+        )
+        return {
+            "clip_encoder_out": self.run_image_encoder(first_frame[:, 0].unsqueeze(0)) if self.config.get("use_image_encoder", False) else None,
+            "vae_encoder_out": self.get_vae_encoder_output(first_frame),
+        }
+
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",
         recorder_mode=GET_RECORDER_MODE(),
@@ -1101,8 +1157,16 @@ class Wan22DenseRunner(WanRunner):
         return vae_encoder_out, latent_shape
 
     def get_vae_encoder_output(self, img):
-        z = self.vae_encoder.encode(img.unsqueeze(0).to(GET_DTYPE()))
-        return z
+        transient = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
+        if transient:
+            self.vae_encoder = self.load_vae_encoder()
+        try:
+            return self.vae_encoder.encode(img.unsqueeze(0).to(device=AI_DEVICE, dtype=GET_DTYPE()))
+        finally:
+            if transient:
+                del self.vae_encoder
+                gc.collect()
+                torch_device_module.empty_cache()
 
 
 @RUNNER_REGISTER("lingbot_world")

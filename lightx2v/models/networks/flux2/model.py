@@ -12,6 +12,7 @@ from lightx2v.models.networks.flux2.weights.post_weights import Flux2PostWeights
 from lightx2v.models.networks.flux2.weights.pre_weights import Flux2DevPreWeights, Flux2PreWeights
 from lightx2v.models.networks.flux2.weights.transformer_weights import Flux2TransformerWeights
 from lightx2v.utils.custom_compiler import compiled_method
+from lightx2v_platform.base import global_var
 
 
 class _Flux2TransformerModelBase(BaseTransformerModel):
@@ -24,6 +25,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         super().__init__(model_path, config, device)
         self.in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
         self.attention_kwargs = {}
+        self._init_tensor_parallel()
         self._init_infer_class()
         self._init_weights()
         # In PipeFusion mode, weights were loaded to CPU to avoid OOM;
@@ -31,6 +33,243 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         if self.config.get("pipefusion_parallel", False):
             self.to_cuda()
         self._init_infer()
+
+    def _init_tensor_parallel(self):
+        if self.config.get("tensor_parallel", False):
+            self.use_tp = True
+            self.tp_group = self.config.get("device_mesh").get_group(mesh_dim="tensor_p")
+            self.tp_rank = dist.get_rank(self.tp_group)
+            self.tp_size = dist.get_world_size(self.tp_group)
+        else:
+            self.use_tp = False
+            self.tp_group = None
+            self.tp_rank = 0
+            self.tp_size = 1
+
+    def _should_load_weights(self):
+        if self.config.get("device_mesh") is None:
+            return True
+        if dist.is_initialized() and self.use_tp:
+            return dist.get_rank() == 0
+        return super()._should_load_weights()
+
+    def _load_ckpt(self, unified_dtype, sensitive_layer):
+        if not self.use_tp:
+            return super()._load_ckpt(unified_dtype, sensitive_layer)
+        original_device = self.device
+        self.device = torch.device("cpu")
+        try:
+            return super()._load_ckpt(unified_dtype, sensitive_layer)
+        finally:
+            self.device = original_device
+
+    def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        if not self.use_tp:
+            return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
+        original_device = self.device
+        self.device = torch.device("cpu")
+        try:
+            return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
+        finally:
+            self.device = original_device
+
+    def _rank_device(self):
+        ai_device = global_var.AI_DEVICE
+        if ai_device is None:
+            return torch.device("cpu")
+        if dist.is_initialized():
+            return torch.device(f"{ai_device}:{dist.get_rank()}")
+        return torch.device(ai_device)
+
+    def _sync_device(self):
+        ai_device = global_var.AI_DEVICE
+        device_module = getattr(torch, ai_device, None) if ai_device else None
+        if device_module is not None and hasattr(device_module, "synchronize"):
+            device_module.synchronize()
+
+    def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
+        if not self.use_tp:
+            return super()._load_weights_from_rank0(weight_dict, is_weight_loader)
+        if self.cpu_offload:
+            raise NotImplementedError("Flux2 tensor parallel weight loading does not support cpu_offload yet.")
+
+        global_src_rank = 0
+        target_device = self._rank_device()
+
+        if is_weight_loader:
+            processed_weight_dict = {}
+            meta_dict = {}
+            processed_bias_keys = set()
+            for key, tensor in weight_dict.items():
+                split_type = self._get_split_type(key)
+                if key.endswith(".weight") and split_type is not None:
+                    split_weights = self._split_weight_for_tp(key, tensor, self.tp_size)
+                    for rank_idx, split_weight in enumerate(split_weights):
+                        rank_key = f"{key}__tp_rank_{rank_idx}"
+                        processed_weight_dict[rank_key] = split_weight.contiguous()
+                    meta_dict[key] = {"shape": split_weights[0].shape, "dtype": split_weights[0].dtype, "is_tp": True}
+
+                    bias_key = key.replace(".weight", ".bias")
+                    if bias_key in weight_dict and split_type in ("col", "ff_fused_col", "single_fused_col"):
+                        bias_splits = self._split_bias_for_tp(bias_key, weight_dict[bias_key], split_type, self.tp_size)
+                        for rank_idx, split_bias in enumerate(bias_splits):
+                            processed_weight_dict[f"{bias_key}__tp_rank_{rank_idx}"] = split_bias.contiguous()
+                        meta_dict[bias_key] = {"shape": bias_splits[0].shape, "dtype": bias_splits[0].dtype, "is_tp": True}
+                        processed_bias_keys.add(bias_key)
+                elif key not in processed_bias_keys:
+                    processed_weight_dict[key] = tensor
+                    meta_dict[key] = {"shape": tensor.shape, "dtype": tensor.dtype, "is_tp": False}
+
+            obj_list = [meta_dict]
+            dist.broadcast_object_list(obj_list, src=global_src_rank)
+            synced_meta_dict = obj_list[0]
+            weight_dict = processed_weight_dict
+        else:
+            obj_list = [None]
+            dist.broadcast_object_list(obj_list, src=global_src_rank)
+            synced_meta_dict = obj_list[0]
+
+        distributed_weight_dict = {key: torch.empty(meta["shape"], dtype=meta["dtype"], device=target_device) for key, meta in synced_meta_dict.items()}
+        dist.barrier()
+
+        for key in sorted(synced_meta_dict.keys()):
+            meta = synced_meta_dict[key]
+            if meta.get("is_tp", False):
+                for rank_idx in range(self.tp_size):
+                    if is_weight_loader:
+                        src_tensor = weight_dict[f"{key}__tp_rank_{rank_idx}"].to(target_device, non_blocking=True)
+                    else:
+                        src_tensor = torch.empty(meta["shape"], dtype=meta["dtype"], device=target_device)
+                    dist.broadcast(src_tensor, src=global_src_rank)
+                    if rank_idx == self.tp_rank:
+                        distributed_weight_dict[key].copy_(src_tensor, non_blocking=True)
+                    del src_tensor
+            else:
+                if is_weight_loader:
+                    distributed_weight_dict[key].copy_(weight_dict[key].to(target_device, non_blocking=True), non_blocking=True)
+                dist.broadcast(distributed_weight_dict[key], src=global_src_rank)
+
+        self._sync_device()
+        return distributed_weight_dict
+
+    def _get_split_type(self, key):
+        if ".norm_" in key:
+            return None
+        if key.endswith(".weight") and "single_transformer_blocks." in key and ".attn.to_qkv_mlp_proj." in key:
+            return "single_fused_col"
+        if key.endswith(".weight") and "single_transformer_blocks." in key and ".attn.to_out." in key:
+            return "single_fused_row"
+        if key.endswith(".weight") and (".ff.linear_in." in key or ".ff_context.linear_in." in key):
+            return "ff_fused_col"
+        col_patterns = (
+            ".attn.to_q.",
+            ".attn.to_k.",
+            ".attn.to_v.",
+            ".attn.add_q_proj.",
+            ".attn.add_k_proj.",
+            ".attn.add_v_proj.",
+        )
+        row_patterns = (
+            ".attn.to_out.0.",
+            ".attn.to_add_out.",
+            ".ff.linear_out.",
+            ".ff_context.linear_out.",
+        )
+        if any(pattern in key for pattern in col_patterns):
+            return "col"
+        if any(pattern in key for pattern in row_patterns):
+            return "row"
+        return None
+
+    def _split_bias_for_tp(self, key, bias, split_type, tp_size):
+        if split_type == "col":
+            assert bias.shape[0] % tp_size == 0, f"bias dimension ({bias.shape[0]}) must be divisible by tp_size ({tp_size}) for {key}"
+            return list(torch.chunk(bias, tp_size, dim=0))
+
+        if split_type == "ff_fused_col":
+            assert bias.shape[0] % 2 == 0, f"invalid fused SwiGLU bias dim for {key}: {bias.shape[0]}"
+            ffn_dim = bias.shape[0] // 2
+            assert ffn_dim % tp_size == 0, f"ffn_dim ({ffn_dim}) must be divisible by tp_size ({tp_size}) for {key}"
+            gate, up = torch.split(bias, [ffn_dim, ffn_dim], dim=0)
+            gate_chunks = torch.chunk(gate, tp_size, dim=0)
+            up_chunks = torch.chunk(up, tp_size, dim=0)
+            return [torch.cat([gate_chunks[rank_idx], up_chunks[rank_idx]], dim=0) for rank_idx in range(tp_size)]
+
+        if split_type == "single_fused_col":
+            inner_dim = self.config["num_attention_heads"] * self.config["attention_head_dim"]
+            ffn_dim_twice = bias.shape[0] - 3 * inner_dim
+            assert ffn_dim_twice > 0 and ffn_dim_twice % 2 == 0, f"invalid fused qkv/mlp bias dim for {key}: {bias.shape[0]}"
+            ffn_dim = ffn_dim_twice // 2
+            assert inner_dim % tp_size == 0, f"inner_dim ({inner_dim}) must be divisible by tp_size ({tp_size}) for {key}"
+            assert ffn_dim % tp_size == 0, f"ffn_dim ({ffn_dim}) must be divisible by tp_size ({tp_size}) for {key}"
+            q, k, v, mlp_1, mlp_2 = torch.split(bias, [inner_dim, inner_dim, inner_dim, ffn_dim, ffn_dim], dim=0)
+            chunks = [torch.chunk(part, tp_size, dim=0) for part in (q, k, v, mlp_1, mlp_2)]
+            return [torch.cat([part_chunks[rank_idx] for part_chunks in chunks], dim=0) for rank_idx in range(tp_size)]
+
+        raise ValueError(f"Unsupported Flux2 TP bias split type {split_type} for {key}")
+
+    def _split_weight_for_tp(self, key, weight, tp_size):
+        split_type = self._get_split_type(key)
+        if split_type is None:
+            return [weight] * tp_size
+
+        if split_type == "col":
+            assert weight.shape[0] % tp_size == 0, f"out_dim ({weight.shape[0]}) must be divisible by tp_size ({tp_size}) for {key}"
+            return list(torch.chunk(weight, tp_size, dim=0))
+
+        if split_type == "row":
+            assert weight.shape[1] % tp_size == 0, f"in_dim ({weight.shape[1]}) must be divisible by tp_size ({tp_size}) for {key}"
+            return list(torch.chunk(weight, tp_size, dim=1))
+
+        if split_type == "ff_fused_col":
+            assert weight.shape[0] % 2 == 0, f"invalid fused SwiGLU out_dim for {key}: {weight.shape[0]}"
+            ffn_dim = weight.shape[0] // 2
+            assert ffn_dim % tp_size == 0, f"ffn_dim ({ffn_dim}) must be divisible by tp_size ({tp_size}) for {key}"
+            gate, up = torch.split(weight, [ffn_dim, ffn_dim], dim=0)
+            gate_chunks = torch.chunk(gate, tp_size, dim=0)
+            up_chunks = torch.chunk(up, tp_size, dim=0)
+            return [torch.cat([gate_chunks[rank_idx], up_chunks[rank_idx]], dim=0) for rank_idx in range(tp_size)]
+
+        inner_dim = self.config["num_attention_heads"] * self.config["attention_head_dim"]
+        if split_type == "single_fused_col":
+            ffn_dim_twice = weight.shape[0] - 3 * inner_dim
+            assert ffn_dim_twice > 0 and ffn_dim_twice % 2 == 0, f"invalid fused qkv/mlp out_dim for {key}: {weight.shape[0]}"
+            ffn_dim = ffn_dim_twice // 2
+            assert inner_dim % tp_size == 0, f"inner_dim ({inner_dim}) must be divisible by tp_size ({tp_size}) for {key}"
+            assert ffn_dim % tp_size == 0, f"ffn_dim ({ffn_dim}) must be divisible by tp_size ({tp_size}) for {key}"
+            q, k, v, mlp_1, mlp_2 = torch.split(weight, [inner_dim, inner_dim, inner_dim, ffn_dim, ffn_dim], dim=0)
+            return [
+                torch.cat(
+                    [
+                        torch.chunk(q, tp_size, dim=0)[rank_idx],
+                        torch.chunk(k, tp_size, dim=0)[rank_idx],
+                        torch.chunk(v, tp_size, dim=0)[rank_idx],
+                        torch.chunk(mlp_1, tp_size, dim=0)[rank_idx],
+                        torch.chunk(mlp_2, tp_size, dim=0)[rank_idx],
+                    ],
+                    dim=0,
+                )
+                for rank_idx in range(tp_size)
+            ]
+
+        if split_type == "single_fused_row":
+            ffn_dim = weight.shape[1] - inner_dim
+            assert ffn_dim > 0, f"invalid fused output in_dim for {key}: {weight.shape[1]}"
+            assert inner_dim % tp_size == 0, f"inner_dim ({inner_dim}) must be divisible by tp_size ({tp_size}) for {key}"
+            assert ffn_dim % tp_size == 0, f"ffn_dim ({ffn_dim}) must be divisible by tp_size ({tp_size}) for {key}"
+            attn, mlp = torch.split(weight, [inner_dim, ffn_dim], dim=1)
+            return [
+                torch.cat(
+                    [
+                        torch.chunk(attn, tp_size, dim=1)[rank_idx],
+                        torch.chunk(mlp, tp_size, dim=1)[rank_idx],
+                    ],
+                    dim=1,
+                )
+                for rank_idx in range(tp_size)
+            ]
+
+        raise ValueError(f"Unsupported Flux2 TP split type {split_type} for {key}")
 
     def _init_infer(self):
         self.transformer_infer = self.transformer_infer_class(self.config)

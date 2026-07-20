@@ -131,6 +131,24 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
         self._audio_grid_meta_cache = {}
         ar_config = config.get("ar_config", {})
         self.rope_position_mode = ar_config.get("rope_position_mode", "local")
+        if self.rope_position_mode not in {"local", "global"}:
+            raise ValueError("ar_config.rope_position_mode must be 'local' or 'global'.")
+
+        self.rope_max_frames = ar_config.get("rope_max_frames")
+        if self.rope_max_frames is not None:
+            self.rope_max_frames = int(self.rope_max_frames)
+            if self.rope_max_frames <= 0:
+                raise ValueError("ar_config.rope_max_frames must be positive.")
+            if self.rope_position_mode != "global":
+                raise ValueError("ar_config.rope_max_frames requires ar_config.rope_position_mode='global'.")
+            if self.rope_max_frames < self.num_frame_per_chunk:
+                raise ValueError("ar_config.rope_max_frames must be at least ar_config.num_frame_per_chunk.")
+
+    def _global_rope_start_frame(self, start_frame, num_frames, ref_num_frames):
+        if self.rope_max_frames is None:
+            return int(start_frame)
+        max_start_frame = int(ref_num_frames) + self.rope_max_frames - int(num_frames)
+        return min(int(start_frame), max_start_frame)
 
     def _audio_grid_meta(self, grid_sizes):
         key = (grid_sizes.data_ptr(), int(self.scheduler.seg_index), int(self.scheduler.step_index))
@@ -228,6 +246,10 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
         global_end=None,
         sink_tokens=0,
     ):
+        if global_end is not None and self.rope_max_frames is not None:
+            max_global_end = int(ref_tokens) + self.rope_max_frames * int(local_per_frame)
+            global_end = min(int(global_end), max_global_end)
+
         orig_dtype = x.dtype
         if self.config.get("causal_rope_type", "triton") == "triton":
             return apply_audio_cache_rope(
@@ -323,7 +345,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
         sink_tokens = self.kv_cache_manager.sink_size * cache_per_frame
         use_local_cache_rope = self.rope_position_mode != "global"
 
-        need_roll = self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and cache_num_new + local_end > self.kv_cache_size
+        need_roll = self.kv_cache_manager.uses_sliding_window(self.block_idx) and current_end > global_end and cache_num_new + local_end > self.kv_cache_size
         if need_roll:
             num_evicted = cache_num_new + local_end - self.kv_cache_size
             local_end_after_roll = local_end - num_evicted
@@ -357,7 +379,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 if use_local_cache_rope:
                     start_frame = local_start_idx // max(cache_per_frame, 1)
                 else:
-                    start_frame = self.kv_cache_manager.ref_num_frames + segment_idx * frames
+                    ref_num_frames = self.kv_cache_manager.ref_num_frames
+                    start_frame = self._global_rope_start_frame(ref_num_frames + segment_idx * frames, frames, ref_num_frames)
                 q_rope, k_rope = self._apply_rope_sp(q, k, grid_sizes, freqs, start_frame)
                 use_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
                 use_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)

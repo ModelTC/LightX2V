@@ -13,6 +13,14 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         self.infer_conditional = True
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
 
+        self.tp_group = None
+        self.tp_rank = 0
+        self.tp_size = 1
+        if self.config.get("tensor_parallel", False):
+            self.tp_group = self.config.get("device_mesh").get_group(mesh_dim="tensor_p")
+            self.tp_rank = dist.get_rank(self.tp_group)
+            self.tp_size = dist.get_world_size(self.tp_group)
+
         self.inner_dim = config.get("num_attention_heads", 24) * config.get("attention_head_dim", 64)
 
         if self.config.get("seq_parallel", False):
@@ -66,7 +74,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         image_rotary_emb,
         img_attn_hook=None,
     ):
-        heads = self.config["num_attention_heads"]
+        heads = self.config["num_attention_heads"] // self.tp_size
         head_dim = self.config["attention_head_dim"]
 
         (shift_msa, scale_msa, gate_msa), (shift_mlp, scale_mlp, gate_mlp) = self._split_double_modulation(temb_mod_img)
@@ -183,7 +191,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         image_rotary_emb,
         num_txt_tokens=0,
     ):
-        heads = self.config["num_attention_heads"]
+        heads = self.config["num_attention_heads"] // self.tp_size
         head_dim = self.config["attention_head_dim"]
 
         if encoder_hidden_states is not None:
