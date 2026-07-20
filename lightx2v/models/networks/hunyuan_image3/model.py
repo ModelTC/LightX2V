@@ -74,7 +74,7 @@ def resolve_pipeline_devices(config, fallback_device):
             return _resolve_sequence_parallel_pipeline_lane(config, devices)
         return devices
 
-    if config.get("pipeline_parallel", False) and torch.cuda.is_available():
+    if config.get("pipeline_parallel", True) and torch.cuda.is_available():
         device_count = torch.cuda.device_count()
         if device_count > 0:
             if config.get("seq_parallel", False):

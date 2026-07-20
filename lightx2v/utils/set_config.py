@@ -250,18 +250,6 @@ def auto_calc_config(config):
             config["patch_embed_hidden_dim"] = 1024
         config["cfg_distilled"] = bool(config.get("cfg_distilled", False))
         config["use_meanflow"] = bool(config.get("use_meanflow", False))
-        config.setdefault("use_qk_norm", True)
-        config.setdefault("rms_norm_eps", 1e-5)
-        config.setdefault("rms_norm_type", "fp32_variance")
-        config.setdefault("hidden_act", "silu")
-        config.setdefault("mlp_bias", False)
-        config.setdefault("attention_bias", False)
-        config.setdefault("moe_layer_num_skipped", 0)
-        config.setdefault("use_mixed_mlp_moe", False)
-        config.setdefault("moe_impl", "eager")
-        config.setdefault("attn_impl", "torch_sdpa")
-        config.setdefault("hunyuan_cfg_mode", "batch")
-        config.setdefault("pipeline_parallel", True)
         if "vae_scale_factor" not in config:
             vae_downsample_factor = config.get("vae_downsample_factor")
             if isinstance(vae_downsample_factor, list) and vae_downsample_factor:
