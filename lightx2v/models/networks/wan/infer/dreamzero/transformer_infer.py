@@ -9,6 +9,11 @@ from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerI
 from lightx2v.models.networks.wan.infer.triton_ops import apply_rotary_embedding
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import ROPE_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+def _can_use_cuda_kernels(tensor):
+    return AI_DEVICE == "cuda" and tensor.device.type == AI_DEVICE
 
 
 @ROPE_REGISTER("dreamzero_rope")
@@ -23,14 +28,14 @@ class DreamZeroRope(RopeTemplate):
     def apply(self, q, k, freqs, **kwargs):
         if freqs.shape[0] != q.shape[0]:
             raise ValueError(f"DreamZero RoPE length mismatch: freqs={freqs.shape[0]}, q={q.shape[0]}.")
-        if q.is_cuda and self.flashinfer_rope.is_available():
+        if _can_use_cuda_kernels(q) and self.flashinfer_rope.is_available():
             cos_sin = torch.cat(
                 [freqs.real.reshape(freqs.shape[0], -1), freqs.imag.reshape(freqs.shape[0], -1)],
                 dim=-1,
             ).contiguous()
             positions = torch.arange(q.shape[0], device=q.device, dtype=torch.long)
             return self.flashinfer_rope.apply(q, k, cos_sin, positions=positions)
-        if q.is_cuda:
+        if _can_use_cuda_kernels(q):
             cos = freqs.real.reshape(freqs.shape[0], -1).contiguous()
             sin = freqs.imag.reshape(freqs.shape[0], -1).contiguous()
             return (
@@ -204,7 +209,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         return cached
 
     def _modulate(self, x, scale, shift):
-        if x.is_cuda and x.is_contiguous():
+        if _can_use_cuda_kernels(x) and x.is_contiguous():
             scale_arg = scale
             shift_arg = shift
             if x.dim() == 2 and scale.dim() == 2 and scale.shape[0] == x.shape[0]:
