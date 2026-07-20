@@ -92,8 +92,7 @@ class WanS2VTransformerInfer(WanTransformerInfer):
             q = wan_rms_norm(phase0.self_attn_norm_q, mm_weight_autocast_nd(phase0.self_attn_q, norm_x)).view(b, s, n, d)
             k = wan_rms_norm(phase0.self_attn_norm_k, mm_weight_autocast_nd(phase0.self_attn_k, norm_x)).view(b, s, n, d)
             v = mm_weight_autocast_nd(phase0.self_attn_v, norm_x).view(b, s, n, d)
-            q, k = phase0.s2v_rope.apply(q, k, freqs)
-            q, k = q.float(), k.float()
+            q, k = phase0.s2v_rope.apply(q.float(), k.float(), freqs)
             attn_out = (
                 phase0.self_attn_1_parallel.apply(
                     q=q.squeeze(0).to(self.infer_dtype),

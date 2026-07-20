@@ -133,10 +133,10 @@ def s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, num_heads, head_dim):
     k = wan_rms_norm(phase0.self_attn_norm_k, mm_weight_autocast_nd(phase0.self_attn_k, norm_x)).view(b, s, n, d)
     v = mm_weight_autocast_nd(phase0.self_attn_v, norm_x).view(b, s, n, d)
 
-    q, k = phase0.s2v_rope.apply(q, k, freqs)
+    q, k = phase0.s2v_rope.apply(q.float(), k.float(), freqs)
     attn = flash_attention(
-        q=q.float(),
-        k=k.float(),
+        q=q,
+        k=k,
         v=v,
         k_lens=seq_lens,
     )
