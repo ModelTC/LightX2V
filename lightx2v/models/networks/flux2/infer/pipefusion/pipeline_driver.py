@@ -223,7 +223,7 @@ class Flux2PipelineDriver:
         inner_dim = self.config.get("num_attention_heads", 24) * self.config.get("attention_head_dim", 64)
         # Raw latent channels (before x_embedder): rank=0 recv from last stage
         # gets raw latents [1, L, C_in]; other stages recv embedded [L, D]
-        raw_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 128))
+        raw_channels = getattr(self.model, "in_channels", self.config.get("transformer_in_channels", self.config.get("in_channels", 128)))
 
         # Split latents into patches (dim=1 for [B, L, C])
         if self._is_first or self._is_last:
