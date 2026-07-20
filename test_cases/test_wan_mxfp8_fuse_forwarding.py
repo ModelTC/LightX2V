@@ -212,9 +212,7 @@ class WanMxfp8FuseForwardingTest(unittest.TestCase):
         self.assertIsNone(local.rope_max_frames)
         self.assertTrue(torch.equal(local._cache_positions_for_range(2, 5, "cpu"), torch.tensor([2, 3, 4])))
 
-        global_rope = audio.WanAudioARTransformerInfer(
-            make_config(ar_config={"num_frame_per_chunk": 1, "rope_position_mode": "global", "rope_max_frames": 40})
-        )
+        global_rope = audio.WanAudioARTransformerInfer(make_config(ar_config={"num_frame_per_chunk": 1, "rope_position_mode": "global", "rope_max_frames": 40}))
         self.assertEqual(global_rope.rope_position_mode, "global")
         self.assertEqual(global_rope._global_rope_start_frame(80, 1, 1), 40)
         self.assertTrue(
@@ -234,9 +232,7 @@ class WanMxfp8FuseForwardingTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires"):
             audio.WanAudioARTransformerInfer(make_config(ar_config={"rope_position_mode": "local", "rope_max_frames": 40}))
         with self.assertRaisesRegex(ValueError, "at least"):
-            audio.WanAudioARTransformerInfer(
-                make_config(ar_config={"num_frame_per_chunk": 2, "rope_position_mode": "global", "rope_max_frames": 1})
-            )
+            audio.WanAudioARTransformerInfer(make_config(ar_config={"num_frame_per_chunk": 2, "rope_position_mode": "global", "rope_max_frames": 1}))
 
     def test_feature_caching_variants_forward_c_gate_msa(self):
         ensure_lightx2v_pipeline_stub()
