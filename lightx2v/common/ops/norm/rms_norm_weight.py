@@ -70,6 +70,8 @@ class RMSWeightTemplate(metaclass=ABCMeta):
     def _get_actual_weight(self):
         if not hasattr(self, "weight_diff"):
             return self.weight
+        if self.weight_diff.device != self.weight.device or self.weight_diff.dtype != self.weight.dtype:
+            self.weight_diff = self.weight_diff.to(device=self.weight.device, dtype=self.weight.dtype)
         return self.weight + self.weight_diff
 
     def register_diff(self, weight_dict):
