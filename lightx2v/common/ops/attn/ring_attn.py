@@ -51,6 +51,16 @@ class RingAttnWeight(AttnWeightTemplate):
         self.config = {}
         self.helper = RingAttnHelper()
 
+    @staticmethod
+    def _validate_sequence_options(seq_p_prepost_backend, seq_p_a2a_backend, seq_p_quant_scheme):
+        if seq_p_prepost_backend != "torch":
+            raise ValueError(f"RingAttn requires seq_p_prepost_backend=\"torch\", got {seq_p_prepost_backend!r}.")
+        if seq_p_a2a_backend != "torch":
+            raise ValueError(f"RingAttn requires seq_p_a2a_backend=\"torch\", got {seq_p_a2a_backend!r}.")
+        if seq_p_quant_scheme is not None:
+            raise ValueError("RingAttn does not support seq_p_quant_scheme; leave it unset.")
+
+
     def apply(
         self,
         q,
@@ -64,6 +74,9 @@ class RingAttnWeight(AttnWeightTemplate):
         use_fp4_comm=False,
         use_tensor_fusion=False,
         enable_head_parallel=False,
+        seq_p_prepost_backend="torch",
+        seq_p_a2a_backend="torch",
+        seq_p_quant_scheme=None,
         **kwargs,
     ):
         """
@@ -81,7 +94,9 @@ class RingAttnWeight(AttnWeightTemplate):
         返回:
             torch.Tensor: 计算得到的注意力结果
         """
-        assert not enable_head_parallel, "RingAttn can't support head parallel mode."
+        self._validate_sequence_options(seq_p_prepost_backend, seq_p_a2a_backend, seq_p_quant_scheme)
+        if enable_head_parallel:
+            raise ValueError("RingAttn does not support head_parallel=True.")
         assert not (use_fp8_comm and use_fp4_comm), "use_fp8_comm and use_fp4_comm can't be enabled at the same time."
 
         use_kv_fusion = use_tensor_fusion

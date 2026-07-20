@@ -36,9 +36,11 @@
     "low_noise_original_ckpt": null,
     "parallel": {
         "seq_p_size": 8,
-        "seq_p_fp8_comm": true,
+        "seq_p_quant_scheme": "fp8",
         "seq_p_head_parallel": true,
         "seq_p_tensor_fusion": true,
-        "seq_p_attn_type": "ulysses-opt"
+        "seq_p_attn_type": "ulysses",
+        "seq_p_prepost_backend": "triton",
+        "seq_p_a2a_backend": "torch"
     }
 }
