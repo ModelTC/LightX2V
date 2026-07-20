@@ -40,25 +40,16 @@ def _resolve_sequence_parallel_pipeline_lane(config, devices):
     parallel_world_size = dist.get_world_size()
     global_rank = dist.get_rank()
     if len(devices) % parallel_world_size:
-        raise ValueError(
-            f"HunyuanImage3 sequence parallel requires pipeline device count ({len(devices)}) "
-            f"to be divisible by cfg_p_size * seq_p_size ({parallel_world_size})."
-        )
+        raise ValueError(f"HunyuanImage3 sequence parallel requires pipeline device count ({len(devices)}) to be divisible by cfg_p_size * seq_p_size ({parallel_world_size}).")
 
     layout = str(config.get("hunyuan_image3_pipeline_layout", "interleaved")).strip().lower()
     if layout != "interleaved":
-        raise ValueError(
-            "HunyuanImage3 sequence parallel uses Wan-style rank/device initialization and currently requires "
-            f"hunyuan_image3_pipeline_layout='interleaved'; got {layout!r}."
-        )
+        raise ValueError(f"HunyuanImage3 sequence parallel uses Wan-style rank/device initialization and currently requires hunyuan_image3_pipeline_layout='interleaved'; got {layout!r}.")
 
     lane = devices[global_rank::parallel_world_size]
     expected_device = f"cuda:{torch.cuda.current_device()}"
     if lane[0] != expected_device:
-        raise RuntimeError(
-            "HunyuanImage3 interleaved pipeline lane must start on the CUDA device selected by "
-            f"init_parallel_env: lane={lane}, current_device={expected_device}."
-        )
+        raise RuntimeError(f"HunyuanImage3 interleaved pipeline lane must start on the CUDA device selected by init_parallel_env: lane={lane}, current_device={expected_device}.")
     return lane
 
 
@@ -86,10 +77,7 @@ def resolve_pipeline_devices(config, fallback_device):
                     if not dist.is_available() or not dist.is_initialized():
                         raise RuntimeError("HunyuanImage3 cfg_parallel pipeline split requires an initialized distributed process group.")
                     if device_count % cfg_p_size != 0:
-                        raise ValueError(
-                            f"HunyuanImage3 cfg_parallel requires visible CUDA device count ({device_count}) "
-                            f"to be divisible by cfg_p_size ({cfg_p_size})."
-                        )
+                        raise ValueError(f"HunyuanImage3 cfg_parallel requires visible CUDA device count ({device_count}) to be divisible by cfg_p_size ({cfg_p_size}).")
                     cfg_p_group = config["device_mesh"].get_group(mesh_dim="cfg_p")
                     cfg_p_rank = dist.get_rank(cfg_p_group)
                     devices_per_cfg_rank = device_count // cfg_p_size
@@ -178,10 +166,7 @@ class HunyuanImage3Model(BaseTransformerModel):
         }
         attn_type = aliases.get(attn_type, attn_type)
         if attn_type not in ("kv_all_gather", "ulysses"):
-            raise ValueError(
-                "HunyuanImage3 parallel.seq_p_attn_type must be one of: "
-                f"kv_all_gather, ulysses; got {attn_type!r}."
-            )
+            raise ValueError(f"HunyuanImage3 parallel.seq_p_attn_type must be one of: kv_all_gather, ulysses; got {attn_type!r}.")
         return attn_type
 
     def _validate_sequence_parallel_config(self):
@@ -196,9 +181,7 @@ class HunyuanImage3Model(BaseTransformerModel):
             if cfg_mode != "parallel":
                 raise ValueError("HunyuanImage3 CFG+SP requires hunyuan_cfg_mode='parallel'.")
         elif self.config.get("enable_cfg", False) and cfg_mode != "serial":
-            raise ValueError(
-                "HunyuanImage3 sequence parallel requires hunyuan_cfg_mode='serial' so every transformer forward has batch size 1."
-            )
+            raise ValueError("HunyuanImage3 sequence parallel requires hunyuan_cfg_mode='serial' so every transformer forward has batch size 1.")
         if self.config.get("use_taylor_cache", False) and self.config.get("enable_kv_cache", False):
             raise ValueError("HunyuanImage3 sequence parallel does not support enabling Taylor cache and KV cache together.")
         if self.sequence_parallel_attn_type == "ulysses":
@@ -206,10 +189,7 @@ class HunyuanImage3Model(BaseTransformerModel):
             q_heads = int(self.config.get("num_attention_heads") or self.config["num_heads"])
             kv_heads = int(self.config.get("num_key_value_heads") or q_heads)
             if q_heads % world_size or kv_heads % world_size:
-                raise ValueError(
-                    "HunyuanImage3 Ulysses requires seq_p_size to divide both Q and KV heads: "
-                    f"Q={q_heads}, KV={kv_heads}, seq_p_size={world_size}."
-                )
+                raise ValueError(f"HunyuanImage3 Ulysses requires seq_p_size to divide both Q and KV heads: Q={q_heads}, KV={kv_heads}, seq_p_size={world_size}.")
 
     def _tensor_target_device(self, key):
         return resolve_pipeline_device_for_key(key, self.config, self.pipeline_devices)
@@ -268,10 +248,7 @@ class HunyuanImage3Model(BaseTransformerModel):
             current_step == 0
             or taylor_counter == int(cache_dic["cache_interval"]) - 1
             or (cache_dic["enable_first_enhance"] and current_step < int(cache_dic["first_enhance_steps"]))
-            or (
-                cache_dic["enable_tailing_enhance"]
-                and current_step >= int(cache_dic["num_steps"]) - int(cache_dic["tailing_enhance_steps"])
-            )
+            or (cache_dic["enable_tailing_enhance"] and current_step >= int(cache_dic["num_steps"]) - int(cache_dic["tailing_enhance_steps"]))
         )
 
     def _infer_transformer(self, pre_infer_out):
@@ -325,10 +302,7 @@ class HunyuanImage3Model(BaseTransformerModel):
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
         if pre_infer_out.hidden_states.shape[0] != 1:
-            raise ValueError(
-                "HunyuanImage3 sequence parallel expects batch size 1 per transformer forward; "
-                "use hunyuan_cfg_mode='serial' for pure SP or 'parallel' for CFG+SP."
-            )
+            raise ValueError("HunyuanImage3 sequence parallel expects batch size 1 per transformer forward; use hunyuan_cfg_mode='serial' for pure SP or 'parallel' for CFG+SP.")
 
         world_size = dist.get_world_size(self.seq_p_group)
         rank = dist.get_rank(self.seq_p_group)
@@ -342,12 +316,8 @@ class HunyuanImage3Model(BaseTransformerModel):
         global_position_ids = pre_infer_out.position_ids
         global_attention_mask = pre_infer_out.attention_mask if self.sequence_parallel_attn_type == "ulysses" else None
 
-        pre_infer_out.hidden_states = self._pad_and_slice_sequence(
-            pre_infer_out.hidden_states, 1, padding_size, local_start, local_seq_len, value=0
-        )
-        pre_infer_out.position_ids = self._pad_and_slice_sequence(
-            pre_infer_out.position_ids, 1, padding_size, local_start, local_seq_len, value=0
-        )
+        pre_infer_out.hidden_states = self._pad_and_slice_sequence(pre_infer_out.hidden_states, 1, padding_size, local_start, local_seq_len, value=0)
+        pre_infer_out.position_ids = self._pad_and_slice_sequence(pre_infer_out.position_ids, 1, padding_size, local_start, local_seq_len, value=0)
         if pre_infer_out.custom_pos_emb is not None:
             cos, sin = pre_infer_out.custom_pos_emb
             pre_infer_out.custom_pos_emb = (

@@ -95,10 +95,7 @@ class HunyuanImage3Runner(DefaultRunner):
         except ModuleNotFoundError:
             repo_path = self._resolve_upstream_repo_path()
             if repo_path is None:
-                raise ModuleNotFoundError(
-                    "Cannot import hunyuan_image_3. Set HUNYUAN_IMAGE3_REPO_PATH or "
-                    "`hunyuan_image3_repo_path` to the HunyuanImage-3.0 project path."
-                )
+                raise ModuleNotFoundError("Cannot import hunyuan_image_3. Set HUNYUAN_IMAGE3_REPO_PATH or `hunyuan_image3_repo_path` to the HunyuanImage-3.0 project path.")
             if repo_path not in sys.path:
                 sys.path.insert(0, repo_path)
 
@@ -138,11 +135,7 @@ class HunyuanImage3Runner(DefaultRunner):
 
         # self.vae_decoder is a complete VAE model (encoder + decoder). T2I only
         # decodes on rank 0, so other SP ranks do not need this extra allocation.
-        load_vae_on_this_rank = not (
-            self.config.get("task") == "t2i"
-            and self._sequence_parallel_enabled()
-            and not self._is_output_rank()
-        )
+        load_vae_on_this_rank = not (self.config.get("task") == "t2i" and self._sequence_parallel_enabled() and not self._is_output_rank())
         if load_vae_on_this_rank:
             self.vae_decoder = self._load_vae_decoder()
         else:
@@ -302,9 +295,7 @@ class HunyuanImage3Runner(DefaultRunner):
                     elif self.hunyuan_image_processor.cond_token_attn_type == "causal":
                         pass
                     else:
-                        raise NotImplementedError(
-                            f"HunyuanImage3 cond_token_attn_type={self.hunyuan_image_processor.cond_token_attn_type!r} is not supported."
-                        )
+                        raise NotImplementedError(f"HunyuanImage3 cond_token_attn_type={self.hunyuan_image_processor.cond_token_attn_type!r} is not supported.")
                     image_idx += 2
             rope_image_info.append(sample_info)
         return rope_image_info
@@ -366,12 +357,7 @@ class HunyuanImage3Runner(DefaultRunner):
         )
 
     def _sequence_parallel_enabled(self):
-        return bool(
-            self.config.get("seq_parallel", False)
-            and dist.is_available()
-            and dist.is_initialized()
-            and getattr(self.model, "seq_p_group", None) is not None
-        )
+        return bool(self.config.get("seq_parallel", False) and dist.is_available() and dist.is_initialized() and getattr(self.model, "seq_p_group", None) is not None)
 
     def _parallel_control_group(self):
         """Return the group used to keep replicated runner state identical.
@@ -538,10 +524,7 @@ class HunyuanImage3Runner(DefaultRunner):
         if mode not in ("batch", "serial", "parallel"):
             raise ValueError(f"HunyuanImage3 hunyuan_cfg_mode must be one of batch/serial/parallel, got {mode!r}.")
         if mode == "parallel" and not self._cfg_parallel_enabled():
-            raise ValueError(
-                "HunyuanImage3 hunyuan_cfg_mode='parallel' requires enable_cfg=true and "
-                "a distributed config with parallel.cfg_p_size=2."
-            )
+            raise ValueError("HunyuanImage3 hunyuan_cfg_mode='parallel' requires enable_cfg=true and a distributed config with parallel.cfg_p_size=2.")
         return mode
 
     def _prepare_cfg_parallel_branch_inputs(self, prepared_inputs, cfg_p_rank, mark_parallel_branch=True):
@@ -640,11 +623,7 @@ class HunyuanImage3Runner(DefaultRunner):
         cond_inputs = dict(cond_inputs)
         cond_inputs["cond_vae_image_mask"] = None if getattr(tokenizer_output, "vae_image_mask", None) is None else tokenizer_output.vae_image_mask.to(device)
         cond_inputs["cond_vit_image_mask"] = None if getattr(tokenizer_output, "vit_image_mask", None) is None else tokenizer_output.vit_image_mask.to(device)
-        cond_inputs["cond_timestep_index"] = (
-            None
-            if getattr(tokenizer_output, "cond_timestep_scatter_index", None) is None
-            else tokenizer_output.cond_timestep_scatter_index.to(device)
-        )
+        cond_inputs["cond_timestep_index"] = None if getattr(tokenizer_output, "cond_timestep_scatter_index", None) is None else tokenizer_output.cond_timestep_scatter_index.to(device)
         return cond_inputs
 
     def _resolve_bot_task(self):
@@ -824,9 +803,7 @@ class HunyuanImage3Runner(DefaultRunner):
             else:
                 if use_kv_cache:
                     model_input_ids = input_ids[:, cache_filled_length:]
-                    position_ids = torch.arange(cache_filled_length, input_ids.shape[1], dtype=torch.long, device=device)[None].expand(
-                        input_ids.shape[0], -1
-                    )
+                    position_ids = torch.arange(cache_filled_length, input_ids.shape[1], dtype=torch.long, device=device)[None].expand(input_ids.shape[0], -1)
                     first_cache_step = cache_filled_length == 0
                     model_inputs = self._build_text_model_inputs(
                         model_input_ids,
@@ -1029,9 +1006,7 @@ class HunyuanImage3Runner(DefaultRunner):
             batch_cond_vae_images.append(image_items)
             batch_cond_timesteps.append(timestep_items)
 
-        if all(len(items) == 1 for items in batch_cond_vae_images) and all(
-            items[0].shape == batch_cond_vae_images[0][0].shape for items in batch_cond_vae_images
-        ):
+        if all(len(items) == 1 for items in batch_cond_vae_images) and all(items[0].shape == batch_cond_vae_images[0][0].shape for items in batch_cond_vae_images):
             cond_vae_images = torch.stack([items[0] for items in batch_cond_vae_images], dim=0)
             cond_timesteps = torch.cat([items[0] for items in batch_cond_timesteps], dim=0)
             if cfg_factor > 1:
@@ -1199,9 +1174,7 @@ class HunyuanImage3Runner(DefaultRunner):
                         dtype=torch.bfloat16,
                         enabled=latents.device.type == "cuda",
                     ):
-                        prediction = self.model.infer(model_inputs)[
-                            "diffusion_prediction"
-                        ].to(latents.device)
+                        prediction = self.model.infer(model_inputs)["diffusion_prediction"].to(latents.device)
 
                     # Transformer 返回 batch=2 prediction，
                     # 在 runner 中拆分并完成 CFG guidance。
@@ -1213,9 +1186,7 @@ class HunyuanImage3Runner(DefaultRunner):
                             pred_uncond,
                         )
                     else:
-                        prediction = pred_uncond + guidance_scale * (
-                            pred_cond - pred_uncond
-                        )
+                        prediction = pred_uncond + guidance_scale * (pred_cond - pred_uncond)
 
                 else:
                     # ==================== CFG Parallel Processing ====================
@@ -1248,9 +1219,7 @@ class HunyuanImage3Runner(DefaultRunner):
                         dtype=torch.bfloat16,
                         enabled=latents.device.type == "cuda",
                     ):
-                        prediction = self.model.infer(model_inputs)[
-                            "diffusion_prediction"
-                        ].to(latents.device)
+                        prediction = self.model.infer(model_inputs)["diffusion_prediction"].to(latents.device)
 
                     # CFG parallel 不需要在 runner 中 chunk/combine。
                     # model.infer() 内部已经通过 cfg_p_group：
@@ -1296,9 +1265,12 @@ class HunyuanImage3Runner(DefaultRunner):
         image_size = self._resolve_image_size(input_info)
         seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
         # cot_text = self._generate_cot_text(prompt, image_size)
-        prepared_inputs = self._prepare_text_to_image_inputs(prompt, image_size, seed,
-                                                            #  cot_text=cot_text
-                                                            )
+        prepared_inputs = self._prepare_text_to_image_inputs(
+            prompt,
+            image_size,
+            seed,
+            #  cot_text=cot_text
+        )
         latents = self._denoise_latents(prepared_inputs, image_size)
         if not self._is_output_rank():
             return []

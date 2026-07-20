@@ -254,10 +254,7 @@ def auto_calc_config(config):
                 if attn_type in ("kv_allgather", "kv_gather"):
                     attn_type = "kv_all_gather"
                 if attn_type not in ("kv_all_gather", "ulysses"):
-                    raise ValueError(
-                        "HunyuanImage3 sequence parallel attention must be 'kv_all_gather' or 'ulysses', "
-                        f"got {attn_type!r}."
-                    )
+                    raise ValueError(f"HunyuanImage3 sequence parallel attention must be 'kv_all_gather' or 'ulysses', got {attn_type!r}.")
                 parallel_config["seq_p_attn_type"] = attn_type
 
             config["parallel"] = parallel_config
@@ -272,10 +269,7 @@ def auto_calc_config(config):
                 q_heads = int(config.get("num_attention_heads") or config["num_heads"])
                 kv_heads = int(config.get("num_key_value_heads") or q_heads)
                 if q_heads % seq_p_size or kv_heads % seq_p_size:
-                    raise ValueError(
-                        "HunyuanImage3 Ulysses requires seq_p_size to divide Q and KV heads: "
-                        f"Q={q_heads}, KV={kv_heads}, seq_p_size={seq_p_size}."
-                    )
+                    raise ValueError(f"HunyuanImage3 Ulysses requires seq_p_size to divide Q and KV heads: Q={q_heads}, KV={kv_heads}, seq_p_size={seq_p_size}.")
 
     if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:

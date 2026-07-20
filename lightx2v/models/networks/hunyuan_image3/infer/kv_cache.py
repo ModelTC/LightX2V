@@ -44,9 +44,7 @@ class HunyuanImage3StaticKVCache:
         if cache_position.dim() != 2:
             raise ValueError(f"HunyuanImage3 cache_position must be 1D or 2D, got {cache_position.shape}.")
         if cache_position.shape[0] != key_states.shape[0]:
-            raise ValueError(
-                f"HunyuanImage3 cache batch mismatch: cache_position={cache_position.shape}, key_states={key_states.shape}."
-            )
+            raise ValueError(f"HunyuanImage3 cache batch mismatch: cache_position={cache_position.shape}, key_states={key_states.shape}.")
 
         for batch_idx in range(cache_position.shape[0]):
             layer.key[batch_idx].index_copy_(1, cache_position[batch_idx], key_states[batch_idx])

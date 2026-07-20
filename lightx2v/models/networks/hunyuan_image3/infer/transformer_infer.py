@@ -138,8 +138,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             return
         self._attn_fallback_warnings.add(key)
         logger.warning(
-            "HunyuanImage3 attn_impl='{}' does not support {} attention masks in the low-intrusion path; "
-            "falling back to PyTorch SDPA for this attention call.",
+            "HunyuanImage3 attn_impl='{}' does not support {} attention masks in the low-intrusion path; falling back to PyTorch SDPA for this attention call.",
             self.attn_impl,
             mask_mode,
         )
@@ -185,9 +184,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             return [[] for _ in range(batch)]
 
         first_item = full_attn_slices[0]
-        if isinstance(first_item, slice) or (
-            isinstance(first_item, (list, tuple)) and len(first_item) == 2 and all(isinstance(v, int) for v in first_item)
-        ):
+        if isinstance(first_item, slice) or (isinstance(first_item, (list, tuple)) and len(first_item) == 2 and all(isinstance(v, int) for v in first_item)):
             full_attn_slices = [full_attn_slices for _ in range(batch)]
         elif len(full_attn_slices) == 1 and batch > 1:
             full_attn_slices = list(full_attn_slices) * batch
@@ -268,10 +265,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             batch_full_slices = self._normalize_full_attn_slices(full_attn_slices, batch)
             if batch_full_slices is None or not any(batch_full_slices):
                 return None
-            segment_specs = [
-                self._build_segment_specs(position_ids[batch_idx], batch_full_slices[batch_idx], kv_len)
-                for batch_idx in range(batch)
-            ]
+            segment_specs = [self._build_segment_specs(position_ids[batch_idx], batch_full_slices[batch_idx], kv_len) for batch_idx in range(batch)]
         if len(segment_specs) != batch or any(specs is None for specs in segment_specs):
             return None
 
@@ -524,10 +518,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         batch_full_slices = self._normalize_full_attn_slices(pre_infer_out.full_attn_slices, batch)
         if batch_full_slices is None or not any(batch_full_slices):
             return None
-        segment_specs = [
-            self._build_segment_specs(position_ids[batch_idx], batch_full_slices[batch_idx], kv_len)
-            for batch_idx in range(batch)
-        ]
+        segment_specs = [self._build_segment_specs(position_ids[batch_idx], batch_full_slices[batch_idx], kv_len) for batch_idx in range(batch)]
         return None if any(specs is None for specs in segment_specs) else segment_specs
 
     def _cached_pre_infer_to_device(self, name, value, device):
@@ -560,10 +551,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
 
     def _sequence_parallel_ulysses_seq_to_head(self, query_states, key_states, value_states, state):
         if query_states.shape[0] != 1:
-            raise ValueError(
-                "HunyuanImage3 Ulysses expects batch size 1; use hunyuan_cfg_mode='serial' "
-                "for pure SP or 'parallel' for CFG+SP."
-            )
+            raise ValueError("HunyuanImage3 Ulysses expects batch size 1; use hunyuan_cfg_mode='serial' for pure SP or 'parallel' for CFG+SP.")
         query = all2all_seq2head(query_states[0].transpose(0, 1).contiguous(), group=self.seq_p_group)
         key = all2all_seq2head(key_states[0].transpose(0, 1).contiguous(), group=self.seq_p_group)
         value = all2all_seq2head(value_states[0].transpose(0, 1).contiguous(), group=self.seq_p_group)

@@ -46,10 +46,7 @@ class HunyuanImage3PreInfer:
                 index = torch.arange(image_mask.shape[1], device=image_seq.device).unsqueeze(0).repeat(batch, 1)
                 image_scatter_index = index.masked_select(image_mask.bool()).reshape(batch, -1)
                 if image_scatter_index.shape[1] != image_seq.shape[1]:
-                    raise ValueError(
-                        f"HunyuanImage3 image_mask selects {image_scatter_index.shape[1]} tokens, "
-                        f"but image patch embed produced {image_seq.shape[1]} tokens."
-                    )
+                    raise ValueError(f"HunyuanImage3 image_mask selects {image_scatter_index.shape[1]} tokens, but image patch embed produced {image_seq.shape[1]} tokens.")
                 out.scatter_(
                     dim=1,
                     index=image_scatter_index.unsqueeze(-1).repeat(1, 1, hidden),
