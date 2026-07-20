@@ -93,12 +93,12 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
         total_img = sum(patch_token_nums)
         full_len = num_txt_tokens + total_img
 
-        if self._full_k_buf is None or self._full_k_buf.shape[0] != full_len or self._full_k_buf.dtype != key.dtype:
-            self._full_k_buf = torch.empty(full_len, *key.shape[1:], dtype=key.dtype, device=key.device)
-            self._full_v_buf = torch.empty(full_len, *value.shape[1:], dtype=value.dtype, device=value.device)
+        if block_idx not in self._full_k_bufs or self._full_k_bufs[block_idx].shape[0] != full_len or self._full_k_bufs[block_idx].dtype != key.dtype:
+            self._full_k_bufs[block_idx] = torch.empty(full_len, *key.shape[1:], dtype=key.dtype, device=key.device)
+            self._full_v_bufs[block_idx] = torch.empty(full_len, *value.shape[1:], dtype=value.dtype, device=value.device)
 
-        buf_k = self._full_k_buf
-        buf_v = self._full_v_buf
+        buf_k = self._full_k_bufs[block_idx]
+        buf_v = self._full_v_bufs[block_idx]
 
         # Copy text K/V (fresh, from current patch's computation)
         buf_k[:num_txt_tokens].copy_(text_key)
