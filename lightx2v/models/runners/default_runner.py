@@ -99,14 +99,7 @@ class DefaultRunner(BaseRunner):
         self.init_scheduler()
 
     def warmup(self):
-        if (
-            not self.config.get("warmup", False)
-            or self.config.get("disagg_mode")
-            or self.config.get("lazy_load", False)
-            or self.config.get("unload_modules", False)
-            or self.config.get("cpu_offload", False)
-            or self.config.get("feature_caching", "NoCaching") != "NoCaching"
-        ):
+        if not self.config.get("warmup", False) or self.config.get("disagg_mode") or self.config.get("unload_modules", False) or self.config.get("feature_caching", "NoCaching") != "NoCaching":
             return
 
         self.run_warmup()
