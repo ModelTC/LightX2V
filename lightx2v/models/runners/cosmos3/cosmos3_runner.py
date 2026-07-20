@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import wave
+from collections import deque
 
 import imageio
 import imageio_ffmpeg as ffmpeg
@@ -16,6 +17,12 @@ from transformers import AutoTokenizer
 
 from lightx2v.models.audio_encoders.hf.cosmos3.sound_tokenizer import Cosmos3SoundTokenizer
 from lightx2v.models.networks.cosmos3.model import Cosmos3TransformerModel
+from lightx2v.models.runners.cosmos3.policy_runtime import (
+    PolicySeedSequence,
+    build_json_policy_prompt,
+    build_official_policy_prompt,
+    normalize_policy_prompt_format,
+)
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.cosmos3.scheduler import Cosmos3Scheduler
 from lightx2v.models.video_encoders.hf.cosmos3.vae import Cosmos3WanVAE
@@ -78,6 +85,45 @@ _EMBODIMENT_TO_RAW_ACTION_DIM = {
     "fractal": 10,
     "hand_pose": 57,
 }
+
+
+def _resize_with_zero_pad(image, height, width):
+    """Match openpi_client.image_tools.resize_with_pad for one RGB image."""
+    image = Image.fromarray(np.asarray(image, dtype=np.uint8), mode="RGB")
+    current_width, current_height = image.size
+    if (current_height, current_width) == (height, width):
+        return np.asarray(image, dtype=np.uint8)
+
+    ratio = max(current_width / width, current_height / height)
+    resized_height = max(1, int(current_height / ratio))
+    resized_width = max(1, int(current_width / ratio))
+    resized = image.resize((resized_width, resized_height), resample=Image.BILINEAR)
+    canvas = Image.new("RGB", (width, height), 0)
+    canvas.paste(resized, (max(0, (width - resized_width) // 2), max(0, (height - resized_height) // 2)))
+    return np.asarray(canvas, dtype=np.uint8)
+
+
+def compose_droid_policy_image(images):
+    """Build the 640x540 concat view expected by Cosmos3 Policy-DROID.
+
+    RoboLab's reference client sends a 640x360 wrist view on the top and two
+    320x180 shoulder views on the bottom, ordered left then right.
+    """
+
+    required = ("wrist_cam", "over_shoulder_left_camera", "over_shoulder_right_camera")
+    missing = [name for name in required if name not in images or images[name] is None]
+    if missing:
+        raise KeyError(f"Cosmos3 Policy-DROID requires cameras: {missing}")
+
+    wrist = _resize_with_zero_pad(images["wrist_cam"], 360, 640)
+    shoulder_views = []
+    for name in ("over_shoulder_left_camera", "over_shoulder_right_camera"):
+        view = _resize_with_zero_pad(images[name], 360, 640)
+        # Keep this interpolation identical to RoboLab's Cosmos3Client.
+        tensor = torch.from_numpy(view.copy()).permute(2, 0, 1).unsqueeze(0).float()
+        tensor = torch.nn.functional.interpolate(tensor, size=(180, 320), mode="bilinear")
+        shoulder_views.append(tensor.squeeze(0).permute(1, 2, 0).numpy().astype(np.uint8))
+    return np.ascontiguousarray(np.concatenate((wrist, np.concatenate(shoulder_views, axis=1)), axis=0))
 
 
 @RUNNER_REGISTER("cosmos3")
@@ -282,15 +328,27 @@ class Cosmos3Runner(DefaultRunner):
             additional_view_description = None
             if action_mode == "policy" and domain_name == "droid_lerobot" and view_point == "concat_view":
                 additional_view_description = _DROID_CONCAT_VIEW_DESCRIPTION
-            cond_text = self._build_action_json_prompt(
-                prompt,
-                view_point=view_point,
-                num_frames=num_frames,
-                fps=fps,
-                height=height,
-                width=width,
-                additional_view_description=additional_view_description,
-            )
+            framing = _ACTION_VIEWPOINT_TEMPLATES.get(view_point)
+            if framing and additional_view_description:
+                framing = f"{framing} {additional_view_description}"
+            if action_mode == "policy":
+                prompt_format = normalize_policy_prompt_format(self.config.get("policy_prompt_format", "official_text"))
+                if prompt_format == "official_text":
+                    cond_text = build_official_policy_prompt(prompt, framing, num_frames, fps, height, width)
+                else:
+                    cond_text = build_json_policy_prompt(prompt, framing, num_frames, fps, height, width)
+                if not dist.is_initialized() or dist.get_rank() == 0:
+                    logger.info(f"Cosmos3 policy effective prompt ({prompt_format}): {cond_text}")
+            else:
+                cond_text = self._build_action_json_prompt(
+                    prompt,
+                    view_point=view_point,
+                    num_frames=num_frames,
+                    fps=fps,
+                    height=height,
+                    width=width,
+                    additional_view_description=additional_view_description,
+                )
         elif not is_image and self.config.get("add_duration_template", True):
             cond_text = self._append_prompt_template(cond_text, f"The video is {num_frames / fps:.1f} seconds long and is of {fps:.0f} FPS.")
             uncond_text = self._append_prompt_template(uncond_text, f"The video is not {num_frames / fps:.1f} seconds long and is not of {fps:.0f} FPS.")
@@ -436,15 +494,22 @@ class Cosmos3Runner(DefaultRunner):
         if not image_path or not os.path.isfile(image_path):
             raise FileNotFoundError(f"Cosmos3 policy image_path does not exist: {image_path}")
         with Image.open(image_path) as image:
-            image = image.convert("RGB")
-            source_width, source_height = image.size
-            scale = min(width / source_width, height / source_height, 1.0)
-            resized_width = max(1, int(scale * source_width + 0.5))
-            resized_height = max(1, int(scale * source_height + 0.5))
-            if (resized_width, resized_height) != image.size:
-                resample = getattr(Image, "Resampling", Image).BICUBIC
-                image = image.resize((resized_width, resized_height), resample=resample)
-            frame = np.asarray(image, dtype=np.uint8)
+            frame = np.asarray(image.convert("RGB"), dtype=np.uint8)
+        return self._load_policy_image_tensor(frame, height, width)
+
+    @staticmethod
+    def _load_policy_image_tensor(frame, height, width):
+        """Convert an in-memory RGB Policy-DROID observation to a model tensor."""
+        frame = np.asarray(frame, dtype=np.uint8)
+        if frame.ndim != 3 or frame.shape[2] != 3:
+            raise ValueError(f"Cosmos3 policy image must be HxWx3 RGB, got {frame.shape}.")
+        source_height, source_width = frame.shape[:2]
+        scale = min(width / source_width, height / source_height, 1.0)
+        resized_width = max(1, int(scale * source_width + 0.5))
+        resized_height = max(1, int(scale * source_height + 0.5))
+        if (resized_width, resized_height) != (source_width, source_height):
+            resample = getattr(Image, "Resampling", Image).BICUBIC
+            frame = np.asarray(Image.fromarray(frame, mode="RGB").resize((resized_width, resized_height), resample=resample), dtype=np.uint8)
 
         padding_right = width - resized_width
         padding_bottom = height - resized_height
@@ -457,22 +522,24 @@ class Cosmos3Runner(DefaultRunner):
         return torch.from_numpy(frame).permute(2, 0, 1).unsqueeze(0).to(device=AI_DEVICE, dtype=GET_DTYPE())
 
     def _load_policy_state(self, raw_action_dim):
-        state_path = getattr(self.input_info, "state_path", None) or self.config.get("state_path", "")
-        if not state_path or not os.path.isfile(state_path):
-            raise FileNotFoundError(f"Cosmos3 policy state_path does not exist: {state_path}")
+        payload = getattr(self.input_info, "policy_state", None)
+        if payload is None:
+            state_path = getattr(self.input_info, "state_path", None) or self.config.get("state_path", "")
+            if not state_path or not os.path.isfile(state_path):
+                raise FileNotFoundError(f"Cosmos3 policy state_path does not exist: {state_path}")
 
-        suffix = os.path.splitext(state_path)[1].lower()
-        if suffix == ".json":
-            with open(state_path, "r") as f:
-                payload = json.load(f)
-        elif suffix in (".npy", ".npz"):
-            payload = np.load(state_path, allow_pickle=True)
-            if isinstance(payload, np.lib.npyio.NpzFile):
-                payload = {key: payload[key] for key in payload.files}
-            elif isinstance(payload, np.ndarray) and payload.shape == () and isinstance(payload.item(), dict):
-                payload = payload.item()
-        else:
-            payload = np.loadtxt(state_path, delimiter=",", dtype=np.float32)
+            suffix = os.path.splitext(state_path)[1].lower()
+            if suffix == ".json":
+                with open(state_path, "r") as f:
+                    payload = json.load(f)
+            elif suffix in (".npy", ".npz"):
+                payload = np.load(state_path, allow_pickle=True)
+                if isinstance(payload, np.lib.npyio.NpzFile):
+                    payload = {key: payload[key] for key in payload.files}
+                elif isinstance(payload, np.ndarray) and payload.shape == () and isinstance(payload.item(), dict):
+                    payload = payload.item()
+            else:
+                payload = np.loadtxt(state_path, delimiter=",", dtype=np.float32)
 
         if isinstance(payload, dict):
             if "state" in payload:
@@ -565,12 +632,22 @@ class Cosmos3Runner(DefaultRunner):
         num_frames = chunk_size + 1
         image_path = getattr(self.input_info, "image_path", None) or self.config.get("image_path", "")
         video_path = getattr(self.input_info, "video_path", None) or self.config.get("video_path", "")
+        policy_image = getattr(self.input_info, "policy_image", None)
 
         loaded_vae_here = not hasattr(self, "vae") or self.vae is None
         if loaded_vae_here:
             self.vae = self.load_vae()
         if action_mode == "inverse_dynamics":
             video = self._load_video_tensor(video_path, num_frames, height, width, keep_first=False)
+        elif action_mode == "policy" and policy_image is not None:
+            frame = self._load_policy_image_tensor(policy_image, height, width)
+            video = torch.full(
+                (frame.shape[0], frame.shape[1], num_frames, frame.shape[2], frame.shape[3]),
+                -1.0,
+                device=frame.device,
+                dtype=frame.dtype,
+            )
+            video[:, :, 0] = frame
         elif image_path:
             if action_mode == "policy":
                 frame = self._load_policy_image_tensor_by_path(image_path, height, width)
@@ -966,3 +1043,82 @@ class Cosmos3Runner(DefaultRunner):
         self._save_action_output(action)
         self.end_run()
         return self._finalize_pipeline_outputs(input_info, images, latents=latents, generator=generator, sound=sound, action=action)
+
+
+class Cosmos3Policy:
+    """Long-running Policy-DROID wrapper used by interactive control loops.
+
+    The normal ``lightx2v.infer`` entry point is intentionally single-shot.
+    This wrapper keeps model weights resident, accepts in-memory observations,
+    and exposes one action at a time from the generated action chunk.
+    """
+
+    def __init__(self, config, *, actions_per_plan=None, binarize_gripper=True):
+        from lightx2v.utils.input_info import init_empty_input_info
+
+        if str(config.get("action_mode", "")).strip().lower() != "policy":
+            raise ValueError("Cosmos3Policy requires action_mode='policy'.")
+        if str(config.get("domain_name", "")).strip().lower() != "droid_lerobot":
+            raise ValueError("Cosmos3Policy requires domain_name='droid_lerobot'.")
+
+        self.config = config
+        self._input_info_factory = lambda: init_empty_input_info("i2va")
+        self.action_dim = int(config.get("raw_action_dim", 8))
+        self.action_chunk_size = int(config.get("action_chunk_size", 32))
+        requested = self.action_chunk_size if actions_per_plan is None else int(actions_per_plan)
+        self.actions_per_plan = max(1, min(requested, self.action_chunk_size))
+        self.binarize_gripper = bool(binarize_gripper)
+        self.prompt_format = normalize_policy_prompt_format(config.get("policy_prompt_format", "official_text"))
+        self._seed_sequence = PolicySeedSequence(config.get("seed", 0))
+        self.pending_actions = deque()
+
+        self.runner = Cosmos3Runner(config)
+        self.runner.init_modules()
+
+    @classmethod
+    def from_config(cls, config, **kwargs):
+        return cls(config, **kwargs)
+
+    def _plan(self, images, state, task_description):
+        state = np.asarray(state, dtype=np.float32).reshape(-1)
+        if state.size != self.action_dim:
+            raise ValueError(f"Cosmos3 Policy-DROID state length {state.size} != {self.action_dim}")
+
+        input_info = self._input_info_factory()
+        input_info.seed = self._seed_sequence.next_seed()
+        input_info.prompt = str(task_description)
+        input_info.negative_prompt = ""
+        input_info.action_mode = "policy"
+        input_info.domain_name = "droid_lerobot"
+        input_info.view_point = str(self.config.get("view_point", "concat_view"))
+        input_info.return_result_tensor = True
+        input_info.policy_image = compose_droid_policy_image(images)
+        input_info.policy_state = state
+
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            logger.info(f"Cosmos3 policy plan: seed={input_info.seed}, prompt_format={self.prompt_format}")
+
+        result = self.runner.run_pipeline(input_info)
+        chunk = result.get("action") if isinstance(result, dict) else None
+        if chunk is None:
+            raise RuntimeError("Cosmos3 Policy-DROID inference returned no action chunk")
+        if isinstance(chunk, torch.Tensor):
+            chunk = chunk.detach().float().cpu().numpy()
+        chunk = np.asarray(chunk, dtype=np.float32)
+        if chunk.ndim != 2 or chunk.shape[1] != self.action_dim:
+            raise ValueError(f"Cosmos3 Policy-DROID action chunk must be Nx{self.action_dim}, got {chunk.shape}")
+        if self.binarize_gripper:
+            chunk = chunk.copy()
+            chunk[:, -1] = (chunk[:, -1] > 0.5).astype(np.float32)
+        self.pending_actions.extend(chunk[: self.actions_per_plan])
+
+    def next_action(self, *, images, state, task_description):
+        if not self.pending_actions:
+            self._plan(images, state, task_description)
+        return np.asarray(self.pending_actions.popleft(), dtype=np.float32)
+
+    def reset(self):
+        self.pending_actions.clear()
+
+    def close(self):
+        self.pending_actions.clear()

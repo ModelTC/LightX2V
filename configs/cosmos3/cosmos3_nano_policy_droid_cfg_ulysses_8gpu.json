@@ -15,6 +15,7 @@
     "policy_use_state": true,
     "policy_history_length": 1,
     "policy_flip_gripper": true,
+    "policy_prompt_format": "official_text",
     "decode_video": false,
     "feature_caching": "NoCaching",
     "rms_norm_type": "one-pass",
