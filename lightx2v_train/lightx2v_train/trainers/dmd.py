@@ -808,6 +808,8 @@ class _LTX2T2AVDmdMixin:
         self.default_fps = float(ltx2_config.get("default_fps", self.dmd_config.get("fps", 25.0)))
         self.video_patchifier = VideoLatentPatchifier(patch_size=1)
         self.audio_patchifier = AudioPatchifier(patch_size=1)
+        self.denoising_sigma_values = self._validate_denoising_sigma_values(self.dmd_config.get("denoising_sigma_values"))
+        self._logged_denoising_sigma_values = False
 
         if self.cdm_enabled:
             raise ValueError("ltx_t2av_dmd does not support training.dmd.cdm yet.")
@@ -936,7 +938,24 @@ class _LTX2T2AVDmdMixin:
                 num_steps=num_steps,
             )
             return
-        self.scheduler.set_timesteps(self.num_inference_steps, device=self.model.device)
+        sigmas = None if self.denoising_sigma_values is None else self.denoising_sigma_values[:-1]
+        self.scheduler.set_timesteps(self.num_inference_steps, sigmas=sigmas, device=self.model.device)
+        if not self._logged_denoising_sigma_values:
+            logger.info("[train] {} denoising_sigma_values={}", self.trainer_name, [round(float(value), 6) for value in self.scheduler.sigmas.detach().cpu()])
+            self._logged_denoising_sigma_values = True
+
+    def _validate_denoising_sigma_values(self, values):
+        if values is None:
+            return None
+        values = tuple(float(value) for value in values)
+        expected = self.num_inference_steps + 1
+        if len(values) != expected:
+            raise ValueError(f"training.dmd.denoising_sigma_values must contain num_inference_steps + 1 values ({expected}), got {len(values)}.")
+        if abs(values[0] - 1.0) > 1e-6 or abs(values[-1]) > 1e-6:
+            raise ValueError("training.dmd.denoising_sigma_values must start at 1.0 and end at 0.0.")
+        if any(current <= following for current, following in zip(values, values[1:])):
+            raise ValueError("training.dmd.denoising_sigma_values must be strictly decreasing.")
+        return values
 
     def sample_initial_latents(self, latent_shape):
         video = torch.randn(latent_shape["video_tokens"], device=self.model.device, dtype=self.running_dtype)
@@ -1805,6 +1824,11 @@ class LTX2T2AVArDmdTrainer(_LTX2T2AVDmdMixin, VideoArDmdTrainer):
     trainer_name = "ltx_t2av_ar_dmd"
     allowed_model_names = {"ltx_t2av_ar"}
 
+    def __init__(self, config):
+        super().__init__(config)
+        if self.denoising_sigma_values is None:
+            raise ValueError("ltx_t2av_ar_dmd requires training.dmd.denoising_sigma_values so training and inference use the same distilled trajectory.")
+
     def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
         transformer = self.model.denoiser_module()
         if not self._ltx_transformer_has_inference_cache(transformer):
@@ -1869,7 +1893,13 @@ class LTX2T2AVArDmdTrainer(_LTX2T2AVDmdMixin, VideoArDmdTrainer):
                         video_current_start=video_start,
                         audio_current_start=audio_start,
                     )
-                latents, x0 = self._step_pair_by_index(velocity, idx, latents)
+                    x0 = self._x0_from_velocity(latents, velocity, sigma)
+
+                if idx < end_step_idx:
+                    next_sigma = self.scheduler.sigma_at(idx + 1, batch_size, device=self.model.device, dtype=self.running_dtype)
+                    with torch.no_grad():
+                        noise = (torch.randn_like(x0[0]), torch.randn_like(x0[1]))
+                        latents = self._add_noise_pair(x0, noise, next_sigma)
 
             output_video_chunks.append(x0[0])
             output_audio_chunks.append(x0[1])
@@ -2022,8 +2052,6 @@ class LTX2T2AVArDmdTrainer(_LTX2T2AVDmdMixin, VideoArDmdTrainer):
     def _audio_token_range(block_idx, num_blocks, audio_total_tokens):
         start = (block_idx * audio_total_tokens + num_blocks - 1) // num_blocks
         end = ((block_idx + 1) * audio_total_tokens + num_blocks - 1) // num_blocks
-        if end <= start:
-            end = min(audio_total_tokens, start + 1)
         return start, end
 
     @staticmethod

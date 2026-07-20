@@ -6,6 +6,7 @@ from math import gcd as _gcd
 import torch
 import torch.distributed as dist
 
+from lightx2v.common.kvcache.utils import causal_chunk_token_range
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX2TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.ltx2.model import LTX2ARModel, LTX2Model
@@ -1080,8 +1081,7 @@ class LTX2ARRunner(LTX2Runner):
         for chunk_idx in range(self._ar_num_chunks):
             video_start = chunk_idx * chunk_frames * video_tokens_per_frame
             video_end = (chunk_idx + 1) * chunk_frames * video_tokens_per_frame
-            audio_start = chunk_idx * keep_audio_tokens // self._ar_num_chunks
-            audio_end = (chunk_idx + 1) * keep_audio_tokens // self._ar_num_chunks
+            audio_start, audio_end = causal_chunk_token_range(chunk_idx, self._ar_num_chunks, keep_audio_tokens)
             self._ar_chunk_ranges.append((video_start, video_end, audio_start, audio_end))
 
         scheduler.video_latent_shape_orig = (

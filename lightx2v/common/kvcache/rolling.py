@@ -68,6 +68,9 @@ class RollingKVCachePool(BaseKVCachePool):
         self._ring_head[idx] = int(head)
         self._ring_recent_len[idx] = int(recent_len)
 
+    def cache_size_for_layer(self, layer_id: int) -> int:
+        return self._cache_size
+
     def _ensure_ring_active(self, layer_id: int, sink_tokens: int) -> None:
         active, sink, head, recent_len = self._ring_get(layer_id)
         local_end = self.get_local_end(layer_id)
@@ -76,10 +79,11 @@ class RollingKVCachePool(BaseKVCachePool):
                 raise RuntimeError(f"ring sink changed for layer {layer_id}: old={sink}, new={sink_tokens}")
             return
         sink = int(sink_tokens)
-        if sink < 0 or sink >= self._cache_size:
-            raise RuntimeError(f"invalid sink_tokens={sink}, cache_size={self._cache_size}")
+        cache_size = self.cache_size_for_layer(layer_id)
+        if sink < 0 or sink >= cache_size:
+            raise RuntimeError(f"invalid sink_tokens={sink}, cache_size={cache_size}")
         recent_len = max(0, int(local_end) - sink)
-        if recent_len > self._cache_size - sink:
+        if recent_len > cache_size - sink:
             raise RuntimeError("recent_len exceeds recent ring capacity")
         self._ring_set(layer_id, active=True, sink=sink, head=0, recent_len=recent_len)
 
@@ -87,6 +91,13 @@ class RollingKVCachePool(BaseKVCachePool):
         cap = self._cache_size - int(sink)
         if cap <= 0:
             raise RuntimeError(f"invalid recent capacity: cache_size={self._cache_size}, sink={sink}")
+        return cap
+
+    def _recent_capacity_for_layer(self, layer_id: int, sink: int) -> int:
+        cache_size = self.cache_size_for_layer(layer_id)
+        cap = cache_size - int(sink)
+        if cap <= 0:
+            raise RuntimeError(f"invalid recent capacity: cache_size={cache_size}, sink={sink}")
         return cap
 
     def _logical_chunks(self, layer_id: int, start: int, end: int) -> list[tuple[int, int, int]]:
@@ -114,7 +125,7 @@ class RollingKVCachePool(BaseKVCachePool):
         r0 = max(start, sink)
         r1 = end
         if r1 > r0:
-            cap = self._recent_capacity(sink)
+            cap = self._recent_capacity_for_layer(layer_id, sink)
             off = r0 - sink
             length = r1 - r0
             if off + length > cap:
@@ -294,7 +305,7 @@ class RollingKVCachePool(BaseKVCachePool):
             return
         if end_idx > sink:
             new_recent_len = max(recent_len, int(end_idx) - sink)
-            cap = self._recent_capacity(sink)
+            cap = self._recent_capacity_for_layer(layer_id, sink)
             if new_recent_len > cap:
                 raise RuntimeError(f"recent ring overflow: recent_len={new_recent_len}, capacity={cap}")
             self._ring_set(layer_id, active=True, sink=sink, head=head, recent_len=new_recent_len)
@@ -371,7 +382,7 @@ class RollingKVCachePool(BaseKVCachePool):
         active, sink, head, recent_len = self._ring_get(layer_id)
         if num_evicted > recent_len:
             raise RuntimeError(f"cannot evict {num_evicted} recent tokens, only {recent_len} available")
-        cap = self._recent_capacity(sink)
+        cap = self._recent_capacity_for_layer(layer_id, sink)
         head = (head + int(num_evicted)) % cap
         recent_len -= int(num_evicted)
         self._ring_set(layer_id, active=True, sink=sink, head=head, recent_len=recent_len)
@@ -502,6 +513,166 @@ class StepRollingKVCachePool(RollingKVCachePool):
     def set_ends(self, layer_id: int, global_end: int, local_end: int) -> None:
         self._global_end[self._step(), layer_id] = int(global_end)
         self._local_end[self._step(), layer_id] = int(local_end)
+
+
+class HybridStepRollingKVCachePool(StepRollingKVCachePool):
+    """Step-isolated rolling cache with a different token capacity per layer.
+
+    Layers with the same capacity share a contiguous allocation. This keeps the
+    existing rolling-cache API while avoiding a max-window allocation for every
+    transformer block.
+    """
+
+    def __init__(
+        self,
+        num_steps: int,
+        num_layers: int,
+        layer_cache_sizes: list[int] | tuple[int, ...],
+        num_heads: int,
+        head_dim: int,
+        dtype: torch.dtype,
+        device: torch.device,
+        *,
+        kv_offload: bool = False,
+    ) -> None:
+        if int(num_steps) <= 0:
+            raise ValueError("num_steps must be positive")
+        sizes = tuple(int(size) for size in layer_cache_sizes)
+        if len(sizes) != int(num_layers):
+            raise ValueError(f"layer_cache_sizes must contain {num_layers} entries, got {len(sizes)}")
+        if not sizes or min(sizes) <= 0:
+            raise ValueError("layer_cache_sizes must contain positive token capacities")
+
+        self._layer_cache_sizes = sizes
+        self._layer_bucket_slots: list[tuple[int, int]] = []
+        bucket_counts: dict[int, int] = {}
+        for size in sizes:
+            slot = bucket_counts.get(size, 0)
+            self._layer_bucket_slots.append((size, slot))
+            bucket_counts[size] = slot + 1
+        self._bucket_counts = bucket_counts
+
+        super().__init__(
+            num_steps=num_steps,
+            num_layers=num_layers,
+            cache_size=max(sizes),
+            num_heads=num_heads,
+            head_dim=head_dim,
+            dtype=dtype,
+            device=device,
+            kv_offload=kv_offload,
+        )
+
+    @property
+    def layer_cache_sizes(self) -> tuple[int, ...]:
+        return self._layer_cache_sizes
+
+    @property
+    def bucket_counts(self) -> dict[int, int]:
+        return dict(self._bucket_counts)
+
+    def cache_size_for_layer(self, layer_id: int) -> int:
+        return self._layer_cache_sizes[int(layer_id)]
+
+    def _bucket_slot(self, layer_id: int) -> tuple[int, int]:
+        return self._layer_bucket_slots[int(layer_id)]
+
+    def _k_layer(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._k_gpu_buf
+        size, slot = self._bucket_slot(layer_id)
+        return self._k_buckets[size][self._step(), slot]
+
+    def _v_layer(self, layer_id: int) -> torch.Tensor:
+        if self._kv_offload:
+            return self._v_gpu_buf
+        size, slot = self._bucket_slot(layer_id)
+        return self._v_buckets[size][self._step(), slot]
+
+    def _k_cpu_layer(self, layer_id: int) -> torch.Tensor:
+        size, slot = self._bucket_slot(layer_id)
+        return self._k_cpu_buckets[size][self._step(), slot]
+
+    def _v_cpu_layer(self, layer_id: int) -> torch.Tensor:
+        size, slot = self._bucket_slot(layer_id)
+        return self._v_cpu_buckets[size][self._step(), slot]
+
+    def _allocate_buckets(self, device: torch.device | str, *, pin_memory: bool = False):
+        buckets = {}
+        for size, count in self._bucket_counts.items():
+            tensor = torch.empty(
+                self.num_steps,
+                count,
+                size,
+                self._num_heads,
+                self._head_dim,
+                dtype=self._dtype,
+                device=device,
+            )
+            buckets[size] = tensor.pin_memory() if pin_memory else tensor
+        return buckets
+
+    def _init_kv_buffer(self) -> None:
+        if self._kv_offload:
+            self._init_kv_buffer_offload()
+            return
+        self._k_buckets = self._allocate_buckets(self._device)
+        self._v_buckets = self._allocate_buckets(self._device)
+        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._init_ring_metadata()
+
+    def _init_kv_buffer_offload(self) -> None:
+        from loguru import logger
+
+        self._k_cpu_buckets = self._allocate_buckets("cpu", pin_memory=True)
+        self._v_cpu_buckets = self._allocate_buckets("cpu", pin_memory=True)
+        self._k_gpu_buf = torch.empty(self._cache_size, self._num_heads, self._head_dim, dtype=self._dtype, device=self._device)
+        self._v_gpu_buf = torch.empty(self._cache_size, self._num_heads, self._head_dim, dtype=self._dtype, device=self._device)
+        self._global_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._local_end = torch.zeros(self.num_steps, self._num_layers, dtype=torch.long, device="cpu")
+        self._init_ring_metadata()
+        self._init_offload_state((self.num_steps, self._num_layers))
+
+        gpu_mb = (self._k_gpu_buf.nbytes + self._v_gpu_buf.nbytes) / (1024 * 1024)
+        cpu_mb = self.allocated_bytes / (1024 * 1024)
+        logger.info(
+            "[{}+offload] steps={}, buckets={}, GPU staging layer: {:.1f} MB, CPU pinned: {:.1f} MB",
+            self.__class__.__name__,
+            self.num_steps,
+            dict(self._bucket_counts),
+            gpu_mb,
+            cpu_mb,
+        )
+
+    def _copy_layer_to_gpu(self, layer_id: int) -> None:
+        size = self.cache_size_for_layer(layer_id)
+        self._k_gpu_buf[:size].copy_(self._k_cpu_layer(layer_id), non_blocking=True)
+        self._v_gpu_buf[:size].copy_(self._v_cpu_layer(layer_id), non_blocking=True)
+
+    @property
+    def allocated_bytes(self) -> int:
+        if self._kv_offload:
+            buckets = (*self._k_cpu_buckets.values(), *self._v_cpu_buckets.values())
+        else:
+            buckets = (*self._k_buckets.values(), *self._v_buckets.values())
+        return sum(tensor.nbytes for tensor in buckets)
+
+    def reset(self) -> None:
+        if self._kv_offload:
+            self.sync_all()
+            for tensor in (*self._k_cpu_buckets.values(), *self._v_cpu_buckets.values()):
+                tensor.zero_()
+            self._k_gpu_buf.zero_()
+            self._v_gpu_buf.zero_()
+            self._global_end.zero_()
+            self._local_end.zero_()
+            self._init_ring_metadata()
+            self._reset_offload_state()
+            return
+        self._global_end.zero_()
+        self._local_end.zero_()
+        self._init_ring_metadata()
 
 
 class SpatialRollingKVCachePool(RollingKVCachePool):
