@@ -32,10 +32,10 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
         # Stale-KV cache: block_idx -> [ [k, v] per patch slot ]
         self._kv_cache: dict = {}
 
-        # Pre-allocated full K/V buffers (lazily created on first async use).
+        # Pre-allocated full K/V buffers per block (lazily created on first async use).
         # Avoids repeated torch.cat allocations per timestep.
-        self._full_k_buf = None
-        self._full_v_buf = None
+        self._full_k_bufs: dict = {}
+        self._full_v_bufs: dict = {}
 
     # ------------------------------------------------------------------
     # Stale-KV hook (overrides base class no-op)
