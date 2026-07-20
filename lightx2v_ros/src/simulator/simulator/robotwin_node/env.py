@@ -35,6 +35,42 @@ from ..sim.base_env import BaseSimEnv, Observation
 FALLBACK_INSTRUCTION = "Complete the {task} task."
 
 
+def _quat_multiply_xyzw(left, right):
+    """Compose two quaternions in scipy's [x, y, z, w] convention."""
+    lx, ly, lz, lw = np.asarray(left, dtype=np.float64)
+    rx, ry, rz, rw = np.asarray(right, dtype=np.float64)
+    quat = np.array(
+        [
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw,
+            lw * rw - lx * rx - ly * ry - lz * rz,
+        ],
+        dtype=np.float64,
+    )
+    norm = np.linalg.norm(quat)
+    if norm < 1e-8:
+        raise ValueError("LingBot-VA produced a zero-norm end-effector quaternion.")
+    return quat / norm
+
+
+def add_relative_eef_pose(relative_pose, initial_pose):
+    """Convert LingBot-VA's relative dual-arm pose into absolute EE targets."""
+    relative_pose = np.asarray(relative_pose, dtype=np.float64).reshape(-1)
+    initial_pose = np.asarray(initial_pose, dtype=np.float64).reshape(-1)
+    if relative_pose.size != 16 or initial_pose.size != 16:
+        raise ValueError("Dual-arm end-effector poses must contain 16 values.")
+
+    output = []
+    for offset in (0, 8):
+        relative = relative_pose[offset : offset + 8]
+        initial = initial_pose[offset : offset + 8]
+        translation = initial[:3] + relative[:3]
+        quaternion = _quat_multiply_xyzw(initial[3:7], relative[3:7])
+        output.extend(np.concatenate([translation, quaternion, relative[7:8]]))
+    return np.asarray(output, dtype=np.float32)
+
+
 def default_robotwin_root() -> Path:
     return Path(__file__).resolve().parent / "RoboTwin"
 
@@ -303,7 +339,16 @@ class RoboTwinEnv(BaseSimEnv):
         instruction = self._resolve_instruction(episode_info)
         self.env.set_instruction(instruction=instruction)
         self._task_description = instruction
+        self._lingbot_initial_eef_pose = self._current_eef_pose()
         self._log(f"episode ready: task={self.task_name} config={self.task_config} seed={self.seed} instruction={instruction!r}")
+
+    def _current_eef_pose(self):
+        observation = self.env.get_obs()
+        endpose = observation["endpose"]
+        return np.asarray(
+            list(endpose["left_endpose"]) + [endpose["left_gripper"]] + list(endpose["right_endpose"]) + [endpose["right_gripper"]],
+            dtype=np.float64,
+        )
 
     @property
     def _expert_planner_available(self) -> bool:
@@ -421,6 +466,11 @@ class RoboTwinEnv(BaseSimEnv):
         # RoboTwin sets a per-task rollout cap (`step_lim`) during setup_demo.
         return getattr(self.env, "step_lim", None)
 
+    @property
+    def accepted_action_dims(self):
+        # 14-D absolute qpos (FastWAM) or 16-D relative EE pose (LingBot-VA).
+        return (self.contract.action_dim, 16)
+
     def new_episode(self, max_setup_retries: int = 5) -> Observation:
         """Tear down the current episode and set up a fresh one (new layout).
 
@@ -481,6 +531,7 @@ class RoboTwinEnv(BaseSimEnv):
             try:
                 self._setup_demo()
                 self.env.set_instruction(instruction=self._task_description)
+                self._lingbot_initial_eef_pose = self._current_eef_pose()
             except Exception:
                 pass
             raise
@@ -531,8 +582,16 @@ class RoboTwinEnv(BaseSimEnv):
     # ------------------------------------------------------------------- step
     def step(self, action):
         action = np.asarray(action, dtype=np.float32).reshape(-1)
-        # RoboTwin policies output absolute joint targets (qpos), matching FastWAM.
-        self.env.take_action(action, action_type="qpos")
+        if action.size == self.contract.action_dim:
+            # FastWAM outputs absolute joint targets.
+            self.env.take_action(action, action_type="qpos")
+        elif action.size == 16:
+            # LingBot-VA outputs dual-arm relative EE pose:
+            # [xyz, quaternion_xyzw, gripper] x 2, relative to episode start.
+            ee_action = add_relative_eef_pose(action, self._lingbot_initial_eef_pose)
+            self.env.take_action(ee_action, action_type="ee")
+        else:
+            raise ValueError(f"RoboTwin expects a 14-D qpos or 16-D relative EE action, got {action.size}.")
         obs = self._observation()
         success = bool(getattr(self.env, "eval_success", False)) or bool(self.env.check_success())
         return obs, success

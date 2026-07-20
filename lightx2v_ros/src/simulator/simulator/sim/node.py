@@ -217,8 +217,9 @@ class SimulatorNode(Node):
             return
 
         action = np.asarray(msg.data, dtype=np.float32).reshape(-1)
-        if action.size != self.contract.action_dim:
-            self.get_logger().error(f"expected action length {self.contract.action_dim}, got {action.size}")
+        accepted_action_dims = tuple(int(dim) for dim in self.env.accepted_action_dims)
+        if action.size not in accepted_action_dims:
+            self.get_logger().error(f"expected action length in {accepted_action_dims}, got {action.size}")
             return
 
         self._in_env_step = True
