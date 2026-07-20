@@ -51,6 +51,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年7月19日：** ⚡️ 我们发布 [Wan2.2-NVFP4-Sparse: Extremely Fast Wan 2.2 14B Inference](https://light-ai.top/LightX2V-BLOG/posts/Wan22-NVFP4-Sparse/) 博客
+
 - **2026年6月15日：** 🚀 支持 平头哥 PPU 的部署。
 
 - **2026年5月29日：** 🚀 我们推出了一个极其高效的 Wan 2.2 14B 变体 (T2V and I2V)：[面向 Blackwell 架构的 NVFP4 量化感知步数蒸馏与稀疏注意力模型](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse)。在单张 RTX 5090 显卡上可实现超过 50 倍的加速。
@@ -345,9 +347,7 @@ pipe.generate(
 
 - [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v) —— 全模态 AI 推理平台，其托管 API 提供 LightX2V 同样支持的 Wan / Seedance / Kling 等模型系列，适合希望使用托管 API 而非自建部署的团队。
 
-## 🌟 Star 历史
-
-[![Star History Chart](https://api.star-history.com/svg?repos=ModelTC/lightx2v&type=Timeline)](https://star-history.com/#ModelTC/lightx2v&Timeline)
+- [Sensecore](https://www.sensecore.cn/about) —— 商汤大装置，建设高效率、低成本、规模化的 AI 云基础设施，打造专业的深度学习平台及算法模型体系，引领AI创新，助力工业界及学术界探索 AI 边界。
 
 ## ✏️ 引用
 

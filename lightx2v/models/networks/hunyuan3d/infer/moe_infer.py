@@ -25,6 +25,11 @@ def infer_moe_block(moe_weights, hidden_states):
 
     expert_cache = torch.zeros_like(flat)
     idxs = flat_topk_idx.argsort()
+    # MLU590 routes tensor indices through native int32 kernels.  Cast once
+    # explicitly while indices are small (2 * 4096 tokens here), avoiding an
+    # implicit int64 conversion in every MoE floor_divide/index operation.
+    if idxs.device.type == "mlu":
+        idxs = idxs.to(torch.int32)
     tokens_per_expert = flat_topk_idx.bincount(minlength=moe_weights.num_experts).cpu().numpy().cumsum(0)
     token_idxs = idxs // moe_top_k
 

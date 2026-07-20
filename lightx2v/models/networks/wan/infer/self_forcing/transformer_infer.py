@@ -60,6 +60,10 @@ class WanSFTransformerInfer(WanTransformerInfer):
         cu_seqlens_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
         return cu_seqlens_q, cu_seqlens_k
 
+    def _set_layer_cache_limits(self, block_idx: int) -> None:
+        self.kv_cache_size = self.kv_cache_manager.kv_size_for_layer(block_idx)
+        self.max_attention_size = self.kv_cache_manager.max_attention_size_for_layer(block_idx)
+
     def _apply_rope_sp(self, q, k, grid_sizes, freqs, start_frame):
         f, h, w = grid_sizes[0].tolist()
         full_seq_len = f * h * w
@@ -101,6 +105,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
         for block_idx in range(num_blocks):
             self.block_idx = block_idx
+            self._set_layer_cache_limits(block_idx)
             if self._kv_offload:
                 self._next_prefetch = None
             x = self.infer_block_func(blocks[block_idx], x, pre_infer_out)
@@ -123,6 +128,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
         for block_idx in range(num_blocks):
             self.block_idx = block_idx
+            self._set_layer_cache_limits(block_idx)
             if self._kv_offload:
                 self._next_prefetch = None
 
@@ -220,7 +226,9 @@ class WanSFTransformerInfer(WanTransformerInfer):
         v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
 
         seg_index = int(self.scheduler.seg_index)
-        current_start_frame = seg_index * self.num_frame_per_chunk
+        is_ref_prefill = bool(pre_infer_out.adapter_args.get("is_ref_prefill", False))
+        ref_num_frames = int(self.kv_cache_manager.ref_num_frames)
+        current_start_frame = 0 if is_ref_prefill else ref_num_frames + seg_index * self.num_frame_per_chunk
 
         if self.config.get("seq_parallel", False):
             q, k = self._apply_rope_sp(q, k, grid_sizes, freqs, current_start_frame)
@@ -234,7 +242,8 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
         num_new = int(q.size(0))
         cache_num_new = num_new * sp_world_size if seq_parallel else num_new
-        current_start = seg_index * cache_num_new
+        ref_tokens = int(self.kv_cache_manager.ref_tokens)
+        current_start = 0 if is_ref_prefill else ref_tokens + seg_index * cache_num_new
         current_end = current_start + cache_num_new
         global_end = kv_cache.get_global_end(self.block_idx)
         local_end = kv_cache.get_local_end(self.block_idx)
@@ -242,7 +251,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
         cache_per_frame = local_per_frame * sp_world_size if seq_parallel else local_per_frame
         sink_tokens = self.kv_cache_manager.sink_size * cache_per_frame
 
-        need_roll = self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and cache_num_new + local_end > self.kv_cache_size
+        need_roll = self.kv_cache_manager.uses_sliding_window(self.block_idx) and current_end > global_end and cache_num_new + local_end > self.kv_cache_size
         if need_roll:
             num_evicted = cache_num_new + local_end - self.kv_cache_size
             local_end_after_roll = local_end - num_evicted

@@ -103,7 +103,7 @@ class QwenImageEditModel(BaseModel):
         return latents * latent_std + latent_mean
 
     def encode_to_latent(self, sample):
-        image = sample["target_image"].to(device=self.device, dtype=self.running_dtype)
+        image = sample["inputs"]["target_image"].to(device=self.device, dtype=self.running_dtype)
         pixel_values = image.unsqueeze(2)
         latent = self.vae.encode(pixel_values).latent_dist.sample()
         return self._normalize_latents(latent)
@@ -112,7 +112,7 @@ class QwenImageEditModel(BaseModel):
         source_images = self._source_images_from_sample(sample)
         condition_images = self._condition_images_from_source_tensors(source_images)
         prompt_embed, prompt_embed_mask = self.text_pipeline.encode_prompt(
-            prompt=sample["prompt"],
+            prompt=sample["conditioning"]["prompt"],
             image=condition_images,
             device=self.device,
             num_images_per_prompt=1,
@@ -129,7 +129,7 @@ class QwenImageEditModel(BaseModel):
         return condition
 
     def _source_images_from_sample(self, sample):
-        source_images = sample.get("source_images")
+        source_images = sample["inputs"].get("source_images")
         if source_images is None:
             return []
         tensors = []
@@ -258,12 +258,12 @@ class QwenImageEditModel(BaseModel):
         return kwargs
 
     def get_pipeline_sample_kwargs(self, sample):
-        source_images = sample.get("source_images", [])
-        if not source_images:
+        source_image_paths = sample["meta"].get("source_image_paths", [])
+        if not source_image_paths:
             return {}
 
         images = []
-        for path in source_images:
+        for path in source_image_paths:
             with Image.open(path) as image:
                 images.append(image.convert("RGB").copy())
         return {"image": images[0] if len(images) == 1 else images}

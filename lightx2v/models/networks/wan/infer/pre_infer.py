@@ -131,7 +131,7 @@ class WanPreInfer:
             motion_vec = None
 
         grid_sizes_t, grid_sizes_h, grid_sizes_w = x.shape[2:]
-        x = x.flatten(2).transpose(1, 2).contiguous()
+        x = x.flatten(2).transpose(1, 2).squeeze(0).contiguous()
         # seq_lens = torch.tensor(x.size(1), dtype=torch.int32).unsqueeze(0)
 
         embed = sinusoidal_embedding_1d(self.freq_dim, t.flatten())
@@ -206,7 +206,7 @@ class WanPreInfer:
         return WanPreInferModuleOutput(
             embed=embed,
             grid_sizes=grid_sizes,
-            x=x.squeeze(0),
+            x=x,
             embed0=embed0.squeeze(0),
             context=context,
             cos_sin=self.cos_sin,

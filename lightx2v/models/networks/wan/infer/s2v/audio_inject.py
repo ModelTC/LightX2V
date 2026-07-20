@@ -6,12 +6,12 @@ from lightx2v.models.networks.wan.infer.s2v.wan_ops import cross_attn_forward, m
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-def _apply_adain(x, temb, adain_linear):
+def _apply_adain(x, temb, adain_linear, adain_norm):
     """Mirror diffusers AdaLayerNorm(chunk_dim=1) used by Wan audio_injector."""
     temb = F.silu(temb)
     emb = mm_weight_autocast_nd(adain_linear, temb)
     shift, scale = emb.chunk(2, dim=-1)
-    x = F.layer_norm(x, (x.shape[-1],), weight=None, bias=None, eps=1e-5)
+    x = adain_norm.apply(x)
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
@@ -32,9 +32,9 @@ def apply_audio_inject(block, hidden_states, pre_infer_out, config):
     with torch.amp.autocast(str(AI_DEVICE), dtype=torch.bfloat16):
         if config.get("enable_adain", False) and config.get("adain_mode") == "attn_norm":
             audio_emb_global = rearrange(pre_infer_out.audio_emb_global, "b t n c -> (b t) n c", t=num_frames)
-            attn_hidden_states = _apply_adain(input_hidden_states, audio_emb_global[:, 0], inj.adain_linear)
+            attn_hidden_states = _apply_adain(input_hidden_states, audio_emb_global[:, 0], inj.adain_linear, inj.adain_norm)
         else:
-            attn_hidden_states = F.layer_norm(input_hidden_states, (input_hidden_states.shape[-1],), weight=None, bias=None, eps=1e-6)
+            attn_hidden_states = inj.attn_norm.apply(input_hidden_states)
         residual_out = cross_attn_forward(inj, attn_hidden_states, audio_emb, None, n, d)
     residual_out = rearrange(residual_out, "(b t) n c -> b (t n) c", t=num_frames)
     hidden_states[:, :original_seq_len] = hidden_states[:, :original_seq_len] + residual_out

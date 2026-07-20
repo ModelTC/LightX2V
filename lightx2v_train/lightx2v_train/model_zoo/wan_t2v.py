@@ -243,8 +243,10 @@ class WanT2VModel(BaseModel):
         ]
 
     def encode_to_latent(self, sample):
-        if "latent" in sample:
-            latent = sample["latent"].to(device=self.device, dtype=self.running_dtype)
+        inputs = sample["inputs"]
+        latent = inputs.get("latents")
+        if latent is not None:
+            latent = latent.to(device=self.device, dtype=self.running_dtype)
             if latent.ndim == 4:
                 latent = latent.unsqueeze(0)
             return latent
@@ -252,13 +254,24 @@ class WanT2VModel(BaseModel):
         if self.vae is None:
             raise RuntimeError("Wan VAE is not loaded. Use cached latents or set model.load_vae=True.")
 
-        video = sample["video"].to(device=self.device, dtype=self.vae_dtype)
+        video = inputs.get("video")
+        if video is None:
+            raise KeyError("Wan encode_to_latent expects inputs.video or inputs.latents.")
+        video = video.to(device=self.device, dtype=self.vae_dtype)
         latent = torch.stack(self.vae.encode(self._batch_to_list(video)), dim=0)
         return latent.to(dtype=self.running_dtype)
 
     def encode_condition(self, sample):
-        if "prompt_embed" in sample:
-            prompt_embed = sample["prompt_embed"].to(device=self.device, dtype=self.running_dtype)
+        conditioning = sample["conditioning"]
+        positive = conditioning.get("positive")
+        if positive is not None:
+            if torch.is_tensor(positive):
+                prompt_embed = positive
+            elif isinstance(positive, dict) and "prompt_embed" in positive:
+                prompt_embed = positive["prompt_embed"]
+            else:
+                raise KeyError("Wan cached condition expects conditioning.positive.prompt_embed.")
+            prompt_embed = prompt_embed.to(device=self.device, dtype=self.running_dtype)
             if prompt_embed.ndim == 2:
                 prompt_embed = prompt_embed.unsqueeze(0)
             return {"prompt_embed": prompt_embed}
@@ -266,7 +279,7 @@ class WanT2VModel(BaseModel):
         if self.text_encoder is None:
             raise RuntimeError("Wan text encoder is not loaded. Use cached prompt embeds or set model.load_text_encoder=True.")
 
-        prompt = sample["prompt"]
+        prompt = conditioning.get("prompt", "")
         prompts = [prompt] if isinstance(prompt, str) else list(prompt)
         text_device = torch.device("cpu") if self.t5_cpu else self.device
         contexts = self.text_encoder(prompts, text_device)
@@ -274,7 +287,7 @@ class WanT2VModel(BaseModel):
         return {"prompt_embed": prompt_embed}
 
     def encode_prompt_condition(self, prompt):
-        return self.encode_condition({"prompt": prompt})
+        return self.encode_condition({"inputs": {}, "conditioning": {"prompt": prompt}, "meta": {}})
 
     def prepare_denoiser_input(self, noisy_latent, condition=None):
         return WanT2VDenoiserInput(hidden_states=noisy_latent)

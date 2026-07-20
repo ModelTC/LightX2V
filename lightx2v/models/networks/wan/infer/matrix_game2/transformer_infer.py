@@ -168,7 +168,7 @@ class WanMtxg2TransformerInfer(WanSFTransformerInfer):
             group_mouse = torch.nn.functional.linear(group_mouse, phase.mouse_mlp_0.weight.T, phase.mouse_mlp_0.bias)
             group_mouse = torch.nn.functional.gelu(group_mouse, approximate="tanh")
             group_mouse = torch.nn.functional.linear(group_mouse, phase.mouse_mlp_2.weight.T, phase.mouse_mlp_2.bias)
-            group_mouse = torch.nn.functional.layer_norm(group_mouse, (group_mouse.shape[-1],), phase.mouse_mlp_3.weight.T, phase.mouse_mlp_3.bias, 1e-5)
+            group_mouse = phase.mouse_mlp_3.apply(group_mouse)
 
             mouse_qkv = torch.nn.functional.linear(group_mouse, phase.t_qkv.weight.T)
 

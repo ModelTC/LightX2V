@@ -10,13 +10,14 @@ from lightx2v.utils.registry_factory import (
 class WanAudioTransformerWeights(WanTransformerWeights):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__(config, lazy_load_path, lora_path)
+        self.adapter_mm_type = self.mm_type if config.get("adapter_quantized", False) else "Default"
         for i in range(self.blocks_num):
             self.blocks[i].compute_phases.append(
                 WanAudioAdapterCA(
                     i,
                     f"ca",
                     self.task,
-                    self.mm_type,
+                    self.adapter_mm_type,
                     self.config,
                     False,
                     False,
@@ -35,7 +36,7 @@ class WanAudioTransformerWeights(WanTransformerWeights):
                     block_index=i,
                     block_prefix=f"ca",
                     task=self.task,
-                    mm_type=self.mm_type,
+                    mm_type=self.adapter_mm_type,
                     config=self.config,
                     create_cuda_buffer=True,
                     create_cpu_buffer=False,
@@ -49,7 +50,7 @@ class WanAudioTransformerWeights(WanTransformerWeights):
                         block_index=i,
                         block_prefix=f"ca",
                         task=self.task,
-                        mm_type=self.mm_type,
+                        mm_type=self.adapter_mm_type,
                         config=self.config,
                         create_cuda_buffer=False,
                         create_cpu_buffer=True,
@@ -63,7 +64,7 @@ class WanAudioTransformerWeights(WanTransformerWeights):
                 block_index=0,
                 block_prefix=f"ca",
                 task=self.task,
-                mm_type=self.mm_type,
+                mm_type=self.adapter_mm_type,
                 config=self.config,
                 create_cuda_buffer=True,
                 create_cpu_buffer=False,
@@ -76,7 +77,7 @@ class WanAudioTransformerWeights(WanTransformerWeights):
                     block_index=0,
                     block_prefix=f"ca",
                     task=self.task,
-                    mm_type=self.mm_type,
+                    mm_type=self.adapter_mm_type,
                     config=self.config,
                     create_cuda_buffer=False,
                     create_cpu_buffer=True,
@@ -134,7 +135,7 @@ class WanAudioAdapterCA(WeightModule):
 
         self.add_module(
             "norm_kv",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{block_index}.norm_kv.weight",
                 f"{block_prefix}.{block_index}.norm_kv.bias",
                 create_cuda_buffer,
@@ -146,7 +147,7 @@ class WanAudioAdapterCA(WeightModule):
 
         self.add_module(
             "norm_q",
-            LN_WEIGHT_REGISTER["torch"](),
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
         self.add_module(

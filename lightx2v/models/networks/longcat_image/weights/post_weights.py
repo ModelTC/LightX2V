@@ -1,5 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER
 
 
 class LongCatImagePostWeights(WeightModule):
@@ -13,6 +13,9 @@ class LongCatImagePostWeights(WeightModule):
         self.out_channels = config.get("transformer_in_channels", config.get("in_channels", 64))
         self.patch_size = config.get("patch_size", 1)
         self.mm_type = config.get("dit_quant_scheme", "Default")
+        self.layer_norm_type = config.get("layer_norm_type", "torch")
+
+        self.add_module("norm_out", LN_WEIGHT_REGISTER[self.layer_norm_type](eps=1e-5))
 
         # norm_out (AdaLayerNormContinuous)
         self.add_module(

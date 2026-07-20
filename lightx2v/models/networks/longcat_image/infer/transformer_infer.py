@@ -40,7 +40,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def _ada_layer_norm_zero(self, hidden_states, temb, norm_linear):
+    def _ada_layer_norm_zero(self, hidden_states, temb, norm, norm_linear):
         """AdaLayerNormZero: compute shift, scale, gate from temb.
 
         For double-stream blocks: returns (norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp)
@@ -51,12 +51,12 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = emb.chunk(6, dim=-1)
 
         # Apply layer norm and modulation
-        norm_hidden_states = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states = norm.apply(hidden_states)
         norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
 
         return norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp
 
-    def _ada_layer_norm_zero_single(self, hidden_states, temb, norm_linear):
+    def _ada_layer_norm_zero_single(self, hidden_states, temb, norm, norm_linear):
         """AdaLayerNormZeroSingle: for single-stream blocks.
 
         Returns (norm_hidden_states, gate)
@@ -67,7 +67,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         shift, scale, gate = emb.chunk(3, dim=-1)
 
         # Apply layer norm and modulation
-        norm_hidden_states = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states = norm.apply(hidden_states)
         norm_hidden_states = norm_hidden_states * (1 + scale) + shift
 
         return norm_hidden_states, gate
@@ -100,10 +100,15 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         head_dim = self.config["attention_head_dim"]
 
         # ===== Image stream: norm1 =====
-        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self._ada_layer_norm_zero(hidden_states, temb, block_weights.norm1_linear)
+        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self._ada_layer_norm_zero(hidden_states, temb, block_weights.norm1, block_weights.norm1_linear)
 
         # ===== Text stream: norm1_context =====
-        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self._ada_layer_norm_zero(encoder_hidden_states, temb, block_weights.norm1_context_linear)
+        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self._ada_layer_norm_zero(
+            encoder_hidden_states,
+            temb,
+            block_weights.norm1_context,
+            block_weights.norm1_context_linear,
+        )
 
         # ===== Attention projections =====
         # Image stream QKV
@@ -186,7 +191,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         # ===== FFN for image stream =====
         # Layer norm without learnable parameters (LongCat/Flux architecture)
-        norm_hidden_states2 = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states2 = block_weights.norm2.apply(hidden_states)
         norm_hidden_states2 = norm_hidden_states2 * (1 + scale_mlp) + shift_mlp
         ff_output = block_weights.ff_net_0_proj.apply(norm_hidden_states2)
         ff_output = F.gelu(ff_output, approximate="tanh")
@@ -195,7 +200,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         # ===== FFN for text stream =====
         # Layer norm without learnable parameters (LongCat/Flux architecture)
-        norm_encoder_hidden_states2 = F.layer_norm(encoder_hidden_states, (encoder_hidden_states.shape[-1],))
+        norm_encoder_hidden_states2 = block_weights.norm2_context.apply(encoder_hidden_states)
         norm_encoder_hidden_states2 = norm_encoder_hidden_states2 * (1 + c_scale_mlp) + c_shift_mlp
         context_ff_output = block_weights.ff_context_net_0_proj.apply(norm_encoder_hidden_states2)
         context_ff_output = F.gelu(context_ff_output, approximate="tanh")
@@ -242,7 +247,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         residual = combined
 
         # AdaLayerNormZeroSingle
-        norm_combined, gate = self._ada_layer_norm_zero_single(combined, temb, block_weights.norm_linear)
+        norm_combined, gate = self._ada_layer_norm_zero_single(combined, temb, block_weights.norm, block_weights.norm_linear)
 
         # MLP branch
         mlp_hidden_states = block_weights.proj_mlp.apply(norm_combined)

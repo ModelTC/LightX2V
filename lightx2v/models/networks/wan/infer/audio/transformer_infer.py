@@ -129,6 +129,26 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
         super().__init__(config)
         self._setup_audio_post_adapter(config)
         self._audio_grid_meta_cache = {}
+        ar_config = config.get("ar_config", {})
+        self.rope_position_mode = ar_config.get("rope_position_mode", "local")
+        if self.rope_position_mode not in {"local", "global"}:
+            raise ValueError("ar_config.rope_position_mode must be 'local' or 'global'.")
+
+        self.rope_max_frames = ar_config.get("rope_max_frames")
+        if self.rope_max_frames is not None:
+            self.rope_max_frames = int(self.rope_max_frames)
+            if self.rope_max_frames <= 0:
+                raise ValueError("ar_config.rope_max_frames must be positive.")
+            if self.rope_position_mode != "global":
+                raise ValueError("ar_config.rope_max_frames requires ar_config.rope_position_mode='global'.")
+            if self.rope_max_frames < self.num_frame_per_chunk:
+                raise ValueError("ar_config.rope_max_frames must be at least ar_config.num_frame_per_chunk.")
+
+    def _global_rope_start_frame(self, start_frame, num_frames, ref_num_frames):
+        if self.rope_max_frames is None:
+            return int(start_frame)
+        max_start_frame = int(ref_num_frames) + self.rope_max_frames - int(num_frames)
+        return min(int(start_frame), max_start_frame)
 
     def _audio_grid_meta(self, grid_sizes):
         key = (grid_sizes.data_ptr(), int(self.scheduler.seg_index), int(self.scheduler.step_index))
@@ -226,6 +246,10 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
         global_end=None,
         sink_tokens=0,
     ):
+        if global_end is not None and self.rope_max_frames is not None:
+            max_global_end = int(ref_tokens) + self.rope_max_frames * int(local_per_frame)
+            global_end = min(int(global_end), max_global_end)
+
         orig_dtype = x.dtype
         if self.config.get("causal_rope_type", "triton") == "triton":
             return apply_audio_cache_rope(
@@ -319,8 +343,9 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
         local_per_frame = num_new // frames if frames > 0 else 0
         cache_per_frame = local_per_frame if replicated_ref_prefill else local_per_frame * sp_world_size if seq_parallel else local_per_frame
         sink_tokens = self.kv_cache_manager.sink_size * cache_per_frame
+        use_local_cache_rope = self.rope_position_mode != "global"
 
-        need_roll = self.kv_cache_manager.local_attn_size != -1 and current_end > global_end and cache_num_new + local_end > self.kv_cache_size
+        need_roll = self.kv_cache_manager.uses_sliding_window(self.block_idx) and current_end > global_end and cache_num_new + local_end > self.kv_cache_size
         if need_roll:
             num_evicted = cache_num_new + local_end - self.kv_cache_size
             local_end_after_roll = local_end - num_evicted
@@ -348,14 +373,19 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 shard_heads = self.num_heads // sp_world_size
                 h0 = sp_rank * shard_heads
                 h1 = h0 + shard_heads
-                kv_cache.store_kv(k_rope[:, h0:h1], v[:, h0:h1], local_start_idx, local_end_idx, self.block_idx)
+                k_to_store = k[:, h0:h1] if use_local_cache_rope else k_rope[:, h0:h1]
+                kv_cache.store_kv(k_to_store, v[:, h0:h1], local_start_idx, local_end_idx, self.block_idx)
             else:
-                start_frame = self.kv_cache_manager.ref_num_frames + segment_idx * frames
+                if use_local_cache_rope:
+                    start_frame = local_start_idx // max(cache_per_frame, 1)
+                else:
+                    ref_num_frames = self.kv_cache_manager.ref_num_frames
+                    start_frame = self._global_rope_start_frame(ref_num_frames + segment_idx * frames, frames, ref_num_frames)
                 q_rope, k_rope = self._apply_rope_sp(q, k, grid_sizes, freqs, start_frame)
                 use_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
                 use_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
                 k_to_store = all2all_seq2head(
-                    k_rope,
+                    k if use_local_cache_rope else k_rope,
                     group=self.seq_p_group,
                     use_fp8_comm=use_fp8_comm,
                     use_fp4_comm=use_fp4_comm,
@@ -390,6 +420,19 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             else:
                 attn_k = kv_cache.k_cache(self.block_idx, attn_start, local_end_idx)
                 attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
+                if use_local_cache_rope:
+                    attn_k = self._apply_rope_with_cache_range(
+                        attn_k,
+                        freqs,
+                        h,
+                        w,
+                        1,
+                        0,
+                        attn_start,
+                        local_end_idx,
+                        cache_ref_tokens,
+                        cache_per_frame,
+                    )
                 attn_out = kv_cache.sp_kvcache_attn_head_shard(
                     q=q_rope,
                     k_cache=attn_k,
@@ -404,6 +447,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
             if self.config.get("ar_config", {}).get("kv_quant", {}).get("calibrate", False):
                 kv_cache.capture_attn(self.block_idx, attn_start, local_end_idx)
+            rope_global_end = None if use_local_cache_rope else current_end
+            rope_sink_tokens = 0 if use_local_cache_rope else sink_tokens
             q = self._apply_rope_with_cache_range(
                 q,
                 freqs,
@@ -415,8 +460,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 local_end_idx,
                 local_ref_tokens,
                 local_per_frame,
-                global_end=current_end,
-                sink_tokens=sink_tokens,
+                global_end=rope_global_end,
+                sink_tokens=rope_sink_tokens,
             )
             attn_k = self._apply_rope_with_cache_range(
                 attn_k,
@@ -429,8 +474,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 local_end_idx,
                 local_ref_tokens,
                 local_per_frame,
-                global_end=current_end,
-                sink_tokens=sink_tokens,
+                global_end=rope_global_end,
+                sink_tokens=rope_sink_tokens,
             )
             if isinstance(attn_k, tuple):
                 k_lens = torch.empty_like(seq_lens).fill_(attn_k[0].size(0))
@@ -457,3 +502,85 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 next_prefetch=None,
             )
         return y
+
+    def infer_cross_attn_with_kvcache(self, phase, x, context, y_out, gate_msa):
+        num_frames = gate_msa.shape[0]
+        frame_seqlen = x.shape[0] // num_frames
+        seg_index = self.scheduler.seg_index
+
+        x.add_((y_out.unflatten(dim=0, sizes=(num_frames, frame_seqlen)) * gate_msa).flatten(0, 1))
+
+        norm3_out = phase.norm3.apply(x)
+
+        if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
+            context_img = context[:257]
+            context = context[257:]
+        else:
+            context_img = None
+
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            context = context.to(self.infer_dtype)
+            if context_img is not None:
+                context_img = context_img.to(self.infer_dtype)
+
+        n, d = self.num_heads, self.head_dim
+        q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
+
+        if self.config["ar_config"].get("use_cross_attn_kv_cache", False):
+            cross_kv_cache = self.kv_cache_manager.cross_attn_kv_cache
+            if seg_index == 0:
+                k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
+                v = phase.cross_attn_v.apply(context).view(-1, n, d)
+                cross_kv_cache.store_kv(k, v, self.block_idx)
+                self._cross_kv_len = k.size(0)
+            else:
+                L = self._cross_kv_len
+                k = cross_kv_cache.k_cache(self.block_idx)[:L]
+                v = cross_kv_cache.v_cache(self.block_idx)[:L]
+        else:
+            k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
+            v = phase.cross_attn_v.apply(context).view(-1, n, d)
+
+        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
+            q,
+            k_lens=torch.tensor([k.size(0)], dtype=torch.int32),
+        )
+        attn_out = phase.cross_attn_1.apply(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_kv=cu_seqlens_k,
+            max_seqlen_q=q.size(0),
+            max_seqlen_kv=k.size(0),
+        )
+
+        if context_img is not None:
+            k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
+            v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
+            cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
+                q,
+                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32),
+            )
+            attn_out.add_(
+                phase.cross_attn_2.apply(
+                    q=q,
+                    k=k_img,
+                    v=v_img,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_kv=cu_seqlens_k,
+                    max_seqlen_q=q.size(0),
+                    max_seqlen_kv=k_img.size(0),
+                )
+            )
+
+            if self.clean_cuda_cache:
+                del k_img, v_img
+                torch_device_module.empty_cache()
+
+        attn_out = phase.cross_attn_o.apply(attn_out)
+
+        if self.clean_cuda_cache:
+            del q, k, v, norm3_out, context, context_img
+            torch_device_module.empty_cache()
+        return x, attn_out

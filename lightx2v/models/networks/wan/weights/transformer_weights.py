@@ -41,7 +41,7 @@ class WanTransformerWeights(WeightModule):
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
-        self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
+        self.register_parameter("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
         self.add_module(
             "head",
             MM_WEIGHT_REGISTER["Default"](
@@ -253,7 +253,7 @@ class WanSelfAttention(WeightModule):
 
         self.add_module(
             "norm1",
-            LN_WEIGHT_REGISTER["torch"](),
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
         self.add_module(
@@ -480,7 +480,7 @@ class WanCrossAttention(WeightModule):
 
         self.add_module(
             "norm3",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{self.block_index}.norm3.weight",
                 f"{block_prefix}.{self.block_index}.norm3.bias",
                 create_cuda_buffer,
@@ -636,7 +636,7 @@ class WanFFN(WeightModule):
 
         self.add_module(
             "norm2",
-            LN_WEIGHT_REGISTER["torch"](),
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
         self.add_module(

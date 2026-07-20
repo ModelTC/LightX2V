@@ -139,6 +139,20 @@ class Wan22MoeDistillRunner(WanDistillRunner):
             if not os.path.isdir(self.low_noise_model_path):
                 raise FileNotFoundError(f"Low Noise Model does not find")
 
+    def get_warmup_step_indices(self, scheduler):
+        return 0, scheduler.boundary_step_index
+
+    def get_warmup_models(self):
+        return tuple(self.model.model)
+
+    def clear_warmup_state(self):
+        super().clear_warmup_state()
+        scheduler = self.model.scheduler
+        scheduler.step_index = 0
+        scheduler.infer_condition = True
+        scheduler.timestep_input = None
+        self.model.cur_model_index = -1
+
     def load_transformer(self):
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             lora_configs = self.config.get("lora_configs")

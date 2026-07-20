@@ -10,6 +10,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_
 from lightx2v_train.infer import build_inferencer
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process
+from lightx2v_train.runtime.monitor import build_monitor
 from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradient_sync
 from lightx2v_train.schedulers.flow_matching import RectifiedFlowMatchingScheduler
 from lightx2v_train.utils.utils import get_running_dtype
@@ -51,10 +52,15 @@ class BaseTrainer:
         self.max_grad_norm = self.training_config.get("max_grad_norm", 1.0)
         self.save_every_iters = self.training_config["save_every_iters"]
         self.save_total_limit = self.training_config["save_total_limit"]
+        self.save_consolidated_weights = bool(self.training_config.get("save_consolidated_weights", False))
+        self.consolidated_weights_name = self.training_config.get("consolidated_weights_name", "consolidated.safetensors")
 
-        self.infer_every_iters = self.infer_config.get("infer_every_iters", None)
+        self.infer_every_iters = None
+        if self.infer_config.get("method", "none") != "none":
+            self.infer_every_iters = self.infer_config.get("infer_every_iters", None)
         logging_config = self.config.get("logging", {})
         self.train_log_every_iters = max(1, int(logging_config.get("train_log_every_iters", 10)))
+        self.monitor = build_monitor(self.config)
 
         resume_config = self.config.get("resume", {})
         self.auto_resume = resume_config.get("auto_resume", False)
@@ -79,6 +85,12 @@ class BaseTrainer:
     def set_data(self, dataloader_train, dataloader_eval=None):
         self.dataloader_train = dataloader_train
         self.dataloader_eval = dataloader_eval
+
+    def log_metrics(self, metrics, step=None):
+        self.monitor.log_metrics(metrics, step=step)
+
+    def finish_monitor(self):
+        self.monitor.finish()
 
     def _setup_trainable_model(self, model):
         if self.train_type == "lora":
@@ -233,11 +245,14 @@ class BaseTrainer:
         iter_output_dir = os.path.join(base_output_dir, f"iter-{current_iter:09d}")
 
         self.inferencer.output_infer_dir = iter_output_dir
-        os.makedirs(iter_output_dir, exist_ok=True)
-        logger.info("[train] running inference iter={} output_dir={}", current_iter, iter_output_dir)
+        if is_main_process():
+            os.makedirs(iter_output_dir, exist_ok=True)
+            logger.info("[train] running inference iter={} output_dir={}", current_iter, iter_output_dir)
+        barrier()
         self.inferencer.infer()
         barrier()
-        logger.info("[train] finished inference iter={}", current_iter)
+        if is_main_process():
+            logger.info("[train] finished inference iter={}", current_iter)
 
         self._restore_trainable_model(self.model)
 
@@ -262,6 +277,7 @@ class BaseTrainer:
 
         if self.model.is_fsdp2_wrapped():
             self._save_distributed_state(save_dir, iteration)
+            self._save_consolidated_weights(save_dir)
             barrier()
             logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
             return
@@ -274,8 +290,19 @@ class BaseTrainer:
         }
         if is_main_process():
             torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
+        self._save_consolidated_weights(save_dir)
         barrier()
         logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
+
+    def _save_consolidated_weights(self, save_dir):
+        if not self.save_consolidated_weights:
+            return
+        if self.train_type != "full":
+            logger.warning("training.save_consolidated_weights=true is ignored for train_type='{}'.", self.train_type)
+            return
+        output_path = os.path.join(save_dir, self.consolidated_weights_name)
+        self.model.save_consolidated_weights(output_path)
+        barrier()
 
     def _save_distributed_state(self, save_dir, iteration):
         dist_state_path = os.path.join(save_dir, "dist_state")

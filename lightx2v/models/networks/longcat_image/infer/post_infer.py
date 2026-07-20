@@ -30,7 +30,7 @@ class LongCatImagePostInfer:
         scale, shift = torch.chunk(temb_out, 2, dim=-1)
 
         # Layer norm (no learnable params) + modulation
-        hidden_states = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        hidden_states = weights.norm_out.apply(hidden_states)
         hidden_states = hidden_states * (1 + scale) + shift
 
         # Final projection

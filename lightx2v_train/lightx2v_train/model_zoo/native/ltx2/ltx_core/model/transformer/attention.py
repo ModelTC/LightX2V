@@ -1,0 +1,836 @@
+import functools
+import math
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Protocol
+
+import torch
+from ltx_core.model.transformer.ops import (
+    GatedAttentionCallable,
+    PreAttentionCallable,
+    PytorchGatedAttention,
+    PytorchPreAttention,
+)
+from ltx_core.model.transformer.rope import LTXRopeType
+from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.nn.attention.flex_attention import BlockMask, flex_attention
+
+
+def _torch_default_sdpa_priority() -> list[SDPBackend]:
+    """Fetch torch's current default SDPA priority order at runtime.
+    Used as the default for ``PytorchAttention`` so the wrapper-always
+    code path matches torch's native dispatch order without hard-coding it
+    (which would drift if torch updates the default).
+    ``torch._C._get_sdp_priority_order`` is a private API; we accept that
+    risk because the project pins ``torch`` in the lockfile, so any
+    rename/removal surfaces on a controlled torch bump rather than silently.
+    """
+    return [SDPBackend(p) for p in torch._C._get_sdp_priority_order()]
+
+
+memory_efficient_attention = None
+flash_attn_interface = None
+flash_attn_4_func = None
+flex_attention_autotuned = flex_attention
+flex_attention_default = flex_attention
+try:
+    flex_attention_autotuned = torch.compile(flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
+except Exception:
+    pass
+try:
+    # LTX cross-attention has large rectangular audio/video sequence shapes.
+    # Avoid per-rank kernel benchmarking for this path while FSDP collectives
+    # are queued; square self-attention keeps the same autotuned path as WAN.
+    flex_attention_default = torch.compile(flex_attention, dynamic=False, mode="default")
+except Exception:
+    pass
+try:
+    from xformers.ops import memory_efficient_attention
+except ImportError:
+    memory_efficient_attention = None
+try:
+    # FlashAttention3 and XFormersAttention cannot be used together
+    if memory_efficient_attention is None:
+        import flash_attn_interface
+except ImportError:
+    flash_attn_interface = None
+try:
+    from flash_attn.cute import flash_attn_func as flash_attn_4_func
+except ImportError:
+    flash_attn_4_func = None
+
+
+class AttentionCallable(Protocol):
+    """Unmasked attention. Backends without a mask kernel (FA3/FA4) implement only
+    this protocol; backends that support masks too (Pytorch/SDPA, xFormers) are
+    structurally usable here and as :class:`MaskedAttentionCallable`."""
+
+    def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int) -> torch.Tensor: ...
+
+
+class MaskedAttentionCallable(Protocol):
+    """Masked attention. Mask is required (not optional) -- the caller has already
+    decided this is the masked path and chosen a backend that can serve it. Used
+    by :class:`Attention` when its forward receives a non-None ``mask``."""
+
+    def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int, mask: torch.Tensor) -> torch.Tensor: ...
+
+
+class PytorchAttention(AttentionCallable):
+    def __init__(self, priority: list[SDPBackend] | None = None) -> None:
+        # priority=None -> snapshot torch's default SDPA priority at construction.
+        # Always passed through ``sdpa_kernel(..., set_priority=True)`` so the
+        # call site is uniform regardless of how the priority was chosen.
+        self._priority = priority if priority is not None else _torch_default_sdpa_priority()
+
+    @property
+    def label(self) -> str:
+        """Human-readable identifier for this backend. Encodes the SDPA priority
+        list so a single-backend pin reads differently from the full-priority
+        dispatcher walk."""
+        return f"SDPA[{'>'.join(b.name for b in self._priority)}]"
+
+    def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, heads: int, mask: torch.Tensor | None = None) -> torch.Tensor:
+        b, _, dim_head = q.shape
+        dim_head //= heads
+        q, k, v = (t.view(b, -1, heads, dim_head).transpose(1, 2) for t in (q, k, v))
+
+        if mask is not None:
+            # add a batch dimension if there isn't already one
+            if mask.ndim == 2:
+                mask = mask.unsqueeze(0)
+            # add a heads dimension if there isn't already one
+            if mask.ndim == 3:
+                mask = mask.unsqueeze(1)
+
+        with sdpa_kernel(self._priority, set_priority=True):
+            out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=False)
+        out = out.transpose(1, 2).reshape(b, -1, heads * dim_head)
+        return out
+
+
+class XFormersAttention(AttentionCallable):
+    label = "xFormers"
+
+    def __call__(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        heads: int,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if memory_efficient_attention is None:
+            raise RuntimeError("XFormersAttention was selected but `xformers` is not installed.")
+
+        b, _, dim_head = q.shape
+        dim_head //= heads
+
+        # xformers expects [B, M, H, K]
+        q, k, v = (t.view(b, -1, heads, dim_head) for t in (q, k, v))
+
+        if mask is not None:
+            # add a singleton batch dimension
+            if mask.ndim == 2:
+                mask = mask.unsqueeze(0)
+            # add a singleton heads dimension
+            if mask.ndim == 3:
+                mask = mask.unsqueeze(1)
+            # pad to a multiple of 8
+            pad = 8 - mask.shape[-1] % 8
+            # the xformers docs says that it's allowed to have a mask of shape (1, Nq, Nk)
+            # but when using separated heads, the shape has to be (B, H, Nq, Nk)
+            # in flux, this matrix ends up being over 1GB
+            # here, we create a mask with the same batch/head size as the input mask (potentially singleton or full)
+            mask_out = torch.empty([mask.shape[0], mask.shape[1], q.shape[1], mask.shape[-1] + pad], dtype=q.dtype, device=q.device)
+
+            mask_out[..., : mask.shape[-1]] = mask
+            # doesn't this remove the padding again??
+            mask = mask_out[..., : mask.shape[-1]]
+            mask = mask.expand(b, heads, -1, -1)
+
+        out = memory_efficient_attention(q.to(v.dtype), k.to(v.dtype), v, attn_bias=mask, p=0.0)
+        out = out.reshape(b, -1, heads * dim_head)
+        return out
+
+
+class FlashAttention3(AttentionCallable):
+    label = "FlashAttention3"
+
+    def __call__(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        heads: int,
+    ) -> torch.Tensor:
+        if flash_attn_interface is None:
+            raise RuntimeError("FlashAttention3 was selected but `FlashAttention3` is not installed.")
+
+        b, _, dim_head = q.shape
+        dim_head //= heads
+
+        q, k, v = (t.view(b, -1, heads, dim_head) for t in (q, k, v))
+
+        out = flash_attn_interface.flash_attn_func(q.to(v.dtype), k.to(v.dtype), v)
+        out = out.reshape(b, -1, heads * dim_head)
+        return out
+
+
+class FlashAttention4(AttentionCallable):
+    label = "FlashAttention4"
+
+    def __call__(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        heads: int,
+    ) -> torch.Tensor:
+        if flash_attn_4_func is None:
+            raise RuntimeError("FlashAttention4 was selected but `flash-attn-4` is not installed.")
+
+        b, _, dim_head = q.shape
+        dim_head //= heads
+
+        q, k, v = (t.view(b, -1, heads, dim_head) for t in (q, k, v))
+
+        out, _ = flash_attn_4_func(q.to(v.dtype), k.to(v.dtype), v)
+        out = out.reshape(b, -1, heads * dim_head)
+        return out
+
+
+# --- Automatic selection -----------------------------------------------------
+# AUTOMATIC inspects installed extras and the GPU arch and returns the fastest
+# usable callable for each path. The selection runs once per process (cached).
+# The unmasked and masked picks are independent: each calls its own helper and
+# may end up on different backends (e.g. FA3 unmasked + xFormers masked on H100).
+
+
+def _sdpa_can_use(backend: SDPBackend, *, with_mask: bool) -> bool:
+    """Ask torch whether *backend* can run with the given mask shape.
+    ``MATH`` is the universal SDPA fallback (pure PyTorch ops, no kernel
+    requirements) so it returns True everywhere, CPU included. The other
+    backends use ``torch.backends.cuda.can_use_*`` capability checks (no GPU
+    compute, no synchronization) and are False without CUDA. The probe shapes
+    are small but realistic enough to surface constraints (head dim, dtype)
+    that the per-backend rules care about.
+    """
+    if backend is SDPBackend.MATH:
+        return True
+    if not torch.cuda.is_available():
+        return False
+    q = torch.empty(1, 4, 128, 64, device="cuda", dtype=torch.bfloat16)
+    k = torch.empty(1, 4, 128, 64, device="cuda", dtype=torch.bfloat16)
+    v = torch.empty(1, 4, 128, 64, device="cuda", dtype=torch.bfloat16)
+    mask = torch.zeros(1, 4, 128, 128, device="cuda", dtype=torch.bfloat16) if with_mask else None
+    params = torch.backends.cuda.SDPAParams(q, k, v, mask, 0.0, False, False)
+    if backend is SDPBackend.CUDNN_ATTENTION:
+        return torch.backends.cuda.can_use_cudnn_attention(params, debug=False)
+    if backend is SDPBackend.FLASH_ATTENTION:
+        return torch.backends.cuda.can_use_flash_attention(params, debug=False)
+    if backend is SDPBackend.EFFICIENT_ATTENTION:
+        return torch.backends.cuda.can_use_efficient_attention(params, debug=False)
+    return False
+
+
+_SDPA_FULL_PRIORITY: tuple[SDPBackend, ...] = (
+    SDPBackend.CUDNN_ATTENTION,
+    SDPBackend.FLASH_ATTENTION,
+    SDPBackend.EFFICIENT_ATTENTION,
+    SDPBackend.MATH,
+)
+
+
+def _sdpa_full_priority() -> PytorchAttention:
+    """Hand SDPA the full backend priority order; let torch's dispatcher pick at call time.
+    ``sdpa_kernel(_SDPA_FULL_PRIORITY, set_priority=True)`` enables all four
+    backends and orders them; torch then walks the order at call time and picks
+    the first backend whose ``can_use_*`` check passes for the actual
+    shapes/dtype/mask. FLASH is rejected automatically when a mask is present;
+    CUDNN may be rejected under deterministic mode; MATH is the universal
+    fallback. Probing per-backend usability up front from generic probe shapes
+    cannot anticipate the variety of real call sites (e.g. broadcast key-only
+    masks, large head dim), so we defer the choice to the dispatcher.
+    """
+    return PytorchAttention(priority=list(_SDPA_FULL_PRIORITY))
+
+
+def _select_primary_attention() -> AttentionCallable:
+    """Pick the fastest unmasked attention based on installed extras and GPU arch.
+    Priority by arch:
+    - Hopper (sm_90, H100): FA3 / xFormers (mutually exclusive at import) > FA4 > SDPA.
+    - Datacenter Blackwell (sm_100, B200): FA4 > SDPA. FA4 is intentionally *not*
+      picked on consumer Blackwell (sm_120) -- known regressions in newer
+      FA4 betas; users who want it on sm_120 must opt in explicitly.
+    - Everywhere else (Ada, Ampere, CPU): SDPA with the full backend priority
+      list -- torch's runtime dispatcher picks the best fit at call time.
+    """
+    if torch.cuda.is_available():
+        major, _ = torch.cuda.get_device_capability(0)
+        if major == 9:
+            if flash_attn_interface is not None:
+                return FlashAttention3()
+            if memory_efficient_attention is not None:
+                return XFormersAttention()
+            if flash_attn_4_func is not None:
+                return FlashAttention4()
+        if major == 10 and flash_attn_4_func is not None:
+            return FlashAttention4()
+    return _sdpa_full_priority()
+
+
+def _select_masked_attention() -> MaskedAttentionCallable:
+    """Pick a mask-aware attention. Prefers xFormers when installed; else SDPA with
+    the full priority list (the dispatcher rejects FLASH automatically when a
+    mask is present and walks past it)."""
+    if memory_efficient_attention is not None:
+        return XFormersAttention()
+    return _sdpa_full_priority()
+
+
+@functools.cache
+def automatic_attention() -> AttentionCallable:
+    """Cached AUTOMATIC pick for the unmasked path.
+    Cached so every ``AttentionOps`` in the process shares one instance."""
+    return _select_primary_attention()
+
+
+@functools.cache
+def automatic_masked_attention() -> MaskedAttentionCallable:
+    """Cached AUTOMATIC pick for the masked path. See :func:`automatic_attention`."""
+    return _select_masked_attention()
+
+
+def attention_label(fn: AttentionCallable | MaskedAttentionCallable) -> str:
+    """Best-effort human-readable backend name.
+    Built-in callables expose ``.label`` (encoding the SDPA priority list for the
+    Pytorch backends); fall back to the class name for custom or wrapped callables
+    (e.g. the multi-GPU All2All wrappers) that don't define one."""
+    return getattr(fn, "label", type(fn).__name__)
+
+
+def _heads_view(x: torch.Tensor, heads: int) -> torch.Tensor:
+    b, t, inner_dim = x.shape
+    return x.view(b, t, heads, inner_dim // heads)
+
+
+def _flatten_heads(x: torch.Tensor) -> torch.Tensor:
+    return x.flatten(2)
+
+
+def _sdpa_shaped(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    out = torch.nn.functional.scaled_dot_product_attention(
+        q.transpose(1, 2),
+        k.transpose(1, 2),
+        v.transpose(1, 2),
+        attn_mask=None,
+        dropout_p=0.0,
+        is_causal=False,
+    )
+    return out.transpose(1, 2)
+
+
+def _flex_attention_flat(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    heads: int,
+    block_mask: BlockMask,
+    *,
+    use_autotune: bool,
+) -> torch.Tensor:
+    q = _heads_view(q, heads)
+    k = _heads_view(k, heads)
+    v = _heads_view(v, heads)
+    q_padded_length = math.ceil(q.shape[1] / 128) * 128 - q.shape[1]
+    kv_padded_length = math.ceil(k.shape[1] / 128) * 128 - k.shape[1]
+    if q_padded_length > 0:
+        pad_shape = (q.shape[0], q_padded_length, q.shape[2], q.shape[3])
+        q = torch.cat([q, torch.zeros(pad_shape, device=q.device, dtype=q.dtype)], dim=1)
+    if kv_padded_length > 0:
+        pad_shape = (k.shape[0], kv_padded_length, k.shape[2], k.shape[3])
+        k = torch.cat([k, torch.zeros(pad_shape, device=k.device, dtype=k.dtype)], dim=1)
+        v = torch.cat([v, torch.zeros(pad_shape, device=v.device, dtype=v.dtype)], dim=1)
+    flex_fn = flex_attention_autotuned if use_autotune else flex_attention_default
+    out = flex_fn(query=q.transpose(1, 2), key=k.transpose(1, 2), value=v.transpose(1, 2), block_mask=block_mask)
+    if q_padded_length > 0:
+        out = out[:, :, :-q_padded_length]
+    return out.transpose(1, 2).flatten(2)
+
+
+def _resolve_sdpa_variant(backend: SDPBackend, name: str, *, with_mask: bool) -> PytorchAttention:
+    """Build a single-backend ``PytorchAttention`` pin, raising if the backend
+    can't actually serve the call on this machine. Used by both
+    :meth:`AttentionFunction.to_callable` and :meth:`MaskedAttentionFunction.to_callable`;
+    ``with_mask`` differs between the two so the capability check considers
+    the protocol the caller intends to use. Not used for ``MATH`` -- MATH is
+    the universal fallback and would falsely fail the CUDA-only probe on CPU.
+    """
+    if not _sdpa_can_use(backend, with_mask=with_mask):
+        raise RuntimeError(
+            f"{name} selected but the SDPA {backend.name} backend is not usable on this machine "
+            "(either no CUDA, the backend rejected the probe shapes, or "
+            "torch.use_deterministic_algorithms(True) excluded it)."
+        )
+    return PytorchAttention(priority=[backend])
+
+
+class AttentionFunction(Enum):
+    PYTORCH = "pytorch"
+    XFORMERS = "xformers"
+    FLASH_ATTENTION_3 = "flash_attention_3"
+    FLASH_ATTENTION_4 = "flash_attention_4"
+    SDPA_CUDNN = "sdpa_cudnn"
+    SDPA_FLASH = "sdpa_flash"
+    SDPA_EFFICIENT = "sdpa_efficient"
+    SDPA_MATH = "sdpa_math"
+    # Pick the fastest unmasked backend for the current GPU/extras combo; see
+    # :func:`automatic_attention`. Default for :class:`AttentionOps`.
+    AUTOMATIC = "automatic"
+
+    def to_callable(self) -> AttentionCallable:  # noqa: PLR0911
+        """Resolve to a concrete callable. Use this at module init time so that
+        torch.compile can trace through the attention call without graph breaks.
+        Every non-AUTOMATIC variant raises :class:`RuntimeError` when the backend
+        isn't usable on this machine -- missing package or SDPA backend rejected
+        on this hardware (e.g. cuDNN under ``torch.use_deterministic_algorithms``).
+        Opting in means "this kernel or fail loudly". ``AUTOMATIC`` returns the
+        cached :func:`automatic_attention` instance so every build shares one callable.
+        """
+        match self:
+            case AttentionFunction.AUTOMATIC:
+                return automatic_attention()
+            case AttentionFunction.PYTORCH:
+                return PytorchAttention()
+            case AttentionFunction.XFORMERS:
+                if memory_efficient_attention is None:
+                    raise RuntimeError("AttentionFunction.XFORMERS selected but `xformers` is not installed.")
+                return XFormersAttention()
+            case AttentionFunction.FLASH_ATTENTION_3:
+                if flash_attn_interface is None:
+                    raise RuntimeError("AttentionFunction.FLASH_ATTENTION_3 selected but `flash-attn-3` is not installed.")
+                return FlashAttention3()
+            case AttentionFunction.FLASH_ATTENTION_4:
+                if flash_attn_4_func is None:
+                    raise RuntimeError("AttentionFunction.FLASH_ATTENTION_4 selected but `flash-attn-4` is not installed.")
+                return FlashAttention4()
+            case AttentionFunction.SDPA_MATH:
+                return PytorchAttention(priority=[SDPBackend.MATH])
+            case AttentionFunction.SDPA_CUDNN:
+                return _resolve_sdpa_variant(SDPBackend.CUDNN_ATTENTION, "AttentionFunction.SDPA_CUDNN", with_mask=False)
+            case AttentionFunction.SDPA_FLASH:
+                return _resolve_sdpa_variant(SDPBackend.FLASH_ATTENTION, "AttentionFunction.SDPA_FLASH", with_mask=False)
+            case AttentionFunction.SDPA_EFFICIENT:
+                return _resolve_sdpa_variant(SDPBackend.EFFICIENT_ATTENTION, "AttentionFunction.SDPA_EFFICIENT", with_mask=False)
+
+
+class MaskedAttentionFunction(Enum):
+    """Backends usable on the masked path. Mirrors :class:`AttentionFunction` minus
+    the variants the torch SDPA dispatcher (or the wrapped kernel) rejects with a
+    mask: ``SDPA_FLASH`` -- FLASH kernel cannot serve an additive ``attn_mask``;
+    ``FLASH_ATTENTION_3``/``FLASH_ATTENTION_4`` -- neither has a mask kernel at all.
+    Keeping them out makes "this backend cannot mask" a type error, not a runtime one."""
+
+    PYTORCH = "pytorch"
+    XFORMERS = "xformers"
+    SDPA_CUDNN = "sdpa_cudnn"
+    SDPA_EFFICIENT = "sdpa_efficient"
+    SDPA_MATH = "sdpa_math"
+    # Pick the fastest mask-capable backend for the current extras combo; see
+    # :func:`automatic_masked_attention`. Default for the masked slot of
+    # :class:`AttentionOps`.
+    AUTOMATIC = "automatic"
+
+    def to_callable(self) -> MaskedAttentionCallable:
+        """Resolve to a concrete masked callable. Same backend classes as
+        :meth:`AttentionFunction.to_callable`; the protocol returned just exposes
+        the masked call signature.
+        Non-AUTOMATIC variants raise :class:`RuntimeError` when the backend isn't
+        usable for the masked path on this machine. SDPA probes run with
+        ``with_mask=True`` so the capability check considers the protocol the
+        caller will actually use."""
+        match self:
+            case MaskedAttentionFunction.AUTOMATIC:
+                return automatic_masked_attention()
+            case MaskedAttentionFunction.PYTORCH:
+                return PytorchAttention()
+            case MaskedAttentionFunction.XFORMERS:
+                if memory_efficient_attention is None:
+                    raise RuntimeError("MaskedAttentionFunction.XFORMERS selected but `xformers` is not installed.")
+                return XFormersAttention()
+            case MaskedAttentionFunction.SDPA_MATH:
+                return PytorchAttention(priority=[SDPBackend.MATH])
+            case MaskedAttentionFunction.SDPA_CUDNN:
+                return _resolve_sdpa_variant(SDPBackend.CUDNN_ATTENTION, "MaskedAttentionFunction.SDPA_CUDNN", with_mask=True)
+            case MaskedAttentionFunction.SDPA_EFFICIENT:
+                return _resolve_sdpa_variant(SDPBackend.EFFICIENT_ATTENTION, "MaskedAttentionFunction.SDPA_EFFICIENT", with_mask=True)
+
+
+@dataclass(frozen=True)
+class AttentionOps:
+    """Pluggable callables consumed by :class:`Attention`."""
+
+    attention_function: AttentionCallable = field(default_factory=lambda: AttentionFunction.AUTOMATIC.to_callable())
+    masked_attention_function: MaskedAttentionCallable = field(default_factory=lambda: MaskedAttentionFunction.AUTOMATIC.to_callable())
+    preattention_function: PreAttentionCallable = field(default_factory=PytorchPreAttention)
+    gated_attention_function: GatedAttentionCallable = field(default_factory=PytorchGatedAttention)
+
+
+class Attention(torch.nn.Module):
+    def __init__(
+        self,
+        query_dim: int,
+        context_dim: int | None = None,
+        heads: int = 8,
+        dim_head: int = 64,
+        norm_eps: float = 1e-6,
+        rope_type: LTXRopeType = LTXRopeType.SPLIT,
+        ops: AttentionOps | None = None,
+        apply_gated_attention: bool = False,
+    ) -> None:
+        super().__init__()
+        if ops is None:
+            ops = AttentionOps()
+        self.rope_type = rope_type
+        self.attention_function = ops.attention_function
+        self.masked_attention_function = ops.masked_attention_function
+        self.preattention_function = ops.preattention_function
+        self.gated_attention_function = ops.gated_attention_function
+
+        inner_dim = dim_head * heads
+        context_dim = query_dim if context_dim is None else context_dim
+
+        self.heads = heads
+        self.dim_head = dim_head
+
+        self.q_norm = torch.nn.RMSNorm(inner_dim, eps=norm_eps)
+        self.k_norm = torch.nn.RMSNorm(inner_dim, eps=norm_eps)
+
+        self.to_q = torch.nn.Linear(query_dim, inner_dim, bias=True)
+        self.to_k = torch.nn.Linear(context_dim, inner_dim, bias=True)
+        self.to_v = torch.nn.Linear(context_dim, inner_dim, bias=True)
+
+        # Optional per-head gating
+        if apply_gated_attention:
+            self.to_gate_logits = torch.nn.Linear(query_dim, heads, bias=True)
+        else:
+            self.to_gate_logits = None
+
+        self.to_out = torch.nn.Sequential(torch.nn.Linear(inner_dim, query_dim, bias=True), torch.nn.Identity())
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        context: torch.Tensor | None = None,
+        mask: torch.Tensor | BlockMask | None = None,
+        pe: torch.Tensor | None = None,
+        k_pe: torch.Tensor | None = None,
+        perturbation_mask: torch.Tensor | None = None,
+        all_perturbed: bool = False,
+        kv_cache: dict | None = None,
+        current_start: int = 0,
+        cache_start: int | None = None,
+        defer_cache_update: bool = False,
+        detach_cache_update: bool = False,
+    ) -> torch.Tensor:
+        """Multi-head attention with optional RoPE, perturbation masking, and per-head gating.
+        When ``perturbation_mask`` is all zeros, the expensive query/key path
+        (linear projections, RMSNorm, RoPE) is skipped entirely and only the
+        value projection is used as a pass-through.
+        Args:
+            x: Query input tensor of shape ``(B, T, query_dim)``.
+            context: Key/value context tensor of shape ``(B, S, context_dim)``.
+                Falls back to ``x`` (self-attention) when *None*.
+            mask: Optional attention mask. Interpretation depends on the attention
+                backend (additive bias for xformers/PyTorch SDPA). A non-None
+                ``mask`` routes to ``masked_attention_function``; ``None`` keeps
+                the unmasked path.
+            pe: Rotary positional embeddings applied to both ``q`` and ``k``.
+            k_pe: Separate rotary positional embeddings for ``k`` only. When
+                *None*, ``pe`` is reused for keys.
+            perturbation_mask: Optional mask in ``[0, 1]`` that
+                blends the attention output with the raw value projection:
+                ``out = attn_out * mask + v * (1 - mask)``.
+                **1** keeps the full attention output, **0** bypasses attention
+                and passes the value projection through unchanged.
+                *None* or all-ones means standard attention; all-zeros skips
+                the query/key path entirely for efficiency.
+            all_perturbed: Whether all perturbations are active for this block.
+        Returns:
+            Output tensor of shape ``(B, T, query_dim)``.
+        """
+        is_self_attention = context is None
+        context = x if context is None else context
+        use_attention = not all_perturbed
+
+        v = self.to_v(context)
+
+        if not use_attention:
+            out = v
+        else:
+            if kv_cache is not None and not is_self_attention:
+                raise ValueError("LTX KV cache is only supported for self-attention.")
+            if kv_cache is not None and mask is not None:
+                raise ValueError("LTX KV cache and explicit self-attention masks are mutually exclusive.")
+            if cache_start is None:
+                cache_start = current_start
+            q = self.to_q(x)
+            k = self.to_k(context)
+            q, k = self.preattention_function(q, k, self, mask, pe, k_pe)
+            cache_update_info = None
+            if kv_cache is not None:
+                out = self._cached_attention(
+                    q,
+                    k,
+                    v,
+                    kv_cache=kv_cache,
+                    current_start=int(current_start),
+                    defer_cache_update=defer_cache_update,
+                    detach_cache_update=detach_cache_update,
+                )
+                if isinstance(out, tuple):
+                    out, cache_update_info = out
+            elif isinstance(mask, BlockMask):
+                out = _flex_attention_flat(q, k, v, self.heads, mask, use_autotune=is_self_attention)
+            elif mask is None:
+                out = self.attention_function(q, k, v, self.heads)  # (B, T, H*D)
+            else:
+                out = self.masked_attention_function(q, k, v, self.heads, mask)
+
+            if perturbation_mask is not None:
+                out = out * perturbation_mask + v * (1 - perturbation_mask)
+
+        # Apply per-head gating if enabled
+        if self.to_gate_logits is not None:
+            out = self.gated_attention_function(x, out, self)
+
+        out = self.to_out(out)
+        if use_attention and kv_cache is not None and cache_update_info is not None:
+            return out, cache_update_info
+        return out
+
+    def _cached_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        kv_cache: dict,
+        current_start: int,
+        defer_cache_update: bool,
+        detach_cache_update: bool,
+    ) -> torch.Tensor | tuple[torch.Tensor, tuple[int, int, dict | None]]:
+        q = _heads_view(q, self.heads)
+        k = _heads_view(k, self.heads)
+        v = _heads_view(v, self.heads)
+        if kv_cache["k"].shape[2] != k.shape[2]:
+            raise ValueError(f"LTX KV cache stores {kv_cache['k'].shape[2]} heads, but current key has {k.shape[2]} heads.")
+
+        current_end = current_start + q.shape[1]
+        kv_cache_size = int(kv_cache["k"].shape[1])
+        attention_window_size = int(kv_cache.get("attention_window_size", kv_cache_size))
+        sink_tokens = int(kv_cache.get("sink_tokens", 0))
+        num_new_tokens = int(q.shape[1])
+        cache_update_info = None
+        detach_cache_update = bool(detach_cache_update and torch.is_grad_enabled() and (k.requires_grad or v.requires_grad) and not defer_cache_update)
+
+        local_end_index = int(kv_cache["local_end_index"].item()) + current_end - int(kv_cache["global_end_index"].item())
+        local_start_index = local_end_index - num_new_tokens
+        needs_roll = current_end > int(kv_cache["global_end_index"].item()) and num_new_tokens + int(kv_cache["local_end_index"].item()) > kv_cache_size
+
+        if needs_roll:
+            num_evicted_tokens = num_new_tokens + int(kv_cache["local_end_index"].item()) - kv_cache_size
+            num_rolled_tokens = int(kv_cache["local_end_index"].item()) - num_evicted_tokens - sink_tokens
+            local_end_index -= num_evicted_tokens
+            local_start_index = local_end_index - num_new_tokens
+            window_start = max(0, local_end_index - attention_window_size)
+            if defer_cache_update:
+                window_k, window_v = self._deferred_window_after_roll(
+                    kv_cache,
+                    k,
+                    v,
+                    window_start,
+                    sink_tokens,
+                    num_rolled_tokens,
+                    num_evicted_tokens,
+                    local_start_index,
+                    num_new_tokens,
+                )
+                cache_update_info = {
+                    "action": "roll_and_insert",
+                    "sink_tokens": sink_tokens,
+                    "num_rolled_tokens": num_rolled_tokens,
+                    "num_evicted_tokens": num_evicted_tokens,
+                    "local_start_index": local_start_index,
+                    "local_end_index": local_end_index,
+                    "new_k": k,
+                    "new_v": v,
+                }
+            elif detach_cache_update:
+                with torch.no_grad():
+                    if num_rolled_tokens > 0:
+                        kv_cache["k"][:, sink_tokens : sink_tokens + num_rolled_tokens] = kv_cache["k"][
+                            :, sink_tokens + num_evicted_tokens : sink_tokens + num_evicted_tokens + num_rolled_tokens
+                        ].clone()
+                        kv_cache["v"][:, sink_tokens : sink_tokens + num_rolled_tokens] = kv_cache["v"][
+                            :, sink_tokens + num_evicted_tokens : sink_tokens + num_evicted_tokens + num_rolled_tokens
+                        ].clone()
+                    kv_cache["k"][:, local_start_index:local_end_index] = k.detach()
+                    kv_cache["v"][:, local_start_index:local_end_index] = v.detach()
+                window_k, window_v = self._window_with_current_kv(
+                    kv_cache,
+                    k,
+                    v,
+                    window_start,
+                    local_start_index,
+                    num_new_tokens,
+                )
+            else:
+                self._roll_cache(
+                    kv_cache,
+                    sink_tokens,
+                    num_rolled_tokens,
+                    num_evicted_tokens,
+                    local_start_index,
+                    local_end_index,
+                    k,
+                    v,
+                    no_grad=False,
+                )
+                window_k = kv_cache["k"][:, window_start:local_end_index]
+                window_v = kv_cache["v"][:, window_start:local_end_index]
+        else:
+            window_start = max(0, local_end_index - attention_window_size)
+            if defer_cache_update:
+                window_k, window_v = self._deferred_window(
+                    kv_cache,
+                    k,
+                    v,
+                    window_start,
+                    local_start_index,
+                    num_new_tokens,
+                )
+                cache_update_info = {
+                    "action": "direct_insert",
+                    "local_start_index": local_start_index,
+                    "local_end_index": local_end_index,
+                    "new_k": k,
+                    "new_v": v,
+                }
+            else:
+                if detach_cache_update:
+                    with torch.no_grad():
+                        kv_cache["k"][:, local_start_index:local_end_index] = k.detach()
+                        kv_cache["v"][:, local_start_index:local_end_index] = v.detach()
+                    window_k, window_v = self._window_with_current_kv(
+                        kv_cache,
+                        k,
+                        v,
+                        window_start,
+                        local_start_index,
+                        num_new_tokens,
+                    )
+                else:
+                    kv_cache["k"][:, local_start_index:local_end_index] = k
+                    kv_cache["v"][:, local_start_index:local_end_index] = v
+                    window_k = kv_cache["k"][:, window_start:local_end_index]
+                    window_v = kv_cache["v"][:, window_start:local_end_index]
+
+        out = _flatten_heads(_sdpa_shaped(q, window_k, window_v))
+        if not defer_cache_update:
+            kv_cache["global_end_index"].fill_(current_end)
+            kv_cache["local_end_index"].fill_(local_end_index)
+            return out
+        return out, (current_end, local_end_index, cache_update_info)
+
+    @staticmethod
+    def _window_with_current_kv(kv_cache, current_k, current_v, window_start, local_start_index, num_new_tokens):
+        window_k_pieces = []
+        window_v_pieces = []
+        if window_start < local_start_index:
+            window_k_pieces.append(kv_cache["k"][:, window_start:local_start_index])
+            window_v_pieces.append(kv_cache["v"][:, window_start:local_start_index])
+        current_start = max(window_start, local_start_index) - local_start_index
+        if current_start < num_new_tokens:
+            window_k_pieces.append(current_k[:, current_start:])
+            window_v_pieces.append(current_v[:, current_start:])
+        return (
+            torch.cat(window_k_pieces, dim=1) if len(window_k_pieces) > 1 else window_k_pieces[0],
+            torch.cat(window_v_pieces, dim=1) if len(window_v_pieces) > 1 else window_v_pieces[0],
+        )
+
+    @staticmethod
+    def _deferred_window(kv_cache, new_k, new_v, window_start, local_start_index, num_new_tokens):
+        window_k_pieces = []
+        window_v_pieces = []
+        if window_start < local_start_index:
+            window_k_pieces.append(kv_cache["k"][:, window_start:local_start_index])
+            window_v_pieces.append(kv_cache["v"][:, window_start:local_start_index])
+        new_start = max(window_start, local_start_index) - local_start_index
+        if new_start < num_new_tokens:
+            window_k_pieces.append(new_k[:, new_start:])
+            window_v_pieces.append(new_v[:, new_start:])
+        return (
+            torch.cat(window_k_pieces, dim=1) if len(window_k_pieces) > 1 else window_k_pieces[0],
+            torch.cat(window_v_pieces, dim=1) if len(window_v_pieces) > 1 else window_v_pieces[0],
+        )
+
+    @staticmethod
+    def _deferred_window_after_roll(
+        kv_cache,
+        new_k,
+        new_v,
+        window_start,
+        sink_tokens,
+        num_rolled_tokens,
+        num_evicted_tokens,
+        local_start_index,
+        num_new_tokens,
+    ):
+        window_k_pieces = []
+        window_v_pieces = []
+        prefix_end = min(sink_tokens, local_start_index)
+        if window_start < prefix_end:
+            window_k_pieces.append(kv_cache["k"][:, window_start:prefix_end])
+            window_v_pieces.append(kv_cache["v"][:, window_start:prefix_end])
+        rolled_start = max(window_start, sink_tokens)
+        if rolled_start < local_start_index and num_rolled_tokens > 0:
+            src_start = rolled_start + num_evicted_tokens
+            src_end = local_start_index + num_evicted_tokens
+            window_k_pieces.append(kv_cache["k"][:, src_start:src_end])
+            window_v_pieces.append(kv_cache["v"][:, src_start:src_end])
+        new_start = max(window_start, local_start_index) - local_start_index
+        if new_start < num_new_tokens:
+            window_k_pieces.append(new_k[:, new_start:])
+            window_v_pieces.append(new_v[:, new_start:])
+        return (
+            torch.cat(window_k_pieces, dim=1) if len(window_k_pieces) > 1 else window_k_pieces[0],
+            torch.cat(window_v_pieces, dim=1) if len(window_v_pieces) > 1 else window_v_pieces[0],
+        )
+
+    @staticmethod
+    def _roll_cache(
+        kv_cache,
+        sink_tokens,
+        num_rolled_tokens,
+        num_evicted_tokens,
+        local_start_index,
+        local_end_index,
+        new_k,
+        new_v,
+        *,
+        no_grad,
+    ):
+        def _assign():
+            if num_rolled_tokens > 0:
+                kv_cache["k"][:, sink_tokens : sink_tokens + num_rolled_tokens] = kv_cache["k"][:, sink_tokens + num_evicted_tokens : sink_tokens + num_evicted_tokens + num_rolled_tokens].clone()
+                kv_cache["v"][:, sink_tokens : sink_tokens + num_rolled_tokens] = kv_cache["v"][:, sink_tokens + num_evicted_tokens : sink_tokens + num_evicted_tokens + num_rolled_tokens].clone()
+            kv_cache["k"][:, local_start_index:local_end_index] = new_k
+            kv_cache["v"][:, local_start_index:local_end_index] = new_v
+
+        if no_grad:
+            with torch.no_grad():
+                _assign()
+        else:
+            _assign()

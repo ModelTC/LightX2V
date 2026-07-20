@@ -128,6 +128,6 @@ class LingbotVATransformerInfer(WanTransformerInfer):
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out, action_mode=False, update_cache=0, cache_name="pos"):
-        self.reset_infer_states()
+        self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out, update_cache=update_cache, cache_name=cache_name)
         return self.infer_non_blocks(weights, x, pre_infer_out, action_mode=action_mode).to(GET_DTYPE())
