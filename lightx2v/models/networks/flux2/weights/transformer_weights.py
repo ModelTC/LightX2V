@@ -154,8 +154,6 @@ class Flux2TransformerWeights(WeightModule):
         self.num_single_layers = config.get("num_single_layers", 20)
         self.mm_type = config.get("dit_quant_scheme", "Default")
 
-        inner_dim = config.get("num_attention_heads", 24) * config.get("attention_head_dim", 64)
-
         # -- Pipeline-parallel block splitting --------------------------------
         pp_size = config.get("pipefusion_parallel", False)
         if pp_size:
