@@ -12,6 +12,7 @@ from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRun
 from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
+from lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner import HunyuanImage3Runner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
@@ -111,6 +112,7 @@ def main():
             "wan2.2_s2v",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
+            "hunyuan_image3",
             "hunyuan3d",
             "worldplay_distill",
             "worldplay_ar",

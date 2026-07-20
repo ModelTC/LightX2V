@@ -228,6 +228,49 @@ def auto_calc_config(config):
     if "infer_steps" not in config and "num_inference_steps" in config:
         config["infer_steps"] = config["num_inference_steps"]
 
+    if config["model_cls"] == "hunyuan_image3":
+        if "vae_scale_factor" not in config:
+            vae_downsample_factor = config.get("vae_downsample_factor")
+            if isinstance(vae_downsample_factor, list) and vae_downsample_factor:
+                config["vae_scale_factor"] = int(vae_downsample_factor[0])
+        parallel_config = config.get("parallel")
+        if isinstance(parallel_config, dict):
+            parallel_config = dict(parallel_config)
+            cfg_p_size = int(parallel_config.get("cfg_p_size", 1))
+            seq_p_size = int(parallel_config.get("seq_p_size", 1))
+            if cfg_p_size not in (1, 2):
+                raise ValueError(f"HunyuanImage3 parallel.cfg_p_size must be 1 or 2, got {cfg_p_size}.")
+            if seq_p_size < 1:
+                raise ValueError(f"HunyuanImage3 parallel.seq_p_size must be >= 1, got {seq_p_size}.")
+            if cfg_p_size == 2 and not config.get("enable_cfg", False):
+                raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires enable_cfg=true.")
+
+            parallel_config["cfg_p_size"] = cfg_p_size
+            parallel_config["seq_p_size"] = seq_p_size
+
+            if seq_p_size > 1:
+                attn_type = parallel_config.get("seq_p_attn_type", "kv_all_gather")
+                attn_type = str(attn_type).strip().lower().replace("-", "_")
+                if attn_type in ("kv_allgather", "kv_gather"):
+                    attn_type = "kv_all_gather"
+                if attn_type not in ("kv_all_gather", "ulysses"):
+                    raise ValueError(f"HunyuanImage3 sequence parallel attention must be 'kv_all_gather' or 'ulysses', got {attn_type!r}.")
+                parallel_config["seq_p_attn_type"] = attn_type
+
+            config["parallel"] = parallel_config
+
+            cfg_mode = str(config.get("hunyuan_cfg_mode", "batch")).strip().lower()
+            if cfg_p_size == 2 and cfg_mode != "parallel":
+                raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires hunyuan_cfg_mode='parallel'.")
+            if cfg_p_size == 1 and seq_p_size > 1 and config.get("enable_cfg", False) and cfg_mode != "serial":
+                raise ValueError("HunyuanImage3 sequence parallel with cfg_p_size=1 requires hunyuan_cfg_mode='serial'.")
+
+            if seq_p_size > 1 and parallel_config["seq_p_attn_type"] == "ulysses":
+                q_heads = int(config.get("num_attention_heads") or config["num_heads"])
+                kv_heads = int(config.get("num_key_value_heads") or q_heads)
+                if q_heads % seq_p_size or kv_heads % seq_p_size:
+                    raise ValueError(f"HunyuanImage3 Ulysses requires seq_p_size to divide Q and KV heads: Q={q_heads}, KV={kv_heads}, seq_p_size={seq_p_size}.")
+
     if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
@@ -295,7 +338,11 @@ def set_parallel_config(config):
                 config["cfg_parallel"] = True
 
         # warmup dist
-        _a = torch.zeros([1]).to(f"{AI_DEVICE}:{dist.get_rank()}")
+        if AI_DEVICE == "cuda":
+            warmup_device = f"{AI_DEVICE}:{torch.cuda.current_device()}"
+        else:
+            warmup_device = AI_DEVICE
+        _a = torch.zeros([1], device=warmup_device)
         dist.all_reduce(_a)
 
 
