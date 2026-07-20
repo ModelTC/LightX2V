@@ -342,7 +342,7 @@ class Flux2PipelineDriver:
                             self.pp_comm.recv_next()
 
                 # ---- 5. Wait for old isends (limit pending to prevent GC issues) ----
-                while len(pending_isends) > 4:
+                while len(pending_isends) > num_patch * 2:
                     old_req, _ = pending_isends.pop(0)
                     old_req.wait()
 
