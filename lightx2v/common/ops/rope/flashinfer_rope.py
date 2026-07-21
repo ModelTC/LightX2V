@@ -85,6 +85,9 @@ class FlashInferRope(RopeTemplate):
             return freqs.float().contiguous()
         raise TypeError(f"Unsupported RoPE frequency type: {type(freqs)!r}")
 
+    def prepare_positions(self, freqs):
+        return torch.arange(freqs.shape[0], device=freqs.device, dtype=torch.long)
+
     def _apply_eager(self, q: torch.Tensor, k: torch.Tensor, freqs: torch.Tensor, positions: torch.Tensor | None = None):
         if apply_rope_with_cos_sin_cache_inplace is None:
             raise ImportError("flashinfer is required for FlashInferRope.")

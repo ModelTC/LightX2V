@@ -45,6 +45,9 @@ class RopeTemplate:
     def prepare_freqs(self, freqs):
         return freqs
 
+    def prepare_positions(self, freqs):
+        return None
+
     def apply_single(self, x: torch.Tensor, freqs, **kwargs) -> torch.Tensor:
         raise NotImplementedError
 
