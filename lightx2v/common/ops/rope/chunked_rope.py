@@ -27,6 +27,9 @@ class ChunkedRope(RopeTemplate):
         if hasattr(self.inner, "set_config"):
             self.inner.set_config(config)
 
+    def prepare_freqs(self, freqs):
+        return self.inner.prepare_freqs(freqs)
+
     def apply_single(self, x: torch.Tensor, freqs, **kwargs):
         freq_len = freqs[0].shape[0] if isinstance(freqs, tuple) else freqs.shape[0]
         seq_len = min(x.shape[0], freq_len)
