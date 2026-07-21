@@ -68,7 +68,7 @@ class FastWAMTrainer:
         self.config = config
         self.model_config = config["model"]
         self.training_config = config["training"]
-        self.evaluation_config = config.get("evaluation", config.get("inference", {}))
+        self.inference_config = config.get("inference", {})
         self.logging_config = config.get("logging", {})
 
         optimizer_config = self.training_config.get("optimizer", {})
@@ -93,16 +93,17 @@ class FastWAMTrainer:
         self.zero1_requested = bool(zero1_config.get("enabled", False)) if isinstance(zero1_config, dict) else bool(zero1_config)
         self.zero1_enabled = False
 
-        self.eval_every_iters = int(self.evaluation_config.get("eval_every_iters", self.evaluation_config.get("infer_every_iters", 0)) or 0)
-        self.eval_num_inference_steps = int(self.evaluation_config.get("eval_num_inference_steps", 5))
-        self.eval_num_samples = max(1, int(self.evaluation_config.get("num_samples", 1)))
-        self.eval_run_inference = bool(self.evaluation_config.get("run_inference", True))
-        self.eval_save_video = bool(self.evaluation_config.get("save_video", True))
-        self.eval_save_preview = bool(self.evaluation_config.get("save_preview", True))
-        self.eval_fps = max(1, int(self.evaluation_config.get("fps", 8)))
-        self.eval_tiled = bool(self.evaluation_config.get("tiled", False))
-        self.eval_output_dir = self.evaluation_config.get("output_dir", os.path.join(self.output_train_dir, "eval"))
-        self.eval_seed = int(self.evaluation_config.get("seed", 42))
+        self.eval_every_iters = int(self.inference_config.get("infer_every_iters", 0) or 0)
+        self.eval_num_inference_steps = int(self.inference_config.get("eval_num_inference_steps", 5))
+        self.eval_num_samples = max(1, int(self.inference_config.get("num_samples", 1)))
+        self.eval_sample_strategy = str(self.inference_config.get("sample_strategy", "fixed")).lower()
+        self.eval_run_inference = bool(self.inference_config.get("run_inference", True))
+        self.eval_save_video = bool(self.inference_config.get("save_video", True))
+        self.eval_save_preview = bool(self.inference_config.get("save_preview", True))
+        self.eval_fps = max(1, int(self.inference_config.get("fps", 8)))
+        self.eval_tiled = bool(self.inference_config.get("tiled", False))
+        self.eval_output_dir = self.inference_config.get("output_dir", os.path.join(self.output_train_dir, "eval"))
+        self.eval_seed = int(self.inference_config.get("seed", 42))
 
         resume_config = self.config.get("resume", {})
         self.auto_resume = bool(resume_config.get("auto_resume", False))
@@ -325,6 +326,7 @@ class FastWAMTrainer:
         running_loss = 0.0
         running_loss_dict = {}
         epoch = 0
+        run_start_iter = current_iter
         start_time = time.perf_counter()
 
         logger.info(
@@ -374,7 +376,7 @@ class FastWAMTrainer:
                         detail,
                         current_lr,
                         float(grad_norm),
-                        current_iter / elapsed,
+                        (current_iter - run_start_iter) / elapsed,
                     )
                 running_loss = 0.0
                 running_loss_dict = {}
@@ -412,7 +414,8 @@ class FastWAMTrainer:
         step_dir = os.path.join(self.eval_output_dir, f"step_{current_iter:09d}")
         os.makedirs(step_dir, exist_ok=True)
 
-        eval_indices = self._select_eval_indices(len(eval_dataset))
+        sample_selection_seed = self._eval_sample_selection_seed(current_iter)
+        eval_indices = self._select_eval_indices(len(eval_dataset), sample_selection_seed)
         local_results = []
         for sample_number in range(get_rank(), len(eval_indices), get_world_size()):
             eval_index = eval_indices[sample_number]
@@ -440,6 +443,8 @@ class FastWAMTrainer:
                     {
                         "iteration": int(current_iter),
                         "num_samples": len(results),
+                        "sample_strategy": self.eval_sample_strategy,
+                        "sample_selection_seed": sample_selection_seed,
                         "duration_seconds": duration_seconds,
                         "mean": summary,
                         "samples": results,
@@ -472,9 +477,15 @@ class FastWAMTrainer:
                 result[key] = value
         return result
 
-    def _select_eval_indices(self, dataset_size):
+    def _eval_sample_selection_seed(self, current_iter):
+        if self.eval_sample_strategy == "rotating":
+            eval_round = current_iter // max(self.eval_every_iters, 1)
+            return self.eval_seed + eval_round
+        return self.eval_seed
+
+    def _select_eval_indices(self, dataset_size, sample_selection_seed):
         count = min(self.eval_num_samples, dataset_size)
-        generator = torch.Generator(device="cpu").manual_seed(self.eval_seed)
+        generator = torch.Generator(device="cpu").manual_seed(sample_selection_seed)
         return torch.randperm(dataset_size, generator=generator)[:count].tolist()
 
     def _evaluate_sample(self, model, dataset, sample, sample_number, eval_index, step_dir):

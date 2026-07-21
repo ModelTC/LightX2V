@@ -36,8 +36,8 @@ training:
     adam_beta2: 0.95
     adam_epsilon: 1.0e-8
 
-evaluation:
-  eval_every_iters: 200
+inference:
+  infer_every_iters: 200
   eval_num_inference_steps: 5
   num_samples: 1
   run_inference: true
