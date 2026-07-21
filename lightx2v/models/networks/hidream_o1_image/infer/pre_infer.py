@@ -7,11 +7,14 @@ import torch.nn.functional as F
 from lightx2v.models.networks.hidream_o1_image.infer.module_io import HidreamPreInferOutput
 from lightx2v.models.networks.hidream_o1_image.infer.vision_infer import HidreamO1ImageVisionInfer
 from lightx2v.models.networks.hidream_o1_image.qwen3_vl import Qwen3VLTextRotaryEmbedding
+from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 
 
 class HidreamO1ImagePreInfer:
     def __init__(self, config):
         self.config = config
+        self.infer_dtype = GET_DTYPE()
+        self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
         self.vision_infer = HidreamO1ImageVisionInfer(config)
         self.rotary_emb = None
         if config.get("_hidream_model_config") is not None:
@@ -83,6 +86,9 @@ class HidreamO1ImagePreInfer:
         vinputs_embedded = vinputs_embedded.reshape(*z_shape[:-1], vinputs_embedded.shape[-1])
         inputs_embeds = torch.cat([inputs_embeds, vinputs_embedded], dim=1)
 
+        if self.infer_dtype != self.sensitive_layer_dtype:
+            inputs_embeds = inputs_embeds.to(self.sensitive_layer_dtype)
+
         if visual_pos_masks is not None:
             if visual_pos_masks.shape[0] != inputs_embeds.shape[0]:
                 visual_pos_masks = visual_pos_masks.expand(inputs_embeds.shape[0], -1)
@@ -132,7 +138,7 @@ class HidreamO1ImagePreInfer:
 
     def _timestep_embedding(self, t, dim, max_period=10000):
         half = dim // 2
-        freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32, device=t.device) / half)
+        freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(device=t.device)
         args = t[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
