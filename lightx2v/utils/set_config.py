@@ -183,6 +183,10 @@ def auto_calc_config(config):
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
+            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
+                # LTX uses rope_type for the layout ("split"), while LightX2V
+                # uses it to select a registered RoPE implementation.
+                model_config.pop("rope_type", None)
             config.update(model_config)
         elif os.path.exists(os.path.join(config["model_path"], "low_noise_model", "config.json")):  # 需要一个更优雅的update方法
             with open(os.path.join(config["model_path"], "low_noise_model", "config.json"), "r") as f:
@@ -199,7 +203,7 @@ def auto_calc_config(config):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-            if config["model_cls"] in {"ltx2", "ltx2_ar"}:
+            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
                 # Upstream LTX2 uses rope_type for the layout name ("split"),
                 # while LightX2V uses it as the registered RoPE implementation.
                 model_config.pop("rope_type", None)
