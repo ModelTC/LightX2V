@@ -52,6 +52,10 @@ class WanPreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    @staticmethod
+    def prepare_rope_cache(weights, freqs):
+        return weights.blocks[0].compute_phases[0].rope.prepare_freqs(freqs)
+
     def prepare_cos_sin(self, grid_sizes, freqs):
         c = self.head_size // 2
         freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
@@ -186,7 +190,7 @@ class WanPreInfer:
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
             freqs = self.freqs.clone()  # self.freqs init param can not be changed
             self.grid_sizes = grid_sizes.tuple
-            self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
+            self.cos_sin = self.prepare_rope_cache(weights, self.prepare_cos_sin(grid_sizes.tuple, freqs))
 
         return WanPreInferModuleOutput(
             embed=embed,

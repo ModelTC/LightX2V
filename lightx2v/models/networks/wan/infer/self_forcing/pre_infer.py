@@ -122,7 +122,7 @@ class WanSFPreInfer(WanPreInfer):
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
             freqs = self.freqs.clone()  # self.freqs init param can not be changed
             self.grid_sizes = grid_sizes.tuple
-            self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
+            self.cos_sin = self.prepare_rope_cache(weights, self.prepare_cos_sin(grid_sizes.tuple, freqs))
 
         return WanSFPreInferModuleOutput(
             embed=embed,

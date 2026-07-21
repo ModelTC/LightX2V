@@ -51,9 +51,6 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
-        self._rope_cache_source = None
-        self._rope_cache_impl = None
-        self._rope_cache = None
         self.use_compile = config.get("use_compile", False)
         if self.use_compile:
             self.compiled_blocks = {}
@@ -87,17 +84,9 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             if reset_state is not None:
                 reset_state()
 
-    def prepare_rope_cache(self, blocks, freqs):
-        rope = blocks[0].compute_phases[0].rope
-        if self._rope_cache_source is not freqs or self._rope_cache_impl is not rope:
-            self._rope_cache_source = freqs
-            self._rope_cache_impl = rope
-            self._rope_cache = rope.prepare_freqs(freqs)
-        return self._rope_cache
-
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
-        self.cos_sin = self.prepare_rope_cache(weights.blocks, pre_infer_out.cos_sin)
+        self.cos_sin = pre_infer_out.cos_sin
         self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
         self.reset_attention_states(weights.blocks)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
