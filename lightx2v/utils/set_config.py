@@ -199,7 +199,7 @@ def auto_calc_config(config):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-            if config["model_cls"] == "ltx2":
+            if config["model_cls"] in {"ltx2", "ltx2_ar"}:
                 # Upstream LTX2 uses rope_type for the layout name ("split"),
                 # while LightX2V uses it as the registered RoPE implementation.
                 model_config.pop("rope_type", None)
