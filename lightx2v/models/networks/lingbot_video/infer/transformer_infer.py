@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
-from lightx2v.models.networks.lingbot_video.infer.utils import apply_rotary_emb
 from lightx2v.utils.envs import GET_DTYPE
 
 
@@ -29,8 +28,11 @@ class LingBotVideoTransformerInfer(BaseTransformerInfer):
         k = weights.attn.to_k.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
         v = weights.attn.to_v.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
 
-        q = apply_rotary_emb(weights.attn.norm_q.apply(q), rotary_emb)
-        k = apply_rotary_emb(weights.attn.norm_k.apply(k), rotary_emb)
+        q, k = weights.attn.rope.apply(
+            weights.attn.norm_q.apply(q),
+            weights.attn.norm_k.apply(k),
+            rotary_emb,
+        )
         seq_len = q.shape[0]
         cu_seqlens = torch.tensor([0, seq_len], dtype=torch.int32, device=q.device)
         hidden_states = weights.attn.calculate.apply(

@@ -1,9 +1,13 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
     TENSOR_REGISTER,
 )
 
@@ -41,7 +45,7 @@ class WanTransformerWeights(WeightModule):
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
-        self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
+        self.register_parameter("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
         self.add_module(
             "head",
             MM_WEIGHT_REGISTER["Default"](
@@ -141,6 +145,22 @@ class WanTransformerWeights(WeightModule):
         self.head.to_cpu()
         self.head_modulation.to_cpu()
 
+    def iter_self_attention_phases(self):
+        for block in self.blocks:
+            yield block.compute_phases[0]
+        for name in ("offload_block_cuda_buffers", "offload_block_cpu_buffers"):
+            buffers = getattr(self, name, None)
+            if buffers is not None:
+                for block in buffers:
+                    yield block.compute_phases[0]
+        phases = getattr(self, "offload_phase_cuda_buffers", None)
+        if phases is not None:
+            yield phases[0]
+        phase_buffers = getattr(self, "offload_phase_cpu_buffers", None)
+        if phase_buffers is not None:
+            for phases in phase_buffers:
+                yield phases[0]
+
 
 class WanTransformerAttentionBlock(WeightModule):
     def __init__(
@@ -239,6 +259,15 @@ class WanSelfAttention(WeightModule):
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
         self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
+        rope = ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32)
+        if config.get("rope_chunk", False):
+            rope = ROPE_REGISTER["chunked_rope"](inner=rope, chunk_size=config.get("rope_chunk_size", 100))
+        self.add_module("rope", rope)
+        if config.get("causal_rope_type") is not None:
+            self.add_module(
+                "causal_rope",
+                ROPE_REGISTER[config.get("causal_rope_type", "wan_causal_rope")](layout="interleaved", compute_dtype=torch.float64),
+            )
 
         self.add_module(
             "modulation",
@@ -253,7 +282,7 @@ class WanSelfAttention(WeightModule):
 
         self.add_module(
             "norm1",
-            LN_WEIGHT_REGISTER["torch"](),
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
         self.add_module(
@@ -368,15 +397,15 @@ class WanSelfAttention(WeightModule):
         if self.config["self_attn_1_type"] == "draft_attn":
             attention_weights_cls.sparsity_ratio = self.config.get("draft_attn_sparsity_ratio", 0.75)
 
-        # sla_attn setting
-        if self.config["self_attn_1_type"] == "sla_attn":
-            sla_config = self.config.get("sla_attn_setting", {})
-            if "sparsity_ratio" in sla_config:
-                attention_weights_cls.sparsity_ratio = sla_config["sparsity_ratio"]
-            if "per_block_mean" in sla_config:
-                attention_weights_cls.per_block_mean = sla_config["per_block_mean"]
-            if "operator" in sla_config:
-                attention_weights_cls.operator = sla_config["operator"]
+        # dynamic_sparse_attn setting
+        if self.config["self_attn_1_type"] == "dynamic_sparse_attn":
+            dynamic_sparse_config = self.config.get("dynamic_sparse_attn_setting", {})
+            if "sparsity_ratio" in dynamic_sparse_config:
+                attention_weights_cls.sparsity_ratio = dynamic_sparse_config["sparsity_ratio"]
+            if "per_block_mean" in dynamic_sparse_config:
+                attention_weights_cls.per_block_mean = dynamic_sparse_config["per_block_mean"]
+            if "operator" in dynamic_sparse_config:
+                attention_weights_cls.operator = dynamic_sparse_config["operator"]
 
         # spas_sage_attn2 setting
         if self.config["self_attn_1_type"] == "sparge_attn":
@@ -480,7 +509,7 @@ class WanCrossAttention(WeightModule):
 
         self.add_module(
             "norm3",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{self.block_index}.norm3.weight",
                 f"{block_prefix}.{self.block_index}.norm3.bias",
                 create_cuda_buffer,
@@ -636,7 +665,7 @@ class WanFFN(WeightModule):
 
         self.add_module(
             "norm2",
-            LN_WEIGHT_REGISTER["torch"](),
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
         self.add_module(

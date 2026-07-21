@@ -54,6 +54,10 @@ class LingBotVideoTransformerModel(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
 
+    def _load_lora_file(self, file_path):
+        lora_weights = super()._load_lora_file(file_path)
+        return {key.replace(".lora.down.weight", ".lora_down.weight").replace(".lora.up.weight", ".lora_up.weight"): value for key, value in lora_weights.items()}
+
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
         self.scheduler.infer_condition = infer_condition

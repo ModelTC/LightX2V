@@ -19,8 +19,11 @@ import torch
 
 try:
     from skimage import measure
-except ImportError:
+except ImportError as exc:
     measure = None
+    _measure_import_error = exc
+else:
+    _measure_import_error = None
 
 
 class Latent2MeshOutput:

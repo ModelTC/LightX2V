@@ -1,3 +1,5 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanFFN,
@@ -9,6 +11,7 @@ from lightx2v.utils.registry_factory import (
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
     TENSOR_REGISTER,
 )
 
@@ -34,7 +37,7 @@ class WanActionTransformerWeights(WeightModule):
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
-        self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
+        self.register_parameter("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
         self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
@@ -98,6 +101,10 @@ class WanActionModule(WeightModule):
         self.quant_method = config.get("quant_method", None)
 
         self.attn_rms_norm_type = self.config.get("rms_norm_type", "self_forcing")
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("action_rope_type", "torch_real_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         self.add_module(
             "keyboard_embed_0",
@@ -177,10 +184,10 @@ class WanActionModule(WeightModule):
             )
             self.add_module(
                 "mouse_mlp_3",
-                LN_WEIGHT_REGISTER["torch"](
+                LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.weight",
                     f"{block_prefix}.{self.block_index}.action_model.mouse_mlp.3.bias",
-                    eps=1e-6,
+                    eps=1e-5,
                 ),
             )
 
@@ -200,7 +207,7 @@ class WanActionCrossAttention(WeightModule):
 
         self.add_module(
             "norm3",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{self.block_index}.norm3.weight",
                 f"{block_prefix}.{self.block_index}.norm3.bias",
             ),

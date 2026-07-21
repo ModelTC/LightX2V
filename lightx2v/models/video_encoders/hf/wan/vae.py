@@ -997,7 +997,7 @@ class WanVAE:
             .to(dtype)
         )
 
-    def _calculate_2d_grid(self, latent_height, latent_width, world_size):
+    def calculate_2d_grid(self, latent_height, latent_width, world_size):
         if (latent_height, latent_width, world_size) in self.grid_table:
             best_h, best_w = self.grid_table[(latent_height, latent_width, world_size)]
             # logger.info(f"Vae using cached 2D grid: {best_h}x{best_w} grid for {latent_height}x{latent_width} latent")
@@ -1072,6 +1072,8 @@ class WanVAE:
             elif split_dim == 4:
                 video_chunk = video[:, :, :, :, start_idx:end_idx].contiguous()
 
+        video_chunk = video_chunk.to(device=self.current_device(), dtype=self.dtype)
+
         if self.use_tiling:
             encoded_chunk = self.model.tiled_encode(video_chunk, self.scale)
         else:
@@ -1102,48 +1104,7 @@ class WanVAE:
 
         return encoded.squeeze(0)
 
-    def encode_dist_2d(self, video, world_size_h, world_size_w, cur_rank_h, cur_rank_w):
-        spatial_ratio = 8
-
-        # Calculate chunk sizes for both dimensions
-        total_latent_h = video.shape[3] // spatial_ratio
-        total_latent_w = video.shape[4] // spatial_ratio
-
-        chunk_h = total_latent_h // world_size_h
-        chunk_w = total_latent_w // world_size_w
-
-        padding_size = 1
-        video_chunk_h = chunk_h * spatial_ratio
-        video_chunk_w = chunk_w * spatial_ratio
-        video_padding_h = padding_size * spatial_ratio
-        video_padding_w = padding_size * spatial_ratio
-
-        # Calculate H dimension slice
-        if cur_rank_h == 0:
-            h_start = 0
-            h_end = video_chunk_h + 2 * video_padding_h
-        elif cur_rank_h == world_size_h - 1:
-            h_start = video.shape[3] - (video_chunk_h + 2 * video_padding_h)
-            h_end = video.shape[3]
-        else:
-            h_start = cur_rank_h * video_chunk_h - video_padding_h
-            h_end = (cur_rank_h + 1) * video_chunk_h + video_padding_h
-
-        # Calculate W dimension slice
-        if cur_rank_w == 0:
-            w_start = 0
-            w_end = video_chunk_w + 2 * video_padding_w
-        elif cur_rank_w == world_size_w - 1:
-            w_start = video.shape[4] - (video_chunk_w + 2 * video_padding_w)
-            w_end = video.shape[4]
-        else:
-            w_start = cur_rank_w * video_chunk_w - video_padding_w
-            w_end = (cur_rank_w + 1) * video_chunk_w + video_padding_w
-
-        # Extract the video chunk for this process
-        video_chunk = video[:, :, :, h_start:h_end, w_start:w_end].contiguous()
-
-        # Encode the chunk
+    def _encode_dist_2d_local_chunk(self, video_chunk, chunk_h, chunk_w, padding_size, world_size_h, world_size_w, cur_rank_h, cur_rank_w):
         if self.use_tiling:
             encoded_chunk = self.model.tiled_encode(video_chunk, self.scale)
         else:
@@ -1193,9 +1154,71 @@ class WanVAE:
 
         return encoded.squeeze(0)
 
+    def encode_dist_2d(self, video, world_size_h, world_size_w, cur_rank_h, cur_rank_w):
+        spatial_ratio = 8
+        total_latent_h = video.shape[3] // spatial_ratio
+        total_latent_w = video.shape[4] // spatial_ratio
+        chunk_h = total_latent_h // world_size_h
+        chunk_w = total_latent_w // world_size_w
+        padding_size = 1
+        video_chunk_h = chunk_h * spatial_ratio
+        video_chunk_w = chunk_w * spatial_ratio
+        video_padding_h = padding_size * spatial_ratio
+        video_padding_w = padding_size * spatial_ratio
+
+        if cur_rank_h == 0:
+            h_start, h_end = 0, video_chunk_h + 2 * video_padding_h
+        elif cur_rank_h == world_size_h - 1:
+            h_start, h_end = video.shape[3] - (video_chunk_h + 2 * video_padding_h), video.shape[3]
+        else:
+            h_start = cur_rank_h * video_chunk_h - video_padding_h
+            h_end = (cur_rank_h + 1) * video_chunk_h + video_padding_h
+
+        if cur_rank_w == 0:
+            w_start, w_end = 0, video_chunk_w + 2 * video_padding_w
+        elif cur_rank_w == world_size_w - 1:
+            w_start, w_end = video.shape[4] - (video_chunk_w + 2 * video_padding_w), video.shape[4]
+        else:
+            w_start = cur_rank_w * video_chunk_w - video_padding_w
+            w_end = (cur_rank_w + 1) * video_chunk_w + video_padding_w
+
+        video_chunk = video[:, :, :, h_start:h_end, w_start:w_end].contiguous()
+        video_chunk = video_chunk.to(device=self.current_device(), dtype=self.dtype)
+        return self._encode_dist_2d_local_chunk(
+            video_chunk,
+            chunk_h,
+            chunk_w,
+            padding_size,
+            world_size_h,
+            world_size_w,
+            cur_rank_h,
+            cur_rank_w,
+        )
+
+    def encode_local_2d(self, video_chunk, chunk_h, chunk_w, padding_size, world_size_h, world_size_w, cur_rank_h, cur_rank_w):
+        """Encode a spatially sharded video prepared by the runner."""
+        if self.cpu_offload:
+            self.to_cuda()
+
+        video_chunk = video_chunk.to(device=self.current_device(), dtype=self.dtype)
+        out = self._encode_dist_2d_local_chunk(
+            video_chunk,
+            chunk_h,
+            chunk_w,
+            padding_size,
+            world_size_h,
+            world_size_w,
+            cur_rank_h,
+            cur_rank_w,
+        )
+
+        if self.cpu_offload:
+            self.to_cpu()
+        return out
+
     def encode(self, video, world_size_h=None, world_size_w=None):
         """
-        video: one video  with shape [1, C, T, H, W].
+        video: one video with shape [1, C, T, H, W].
         """
         if self.cpu_offload:
             self.to_cuda()
@@ -1207,7 +1230,7 @@ class WanVAE:
 
             if self.use_2d_split:
                 if world_size_h is None or world_size_w is None:
-                    world_size_h, world_size_w = self._calculate_2d_grid(height // 8, width // 8, world_size)
+                    world_size_h, world_size_w = self.calculate_2d_grid(height // 8, width // 8, world_size)
                 cur_rank_h = cur_rank // world_size_w
                 cur_rank_w = cur_rank % world_size_w
                 out = self.encode_dist_2d(video, world_size_h, world_size_w, cur_rank_h, cur_rank_w)
@@ -1219,11 +1242,13 @@ class WanVAE:
                     out = self.encode_dist(video, world_size, cur_rank, split_dim=3)
                 else:
                     logger.info("Fall back to naive encode mode")
+                    video = video.to(device=self.current_device(), dtype=self.dtype)
                     if self.use_tiling:
                         out = self.model.tiled_encode(video, self.scale).squeeze(0)
                     else:
                         out = self.model.encode(video, self.scale).squeeze(0)
         else:
+            video = video.to(device=self.current_device(), dtype=self.dtype)
             if self.use_tiling:
                 out = self.model.tiled_encode(video, self.scale).squeeze(0)
             else:
@@ -1538,7 +1563,7 @@ class WanVAE:
             latent_height, latent_width = zs.shape[2], zs.shape[3]
 
             if self.use_2d_split:
-                world_size_h, world_size_w = self._calculate_2d_grid(latent_height, latent_width, world_size)
+                world_size_h, world_size_w = self.calculate_2d_grid(latent_height, latent_width, world_size)
                 cur_rank_h = cur_rank // world_size_w
                 cur_rank_w = cur_rank % world_size_w
                 images = self.decode_dist_2d(zs, world_size_h, world_size_w, cur_rank_h, cur_rank_w)
@@ -1570,7 +1595,7 @@ class WanVAE:
             cur_rank = dist.get_rank()
             latent_height, latent_width = zs.shape[2], zs.shape[3]
 
-            world_size_h, world_size_w = self._calculate_2d_grid(latent_height, latent_width, world_size)
+            world_size_h, world_size_w = self.calculate_2d_grid(latent_height, latent_width, world_size)
             cur_rank_h = cur_rank // world_size_w
             cur_rank_w = cur_rank % world_size_w
 
@@ -1595,7 +1620,7 @@ class WanVAE:
             cur_rank = dist.get_rank()
             latent_height, latent_width = zs.shape[2], zs.shape[3]
 
-            world_size_h, world_size_w = self._calculate_2d_grid(latent_height, latent_width, world_size)
+            world_size_h, world_size_w = self.calculate_2d_grid(latent_height, latent_width, world_size)
             cur_rank_h = cur_rank // world_size_w
             cur_rank_w = cur_rank % world_size_w
             for images in self.decode_dist_2d_stream(zs, world_size_h, world_size_w, cur_rank_h, cur_rank_w):

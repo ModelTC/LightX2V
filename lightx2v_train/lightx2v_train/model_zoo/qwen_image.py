@@ -71,7 +71,7 @@ class QwenImageModel(BaseModel):
         ]
 
     def encode_to_latent(self, sample):
-        image = sample["target_image"].to(device=self.device, dtype=self.running_dtype)
+        image = sample["inputs"]["target_image"].to(device=self.device, dtype=self.running_dtype)
         pixel_values = image.unsqueeze(2)
         latent = self.vae.encode(pixel_values).latent_dist.sample()  # (B, C, T, H, W)
 
@@ -80,7 +80,7 @@ class QwenImageModel(BaseModel):
         return (latent - latent_mean) * latent_std
 
     def encode_condition(self, sample):
-        prompt = sample["prompt"]
+        prompt = sample["conditioning"]["prompt"]
         return self.encode_prompt_condition(prompt)
 
     def encode_prompt_condition(self, prompt):

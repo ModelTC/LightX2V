@@ -13,6 +13,7 @@
     "audio_fps": 24000,
     "audio_mel_bins":16,
     "double_precision_rope": true,
+    "rope_type": "torch_real_rope",
     "use_tiling_vae": false,
-    "dit_original_ckpt": "Lightricks/LTX-2/ltx-2-19b-dev.safetensors"
+    "dit_original_ckpt": "/LTX-2/ltx-2-19b-dev.safetensors"
 }

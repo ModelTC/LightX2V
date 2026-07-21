@@ -59,6 +59,17 @@ INFERENCER_REGISTER = Register()
 DATA_REGISTER = Register()
 
 
+def _ensure_data_registered(data_name):
+    if data_name in DATA_REGISTER:
+        return
+    if data_name == "image_dataset":
+        import lightx2v_train.data.image_dataset  # noqa: F401
+    elif data_name == "libero_fastwam_dataset":
+        import lightx2v_train.data.libero.dataset  # noqa: F401
+    elif data_name in {"latent_dataset", "prompt_dataset", "video_dataset"}:
+        import lightx2v_train.data.video_dataset  # noqa: F401
+
+
 def build_model(config):
     name = config["model"]["name"]
     if name not in MODEL_REGISTER:
@@ -90,6 +101,7 @@ def build_data(config, train_or_val):
         raise ValueError(f"config['data'] has no key {train_or_val!r}. Available keys: {available_splits}")
     data_config_split = data_config[train_or_val]
     data_name = data_config_split.get("name", "image_dataset")
+    _ensure_data_registered(data_name)
     if data_name not in DATA_REGISTER:
         available_names = ", ".join(sorted(DATA_REGISTER.keys()))
         raise ValueError(f"Unknown data {data_name!r}. Available data: {available_names}")

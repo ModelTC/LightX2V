@@ -37,6 +37,7 @@ from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import T2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -73,12 +74,125 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
 
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
+    _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
+    _WARMUP_TASKS = ("t2v", "i2v", "flf2v")
+
     def __init__(self, config):
         super().__init__(config)
         self.vae_cls = WanVAE
         self.tiny_vae_cls = WanVAE_tiny
         self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
+
+    @ProfilingContext4DebugL1("Warmup")
+    def run_warmup(self):
+        if self.config.get("task") not in self._WARMUP_TASKS:
+            logger.warning(f"Warmup is not implemented for {self.config.get('task')}")
+            return
+
+        if not self.config.get("lazy_load", False):
+            return self._run_warmup()
+
+        # Lazy-load warmup.
+        try:
+            self.model = self.load_transformer()
+            self.model.set_scheduler(self.scheduler)
+            self._run_warmup()
+        finally:
+            self.clean_lazy_load_warmup()
+
+    def _run_warmup(self):
+        input_info = T2VInputInfo(prompt="warmup", prompt_enhanced="warmup")
+        inputs = {"text_encoder_output": self.run_text_encoder(input_info)}
+        scheduler = self.model.scheduler
+        original_generator = scheduler.generator
+        original_guide_scale = scheduler.sample_guide_scale
+
+        try:
+            for height, width in self._WARMUP_RESOLUTIONS:
+                latent_shape = self.get_warmup_latent_shape(height, width)
+                inputs["image_encoder_output"] = self.get_warmup_image_encoder_output(latent_shape)
+                logger.info(f"Warmup: {height}x{width}")
+                try:
+                    scheduler.generator = None
+                    scheduler.prepare(seed=input_info.seed, latent_shape=latent_shape, image_encoder_output=inputs["image_encoder_output"])
+                    if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
+                        inputs["image_encoder_output"]["vae_encoder_out"] = None
+                    try:
+                        for step_index in self.get_warmup_step_indices(scheduler):
+                            scheduler.step_pre(step_index=step_index)
+                            self.model.infer(inputs)
+                    finally:
+                        if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
+                            for model in filter(None, self.get_warmup_models()):
+                                model.to_cpu()
+                    self.run_vae_decoder(scheduler.latents)
+                    torch_device_module.synchronize()
+                finally:
+                    self.clear_warmup_state()
+                    inputs.pop("image_encoder_output", None)
+        finally:
+            scheduler.generator = original_generator
+            scheduler.sample_guide_scale = original_guide_scale
+            del inputs
+            self._maybe_freeze_gc()
+
+        logger.info("Warmup completed")
+
+    def get_warmup_latent_shape(self, target_height, target_width):
+        _, stride_h, stride_w = self.config["vae_stride"]
+        _, patch_h, patch_w = self.config.get("patch_size", (1, 2, 2))
+        latent_h = max(1, target_height // stride_h // patch_h) * patch_h
+        latent_w = max(1, target_width // stride_w // patch_w) * patch_w
+        return self.get_latent_shape_with_lat_hw(latent_h, latent_w)
+
+    def get_warmup_step_indices(self, scheduler):
+        return (0,)
+
+    def get_warmup_models(self):
+        return (self.model,)
+
+    def get_warmup_image_encoder_output(self, latent_shape):
+        task = self.config["task"]
+        if task == "t2v":
+            return None
+
+        _, stride_h, stride_w = self.config["vae_stride"]
+        first_frame = torch.zeros(
+            1,
+            3,
+            latent_shape[-2] * stride_h,
+            latent_shape[-1] * stride_w,
+            device=self.init_device,
+        )
+        last_frame = torch.zeros_like(first_frame) if task == "flf2v" else None
+        clip_encoder_out = self.run_image_encoder(first_frame, last_frame) if self.config.get("use_image_encoder", True) else None
+        vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_shape[-2], latent_shape[-1], last_frame)
+        return {
+            "clip_encoder_out": clip_encoder_out,
+            "vae_encoder_out": vae_encoder_out,
+        }
+
+    def clear_warmup_state(self):
+        scheduler = self.model.scheduler
+        for name in ("latents", "noise_pred", "noise_pred_cond", "noise_pred_uncond", "noise_pred_guided", "vae_encoder_out", "mask"):
+            setattr(scheduler, name, None)
+
+    def clean_lazy_load_warmup(self):
+        models = tuple(filter(None, self.get_warmup_models())) if getattr(self, "model", None) is not None else ()
+
+        if models:
+            torch_device_module.synchronize()
+        for model in models:
+            transformer_infer = getattr(model, "transformer_infer", None)
+            if hasattr(transformer_infer, "offload_manager"):
+                del transformer_infer.offload_manager
+        self.model = None
+        for name in ("text_encoders", "image_encoder", "vae_encoder", "vae_decoder"):
+            if hasattr(self, name):
+                delattr(self, name)
+        gc.collect()
+        torch_device_module.empty_cache()
 
     def load_transformer(self):
         wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
@@ -494,6 +608,115 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
         return latent_h + pad_h, latent_w + pad_w, world_size_h, world_size_w
 
+    @staticmethod
+    def _get_vae_encode_2d_plan(video_height, video_width, world_size_h, world_size_w, cur_rank):
+        spatial_ratio = 8
+        latent_h = video_height // spatial_ratio
+        latent_w = video_width // spatial_ratio
+
+        if world_size_h * world_size_w <= cur_rank:
+            raise ValueError(f"Rank {cur_rank} is outside the {world_size_h}x{world_size_w} VAE parallel grid")
+        if latent_h % world_size_h != 0 or latent_w % world_size_w != 0:
+            raise ValueError(f"VAE input latent shape {latent_h}x{latent_w} is not divisible by the {world_size_h}x{world_size_w} parallel grid")
+
+        chunk_h = latent_h // world_size_h
+        chunk_w = latent_w // world_size_w
+        padding_size = 1
+        video_chunk_h = chunk_h * spatial_ratio
+        video_chunk_w = chunk_w * spatial_ratio
+        video_padding = padding_size * spatial_ratio
+        cur_rank_h = cur_rank // world_size_w
+        cur_rank_w = cur_rank % world_size_w
+
+        if world_size_h == 1:
+            h_start, h_end = 0, video_height
+        elif cur_rank_h == 0:
+            h_start, h_end = 0, video_chunk_h + 2 * video_padding
+        elif cur_rank_h == world_size_h - 1:
+            h_start, h_end = video_height - (video_chunk_h + 2 * video_padding), video_height
+        else:
+            h_start = cur_rank_h * video_chunk_h - video_padding
+            h_end = (cur_rank_h + 1) * video_chunk_h + video_padding
+
+        if world_size_w == 1:
+            w_start, w_end = 0, video_width
+        elif cur_rank_w == 0:
+            w_start, w_end = 0, video_chunk_w + 2 * video_padding
+        elif cur_rank_w == world_size_w - 1:
+            w_start, w_end = video_width - (video_chunk_w + 2 * video_padding), video_width
+        else:
+            w_start = cur_rank_w * video_chunk_w - video_padding
+            w_end = (cur_rank_w + 1) * video_chunk_w + video_padding
+
+        return {
+            "h_start": h_start,
+            "h_end": h_end,
+            "w_start": w_start,
+            "w_end": w_end,
+            "chunk_h": chunk_h,
+            "chunk_w": chunk_w,
+            "padding_size": padding_size,
+            "world_size_h": world_size_h,
+            "world_size_w": world_size_w,
+            "cur_rank_h": cur_rank_h,
+            "cur_rank_w": cur_rank_w,
+        }
+
+    def _resolve_vae_encode_grid(self, latent_h, latent_w):
+        if not getattr(self.vae_encoder, "parallel", False) or not getattr(self.vae_encoder, "use_2d_split", False) or not dist.is_initialized() or dist.get_world_size() <= 1:
+            return None, None
+
+        world_size = dist.get_world_size()
+        world_size_h, world_size_w = self.vae_encoder.calculate_2d_grid(latent_h, latent_w, world_size)
+        if world_size_h * world_size_w != world_size or latent_h % world_size_h != 0 or latent_w % world_size_w != 0:
+            raise ValueError(f"VAE grid {world_size_h}x{world_size_w} cannot split latent shape {latent_h}x{latent_w} across {world_size} ranks")
+        return world_size_h, world_size_w
+
+    def _build_vae_encoder_input(self, first_frame, last_frame, height, width, world_size_h, world_size_w):
+        first_frame = torch.nn.functional.interpolate(first_frame.cpu(), size=(height, width), mode="bicubic")
+        if last_frame is not None:
+            last_frame = torch.nn.functional.interpolate(last_frame.cpu(), size=(height, width), mode="bicubic")
+
+        plan = None
+        if (
+            getattr(self.vae_encoder, "parallel", False)
+            and getattr(self.vae_encoder, "use_2d_split", False)
+            and dist.is_initialized()
+            and dist.get_world_size() > 1
+            and world_size_h is not None
+            and world_size_w is not None
+        ):
+            if world_size_h * world_size_w != dist.get_world_size():
+                raise ValueError(f"VAE parallel grid {world_size_h}x{world_size_w} does not match world size {dist.get_world_size()}")
+            plan = self._get_vae_encode_2d_plan(height, width, world_size_h, world_size_w, dist.get_rank())
+            h_start, h_end = plan["h_start"], plan["h_end"]
+            w_start, w_end = plan["w_start"], plan["w_end"]
+        else:
+            h_start, h_end = 0, height
+            w_start, w_end = 0, width
+
+        target_video_length = self.config["target_video_length"]
+        if target_video_length < 1:
+            raise ValueError(f"target_video_length must be positive, got {target_video_length}")
+        if last_frame is not None and target_video_length < 2:
+            raise ValueError("target_video_length must be at least 2 when last_frame is provided")
+
+        vae_dtype = self.vae_encoder.dtype
+        vae_input = torch.zeros(
+            first_frame.shape[0],
+            first_frame.shape[1],
+            target_video_length,
+            h_end - h_start,
+            w_end - w_start,
+            device=AI_DEVICE,
+            dtype=vae_dtype,
+        )
+        vae_input[:, :, 0] = first_frame[:, :, h_start:h_end, w_start:w_end].to(device=AI_DEVICE, dtype=vae_dtype)
+        if last_frame is not None:
+            vae_input[:, :, -1] = last_frame[:, :, h_start:h_end, w_start:w_end].to(device=AI_DEVICE, dtype=vae_dtype)
+
+        return vae_input, plan
+
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",
         recorder_mode=GET_RECORDER_MODE(),
@@ -516,13 +739,11 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 logger.info(f"ori latent: {ori_latent_h}x{ori_latent_w}, adjust_latent: {latent_h}x{latent_w}, grid: {world_size_h}x{world_size_w}")
             else:
                 latent_h, latent_w = ori_latent_h, ori_latent_w
-                world_size_h, world_size_w = None, None
 
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)  # Important: latent_shape is used to set the input_info
         else:
             latent_shape = self.input_info.latent_shape
             latent_h, latent_w = self.input_info.latent_shape[-2], self.input_info.latent_shape[-1]
-            world_size_h, world_size_w = None, None
 
         if self.config.get("changing_resolution", False):
             assert last_frame is None
@@ -532,8 +753,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
                     int(latent_h * self.config["resolution_rate"][i]) // 2 * 2,
                     int(latent_w * self.config["resolution_rate"][i]) // 2 * 2,
                 )
-                vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h_tmp, latent_w_tmp, world_size_h=world_size_h, world_size_w=world_size_w))
-            vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h, latent_w, world_size_h=world_size_h, world_size_w=world_size_w))
+                vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h_tmp, latent_w_tmp))
+            vae_encode_out_list.append(self.get_vae_encoder_output(first_frame, latent_h, latent_w))
             return vae_encode_out_list, latent_shape
         else:
             if last_frame is not None:
@@ -546,12 +767,16 @@ class WanRunner(DisaggMixin, DefaultRunner):
                         round(last_frame_size[1] * last_frame_resize_ratio),
                     ]
                     last_frame = TF.center_crop(last_frame, last_frame_size)
-            vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_h, latent_w, last_frame, world_size_h=world_size_h, world_size_w=world_size_w)
+            vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_h, latent_w, last_frame)
             return vae_encoder_out, latent_shape
 
-    def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None, world_size_h=None, world_size_w=None):
+    def get_vae_encoder_output(self, first_frame, lat_h, lat_w, last_frame=None):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae_encoder = self.load_vae_encoder()
+
         h = lat_h * self.config["vae_stride"][1]
         w = lat_w * self.config["vae_stride"][2]
+        world_size_h, world_size_w = self._resolve_vae_encode_grid(lat_h, lat_w)
         msk = torch.ones(
             1,
             self.config["target_video_length"],
@@ -568,28 +793,20 @@ class WanRunner(DisaggMixin, DefaultRunner):
         msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
         msk = msk.transpose(1, 2)[0]
 
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.vae_encoder = self.load_vae_encoder()
-
-        if last_frame is not None:
-            vae_input = torch.concat(
-                [
-                    torch.nn.functional.interpolate(first_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                    torch.zeros(3, self.config["target_video_length"] - 2, h, w),
-                    torch.nn.functional.interpolate(last_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                ],
-                dim=1,
-            ).to(AI_DEVICE)
+        vae_input, encode_plan = self._build_vae_encoder_input(first_frame, last_frame, h, w, world_size_h, world_size_w)
+        if encode_plan is None:
+            vae_encoder_out = self.vae_encoder.encode(vae_input, world_size_h=world_size_h, world_size_w=world_size_w)
         else:
-            vae_input = torch.concat(
-                [
-                    torch.nn.functional.interpolate(first_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-                    torch.zeros(3, self.config["target_video_length"] - 1, h, w),
-                ],
-                dim=1,
-            ).to(AI_DEVICE)
-
-        vae_encoder_out = self.vae_encoder.encode(vae_input.unsqueeze(0).to(GET_DTYPE()), world_size_h=world_size_h, world_size_w=world_size_w)
+            vae_encoder_out = self.vae_encoder.encode_local_2d(
+                vae_input,
+                chunk_h=encode_plan["chunk_h"],
+                chunk_w=encode_plan["chunk_w"],
+                padding_size=encode_plan["padding_size"],
+                world_size_h=encode_plan["world_size_h"],
+                world_size_w=encode_plan["world_size_w"],
+                cur_rank_h=encode_plan["cur_rank_h"],
+                cur_rank_w=encode_plan["cur_rank_w"],
+            )
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
@@ -743,6 +960,24 @@ class Wan22MoeRunner(WanRunner):
             if not os.path.isdir(self.low_noise_model_path):
                 raise FileNotFoundError(f"Low Noise Model does not find")
 
+    def get_warmup_step_indices(self, scheduler):
+        timesteps = scheduler.timesteps
+        boundary = self.model.boundary_timestep
+        high_noise_steps = torch.nonzero(timesteps >= boundary, as_tuple=True)[0]
+        low_noise_steps = torch.nonzero(timesteps < boundary, as_tuple=True)[0]
+        return high_noise_steps[0].item(), low_noise_steps[0].item()
+
+    def get_warmup_models(self):
+        return tuple(self.model.model)
+
+    def clear_warmup_state(self):
+        super().clear_warmup_state()
+        scheduler = self.model.scheduler
+        scheduler.step_index = 0
+        scheduler.infer_condition = True
+        scheduler.timestep_input = None
+        self.model.cur_model_index = -1
+
     def load_transformer(self):
         # encoder -> high_noise_model -> low_noise_model -> vae -> video_output
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
@@ -876,6 +1111,23 @@ class Wan22DenseRunner(WanRunner):
             return self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)
         return self.vae_cls(**self._build_wan22_vae_config(vae_offload))
 
+    def get_warmup_image_encoder_output(self, latent_shape):
+        if self.config["task"] == "t2v":
+            return None
+
+        _, stride_h, stride_w = self.config["vae_stride"]
+        first_frame = torch.zeros(
+            3,
+            1,
+            latent_shape[-2] * stride_h,
+            latent_shape[-1] * stride_w,
+            device=AI_DEVICE,
+        )
+        return {
+            "clip_encoder_out": self.run_image_encoder(first_frame[:, 0].unsqueeze(0)) if self.config.get("use_image_encoder", False) else None,
+            "vae_encoder_out": self.get_vae_encoder_output(first_frame),
+        }
+
     @ProfilingContext4DebugL1(
         "Run VAE Encoder",
         recorder_mode=GET_RECORDER_MODE(),
@@ -905,8 +1157,16 @@ class Wan22DenseRunner(WanRunner):
         return vae_encoder_out, latent_shape
 
     def get_vae_encoder_output(self, img):
-        z = self.vae_encoder.encode(img.unsqueeze(0).to(GET_DTYPE()))
-        return z
+        transient = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
+        if transient:
+            self.vae_encoder = self.load_vae_encoder()
+        try:
+            return self.vae_encoder.encode(img.unsqueeze(0).to(device=AI_DEVICE, dtype=GET_DTYPE()))
+        finally:
+            if transient:
+                del self.vae_encoder
+                gc.collect()
+                torch_device_module.empty_cache()
 
 
 @RUNNER_REGISTER("lingbot_world")

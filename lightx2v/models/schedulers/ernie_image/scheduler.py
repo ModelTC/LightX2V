@@ -34,9 +34,8 @@ class ErnieImageScheduler(BaseScheduler):
             1.0,
             0.0,
             self.config["infer_steps"] + 1,
-            device=AI_DEVICE,
             dtype=torch.float32,
-        )
+        ).tolist()
         self.scheduler.set_timesteps(sigmas=sigmas[:-1], device=AI_DEVICE)
         self.timesteps = self.scheduler.timesteps
         self.infer_steps = len(self.timesteps)

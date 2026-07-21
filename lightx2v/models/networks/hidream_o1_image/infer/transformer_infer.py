@@ -2,20 +2,11 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.models.networks.hidream_o1_image.infer.module_io import HidreamTransformerInferOutput
-from lightx2v.models.networks.hidream_o1_image.infer.rope import apply_hidream_rope_with_flashinfer, apply_hidream_rope_with_torch
 
 
 class HidreamO1ImageTransformerInfer:
     def __init__(self, config):
         self.config = config
-        rope_type = config.get("rope_type", "flashinfer")
-        rope_funcs = {
-            "flashinfer": apply_hidream_rope_with_flashinfer,
-            "torch": apply_hidream_rope_with_torch,
-        }
-        if rope_type not in rope_funcs:
-            raise ValueError(f"Unsupported HiDream rope_type={rope_type!r}. Supported values: {sorted(rope_funcs)}")
-        self.apply_rope_func = rope_funcs[rope_type]
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
@@ -26,6 +17,10 @@ class HidreamO1ImageTransformerInfer:
             self.seq_p_fp8_comm = False
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
+
+    def _apply_rope(self, rope, q, k, rope_cos_sin):
+        positions = rope_cos_sin[2] if len(rope_cos_sin) > 2 else None
+        return rope.apply(q, k, tuple(rope_cos_sin[:2]), positions=positions, unsqueeze_dim=-2)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -173,7 +168,7 @@ class HidreamO1ImageTransformerInfer:
         v = weights.v_proj.apply(flat_hidden).reshape(batch, seq_len, weights.kv_heads, weights.head_dim)
         q = weights.q_norm.apply(q)
         k = weights.k_norm.apply(k)
-        q, k = self.apply_rope_func(q, k, rope_cos_sin)
+        q, k = self._apply_rope(weights.rope, q, k, rope_cos_sin)
         return q, k, v
 
     def _two_pass_attn(self, weights, q, k, v, idx_ar):

@@ -13,8 +13,10 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
     import sgl_kernel
+    from sgl_kernel.utils import is_arch_support_pdl
 except ImportError:
     sgl_kernel = None
+    is_arch_support_pdl = None
 
 try:
     from magi_compiler import magi_register_custom_op
@@ -68,6 +70,8 @@ class RMSWeightTemplate(metaclass=ABCMeta):
     def _get_actual_weight(self):
         if not hasattr(self, "weight_diff"):
             return self.weight
+        if self.weight_diff.device != self.weight.device or self.weight_diff.dtype != self.weight.dtype:
+            self.weight_diff = self.weight_diff.to(device=self.weight.device, dtype=self.weight.dtype)
         return self.weight + self.weight_diff
 
     def register_diff(self, weight_dict):
@@ -268,13 +272,19 @@ class RMSWeightSgl(RMSWeight):
             lora_prefix,
             lora_path,
         )
+        self.enable_pdl = is_arch_support_pdl() if is_arch_support_pdl is not None else False
 
     def apply(self, input_tensor):
         if sgl_kernel is not None and self.sensitive_layer_dtype == self.infer_dtype:
             input_tensor = input_tensor.contiguous()
             orig_shape = input_tensor.shape
             input_tensor = input_tensor.view(-1, orig_shape[-1])
-            input_tensor = sgl_kernel.rmsnorm(input_tensor, (self._get_actual_weight()), self.eps).view(orig_shape)
+            input_tensor = sgl_kernel.rmsnorm(
+                input_tensor,
+                self._get_actual_weight(),
+                self.eps,
+                enable_pdl=self.enable_pdl,
+            ).view(orig_shape)
         else:
             # sgl_kernel is not available or dtype!=torch.bfloat16/float16, fallback to default implementation
             if self.sensitive_layer_dtype != self.infer_dtype:

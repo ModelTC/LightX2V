@@ -6,6 +6,10 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from lightx2v.common.ops.rope import TorchRealRope
+
+_WORLDMIRROR_NORMALIZED_ROPE = TorchRealRope(layout="split_half")
+
 
 class PositionGetter:
     """Generates and caches 2D spatial positions for patches in a grid."""
@@ -21,11 +25,6 @@ class PositionGetter:
 
         cached_positions = self.position_cache[height, width]
         return cached_positions.view(1, height * width, 2).expand(batch_size, -1, -1).clone()
-
-
-def _rotate_half(x: torch.Tensor) -> torch.Tensor:
-    x1, x2 = x.chunk(2, dim=-1)
-    return torch.cat((-x2, x1), dim=-1)
 
 
 class NormalizedRotaryPositionEmbedding2D(nn.Module):
@@ -136,4 +135,4 @@ class NormalizedRotaryPositionEmbedding2D(nn.Module):
         flat_indices = indices.view(-1)
         gathered_sin = sin[flat_indices].view(B, 1, N, C_head)
         gathered_cos = cos[flat_indices].view(B, 1, N, C_head)
-        return (tokens * gathered_cos) + (_rotate_half(tokens) * gathered_sin)
+        return _WORLDMIRROR_NORMALIZED_ROPE.apply_single(tokens, (gathered_cos, gathered_sin))

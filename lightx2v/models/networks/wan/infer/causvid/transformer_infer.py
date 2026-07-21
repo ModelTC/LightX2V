@@ -5,7 +5,7 @@ import torch
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import *
 
-from ..utils import apply_rotary_emb, compute_freqs_causvid
+from ..utils import compute_freqs_causvid
 
 
 class WanTransformerInferCausVid(WanOffloadTransformerInfer):
@@ -48,7 +48,6 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
 
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
         self.get_scheduler_values()
-        self.reset_infer_states()
         return self.infer_func(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end)
 
     def _infer_with_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
@@ -96,7 +95,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
         return x
 
     def infer_self_attn(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx, kv_start, kv_end):
-        norm1_out = torch.nn.functional.layer_norm(x, (x.shape[1],), None, None, 1e-6)
+        norm1_out = weights.norm1.apply(x)
         norm1_out = (norm1_out * (1 + embed0[1]) + embed0[0]).squeeze(0)
 
         s, n, d = *norm1_out.shape[:1], self.num_heads, self.head_dim
@@ -110,8 +109,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
             # TODO: Implement parallel attention for causvid inference
             raise NotImplementedError("Parallel attention is not implemented for causvid inference")
 
-        q = apply_rotary_emb(q, freqs_i)
-        k = apply_rotary_emb(k, freqs_i)
+        q, k = weights.rope.apply(q, k, freqs_i)
 
         self.kv_cache[block_idx]["k"][kv_start:kv_end] = k
         self.kv_cache[block_idx]["v"][kv_start:kv_end] = v
@@ -197,7 +195,7 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
         return x
 
     def infer_ffn(self, weights, x, embed0):
-        norm2_out = torch.nn.functional.layer_norm(x, (x.shape[1],), None, None, 1e-6)
+        norm2_out = weights.norm2.apply(x)
         y = weights.ffn_0.apply(norm2_out * (1 + embed0[4].squeeze(0)) + embed0[3].squeeze(0))
         y = torch.nn.functional.gelu(y, approximate="tanh")
         y = weights.ffn_2.apply(y)

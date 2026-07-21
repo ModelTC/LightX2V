@@ -1,3 +1,5 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanFFN,
@@ -8,6 +10,7 @@ from lightx2v.utils.registry_factory import (
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
     TENSOR_REGISTER,
 )
 
@@ -43,7 +46,7 @@ class WanMtxg3TransformerWeights(WeightModule):
         self.add_module("blocks", self.blocks)
 
         # Non-block weights (head)
-        self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
+        self.register_parameter("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
         self.add_module("head", MM_WEIGHT_REGISTER["Default"]("head.head.weight", "head.head.bias"))
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
@@ -77,8 +80,13 @@ class WanMtxg3TransformerBlock(WeightModule):
         self.config = config
         self.has_action = has_action
 
+        self_attn = WanSelfAttention(block_index, block_prefix, task, mm_type, config)
+        self_attn.add_module(
+            "indexed_rope",
+            ROPE_REGISTER[config.get("indexed_rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
         phases = [
-            WanSelfAttention(block_index, block_prefix, task, mm_type, config),
+            self_attn,
             WanMtxg3CamInjection(block_index, block_prefix, mm_type, config),
             WanMtxg3CrossAttention(block_index, block_prefix, task, mm_type, config),
         ]
@@ -154,7 +162,7 @@ class WanMtxg3CrossAttention(WeightModule):
         # norm3 with elementwise_affine=True for cross_attn_norm
         self.add_module(
             "norm3",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{block_index}.norm3.weight",
                 f"{block_prefix}.{block_index}.norm3.bias",
             ),
@@ -219,6 +227,10 @@ class WanMtxg3ActionModule(WeightModule):
         self.block_index = block_index
         self.mm_type = mm_type
         self.config = config
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("action_rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         attn_rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
 
@@ -255,7 +267,7 @@ class WanMtxg3ActionModule(WeightModule):
         )
         self.add_module(
             "mouse_mlp_3",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{block_index}.action_model.mouse_mlp.3.weight",
                 f"{block_prefix}.{block_index}.action_model.mouse_mlp.3.bias",
                 eps=1e-5,

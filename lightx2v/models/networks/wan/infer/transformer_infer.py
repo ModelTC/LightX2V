@@ -1,6 +1,5 @@
-from functools import partial
-
 import torch
+from loguru import logger
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
@@ -9,7 +8,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .mxfp8_fuse import WanMxfp8FuseMixin, scaled_mxfp8_modulate_quant
 from .triton_ops import fuse_scale_shift_kernel
-from .utils import apply_wan_rope_with_chunk, apply_wan_rope_with_flashinfer, apply_wan_rope_with_torch, apply_wan_rope_with_torch_naive
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
@@ -33,29 +31,6 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = modulate
-        rope_funcs = {
-            "flashinfer": apply_wan_rope_with_flashinfer,
-            "torch": apply_wan_rope_with_torch,
-            "torch_naive": apply_wan_rope_with_torch_naive,
-        }
-        rope_type = self.config.get("rope_type", "flashinfer")
-        # Try to get rope function from registry first (for platform-specific implementations)
-        if rope_type in ROPE_REGISTER:
-            rope_class = ROPE_REGISTER[rope_type]
-            self.rope_instance = rope_class()
-
-            # Create a wrapper function that matches the expected signature
-            def rope_wrapper(xq, xk, cos_sin_cache):
-                return self.rope_instance.apply(xq, xk, cos_sin_cache)
-
-            rope_func = rope_wrapper
-        else:
-            # Fallback to hardcoded functions
-            rope_func = rope_funcs.get(rope_type, apply_wan_rope_with_torch)
-        if self.config.get("rope_chunk", False):
-            self.apply_rope_func = partial(apply_wan_rope_with_chunk, chunk_size=self.config.get("rope_chunk_size", 100), rope_func=rope_func)
-        else:
-            self.apply_rope_func = rope_func
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.mxfp8_fuse_enable = self.config.get("mxfp8_fuse_enable", True)
         self.infer_dtype = GET_DTYPE()
@@ -76,6 +51,10 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
+        self.use_compile = config.get("use_compile", False)
+        if self.use_compile:
+            self.compiled_blocks = {}
+            logger.info("Using torch.compile for WanTransformerInfer blocks")
 
         self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
 
@@ -83,11 +62,18 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     def reset_post_adapter_states(self):
         pass
 
-    def reset_infer_states(self):
-        self.self_attn_cu_seqlens_qkv = None
-        self.cross_attn_cu_seqlens_q = None
-        self.cross_attn_cu_seqlens_kv = None
-        self.cross_attn_cu_seqlens_kv_img = None
+    def reset_infer_states(self, x, context):
+        query_len = x.shape[0]
+        context_len = context.shape[0]
+        has_image_context = self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True)
+
+        self.self_attn_cu_seqlens_qkv = torch.tensor([0, query_len], dtype=torch.int32)
+        self.cross_attn_cu_seqlens_q = torch.tensor([0, query_len], dtype=torch.int32)
+        if has_image_context:
+            self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, 257], dtype=torch.int32)
+            context_len -= 257
+        self.cross_attn_cu_seqlens_kv = torch.tensor([0, context_len], dtype=torch.int32)
+
         if self.has_post_adapter:
             self.reset_post_adapter_states()
 
@@ -101,7 +87,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
-        self.reset_infer_states()
+        self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
         self.reset_attention_states(weights.blocks)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
@@ -134,10 +120,26 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             torch_device_module.empty_cache()
         return x
 
+    def get_compiled_block(self, block_idx, block):
+        cached = self.compiled_blocks.get(block_idx)
+        if cached is not None and cached[0] is block:
+            return cached[1]
+
+        def block_runner(x, pre_infer_out):
+            return self.infer_block(block, x, pre_infer_out)
+
+        compiled = torch.compile(block_runner, dynamic=None)
+        self.compiled_blocks[block_idx] = (block, compiled)
+        return compiled
+
     def infer_without_offload(self, blocks, x, pre_infer_out):
-        for block_idx in range(len(blocks)):
+        for block_idx, block in enumerate(blocks):
             self.block_idx = block_idx
-            x = self.infer_block(blocks[block_idx], x, pre_infer_out)
+            if self.use_compile:
+                compiled_block = self.get_compiled_block(block_idx, block)
+                x = compiled_block(x, pre_infer_out)
+            else:
+                x = self.infer_block(block, x, pre_infer_out)
         return x
 
     def infer_block(self, block, x, pre_infer_out):
@@ -226,10 +228,8 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
             k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
             v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
-        q, k = self.apply_rope_func(q, k, cos_sin)
+        q, k = phase.rope.apply(q, k, cos_sin)
         img_qkv_len = q.shape[0]
-        if self.self_attn_cu_seqlens_qkv is None:
-            self.self_attn_cu_seqlens_qkv = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
 
         if self.clean_cuda_cache:
             del norm1_out, shift_msa, scale_msa
@@ -301,10 +301,6 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
         v = phase.cross_attn_v.apply(context).view(-1, n, d)
 
-        if self.cross_attn_cu_seqlens_q is None:
-            self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
-        if self.cross_attn_cu_seqlens_kv is None:
-            self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32)
         attn_out = phase.cross_attn_1.apply(
             q=q,
             k=k,
@@ -318,9 +314,6 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
             k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
-
-            if self.cross_attn_cu_seqlens_kv_img is None:
-                self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32)
 
             img_attn_out = phase.cross_attn_2.apply(
                 q=q,

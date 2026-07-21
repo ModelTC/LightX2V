@@ -28,7 +28,9 @@ def main():
         model.load_components()
 
         dataloader_train = build_data(config, train_or_val="train")
-        dataloader_eval = build_data(config, train_or_val="val")
+        dataloader_eval = None
+        if config.get("inference", {}).get("infer_every_iters", None):
+            dataloader_eval = build_data(config, train_or_val="val")
 
         trainer = build_trainer(config)
         trainer.set_model(model)

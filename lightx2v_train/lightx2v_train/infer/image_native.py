@@ -16,7 +16,7 @@ class NativeImageInferencer(BaseInferencer):
         if is_distributed():
             raise NotImplementedError("image_native_infer is not supported with torchrun. Use image_infer instead.")
 
-        prompts = [sample["prompt"] for sample in self.dataloader_eval.dataset.samples]
+        prompts = [record["prompt"] for record in self.dataloader_eval.dataset.samples]
         enable_cfg = self.infer_config.get("enable_cfg", False)
         negative_prompt = self.infer_config.get("negative_prompt", " ") if enable_cfg else None
         base_seed = self.infer_config.get("seed", 42)
@@ -37,7 +37,7 @@ class NativeImageInferencer(BaseInferencer):
         with torch.no_grad():
             for i, prompt in enumerate(prompts):
                 generator = torch.Generator(device=self.model.device).manual_seed(base_seed + i)
-                sample_kwargs = self.model.get_pipeline_sample_kwargs(self.dataloader_eval.dataset.samples[i])
+                sample_kwargs = self.model.get_pipeline_sample_kwargs(self.dataloader_eval.dataset[i])
                 result = pipe(
                     prompt=prompt,
                     negative_prompt=negative_prompt,

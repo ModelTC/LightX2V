@@ -11,7 +11,6 @@ from .triton_ops import (
     fuse_scale_shift_gate_select01_kernel,
     fuse_scale_shift_kernel,
 )
-from .utils import apply_qwen_rope_with_flashinfer, apply_qwen_rope_with_torch, apply_qwen_rope_with_torch_naive
 
 try:
     from magi_compiler import magi_compile
@@ -51,14 +50,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
-        rope_funcs = {
-            "flashinfer": apply_qwen_rope_with_flashinfer,
-            "torch": apply_qwen_rope_with_torch,
-            "torch_naive": apply_qwen_rope_with_torch_naive,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        self.apply_rope_func = rope_funcs.get(rope_type, apply_qwen_rope_with_torch)
-
         self.img_qkv_len1 = None
         self.cu_seqlens_qkv1 = None
         self.img_qkv_len2 = None
@@ -134,7 +125,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         if img_attn_phase.norm_k is not None:
             img_key = img_attn_phase.norm_k.apply(img_key)
 
-        img_query, img_key = self.apply_rope_func(img_query, img_key, img_freqs)
+        img_query, img_key = img_attn_phase.rope.apply(img_query, img_key, img_freqs)
 
         return img_query, img_key, img_value, img_gate1, img_mod2
 
@@ -161,7 +152,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         if txt_attn_phase.norm_added_k is not None:
             txt_key = txt_attn_phase.norm_added_k.apply(txt_key)
 
-        txt_query, txt_key = self.apply_rope_func(txt_query, txt_key, txt_freqs)
+        txt_query, txt_key = txt_attn_phase.rope.apply(txt_query, txt_key, txt_freqs)
 
         return txt_query, txt_key, txt_value, seq_txt, txt_gate1, txt_mod2
 

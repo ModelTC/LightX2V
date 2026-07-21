@@ -1,4 +1,5 @@
 {
+    "causal_rope_type": "wan_causal_rope",
     "infer_steps": 6,
     "target_fps": 16,
     "video_duration": 16,

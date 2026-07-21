@@ -21,22 +21,48 @@ class BaseRunner(ABC):
         self.vae_encoder_need_img_original = False
         self.input_info = None
         self._gc_frozen = False  # one-shot guard for _maybe_freeze_gc()
+        self._init_modules_depth = 0
+        self._warmup_done = False
 
     def __init_subclass__(cls, **kwargs):
-        """Wrap each subclass's ``run_pipeline`` so the one-shot GC freeze fires after it."""
+        """Install common lifecycle hooks around runner entry points."""
         super().__init_subclass__(**kwargs)
-        fn = cls.__dict__.get("run_pipeline")
-        if fn is None or getattr(fn, "_gc_freeze_wrapped", False):
-            return
 
-        @functools.wraps(fn)
-        def run_pipeline(self, *args, **kwargs):
-            result = fn(self, *args, **kwargs)
-            self._maybe_freeze_gc()
-            return result
+        run_pipeline_fn = cls.__dict__.get("run_pipeline")
+        if run_pipeline_fn is not None and not getattr(run_pipeline_fn, "_gc_freeze_wrapped", False):
 
-        run_pipeline._gc_freeze_wrapped = True
-        cls.run_pipeline = run_pipeline
+            @functools.wraps(run_pipeline_fn)
+            def run_pipeline(self, *args, **kwargs):
+                result = run_pipeline_fn(self, *args, **kwargs)
+                self._maybe_freeze_gc()
+                return result
+
+            run_pipeline._gc_freeze_wrapped = True
+            cls.run_pipeline = run_pipeline
+
+        init_modules_fn = cls.__dict__.get("init_modules")
+        if init_modules_fn is not None and not getattr(init_modules_fn, "_warmup_wrapped", False):
+
+            @functools.wraps(init_modules_fn)
+            def init_modules(self, *args, **kwargs):
+                depth = getattr(self, "_init_modules_depth", 0)
+                self._init_modules_depth = depth + 1
+                try:
+                    result = init_modules_fn(self, *args, **kwargs)
+                finally:
+                    self._init_modules_depth = depth
+
+                if depth == 0 and not self._warmup_done:
+                    self.warmup()
+                    self._warmup_done = True
+                return result
+
+            init_modules._warmup_wrapped = True
+            cls.init_modules = init_modules
+
+    def warmup(self):
+        """Optional post-initialization warmup hook."""
+        pass
 
     def _maybe_freeze_gc(self):
         """Move the steady-state object graph into the GC's permanent generation once."""
@@ -337,8 +363,4 @@ class BaseRunner(ABC):
                 print(f"end_run failed: {e}")
             raise Exception(f"find rank: {rank} stop_signal, stop running, it's an expected behavior")
         if paused == 1:
-            try:
-                self.end_run()
-            except Exception as e:
-                print(f"end_run failed: {e}")
             raise Exception(f"find rank: {rank} pause_signal, pause running, it's an expected behavior")

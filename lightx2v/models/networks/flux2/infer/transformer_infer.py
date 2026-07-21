@@ -4,14 +4,20 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .utils import apply_rope_with_flashinfer, apply_rope_with_torch
-
 
 class Flux2TransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
         self.infer_conditional = True
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
+
+        self.tp_group = None
+        self.tp_rank = 0
+        self.tp_size = 1
+        if self.config.get("tensor_parallel", False):
+            self.tp_group = self.config.get("device_mesh").get_group(mesh_dim="tensor_p")
+            self.tp_rank = dist.get_rank(self.tp_group)
+            self.tp_size = dist.get_world_size(self.tp_group)
 
         self.inner_dim = config.get("num_attention_heads", 24) * config.get("attention_head_dim", 64)
 
@@ -25,13 +31,6 @@ class Flux2TransformerInfer(BaseTransformerInfer):
             self.seq_p_fp8_comm = False
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
-
-        rope_funcs = {
-            "flashinfer": apply_rope_with_flashinfer,
-            "torch": apply_rope_with_torch,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        self.apply_rope_func = rope_funcs.get(rope_type, apply_rope_with_torch)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -58,15 +57,15 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         image_rotary_emb,
         img_attn_hook=None,
     ):
-        heads = self.config["num_attention_heads"]
+        heads = self.config["num_attention_heads"] // self.tp_size
         head_dim = self.config["attention_head_dim"]
 
         (shift_msa, scale_msa, gate_msa), (shift_mlp, scale_mlp, gate_mlp) = self._split_double_modulation(temb_mod_img)
         (c_shift_msa, c_scale_msa, c_gate_msa), (c_shift_mlp, c_scale_mlp, c_gate_mlp) = self._split_double_modulation(temb_mod_txt)
-        norm_hidden_states = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states = block_weights.norm1.apply(hidden_states)
         norm_hidden_states = (norm_hidden_states * (1 + scale_msa) + shift_msa).squeeze(0)
 
-        norm_encoder_hidden_states = F.layer_norm(encoder_hidden_states, (encoder_hidden_states.shape[-1],))
+        norm_encoder_hidden_states = block_weights.norm1_context.apply(encoder_hidden_states)
         norm_encoder_hidden_states = (norm_encoder_hidden_states * (1 + c_scale_msa) + c_shift_msa).squeeze(0)
 
         img_query = block_weights.to_q.apply(norm_hidden_states)
@@ -93,7 +92,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         key = torch.cat([txt_key, img_key], dim=0)
         value = torch.cat([txt_value, img_value], dim=0)
 
-        query, key = self.apply_rope_func(query, key, image_rotary_emb)
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb)
 
         total_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
@@ -140,7 +139,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
             img_attn_hook(gated_img_attn)
         hidden_states = hidden_states + gated_img_attn
         encoder_hidden_states = encoder_hidden_states + c_gate_msa * txt_attn_output
-        norm_hidden_states2 = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states2 = block_weights.norm2.apply(hidden_states)
         norm_hidden_states2 = (norm_hidden_states2 * (1 + scale_mlp) + shift_mlp).squeeze(0)
         ff_output = block_weights.ff_net_0.apply(norm_hidden_states2)
         ff_1, ff_2 = ff_output.chunk(2, dim=-1)
@@ -148,7 +147,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         ff_output = block_weights.ff_net_2.apply(ff_output)
         hidden_states = hidden_states + gate_mlp * ff_output
 
-        norm_encoder_hidden_states2 = F.layer_norm(encoder_hidden_states, (encoder_hidden_states.shape[-1],))
+        norm_encoder_hidden_states2 = block_weights.norm2_context.apply(encoder_hidden_states)
         norm_encoder_hidden_states2 = (norm_encoder_hidden_states2 * (1 + c_scale_mlp) + c_shift_mlp).squeeze(0)
         context_ff_output = block_weights.ff_context_net_0.apply(norm_encoder_hidden_states2)
         ctx_ff_1, ctx_ff_2 = context_ff_output.chunk(2, dim=-1)
@@ -169,7 +168,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         image_rotary_emb,
         num_txt_tokens=0,
     ):
-        heads = self.config["num_attention_heads"]
+        heads = self.config["num_attention_heads"] // self.tp_size
         head_dim = self.config["attention_head_dim"]
 
         if encoder_hidden_states is not None:
@@ -179,7 +178,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         shift_msa, scale_msa, gate_msa = self._split_single_modulation(temb_mod)
 
-        norm_combined = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_combined = block_weights.norm.apply(hidden_states)
         norm_combined = (norm_combined * (1 + scale_msa) + shift_msa).squeeze(0)
 
         hidden_states_proj = block_weights.to_qkv_mlp_proj.apply(norm_combined)
@@ -194,7 +193,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         query = block_weights.norm_q.apply(query)
         key = block_weights.norm_k.apply(key)
 
-        query, key = self.apply_rope_func(query, key, image_rotary_emb)
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb)
 
         total_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
