@@ -65,30 +65,15 @@ class WanPreInfer:
             ],
             dim=-1,
         )
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            cos_sin = cos_sin.reshape(seq_len, -1)
-            # Extract cos and sin parts separately and concatenate
-            cos_half = cos_sin.real.contiguous()
-            sin_half = cos_sin.imag.contiguous()
-            cos_sin = torch.cat([cos_half, sin_half], dim=-1)
-            if self.seq_p_group is not None:
-                world_size = dist.get_world_size(self.seq_p_group)
-                cur_rank = dist.get_rank(self.seq_p_group)
-                seqlen = cos_sin.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
-                cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
-        else:
-            cos_sin = cos_sin.reshape(seq_len, 1, -1)
-            if self.seq_p_group is not None:
-                world_size = dist.get_world_size(self.seq_p_group)
-                cur_rank = dist.get_rank(self.seq_p_group)
-                seqlen = cos_sin.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    cos_sin = F.pad(cos_sin, (0, 0, 0, 0, 0, padding_size))
-                cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
+        cos_sin = cos_sin.reshape(seq_len, 1, -1)
+        if self.seq_p_group is not None:
+            world_size = dist.get_world_size(self.seq_p_group)
+            cur_rank = dist.get_rank(self.seq_p_group)
+            seqlen = cos_sin.shape[0]
+            padding_size = (world_size - (seqlen % world_size)) % world_size
+            if padding_size > 0:
+                cos_sin = F.pad(cos_sin, (0, 0, 0, 0, 0, padding_size))
+            cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
         return cos_sin
 
     @torch.no_grad()

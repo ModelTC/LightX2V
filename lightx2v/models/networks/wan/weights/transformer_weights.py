@@ -1,9 +1,13 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
     TENSOR_REGISTER,
 )
 
@@ -141,6 +145,22 @@ class WanTransformerWeights(WeightModule):
         self.head.to_cpu()
         self.head_modulation.to_cpu()
 
+    def iter_self_attention_phases(self):
+        for block in self.blocks:
+            yield block.compute_phases[0]
+        for name in ("offload_block_cuda_buffers", "offload_block_cpu_buffers"):
+            buffers = getattr(self, name, None)
+            if buffers is not None:
+                for block in buffers:
+                    yield block.compute_phases[0]
+        phases = getattr(self, "offload_phase_cuda_buffers", None)
+        if phases is not None:
+            yield phases[0]
+        phase_buffers = getattr(self, "offload_phase_cpu_buffers", None)
+        if phase_buffers is not None:
+            for phases in phase_buffers:
+                yield phases[0]
+
 
 class WanTransformerAttentionBlock(WeightModule):
     def __init__(
@@ -239,6 +259,15 @@ class WanSelfAttention(WeightModule):
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
         self.attn_rms_norm_type = self.config.get("rms_norm_type", "sgl-kernel")
+        rope = ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32)
+        if config.get("rope_chunk", False):
+            rope = ROPE_REGISTER["chunked_rope"](inner=rope, chunk_size=config.get("rope_chunk_size", 100))
+        self.add_module("rope", rope)
+        if config.get("causal_rope_type") is not None:
+            self.add_module(
+                "causal_rope",
+                ROPE_REGISTER[config.get("causal_rope_type", "wan_causal_rope")](layout="interleaved", compute_dtype=torch.float64),
+            )
 
         self.add_module(
             "modulation",

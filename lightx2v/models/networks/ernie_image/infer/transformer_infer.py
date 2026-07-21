@@ -1,4 +1,3 @@
-import torch
 import torch.nn.functional as F
 
 
@@ -11,16 +10,6 @@ class ErnieImageTransformerInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    @staticmethod
-    def _apply_rotary_emb(x_in: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
-        rot_dim = freqs_cis.shape[-1]
-        x, x_pass = x_in[..., :rot_dim], x_in[..., rot_dim:]
-        cos_ = torch.cos(freqs_cis).to(x.dtype)
-        sin_ = torch.sin(freqs_cis).to(x.dtype)
-        x1, x2 = x.chunk(2, dim=-1)
-        x_rotated = torch.cat((-x2, x1), dim=-1)
-        return torch.cat((x * cos_ + x_rotated * sin_, x_pass), dim=-1)
-
     def _attention(self, weights, hidden_states, rotary_pos_emb):
         query = weights.to_q.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
         key = weights.to_k.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
@@ -28,8 +17,12 @@ class ErnieImageTransformerInfer:
 
         query = weights.norm_q.apply(query)
         key = weights.norm_k.apply(key)
-        query = self._apply_rotary_emb(query, rotary_pos_emb)
-        key = self._apply_rotary_emb(key, rotary_pos_emb)
+        query, key = weights.rope.apply(
+            query,
+            key,
+            (rotary_pos_emb.cos(), rotary_pos_emb.sin()),
+            rotary_dim=rotary_pos_emb.shape[-1],
+        )
 
         hidden_states = weights.attn.apply(
             query,

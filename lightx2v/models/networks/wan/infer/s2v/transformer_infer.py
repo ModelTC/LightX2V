@@ -2,7 +2,6 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.models.networks.wan.infer.s2v.audio_inject import apply_audio_inject
-from lightx2v.models.networks.wan.infer.s2v.rope import apply_precomputed_rope
 from lightx2v.models.networks.wan.infer.s2v.wan_ops import (
     cross_attn_forward,
     mm_weight_autocast_nd,
@@ -93,8 +92,7 @@ class WanS2VTransformerInfer(WanTransformerInfer):
             q = wan_rms_norm(phase0.self_attn_norm_q, mm_weight_autocast_nd(phase0.self_attn_q, norm_x)).view(b, s, n, d)
             k = wan_rms_norm(phase0.self_attn_norm_k, mm_weight_autocast_nd(phase0.self_attn_k, norm_x)).view(b, s, n, d)
             v = mm_weight_autocast_nd(phase0.self_attn_v, norm_x).view(b, s, n, d)
-            q = apply_precomputed_rope(q, freqs)
-            k = apply_precomputed_rope(k, freqs)
+            q, k = phase0.s2v_rope.apply(q.float(), k.float(), freqs)
             attn_out = (
                 phase0.self_attn_1_parallel.apply(
                     q=q.squeeze(0).to(self.infer_dtype),
@@ -116,7 +114,7 @@ class WanS2VTransformerInfer(WanTransformerInfer):
             )
             return mm_weight_autocast_nd(phase0.self_attn_o, attn_out)
 
-        return s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, self.num_heads, self.head_dim, apply_precomputed_rope)
+        return s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, self.num_heads, self.head_dim)
 
     @torch.no_grad()
     def infer_s2v_block(self, block, x, pre_infer_out):

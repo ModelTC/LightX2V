@@ -12,7 +12,6 @@ from lightx2v.common.ops.attn.utils.all2all import all2all_seq2head
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import align_hidden_states_and_mask, calculate_n_query_tokens, get_qk_lens_audio_range
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.models.networks.wan.infer.self_forcing.transformer_infer import WanSFTransformerInfer
-from lightx2v.models.networks.wan.infer.triton_ops import apply_audio_cache_rope
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -233,6 +232,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
 
     def _apply_rope_with_cache_range(
         self,
+        phase,
         x,
         freqs,
         h,
@@ -250,38 +250,20 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             max_global_end = int(ref_tokens) + self.rope_max_frames * int(local_per_frame)
             global_end = min(int(global_end), max_global_end)
 
-        orig_dtype = x.dtype
-        if self.config.get("causal_rope_type", "triton") == "triton":
-            return apply_audio_cache_rope(
-                x,
-                freqs,
-                h=h,
-                w=w,
-                token_start=token_start,
-                ref_tokens=ref_tokens,
-                local_per_frame=local_per_frame,
-                world_size=world_size,
-                rank=rank,
-                global_end=global_end,
-                sink_tokens=sink_tokens,
-            ).to(orig_dtype)
-        pos_freqs = self._rope_freqs_for_cache_range(
+        return phase.causal_rope.apply_audio_cache(
+            x,
             freqs,
-            h,
-            w,
-            world_size,
-            rank,
-            token_start,
-            token_end,
-            ref_tokens,
-            local_per_frame,
+            h=h,
+            w=w,
+            world_size=world_size,
+            rank=rank,
+            token_start=token_start,
+            token_end=token_end,
+            ref_tokens=ref_tokens,
+            local_per_frame=local_per_frame,
             global_end=global_end,
             sink_tokens=sink_tokens,
         )
-        n = x.size(1)
-        x_c = torch.view_as_complex(x.float().reshape(x.size(0), n, -1, 2))
-        out = torch.view_as_real(x_c * pos_freqs.to(torch.complex64)).flatten(2)
-        return out.to(orig_dtype)
 
     def infer_block_with_kvcache(self, block, x, pre_infer_out):
         if hasattr(block.compute_phases[0], "before_proj"):
@@ -368,8 +350,8 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
 
         if seq_parallel:
             if replicated_ref_prefill:
-                q_rope = self._apply_rope_with_cache_range(q, freqs, h, w, 1, 0, local_current_start, local_current_end, local_ref_tokens, local_per_frame)
-                k_rope = self._apply_rope_with_cache_range(k, freqs, h, w, 1, 0, local_current_start, local_current_end, local_ref_tokens, local_per_frame)
+                q_rope = self._apply_rope_with_cache_range(phase, q, freqs, h, w, 1, 0, local_current_start, local_current_end, local_ref_tokens, local_per_frame)
+                k_rope = self._apply_rope_with_cache_range(phase, k, freqs, h, w, 1, 0, local_current_start, local_current_end, local_ref_tokens, local_per_frame)
                 shard_heads = self.num_heads // sp_world_size
                 h0 = sp_rank * shard_heads
                 h1 = h0 + shard_heads
@@ -381,7 +363,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 else:
                     ref_num_frames = self.kv_cache_manager.ref_num_frames
                     start_frame = self._global_rope_start_frame(ref_num_frames + segment_idx * frames, frames, ref_num_frames)
-                q_rope, k_rope = self._apply_rope_sp(q, k, grid_sizes, freqs, start_frame)
+                q_rope, k_rope = self._apply_rope_sp(phase, q, k, grid_sizes, freqs, start_frame)
                 use_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
                 use_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
                 k_to_store = all2all_seq2head(

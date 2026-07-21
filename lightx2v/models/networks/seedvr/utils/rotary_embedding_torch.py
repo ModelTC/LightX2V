@@ -9,6 +9,10 @@ from torch import Tensor, broadcast_tensors, einsum, is_tensor, nn, tensor
 from torch.amp import autocast
 from torch.nn import Module
 
+from lightx2v.common.ops.rope import TorchRealRope
+
+_SEEDVR_ROPE = TorchRealRope(layout="interleaved")
+
 # helper functions
 
 
@@ -38,13 +42,6 @@ def slice_at_dim(t, dim_slice: slice, *, dim):
 # rotary embedding helper functions
 
 
-def rotate_half(x):
-    x = rearrange(x, "... (d r) -> ... d r", r=2)
-    x1, x2 = x.unbind(dim=-1)
-    x = torch.stack((-x2, x1), dim=-1)
-    return rearrange(x, "... d r -> ... (d r)")
-
-
 @autocast("cuda", enabled=False)
 def apply_rotary_emb(freqs, t, start_index=0, scale=1.0, seq_dim=-2, freqs_seq_dim=None):
     dtype = t.dtype
@@ -68,7 +65,11 @@ def apply_rotary_emb(freqs, t, start_index=0, scale=1.0, seq_dim=-2, freqs_seq_d
     t_right = t[..., end_index:]
 
     # Apply rotary embeddings without modifying t in place
-    t_transformed = (t_middle * freqs.cos() * scale) + (rotate_half(t_middle) * freqs.sin() * scale)
+    t_transformed = _SEEDVR_ROPE.apply_single(
+        t_middle,
+        (freqs.cos() * scale, freqs.sin() * scale),
+        unsqueeze_dim=0,
+    )
 
     out = torch.cat((t_left, t_transformed, t_right), dim=-1)
 

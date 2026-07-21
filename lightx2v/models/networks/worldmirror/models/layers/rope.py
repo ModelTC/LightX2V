@@ -14,6 +14,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from lightx2v.common.ops.rope import TorchRealRope
+
+_WORLDMIRROR_ROPE = TorchRealRope(layout="split_half")
+
 
 class PositionGetter:
     """Generates and caches 2D spatial positions for patches in a grid.
@@ -112,20 +116,6 @@ class RotaryPositionEmbedding2D(nn.Module):
 
         return self.frequency_cache[cache_key]
 
-    @staticmethod
-    def _rotate_features(x: torch.Tensor) -> torch.Tensor:
-        """Performs feature rotation by splitting and recombining feature dimensions.
-
-        Args:
-            x: Input tensor to rotate.
-
-        Returns:
-            Rotated feature tensor.
-        """
-        feature_dim = x.shape[-1]
-        x1, x2 = x[..., : feature_dim // 2], x[..., feature_dim // 2 :]
-        return torch.cat((-x2, x1), dim=-1)
-
     def _apply_1d_rope(self, tokens: torch.Tensor, positions: torch.Tensor, cos_comp: torch.Tensor, sin_comp: torch.Tensor) -> torch.Tensor:
         """Applies 1D rotary position embeddings along one dimension.
 
@@ -142,8 +132,7 @@ class RotaryPositionEmbedding2D(nn.Module):
         cos = F.embedding(positions, cos_comp)[:, None, :, :]
         sin = F.embedding(positions, sin_comp)[:, None, :, :]
 
-        # Apply rotation
-        return (tokens * cos) + (self._rotate_features(tokens) * sin)
+        return _WORLDMIRROR_ROPE.apply_single(tokens, (cos, sin))
 
     def forward(self, tokens: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
         """Applies 2D rotary position embeddings to input tokens.

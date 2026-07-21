@@ -4,8 +4,6 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .utils import apply_rope_with_flashinfer, apply_rope_with_torch
-
 
 class Flux2TransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
@@ -33,13 +31,6 @@ class Flux2TransformerInfer(BaseTransformerInfer):
             self.seq_p_fp8_comm = False
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
-
-        rope_funcs = {
-            "flashinfer": apply_rope_with_flashinfer,
-            "torch": apply_rope_with_torch,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        self.apply_rope_func = rope_funcs.get(rope_type, apply_rope_with_torch)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -101,7 +92,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         key = torch.cat([txt_key, img_key], dim=0)
         value = torch.cat([txt_value, img_value], dim=0)
 
-        query, key = self.apply_rope_func(query, key, image_rotary_emb)
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb)
 
         total_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
@@ -202,7 +193,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         query = block_weights.norm_q.apply(query)
         key = block_weights.norm_k.apply(key)
 
-        query, key = self.apply_rope_func(query, key, image_rotary_emb)
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb)
 
         total_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)

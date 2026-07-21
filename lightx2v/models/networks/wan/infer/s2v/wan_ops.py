@@ -125,7 +125,7 @@ def flash_attention(
     return x.unflatten(0, (b, lq)).type(out_dtype)
 
 
-def s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, num_heads, head_dim, rope_apply_fn):
+def s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, num_heads, head_dim):
     """Mirror of WanS2VSelfAttention.forward (model_s2v.py + model.py)."""
     b, s, n, d = norm_x.size(0), norm_x.size(1), num_heads, head_dim
 
@@ -133,9 +133,10 @@ def s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, num_heads, head_dim, 
     k = wan_rms_norm(phase0.self_attn_norm_k, mm_weight_autocast_nd(phase0.self_attn_k, norm_x)).view(b, s, n, d)
     v = mm_weight_autocast_nd(phase0.self_attn_v, norm_x).view(b, s, n, d)
 
+    q, k = phase0.s2v_rope.apply(q.float(), k.float(), freqs)
     attn = flash_attention(
-        q=rope_apply_fn(q, freqs),
-        k=rope_apply_fn(k, freqs),
+        q=q,
+        k=k,
         v=v,
         k_lens=seq_lens,
     )

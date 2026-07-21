@@ -6,8 +6,6 @@ from loguru import logger
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.common.ops.attn.utils.all2all import all2all_seq2head
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
-from lightx2v.models.networks.wan.infer.triton_ops import causal_rope_apply_triton
-from lightx2v.models.networks.wan.infer.utils import causal_rope_apply
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -49,11 +47,6 @@ class WanSFTransformerInfer(WanTransformerInfer):
         else:
             self.infer_func = self.infer_with_kvcache
 
-        if self.config.get("causal_rope_type", "torch") == "triton":
-            self.causal_rope_apply_func = causal_rope_apply_triton
-        else:
-            self.causal_rope_apply_func = causal_rope_apply
-
     def _calculate_q_k_len(self, q, k_lens):
         q_lens = torch.tensor([q.size(0)], dtype=torch.int32)
         cu_seqlens_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
@@ -64,7 +57,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
         self.kv_cache_size = self.kv_cache_manager.kv_size_for_layer(block_idx)
         self.max_attention_size = self.kv_cache_manager.max_attention_size_for_layer(block_idx)
 
-    def _apply_rope_sp(self, q, k, grid_sizes, freqs, start_frame):
+    def _apply_rope_sp(self, phase, q, k, grid_sizes, freqs, start_frame):
         f, h, w = grid_sizes[0].tolist()
         full_seq_len = f * h * w
         c = q.size(-1) // 2
@@ -86,13 +79,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
             pos_freqs = F.pad(pos_freqs, (0, 0, 0, 0, 0, padding_size))
         pos_freqs = torch.chunk(pos_freqs, world_size, dim=0)[cur_rank][: q.size(0)]
 
-        n = q.size(1)
-        q_c = torch.view_as_complex(q.float().reshape(q.size(0), n, -1, 2))
-        k_c = torch.view_as_complex(k.float().reshape(k.size(0), n, -1, 2))
-        pos_freqs = pos_freqs.to(torch.complex64)
-        q = torch.view_as_real(q_c * pos_freqs).flatten(2).type_as(q)
-        k = torch.view_as_real(k_c * pos_freqs).flatten(2).type_as(k)
-        return q, k
+        return phase.causal_rope.apply(q, k, pos_freqs.to(torch.complex64))
 
     def infer_with_kvcache(self, blocks, x, pre_infer_out):
         """Run all transformer blocks with the rolling self-attention KV cache."""
@@ -231,10 +218,16 @@ class WanSFTransformerInfer(WanTransformerInfer):
         current_start_frame = 0 if is_ref_prefill else ref_num_frames + seg_index * self.num_frame_per_chunk
 
         if self.config.get("seq_parallel", False):
-            q, k = self._apply_rope_sp(q, k, grid_sizes, freqs, current_start_frame)
+            q, k = self._apply_rope_sp(phase, q, k, grid_sizes, freqs, current_start_frame)
         else:
-            q = self.causal_rope_apply_func(q.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
-            k = self.causal_rope_apply_func(k.unsqueeze(0), grid_sizes, freqs, start_frame=current_start_frame).type_as(v)[0]
+            q, k = phase.causal_rope.apply(
+                q.unsqueeze(0),
+                k.unsqueeze(0),
+                freqs,
+                grid_sizes=grid_sizes,
+                start_frame=current_start_frame,
+            )
+            q, k = q.type_as(v)[0], k.type_as(v)[0]
 
         kv_cache = self.kv_cache_manager.self_attn_kv_cache
         seq_parallel = self.config.get("seq_parallel", False)
