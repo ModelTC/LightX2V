@@ -42,7 +42,7 @@ class RopeTemplate:
     def named_parameters(self, prefix=""):
         return iter(())
 
-    def prepare_freqs(self, freqs):
+    def prepare_freqs(self, freqs, rotary_dim: int | None = None):
         return freqs
 
     def prepare_positions(self, freqs):

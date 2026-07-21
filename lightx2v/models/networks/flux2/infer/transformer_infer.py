@@ -55,6 +55,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         temb_mod_img,
         temb_mod_txt,
         image_rotary_emb,
+        image_rotary_positions,
         img_attn_hook=None,
     ):
         heads = self.config["num_attention_heads"] // self.tp_size
@@ -92,7 +93,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         key = torch.cat([txt_key, img_key], dim=0)
         value = torch.cat([txt_value, img_value], dim=0)
 
-        query, key = block_weights.rope.apply(query, key, image_rotary_emb)
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb, positions=image_rotary_positions)
 
         total_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
@@ -166,6 +167,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         encoder_hidden_states,
         temb_mod,
         image_rotary_emb,
+        image_rotary_positions,
         num_txt_tokens=0,
     ):
         heads = self.config["num_attention_heads"] // self.tp_size
@@ -193,7 +195,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         query = block_weights.norm_q.apply(query)
         key = block_weights.norm_k.apply(key)
 
-        query, key = block_weights.rope.apply(query, key, image_rotary_emb)
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb, positions=image_rotary_positions)
 
         total_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_len], dtype=torch.int32)
@@ -240,52 +242,14 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         return hidden_states
 
-    def _prepare_image_rotary_emb(self, image_rotary_emb, num_txt_tokens):
-        if self.seq_p_group is None or image_rotary_emb is None:
-            return image_rotary_emb
-
-        world_size = dist.get_world_size(self.seq_p_group)
-        cur_rank = dist.get_rank(self.seq_p_group)
-
-        if isinstance(image_rotary_emb, tuple):
-            freqs_cos, freqs_sin = image_rotary_emb
-
-            txt_cos = freqs_cos[:num_txt_tokens]
-            img_cos = freqs_cos[num_txt_tokens:]
-            txt_sin = freqs_sin[:num_txt_tokens]
-            img_sin = freqs_sin[num_txt_tokens:]
-
-            seqlen = img_cos.shape[0]
-            padding_size = (world_size - (seqlen % world_size)) % world_size
-            if padding_size > 0:
-                img_cos = F.pad(img_cos, (0, 0, 0, padding_size))
-                img_sin = F.pad(img_sin, (0, 0, 0, padding_size))
-            img_cos = torch.chunk(img_cos, world_size, dim=0)[cur_rank]
-            img_sin = torch.chunk(img_sin, world_size, dim=0)[cur_rank]
-
-            freqs_cos = torch.cat([txt_cos, img_cos], dim=0)
-            freqs_sin = torch.cat([txt_sin, img_sin], dim=0)
-            return (freqs_cos, freqs_sin)
-
-        txt_emb = image_rotary_emb[:num_txt_tokens]
-        img_emb = image_rotary_emb[num_txt_tokens:]
-
-        seqlen = img_emb.shape[0]
-        padding_size = (world_size - (seqlen % world_size)) % world_size
-        if padding_size > 0:
-            img_emb = F.pad(img_emb, (0, 0, 0, padding_size))
-        img_emb = torch.chunk(img_emb, world_size, dim=0)[cur_rank]
-        return torch.cat([txt_emb, img_emb], dim=0)
-
     def _infer_forward(self, block_weights, pre_infer_out, decisive_block_id=None, on_decisive_block=None):
         hidden_states = pre_infer_out.hidden_states
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         timestep = pre_infer_out.timestep
         image_rotary_emb = pre_infer_out.image_rotary_emb
+        image_rotary_positions = pre_infer_out.image_rotary_positions
 
         num_txt_tokens = encoder_hidden_states.shape[0]
-        image_rotary_emb = self._prepare_image_rotary_emb(image_rotary_emb, num_txt_tokens)
-
         timestep_act = F.silu(timestep)
         double_stream_mod_img = block_weights.double_stream_modulation_img_linear.apply(timestep_act)
         double_stream_mod_txt = block_weights.double_stream_modulation_txt_linear.apply(timestep_act)
@@ -300,6 +264,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 double_stream_mod_img,
                 double_stream_mod_txt,
                 image_rotary_emb,
+                image_rotary_positions,
                 img_attn_hook=block_hook,
             )
 
@@ -312,6 +277,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
                 None,
                 single_stream_mod,
                 image_rotary_emb,
+                image_rotary_positions,
                 num_txt_tokens=num_txt_tokens,
             )
         return hidden_states[num_txt_tokens:, ...]
