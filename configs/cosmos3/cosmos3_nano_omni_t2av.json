@@ -11,7 +11,7 @@
     "feature_caching": "NoCaching",
     "rms_norm_type": "one-pass",
     "attn_rms_norm_type": "one-pass",
-    "rope_type": "triton",
+    "rope_type": "cosmos3_rope",
     "self_attn_type": "flash_attn3",
     "causal_self_attn_type": "flash_attn3",
     "add_resolution_template": false,
