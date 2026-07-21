@@ -33,6 +33,13 @@ class HidreamO1ImageModel(BaseTransformerModel):
             "model.visual",
         ]
         super().__init__(model_path, config, torch.device(AI_DEVICE), None)
+        self.sensitive_layer = {
+            "input_layernorm.weight",
+            "post_attention_layernorm.weight",
+            "self_attn.q_norm.weight",
+            "self_attn.k_norm.weight",
+            "model.language_model.norm.weight",
+        }
         self._init_infer_class()
         self._init_weights()
         self._configure_weight_structure()
@@ -79,7 +86,7 @@ class HidreamO1ImageModel(BaseTransformerModel):
         )
         if self.config["seq_parallel"]:
             pre_out = self._seq_parallel_pre_process(pre_out)
-        transformer_out = self.transformer_infer.infer(self.transformer_weights, pre_out, self.dtype)
+        transformer_out = self.transformer_infer.infer(self.transformer_weights, pre_out)
         if self.config["seq_parallel"]:
             transformer_out = self._seq_parallel_post_process(transformer_out)
         x_pred = self.post_infer.infer(self.post_weight, transformer_out)

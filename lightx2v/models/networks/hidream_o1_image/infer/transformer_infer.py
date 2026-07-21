@@ -2,11 +2,14 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.models.networks.hidream_o1_image.infer.module_io import HidreamTransformerInferOutput
+from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 
 
 class HidreamO1ImageTransformerInfer:
     def __init__(self, config):
         self.config = config
+        self.infer_dtype = GET_DTYPE()
+        self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
@@ -25,7 +28,7 @@ class HidreamO1ImageTransformerInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def infer(self, block_weights, pre_infer_out, dtype):
+    def infer(self, block_weights, pre_infer_out):
         if self.config["seq_parallel"]:
             return self._infer_seq_parallel(block_weights, pre_infer_out)
 
@@ -74,7 +77,7 @@ class HidreamO1ImageTransformerInfer:
 
     def _infer_final_linear(self, weights, hidden_states, vinput_mask):
         hidden_vis = hidden_states[0, vinput_mask[0].to(hidden_states.device)]
-        return weights.final_linear.apply(hidden_vis).unsqueeze(0)
+        return self._apply_linear(weights.final_linear, hidden_vis).unsqueeze(0)
 
     def _infer_decoder_block(self, weights, hidden_states, rope_cos_sin, idx_ar):
         residual = hidden_states
@@ -112,7 +115,7 @@ class HidreamO1ImageTransformerInfer:
         q, k, v = self._project_qkv(weights, hidden_states, rope_cos_sin)
         attn_output = self._two_pass_attn(weights, q, k, v, idx_ar)
         attn_output = attn_output.reshape(-1, attn_output.shape[-1])
-        attn_output = weights.o_proj.apply(attn_output)
+        attn_output = self._apply_linear(weights.o_proj, attn_output)
         return attn_output.reshape(batch, seq_len, -1)
 
     def _infer_self_attn_seq_parallel(self, weights, hidden_ar, hidden_gen, rope_ar, rope_gen):
@@ -125,9 +128,9 @@ class HidreamO1ImageTransformerInfer:
         softmax_scale = weights.head_dim**-0.5
 
         out_ar = weights.attn.apply(
-            q_ar[0],
-            k_ar[0],
-            v_ar[0],
+            q_ar[0].to(self.infer_dtype),
+            k_ar[0].to(self.infer_dtype),
+            v_ar[0].to(self.infer_dtype),
             causal=True,
             softmax_scale=softmax_scale,
             max_seqlen_q=q_ar.shape[1],
@@ -135,8 +138,9 @@ class HidreamO1ImageTransformerInfer:
             model_cls="hidream_o1_image",
         )
 
-        k = torch.cat([k_gen[0], k_ar[0]], dim=0)
-        v = torch.cat([v_gen[0], v_ar[0]], dim=0)
+        q_gen = q_gen.to(self.infer_dtype)
+        k = torch.cat([k_gen[0], k_ar[0]], dim=0).to(self.infer_dtype)
+        v = torch.cat([v_gen[0], v_ar[0]], dim=0).to(self.infer_dtype)
         cu_seqlens_qkv = torch.tensor([0, q_gen.shape[1] + k_ar.shape[1]], dtype=torch.int32, device="cpu")
         out_gen = weights.attn_parallel.apply(
             q=q_gen[0],
@@ -156,16 +160,16 @@ class HidreamO1ImageTransformerInfer:
             model_cls="hidream_o1_image",
         )
 
-        out_ar = weights.o_proj.apply(out_ar).reshape(1, q_ar.shape[1], -1)
-        out_gen = weights.o_proj.apply(out_gen).reshape(1, q_gen.shape[1], -1)
+        out_ar = self._apply_linear(weights.o_proj, out_ar).reshape(1, q_ar.shape[1], -1)
+        out_gen = self._apply_linear(weights.o_proj, out_gen).reshape(1, q_gen.shape[1], -1)
         return out_ar, out_gen
 
     def _project_qkv(self, weights, hidden_states, rope_cos_sin):
         batch, seq_len, _ = hidden_states.shape
         flat_hidden = hidden_states.reshape(-1, hidden_states.shape[-1])
-        q = weights.q_proj.apply(flat_hidden).reshape(batch, seq_len, weights.heads, weights.head_dim)
-        k = weights.k_proj.apply(flat_hidden).reshape(batch, seq_len, weights.kv_heads, weights.head_dim)
-        v = weights.v_proj.apply(flat_hidden).reshape(batch, seq_len, weights.kv_heads, weights.head_dim)
+        q = self._apply_linear(weights.q_proj, flat_hidden).reshape(batch, seq_len, weights.heads, weights.head_dim)
+        k = self._apply_linear(weights.k_proj, flat_hidden).reshape(batch, seq_len, weights.kv_heads, weights.head_dim)
+        v = self._apply_linear(weights.v_proj, flat_hidden).reshape(batch, seq_len, weights.kv_heads, weights.head_dim)
         q = weights.q_norm.apply(q)
         k = weights.k_norm.apply(k)
         q, k = self._apply_rope(weights.rope, q, k, rope_cos_sin)
@@ -179,9 +183,9 @@ class HidreamO1ImageTransformerInfer:
         k_ar = k[0, idx_ar].contiguous()
         v_ar = v[0, idx_ar].contiguous()
         out_ar = weights.attn.apply(
-            q_ar,
-            k_ar,
-            v_ar,
+            q_ar.to(self.infer_dtype),
+            k_ar.to(self.infer_dtype),
+            v_ar.to(self.infer_dtype),
             causal=True,
             softmax_scale=softmax_scale,
             max_seqlen_q=q_ar.shape[0],
@@ -189,9 +193,9 @@ class HidreamO1ImageTransformerInfer:
             model_cls="hidream_o1_image",
         )
         out_full = weights.attn.apply(
-            q[0],
-            k[0],
-            v[0],
+            q[0].to(self.infer_dtype),
+            k[0].to(self.infer_dtype),
+            v[0].to(self.infer_dtype),
             causal=False,
             softmax_scale=softmax_scale,
             max_seqlen_q=q.shape[1],
@@ -205,8 +209,13 @@ class HidreamO1ImageTransformerInfer:
     def _infer_mlp(self, weights, hidden_states):
         shape = hidden_states.shape
         flat_hidden = hidden_states.reshape(-1, shape[-1])
-        gate = weights.gate_proj.apply(flat_hidden)
-        up = weights.up_proj.apply(flat_hidden)
+        gate = self._apply_linear(weights.gate_proj, flat_hidden)
+        up = self._apply_linear(weights.up_proj, flat_hidden)
         hidden = weights.act_fn(gate) * up
-        hidden = weights.down_proj.apply(hidden)
+        hidden = self._apply_linear(weights.down_proj, hidden)
         return hidden.reshape(*shape)
+
+    def _apply_linear(self, weights, hidden_states):
+        if self.infer_dtype != self.sensitive_layer_dtype:
+            hidden_states = hidden_states.to(self.infer_dtype)
+        return weights.apply(hidden_states)
