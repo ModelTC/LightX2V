@@ -120,7 +120,7 @@ class WanLingbotFastPreInfer(WanLingbotPreInfer):
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
             freqs = self.freqs.clone()
             self.grid_sizes = grid_sizes.tuple
-            self.cos_sin = self.prepare_rope_cache(weights, self.prepare_cos_sin(grid_sizes.tuple, freqs))
+            self.cos_sin = self.prepare_rope_cache(self.prepare_cos_sin(grid_sizes.tuple, freqs))
 
         result = WanSFPreInferModuleOutput(
             embed=embed,

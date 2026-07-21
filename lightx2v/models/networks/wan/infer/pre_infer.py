@@ -13,6 +13,7 @@ class WanPreInfer:
     def __init__(self, config):
         assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
         self.config = config
+        self.rope = None
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
         self.task = config["task"]
         self.freq_dim = config["freq_dim"]
@@ -52,9 +53,13 @@ class WanPreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    @staticmethod
-    def prepare_rope_cache(weights, freqs):
-        return weights.blocks[0].compute_phases[0].rope.prepare_freqs(freqs)
+    def set_rope(self, rope):
+        self.rope = rope
+
+    def prepare_rope_cache(self, freqs):
+        if self.rope is None:
+            raise RuntimeError("RoPE must be set before preparing the Wan frequency cache.")
+        return self.rope.prepare_freqs(freqs)
 
     def prepare_cos_sin(self, grid_sizes, freqs):
         c = self.head_size // 2
@@ -190,7 +195,7 @@ class WanPreInfer:
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
             freqs = self.freqs.clone()  # self.freqs init param can not be changed
             self.grid_sizes = grid_sizes.tuple
-            self.cos_sin = self.prepare_rope_cache(weights, self.prepare_cos_sin(grid_sizes.tuple, freqs))
+            self.cos_sin = self.prepare_rope_cache(self.prepare_cos_sin(grid_sizes.tuple, freqs))
 
         return WanPreInferModuleOutput(
             embed=embed,
