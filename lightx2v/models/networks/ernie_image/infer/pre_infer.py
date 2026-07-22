@@ -50,10 +50,12 @@ class ErnieImagePreInfer:
         self.rope_axes_dim = config.get("rope_axes_dim", (32, 48, 48))
         self.rotary_dim = sum(self.rope_axes_dim)
         self.rope = None
+        self.scheduler = None
         self.clear_rope_cache()
 
     def clear_rope_cache(self):
-        self._rope_cache = {}
+        self._rope_cache_request_id = None
+        self._rope_cache = {True: None, False: None}
 
     def set_rope(self, rope):
         self.rope = rope
@@ -62,6 +64,10 @@ class ErnieImagePreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
         self.clear_rope_cache()
+
+    @staticmethod
+    def _device_key(device):
+        return device.type, device.index
 
     def prepare_rope_cache(self, image_hw, text_len, device):
         if self.rope is None:
@@ -74,12 +80,28 @@ class ErnieImagePreInfer:
         return rotary_freqs, rotary_positions
 
     def get_rope_cache(self, image_hw, text_len, device):
-        cache_key = (*image_hw, text_len, str(device))
-        cached = self._rope_cache.get(cache_key)
-        if cached is None:
-            cached = self.prepare_rope_cache(image_hw, text_len, device)
-            self._rope_cache[cache_key] = cached
-        return cached
+        if self.scheduler is None:
+            raise RuntimeError("ErnieImagePreInfer scheduler is not initialized.")
+
+        request_id = self.scheduler.rope_request_id
+        if request_id != self._rope_cache_request_id:
+            self._rope_cache_request_id = request_id
+            self._rope_cache = {True: None, False: None}
+
+        cache_key = (self._device_key(device), *image_hw, text_len)
+        branch = bool(self.scheduler.infer_condition)
+        cached = self._rope_cache[branch]
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+
+        shared = self._rope_cache[not branch]
+        if shared is not None and shared[0] == cache_key:
+            self._rope_cache[branch] = shared
+            return shared[1]
+
+        value = self.prepare_rope_cache(image_hw, text_len, device)
+        self._rope_cache[branch] = (cache_key, value)
+        return value
 
     def _pos_embed(self, ids: torch.Tensor) -> torch.Tensor:
         emb = torch.cat([_rope(ids[..., i], self.rope_axes_dim[i], self.rope_theta) for i in range(3)], dim=-1)
