@@ -29,6 +29,7 @@ class WanPreInfer:
             self.seq_p_group = None
 
         self.cos_sin = None
+        self.rope_positions = None
         self.grid_sizes = (0, 0, 0)  # (t, h, w)
         self.head_size = self.config["dim"] // self.config["num_heads"]
         self.freqs = torch.cat(
@@ -55,11 +56,16 @@ class WanPreInfer:
 
     def set_rope(self, rope):
         self.rope = rope
+        self.cos_sin = None
+        self.rope_positions = None
+        self.grid_sizes = (0, 0, 0)
 
     def prepare_rope_cache(self, freqs):
         if self.rope is None:
             raise RuntimeError("RoPE must be set before preparing the Wan frequency cache.")
-        return self.rope.prepare_freqs(freqs)
+        freqs = self.rope.prepare_freqs(freqs, rotary_dim=self.head_size)
+        self.rope_positions = self.rope.prepare_positions(freqs)
+        return freqs
 
     def prepare_cos_sin(self, grid_sizes, freqs):
         c = self.head_size // 2
@@ -204,5 +210,6 @@ class WanPreInfer:
             embed0=embed0.squeeze(0),
             context=context,
             cos_sin=self.cos_sin,
+            rope_positions=self.rope_positions,
             adapter_args={"motion_vec": motion_vec},
         )
