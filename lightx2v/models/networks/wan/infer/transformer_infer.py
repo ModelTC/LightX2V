@@ -134,14 +134,15 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.compiled_blocks[block_idx] = (block, compiled)
         return compiled
 
+    def run_block(self, block_idx, block, x, pre_infer_out):
+        self.block_idx = block_idx
+        if self.use_compile:
+            return self.get_compiled_block(block_idx, block)(x, pre_infer_out)
+        return self.infer_block(block, x, pre_infer_out)
+
     def infer_without_offload(self, blocks, x, pre_infer_out):
         for block_idx, block in enumerate(blocks):
-            self.block_idx = block_idx
-            if self.use_compile:
-                compiled_block = self.get_compiled_block(block_idx, block)
-                x = compiled_block(x, pre_infer_out)
-            else:
-                x = self.infer_block(block, x, pre_infer_out)
+            x = self.run_block(block_idx, block, x, pre_infer_out)
         return x
 
     def infer_block(self, block, x, pre_infer_out):

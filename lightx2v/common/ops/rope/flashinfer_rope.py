@@ -142,5 +142,5 @@ if magi_register_custom_op is not None and apply_rope_with_cos_sin_cache_inplace
         infer_output_meta_fn=_rope_meta,
         is_subgraph_boundary=True,
     )
-    def _rope_flashinfer_custom_op(q: torch.Tensor, k: torch.Tensor, freqs: torch.Tensor):
+    def _rope_flashinfer_custom_op(q: torch.Tensor, k: torch.Tensor, freqs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         return FlashInferRope(layout="interleaved")._apply_eager(q.clone(), k.clone(), freqs)

@@ -105,6 +105,6 @@ if magi_register_custom_op is not None:
         infer_output_meta_fn=_rope_meta,
         is_subgraph_boundary=True,
     )
-    def _rope_torch_complex_custom_op(q: torch.Tensor, k: torch.Tensor, freqs: torch.Tensor):
+    def _rope_torch_complex_custom_op(q: torch.Tensor, k: torch.Tensor, freqs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         module = TorchComplexRope()
         return module.apply_single(q, freqs), module.apply_single(k, freqs)
