@@ -67,22 +67,28 @@ class Block(nn.Module):
 
         self.sample_drop_ratio = drop_path
 
-    def forward(self, x: Tensor, pos=None) -> Tensor:
-        def attn_residual_func(x: Tensor, pos=None) -> Tensor:
-            return self.ls1(self.attn(self.norm1(x), pos=pos))
+    def forward(self, x: Tensor, pos=None, rope_cache=None) -> Tensor:
+        def attn_residual_func(x: Tensor, pos=None, rope_cache=None) -> Tensor:
+            return self.ls1(self.attn(self.norm1(x), pos=pos, rope_cache=rope_cache))
 
         def ffn_residual_func(x: Tensor) -> Tensor:
             return self.ls2(self.mlp(self.norm2(x)))
 
         if self.training and self.sample_drop_ratio > 0.1:
             # the overhead is compensated only for a drop path rate larger than 0.1
-            x = drop_add_residual_stochastic_depth(x, pos=pos, residual_func=attn_residual_func, sample_drop_ratio=self.sample_drop_ratio)
+            x = drop_add_residual_stochastic_depth(
+                x,
+                pos=pos,
+                rope_cache=rope_cache,
+                residual_func=attn_residual_func,
+                sample_drop_ratio=self.sample_drop_ratio,
+            )
             x = drop_add_residual_stochastic_depth(x, residual_func=ffn_residual_func, sample_drop_ratio=self.sample_drop_ratio)
         elif self.training and self.sample_drop_ratio > 0.0:
-            x = x + self.drop_path1(attn_residual_func(x, pos=pos))
+            x = x + self.drop_path1(attn_residual_func(x, pos=pos, rope_cache=rope_cache))
             x = x + self.drop_path1(ffn_residual_func(x))  # FIXME: drop_path2
         else:
-            x = x + attn_residual_func(x, pos=pos)
+            x = x + attn_residual_func(x, pos=pos, rope_cache=rope_cache)
             x = x + ffn_residual_func(x)
         return x
 
@@ -91,9 +97,9 @@ class DistBlock(Block):
     def __init__(self, *args, attn_class: Callable[..., nn.Module] = DistAttention, **kwargs):
         super().__init__(*args, attn_class=attn_class, **kwargs)
 
-    def forward(self, x: Tensor, pos=None, sp_size=1, sp_group=None, padding_tokens=0, block_type=None, token_shape=None) -> Tensor:
-        def attn_residual_func(x: Tensor, pos=None, sp_size=1, sp_group=None, padding_tokens=0) -> Tensor:
-            return self.ls1(self.attn(self.norm1(x), pos=pos, sp_size=sp_size, sp_group=sp_group, padding_tokens=padding_tokens))
+    def forward(self, x: Tensor, pos=None, sp_size=1, sp_group=None, padding_tokens=0, block_type=None, token_shape=None, rope_cache=None) -> Tensor:
+        def attn_residual_func(x: Tensor, pos=None, sp_size=1, sp_group=None, padding_tokens=0, rope_cache=None) -> Tensor:
+            return self.ls1(self.attn(self.norm1(x), pos=pos, rope_cache=rope_cache, sp_size=sp_size, sp_group=sp_group, padding_tokens=padding_tokens))
 
         def ffn_residual_func(x: Tensor) -> Tensor:
             return self.ls2(self.mlp(self.norm2(x)))
@@ -101,19 +107,26 @@ class DistBlock(Block):
         if self.training and self.sample_drop_ratio > 0.1:
             # the overhead is compensated only for a drop path rate larger than 0.1
             x = drop_add_residual_stochastic_depth(
-                x, pos=pos, sp_size=sp_size, sp_group=sp_group, padding_tokens=padding_tokens, residual_func=attn_residual_func, sample_drop_ratio=self.sample_drop_ratio
+                x,
+                pos=pos,
+                rope_cache=rope_cache,
+                sp_size=sp_size,
+                sp_group=sp_group,
+                padding_tokens=padding_tokens,
+                residual_func=attn_residual_func,
+                sample_drop_ratio=self.sample_drop_ratio,
             )
             x = drop_add_residual_stochastic_depth(x, residual_func=ffn_residual_func, sample_drop_ratio=self.sample_drop_ratio)
         elif self.training and self.sample_drop_ratio > 0.0:
-            x = x + self.drop_path1(attn_residual_func(x, pos=pos, sp_size=sp_size, sp_group=sp_group, padding_tokens=padding_tokens))
+            x = x + self.drop_path1(attn_residual_func(x, pos=pos, rope_cache=rope_cache, sp_size=sp_size, sp_group=sp_group, padding_tokens=padding_tokens))
             x = x + self.drop_path1(ffn_residual_func(x))  # FIXME: drop_path2
         else:
-            x = x + attn_residual_func(x, pos=pos, sp_size=sp_size, sp_group=sp_group, padding_tokens=padding_tokens)
+            x = x + attn_residual_func(x, pos=pos, rope_cache=rope_cache, sp_size=sp_size, sp_group=sp_group, padding_tokens=padding_tokens)
             x = x + ffn_residual_func(x)
         return x
 
 
-def drop_add_residual_stochastic_depth(x: Tensor, residual_func: Callable[[Tensor], Tensor], sample_drop_ratio: float = 0.0, pos=None) -> Tensor:
+def drop_add_residual_stochastic_depth(x: Tensor, residual_func: Callable[[Tensor], Tensor], sample_drop_ratio: float = 0.0, pos=None, rope_cache=None, **residual_kwargs) -> Tensor:
     # 1) extract subset using permutation
     b, n, d = x.shape
     sample_subset_size = max(int(b * (1 - sample_drop_ratio)), 1)
@@ -121,12 +134,12 @@ def drop_add_residual_stochastic_depth(x: Tensor, residual_func: Callable[[Tenso
     x_subset = x[brange]
 
     # 2) apply residual_func to get residual
+    if rope_cache is not None:
+        residual_kwargs["rope_cache"] = rope_cache.select_batch(brange)
     if pos is not None:
         # if necessary, apply rope to the subset
-        pos = pos[brange]
-        residual = residual_func(x_subset, pos=pos)
-    else:
-        residual = residual_func(x_subset)
+        residual_kwargs["pos"] = pos[brange]
+    residual = residual_func(x_subset, **residual_kwargs)
 
     x_flat = x.flatten(1)
     residual = residual.flatten(1)
