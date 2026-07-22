@@ -180,14 +180,14 @@ _SCRIPT = """
 
     function stateLabel(s) {
       const m = {
-        ready: "就绪 — 点击「开始」运行评测",
-        running: "评测运行中",
-        paused: "已暂停",
-        success: "✔ 评测成功",
-        failure: "✘ 评测失败（超过步数上限）",
-        switching: "切换/重建场景中，请稍候…",
+        ready: 'Ready — click "Start" to run the evaluation',
+        running: "Evaluation in progress",
+        paused: "Paused",
+        success: "✔ Evaluation succeeded",
+        failure: "✘ Evaluation failed (maximum step limit exceeded)",
+        switching: "Switching/rebuilding the scene, please wait…",
       };
-      return m[s] || s || "等待模拟器状态…";
+      return m[s] || s || "Waiting for simulator status…";
     }
 
     async function post(cmd, extra) {
@@ -220,7 +220,7 @@ _SCRIPT = """
 
     function markConfigDirty() {
       configDirty = true;
-      setConfigFeedback("配置尚未应用", "pending");
+      setConfigFeedback("Configuration changes have not been applied", "pending");
     }
 
     async function waitForConfig(expected, timeoutMs = 60000) {
@@ -236,11 +236,11 @@ _SCRIPT = """
           return statusData;
         }
         if (sawSwitching && statusData.state === "failure") {
-          throw new Error("模拟器切换失败，请查看 libero_node 日志");
+          throw new Error("Simulator switch failed; check the libero_node logs");
         }
         await new Promise(resolve => setTimeout(resolve, 250));
       }
-      throw new Error("等待模拟器应用配置超时");
+      throw new Error("Timed out waiting for the simulator to apply the configuration");
     }
 
     async function waitForRestart(expected, previousEpisode, timeoutMs = 60000) {
@@ -258,11 +258,11 @@ _SCRIPT = """
           return statusData;
         }
         if (sawSwitching && statusData.state === "failure") {
-          throw new Error("配置已应用，但自动重启失败，请查看 libero_node 日志");
+          throw new Error("Configuration was applied, but the automatic restart failed; check the libero_node logs");
         }
         await new Promise(resolve => setTimeout(resolve, 250));
       }
-      throw new Error("配置已应用，但等待自动重启超时");
+      throw new Error("Configuration was applied, but the automatic restart timed out");
     }
 
     async function applyTask() {
@@ -270,7 +270,7 @@ _SCRIPT = """
       const selected = selectedConfig();
       applyingConfig = true;
       updateButtons(statusData.state);
-      setConfigFeedback("正在重建仿真环境…", "pending");
+      setConfigFeedback("Rebuilding the simulation environment…", "pending");
       try {
         await post("set_task", selected.extra);
         let applied = await waitForConfig(selected);
@@ -282,20 +282,20 @@ _SCRIPT = """
             config: String(applied.task_config),
             seed: Number(applied.seed),
           };
-          setConfigFeedback("配置已应用，正在自动重启…", "pending");
+          setConfigFeedback("Configuration applied; restarting automatically…", "pending");
           await post("restart");
           applied = await waitForRestart(restartExpected, appliedEpisode);
           restarted = true;
         }
         configDirty = false;
         setConfigFeedback(
-          `${restarted ? "已应用并重启" : "已应用"} ${applied.task_name} · 场景 ${applied.task_config} · seed ${applied.seed}`,
+          `${restarted ? "Applied and restarted" : "Applied"} ${applied.task_name} · Scenario ${applied.task_config} · seed ${applied.seed}`,
           "success",
         );
         return true;
       } catch (error) {
         console.error(error);
-        setConfigFeedback(`应用失败：${error.message}`, "error");
+        setConfigFeedback(`Failed to apply configuration: ${error.message}`, "error");
         return false;
       } finally {
         applyingConfig = false;
@@ -342,16 +342,16 @@ _SCRIPT = """
       tbody.innerHTML = "";
       for (const h of history.slice().reverse()) {
         const tr = document.createElement("tr");
-        const outcome = h.outcome === "success" ? "成功" : "失败";
+        const outcome = h.outcome === "success" ? "Success" : "Failure";
         tr.innerHTML = `<td>${h.episode}</td><td>${h.task}</td><td>${h.config || "-"}</td><td>${h.seed ?? "-"}</td>` +
           `<td class="outcome-${h.outcome}">${outcome}</td><td>${h.steps}</td>`;
         tbody.appendChild(tr);
       }
       if (stats && stats.episodes > 0) {
         const rate = (100 * stats.successes / stats.episodes).toFixed(0);
-        el("stats").textContent = `共 ${stats.episodes} 个 episode，成功 ${stats.successes} 个，成功率 ${rate}%`;
+        el("stats").textContent = `${stats.episodes} episodes total, ${stats.successes} successful, ${rate}% success rate`;
       } else {
-        el("stats").textContent = "暂无已完成的 episode";
+        el("stats").textContent = "No completed episodes yet";
       }
     }
 
@@ -360,7 +360,7 @@ _SCRIPT = """
       el("btn-pause").disabled = (s !== "running");
       el("btn-restart").disabled = (s === "switching");
       el("btn-apply").disabled = (s === "switching" || applyingConfig);
-      el("btn-start").textContent = (s === "paused") ? "继续" : "开始";
+      el("btn-start").textContent = (s === "paused") ? "Resume" : "Start";
     }
 
     async function refreshStatus() {
@@ -373,7 +373,7 @@ _SCRIPT = """
       banner.className = s || "";
       let text = stateLabel(s);
       if (s === "running" && statusData.max_episode_steps) {
-        text += `（第 ${statusData.episode} 轮 · ${statusData.episode_step}/${statusData.max_episode_steps} 步）`;
+        text += ` (Episode ${statusData.episode} · ${statusData.episode_step}/${statusData.max_episode_steps} steps)`;
       }
       banner.querySelector("span").textContent = text;
       el("meta").textContent = statusData.task_name
@@ -454,24 +454,24 @@ def render_index(cameras, title="LightX2V ROS", policy_cameras=None):
     <div class="meta" id="meta"></div>
   </header>
 
-  <div id="banner"><span>等待模拟器状态…</span></div>
+  <div id="banner"><span>Waiting for simulator status…</span></div>
 
   <section class="panel">
     <div class="controls">
-      <button id="btn-start" class="primary">开始</button>
-      <button id="btn-pause">暂停</button>
-      <button id="btn-restart" class="danger">重启 (新场景)</button>
+      <button id="btn-start" class="primary">Start</button>
+      <button id="btn-pause">Pause</button>
+      <button id="btn-restart" class="danger">Restart (New Scene)</button>
     </div>
     <div class="controls" id="task-panel" style="margin-top: 10px; display: none;">
-      <label>任务</label>
+      <label>Task</label>
       <select id="task-select"></select>
-      <label>场景</label>
+      <label>Scenario</label>
       <select id="config-select"></select>
       <label>seed</label>
-      <input id="seed-input" type="number" placeholder="自动">
-      <button id="btn-apply">应用配置</button>
-      <span id="config-feedback" class="config-feedback">修改后请应用配置</span>
-      <label style="opacity:.7">（切换需重建场景，约 10~30 秒）</label>
+      <input id="seed-input" type="number" placeholder="Auto">
+      <button id="btn-apply">Apply Configuration</button>
+      <span id="config-feedback" class="config-feedback">Apply the configuration after making changes</span>
+      <label style="opacity:.7">(Switching rebuilds the scene and takes about 10–30 seconds)</label>
     </div>
     <div class="cam-toggles">
 {toggles}
@@ -485,9 +485,9 @@ def render_index(cameras, title="LightX2V ROS", policy_cameras=None):
   <section class="task" id="task"><span>waiting for task description</span></section>
 
   <section class="panel">
-    <div class="stats" id="stats">暂无已完成的 episode</div>
+    <div class="stats" id="stats">No completed episodes yet</div>
     <table>
-      <thead><tr><th>Episode</th><th>任务</th><th>场景</th><th>Seed</th><th>结果</th><th>步数</th></tr></thead>
+      <thead><tr><th>Episode</th><th>Task</th><th>Scenario</th><th>Seed</th><th>Outcome</th><th>Steps</th></tr></thead>
       <tbody id="history-body"></tbody>
     </table>
   </section>
