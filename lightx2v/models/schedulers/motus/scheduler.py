@@ -12,8 +12,10 @@ class MotusScheduler(WanScheduler):
         self.action_latents = None
         self.action_noise_pred = None
         self.condition_frame_latent = None
+        self.rope_request_id = 0
 
     def prepare(self, seed, latent_shape, image_encoder_output, action_shape):
+        self.rope_request_id += 1
         self.vae_encoder_out = image_encoder_output["vae_encoder_out"]
         self.prepare_latents(seed, latent_shape, dtype=torch.float32)
 
