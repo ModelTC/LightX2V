@@ -47,6 +47,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         attn_phase,
         hidden_states,
         freqs_cis,
+        rope_positions,
         scale_msa=None,
         image_tokens_len=None,
         q_only_img=False,
@@ -70,7 +71,10 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         if attn_phase.norm_k is not None:
             key = attn_phase.norm_k.apply(key)
 
-        query, key = attn_phase.rope.apply(query, key, freqs_cis)
+        if rope_positions is None:
+            query, key = attn_phase.rope.apply(query, key, freqs_cis)
+        else:
+            query, key = attn_phase.rope.apply(query, key, freqs_cis, positions=rope_positions)
 
         total_seq_len = query.shape[0]
         cu_seqlens = torch.tensor([0, total_seq_len], dtype=torch.int32, device="cpu")
@@ -137,6 +141,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         block_weight,
         hidden_states,
         freqs_cis,
+        rope_positions,
         adaln_input=None,
         image_tokens_len=None,
         q_only_img=False,
@@ -150,6 +155,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             attn_phase,
             hidden_states,
             freqs_cis,
+            rope_positions,
             scale_msa,
             image_tokens_len=image_tokens_len,
             q_only_img=q_only_img,
@@ -176,16 +182,19 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         noise_refiner_blocks,
         hidden_states,
         x_freqs_cis,
+        x_rope_positions,
         adaln_input,
         x_len,
     ):
         x_hidden = hidden_states[:x_len]
         x_freqs = x_freqs_cis[:x_len]
+        x_positions = x_rope_positions[:x_len] if x_rope_positions is not None else None
         for block_weight in noise_refiner_blocks:
             x_hidden = self.infer_block(
                 block_weight=block_weight,
                 hidden_states=x_hidden,
                 freqs_cis=x_freqs,
+                rope_positions=x_positions,
                 adaln_input=adaln_input,
                 image_tokens_len=x_hidden.shape[0],
                 q_only_img=True,
@@ -198,15 +207,18 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         context_refiner_blocks,
         encoder_hidden_states,
         cap_freqs_cis,
+        cap_rope_positions,
         cap_len,
     ):
         cap_hidden = encoder_hidden_states[:cap_len]
         cap_freqs = cap_freqs_cis[:cap_len]
+        cap_positions = cap_rope_positions[:cap_len] if cap_rope_positions is not None else None
         for block_weight in context_refiner_blocks:
             cap_hidden = self.infer_block(
                 block_weight=block_weight,
                 hidden_states=cap_hidden,
                 freqs_cis=cap_freqs,
+                rope_positions=cap_positions,
                 adaln_input=None,
                 image_tokens_len=None,
             )
@@ -218,19 +230,19 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         main_blocks,
         hidden_states,
         encoder_hidden_states,
-        x_freqs_cis,
-        cap_freqs_cis,
+        unified_freqs_cis,
+        unified_rope_positions,
         adaln_input,
         x_len,
         cap_len,
     ):
         unified = torch.cat([hidden_states, encoder_hidden_states], dim=0)
-        unified_freqs_cis = torch.cat([x_freqs_cis[:x_len], cap_freqs_cis[:cap_len]], dim=0)
         for block_weight in main_blocks:
             unified = self.infer_block(
                 block_weight=block_weight,
                 hidden_states=unified,
                 freqs_cis=unified_freqs_cis,
+                rope_positions=unified_rope_positions,
                 adaln_input=adaln_input,
                 image_tokens_len=x_len,
             )
@@ -244,6 +256,10 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states,
         x_freqs_cis,
         cap_freqs_cis,
+        unified_freqs_cis,
+        x_rope_positions,
+        cap_rope_positions,
+        unified_rope_positions,
         adaln_input,
         x_item_seqlens,
         cap_item_seqlens,
@@ -256,6 +272,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             noise_refiner_blocks=block_weights.noise_refiner,
             hidden_states=hidden_states,
             x_freqs_cis=x_freqs_cis,
+            x_rope_positions=x_rope_positions,
             adaln_input=adaln_input,
             x_len=x_len,
         )
@@ -265,6 +282,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             context_refiner_blocks=block_weights.context_refiner,
             encoder_hidden_states=encoder_hidden_states,
             cap_freqs_cis=cap_freqs_cis,
+            cap_rope_positions=cap_rope_positions,
             cap_len=cap_len,
         )
 
@@ -273,8 +291,8 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             main_blocks=block_weights.blocks,
             hidden_states=hidden_states,
             encoder_hidden_states=encoder_hidden_states,
-            x_freqs_cis=x_freqs_cis,
-            cap_freqs_cis=cap_freqs_cis,
+            unified_freqs_cis=unified_freqs_cis,
+            unified_rope_positions=unified_rope_positions,
             adaln_input=adaln_input,
             x_len=x_len,
             cap_len=cap_len,
@@ -290,6 +308,7 @@ class ZImageTransformerInfer(BaseTransformerInfer):
         cap_item_seqlens = pre_infer_out.cap_item_seqlens
         x_freqs_cis = pre_infer_out.x_freqs_cis
         cap_freqs_cis = pre_infer_out.cap_freqs_cis
+        unified_freqs_cis = pre_infer_out.unified_freqs_cis
 
         hidden_states = self.infer_calculating(
             block_weights=block_weights,
@@ -297,6 +316,10 @@ class ZImageTransformerInfer(BaseTransformerInfer):
             encoder_hidden_states=encoder_hidden_states,
             x_freqs_cis=x_freqs_cis,
             cap_freqs_cis=cap_freqs_cis,
+            unified_freqs_cis=unified_freqs_cis,
+            x_rope_positions=pre_infer_out.x_rope_positions,
+            cap_rope_positions=pre_infer_out.cap_rope_positions,
+            unified_rope_positions=pre_infer_out.unified_rope_positions,
             adaln_input=adaln_input,
             x_item_seqlens=x_item_seqlens,
             cap_item_seqlens=cap_item_seqlens,
