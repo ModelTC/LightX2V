@@ -12,10 +12,7 @@ class RotaryPositionalEmbedding1D:
         cache_key = (device.type, device.index)
         inv_freq = self._inv_freq_cache.get(cache_key)
         if inv_freq is None:
-            inv_freq = 1.0 / (
-                self.base
-                ** (torch.arange(0, self.head_dim, 2, device=device, dtype=torch.float32) / self.head_dim)
-            )
+            inv_freq = 1.0 / (self.base ** (torch.arange(0, self.head_dim, 2, device=device, dtype=torch.float32) / self.head_dim))
             self._inv_freq_cache[cache_key] = inv_freq
         return inv_freq
 

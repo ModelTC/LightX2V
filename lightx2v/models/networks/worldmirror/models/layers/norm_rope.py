@@ -22,10 +22,7 @@ class NormalizedRotaryPositionEmbedding2DCache:
     def reshape(self, batch_size: int, token_count: int) -> "NormalizedRotaryPositionEmbedding2DCache":
         def reshape_tensor(tensor: torch.Tensor) -> torch.Tensor:
             if tensor.shape[0] * tensor.shape[2] != batch_size * token_count:
-                raise ValueError(
-                    f"Cannot reshape RoPE cache from batch/tokens={tensor.shape[0]}/{tensor.shape[2]} "
-                    f"to {batch_size}/{token_count}."
-                )
+                raise ValueError(f"Cannot reshape RoPE cache from batch/tokens={tensor.shape[0]}/{tensor.shape[2]} to {batch_size}/{token_count}.")
             return tensor.reshape(batch_size, 1, token_count, tensor.shape[-1])
 
         return NormalizedRotaryPositionEmbedding2DCache(

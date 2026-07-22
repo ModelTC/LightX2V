@@ -32,10 +32,7 @@ class RotaryPositionEmbedding2DCache:
     def reshape(self, batch_size: int, token_count: int) -> "RotaryPositionEmbedding2DCache":
         def reshape_tensor(tensor: torch.Tensor) -> torch.Tensor:
             if tensor.shape[0] * tensor.shape[2] != batch_size * token_count:
-                raise ValueError(
-                    f"Cannot reshape RoPE cache from batch/tokens={tensor.shape[0]}/{tensor.shape[2]} "
-                    f"to {batch_size}/{token_count}."
-                )
+                raise ValueError(f"Cannot reshape RoPE cache from batch/tokens={tensor.shape[0]}/{tensor.shape[2]} to {batch_size}/{token_count}.")
             return tensor.reshape(batch_size, 1, token_count, tensor.shape[-1])
 
         return RotaryPositionEmbedding2DCache(
@@ -192,9 +189,7 @@ class RotaryPositionEmbedding2D(nn.Module):
     @staticmethod
     def _validate_cache(tokens: torch.Tensor, cache: RotaryPositionEmbedding2DCache) -> None:
         if tokens.shape[0] != cache.vertical_cos.shape[0] or tokens.shape[-2] != cache.vertical_cos.shape[-2]:
-            raise ValueError(
-                f"RoPE cache shape does not match tokens: cache={cache.vertical_cos.shape}, tokens={tokens.shape}."
-            )
+            raise ValueError(f"RoPE cache shape does not match tokens: cache={cache.vertical_cos.shape}, tokens={tokens.shape}.")
 
     def apply_single(self, tokens: torch.Tensor, cache: RotaryPositionEmbedding2DCache) -> torch.Tensor:
         self._validate_cache(tokens, cache)

@@ -41,9 +41,7 @@ class LongCatImagePreInfer:
         cached = self._rope_cache[branch]
         if cached is not None:
             cached_sources, cached_value = cached
-            same_sources = len(cached_sources) == len(sources) and all(
-                cached_source is source for cached_source, source in zip(cached_sources, sources)
-            )
+            same_sources = len(cached_sources) == len(sources) and all(cached_source is source for cached_source, source in zip(cached_sources, sources))
             if same_sources:
                 return cached_value
 
