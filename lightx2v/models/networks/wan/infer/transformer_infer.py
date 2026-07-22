@@ -51,6 +51,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
+        self.rope_positions = None
         self.use_compile = config.get("use_compile", False)
         if self.use_compile:
             self.compiled_blocks = {}
@@ -87,6 +88,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
+        self.rope_positions = getattr(pre_infer_out, "rope_positions", None)
         self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
         self.reset_attention_states(weights.blocks)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
@@ -228,7 +230,10 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
             k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
             v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
-        q, k = phase.rope.apply(q, k, cos_sin)
+        if self.rope_positions is None:
+            q, k = phase.rope.apply(q, k, cos_sin)
+        else:
+            q, k = phase.rope.apply(q, k, cos_sin, positions=self.rope_positions)
         img_qkv_len = q.shape[0]
 
         if self.clean_cuda_cache:

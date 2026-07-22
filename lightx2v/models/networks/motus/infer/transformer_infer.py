@@ -45,7 +45,9 @@ class MotusTransformerInfer(BaseTransformerInfer):
 
         self.infer_func = self.infer_without_offload
         self.cos_sin = None
+        self.rope_positions = None
         self.weights = None
+        self._cu_seqlens_cache = {}
         self.reset_infer_states()
 
     def reset_infer_states(self):
@@ -68,15 +70,12 @@ class MotusTransformerInfer(BaseTransformerInfer):
         return self.weights.und.blocks[layer_idx]
 
     def _get_cu_seqlens(self, cache_name, batch, seq_len, device, attn_type):
-        cu_seqlens = getattr(self, cache_name)
-        expected_total = batch * seq_len
-        if cu_seqlens is None or int(cu_seqlens[-1].item()) != expected_total or cu_seqlens.device != device:
-            tensor = torch.arange(0, expected_total + seq_len, seq_len, dtype=torch.int32)
-            if attn_type in ["flash_attn2", "flash_attn3"]:
-                cu_seqlens = tensor.to(device, non_blocking=True)
-            else:
-                cu_seqlens = tensor
-            setattr(self, cache_name, cu_seqlens)
+        cache_key = (cache_name, batch, seq_len, device.type, device.index, attn_type)
+        cu_seqlens = self._cu_seqlens_cache.get(cache_key)
+        if cu_seqlens is None:
+            tensor = torch.arange(0, (batch + 1) * seq_len, seq_len, dtype=torch.int32)
+            cu_seqlens = tensor.to(device, non_blocking=True) if attn_type in ["flash_attn2", "flash_attn3"] else tensor
+            self._cu_seqlens_cache[cache_key] = cu_seqlens
         return cu_seqlens
 
     def _normalize_attention_dtype(self, tensor):
@@ -133,18 +132,34 @@ class MotusTransformerInfer(BaseTransformerInfer):
         out = x + y * gate.squeeze(2)
         return out if out.dtype == out_dtype else out.to(out_dtype)
 
-    def _apply_video_rope(self, q, k, cos_sin_cache):
+    def _apply_video_rope(self, q, k, cos_sin_cache, rope_positions):
         if q.dim() != 4:
             raise ValueError("Motus video rope expects q/k with shape [B, L, H, D].")
 
         if q.shape[0] == 1:
-            q_out, k_out = self.weights.rope.apply(q.squeeze(0), k.squeeze(0), cos_sin_cache)
+            if rope_positions is None:
+                q_out, k_out = self.weights.rope.apply(q.squeeze(0), k.squeeze(0), cos_sin_cache)
+            else:
+                q_out, k_out = self.weights.rope.apply(
+                    q.squeeze(0),
+                    k.squeeze(0),
+                    cos_sin_cache,
+                    positions=rope_positions,
+                )
             return q_out.unsqueeze(0), k_out.unsqueeze(0)
 
         q_list = []
         k_list = []
         for batch_idx in range(q.shape[0]):
-            q_i, k_i = self.weights.rope.apply(q[batch_idx], k[batch_idx], cos_sin_cache)
+            if rope_positions is None:
+                q_i, k_i = self.weights.rope.apply(q[batch_idx], k[batch_idx], cos_sin_cache)
+            else:
+                q_i, k_i = self.weights.rope.apply(
+                    q[batch_idx],
+                    k[batch_idx],
+                    cos_sin_cache,
+                    positions=rope_positions,
+                )
             q_list.append(q_i)
             k_list.append(k_i)
         return torch.stack(q_list, dim=0), torch.stack(k_list, dim=0)
@@ -187,7 +202,12 @@ class MotusTransformerInfer(BaseTransformerInfer):
             self.head_dim,
         )
         video_v = apply_mm(video_self_phase.self_attn_v, norm_video).view(batch, video_len, self.num_heads, self.head_dim)
-        video_q, video_k = self._apply_video_rope(video_q, video_k, pre_infer_out.cos_sin)
+        video_q, video_k = self._apply_video_rope(
+            video_q,
+            video_k,
+            pre_infer_out.cos_sin,
+            pre_infer_out.rope_positions,
+        )
 
         action_q, action_k, action_v = action_block.wan_action_qkv.apply(norm_action)
         action_q = action_block.wan_action_norm_q.apply(action_q.flatten(-2)).view(batch, action_len, self.num_heads, self.head_dim)
@@ -311,6 +331,7 @@ class MotusTransformerInfer(BaseTransformerInfer):
     def infer(self, weights, pre_infer_out):
         self.weights = weights
         self.cos_sin = pre_infer_out.cos_sin
+        self.rope_positions = pre_infer_out.rope_positions
         self.reset_infer_states()
 
         processed_t5_context = pre_infer_out.context

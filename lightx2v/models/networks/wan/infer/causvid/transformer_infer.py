@@ -1,219 +1,224 @@
-import math
-
 import torch
 
+from lightx2v.models.networks.wan.infer.mxfp8_fuse import scaled_mxfp8_modulate_quant
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
-from lightx2v.utils.envs import *
+from lightx2v_platform.base.global_var import AI_DEVICE
 
-from ..utils import compute_freqs_causvid
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class WanTransformerInferCausVid(WanOffloadTransformerInfer):
+    """Wan inference with persistent causal self/cross-attention caches."""
+
     def __init__(self, config):
         super().__init__(config)
         self.num_frames = config["num_frames"]
-        self.num_frame_per_block = config["num_frame_per_block"]
         self.frame_seq_length = config["frame_seq_length"]
-        self.text_len = config["text_len"]
         self.kv_cache = None
         self.crossattn_cache = None
+        self._cache_meta = None
+        self._kv_start = 0
+        self._kv_end = 0
+        self._cu_seqlens_cache = {}
 
-    def _init_kv_cache(self, dtype, device):
-        kv_cache = []
-        kv_size = self.num_frames * self.frame_seq_length
+    def _init_kv_cache(self, dtype, device, kv_size=None):
+        kv_size = kv_size or self.num_frames * self.frame_seq_length
+        self.kv_cache = [
+            {
+                "k": torch.zeros((kv_size, self.num_heads, self.head_dim), dtype=dtype, device=device),
+                "v": torch.zeros((kv_size, self.num_heads, self.head_dim), dtype=dtype, device=device),
+            }
+            for _ in range(self.blocks_num)
+        ]
+        self.crossattn_cache = [
+            {
+                "k": None,
+                "v": None,
+                "k_img": None,
+                "v_img": None,
+                "is_init": False,
+            }
+            for _ in range(self.blocks_num)
+        ]
+        self._cache_meta = (dtype, torch.device(device), kv_size)
 
-        for _ in range(self.blocks_num):
-            kv_cache.append(
-                {
-                    "k": torch.zeros([kv_size, self.num_heads, self.head_dim], dtype=dtype, device=device),
-                    "v": torch.zeros([kv_size, self.num_heads, self.head_dim], dtype=dtype, device=device),
-                }
+    def _ensure_attention_caches(self, x):
+        configured_size = self.num_frames * self.frame_seq_length
+        kv_size = max(configured_size, self._kv_end)
+        expected_meta = (x.dtype, x.device, kv_size)
+        if self._cache_meta != expected_meta or self.kv_cache is None:
+            self._init_kv_cache(x.dtype, x.device, kv_size)
+
+    def _get_cu_seqlens(self, q_len, kv_len):
+        key = (int(q_len), int(kv_len))
+        cached = self._cu_seqlens_cache.get(key)
+        if cached is None:
+            cached = (
+                torch.tensor([0, q_len], dtype=torch.int32),
+                torch.tensor([0, kv_len], dtype=torch.int32),
             )
+            self._cu_seqlens_cache[key] = cached
+        return cached
 
-        self.kv_cache = kv_cache
+    def reset_infer_states(self, x, context):
+        query_len = x.shape[0]
+        has_image_context = self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True)
+        context_len = context.shape[0] - (257 if has_image_context else 0)
 
-    def _init_crossattn_cache(self, dtype, device):
-        crossattn_cache = []
+        self.self_attn_cu_seqlens_qkv, _ = self._get_cu_seqlens(query_len, query_len)
+        self.cross_attn_cu_seqlens_q, self.cross_attn_cu_seqlens_kv = self._get_cu_seqlens(query_len, context_len)
+        if has_image_context:
+            _, self.cross_attn_cu_seqlens_kv_img = self._get_cu_seqlens(query_len, 257)
 
-        for _ in range(self.blocks_num):
-            crossattn_cache.append(
-                {
-                    "k": torch.zeros([self.text_len, self.num_heads, self.head_dim], dtype=dtype, device=device),
-                    "v": torch.zeros([self.text_len, self.num_heads, self.head_dim], dtype=dtype, device=device),
-                    "is_init": False,
-                }
-            )
+        if self.has_post_adapter:
+            self.reset_post_adapter_states()
 
-        self.crossattn_cache = crossattn_cache
+    @torch.no_grad()
+    def infer(self, weights, pre_infer_out, kv_start, kv_end):
+        if self.config["seq_parallel"]:
+            raise NotImplementedError("Sequence parallel inference is not implemented for CausVid.")
 
-    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
-        self.get_scheduler_values()
-        return self.infer_func(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end)
+        self._kv_start = int(kv_start)
+        self._kv_end = int(kv_end)
+        query_len = pre_infer_out.x.shape[0]
+        if self._kv_start < 0 or self._kv_end <= self._kv_start:
+            raise ValueError(f"Invalid CausVid KV range: [{self._kv_start}, {self._kv_end}).")
+        if self._kv_end - self._kv_start != query_len:
+            raise ValueError(f"CausVid query length must match its KV cache range: query_len={query_len}, range=[{self._kv_start}, {self._kv_end}).")
 
-    def _infer_with_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
-        for block_idx in range(self.blocks_num):
-            if block_idx == 0:
-                self.weights_stream_mgr.active_weights[0] = weights.blocks[0]
-                self.weights_stream_mgr.active_weights[0].to_cuda()
+        self._ensure_attention_caches(pre_infer_out.x)
+        return super().infer(weights, pre_infer_out)
 
-            with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
-                x = self.infer_block(
-                    self.weights_stream_mgr.active_weights[0],
-                    grid_sizes,
-                    embed,
-                    x,
-                    embed0,
-                    seq_lens,
-                    freqs,
-                    context,
-                    block_idx,
-                    kv_start,
-                    kv_end,
+    def infer_self_attn(self, phase, x, shift_msa, scale_msa, grid_sizes=None):
+        norm1_quant = None
+        norm1_scale = None
+        if hasattr(phase, "smooth_norm1_weight"):
+            norm1_weight = (1 + scale_msa.squeeze()) * phase.smooth_norm1_weight.tensor
+            norm1_bias = shift_msa.squeeze() * phase.smooth_norm1_bias.tensor
+            norm1_out = phase.norm1.apply(x)
+            if self.sensitive_layer_dtype != self.infer_dtype:
+                norm1_out = norm1_out.to(self.sensitive_layer_dtype)
+            norm1_out.mul_(norm1_weight).add_(norm1_bias)
+        else:
+            norm1_out = phase.norm1.apply(x)
+            if self.sensitive_layer_dtype != self.infer_dtype:
+                norm1_out = norm1_out.to(self.sensitive_layer_dtype)
+            if self._use_mxfp8_quant_fuse():
+                self._ensure_mxfp8_quant_fuse_ready(
+                    phase,
+                    norm1_out,
+                    scale_msa,
+                    shift_msa,
+                    module_names=("self_attn_q", "self_attn_k", "self_attn_v"),
                 )
+            if self._can_reuse_self_attn_mxfp8_quant(phase, norm1_out, scale_msa, shift_msa):
+                norm1_quant, norm1_scale = scaled_mxfp8_modulate_quant(norm1_out, scale_msa, shift_msa)
+            else:
+                norm1_out = self.modulate_func(norm1_out, scale=scale_msa, shift=shift_msa).squeeze()
 
-            if block_idx < self.blocks_num - 1:
-                self.weights_stream_mgr.prefetch_weights(block_idx + 1, weights.blocks)
-            self.weights_stream_mgr.swap_weights()
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            norm1_out = norm1_out.to(self.infer_dtype)
 
-        return x
-
-    def _infer_without_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, kv_start, kv_end):
-        for block_idx in range(self.blocks_num):
-            x = self.infer_block(
-                weights.blocks[block_idx],
-                grid_sizes,
-                embed,
-                x,
-                embed0,
-                seq_lens,
-                freqs,
-                context,
-                block_idx,
-                kv_start,
-                kv_end,
-            )
-        return x
-
-    def infer_self_attn(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx, kv_start, kv_end):
-        norm1_out = weights.norm1.apply(x)
-        norm1_out = (norm1_out * (1 + embed0[1]) + embed0[0]).squeeze(0)
-
-        s, n, d = *norm1_out.shape[:1], self.num_heads, self.head_dim
-        q = weights.self_attn_norm_q.apply(weights.self_attn_q.apply(norm1_out)).view(s, n, d)
-        k = weights.self_attn_norm_k.apply(weights.self_attn_k.apply(norm1_out)).view(s, n, d)
-        v = weights.self_attn_v.apply(norm1_out).view(s, n, d)
-
-        if not self.parallel_attention:
-            freqs_i = compute_freqs_causvid(q.size(2) // 2, grid_sizes, freqs, start_frame=kv_start // math.prod(grid_sizes[0][1:]).item())
+        seq_len, num_heads, head_dim = norm1_out.shape[0], self.num_heads, self.head_dim
+        if norm1_quant is not None:
+            q = phase.self_attn_norm_q.apply(self._mxfp8_apply_quantized(phase.self_attn_q, norm1_quant, norm1_scale)).view(seq_len, num_heads, head_dim)
+            k = phase.self_attn_norm_k.apply(self._mxfp8_apply_quantized(phase.self_attn_k, norm1_quant, norm1_scale)).view(seq_len, num_heads, head_dim)
+            v = self._mxfp8_apply_quantized(phase.self_attn_v, norm1_quant, norm1_scale).view(seq_len, num_heads, head_dim)
         else:
-            # TODO: Implement parallel attention for causvid inference
-            raise NotImplementedError("Parallel attention is not implemented for causvid inference")
+            q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(seq_len, num_heads, head_dim)
+            k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(seq_len, num_heads, head_dim)
+            v = phase.self_attn_v.apply(norm1_out).view(seq_len, num_heads, head_dim)
 
-        q, k = weights.rope.apply(q, k, freqs_i)
-
-        self.kv_cache[block_idx]["k"][kv_start:kv_end] = k
-        self.kv_cache[block_idx]["v"][kv_start:kv_end] = v
-
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q=q, k_lens=torch.tensor([kv_end], dtype=torch.int32))
-
-        if not self.parallel_attention:
-            attn_out = weights.self_attn_1.apply(
-                q=q,
-                k=self.kv_cache[block_idx]["k"][:kv_end],
-                v=self.kv_cache[block_idx]["v"][:kv_end],
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_k,
-                max_seqlen_q=q.size(0),
-                max_seqlen_kv=k.size(0),
-            )
+        if self.rope_positions is None:
+            q, k = phase.rope.apply(q, k, self.cos_sin)
         else:
-            # TODO: Implement parallel attention for causvid inference
-            raise NotImplementedError("Parallel attention is not implemented for causvid inference")
+            q, k = phase.rope.apply(q, k, self.cos_sin, positions=self.rope_positions)
+        block_cache = self.kv_cache[self.block_idx]
+        block_cache["k"][self._kv_start : self._kv_end].copy_(k)
+        block_cache["v"][self._kv_start : self._kv_end].copy_(v)
 
-        y = weights.self_attn_o.apply(attn_out)
+        cu_seqlens_q, cu_seqlens_kv = self._get_cu_seqlens(seq_len, self._kv_end)
+        attn_out = phase.self_attn_1.apply(
+            q=q,
+            k=block_cache["k"][: self._kv_end],
+            v=block_cache["v"][: self._kv_end],
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_kv=cu_seqlens_kv,
+            max_seqlen_q=seq_len,
+            max_seqlen_kv=self._kv_end,
+            block_idx=self.block_idx,
+            scheduler=self.scheduler,
+            grid_sizes=grid_sizes,
+        )
+        y = phase.self_attn_o.apply(attn_out)
 
-        x = x + y * embed0[2].squeeze(0)
+        if self.clean_cuda_cache:
+            del norm1_out, q, k, v, attn_out, shift_msa, scale_msa
+            if norm1_quant is not None:
+                del norm1_quant, norm1_scale
+            torch_device_module.empty_cache()
+        return y
 
-        return x
+    def infer_cross_attn(self, phase, x, context, y_out, gate_msa):
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            x = x.to(self.sensitive_layer_dtype) + y_out.to(self.sensitive_layer_dtype) * gate_msa.squeeze()
+        else:
+            x.add_(y_out * gate_msa.squeeze())
 
-    def infer_cross_attn(self, weights, x, context, block_idx):
-        norm3_out = weights.norm3.apply(x)
-
-        if self.task in ["i2v", "s2v", "rs2v"]:
+        norm3_out = phase.norm3.apply(x)
+        has_image_context = self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True)
+        if has_image_context:
             context_img = context[:257]
             context = context[257:]
-
-        n, d = self.num_heads, self.head_dim
-        q = weights.cross_attn_norm_q.apply(weights.cross_attn_q.apply(norm3_out)).view(-1, n, d)
-        if not self.crossattn_cache[block_idx]["is_init"]:
-            k = weights.cross_attn_norm_k.apply(weights.cross_attn_k.apply(context)).view(-1, n, d)
-            v = weights.cross_attn_v.apply(context).view(-1, n, d)
-            self.crossattn_cache[block_idx]["k"] = k
-            self.crossattn_cache[block_idx]["v"] = v
-            self.crossattn_cache[block_idx]["is_init"] = True
         else:
-            k = self.crossattn_cache[block_idx]["k"]
-            v = self.crossattn_cache[block_idx]["v"]
+            context_img = None
 
-        cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=torch.tensor([k.size(0)], dtype=torch.int32))
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            context = context.to(self.infer_dtype)
+            if context_img is not None:
+                context_img = context_img.to(self.infer_dtype)
 
-        attn_out = weights.cross_attn_1.apply(
+        num_heads, head_dim = self.num_heads, self.head_dim
+        q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, num_heads, head_dim)
+        block_cache = self.crossattn_cache[self.block_idx]
+        if not block_cache["is_init"]:
+            block_cache["k"] = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, num_heads, head_dim)
+            block_cache["v"] = phase.cross_attn_v.apply(context).view(-1, num_heads, head_dim)
+            if context_img is not None:
+                block_cache["k_img"] = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, num_heads, head_dim)
+                block_cache["v_img"] = phase.cross_attn_v_img.apply(context_img).view(-1, num_heads, head_dim)
+            block_cache["is_init"] = True
+
+        k = block_cache["k"]
+        v = block_cache["v"]
+        cu_seqlens_q, cu_seqlens_kv = self._get_cu_seqlens(q.size(0), k.size(0))
+        attn_out = phase.cross_attn_1.apply(
             q=q,
             k=k,
             v=v,
             cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_kv=cu_seqlens_k,
+            cu_seqlens_kv=cu_seqlens_kv,
             max_seqlen_q=q.size(0),
             max_seqlen_kv=k.size(0),
         )
 
-        if self.task in ["i2v", "s2v", "rs2v"]:
-            k_img = weights.cross_attn_norm_k_img.apply(weights.cross_attn_k_img.apply(context_img)).view(-1, n, d)
-            v_img = weights.cross_attn_v_img.apply(context_img).view(-1, n, d)
-
-            cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(
-                q,
-                k_lens=torch.tensor([k_img.size(0)], dtype=torch.int32),
-            )
-
-            img_attn_out = weights.cross_attn_2.apply(
+        k_img = block_cache["k_img"]
+        v_img = block_cache["v_img"]
+        if k_img is not None:
+            cu_seqlens_q, cu_seqlens_kv_img = self._get_cu_seqlens(q.size(0), k_img.size(0))
+            img_attn_out = phase.cross_attn_2.apply(
                 q=q,
                 k=k_img,
                 v=v_img,
                 cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_kv=cu_seqlens_k,
+                cu_seqlens_kv=cu_seqlens_kv_img,
                 max_seqlen_q=q.size(0),
                 max_seqlen_kv=k_img.size(0),
             )
+            attn_out.add_(img_attn_out)
 
-            attn_out = attn_out + img_attn_out
-
-        attn_out = weights.cross_attn_o.apply(attn_out)
-
-        x = x + attn_out
-
-        return x
-
-    def infer_ffn(self, weights, x, embed0):
-        norm2_out = weights.norm2.apply(x)
-        y = weights.ffn_0.apply(norm2_out * (1 + embed0[4].squeeze(0)) + embed0[3].squeeze(0))
-        y = torch.nn.functional.gelu(y, approximate="tanh")
-        y = weights.ffn_2.apply(y)
-        x = x + y * embed0[5].squeeze(0)
-
-        return x
-
-    def infer_block(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx, kv_start, kv_end):
-        if embed0.dim() == 3:
-            modulation = weights.compute_phases[0].modulation.tensor.unsqueeze(2)  # 1, 6, 1, dim
-            embed0 = embed0.unsqueeze(0)  #
-            embed0 = (modulation + embed0).chunk(6, dim=1)
-            embed0 = [ei.squeeze(1) for ei in embed0]
-        elif embed0.dim() == 2:
-            embed0 = (weights.compute_phases[0].modulation.tensor + embed0).chunk(6, dim=1)
-
-        x = self.infer_self_attn(weights.compute_phases[1], grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx, kv_start, kv_end)
-        x = self.infer_cross_attn(weights.compute_phases[2], x, context, block_idx)
-        x = self.infer_ffn(weights.compute_phases[3], x, embed0)
-
-        return x
+        attn_out = phase.cross_attn_o.apply(attn_out)
+        if self.clean_cuda_cache:
+            del q, norm3_out, context, context_img, y_out, gate_msa
+            torch_device_module.empty_cache()
+        return x, attn_out

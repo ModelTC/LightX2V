@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn.functional as F
 
-from lightx2v.common.ops.rope import FlashInferRope, RopeTemplate, TorchComplexRope
+from lightx2v.common.ops.rope import FlashInferRope, RopeTemplate, TorchRealRope
 from lightx2v.models.networks.wan.infer.dreamzero.pre_infer import _category_linear
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.models.networks.wan.infer.triton_ops import apply_rotary_embedding
@@ -22,22 +22,36 @@ class DreamZeroRope(RopeTemplate):
         super().__init__(layout=layout, compute_dtype=compute_dtype)
         if layout != "interleaved":
             raise ValueError("DreamZeroRope only supports interleaved layout.")
-        self.torch_rope = TorchComplexRope(compute_dtype=compute_dtype)
+        self.torch_rope = TorchRealRope(layout=layout, compute_dtype=compute_dtype)
         self.flashinfer_rope = FlashInferRope(layout=layout, compute_dtype=compute_dtype)
 
-    def apply(self, q, k, freqs, **kwargs):
-        if freqs.shape[0] != q.shape[0]:
-            raise ValueError(f"DreamZero RoPE length mismatch: freqs={freqs.shape[0]}, q={q.shape[0]}.")
-        if _can_use_cuda_kernels(q) and self.flashinfer_rope.is_available():
-            cos_sin = torch.cat(
+    def prepare_freqs(self, freqs, rotary_dim=None):
+        if torch.is_tensor(freqs) and torch.is_complex(freqs):
+            freqs = torch.cat(
                 [freqs.real.reshape(freqs.shape[0], -1), freqs.imag.reshape(freqs.shape[0], -1)],
                 dim=-1,
-            ).contiguous()
-            positions = torch.arange(q.shape[0], device=q.device, dtype=torch.long)
-            return self.flashinfer_rope.apply(q, k, cos_sin, positions=positions)
+            )
+        elif isinstance(freqs, tuple):
+            freqs = self.flashinfer_rope.prepare_freqs(freqs, rotary_dim=rotary_dim)
+        elif not torch.is_tensor(freqs):
+            raise TypeError(f"Unsupported DreamZero RoPE frequency type: {type(freqs)!r}")
+        if rotary_dim is not None and freqs.shape[-1] != rotary_dim:
+            raise ValueError(f"DreamZero RoPE frequency width must be {rotary_dim}, got {freqs.shape[-1]}.")
+        return freqs.to(dtype=self.compute_dtype).contiguous()
+
+    def prepare_positions(self, freqs):
+        return torch.arange(freqs.shape[0], device=freqs.device, dtype=torch.long)
+
+    def apply(self, q, k, freqs, positions=None, **kwargs):
+        freqs = self.prepare_freqs(freqs, rotary_dim=q.shape[-1])
+        if freqs.shape[0] != q.shape[0]:
+            raise ValueError(f"DreamZero RoPE length mismatch: freqs={freqs.shape[0]}, q={q.shape[0]}.")
+        if positions is not None and positions.shape[0] != q.shape[0]:
+            raise ValueError(f"DreamZero RoPE position length mismatch: positions={positions.shape[0]}, q={q.shape[0]}.")
+        if _can_use_cuda_kernels(q) and self.flashinfer_rope.is_available():
+            return self.flashinfer_rope.apply(q, k, freqs, positions=positions)
         if _can_use_cuda_kernels(q):
-            cos = freqs.real.reshape(freqs.shape[0], -1).contiguous()
-            sin = freqs.imag.reshape(freqs.shape[0], -1).contiguous()
+            cos, sin = freqs.chunk(2, dim=-1)
             return (
                 apply_rotary_embedding(q.contiguous(), cos, sin, interleaved=False),
                 apply_rotary_embedding(k.contiguous(), cos, sin, interleaved=False),
@@ -230,7 +244,12 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
         k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(seq_total, self.num_heads, self.head_dim)
         v = phase.self_attn_v.apply(norm1_out).view(seq_total, self.num_heads, self.head_dim)
-        q, k = phase.dreamzero_rope.apply(q, k, pre_infer_out.freqs)
+        q, k = phase.dreamzero_rope.apply(
+            q,
+            k,
+            pre_infer_out.freqs,
+            positions=pre_infer_out.rope_positions,
+        )
 
         action_k = action_v = None
         if pre_infer_out.action_register_length is not None:

@@ -39,6 +39,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
         temb_img_silu,
         temb_txt_silu,
         image_rotary_emb,
+        image_rotary_positions,
         modulate_index,
     ):
         for block_idx in range(len(blocks)):
@@ -66,6 +67,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                             hidden_states=hidden_states,
                             temb_img_silu=temb_img_silu,
                             img_freqs=image_rotary_emb[0],
+                            img_positions=image_rotary_positions[0],
                             modulate_index=modulate_index,
                         )
                     elif phase_idx == 1:
@@ -74,6 +76,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                             encoder_hidden_states=encoder_hidden_states,
                             temb_txt_silu=temb_txt_silu,
                             txt_freqs=image_rotary_emb[1],
+                            txt_positions=image_rotary_positions[1],
                         )
                     elif phase_idx == 2:
                         hidden_states, encoder_hidden_states = self.infer_cross_attn(
@@ -112,6 +115,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
         temb_img_silu,
         temb_txt_silu,
         image_rotary_emb,
+        image_rotary_positions,
         modulate_index,
     ):
         for block_idx in range(self.num_blocks):
@@ -136,6 +140,7 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                     temb_img_silu=temb_img_silu,
                     temb_txt_silu=temb_txt_silu,
                     image_rotary_emb=image_rotary_emb,
+                    image_rotary_positions=image_rotary_positions,
                     modulate_index=modulate_index,
                 )
 

@@ -70,6 +70,7 @@ class HidreamO1ImageModel(BaseTransformerModel):
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)
+        self.pre_infer.set_rope(self.transformer_weights.blocks[0].rope)
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
 

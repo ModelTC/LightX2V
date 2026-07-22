@@ -42,6 +42,11 @@ class QwenImageTransformerModel(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
+        first_block = self.transformer_weights.blocks[0]
+        self.pre_infer.set_rope(
+            img_rope=first_block.compute_phases[0].rope,
+            txt_rope=first_block.compute_phases[1].rope,
+        )
         if hasattr(self.transformer_infer, "offload_manager"):
             self._init_offload_manager()
 

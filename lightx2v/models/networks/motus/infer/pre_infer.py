@@ -11,6 +11,7 @@ class MotusPreInfer(WanPreInfer):
         super().__init__(config)
         self.model = model
         self.scheduler = None
+        self._grid_cache = {}
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -35,19 +36,21 @@ class MotusPreInfer(WanPreInfer):
             raise RuntimeError(f"Expected video latents with shape [B, C, T, H, W], got {tuple(video_latents.shape)}")
         batch_size = state.shape[0]
         _, _, latent_t, latent_h, latent_w = video_latents.shape
-        grid_sizes = torch.tensor(
-            [[latent_t, latent_h // self.model.video_backbone.patch_size[1], latent_w // self.model.video_backbone.patch_size[2]]],
-            dtype=torch.long,
-            device=state.device,
-        ).expand(batch_size, -1)
-        grid_output = GridOutput(
-            tensor=grid_sizes,
-            tuple=tuple(int(v) for v in grid_sizes[0].tolist()),
+        grid_tuple = (
+            latent_t,
+            latent_h // self.model.video_backbone.patch_size[1],
+            latent_w // self.model.video_backbone.patch_size[2],
         )
+        grid_key = (batch_size, grid_tuple, state.device.type, state.device.index)
+        grid_output = self._grid_cache.get(grid_key)
+        if grid_output is None:
+            grid_sizes = torch.tensor([grid_tuple], dtype=torch.long, device=state.device).expand(batch_size, -1)
+            grid_output = GridOutput(tensor=grid_sizes, tuple=grid_tuple)
+            self._grid_cache[grid_key] = grid_output
 
         if self.cos_sin is None or self.grid_sizes != grid_output.tuple:
             self.grid_sizes = grid_output.tuple
-            self.cos_sin = self.prepare_cos_sin(grid_output.tuple, self.freqs.clone())
+            self.cos_sin = self.prepare_rope_cache(self.prepare_cos_sin(grid_output.tuple, self.freqs.clone()))
 
         dummy_embed = torch.empty(0, device=state.device, dtype=processed_t5_context.dtype)
 
@@ -58,6 +61,7 @@ class MotusPreInfer(WanPreInfer):
             embed0=dummy_embed,
             context=processed_t5_context,
             cos_sin=self.cos_sin,
+            rope_positions=self.rope_positions,
             first_frame=first_frame,
             state=state,
             instruction=instruction,

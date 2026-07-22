@@ -16,9 +16,97 @@ class ZImagePreInfer:
         self.attention_kwargs = {}
         self.cpu_offload = config.get("cpu_offload", False)
         self.zero_cond_t = config.get("zero_cond_t", False)
+        self.rope = None
+        self._rope_cache = {}
+
+    def set_rope(self, rope):
+        self.rope = rope
+        self._rope_cache.clear()
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+        self._rope_cache.clear()
+
+    @staticmethod
+    def _device_key(device):
+        return device.type, device.index
+
+    def _prepare_rope_cache(
+        self,
+        device,
+        f_tokens,
+        h_tokens,
+        w_tokens,
+        x_ori_len,
+        x_padded_len,
+        cap_padded_len,
+    ):
+        if self.rope is None:
+            raise RuntimeError("ZImagePreInfer RoPE is not initialized.")
+
+        world_size = 1
+        rank = 0
+        if self.config["seq_parallel"]:
+            seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+            world_size = torch.distributed.get_world_size(seq_p_group)
+            rank = torch.distributed.get_rank(seq_p_group)
+
+        cache_key = (
+            self._device_key(device),
+            f_tokens,
+            h_tokens,
+            w_tokens,
+            x_ori_len,
+            x_padded_len,
+            cap_padded_len,
+            world_size,
+            rank,
+        )
+        cached = self._rope_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        cap_pos_ids = self.scheduler.create_coordinate_grid(
+            size=(cap_padded_len, 1, 1),
+            start=(1, 0, 0),
+            device=device,
+        ).flatten(0, 2)
+        image_pos_ids = self.scheduler.create_coordinate_grid(
+            size=(f_tokens, h_tokens, w_tokens),
+            start=(cap_padded_len + 1, 0, 0),
+            device=device,
+        ).flatten(0, 2)
+        if x_padded_len > x_ori_len:
+            padding_pos_ids = torch.zeros(
+                (x_padded_len - x_ori_len, image_pos_ids.shape[-1]),
+                dtype=image_pos_ids.dtype,
+                device=device,
+            )
+            image_pos_ids = torch.cat([image_pos_ids, padding_pos_ids], dim=0)
+
+        x_freqs_cis = self.scheduler.generate_freqs_cis_from_position_ids(image_pos_ids, device=device)
+        cap_freqs_cis = self.scheduler.generate_freqs_cis_from_position_ids(cap_pos_ids, device=device)
+
+        if world_size > 1:
+            padding_size = (-x_freqs_cis.shape[0]) % world_size
+            if padding_size:
+                x_freqs_cis = F.pad(x_freqs_cis, (0, 0, 0, padding_size))
+            x_freqs_cis = torch.chunk(x_freqs_cis, world_size, dim=0)[rank]
+
+        rotary_dim = sum(self.config.get("axes_dims", [32, 48, 48]))
+        x_freqs_cis = self.rope.prepare_freqs(x_freqs_cis, rotary_dim=rotary_dim)
+        cap_freqs_cis = self.rope.prepare_freqs(cap_freqs_cis, rotary_dim=rotary_dim)
+        unified_freqs_cis = torch.cat([x_freqs_cis, cap_freqs_cis], dim=0)
+        cached = (
+            x_freqs_cis,
+            cap_freqs_cis,
+            unified_freqs_cis,
+            self.rope.prepare_positions(x_freqs_cis),
+            self.rope.prepare_positions(cap_freqs_cis),
+            self.rope.prepare_positions(unified_freqs_cis),
+        )
+        self._rope_cache[cache_key] = cached
+        return cached
 
     def infer(self, weights, hidden_states, encoder_hidden_states):
         patch_size = self.config.get("patch_size", 2)
@@ -99,37 +187,22 @@ class ZImagePreInfer:
                 cap_pad_token = cap_pad_token.squeeze(0)  # [D]
             encoder_hidden_states[cap_pad_mask] = cap_pad_token
 
-        device = hidden_states.device
-
-        # Generate position IDs for caption
-        cap_pos_ids = self.scheduler.create_coordinate_grid(
-            size=(cap_padded_len, 1, 1),
-            start=(1, 0, 0),
-            device=device,
-        ).flatten(0, 2)
-
-        # Generate position IDs for image
-        image_pos_ids = self.scheduler.create_coordinate_grid(
-            size=(F_tokens, H_tokens, W_tokens),
-            start=(cap_padded_len + 1, 0, 0),
-            device=device,
-        ).flatten(0, 2)
-
-        if x_padded_len > x_ori_len:
-            padding_pos_ids = (
-                self.scheduler.create_coordinate_grid(
-                    size=(1, 1, 1),
-                    start=(0, 0, 0),
-                    device=device,
-                )
-                .flatten(0, 2)
-                .repeat(x_padded_len - x_ori_len, 1)
-            )
-            image_pos_ids = torch.cat([image_pos_ids, padding_pos_ids], dim=0)
-
-        # Generate freqs_cis
-        x_freqs_cis = self.scheduler.generate_freqs_cis_from_position_ids(image_pos_ids, device=device)
-        cap_freqs_cis = self.scheduler.generate_freqs_cis_from_position_ids(cap_pos_ids, device=device)
+        (
+            x_freqs_cis,
+            cap_freqs_cis,
+            unified_freqs_cis,
+            x_rope_positions,
+            cap_rope_positions,
+            unified_rope_positions,
+        ) = self._prepare_rope_cache(
+            hidden_states.device,
+            F_tokens,
+            H_tokens,
+            W_tokens,
+            x_ori_len,
+            x_padded_len,
+            cap_padded_len,
+        )
 
         embed0 = weights.time_text_embed_timestep_embedder_linear_1.apply(self.scheduler.timesteps_proj)
         embed0 = F.silu(embed0)
@@ -160,6 +233,10 @@ class ZImagePreInfer:
             temb_txt_silu=temb_txt_silu,
             x_freqs_cis=x_freqs_cis,
             cap_freqs_cis=cap_freqs_cis,
+            unified_freqs_cis=unified_freqs_cis,
+            x_rope_positions=x_rope_positions,
+            cap_rope_positions=cap_rope_positions,
+            unified_rope_positions=unified_rope_positions,
             image_tokens_len=image_tokens_len,
             x_item_seqlens=[x_padded_len],
             cap_item_seqlens=[cap_padded_len],

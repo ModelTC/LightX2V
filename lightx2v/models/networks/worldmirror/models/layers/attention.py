@@ -119,19 +119,22 @@ class Attention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-    def forward(self, x: Tensor, pos=None) -> Tensor:
+    def forward(self, x: Tensor, pos=None, rope_cache=None) -> Tensor:
         q, k, v, B, N, C = self._compute_qkv(x)
 
         if self.rope is not None:
-            q = self.rope(q, pos)
-            k = self.rope(k, pos)
+            if rope_cache is not None:
+                q, k = self.rope.apply_qk(q, k, rope_cache)
+            else:
+                q = self.rope(q, pos)
+                k = self.rope(k, pos)
 
         x = self._apply_attention(q, k, v)
         return self._project_output(x, B, N, C)
 
 
 class DistAttention(Attention):
-    def forward(self, x: Tensor, pos=None, sp_size=1, sp_group=None, padding_tokens=0) -> Tensor:
+    def forward(self, x: Tensor, pos=None, sp_size=1, sp_group=None, padding_tokens=0, rope_cache=None) -> Tensor:
         q, k, v, B, N, C = self._compute_qkv(x)
 
         if sp_size > 1:
@@ -143,8 +146,11 @@ class DistAttention(Attention):
             v = depad_by_length(v, padding_tokens, 2)
 
         if self.rope is not None:
-            q = self.rope(q, pos)
-            k = self.rope(k, pos)
+            if rope_cache is not None:
+                q, k = self.rope.apply_qk(q, k, rope_cache)
+            else:
+                q = self.rope(q, pos)
+                k = self.rope(k, pos)
 
         x = self._apply_attention(q, k, v)
 
