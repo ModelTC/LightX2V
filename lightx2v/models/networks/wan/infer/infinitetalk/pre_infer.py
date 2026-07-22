@@ -18,14 +18,34 @@ class WanInfiniteTalkPreInfer(WanPreInfer):
         self.audio_output_dim = config.get("infinitetalk_audio_output_dim", 768)
         self.audio_rope = None
         self.rope_1d = RotaryPositionalEmbedding1D(self.head_size)
-        self._audio_rope_cache = {}
+        self.clear_request_rope_cache()
+
+    def clear_request_rope_cache(self):
+        self._rope_cache_request_id = None
+        self._audio_rope_cache = None
+        self.cos_sin = None
+        self.rope_positions = None
+        self.grid_sizes = (0, 0, 0)
 
     def set_audio_rope(self, rope):
         self.audio_rope = rope
-        self._audio_rope_cache.clear()
+        self.clear_request_rope_cache()
+
+    def set_scheduler(self, scheduler):
+        super().set_scheduler(scheduler)
+        self.clear_request_rope_cache()
+
+    def _sync_request_rope_cache(self):
+        request_id = self.scheduler.rope_request_id
+        if request_id == self._rope_cache_request_id:
+            return
+
+        self.clear_request_rope_cache()
+        self._rope_cache_request_id = request_id
 
     @torch.no_grad()
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
+        self._sync_request_rope_cache()
         original_latents = self.scheduler.latents
         image_encoder_output = inputs.get("image_encoder_output", {})
         original_vae_encoder_out = image_encoder_output.get("vae_encoder_out")
@@ -134,8 +154,8 @@ class WanInfiniteTalkPreInfer(WanPreInfer):
             device.index,
             dtype,
         )
-        cached = self._audio_rope_cache.get(cache_key)
-        if cached is None:
+        cached = self._audio_rope_cache
+        if cached is None or cached[0] != cache_key:
             h1 = torch.tensor((0, self.config.get("infinitetalk_class_interval", 4)), dtype=dtype, device=device)
             class_range = self.config.get("infinitetalk_class_range", 24)
             h2 = torch.tensor(
@@ -163,8 +183,10 @@ class WanInfiniteTalkPreInfer(WanPreInfer):
                 per_frame[token_edges[idx] : token_edges[idx + 1]] = rope_centers[idx]
             encoder_pos = per_frame.repeat(grid_t)
             encoder_freqs, encoder_positions = self.rope_1d.prepare(self.audio_rope, encoder_pos)
-            cached = (rope_ranges, encoder_freqs, encoder_positions)
-            self._audio_rope_cache[cache_key] = cached
+            value = (rope_ranges, encoder_freqs, encoder_positions)
+            self._audio_rope_cache = (cache_key, value)
+        else:
+            value = cached[1]
 
-        pre_out.adapter_args["audio_rope_ranges"] = cached[0]
-        pre_out.adapter_args["audio_encoder_rope"] = cached[1:]
+        pre_out.adapter_args["audio_rope_ranges"] = value[0]
+        pre_out.adapter_args["audio_encoder_rope"] = value[1:]
