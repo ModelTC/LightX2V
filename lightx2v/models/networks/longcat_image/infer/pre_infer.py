@@ -12,9 +12,44 @@ class LongCatImagePreInfer:
         self.config = config
         self.attention_kwargs = {}
         self.cpu_offload = config.get("cpu_offload", False)
+        self.head_dim = config["attention_head_dim"]
+        self.rope = None
+        self.clear_rope_cache()
+
+    def clear_rope_cache(self):
+        self._rope_cache = {True: None, False: None}
+
+    def set_rope(self, rope):
+        self.rope = rope
+        self.clear_rope_cache()
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+        self.clear_rope_cache()
+
+    def prepare_rope_cache(self, image_rotary_emb):
+        if self.rope is None:
+            raise RuntimeError("LongCatImagePreInfer RoPE is not initialized.")
+
+        image_rotary_emb = self.rope.prepare_freqs(image_rotary_emb, rotary_dim=self.head_dim)
+        image_rotary_positions = self.rope.prepare_positions(image_rotary_emb)
+        return image_rotary_emb, image_rotary_positions
+
+    def get_rope_cache(self, image_rotary_emb):
+        branch = bool(self.scheduler.infer_condition)
+        sources = tuple(image_rotary_emb[:2]) if isinstance(image_rotary_emb, tuple) else (image_rotary_emb,)
+        cached = self._rope_cache[branch]
+        if cached is not None:
+            cached_sources, cached_value = cached
+            same_sources = len(cached_sources) == len(sources) and all(
+                cached_source is source for cached_source, source in zip(cached_sources, sources)
+            )
+            if same_sources:
+                return cached_value
+
+        prepared = self.prepare_rope_cache(image_rotary_emb)
+        self._rope_cache[branch] = (sources, prepared)
+        return prepared
 
     def infer(self, weights, hidden_states, encoder_hidden_states):
         """
@@ -59,6 +94,7 @@ class LongCatImagePreInfer:
             image_rotary_emb = self.scheduler.image_rotary_emb
         else:
             image_rotary_emb = self.scheduler.negative_image_rotary_emb
+        image_rotary_emb, image_rotary_positions = self.get_rope_cache(image_rotary_emb)
 
         # For I2I task: get input image latents and output sequence length
         input_image_latents = None
@@ -73,6 +109,7 @@ class LongCatImagePreInfer:
             encoder_hidden_states=encoder_hidden_states,
             temb=temb,
             image_rotary_emb=image_rotary_emb,
+            image_rotary_positions=image_rotary_positions,
             input_image_latents=input_image_latents,
             output_seq_len=output_seq_len,
         )

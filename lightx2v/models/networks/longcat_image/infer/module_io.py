@@ -9,7 +9,8 @@ class LongCatImagePreInferModuleOutput:
     hidden_states: torch.Tensor
     encoder_hidden_states: torch.Tensor
     temb: torch.Tensor
-    image_rotary_emb: tuple  # (cos, sin) tuple
+    image_rotary_emb: torch.Tensor | tuple[torch.Tensor, torch.Tensor]
+    image_rotary_positions: Optional[torch.Tensor]
     # For I2I (image editing) task
     input_image_latents: Optional[torch.Tensor] = None
     output_seq_len: Optional[int] = None
