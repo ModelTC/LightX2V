@@ -20,6 +20,12 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
         self._kv_start = 0
         self._kv_end = 0
         self._cu_seqlens_cache = {}
+        self._cu_seqlens_cache_request_id = None
+
+    def set_scheduler(self, scheduler):
+        super().set_scheduler(scheduler)
+        self._cu_seqlens_cache_request_id = None
+        self._clear_request_cache()
 
     def _init_kv_cache(self, dtype, device, kv_size=None):
         kv_size = kv_size or self.num_frames * self.frame_seq_length
@@ -49,6 +55,22 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
         if self._cache_meta != expected_meta or self.kv_cache is None:
             self._init_kv_cache(x.dtype, x.device, kv_size)
 
+    def _clear_request_cache(self):
+        self._cu_seqlens_cache.clear()
+        if self.crossattn_cache is None:
+            return
+        for block_cache in self.crossattn_cache:
+            block_cache["k"] = None
+            block_cache["v"] = None
+            block_cache["k_img"] = None
+            block_cache["v_img"] = None
+            block_cache["is_init"] = False
+
+    def set_scheduler(self, scheduler):
+        super().set_scheduler(scheduler)
+        self._cu_seqlens_cache_request_id = None
+        self._clear_request_cache()
+
     def _get_cu_seqlens(self, q_len, kv_len):
         key = (int(q_len), int(kv_len))
         cached = self._cu_seqlens_cache.get(key)
@@ -77,9 +99,16 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
     def infer(self, weights, pre_infer_out, kv_start, kv_end):
         if self.config["seq_parallel"]:
             raise NotImplementedError("Sequence parallel inference is not implemented for CausVid.")
+        if not hasattr(self, "scheduler"):
+            raise RuntimeError("WanTransformerInferCausVid scheduler is not initialized.")
 
         self._kv_start = int(kv_start)
         self._kv_end = int(kv_end)
+        request_id = self.scheduler.rope_request_id
+        if request_id != self._cu_seqlens_cache_request_id:
+            self._clear_request_cache()
+            self._cu_seqlens_cache_request_id = request_id
+
         query_len = pre_infer_out.x.shape[0]
         if self._kv_start < 0 or self._kv_end <= self._kv_start:
             raise ValueError(f"Invalid CausVid KV range: [{self._kv_start}, {self._kv_end}).")
