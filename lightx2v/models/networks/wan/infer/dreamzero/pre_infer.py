@@ -60,10 +60,18 @@ class DreamZeroPreInfer:
         self._freqs_state = None
         self._context_projection_cache = {}
         self._freqs_cache = {}
+        self._prepared_freqs_cache = {}
         self._time_embedding_cache = {}
+        self.rope = None
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+
+    def set_rope(self, rope):
+        if self.rope is rope:
+            return
+        self.rope = rope
+        self._prepared_freqs_cache.clear()
 
     def clear_cache(self):
         self._context_projection_cache.clear()
@@ -131,6 +139,19 @@ class DreamZeroPreInfer:
         )
         self._freqs_cache[cache_key] = freqs
         return freqs
+
+    def _prepare_attention_freqs(self, freqs, grid_size, start_frame, action_register_length, device):
+        if self.rope is None:
+            return freqs, None
+        cache_key = (tuple(grid_size), int(start_frame), action_register_length, str(device))
+        cached = self._prepared_freqs_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        prepared_freqs = self.rope.prepare_freqs(freqs, rotary_dim=self.head_dim)
+        rope_positions = self.rope.prepare_positions(prepared_freqs)
+        cached = (prepared_freqs, rope_positions)
+        self._prepared_freqs_cache[cache_key] = cached
+        return cached
 
     def _action_encoder(self, weights, action, timestep_action):
         action_features = _category_linear(action, weights.action_encoder.W1)
@@ -279,12 +300,20 @@ class DreamZeroPreInfer:
 
         current_start_frame = int(inputs.get("current_start_frame", 0))
         freqs = self._create_attention_freqs(grid_size, current_start_frame, action_register_length, x.device)
+        freqs, rope_positions = self._prepare_attention_freqs(
+            freqs,
+            grid_size,
+            current_start_frame,
+            action_register_length,
+            x.device,
+        )
         return DreamZeroPreInferOutput(
             x=x,
             embed=embed,
             embed0=embed0,
             context=None,
             freqs=freqs,
+            rope_positions=rope_positions,
             freqs_action=self._freqs_action,
             freqs_state=self._freqs_state,
             grid_size=grid_size,
