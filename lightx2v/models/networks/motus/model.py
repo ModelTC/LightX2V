@@ -296,6 +296,7 @@ class MotusModel(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self, self.config)
         self.transformer_infer = self.transformer_infer_class(self, self.config)
         self.post_infer = self.post_infer_class(self, self.config)
+        self.pre_infer.set_rope(self.transformer_weights.rope)
 
     def _move_weight_tree(self, node, move_to_cuda, non_blocking=False):
         if node is None:
