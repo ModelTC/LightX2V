@@ -172,6 +172,10 @@ def add_residual(x, brange, residual, residual_scale_factor, scaling_vector=None
 attn_bias_cache: Dict[Tuple, Any] = {}
 
 
+def clear_attn_bias_cache() -> None:
+    attn_bias_cache.clear()
+
+
 def get_attn_bias_and_cat(x_list, branges=None):
     """
     this will perform the index select, cat the tensors, and provide the attn_bias from cache
