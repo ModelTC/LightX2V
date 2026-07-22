@@ -16,10 +16,13 @@ class QwenImagePreInfer:
         self.use_additional_t_cond = config.get("use_additional_t_cond", False)
         self.img_rope = None
         self.txt_rope = None
+        self.scheduler = None
         self.clear_rope_cache()
 
     def clear_rope_cache(self):
-        self._rope_cache = {True: None, False: None}
+        self._rope_cache_request_id = None
+        self._img_rope_cache = None
+        self._txt_rope_cache = {True: None, False: None}
 
     def set_rope(self, img_rope, txt_rope):
         self.img_rope = img_rope
@@ -30,31 +33,40 @@ class QwenImagePreInfer:
         self.scheduler = scheduler
         self.clear_rope_cache()
 
-    def prepare_rope_cache(self, image_rotary_emb):
+    def get_rope_cache(self, image_rotary_emb):
+        if self.scheduler is None:
+            raise RuntimeError("QwenImagePreInfer scheduler is not initialized.")
+        request_id = self.scheduler.rope_request_id
+        if request_id != self._rope_cache_request_id:
+            self._rope_cache_request_id = request_id
+            self._img_rope_cache = None
+            self._txt_rope_cache = {True: None, False: None}
+
         if self.img_rope is None or self.txt_rope is None:
             raise RuntimeError("QwenImagePreInfer RoPE is not initialized.")
 
-        img_freqs, txt_freqs = image_rotary_emb
-        img_freqs = self.img_rope.prepare_freqs(img_freqs)
-        txt_freqs = self.txt_rope.prepare_freqs(txt_freqs)
-        positions = (
-            self.img_rope.prepare_positions(img_freqs),
-            self.txt_rope.prepare_positions(txt_freqs),
-        )
-        return (img_freqs, txt_freqs), positions
-
-    def get_rope_cache(self, image_rotary_emb):
         branch = bool(self.scheduler.infer_condition)
         img_source, txt_source = image_rotary_emb
-        cached = self._rope_cache[branch]
-        if cached is not None:
-            cached_sources, cached_value = cached
-            if cached_sources[0] is img_source and cached_sources[1] is txt_source:
-                return cached_value
 
-        prepared = self.prepare_rope_cache(image_rotary_emb)
-        self._rope_cache[branch] = ((img_source, txt_source), prepared)
-        return prepared
+        if self._img_rope_cache is None:
+            img_freqs = self.img_rope.prepare_freqs(img_source)
+            img_positions = self.img_rope.prepare_positions(img_freqs)
+            self._img_rope_cache = (img_source, (img_freqs, img_positions))
+        else:
+            cached_img_source, _ = self._img_rope_cache
+            if cached_img_source is not img_source:
+                raise RuntimeError("QwenImageScheduler must share image RoPE frequencies between cond and uncond within one request.")
+        _, (img_freqs, img_positions) = self._img_rope_cache
+
+        cached_txt = self._txt_rope_cache[branch]
+        if cached_txt is None or cached_txt[0] is not txt_source:
+            txt_freqs = self.txt_rope.prepare_freqs(txt_source)
+            txt_positions = self.txt_rope.prepare_positions(txt_freqs)
+            cached_txt = (txt_source, (txt_freqs, txt_positions))
+            self._txt_rope_cache[branch] = cached_txt
+        _, (txt_freqs, txt_positions) = cached_txt
+
+        return (img_freqs, txt_freqs), (img_positions, txt_positions)
 
     def infer(self, weights, hidden_states, encoder_hidden_states):
         hidden_states = weights.img_in.apply(hidden_states.squeeze(0))
