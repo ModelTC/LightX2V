@@ -62,7 +62,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                 raise ValueError("seq_p_quant_scheme conflicts with legacy seq_p_fp8_comm/seq_p_fp4_comm settings.")
             if self.seq_p_quant_scheme is None:
                 self.seq_p_quant_scheme = legacy_quant_scheme
-            self.use_new_ulysses_interface = self.seq_p_attn_type == "ulysses" and any(key in parallel_config for key in ("seq_p_prepost_backend", "seq_p_a2a_backend", "seq_p_quant_scheme"))
+            self.use_new_seq_p_interface = True
         else:
             self.seq_p_group = None
             self.seq_p_attn_type = None
@@ -74,7 +74,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             self.seq_p_a2a_backend = "torch"
             self.seq_p_quant_scheme = None
             self.seq_p_configured_quant_scheme = None
-            self.use_new_ulysses_interface = False
+            self.use_new_seq_p_interface = False
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
@@ -275,7 +275,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         }
 
         if self.config["seq_parallel"]:
-            if self.use_new_ulysses_interface:
+            if self.use_new_seq_p_interface:
                 attn_out, aux_attn_out = phase.self_attn_1_parallel.apply_new(
                     q=q,
                     k=k,
@@ -285,7 +285,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                     prepost_backend=self.seq_p_prepost_backend,
                     a2a_backend=self.seq_p_a2a_backend,
                     quant_scheme=self.seq_p_quant_scheme,
-                    qkv_fusion=self.seq_p_tensor_fusion,
+                    tensor_fusion=self.seq_p_tensor_fusion,
                     head_parallel=self.seq_p_head_parallel,
                     attention_kwargs=attn_running_args,
                 )

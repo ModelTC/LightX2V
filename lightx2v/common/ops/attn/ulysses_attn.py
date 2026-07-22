@@ -8,6 +8,7 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from .template import AttnWeightTemplate
 from .ulysses_a2a import create_ulysses_a2a_backend
 from .ulysses_prepost import create_ulysses_prepost_backend
+from .utils.seq_p import flatten_seq_p_tensor, split_main_aux_output, validate_seq_p_inputs
 
 
 @ATTN_WEIGHT_REGISTER("ulysses")
@@ -42,9 +43,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         ``cu_seqlens_qkv`` is retained only for call-signature compatibility;
         its value is ignored.
         """
-        q = self._flatten_tensor(q)
-        k = self._flatten_tensor(k)
-        v = self._flatten_tensor(v)
+        q = flatten_seq_p_tensor(q, "q")
+        k = flatten_seq_p_tensor(k, "k")
+        v = flatten_seq_p_tensor(v, "v")
 
         split_len = int(slice_qkv_len.item()) if isinstance(slice_qkv_len, torch.Tensor) else int(slice_qkv_len)
         main_first = img_first
@@ -76,7 +77,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             attention_module=attention_module,
             seq_p_group=seq_p_group,
             quant_scheme=quant_scheme,
-            qkv_fusion=use_tensor_fusion,
+            tensor_fusion=use_tensor_fusion,
             head_parallel=enable_head_parallel,
             aux_first=not main_first,
             attention_kwargs=kwargs,
@@ -96,7 +97,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         prepost_backend=None,
         a2a_backend=None,
         quant_scheme=None,
-        qkv_fusion=False,
+        tensor_fusion=False,
         head_parallel=False,
         aux_first=False,
         attention_kwargs=None,
@@ -104,7 +105,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         """Run Ulysses attention over QKV and optional auxiliary token regions.
 
         ``q``, ``k``, and ``v`` contain this rank's local sequence partition with
-        all heads and are exchanged by Ulysses A2A. ``aux_*`` contain optional
+        all heads and are exchanged by Ulysses A2A. Every rank must provide the
+        same local sequence length; the caller is responsible for padding and
+        partitioning before this hot-path interface. ``aux_*`` contain optional
         tokens available in full on every sequence-parallel rank; they bypass QKV
         A2A and are sliced by head locally. Passing all auxiliary tensors as
         ``None`` selects QKV-only attention; passing only ``aux_q=None`` selects
@@ -112,22 +115,23 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         tokens precede the A2A tokens in the attention sequence.
         This interface supports one logical Q sequence and one logical KV
         sequence only. Packed-varlen batches are not supported.
+        ``tensor_fusion`` packs Q/K/V into one Ulysses communication payload.
         The return value is ``(output, aux_output)``.
         """
-        q = self._flatten_tensor(q)
-        k = self._flatten_tensor(k)
-        v = self._flatten_tensor(v)
-        aux_q = self._flatten_tensor(aux_q)
-        aux_k = self._flatten_tensor(aux_k)
-        aux_v = self._flatten_tensor(aux_v)
+        q = flatten_seq_p_tensor(q, "q")
+        k = flatten_seq_p_tensor(k, "k")
+        v = flatten_seq_p_tensor(v, "v")
+        aux_q = flatten_seq_p_tensor(aux_q, "aux_q")
+        aux_k = flatten_seq_p_tensor(aux_k, "aux_k")
+        aux_v = flatten_seq_p_tensor(aux_v, "aux_v")
         if attention_kwargs is None:
             attention_kwargs = {}
 
         world_size = dist.get_world_size(seq_p_group)
         rank = dist.get_rank(seq_p_group)
         self._validate_inputs(q, k, v, aux_q, aux_k, aux_v, world_size)
-        self._validate_sequence_partition(q.shape[0], world_size, seq_p_group, q.device)
 
+        qkv_fusion = tensor_fusion
         prepost_name, a2a_name, qkv_fusion = self._resolve_options(
             prepost_backend,
             a2a_backend,
@@ -184,6 +188,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         local_len, q_heads, hidden_dims = q.shape
         shard_heads = q_heads // world_size
         global_len = local_len * world_size
+        aux_len = 0 if aux_q is None else aux_q.shape[0]
 
         packed_qkv = prepost.pack_qkv(q, k, v, world_size, quant_scheme, qkv_fusion)
         exchanged_qkv = UlyssesAttnWeight._exchange_packed(packed_qkv, a2a, seq_p_group)
@@ -210,7 +215,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             max_seqlen_kv=None,
             **attention_kwargs,
         ).reshape(attn_q.shape[0], -1)
-        output, local_aux_attn = UlyssesAttnWeight._split_attention_output(attn, global_len, aux_q, aux_first)
+        output, local_aux_attn = split_main_aux_output(attn, global_len, aux_len, aux_first)
 
         packed_attn = prepost.pack_attn(output, local_len, world_size, shard_heads, hidden_dims, quant_scheme)
         exchanged_attn = UlyssesAttnWeight._exchange_packed(packed_attn, a2a, seq_p_group)
@@ -241,6 +246,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         local_len, q_heads, hidden_dims = q.shape
         shard_heads = q_heads // world_size
         global_len = local_len * world_size
+        aux_len = 0 if aux_q is None else aux_q.shape[0]
 
         qkv_records = []
         for head_index in range(shard_heads):
@@ -286,7 +292,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             if head_attn.shape[1] != hidden_dims:
                 raise ValueError(f"head_parallel attention output must flatten to hidden_dims={hidden_dims}, got shape={tuple(head_attn.shape)}.")
 
-            output, local_aux_attn = UlyssesAttnWeight._split_attention_output(head_attn, global_len, aux_q, aux_first)
+            output, local_aux_attn = split_main_aux_output(head_attn, global_len, aux_len, aux_first)
             if local_aux_attn is not None:
                 local_aux_heads.append(local_aux_attn.reshape(local_aux_attn.shape[0], 1, hidden_dims))
 
@@ -339,14 +345,6 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             work.wait()
 
     @staticmethod
-    def _split_attention_output(attn, global_len, aux_q, aux_first):
-        if aux_q is None:
-            return attn, None
-        if aux_first:
-            return attn[-global_len:], attn[:-global_len]
-        return attn[:global_len], attn[global_len:]
-
-    @staticmethod
     def _gather_aux(local_aux, world_size, group):
         if local_aux is None:
             return None
@@ -366,12 +364,12 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             if quant_scheme == "fp4":
                 raise ValueError("prepost_backend='triton' does not support FP4 communication; select prepost_backend='torch'.")
             if not qkv_fusion:
-                raise ValueError("prepost_backend='triton' requires qkv_fusion=True.")
+                raise ValueError("prepost_backend='triton' requires tensor_fusion=True.")
 
         if head_parallel and is_gqa:
             raise ValueError("head_parallel does not support GQA.")
         if qkv_fusion and is_gqa:
-            raise ValueError("qkv_fusion does not support GQA.")
+            raise ValueError("tensor_fusion does not support GQA.")
         if head_parallel and a2a_name == "round_robin":
             raise ValueError("a2a_backend='round_robin' is incompatible with head_parallel=True.")
 
@@ -379,62 +377,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
 
     @staticmethod
     def _validate_inputs(q, k, v, aux_q, aux_k, aux_v, world_size):
-        if q.dim() != 3 or k.dim() != 3 or v.dim() != 3:
-            raise ValueError("q/k/v must be 3D [sequence, heads, head_dim] tensors.")
-        if q.shape[0] <= 0:
-            raise ValueError("q/k/v must contain at least one local sequence token.")
-        if q.shape[0] != k.shape[0] or q.shape[0] != v.shape[0]:
-            raise ValueError("q/k/v must have the same sequence length.")
-        if k.shape != v.shape:
-            raise ValueError("k/v must have the same shape.")
-        if q.shape[-1] != k.shape[-1]:
-            raise ValueError("q/k/v must have the same head_dim.")
+        validate_seq_p_inputs(q, k, v, aux_q, aux_k, aux_v)
         if q.shape[1] % world_size or k.shape[1] % world_size:
             raise ValueError(f"q_heads and kv_heads must be divisible by world_size={world_size}.")
-
-        aux = (aux_q, aux_k, aux_v)
-        if (aux_k is None) != (aux_v is None):
-            raise ValueError("aux k/v must either both be tensors or both be None.")
-        if aux_q is not None and aux_k is None:
-            raise ValueError("aux q requires aux k/v.")
-        for name, tensor, source in zip(("q", "k", "v"), aux, (q, k, v)):
-            if tensor is None:
-                continue
-            if tensor.dim() != 3 or tensor.shape[1:] != source.shape[1:]:
-                raise ValueError(f"aux_{name} must match {name} head dimensions, got {tuple(tensor.shape)} vs {tuple(source.shape)}.")
-        if aux_k is not None and aux_k.shape[0] != aux_v.shape[0]:
-            raise ValueError("aux k/v must have the same sequence length.")
-        if aux_q is not None and aux_q.shape[0] != aux_k.shape[0]:
-            raise ValueError("aux q/k/v must have the same sequence length.")
-
-    @staticmethod
-    def _flatten_tensor(tensor):
-        if tensor is None:
-            return None
-        if tensor.dim() == 4:
-            if tensor.shape[0] != 1:
-                raise ValueError(
-                    "Ulysses supports one logical sequence only; 4D inputs must have batch size 1, "
-                    f"got shape={tuple(tensor.shape)}."
-                )
-            return tensor.reshape(-1, tensor.shape[-2], tensor.shape[-1])
-        return tensor
-
-    @staticmethod
-    def _validate_sequence_partition(local_len, world_size, group, device):
-        """Ensure every sequence-parallel rank owns the same local token count."""
-        if world_size == 1:
-            return
-
-        local_len_tensor = torch.tensor([local_len], dtype=torch.int64, device=device)
-        gathered_lengths = [torch.empty_like(local_len_tensor) for _ in range(world_size)]
-        dist.all_gather(gathered_lengths, local_len_tensor, group=group)
-        lengths = tuple(int(length.item()) for length in gathered_lengths)
-        if len(set(lengths)) != 1:
-            raise ValueError(
-                "Ulysses requires the same local sequence length on every sequence-parallel rank, "
-                f"got lengths={lengths}."
-            )
 
     @staticmethod
     def _legacy_split_tensor(tensor, main_len, aux_len, main_first):

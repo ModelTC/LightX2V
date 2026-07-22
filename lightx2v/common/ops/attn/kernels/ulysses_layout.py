@@ -96,6 +96,7 @@ def _check_fp8_split(payload, scale, payload_shape, scale_shape, scale_dtype=tor
 
 # BF16/FP16 layout kernels
 
+
 @triton.jit
 def _qkv_pre_kernel(
     q,
@@ -341,6 +342,7 @@ def _attn_post_kernel(
 
 
 # FP8 quantized layout kernels
+
 
 @triton.jit
 def _qkv_pre_fp8_kernel(
@@ -654,6 +656,7 @@ def _attn_post_fp8_kernel(
 
 # Public BF16/FP16 wrappers
 
+
 def qkv_pre(q, k, v, world_size, block_size=None, head_index=None):
     """Prepare BF16/FP16 q/k/v for the first Ulysses all-to-all.
 
@@ -709,10 +712,7 @@ def qkv_post(qkv, q_source, k_source, v_source, cur_rank, aux_len, main_first, q
         full_heads = k_source.shape[1]
     else:
         if q_source.shape != k_source.shape or q_source.shape != v_source.shape:
-            raise ValueError(
-                f"q/k/v source tensors must have the same shape, got q={tuple(q_source.shape)}, "
-                f"k={tuple(k_source.shape)}, v={tuple(v_source.shape)}."
-            )
+            raise ValueError(f"q/k/v source tensors must have the same shape, got q={tuple(q_source.shape)}, k={tuple(k_source.shape)}, v={tuple(v_source.shape)}.")
         full_heads = q_source.shape[1]
     expected_shard_heads, head_offset, head_stride = _resolve_qkv_head_layout(full_heads, world_size, head_index)
     if shard_heads != expected_shard_heads:
@@ -842,6 +842,7 @@ def attn_post(attn, block_size=None):
 
 # Public FP8 wrappers
 
+
 def qkv_pre_fp8(q, k, v, world_size, head_index=None):
     """FP8 version of ``qkv_pre`` with fused layout+quantization.
 
@@ -913,10 +914,7 @@ def qkv_post_fp8(
         full_heads = k_source.shape[1]
     else:
         if q_source.shape != k_source.shape or q_source.shape != v_source.shape:
-            raise ValueError(
-                f"q/k/v source tensors must have the same shape, got q={tuple(q_source.shape)}, "
-                f"k={tuple(k_source.shape)}, v={tuple(v_source.shape)}."
-            )
+            raise ValueError(f"q/k/v source tensors must have the same shape, got q={tuple(q_source.shape)}, k={tuple(k_source.shape)}, v={tuple(v_source.shape)}.")
         full_heads = q_source.shape[1]
     expected_shard_heads, head_offset, head_stride = _resolve_qkv_head_layout(full_heads, world_size, head_index)
     if shard_heads != expected_shard_heads:

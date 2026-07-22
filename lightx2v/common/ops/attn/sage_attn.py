@@ -102,6 +102,29 @@ class SageAttn2Weight(AttnWeightTemplate):
             x = sageattn(q, k, v, tensor_layout="NHD").view(bs * max_seqlen_q, -1)
         return x
 
+    def apply_with_lse(self, q, k, v, softmax_scale=None):
+        """Apply one dense attention block and return LSE as [tokens, heads]."""
+        if sageattn is None:
+            raise ImportError("sageattention is required for SageAttention2.")
+        q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        if q.ndim == 3:
+            q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+        elif q.ndim != 4:
+            raise ValueError(f"Dense SageAttention2 expects 3D or 4D Q/K/V, got q.ndim={q.ndim}.")
+
+        output, lse = sageattn(
+            q,
+            k,
+            v,
+            tensor_layout="NHD",
+            is_causal=False,
+            sm_scale=softmax_scale,
+            return_lse=True,
+        )
+        output = output.reshape(q.shape[0] * q.shape[1], -1)
+        lse = lse.transpose(1, 2).reshape(q.shape[0] * q.shape[1], q.shape[2])
+        return output, lse
+
 
 @ATTN_WEIGHT_REGISTER("sage_attn3")
 class SageAttn3Weight(AttnWeightTemplate):

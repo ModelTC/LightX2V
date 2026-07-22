@@ -1,7 +1,5 @@
 import torch
 
-from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
-
 from .kernels.ulysses_layout import (
     attn_post,
     attn_post_fp8,
@@ -12,53 +10,7 @@ from .kernels.ulysses_layout import (
     qkv_pre,
     qkv_pre_fp8,
 )
-
-try:
-    from sageattn3_sparse import dequant_fp4 as dequant_fp4_sage3
-    from sageattn3_sparse import quant_fp4 as quant_fp4_sage3
-except ImportError:
-    quant_fp4_sage3 = None
-    dequant_fp4_sage3 = None
-
-
-def _validate_quant_scheme(quant_scheme):
-    if quant_scheme not in (None, "fp8", "fp4"):
-        raise ValueError(f"Unknown quant_scheme={quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
-    if quant_scheme != "fp4":
-        return
-    if quant_fp4_sage3 is None or dequant_fp4_sage3 is None:
-        raise ImportError("sageattn3_sparse quant_fp4/dequant_fp4 is required for Ulysses FP4 communication.")
-
-
-def _pack_tensor(tensor, quant_scheme):
-    tensor = tensor.contiguous()
-    _validate_quant_scheme(quant_scheme)
-    if quant_scheme is None:
-        return tensor, None
-
-    shape = tensor.shape
-    hidden_dims = shape[-1]
-    if quant_scheme == "fp8":
-        payload, scale = quant_fp8_vllm(tensor.reshape(-1, hidden_dims))
-        return payload.reshape(shape).contiguous(), scale.reshape(*shape[:-1], 1).contiguous()
-
-    if hidden_dims % 16 != 0:
-        raise ValueError(f"Ulysses FP4 communication requires hidden_dims divisible by 16, got {hidden_dims}.")
-    payload, scale = quant_fp4_sage3(tensor.reshape(1, 1, -1, hidden_dims))
-    return payload.reshape(*shape[:-1], hidden_dims // 2).contiguous(), scale.reshape(*shape[:-1], hidden_dims // 16).contiguous()
-
-
-def _unpack_tensor(packed, output_dtype, hidden_dims):
-    payload, scale = packed
-    if scale is None:
-        return payload
-    if payload.dtype == torch.float8_e4m3fn:
-        return dequant_fp8_vllm(payload, scale, output_dtype)
-    output_shape = (*payload.shape[:-1], hidden_dims)
-    return dequant_fp4_sage3(
-        payload.reshape(1, 1, -1, hidden_dims // 2),
-        scale.reshape(1, 1, -1, hidden_dims // 16),
-    ).reshape(output_shape)
+from .utils.seq_p import pack_seq_p_tensor, unpack_seq_p_tensor, validate_quant_scheme
 
 
 def _join_tokens(tensor, aux, aux_first):
@@ -102,11 +54,11 @@ class TorchUlyssesPrePost:
             head_v = v[:, :, head_index].transpose(0, 1)
             if qkv_fusion:
                 qkv = torch.stack((head_q, head_k, head_v), dim=2).unsqueeze(3)
-                return (_pack_tensor(qkv, quant_scheme),)
+                return (pack_seq_p_tensor(qkv, quant_scheme),)
             return (
-                _pack_tensor(head_q.unsqueeze(2), quant_scheme),
-                _pack_tensor(head_k.unsqueeze(2), quant_scheme),
-                _pack_tensor(head_v.unsqueeze(2), quant_scheme),
+                pack_seq_p_tensor(head_q.unsqueeze(2), quant_scheme),
+                pack_seq_p_tensor(head_k.unsqueeze(2), quant_scheme),
+                pack_seq_p_tensor(head_v.unsqueeze(2), quant_scheme),
             )
 
         if qkv_fusion and q.shape == k.shape == v.shape:
@@ -114,12 +66,12 @@ class TorchUlyssesPrePost:
             k = k.reshape(local_len, world_size, q_shard_heads, hidden_dims)
             v = v.reshape(local_len, world_size, q_shard_heads, hidden_dims)
             qkv = torch.stack((q, k, v), dim=2).permute(1, 0, 2, 3, 4).contiguous()
-            return (_pack_tensor(qkv, quant_scheme),)
+            return (pack_seq_p_tensor(qkv, quant_scheme),)
 
         q = q.reshape(local_len, world_size, q_shard_heads, hidden_dims).permute(1, 0, 2, 3).contiguous()
         k = k.reshape(local_len, world_size, kv_shard_heads, hidden_dims).permute(1, 0, 2, 3).contiguous()
         v = v.reshape(local_len, world_size, kv_shard_heads, hidden_dims).permute(1, 0, 2, 3).contiguous()
-        return _pack_tensor(q, quant_scheme), _pack_tensor(k, quant_scheme), _pack_tensor(v, quant_scheme)
+        return pack_seq_p_tensor(q, quant_scheme), pack_seq_p_tensor(k, quant_scheme), pack_seq_p_tensor(v, quant_scheme)
 
     @staticmethod
     def unpack_qkv(
@@ -142,13 +94,13 @@ class TorchUlyssesPrePost:
             q_shard_heads = kv_shard_heads = 1
 
         if len(packed) == 1:
-            qkv = _unpack_tensor(packed[0], q.dtype, hidden_dims)
+            qkv = unpack_seq_p_tensor(packed[0], q.dtype, hidden_dims)
             qkv = qkv.reshape(-1, 3, q_shard_heads, hidden_dims)
             global_q, global_k, global_v = qkv.unbind(dim=1)
         else:
-            global_q = _unpack_tensor(packed[0], q.dtype, hidden_dims).reshape(-1, q_shard_heads, hidden_dims)
-            global_k = _unpack_tensor(packed[1], k.dtype, hidden_dims).reshape(-1, kv_shard_heads, hidden_dims)
-            global_v = _unpack_tensor(packed[2], v.dtype, hidden_dims).reshape(-1, kv_shard_heads, hidden_dims)
+            global_q = unpack_seq_p_tensor(packed[0], q.dtype, hidden_dims).reshape(-1, q_shard_heads, hidden_dims)
+            global_k = unpack_seq_p_tensor(packed[1], k.dtype, hidden_dims).reshape(-1, kv_shard_heads, hidden_dims)
+            global_v = unpack_seq_p_tensor(packed[2], v.dtype, hidden_dims).reshape(-1, kv_shard_heads, hidden_dims)
 
         local_q_heads = q.shape[1] // world_size
         local_kv_heads = k.shape[1] // world_size
@@ -164,11 +116,11 @@ class TorchUlyssesPrePost:
     @staticmethod
     def pack_attn(output, local_len, world_size, shard_heads, hidden_dims, quant_scheme=None):
         attn = output.reshape(world_size, local_len, shard_heads, hidden_dims).transpose(1, 2).contiguous()
-        return (_pack_tensor(attn, quant_scheme),)
+        return (pack_seq_p_tensor(attn, quant_scheme),)
 
     @staticmethod
     def unpack_attn(packed, output_dtype, hidden_dims):
-        attn = _unpack_tensor(packed[0], output_dtype, hidden_dims)
+        attn = unpack_seq_p_tensor(packed[0], output_dtype, hidden_dims)
         world_size, shard_heads, local_len, _ = attn.shape
         return attn.reshape(world_size * shard_heads, local_len, hidden_dims).transpose(0, 1).contiguous().reshape(local_len, -1)
 
@@ -182,7 +134,7 @@ class TritonUlyssesPrePost:
             raise ValueError("prepost_backend='triton' requires equal q/k/v head counts.")
         if quant_scheme == "fp4":
             raise ValueError("prepost_backend='triton' does not support FP4 communication.")
-        _validate_quant_scheme(quant_scheme)
+        validate_quant_scheme(quant_scheme)
 
     @classmethod
     def pack_qkv(cls, q, k, v, world_size, quant_scheme=None, qkv_fusion=True, head_index=None):
