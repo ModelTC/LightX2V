@@ -1,16 +1,13 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
-cd "$(dirname "$0")/.."
+lightx2v_path=${LIGHTX2V_PATH:-/path/to/LightX2V}
+diffusers_path=${DIFFUSERS_PATH:-/path/to/diffusers/src}
+config=${CONFIG:-${lightx2v_path}/lightx2v_train/configs/infer/wan2_2_ti2v_5b_tf_ar.yaml}
 
-export PYTHONPATH=/data/nvme4/gushiqiao/new/diffusers/src:${PYTHONPATH}
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+cd "${lightx2v_path}/lightx2v_train"
+export PYTHONPATH="${diffusers_path}:${lightx2v_path}:${PYTHONPATH:-}"
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-5}
 
-NPROC_PER_NODE=${NPROC_PER_NODE:-1}
-CONFIG=${CONFIG:-configs/infer/wan2_1_t2v_1_3b_tf_chunkwise_ar.yaml}
-
-torchrun \
---standalone \
---nproc_per_node="${NPROC_PER_NODE}" \
-infer.py --config "${CONFIG}"
+python3 infer.py --config "${config}"

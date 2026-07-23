@@ -12,6 +12,7 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>common</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

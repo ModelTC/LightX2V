@@ -11,8 +11,12 @@ model:
 distributed:
     backend: nccl
     timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
     fsdp2:
         enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
         reshard_after_forward:
             root_reshard: false
             block_reshard: true
@@ -24,7 +28,7 @@ distributed:
 
 data:
     train:
-        name: wan_t2v_video_dataset
+        name: video_dataset
         data_path:
             - /path/to/OpenVid-1M/OpenVid-1M.csv
         video_root: /path/to/OpenVid-1M/video
@@ -103,7 +107,6 @@ training:
 
 inference:
     method: wan_t2v_infer
-    negative_prompt: "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards"
     default_width: 832
     default_height: 480
     num_frames: 81

@@ -1,7 +1,8 @@
+import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 def _tp_info(config):
@@ -53,10 +54,20 @@ class Flux2DoubleBlockWeights(WeightModule):
         self.block_idx = block_idx
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
+        self.layer_norm_type = config.get("layer_norm_type", "torch")
         self.rms_norm_type = config.get("rms_norm_type", "torch")
         self.attn_type = config.get("attn_type", "flash_attn3")
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         p = f"transformer_blocks.{self.block_idx}"
+
+        self.add_module("norm1", LN_WEIGHT_REGISTER[self.layer_norm_type](eps=1e-5))
+        self.add_module("norm1_context", LN_WEIGHT_REGISTER[self.layer_norm_type](eps=1e-5))
+        self.add_module("norm2", LN_WEIGHT_REGISTER[self.layer_norm_type](eps=1e-5))
+        self.add_module("norm2_context", LN_WEIGHT_REGISTER[self.layer_norm_type](eps=1e-5))
 
         self.add_module("to_q", _mm_weight(config, f"{p}.attn.to_q.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
         self.add_module("to_k", _mm_weight(config, f"{p}.attn.to_k.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
@@ -106,10 +117,17 @@ class Flux2SingleBlockWeights(WeightModule):
         self.block_idx = block_idx
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
+        self.layer_norm_type = config.get("layer_norm_type", "torch")
         self.rms_norm_type = config.get("rms_norm_type", "torch")
         self.attn_type = config.get("attn_type", "flash_attn3")
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         p = f"single_transformer_blocks.{self.block_idx}"
+
+        self.add_module("norm", LN_WEIGHT_REGISTER[self.layer_norm_type](eps=1e-5))
 
         self.add_module("to_qkv_mlp_proj", _mm_weight(config, f"{p}.attn.to_qkv_mlp_proj.weight", None, "col", create_cuda_buffer, create_cpu_buffer))
         self.add_module("norm_q", _rms_weight(config, f"{p}.attn.norm_q.weight", create_cuda_buffer, create_cpu_buffer))

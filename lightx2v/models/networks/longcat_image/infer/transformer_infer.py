@@ -3,8 +3,6 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .utils import apply_longcat_rope_with_flashinfer, apply_longcat_rope_with_torch
-
 
 class LongCatImageTransformerInfer(BaseTransformerInfer):
     """Transformer inference for LongCat Image model.
@@ -29,18 +27,10 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
 
-        # RoPE function selection
-        rope_funcs = {
-            "flashinfer": apply_longcat_rope_with_flashinfer,
-            "torch": apply_longcat_rope_with_torch,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        self.apply_rope_func = rope_funcs.get(rope_type, apply_longcat_rope_with_torch)
-
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    def _ada_layer_norm_zero(self, hidden_states, temb, norm_linear):
+    def _ada_layer_norm_zero(self, hidden_states, temb, norm, norm_linear):
         """AdaLayerNormZero: compute shift, scale, gate from temb.
 
         For double-stream blocks: returns (norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp)
@@ -51,12 +41,12 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = emb.chunk(6, dim=-1)
 
         # Apply layer norm and modulation
-        norm_hidden_states = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states = norm.apply(hidden_states)
         norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
 
         return norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp
 
-    def _ada_layer_norm_zero_single(self, hidden_states, temb, norm_linear):
+    def _ada_layer_norm_zero_single(self, hidden_states, temb, norm, norm_linear):
         """AdaLayerNormZeroSingle: for single-stream blocks.
 
         Returns (norm_hidden_states, gate)
@@ -67,7 +57,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         shift, scale, gate = emb.chunk(3, dim=-1)
 
         # Apply layer norm and modulation
-        norm_hidden_states = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states = norm.apply(hidden_states)
         norm_hidden_states = norm_hidden_states * (1 + scale) + shift
 
         return norm_hidden_states, gate
@@ -79,6 +69,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states,
         temb,
         image_rotary_emb,
+        image_rotary_positions,
     ):
         """Inference for a single double-stream transformer block.
 
@@ -100,10 +91,15 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         head_dim = self.config["attention_head_dim"]
 
         # ===== Image stream: norm1 =====
-        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self._ada_layer_norm_zero(hidden_states, temb, block_weights.norm1_linear)
+        norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self._ada_layer_norm_zero(hidden_states, temb, block_weights.norm1, block_weights.norm1_linear)
 
         # ===== Text stream: norm1_context =====
-        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self._ada_layer_norm_zero(encoder_hidden_states, temb, block_weights.norm1_context_linear)
+        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self._ada_layer_norm_zero(
+            encoder_hidden_states,
+            temb,
+            block_weights.norm1_context,
+            block_weights.norm1_context_linear,
+        )
 
         # ===== Attention projections =====
         # Image stream QKV
@@ -136,7 +132,8 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         value = torch.cat([txt_value, img_value], dim=0)
 
         # Apply rotary embedding: [L, H, D]
-        query, key = self.apply_rope_func(query, key, image_rotary_emb)
+        rope_kwargs = {} if image_rotary_positions is None else {"positions": image_rotary_positions}
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb, **rope_kwargs)
 
         # Calculate cu_seqlens for flash attention (batch_size=1)
         total_len = query.shape[0]
@@ -186,7 +183,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         # ===== FFN for image stream =====
         # Layer norm without learnable parameters (LongCat/Flux architecture)
-        norm_hidden_states2 = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        norm_hidden_states2 = block_weights.norm2.apply(hidden_states)
         norm_hidden_states2 = norm_hidden_states2 * (1 + scale_mlp) + shift_mlp
         ff_output = block_weights.ff_net_0_proj.apply(norm_hidden_states2)
         ff_output = F.gelu(ff_output, approximate="tanh")
@@ -195,7 +192,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         # ===== FFN for text stream =====
         # Layer norm without learnable parameters (LongCat/Flux architecture)
-        norm_encoder_hidden_states2 = F.layer_norm(encoder_hidden_states, (encoder_hidden_states.shape[-1],))
+        norm_encoder_hidden_states2 = block_weights.norm2_context.apply(encoder_hidden_states)
         norm_encoder_hidden_states2 = norm_encoder_hidden_states2 * (1 + c_scale_mlp) + c_shift_mlp
         context_ff_output = block_weights.ff_context_net_0_proj.apply(norm_encoder_hidden_states2)
         context_ff_output = F.gelu(context_ff_output, approximate="tanh")
@@ -215,6 +212,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states,
         temb,
         image_rotary_emb,
+        image_rotary_positions,
     ):
         """Inference for a single single-stream transformer block.
 
@@ -242,7 +240,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         residual = combined
 
         # AdaLayerNormZeroSingle
-        norm_combined, gate = self._ada_layer_norm_zero_single(combined, temb, block_weights.norm_linear)
+        norm_combined, gate = self._ada_layer_norm_zero_single(combined, temb, block_weights.norm, block_weights.norm_linear)
 
         # MLP branch
         mlp_hidden_states = block_weights.proj_mlp.apply(norm_combined)
@@ -263,7 +261,8 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         key = block_weights.norm_k.apply(key)
 
         # Apply rotary embedding: [L, H, D]
-        query, key = self.apply_rope_func(query, key, image_rotary_emb)
+        rope_kwargs = {} if image_rotary_positions is None else {"positions": image_rotary_positions}
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb, **rope_kwargs)
 
         # Calculate cu_seqlens for flash attention (batch_size=1)
         total_len = query.shape[0]
@@ -328,6 +327,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         temb = pre_infer_out.temb
         image_rotary_emb = pre_infer_out.image_rotary_emb
+        image_rotary_positions = pre_infer_out.image_rotary_positions
 
         # For I2I task: concatenate output latents with input image latents
         output_seq_len = None
@@ -343,6 +343,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
                 encoder_hidden_states,
                 temb,
                 image_rotary_emb,
+                image_rotary_positions,
             )
 
         # Process single-stream blocks
@@ -353,6 +354,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
                 encoder_hidden_states,
                 temb,
                 image_rotary_emb,
+                image_rotary_positions,
             )
 
         # For I2I task: only return output image latents (not input image latents)

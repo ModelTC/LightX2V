@@ -1,0 +1,71 @@
+model:
+    name: wan_t2v_14b
+    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-14B/
+    checkpoint_path: ./output_train/wan2_1_t2v_14b_tf_chunkwise_full/checkpoint-000005000
+    checkpoint_strict: true
+    causal: true
+    max_sequence_length: 512
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    vae_dtype: fp32
+    load_vae: true
+    load_text_encoder: true
+    load_transformer: true
+    num_frame_per_chunk: 3
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    val:
+        name: prompt_dataset
+        data_path:
+            - /path/to/prompts/wan_t2v_prompts.txt
+        max_samples: 1
+        batch_size: 1
+        num_workers: 0
+        shuffle: false
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: linear
+        time_shift_mu: 5.0
+        time_shift_power: 1.0
+        sigma_min: 0.0
+        extra_one_step: true
+
+inference:
+    method: wan_t2v_14b_ar_infer
+    default_width: 832
+    default_height: 480
+    num_frames: 81
+    num_inference_steps: 50
+    fps: 16
+    enable_cfg: true
+    cfg_guidance_scale: 3.0
+    seed: 42
+    output_dir: ./output_infer/wan2_1_t2v_14b_tf_chunkwise_ar
+
+logging:
+    rank_zero_only: true
+    infer_log_every_steps: 10

@@ -1,8 +1,8 @@
 import gc
 import os
 
-import cv2
 import torch
+from PIL import Image
 from loguru import logger
 from transformers import AutoProcessor
 
@@ -274,8 +274,7 @@ class HidreamO1ImageRunner(DefaultRunner):
             return {"images": [image]}
         if save_result_path:
             os.makedirs(os.path.dirname(os.path.abspath(save_result_path)), exist_ok=True)
-            if not cv2.imwrite(save_result_path, image):
-                raise RuntimeError(f"Failed to save HiDream image to: {save_result_path}")
+            Image.fromarray(image[:, :, [2, 1, 0]]).save(save_result_path)
             logger.info(f"HiDream image saved successfully to: {save_result_path}")
 
         if GET_RECORDER_MODE():

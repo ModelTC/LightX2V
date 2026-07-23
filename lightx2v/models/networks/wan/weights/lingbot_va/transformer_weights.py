@@ -1,5 +1,7 @@
+import torch
+
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerWeights
-from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 class LingbotVATransformerWeights(WanTransformerWeights):
@@ -7,6 +9,11 @@ class LingbotVATransformerWeights(WanTransformerWeights):
 
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__(config, lazy_load_path=lazy_load_path, lora_path=lora_path)
+        for phase in self.iter_self_attention_phases():
+            phase.add_module(
+                "lingbot_rope",
+                ROPE_REGISTER[config.get("lingbot_rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float64),
+            )
         mm_type = config.get("dit_quant_scheme", "Default")
         if mm_type != "Default":
             assert config.get("dit_quantized") is True

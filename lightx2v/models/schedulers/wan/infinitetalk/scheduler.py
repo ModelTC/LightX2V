@@ -25,6 +25,7 @@ class InfiniteTalkScheduler(BaseScheduler):
         self.latent_motion_frames = None
         self.cur_motion_frames_latent_num = 0
         self.is_first_clip = True
+        self.rope_request_id = 0
 
     def seed_everything(self, seed):
         seed = seed if seed >= 0 else random.randint(0, 99999999)
@@ -36,6 +37,8 @@ class InfiniteTalkScheduler(BaseScheduler):
         return seed
 
     def prepare(self, seed, latent_shape, latent_motion_frames=None, is_first_clip=True, cur_motion_frames_latent_num=1):
+        if is_first_clip:
+            self.rope_request_id += 1
         self.latents = torch.randn(*latent_shape, dtype=torch.float32, device=AI_DEVICE)
         self.latent_motion_frames = latent_motion_frames
         self.is_first_clip = is_first_clip

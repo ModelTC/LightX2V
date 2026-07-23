@@ -166,10 +166,27 @@ def auto_calc_config(config):
         config.setdefault("target_video_length", 1)
         config.setdefault("target_fps", config.get("base_fps", 24))
         config.setdefault("enable_cfg", True)
+    elif config["model_cls"] == "lingbot_video":
+        transformer_config_path = os.path.join(config["model_path"], "transformer", "config.json")
+        if os.path.exists(transformer_config_path):
+            with open(transformer_config_path, "r") as f:
+                model_config = json.load(f)
+            config.update(model_config)
+        config.setdefault("target_video_length", 1)
+        config.setdefault("target_fps", 24)
+        config.setdefault("enable_cfg", True)
+        config.setdefault("vae_stride", (4, 8, 8))
+        config.setdefault("vae_scale_factor_spatial", 8)
+        config.setdefault("vae_scale_factor_temporal", 4)
+        config.setdefault("vae_scale_factor", 8)
     else:
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
+            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
+                # LTX uses rope_type for the layout ("split"), while LightX2V
+                # uses it to select a registered RoPE implementation.
+                model_config.pop("rope_type", None)
             config.update(model_config)
         elif os.path.exists(os.path.join(config["model_path"], "low_noise_model", "config.json")):  # 需要一个更优雅的update方法
             with open(os.path.join(config["model_path"], "low_noise_model", "config.json"), "r") as f:
@@ -186,7 +203,11 @@ def auto_calc_config(config):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-            if config["model_cls"] == "z_image":
+            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
+                # Upstream LTX2 uses rope_type for the layout name ("split"),
+                # while LightX2V uses it as the registered RoPE implementation.
+                model_config.pop("rope_type", None)
+            elif config["model_cls"] == "z_image":
                 # https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/transformer/config.json
                 z_image_patch_size = model_config.pop("all_patch_size", [2])
                 z_image_f_patch_size = model_config.pop("all_f_patch_size", [1])
@@ -215,7 +236,63 @@ def auto_calc_config(config):
     if "infer_steps" not in config and "num_inference_steps" in config:
         config["infer_steps"] = config["num_inference_steps"]
 
-    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
+    if config["model_cls"] == "hunyuan_image3":
+        if "vae_scale_factor" not in config:
+            vae_downsample_factor = config.get("vae_downsample_factor")
+            if isinstance(vae_downsample_factor, list) and vae_downsample_factor:
+                config["vae_scale_factor"] = int(vae_downsample_factor[0])
+        parallel_config = config.get("parallel")
+        if isinstance(parallel_config, dict):
+            parallel_config = dict(parallel_config)
+            cfg_p_size = int(parallel_config.get("cfg_p_size", 1))
+            seq_p_size = int(parallel_config.get("seq_p_size", 1))
+            if cfg_p_size not in (1, 2):
+                raise ValueError(f"HunyuanImage3 parallel.cfg_p_size must be 1 or 2, got {cfg_p_size}.")
+            if seq_p_size < 1:
+                raise ValueError(f"HunyuanImage3 parallel.seq_p_size must be >= 1, got {seq_p_size}.")
+            if cfg_p_size == 2 and not config.get("enable_cfg", False):
+                raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires enable_cfg=true.")
+
+            parallel_config["cfg_p_size"] = cfg_p_size
+            parallel_config["seq_p_size"] = seq_p_size
+
+            if seq_p_size > 1:
+                attn_type = parallel_config.get("seq_p_attn_type", "kv_all_gather")
+                attn_type = str(attn_type).strip().lower().replace("-", "_")
+                if attn_type in ("kv_allgather", "kv_gather"):
+                    attn_type = "kv_all_gather"
+                if attn_type not in ("kv_all_gather", "ulysses"):
+                    raise ValueError(f"HunyuanImage3 sequence parallel attention must be 'kv_all_gather' or 'ulysses', got {attn_type!r}.")
+                parallel_config["seq_p_attn_type"] = attn_type
+
+            config["parallel"] = parallel_config
+
+            cfg_mode = str(config.get("hunyuan_cfg_mode", "batch")).strip().lower()
+            if cfg_p_size == 2 and cfg_mode != "parallel":
+                raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires hunyuan_cfg_mode='parallel'.")
+            if cfg_p_size == 1 and seq_p_size > 1 and config.get("enable_cfg", False) and cfg_mode != "serial":
+                raise ValueError("HunyuanImage3 sequence parallel with cfg_p_size=1 requires hunyuan_cfg_mode='serial'.")
+
+            if seq_p_size > 1 and parallel_config["seq_p_attn_type"] == "ulysses":
+                q_heads = int(config.get("num_attention_heads") or config["num_heads"])
+                kv_heads = int(config.get("num_key_value_heads") or q_heads)
+                if q_heads % seq_p_size or kv_heads % seq_p_size:
+                    raise ValueError(f"HunyuanImage3 Ulysses requires seq_p_size to divide Q and KV heads: Q={q_heads}, KV={kv_heads}, seq_p_size={seq_p_size}.")
+
+    if config["model_cls"] == "lingbot_va" and "target_video_length" not in config:
+        ar_config = config.get("ar_config", {})
+        required_keys = ("num_frame_per_chunk", "num_chunks")
+        missing_keys = [key for key in required_keys if key not in ar_config]
+        if missing_keys:
+            raise ValueError(f"LingBot-VA requires ar_config.{', ar_config.'.join(missing_keys)} to derive target_video_length.")
+        latent_frames = int(ar_config["num_frame_per_chunk"]) * int(ar_config["num_chunks"])
+        temporal_stride = int(config["vae_stride"][0])
+        if latent_frames <= 0 or temporal_stride <= 0:
+            raise ValueError(f"LingBot-VA requires positive latent frame count and VAE temporal stride, got latent_frames={latent_frames}, temporal_stride={temporal_stride}.")
+        config["target_video_length"] = (latent_frames - 1) * temporal_stride + 1
+        logger.info(f"Auto-set LingBot-VA target_video_length={config['target_video_length']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
+
+    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
@@ -236,6 +313,10 @@ def auto_calc_config(config):
             vae_config = json.load(f)
         config["vae_scale_factor_spatial"] = int(vae_config.get("scale_factor_spatial", 16))
         config["vae_scale_factor_temporal"] = int(vae_config.get("scale_factor_temporal", 4))
+        config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
+    if config["model_cls"] == "lingbot_video":
+        config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
+        config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
         config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
     if config["model_cls"] == "cosmos3" and os.path.exists(os.path.join(config["model_path"], "sound_tokenizer", "config.json")):
         with open(os.path.join(config["model_path"], "sound_tokenizer", "config.json"), "r") as f:
@@ -278,7 +359,11 @@ def set_parallel_config(config):
                 config["cfg_parallel"] = True
 
         # warmup dist
-        _a = torch.zeros([1]).to(f"{AI_DEVICE}:{dist.get_rank()}")
+        if AI_DEVICE == "cuda":
+            warmup_device = f"{AI_DEVICE}:{torch.cuda.current_device()}"
+        else:
+            warmup_device = AI_DEVICE
+        _a = torch.zeros([1], device=warmup_device)
         dist.all_reduce(_a)
 
 

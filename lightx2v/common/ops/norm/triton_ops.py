@@ -980,6 +980,84 @@ def rms_norm_kernel(x: torch.Tensor, w: torch.Tensor, eps: float = 1e-6):
     return y
 
 
+@triton.jit
+def _fused_qk_rms_norm_kernel(
+    q_ptr,
+    k_ptr,
+    w_q_ptr,
+    w_k_ptr,
+    n_q,
+    n_k,
+    D,
+    eps,
+    BLOCK_SIZE_DIM: tl.constexpr,
+    BLOCK_SIZE_SEQ: tl.constexpr,
+    MATCH_TORCH_RMS_CAST: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    n_q_tiles = tl.cdiv(n_q, BLOCK_SIZE_SEQ)
+    is_k = pid >= n_q_tiles
+    tile_id = pid - n_q_tiles if is_k else pid
+    n_rows = n_k if is_k else n_q
+    base_ptr = k_ptr if is_k else q_ptr
+    w_ptr = w_k_ptr if is_k else w_q_ptr
+
+    row_start = tile_id * BLOCK_SIZE_SEQ
+    rows = row_start + tl.arange(0, BLOCK_SIZE_SEQ)
+    row_mask = rows < n_rows
+
+    d_offset = tl.arange(0, BLOCK_SIZE_DIM)[None, :]
+    d_mask = d_offset < D
+    x_blk = base_ptr + rows[:, None] * D + d_offset
+    mask = row_mask[:, None] & d_mask
+
+    x = tl.load(x_blk, mask=mask, other=0.0).to(tl.float32)
+    mean_square = tl.sum(x * x, axis=1, keep_dims=True) / D
+    rstd = tl.math.rsqrt(mean_square + eps)
+    w = tl.load(w_ptr + d_offset, mask=d_mask)
+    if MATCH_TORCH_RMS_CAST:
+        out = (x * rstd).to(w.dtype) * w
+    else:
+        out = (x * rstd * w.to(tl.float32)).to(w.dtype)
+    tl.store(x_blk, out, mask=mask)
+
+
+def fused_qk_rms_norm(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    w_q: torch.Tensor,
+    w_k: torch.Tensor,
+    eps: float = 1e-6,
+    *,
+    match_torch_rms_cast: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """In-place RMSNorm on q [Nq, D] and k [Nk, D] in one Triton launch."""
+    if not q.is_cuda or not k.is_cuda:
+        raise RuntimeError("fused_qk_rms_norm requires CUDA tensors")
+    q = q.contiguous()
+    k = k.contiguous()
+    n_q, d = q.shape
+    n_k = k.shape[0]
+    block_d = triton.next_power_of_2(d)
+    block_s = min(16, triton.next_power_of_2(max(1, max(n_q, n_k) // 512)))
+    grid = (triton.cdiv(n_q, block_s) + triton.cdiv(n_k, block_s),)
+    with torch.cuda.device(q.device):
+        torch.library.wrap_triton(_fused_qk_rms_norm_kernel)[grid](
+            q,
+            k,
+            w_q,
+            w_k,
+            n_q,
+            n_k,
+            d,
+            eps,
+            BLOCK_SIZE_DIM=block_d,
+            BLOCK_SIZE_SEQ=block_s,
+            MATCH_TORCH_RMS_CAST=match_torch_rms_cast,
+        )
+    return q, k
+
+
 # ---------------------------------------------------------------------------
 # Fused dual-RMSNorm + 3D Neox-RoPE  (NeoPP Q/K, in-place, bfloat16)
 # ---------------------------------------------------------------------------

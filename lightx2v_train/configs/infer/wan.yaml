@@ -1,0 +1,75 @@
+model:
+    name: wan_ti2v_5b
+    pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
+    max_sequence_length: 512
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    vae_dtype: fp32
+    t5_dtype: bf16
+    load_vae: true
+    load_text_encoder: true
+    load_transformer: true
+    vae_stride:
+        - 4
+        - 16
+        - 16
+    patch_size:
+        - 1
+        - 2
+        - 2
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    fsdp2:
+        enabled: true
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    val:
+        name: prompt_dataset
+        data_path:
+            - /path/to/prompts/wan_t2v_prompts.txt
+        max_samples: 1
+        batch_size: 1
+        num_workers: 0
+        pin_memory: true
+        shuffle: false
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: linear
+        time_shift_mu: 5.0
+        time_shift_power: 1.0
+        sigma_min: 0.0
+        extra_one_step: true
+
+inference:
+    method: wan_ti2v_5b_infer
+    default_width: 1280
+    default_height: 704
+    num_frames: 121
+    num_inference_steps: 50
+    fps: 24
+    enable_cfg: true
+    cfg_guidance_scale: 5.0
+    seed: 42
+    video_quality: 6.0
+    macro_block_size: 16
+    output_dir: ./output_infer/wan2_2_ti2v_5b
+
+logging:
+    rank_zero_only: true
+    infer_log_every_steps: 10

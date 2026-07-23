@@ -1,6 +1,9 @@
 model:
     name: wan_t2v
-    pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
+    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
+    # May be either a checkpoint directory containing model_state.pt or the model_state.pt file itself.
+    checkpoint_path: /path/to/checkpoints/chunkwise/ar_diffusion.pt
+    checkpoint_strict: true
     causal: true
     max_sequence_length: 512
     running_dtype: bf16
@@ -13,8 +16,12 @@ model:
 distributed:
     backend: nccl
     timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
     fsdp2:
         enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
         reshard_after_forward:
             root_reshard: false
             block_reshard: true
@@ -49,10 +56,6 @@ scheduler:
 
 inference:
     method: wan_t2v_ar_infer
-    # May be either a checkpoint directory containing model_state.pt or the model_state.pt file itself.
-    checkpoint_path: /path/to/Causal-Forcing/checkpoints/chunkwise/ar_diffusion.pt
-    checkpoint_strict: true
-    negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
     default_width: 832
     default_height: 480
     num_frames: 81

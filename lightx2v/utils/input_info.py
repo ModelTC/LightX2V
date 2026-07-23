@@ -109,6 +109,7 @@ class S2VInputInfo:
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
+    video_path: str = field(default_factory=str)
     src_video: str = field(default_factory=str)
     audio_path: str = field(default_factory=str)
     src_pose_path: str = field(default_factory=str)
@@ -289,6 +290,11 @@ class I2VAInputInfo:
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
     target_video_length: int = field(default_factory=int)
+    # Optional in-memory policy inputs.  Offline/CLI inference continues to use
+    # image_path/state_path; long-running integrations (for example ROS) can
+    # avoid writing a PNG and NPY file for every control step.
+    policy_image: Any = field(default=None, repr=False)
+    policy_state: Any = field(default=None, repr=False)
 
 
 @dataclass

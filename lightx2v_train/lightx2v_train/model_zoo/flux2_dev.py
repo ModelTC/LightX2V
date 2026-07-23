@@ -89,12 +89,12 @@ class Flux2DevModel(BaseModel):
         return Flux2Pipeline._unpatchify_latents(latents)
 
     def encode_to_latent(self, sample):
-        image = sample["target_image"].to(device=self.device, dtype=self.running_dtype)
+        image = sample["inputs"]["target_image"].to(device=self.device, dtype=self.running_dtype)
         latent = self.vae.encode(image).latent_dist.sample()
         return self._normalize_patch_latents(latent)
 
     def encode_condition(self, sample):
-        prompt = sample["prompt"]
+        prompt = sample["conditioning"]["prompt"]
         return self.encode_prompt_condition(prompt)
 
     def encode_prompt_condition(self, prompt):
@@ -108,7 +108,7 @@ class Flux2DevModel(BaseModel):
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
 
-    def prepare_denoiser_input(self, noisy_latent):
+    def prepare_denoiser_input(self, noisy_latent, condition=None):
         h, w = noisy_latent.shape[2], noisy_latent.shape[3]
         packed = Flux2Pipeline._pack_latents(noisy_latent)
         img_ids = Flux2Pipeline._prepare_latent_ids(noisy_latent).to(self.device)

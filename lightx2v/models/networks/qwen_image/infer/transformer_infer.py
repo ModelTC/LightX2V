@@ -11,7 +11,6 @@ from .triton_ops import (
     fuse_scale_shift_gate_select01_kernel,
     fuse_scale_shift_kernel,
 )
-from .utils import apply_qwen_rope_with_flashinfer, apply_qwen_rope_with_torch, apply_qwen_rope_with_torch_naive
 
 try:
     from magi_compiler import magi_compile
@@ -51,14 +50,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
-        rope_funcs = {
-            "flashinfer": apply_qwen_rope_with_flashinfer,
-            "torch": apply_qwen_rope_with_torch,
-            "torch_naive": apply_qwen_rope_with_torch_naive,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        self.apply_rope_func = rope_funcs.get(rope_type, apply_qwen_rope_with_torch)
-
         self.img_qkv_len1 = None
         self.cu_seqlens_qkv1 = None
         self.img_qkv_len2 = None
@@ -113,6 +104,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         hidden_states,
         temb_img_silu,
         img_freqs,
+        img_positions,
         modulate_index=None,
     ):
         img_mod_params = img_attn_phase.img_mod.apply(temb_img_silu)
@@ -134,11 +126,14 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         if img_attn_phase.norm_k is not None:
             img_key = img_attn_phase.norm_k.apply(img_key)
 
-        img_query, img_key = self.apply_rope_func(img_query, img_key, img_freqs)
+        if img_positions is None:
+            img_query, img_key = img_attn_phase.rope.apply(img_query, img_key, img_freqs)
+        else:
+            img_query, img_key = img_attn_phase.rope.apply(img_query, img_key, img_freqs, positions=img_positions)
 
         return img_query, img_key, img_value, img_gate1, img_mod2
 
-    def infer_txt_qkv(self, txt_attn_phase, encoder_hidden_states, temb_txt_silu, txt_freqs):
+    def infer_txt_qkv(self, txt_attn_phase, encoder_hidden_states, temb_txt_silu, txt_freqs, txt_positions):
         seq_txt = encoder_hidden_states.shape[0]
 
         txt_mod_params = txt_attn_phase.txt_mod.apply(temb_txt_silu)
@@ -161,7 +156,10 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         if txt_attn_phase.norm_added_k is not None:
             txt_key = txt_attn_phase.norm_added_k.apply(txt_key)
 
-        txt_query, txt_key = self.apply_rope_func(txt_query, txt_key, txt_freqs)
+        if txt_positions is None:
+            txt_query, txt_key = txt_attn_phase.rope.apply(txt_query, txt_key, txt_freqs)
+        else:
+            txt_query, txt_key = txt_attn_phase.rope.apply(txt_query, txt_key, txt_freqs, positions=txt_positions)
 
         return txt_query, txt_key, txt_value, seq_txt, txt_gate1, txt_mod2
 
@@ -267,6 +265,8 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         temb_txt_silu,
         img_freqs,
         txt_freqs,
+        img_positions,
+        txt_positions,
         modulate_index=None,
     ):
         """Norm1 + modulate + QKV (+ RoPE); hidden_states unchanged for cross-attn residual."""
@@ -275,6 +275,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             hidden_states=hidden_states,
             temb_img_silu=temb_img_silu,
             img_freqs=img_freqs,
+            img_positions=img_positions,
             modulate_index=modulate_index,
         )
 
@@ -283,6 +284,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             encoder_hidden_states=encoder_hidden_states,
             temb_txt_silu=temb_txt_silu,
             txt_freqs=txt_freqs,
+            txt_positions=txt_positions,
         )
 
         return (
@@ -325,6 +327,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         temb_img_silu,
         temb_txt_silu,
         image_rotary_emb,
+        image_rotary_positions,
         modulate_index=None,
     ):
         if self.use_magi_compile:
@@ -348,6 +351,8 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 temb_txt_silu=temb_txt_silu,
                 img_freqs=image_rotary_emb[0],
                 txt_freqs=image_rotary_emb[1],
+                img_positions=image_rotary_positions[0],
+                txt_positions=image_rotary_positions[1],
                 modulate_index=modulate_index,
             )
             hidden_states, encoder_hidden_states = self.infer_cross_attn(
@@ -378,6 +383,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             hidden_states=hidden_states,
             temb_img_silu=temb_img_silu,
             img_freqs=image_rotary_emb[0],
+            img_positions=image_rotary_positions[0],
             modulate_index=modulate_index,
         )
 
@@ -386,6 +392,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             encoder_hidden_states=encoder_hidden_states,
             temb_txt_silu=temb_txt_silu,
             txt_freqs=image_rotary_emb[1],
+            txt_positions=image_rotary_positions[1],
         )
 
         hidden_states, encoder_hidden_states = self.infer_cross_attn(
@@ -422,6 +429,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         temb_img_silu,
         temb_txt_silu,
         image_rotary_emb,
+        image_rotary_positions,
         modulate_index,
     ):
         trace_path = os.environ.get("QWEN_MAGI_PROFILE_TRACE")
@@ -433,6 +441,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 temb_img_silu,
                 temb_txt_silu,
                 image_rotary_emb,
+                image_rotary_positions,
                 modulate_index,
                 trace_path,
             )
@@ -445,6 +454,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 temb_img_silu=temb_img_silu,
                 temb_txt_silu=temb_txt_silu,
                 image_rotary_emb=image_rotary_emb,
+                image_rotary_positions=image_rotary_positions,
                 modulate_index=modulate_index,
             )
         return hidden_states
@@ -465,6 +475,8 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 "encoder_hidden_states": 0,
                 "img_freqs": 0,
                 "txt_freqs": 0,
+                "img_positions": 0,
+                "txt_positions": 0,
                 "modulate_index": 1,
             },
             config_patch=_magi_config_patch,
@@ -479,6 +491,8 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             temb_txt_silu,
             img_freqs,
             txt_freqs,
+            img_positions,
+            txt_positions,
             modulate_index=None,
         ):
             return self.infer_block_pre_attn(
@@ -490,6 +504,8 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 temb_txt_silu,
                 img_freqs,
                 txt_freqs,
+                img_positions,
+                txt_positions,
                 modulate_index,
             )
 
@@ -525,6 +541,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         temb_img_silu = pre_infer_out.temb_img_silu
         temb_txt_silu = pre_infer_out.temb_txt_silu
         image_rotary_emb = pre_infer_out.image_rotary_emb
+        image_rotary_positions = pre_infer_out.image_rotary_positions
         return self.infer_func(
             block_weights.blocks,
             hidden_states,
@@ -532,5 +549,6 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             temb_img_silu,
             temb_txt_silu,
             image_rotary_emb,
+            image_rotary_positions,
             self.scheduler.modulate_index,
         )

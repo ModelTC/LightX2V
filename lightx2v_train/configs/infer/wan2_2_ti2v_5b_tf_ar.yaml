@@ -1,0 +1,87 @@
+model:
+    name: wan_ti2v_5b_ar
+    pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
+    #checkpoint_path: /path/to/LightX2V/lightx2v_train/output_train/wan2_2_ti2v_5b_tf_cache_96f_sp4/checkpoint-000005000
+    checkpoint_strict: true
+    latent_channels: 48
+    max_sequence_length: 512
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    vae_dtype: fp32
+    t5_dtype: bf16
+    t5_cpu: true
+    load_vae: true
+    load_text_encoder: true
+    load_transformer: true
+    num_frame_per_chunk: 8
+    local_attn_size: 32
+    sink_size: 8
+    vae_stride:
+        - 4
+        - 16
+        - 16
+    patch_size:
+        - 1
+        - 2
+        - 2
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel:
+        enabled: true
+        size: 4
+    fsdp2:
+        enabled: true
+        size: 2
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    val:
+        name: prompt_dataset
+        data_path:
+            - /path/to/prompts/wan_t2v_prompts.txt
+        max_samples: 10
+        batch_size: 1
+        num_workers: 0
+        pin_memory: true
+        shuffle: false
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: linear
+        time_shift_mu: 5.0
+        time_shift_power: 1.0
+        sigma_min: 0.0
+        extra_one_step: true
+
+inference:
+    method: wan_ti2v_5b_ar_infer
+    default_width: 1280
+    default_height: 704
+    num_frames: 381
+    num_inference_steps: 50
+    fps: 24
+    enable_cfg: true
+    cfg_guidance_scale: 3.0
+    seed: 42
+    save_latents_only: false
+    video_quality: 6.0
+    macro_block_size: 16
+    output_dir: ./output_infer/wan2_2_ti2v_5b_tf_ar_1
+
+logging:
+    rank_zero_only: true
+    infer_log_every_steps: 10

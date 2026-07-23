@@ -52,7 +52,7 @@ class MultiDistillModelStruct(MultiModelStruct):
         self.cur_model_index = -1
         logger.info(f"boundary step index: {self.boundary_step_index}")
 
-    @ProfilingContext4DebugL2("Swtich models in infer_main costs")
+    @ProfilingContext4DebugL2("Switch models in infer_main costs")
     def get_current_model_index(self):
         if self.scheduler.step_index < self.boundary_step_index:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
@@ -138,6 +138,20 @@ class Wan22MoeDistillRunner(WanDistillRunner):
             self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
             if not os.path.isdir(self.low_noise_model_path):
                 raise FileNotFoundError(f"Low Noise Model does not find")
+
+    def get_warmup_step_indices(self, scheduler):
+        return 0, scheduler.boundary_step_index
+
+    def get_warmup_models(self):
+        return tuple(self.model.model)
+
+    def clear_warmup_state(self):
+        super().clear_warmup_state()
+        scheduler = self.model.scheduler
+        scheduler.step_index = 0
+        scheduler.infer_condition = True
+        scheduler.timestep_input = None
+        self.model.cur_model_index = -1
 
     def load_transformer(self):
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):

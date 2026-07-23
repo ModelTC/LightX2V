@@ -1,6 +1,6 @@
 model:
     name: wan_t2v
-    pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
+    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -8,20 +8,23 @@ model:
     load_vae: true
     load_text_encoder: true
     load_transformer: true
-    num_frame_per_chunk: 3
     fake:
         name: wan_t2v
-        pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
+        pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
     teacher:
         name: wan_t2v
-        pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
+        pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
         transformer_param_dtype: bf16
 
 distributed:
     backend: nccl
     timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
     fsdp2:
-        enabled: true
+        enabled: false
+        size: 1
         reshard_after_forward:
             root_reshard: false
             block_reshard: true
@@ -35,7 +38,7 @@ data:
     train:
         name: prompt_dataset
         data_path:
-            - /path/to/Causal-Forcing/prompts/vidprom_filtered_extended.txt
+            - /path/to/prompts/vidprom_filtered_extended.txt
         batch_size: 1
         num_workers: 8
         pin_memory: true
@@ -44,8 +47,8 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /path/to/wan_t2v_prompts.txt
-        max_samples: 1
+            - /path/to/prompts/wan_t2v_prompts.txt
+        max_samples: 2
         batch_size: 1
         num_workers: 0
         shuffle: false
@@ -65,7 +68,6 @@ scheduler:
 
 training:
     method: video_dmd
-    train_type: full
     max_train_iters: 1000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
@@ -77,6 +79,9 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 5
+        height: 480
+        width: 832
+        num_frames: 81
         denoising_step_list:
             - 1000
             - 750
@@ -91,14 +96,13 @@ training:
         min_step_ratio: 0.02
         max_step_ratio: 0.98
         same_step_across_blocks: true
-        num_frame_per_chunk: 3
-        num_training_frames: 21
         context_noise: 0
         renoise_sigma_min: 0.02
         renoise_sigma_max: 0.98
         renoise_discrete_samples: 1000
         renoise_shift: 5.0
     student:
+        train_type: full
         optimizer:
             learning_rate: 0.000002
             adam_beta1: 0.0
@@ -106,6 +110,7 @@ training:
             weight_decay: 0.01
             adam_epsilon: 0.00000001
     fake:
+        train_type: full
         optimizer:
             learning_rate: 0.0000004
             adam_beta1: 0.0
@@ -114,7 +119,6 @@ training:
             adam_epsilon: 0.00000001
     teacher:
         guidance_scale: 3.0
-        negative_prompt: "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
         cfg_norm: none
     output_dir: ./output_train/wan2_1_t2v_1_3b_dmd
 
@@ -133,7 +137,6 @@ inference:
     fps: 16
     enable_cfg: false
     cfg_guidance_scale: 1.0
-    negative_prompt: " "
     seed: 42
     output_dir: ./output_infer/wan2_1_t2v_1_3b_dmd
     infer_every_iters: ${training.save_every_iters}

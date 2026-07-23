@@ -81,14 +81,14 @@ class LongCatImageModel(BaseModel):
         return 2 ** (len(self.vae.config.block_out_channels) - 1)
 
     def encode_to_latent(self, sample):
-        image = sample["target_image"].to(device=self.device, dtype=self.running_dtype)
+        image = sample["inputs"]["target_image"].to(device=self.device, dtype=self.running_dtype)
         latent = self.vae.encode(image).latent_dist.sample()
         shift = getattr(self.vae.config, "shift_factor", 0.0)
         scale = getattr(self.vae.config, "scaling_factor", 1.0)
         return (latent - shift) * scale
 
     def encode_condition(self, sample):
-        prompt = sample["prompt"]
+        prompt = sample["conditioning"]["prompt"]
         return self.encode_prompt_condition(prompt)
 
     def encode_prompt_condition(self, prompt):

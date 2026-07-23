@@ -116,22 +116,7 @@ class _LNAdapter(nn.Module):
         self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        w = self.ln_weight._get_actual_weight()
-        b = self.ln_weight._get_actual_bias()
-        # Match autocast semantics for a bf16/fp16 activation meeting an
-        # fp32 LN weight — cast the weight down so the LN runs in the
-        # activation dtype (what ``nn.LayerNorm`` does under autocast).
-        if w is not None and x.is_floating_point() and w.dtype != x.dtype and x.dtype in (torch.float16, torch.bfloat16):
-            w = w.to(x.dtype)
-            if b is not None:
-                b = b.to(x.dtype)
-        return torch.nn.functional.layer_norm(
-            x,
-            self.normalized_shape,
-            w,
-            b,
-            self.eps,
-        )
+        return self.ln_weight.apply(x)
 
     def _apply(self, fn, *args, **kwargs):  # noqa: D401
         return self

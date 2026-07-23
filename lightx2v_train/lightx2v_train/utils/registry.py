@@ -1,7 +1,9 @@
-class Register(dict):
+from collections.abc import MutableMapping
+
+
+class Register(MutableMapping):
     def __init__(self, *args, **kwargs):
-        super(Register, self).__init__(*args, **kwargs)
-        self._dict = {}
+        self._dict = dict(*args, **kwargs)
 
     def __call__(self, target_or_name):
         if callable(target_or_name):
@@ -27,6 +29,15 @@ class Register(dict):
 
     def __getitem__(self, key):
         return self._dict[key]
+
+    def __delitem__(self, key):
+        del self._dict[key]
+
+    def __iter__(self):
+        return iter(self._dict)
+
+    def __len__(self):
+        return len(self._dict)
 
     def __contains__(self, key):
         return key in self._dict
@@ -57,6 +68,17 @@ MODEL_REGISTER = Register()
 TRAINER_REGISTER = Register()
 INFERENCER_REGISTER = Register()
 DATA_REGISTER = Register()
+
+
+def _ensure_data_registered(data_name):
+    if data_name in DATA_REGISTER:
+        return
+    if data_name == "image_dataset":
+        import lightx2v_train.data.image_dataset  # noqa: F401
+    elif data_name == "libero_fastwam_dataset":
+        import lightx2v_train.data.libero.dataset  # noqa: F401
+    elif data_name in {"latent_dataset", "prompt_dataset", "video_dataset"}:
+        import lightx2v_train.data.video_dataset  # noqa: F401
 
 
 def build_model(config):
@@ -90,6 +112,7 @@ def build_data(config, train_or_val):
         raise ValueError(f"config['data'] has no key {train_or_val!r}. Available keys: {available_splits}")
     data_config_split = data_config[train_or_val]
     data_name = data_config_split.get("name", "image_dataset")
+    _ensure_data_registered(data_name)
     if data_name not in DATA_REGISTER:
         available_names = ", ".join(sorted(DATA_REGISTER.keys()))
         raise ValueError(f"Unknown data {data_name!r}. Available data: {available_names}")

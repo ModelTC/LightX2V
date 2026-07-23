@@ -1,16 +1,18 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
-cd "$(dirname "$0")/.."
+lightx2v_path=${LIGHTX2V_PATH:-/path/to/LightX2V}
+diffusers_path=${DIFFUSERS_PATH:-/path/to/diffusers/src}
+config=${CONFIG:-${lightx2v_path}/lightx2v_train/configs/train/tf/wan2_1_t2v_1_3b_tf_chunkwise_full.yaml}
 
-export PYTHONPATH=/data/nvme4/gushiqiao/new/diffusers/src:${PYTHONPATH}
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-7}
+cd "${lightx2v_path}/lightx2v_train"
+export PYTHONPATH="${diffusers_path}:${lightx2v_path}:${PYTHONPATH:-}"
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-3}
 
-NPROC_PER_NODE=${NPROC_PER_NODE:-1}
-CONFIG=${CONFIG:-configs/train/dmd/wan2_1_t2v_1_3b_dmd.yaml}
+nproc_per_node=${NPROC_PER_NODE:-1}
 
 torchrun \
 --standalone \
---nproc_per_node="${NPROC_PER_NODE}" \
-train.py --config "${CONFIG}"
+--nproc_per_node="${nproc_per_node}" \
+train.py --config "${config}"

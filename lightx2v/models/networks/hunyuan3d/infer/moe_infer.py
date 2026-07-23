@@ -1,6 +1,13 @@
 import torch
 import torch.nn.functional as F
 
+try:
+    from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
+    from flashinfer.tllm_enums import ActivationType as FlashInferActivationType
+except ImportError:
+    flashinfer_cutlass_fused_moe = None
+    FlashInferActivationType = None
+
 
 @torch.no_grad()
 def infer_moe_ffn(ffn_weights, hidden_states):
@@ -23,8 +30,34 @@ def infer_moe_block(moe_weights, hidden_states):
     flat_topk_idx = topk_idx.reshape(-1)
     flat_topk_weight = topk_weight.reshape(-1, 1)
 
+    if moe_weights.moe_backend == "flashinfer":
+        if flashinfer_cutlass_fused_moe is None:
+            raise RuntimeError("Hunyuan3D moe_backend=flashinfer but flashinfer.fused_moe is not available")
+        if not hasattr(moe_weights, "_fi_fc1_weight"):
+            moe_weights._build_flashinfer_weights()
+        routed = flashinfer_cutlass_fused_moe(
+            flat if flat.is_contiguous() else flat.contiguous(),
+            topk_idx.to(torch.int32),
+            topk_weight.to(torch.float32),
+            moe_weights._fi_fc1_weight,
+            moe_weights._fi_fc2_weight,
+            flat.dtype,
+            quant_scales=None,
+            fc1_expert_biases=moe_weights._fi_fc1_bias,
+            fc2_expert_biases=moe_weights._fi_fc2_bias,
+            tune_max_num_tokens=moe_weights.moe_flashinfer_tune_max_num_tokens,
+            activation_type=FlashInferActivationType.Gelu,
+        )[0].view(bsz, seq_len, hidden_dim)
+        shared = infer_moe_ffn(moe_weights.shared_experts, flat).view(bsz, seq_len, hidden_dim)
+        return routed + shared
+
     expert_cache = torch.zeros_like(flat)
     idxs = flat_topk_idx.argsort()
+    # MLU590 routes tensor indices through native int32 kernels.  Cast once
+    # explicitly while indices are small (2 * 4096 tokens here), avoiding an
+    # implicit int64 conversion in every MoE floor_divide/index operation.
+    if idxs.device.type == "mlu":
+        idxs = idxs.to(torch.int32)
     tokens_per_expert = flat_topk_idx.bincount(minlength=moe_weights.num_experts).cpu().numpy().cumsum(0)
     token_idxs = idxs // moe_top_k
 

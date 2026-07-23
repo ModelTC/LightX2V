@@ -18,6 +18,7 @@ class ErnieImageScheduler(BaseScheduler):
         self.sample_guide_scale = config.get("sample_guide_scale", 1.0)
         self.timestep = None
         self.noise_pred = None
+        self.rope_request_id = 0
 
     def prepare_latents(self, input_info):
         shape = tuple(input_info.target_shape)
@@ -34,14 +35,14 @@ class ErnieImageScheduler(BaseScheduler):
             1.0,
             0.0,
             self.config["infer_steps"] + 1,
-            device=AI_DEVICE,
             dtype=torch.float32,
-        )
+        ).tolist()
         self.scheduler.set_timesteps(sigmas=sigmas[:-1], device=AI_DEVICE)
         self.timesteps = self.scheduler.timesteps
         self.infer_steps = len(self.timesteps)
 
     def prepare(self, input_info):
+        self.rope_request_id += 1
         if self.generator is None:
             self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
         self.prepare_latents(input_info)

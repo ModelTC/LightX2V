@@ -568,7 +568,7 @@ class WanDreamZeroRunner(WanRunner):
         self.last_chunk_started_new_segment = len(frame_indices) == 1 or self.current_start_frame >= int(self.config.get("local_attn_size", 9))
         if self.last_chunk_started_new_segment:
             self.current_start_frame = 0
-            self.model.clear_cache(self.cache_name)
+            self.model.clear_cache(self.cache_name, clear_pre_infer=False)
 
         observed_latents = None
         if self.current_start_frame == 0:

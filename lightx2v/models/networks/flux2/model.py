@@ -25,9 +25,50 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         super().__init__(model_path, config, device)
         self.in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
         self.attention_kwargs = {}
+        self._combined_img_ids_cache = None
+        self._init_tensor_parallel()
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
+
+    def _init_tensor_parallel(self):
+        if self.config.get("tensor_parallel", False):
+            self.use_tp = True
+            self.tp_group = self.config.get("device_mesh").get_group(mesh_dim="tensor_p")
+            self.tp_rank = dist.get_rank(self.tp_group)
+            self.tp_size = dist.get_world_size(self.tp_group)
+        else:
+            self.use_tp = False
+            self.tp_group = None
+            self.tp_rank = 0
+            self.tp_size = 1
+
+    def _should_load_weights(self):
+        if self.config.get("device_mesh") is None:
+            return True
+        if dist.is_initialized() and self.use_tp:
+            return dist.get_rank() == 0
+        return super()._should_load_weights()
+
+    def _load_ckpt(self, unified_dtype, sensitive_layer):
+        if not self.use_tp:
+            return super()._load_ckpt(unified_dtype, sensitive_layer)
+        original_device = self.device
+        self.device = torch.device("cpu")
+        try:
+            return super()._load_ckpt(unified_dtype, sensitive_layer)
+        finally:
+            self.device = original_device
+
+    def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        if not self.use_tp:
+            return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
+        original_device = self.device
+        self.device = torch.device("cpu")
+        try:
+            return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
+        finally:
+            self.device = original_device
 
     def _rank_device(self):
         ai_device = global_var.AI_DEVICE
@@ -231,12 +272,24 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
+        self.pre_infer.set_rope(self.transformer_weights.double_blocks[0].rope)
         if hasattr(self.transformer_infer, "offload_manager_double") and hasattr(self.transformer_infer, "offload_manager_single"):
             self._init_offload_manager()
 
     def _init_offload_manager(self):
         self.transformer_infer.offload_manager_double.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_double_block_cuda_buffers)
         self.transformer_infer.offload_manager_single.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_single_block_cuda_buffers)
+
+    def _get_combined_img_ids(self, img_ids, input_image_ids):
+        cached = self._combined_img_ids_cache
+        if cached is not None:
+            cached_sources, combined = cached
+            if cached_sources[0] is img_ids and cached_sources[1] is input_image_ids:
+                return combined
+
+        combined = torch.cat([img_ids, input_image_ids], dim=1)
+        self._combined_img_ids_cache = ((img_ids, input_image_ids), combined)
+        return combined
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True, txt_ids=None, img_ids=None):
@@ -250,7 +303,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         if input_image_latents is not None:
             latents_input = torch.cat([latents_input, input_image_latents], dim=1)
             if img_ids is not None and input_image_ids is not None:
-                img_ids = torch.cat([img_ids, input_image_ids], dim=1)
+                img_ids = self._get_combined_img_ids(img_ids, input_image_ids)
 
         pre_infer_out = self.pre_infer.infer(
             weights=self.pre_weight,

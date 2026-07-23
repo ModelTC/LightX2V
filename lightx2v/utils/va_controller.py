@@ -68,7 +68,7 @@ class VAController:
         # how many frames to publish stream as a batch
         self.slice_frame = config.get("slice_frame", self.prev_frame_length)
         # estimate the max infer seconds, for immediate switch with local omni
-        slice_interval = max(1, self.slice_frame / self.record_fps)
+        slice_interval = max(1e-5, self.slice_frame / self.record_fps)
 
         est_max_infer_secs = config.get("est_max_infer_secs", 0.6)
         est_max_switch_image_secs = config.get("est_max_switch_image_secs", 0)
@@ -80,6 +80,13 @@ class VAController:
 
         max_end_idx = max(self.est_infer_end_idx, self.est_switch_image_end_idx, self.est_switch_action_end_idx)
         self.min_stay_queue_num = max_end_idx * 2 + 1
+
+        # for seko_talk_ar, the audio_sr is the same as the sample_rate
+        self.is_seko_talk_ar = config.get("model_cls") == "seko_talk_ar"
+        if self.is_seko_talk_ar:
+            self.latent_per_chunk = config["ar_config"]["num_frame_per_chunk"]
+            self.audio_window_secs = config.get("audio_window", 1.0)
+            self.look_ahead_secs = config.get("look_ahead", 0.0)
 
     def init_recorder(self):
         if not self.output_video_path or self.rank != self.target_recorder_rank:
@@ -117,7 +124,24 @@ class VAController:
         prev_duration = self.prev_frame_length / self.target_fps
         omni_work_dir = os.getenv("OMNI_WORK_DIR", None)
         if omni_work_dir:
-            from lightx2v.utils.va_reader_omni import OmniVAReader
+            from lightx2v.utils.va_reader_omni import OmniVAReader, SekoAROmniVAReader
+
+            if self.is_seko_talk_ar:
+                self.reader = SekoAROmniVAReader(
+                    rank=self.rank,
+                    world_size=self.world_size,
+                    stream_url=self.audio_path["data"],
+                    sample_rate=self.audio_sr,
+                    latent_per_chunk=self.latent_per_chunk,
+                    audio_window_secs=self.audio_window_secs,
+                    look_ahead_secs=self.look_ahead_secs,
+                    video_fps=self.target_fps,
+                    target_rank=self.target_reader_rank,
+                    model_runner=model_runner,
+                    huoshan_tts_voice_type=self.audio_path.get("huoshan_tts_voice_type", None),
+                    stream_config=self.stream_config,
+                )
+                return
 
             self.reader = OmniVAReader(
                 rank=self.rank,
@@ -172,6 +196,9 @@ class VAController:
         if isinstance(self.reader, OmniVAReader):
             self.len_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)
             self.flag_tensor = torch.tensor([0], dtype=torch.int32, device=AI_DEVICE)
+            if self.is_seko_talk_ar:
+                self.prev_tensor = torch.full((1, 1, self.prev_frame_length), -1, dtype=torch.int64, device=AI_DEVICE)
+                return
             self.prev_tensor = torch.zeros((1, 3, self.prev_frame_length, self.tgt_h, self.tgt_w), dtype=torch.float, device=AI_DEVICE)
 
     def omni_reader_next_control(self):

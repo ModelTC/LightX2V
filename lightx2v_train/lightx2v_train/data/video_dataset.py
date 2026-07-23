@@ -1,98 +1,116 @@
-import csv
+import io
 import json
-import math
 import random
-import sys
 from pathlib import Path
 
-import imageio
 import numpy as np
 import torch
-from PIL import Image
 from loguru import logger
 from torch.utils.data import DataLoader, DistributedSampler
 
-from lightx2v_train.runtime.distributed import get_world_size
+from lightx2v_train.data.utils import (
+    VideoFrameSampler,
+    load_video_tensor,
+    prompt_text,
+    read_records,
+    record_value,
+    resolve_data_path,
+    to_list,
+)
+from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
 
-
-def _pil_resampling(name):
-    if hasattr(Image, "Resampling"):
-        return getattr(Image.Resampling, name)
-    return getattr(Image, name)
-
-
-def crop_and_resize(image, target_height, target_width):
-    width, height = image.size
-    scale = max(target_width / width, target_height / height)
-    resized_width = round(width * scale)
-    resized_height = round(height * scale)
-    image = image.resize((resized_width, resized_height), _pil_resampling("BILINEAR"))
-
-    left = max(0, (resized_width - target_width) // 2)
-    top = max(0, (resized_height - target_height) // 2)
-    return image.crop((left, top, left + target_width, top + target_height))
+METADATA_SUFFIXES = {".jsonl", ".json", ".csv"}
+PROMPT_SUFFIXES = {".txt", ".list"}
+CONDITION_KEYS = (
+    "prompt_embed",
+    "video_prompt_embeds",
+    "audio_prompt_embeds",
+    "prompt_embeds",
+    "prompt_attention_mask",
+    "video_context",
+    "audio_context",
+    "context_mask",
+)
 
 
-def frame_to_tensor(frame):
-    array = np.asarray(frame, dtype=np.float32) / 127.5 - 1.0
-    return torch.from_numpy(array).permute(2, 0, 1)
+def _strip_condition_batch(value):
+    if torch.is_tensor(value):
+        if value.ndim >= 2 and value.shape[0] == 1:
+            return value[0]
+        return value
+    if isinstance(value, dict):
+        return {key: _strip_condition_batch(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_strip_condition_batch(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_condition_batch(item) for item in value)
+    return value
 
 
-class FrameSampler:
-    def __init__(
-        self,
-        num_frames=81,
-        time_division_factor=4,
-        time_division_remainder=1,
-        frame_rate=24,
-        fix_frame_rate=False,
-        random_start=False,
-    ):
-        self.num_frames = num_frames
-        self.time_division_factor = time_division_factor
-        self.time_division_remainder = time_division_remainder
-        self.frame_rate = frame_rate
-        self.fix_frame_rate = fix_frame_rate
-        self.random_start = random_start
-
-    def available_frames(self, reader):
-        total_raw_frames = int(reader.count_frames())
-        if not self.fix_frame_rate:
-            return total_raw_frames
-
-        meta_data = reader.get_meta_data()
-        duration = meta_data.get("duration") or total_raw_frames / meta_data["fps"]
-        return int(math.floor(duration * self.frame_rate))
-
-    def sample_count(self, reader):
-        num_frames = self.num_frames
-        total_frames = self.available_frames(reader)
-        if total_frames < num_frames:
-            num_frames = total_frames
-            while num_frames > 1 and num_frames % self.time_division_factor != self.time_division_remainder:
-                num_frames -= 1
-        return max(1, num_frames)
-
-    def raw_frame_id(self, sequence_id, raw_frame_rate, total_raw_frames):
-        if not self.fix_frame_rate:
-            return sequence_id
-
-        target_time = sequence_id / self.frame_rate
-        frame_id = int(round(target_time * raw_frame_rate))
-        return min(frame_id, total_raw_frames - 1)
-
-    def frame_ids(self, reader):
-        raw_frame_rate = reader.get_meta_data().get("fps", self.frame_rate)
-        total_raw_frames = int(reader.count_frames())
-        num_frames = self.sample_count(reader)
-
-        max_start = max(0, self.available_frames(reader) - num_frames)
-        start = random.randint(0, max_start) if self.random_start and max_start > 0 else 0
-        return [self.raw_frame_id(start + frame_id, raw_frame_rate, total_raw_frames) for frame_id in range(num_frames)]
+def _condition_payload(item):
+    if isinstance(item, (list, tuple)):
+        return _strip_condition_batch(item)
+    if not isinstance(item, dict):
+        raise TypeError(f"Condition payload must be a dict/list/tuple, got {type(item)!r}.")
+    if "conditioning" in item:
+        item = item["conditioning"]
+    if "positive" in item:
+        conditions = item["positive"]
+    elif "conditions" in item:
+        conditions = item["conditions"]
+    elif "condition" in item:
+        conditions = item["condition"]
+    else:
+        conditions = {key: item[key] for key in CONDITION_KEYS if key in item}
+    if conditions is None or (isinstance(conditions, (dict, list, tuple)) and not conditions):
+        raise KeyError("Condition payload must contain positive/conditions/condition or prompt embedding tensors.")
+    return _strip_condition_batch(conditions)
 
 
-class WanT2VVideoDataset(torch.utils.data.Dataset):
+def _video_latent_payload(data):
+    if torch.is_tensor(data):
+        return {"latents": data}
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    latents = normalized.get("latents")
+    if not torch.is_tensor(latents) or latents.dim() != 2:
+        return normalized
+    num_frames = int(normalized["num_frames"])
+    height = int(normalized["height"])
+    width = int(normalized["width"])
+    normalized["latents"] = latents.reshape(num_frames, height, width, latents.shape[-1]).permute(3, 0, 1, 2).contiguous()
+    return normalized
+
+
+def _metadata_path(path):
+    path = Path(path)
+    if path.is_dir():
+        metadata_path = path / "metadata.jsonl"
+        if not metadata_path.is_file():
+            raise FileNotFoundError(f"Dataset directory must contain metadata.jsonl: {path}")
+        return metadata_path
+    if path.suffix.lower() not in METADATA_SUFFIXES:
+        raise ValueError(f"Metadata dataset path must be .jsonl/.json/.csv or a directory containing metadata.jsonl, got: {path}")
+    return path
+
+
+def _is_lmdb_path(path):
+    path = Path(path)
+    return path.is_dir() and ((path / "data.mdb").is_file() or (path / "lock.mdb").is_file())
+
+
+def _resolve_required_path(value, base_dir, key):
+    path = resolve_data_path(value, base_dir)
+    if path is None:
+        return None
+    if not path.is_file():
+        raise FileNotFoundError(f"{key} points to a missing file: {path}")
+    return path
+
+
+class VideoDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         metadata_paths,
@@ -102,8 +120,13 @@ class WanT2VVideoDataset(torch.utils.data.Dataset):
         dataset_repeat=1,
         prompt_dropout_rate=0.0,
         video_column="video",
+        audio_column="audio",
+        image_column="image",
         prompt_column="caption",
         video_root=None,
+        audio_root=None,
+        image_root=None,
+        media_root=None,
         skip_missing=True,
         max_samples=None,
         random_start=False,
@@ -111,367 +134,380 @@ class WanT2VVideoDataset(torch.utils.data.Dataset):
         fix_frame_rate=False,
         decode_retries=3,
     ):
-        if isinstance(metadata_paths, (str, Path)):
-            metadata_paths = [metadata_paths]
-        self.metadata_paths = [Path(path) for path in metadata_paths]
-        self.height = height
-        self.width = width
+        self.metadata_paths = [_metadata_path(path) for path in to_list(metadata_paths)]
+        self.height = int(height)
+        self.width = int(width)
         if self.height % 16 != 0 or self.width % 16 != 0:
-            raise ValueError(f"Wan T2V training height and width must be divisible by 16, got {self.height}x{self.width}.")
-        self.dataset_repeat = dataset_repeat
-        self.prompt_dropout_rate = prompt_dropout_rate
+            raise ValueError(f"Video training height and width must be divisible by 16, got {self.height}x{self.width}.")
+        self.dataset_repeat = int(dataset_repeat)
+        self.prompt_dropout_rate = float(prompt_dropout_rate)
         self.video_column = video_column
+        self.audio_column = audio_column
+        self.image_column = image_column
         self.prompt_column = prompt_column
-        self.video_root = Path(video_root) if video_root else None
-        self.skip_missing = skip_missing
+        self.video_roots = [Path(path) for path in to_list(video_root)] + [Path(path) for path in to_list(media_root)]
+        self.audio_roots = [Path(path) for path in to_list(audio_root)] + [Path(path) for path in to_list(media_root)]
+        self.image_roots = [Path(path) for path in to_list(image_root)] + [Path(path) for path in to_list(media_root)]
+        self.skip_missing = bool(skip_missing)
         self.max_samples = max_samples
-        self.decode_retries = max(1, decode_retries)
-        self.frame_sampler = FrameSampler(
+        self.decode_retries = max(1, int(decode_retries))
+        self.frame_sampler = VideoFrameSampler(
             num_frames=num_frames,
             frame_rate=frame_rate,
             fix_frame_rate=fix_frame_rate,
             random_start=random_start,
         )
         self.samples = self._load_samples()
-
         if not self.samples:
-            raise RuntimeError(f"No usable video samples found from metadata_paths={metadata_paths}")
+            raise RuntimeError(f"No usable video samples found from data_path={metadata_paths}")
+        logger.info("[data] video_dataset samples={} repeat={}", len(self.samples), self.dataset_repeat)
 
     def _load_samples(self):
         samples = []
         for metadata_path in self.metadata_paths:
-            for row in self._iter_metadata(metadata_path):
-                video = row.get(self.video_column, "")
-                prompt = row.get(self.prompt_column, "")
-                video_path = self._resolve_video_path(metadata_path, video)
+            for row in read_records(metadata_path, prompt_column=self.prompt_column):
+                video_value = record_value(row, self.video_column, "video_path", "video")
+                video_path = resolve_data_path(video_value, metadata_path.parent, self.video_roots, subdirs=("video", "videos"))
                 if self.skip_missing and (video_path is None or not video_path.is_file()):
                     continue
 
-                samples.append(
-                    {
-                        "video_path": str(video_path or video),
-                        "prompt": str(prompt) if prompt is not None else "",
-                    }
-                )
+                meta = {
+                    "video_path": str(video_path or video_value),
+                }
+                height = record_value(row, "target_height", "height")
+                width = record_value(row, "target_width", "width")
+                if height not in (None, "") and width not in (None, ""):
+                    meta["target_height"] = int(height)
+                    meta["target_width"] = int(width)
+                for key in ("id", "width", "height", "fps", "frames", "duration", "num_frames"):
+                    if isinstance(row, dict) and key in row:
+                        meta[key] = row[key]
 
-                if self.max_samples is not None and len(samples) >= self.max_samples:
+                audio_value = record_value(row, self.audio_column, "audio_path", "audio")
+                audio_path = resolve_data_path(audio_value, metadata_path.parent, self.audio_roots, subdirs=("audio", "audios"))
+                if audio_path is not None:
+                    meta["audio_path"] = str(audio_path)
+
+                image_value = record_value(row, self.image_column, "image_path", "image")
+                image_path = resolve_data_path(image_value, metadata_path.parent, self.image_roots, subdirs=("image", "images"))
+                if image_path is not None:
+                    meta["image_path"] = str(image_path)
+
+                samples.append({"prompt": prompt_text(row, self.prompt_column), "meta": meta})
+                if self.max_samples is not None and len(samples) >= int(self.max_samples):
                     return samples
         return samples
 
-    def _iter_metadata(self, metadata_path):
-        if metadata_path.suffix == ".jsonl":
-            with metadata_path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    if line.strip():
-                        yield json.loads(line)
-            return
-
-        if metadata_path.suffix == ".json":
-            with metadata_path.open("r", encoding="utf-8") as handle:
-                for row in json.load(handle):
-                    yield row
-            return
-
-        csv.field_size_limit(sys.maxsize)
-        with metadata_path.open("r", encoding="utf-8-sig", newline="") as handle:
-            yield from csv.DictReader(handle)
-
-    def _resolve_video_path(self, metadata_path, video):
-        if not video or not str(video).strip():
-            return None
-
-        video_path = Path(str(video).strip())
-        if video_path.is_absolute():
-            candidates = [video_path]
-        else:
-            metadata_dir = metadata_path.parent
-            candidates = [
-                metadata_dir / video_path,
-                metadata_dir / "video" / video_path.name,
-            ]
-            if self.video_root is not None:
-                candidates.extend([self.video_root / video_path, self.video_root / video_path.name])
-
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-        return candidates[0]
-
     def _load_video(self, video_path):
-        reader = imageio.get_reader(video_path)
-        try:
-            frames = []
-            for frame_id in self.frame_sampler.frame_ids(reader):
-                frame = Image.fromarray(reader.get_data(frame_id)).convert("RGB")
-                frame = crop_and_resize(frame, self.height, self.width)
-                frames.append(frame_to_tensor(frame))
-        finally:
-            reader.close()
-
-        return torch.stack(frames, dim=1)
+        return load_video_tensor(video_path, self.height, self.width, self.frame_sampler)
 
     def __getitem__(self, index):
         base_index = index % len(self.samples)
         last_error = None
         for retry_id in range(self.decode_retries):
-            sample = self.samples[(base_index + retry_id) % len(self.samples)]
+            record = self.samples[(base_index + retry_id) % len(self.samples)]
+            meta = dict(record["meta"])
             try:
-                prompt = sample["prompt"]
+                prompt = record["prompt"]
                 if random.random() < self.prompt_dropout_rate:
                     prompt = " "
                 return {
-                    "prompt": prompt,
-                    "video": self._load_video(sample["video_path"]),
-                    "video_path": sample["video_path"],
+                    "inputs": {"video": self._load_video(meta["video_path"])},
+                    "conditioning": {"prompt": prompt},
+                    "meta": meta,
                 }
             except Exception as error:
                 last_error = error
-                logger.warning("Failed to load video {}: {}", sample.get("video_path"), error)
+                logger.warning("Failed to load video {}: {}", meta.get("video_path"), error)
         raise last_error
 
     def __len__(self):
         return len(self.samples) * self.dataset_repeat
 
 
-class WanT2VCachedDataset(torch.utils.data.Dataset):
-    def __init__(self, cache_paths, dataset_repeat=1, max_samples=None):
-        if isinstance(cache_paths, (str, Path)):
-            cache_paths = [cache_paths]
-        self.cache_paths = self._collect_cache_paths(cache_paths)
-        if max_samples is not None:
-            self.cache_paths = self.cache_paths[:max_samples]
-        self.dataset_repeat = dataset_repeat
-
-        if not self.cache_paths:
-            raise RuntimeError(f"No .pt cache files found from cache_paths={cache_paths}")
-
-    def _collect_cache_paths(self, cache_paths):
-        result = []
-        for cache_path in cache_paths:
-            path = Path(cache_path)
-            if path.is_dir():
-                result.extend(sorted(str(item) for item in path.rglob("*.pt")))
-            elif path.suffix == ".pt":
-                result.append(str(path))
-            elif path.suffix in {".txt", ".list"}:
-                with path.open("r", encoding="utf-8") as handle:
-                    result.extend(line.strip() for line in handle if line.strip())
-        return result
-
-    def __getitem__(self, index):
-        path = self.cache_paths[index % len(self.cache_paths)]
-        item = torch.load(path, map_location="cpu", weights_only=False)
-        latent = item["latent"]
-        prompt_embed = item["prompt_embed"]
-        if latent.ndim == 5 and latent.shape[0] == 1:
-            latent = latent[0]
-        if prompt_embed.ndim == 3 and prompt_embed.shape[0] == 1:
-            prompt_embed = prompt_embed[0]
-        return {
-            "latent": latent,
-            "prompt_embed": prompt_embed,
-            "prompt": item.get("prompt", ""),
-            "video_path": item.get("video_path", ""),
-            "cache_path": path,
-        }
-
-    def __len__(self):
-        return len(self.cache_paths) * self.dataset_repeat
-
-
-def _get_array_shape_from_lmdb(env, array_name):
-    with env.begin() as txn:
-        shape_bytes = txn.get(f"{array_name}_shape".encode())
-    if shape_bytes is None:
-        raise KeyError(f"{array_name}_shape not found in LMDB dataset.")
-    return tuple(map(int, shape_bytes.decode().split()))
-
-
-def _retrieve_row_from_lmdb(env, array_name, dtype, row_index, shape=None):
-    data_key = f"{array_name}_{row_index}_data".encode()
-    with env.begin() as txn:
-        row_bytes = txn.get(data_key)
-    if row_bytes is None:
-        raise KeyError(f"{data_key!r} not found in LMDB dataset.")
-    if dtype is str:
-        return row_bytes.decode()
-    array = np.frombuffer(row_bytes, dtype=dtype)
-    if shape is not None and len(shape) > 0:
-        array = array.reshape(shape)
-    return array
-
-
-class CausalForcingLatentLMDBDataset(torch.utils.data.Dataset):
-    def __init__(self, data_path, dataset_repeat=1, max_samples=None):
-        try:
-            import lmdb
-        except ImportError as error:
-            raise ImportError("causal_forcing_lmdb_dataset requires the 'lmdb' Python package.") from error
-
-        self.data_path = str(data_path)
-        self.env = lmdb.open(self.data_path, readonly=True, lock=False, readahead=False, meminit=False)
-        self.latents_shape = _get_array_shape_from_lmdb(self.env, "latents")
-        self.dataset_repeat = dataset_repeat
-        self.max_samples = max_samples
-
-    def __len__(self):
-        length = self.latents_shape[0]
-        if self.max_samples is not None:
-            length = min(length, self.max_samples)
-        return length * self.dataset_repeat
-
-    def __getitem__(self, index):
-        row_index = index % min(self.latents_shape[0], self.max_samples or self.latents_shape[0])
-        latents = _retrieve_row_from_lmdb(
-            self.env,
-            "latents",
-            np.float16,
-            row_index,
-            shape=self.latents_shape[1:],
-        )
-        if latents.ndim == 4:
-            latents = latents[None, ...]
-        clean_latent = torch.tensor(latents, dtype=torch.float32)[-1]
-        prompt = _retrieve_row_from_lmdb(self.env, "prompts", str, row_index)
-        return {
-            "prompts": prompt,
-            "prompt": prompt,
-            "clean_latent": clean_latent,
-            "latent": clean_latent.permute(1, 0, 2, 3).contiguous(),
-        }
-
-
 class PromptDataset(torch.utils.data.Dataset):
     def __init__(
         self,
-        metadata_paths,
-        prompt_column="prompt",
-        prompt_index=0,
+        prompt_paths,
         dataset_repeat=1,
         max_samples=None,
+        prompt_dropout_rate=0.0,
     ):
-        if isinstance(metadata_paths, (str, Path)):
-            metadata_paths = [metadata_paths]
-        self.metadata_paths = [Path(path) for path in metadata_paths]
-        self.prompt_column = prompt_column
-        self.prompt_index = int(prompt_index)
-        self.dataset_repeat = dataset_repeat
-        self.max_samples = max_samples
-        self.samples = self._load_samples()
-
+        self.prompt_paths = [Path(path) for path in to_list(prompt_paths)]
+        if not self.prompt_paths:
+            raise ValueError("prompt_dataset requires data_path.")
+        self.dataset_repeat = int(dataset_repeat)
+        self.max_samples = None if max_samples is None else int(max_samples)
+        self.prompt_dropout_rate = float(prompt_dropout_rate)
+        self.samples = self._load_prompts()
         if not self.samples:
-            raise RuntimeError(f"No prompts found from metadata_paths={metadata_paths}")
+            raise RuntimeError(f"No prompts found from data_path={prompt_paths}")
+        logger.info("[data] prompt_dataset samples={} repeat={}", len(self.samples), self.dataset_repeat)
 
-    def _load_samples(self):
+    def _load_prompts(self):
         samples = []
-        for metadata_path in self.metadata_paths:
-            for sample in self._iter_metadata(metadata_path):
-                prompt = sample.get("prompt", "")
-                if prompt.strip():
-                    samples.append(sample)
-
+        for path in self.prompt_paths:
+            suffix = path.suffix.lower()
+            if suffix not in PROMPT_SUFFIXES | {".json", ".jsonl"}:
+                raise ValueError(f"prompt_dataset only accepts .txt/.list/.json/.jsonl files, got: {path}")
+            for row_index, record in enumerate(read_records(path)):
+                prompt = prompt_text(record)
+                if not prompt:
+                    continue
+                negative_prompt = record_value(record, "negative_prompt", default="")
+                if isinstance(negative_prompt, (dict, list)):
+                    negative_prompt = json.dumps(negative_prompt, ensure_ascii=False, separators=(",", ":"))
+                else:
+                    negative_prompt = str(negative_prompt).strip()
+                samples.append(
+                    {
+                        "prompt": prompt,
+                        "negative_prompt": negative_prompt,
+                        "meta": {"prompt_path": str(path), "row_index": row_index},
+                    }
+                )
                 if self.max_samples is not None and len(samples) >= self.max_samples:
                     return samples
         return samples
 
-    def _iter_metadata(self, metadata_path):
-        if metadata_path.suffix in {".txt", ".list"}:
-            with metadata_path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    prompt = line.strip()
-                    if prompt:
-                        yield {"prompt": prompt}
+    def __getitem__(self, index):
+        sample = self.samples[index % len(self.samples)]
+        prompt = sample["prompt"]
+        if random.random() < self.prompt_dropout_rate:
+            prompt = " "
+        return {
+            "inputs": {},
+            "conditioning": {
+                "prompt": prompt,
+                "negative_prompt": sample["negative_prompt"],
+            },
+            "meta": dict(sample["meta"]),
+        }
+
+    def __len__(self):
+        return len(self.samples) * self.dataset_repeat
+
+
+class LatentDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        data_paths,
+        dataset_repeat=1,
+        max_samples=None,
+        prompt_column="caption",
+        prompt_index=0,
+        negative_condition_path=None,
+    ):
+        self.paths = [Path(path) for path in to_list(data_paths)]
+        if not self.paths:
+            raise ValueError("latent_dataset requires data_path.")
+        self.dataset_repeat = int(dataset_repeat)
+        self.max_samples = None if max_samples is None else int(max_samples)
+        self.prompt_column = prompt_column
+        self.prompt_index = int(prompt_index)
+        self.samples = []
+        self.lmdb_envs = []
+        self.negative_condition = self._load_negative_condition(negative_condition_path)
+
+        for path in self.paths:
+            self._index_path(path)
+        if self.max_samples is not None:
+            self.samples = self.samples[: self.max_samples]
+        if not self.samples:
+            raise RuntimeError(f"No usable latent samples found from data_path={data_paths}.")
+        logger.info("[data] latent_dataset samples={} repeat={}", len(self.samples), self.dataset_repeat)
+
+    def _index_path(self, path):
+        if _is_lmdb_path(path):
+            self._index_lmdb(path)
+            return
+        self._index_metadata(_metadata_path(path))
+
+    def _load_negative_condition(self, negative_condition_path):
+        if negative_condition_path is None:
+            for path in self.paths:
+                base = path if path.is_dir() else path.parent
+                candidate = base / "negative_condition.pt"
+                if candidate.is_file():
+                    negative_condition_path = candidate
+                    break
+        if negative_condition_path is None:
+            return None
+        return _condition_payload(torch.load(negative_condition_path, map_location="cpu", weights_only=False))
+
+    def _index_metadata(self, metadata_path):
+        for row in read_records(metadata_path, prompt_column=self.prompt_column, prompt_index=self.prompt_index):
+            self.samples.append({"type": "metadata", "row": row, "base_dir": str(metadata_path.parent)})
+
+    def _index_lmdb(self, data_path):
+        try:
+            import lmdb
+        except ImportError as error:
+            raise ImportError("latent_dataset LMDB input requires the 'lmdb' Python package.") from error
+
+        env = lmdb.open(str(data_path), readonly=True, lock=False, readahead=False, meminit=False)
+        with env.begin() as txn:
+            format_bytes = txn.get(b"__format__")
+            sample_count_bytes = txn.get(b"sample_count") or txn.get(b"num_samples")
+
+        env_index = len(self.lmdb_envs)
+        if format_bytes is not None and format_bytes.decode() == "sample_pt":
+            if sample_count_bytes is None:
+                raise KeyError("sample_pt LMDB dataset requires sample_count.")
+            sample_count = int(sample_count_bytes.decode())
+            self.lmdb_envs.append({"env": env, "format": "sample_pt", "path": str(data_path)})
+            for row_index in range(sample_count):
+                self.samples.append({"type": "lmdb_sample", "env_index": env_index, "row_index": row_index})
             return
 
-        if metadata_path.suffix == ".jsonl":
-            with metadata_path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    if line.strip():
-                        yield self._normalize_json_record(json.loads(line))
-            return
+        latents_shape = self._get_lmdb_shape(env, "latents")
+        self.lmdb_envs.append({"env": env, "format": "wan_latents", "latents_shape": latents_shape, "path": str(data_path)})
+        for row_index in range(latents_shape[0]):
+            self.samples.append({"type": "lmdb_wan", "env_index": env_index, "row_index": row_index})
 
-        if metadata_path.suffix == ".json":
-            with metadata_path.open("r", encoding="utf-8") as handle:
-                records = json.load(handle)
-            if isinstance(records, dict):
-                records = records.get("prompts", [records])
-            for record in records:
-                yield self._normalize_json_record(record)
-            return
+    @staticmethod
+    def _get_lmdb_shape(env, array_name):
+        with env.begin() as txn:
+            shape_bytes = txn.get(f"{array_name}_shape".encode())
+        if shape_bytes is None:
+            raise KeyError(f"{array_name}_shape not found in LMDB dataset.")
+        return tuple(map(int, shape_bytes.decode().split()))
 
-        csv.field_size_limit(sys.maxsize)
-        with metadata_path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.reader(handle)
-            first_row = next(reader, None)
-            if first_row is None:
-                return
-
-            header = [column.strip() for column in first_row]
-            if self.prompt_column in header:
-                column_to_index = {column: index for index, column in enumerate(header)}
-                for row in reader:
-                    yield self._normalize_csv_row(row, column_to_index)
-            else:
-                yield self._normalize_csv_row(first_row)
-                for row in reader:
-                    yield self._normalize_csv_row(row)
-
-    def _normalize_json_record(self, record):
-        if isinstance(record, str):
-            return {"prompt": record.strip()}
-        if not isinstance(record, dict):
-            return {"prompt": str(record).strip()}
-
-        prompt = record.get(self.prompt_column, record.get("prompt", ""))
-        prompt = "" if prompt is None else str(prompt).strip()
-        sample = {"prompt": prompt}
-        height = record.get("target_height", record.get("height"))
-        width = record.get("target_width", record.get("width"))
-        self._maybe_add_target_hw(sample, height, width)
-        return sample
-
-    def _normalize_csv_row(self, row, column_to_index=None):
-        if column_to_index is not None:
-            prompt_index = column_to_index.get(self.prompt_column, column_to_index.get("prompt", 0))
-            prompt = self._row_value(row, prompt_index)
-            height_index = column_to_index.get("target_height", column_to_index.get("height"))
-            width_index = column_to_index.get("target_width", column_to_index.get("width"))
-            height = self._row_value(row, height_index)
-            width = self._row_value(row, width_index)
-        else:
-            prompt = self._row_value(row, self.prompt_index)
-            height = None
-            width = None
-
-        sample = {"prompt": prompt.strip()}
-        self._maybe_add_target_hw(sample, height, width)
-        return sample
-
-    def _row_value(self, row, index):
-        if index is None or index >= len(row):
-            return ""
-        return str(row[index])
-
-    def _maybe_add_target_hw(self, sample, height, width):
-        if height in (None, "") or width in (None, ""):
-            return
-        sample["target_height"] = int(height)
-        sample["target_width"] = int(width)
+    @staticmethod
+    def _retrieve_lmdb_row(env, array_name, dtype, row_index, shape=None):
+        data_key = f"{array_name}_{row_index}_data".encode()
+        with env.begin() as txn:
+            row_bytes = txn.get(data_key)
+        if row_bytes is None:
+            raise KeyError(f"{data_key!r} not found in LMDB dataset.")
+        if dtype is str:
+            return row_bytes.decode()
+        array = np.frombuffer(row_bytes, dtype=dtype)
+        if shape is not None and len(shape) > 0:
+            array = array.reshape(shape)
+        return array
 
     def __getitem__(self, index):
-        return self.samples[index % len(self.samples)]
+        sample = self.samples[index % len(self.samples)]
+        if sample["type"] == "metadata":
+            return self._load_metadata_sample(sample["row"], Path(sample["base_dir"]))
+        if sample["type"] in {"lmdb_sample", "lmdb_wan"}:
+            return self._load_lmdb_sample(sample)
+        raise AssertionError(f"Unhandled latent dataset sample type: {sample['type']}")
+
+    def _load_metadata_sample(self, row, base_dir):
+        inputs = {}
+        conditioning = {}
+        meta = {}
+        height = record_value(row, "target_height", "height")
+        width = record_value(row, "target_width", "width")
+        if height not in (None, "") and width not in (None, ""):
+            meta["target_height"] = int(height)
+            meta["target_width"] = int(width)
+        for key in ("id", "width", "height", "fps", "frames", "duration", "num_frames"):
+            if isinstance(row, dict) and key in row:
+                meta[key] = row[key]
+        for key in ("video", "video_path", "audio", "audio_path", "image", "image_path"):
+            value = record_value(row, key)
+            path = resolve_data_path(value, base_dir)
+            if path is not None:
+                meta[key] = str(path)
+        prompt = prompt_text(row, self.prompt_column, self.prompt_index)
+        if prompt:
+            conditioning["prompt"] = prompt
+
+        video_latent_path = _resolve_required_path(record_value(row, "video_latent_path"), base_dir, "video_latent_path")
+        if video_latent_path is not None:
+            video_payload = _video_latent_payload(torch.load(video_latent_path, map_location="cpu", weights_only=True))
+            inputs["video_latents"] = video_payload
+            if torch.is_tensor(video_payload):
+                inputs["latents"] = video_payload
+            elif isinstance(video_payload, dict) and torch.is_tensor(video_payload.get("latents")):
+                inputs["latents"] = video_payload["latents"]
+            meta["video_latent_path"] = str(video_latent_path)
+
+        audio_latent_path = _resolve_required_path(record_value(row, "audio_latent_path"), base_dir, "audio_latent_path")
+        if audio_latent_path is not None:
+            inputs["audio_latents"] = torch.load(audio_latent_path, map_location="cpu", weights_only=True)
+            meta["audio_latent_path"] = str(audio_latent_path)
+
+        condition_path = _resolve_required_path(record_value(row, "condition_path"), base_dir, "condition_path")
+        if condition_path is not None:
+            condition_item = torch.load(condition_path, map_location="cpu", weights_only=False)
+            positive = _condition_payload(condition_item)
+            conditioning["positive"] = positive
+            meta["condition_path"] = str(condition_path)
+            self._add_negative_condition(conditioning, condition_item)
+        elif self.negative_condition is not None:
+            conditioning["negative"] = self.negative_condition
+
+        row_negative_path = _resolve_required_path(record_value(row, "negative_condition_path"), base_dir, "negative_condition_path")
+        if row_negative_path is not None:
+            conditioning["negative"] = _condition_payload(torch.load(row_negative_path, map_location="cpu", weights_only=False))
+            meta["negative_condition_path"] = str(row_negative_path)
+
+        if not inputs and "positive" not in conditioning:
+            raise ValueError(f"Latent metadata row must contain video_latent_path and/or condition_path: {row}")
+        return {"inputs": inputs, "conditioning": conditioning, "meta": meta}
+
+    def _load_lmdb_sample(self, record):
+        source = self.lmdb_envs[record["env_index"]]
+        env = source["env"]
+        row_index = record["row_index"]
+
+        if source.get("format") == "sample_pt":
+            data_key = f"sample_{row_index:08d}".encode()
+            with env.begin() as txn:
+                row_bytes = txn.get(data_key)
+            if row_bytes is None:
+                raise KeyError(f"{data_key!r} not found in LMDB dataset.")
+            sample = torch.load(io.BytesIO(row_bytes), map_location="cpu", weights_only=False)
+            sample = {
+                "inputs": sample.get("inputs", {}),
+                "conditioning": sample.get("conditioning", {}),
+                "meta": sample.get("meta", {}),
+            }
+            sample["meta"].setdefault("row_index", row_index)
+            sample["meta"].setdefault("lmdb_path", source.get("path"))
+            return sample
+
+        latents_shape = source["latents_shape"]
+        latents = self._retrieve_lmdb_row(env, "latents", np.float16, row_index, shape=latents_shape[1:])
+        if latents.ndim == 4:
+            latents = latents[None, ...]
+        latent_tchw = torch.tensor(latents, dtype=torch.float32)[-1]
+        prompt = self._retrieve_lmdb_row(env, "prompts", str, row_index)
+        return {
+            "inputs": {"latents": latent_tchw.permute(1, 0, 2, 3).contiguous()},
+            "conditioning": {"prompt": prompt},
+            "meta": {"row_index": row_index, "lmdb_path": source.get("path")},
+        }
+
+    def _add_negative_condition(self, conditioning, item):
+        if self.negative_condition is not None:
+            conditioning["negative"] = self.negative_condition
+        elif isinstance(item, dict) and "negative" in item:
+            conditioning["negative"] = _condition_payload({"positive": item["negative"]})
+        elif isinstance(item, dict) and "negative_conditions" in item:
+            conditioning["negative"] = _condition_payload({"positive": item["negative_conditions"]})
 
     def __len__(self):
         return len(self.samples) * self.dataset_repeat
 
 
 def _build_dataloader(dataset, data_config, train_or_val):
-    world_size = get_world_size()
+    dp_world_size = get_data_parallel_world_size()
     sampler = None
     shuffle = data_config.get("shuffle", train_or_val == "train")
     drop_last = data_config.get("drop_last", False)
-    if train_or_val == "train" and world_size > 1:
-        sampler = DistributedSampler(dataset, shuffle=shuffle, drop_last=drop_last)
+    if train_or_val == "train" and dp_world_size > 1:
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=dp_world_size,
+            rank=get_data_parallel_rank(),
+            shuffle=shuffle,
+            drop_last=drop_last,
+        )
         shuffle = False
 
     return DataLoader(
@@ -485,9 +521,9 @@ def _build_dataloader(dataset, data_config, train_or_val):
     )
 
 
-@DATA_REGISTER("wan_t2v_video_dataset")
-def build_wan_t2v_video_dataset(data_config, train_or_val="train"):
-    dataset = WanT2VVideoDataset(
+@DATA_REGISTER("video_dataset")
+def build_video_dataset(data_config, train_or_val="train"):
+    dataset = VideoDataset(
         metadata_paths=data_config["data_path"],
         height=data_config.get("height", 480),
         width=data_config.get("width", 832),
@@ -495,8 +531,13 @@ def build_wan_t2v_video_dataset(data_config, train_or_val="train"):
         dataset_repeat=data_config.get("dataset_repeat", 1),
         prompt_dropout_rate=data_config.get("prompt_dropout_rate", 0.0),
         video_column=data_config.get("video_column", "video"),
+        audio_column=data_config.get("audio_column", "audio"),
+        image_column=data_config.get("image_column", "image"),
         prompt_column=data_config.get("prompt_column", "caption"),
         video_root=data_config.get("video_root"),
+        audio_root=data_config.get("audio_root"),
+        image_root=data_config.get("image_root"),
+        media_root=data_config.get("media_root"),
         skip_missing=data_config.get("skip_missing", True),
         max_samples=data_config.get("max_samples"),
         random_start=data_config.get("random_start", False),
@@ -507,34 +548,25 @@ def build_wan_t2v_video_dataset(data_config, train_or_val="train"):
     return _build_dataloader(dataset, data_config, train_or_val)
 
 
-@DATA_REGISTER("wan_t2v_cached_dataset")
-def build_wan_t2v_cached_dataset(data_config, train_or_val="train"):
-    cache_paths = data_config.get("cache_path", data_config.get("data_path"))
-    dataset = WanT2VCachedDataset(
-        cache_paths=cache_paths,
-        dataset_repeat=data_config.get("dataset_repeat", 1),
-        max_samples=data_config.get("max_samples"),
-    )
-    return _build_dataloader(dataset, data_config, train_or_val)
-
-
-@DATA_REGISTER("causal_forcing_lmdb_dataset")
-def build_causal_forcing_lmdb_dataset(data_config, train_or_val="train"):
-    dataset = CausalForcingLatentLMDBDataset(
-        data_path=data_config["data_path"],
-        dataset_repeat=data_config.get("dataset_repeat", 1),
-        max_samples=data_config.get("max_samples"),
-    )
-    return _build_dataloader(dataset, data_config, train_or_val)
-
-
 @DATA_REGISTER("prompt_dataset")
-def build_prompt_dataset(data_config, train_or_val="val"):
+def build_prompt_dataset(data_config, train_or_val="train"):
     dataset = PromptDataset(
-        metadata_paths=data_config["data_path"],
-        prompt_column=data_config.get("prompt_column", "prompt"),
-        prompt_index=data_config.get("prompt_index", 0),
+        prompt_paths=data_config["data_path"],
         dataset_repeat=data_config.get("dataset_repeat", 1),
         max_samples=data_config.get("max_samples"),
+        prompt_dropout_rate=data_config.get("prompt_dropout_rate", 0.0),
+    )
+    return _build_dataloader(dataset, data_config, train_or_val)
+
+
+@DATA_REGISTER("latent_dataset")
+def build_latent_dataset(data_config, train_or_val="train"):
+    dataset = LatentDataset(
+        data_paths=data_config["data_path"],
+        dataset_repeat=data_config.get("dataset_repeat", 1),
+        max_samples=data_config.get("max_samples"),
+        prompt_column=data_config.get("prompt_column", "caption"),
+        prompt_index=data_config.get("prompt_index", 0),
+        negative_condition_path=data_config.get("negative_condition_path"),
     )
     return _build_dataloader(dataset, data_config, train_or_val)

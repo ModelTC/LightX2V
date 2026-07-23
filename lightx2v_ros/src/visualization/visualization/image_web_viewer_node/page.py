@@ -1,10 +1,18 @@
-INDEX_HTML = """<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LightX2V ROS</title>
-  <style>
+"""Dynamic HTML for the image web viewer.
+
+The camera grid is generated from the active environment contract so the same
+viewer renders LIBERO and RoboTwin without code changes. The page also exposes
+an evaluation control panel (start/pause/resume/restart, task + scenario + seed
+selection), a state banner with success/failure notification, camera visibility
+toggles and an episode history table -- all backed by the `/status.json` and
+`POST /control` endpoints, which the viewer node bridges to the simulator's
+`{namespace}/status` / `{namespace}/control` ROS topics.
+"""
+
+import html
+import json
+
+_STYLE = """
     :root {
       color-scheme: dark;
       --bg: #0b0d10;
@@ -13,10 +21,12 @@ INDEX_HTML = """<!doctype html>
       --text: #f4f7fb;
       --muted: #95a1af;
       --accent: #5eead4;
+      --green: #34d399;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --blue: #60a5fa;
     }
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
@@ -34,30 +44,70 @@ INDEX_HTML = """<!doctype html>
       border-bottom: 1px solid var(--panel-border);
       background: #101319;
     }
-    h1 {
-      margin: 0;
-      font-size: 16px;
+    h1 { margin: 0; font-size: 16px; font-weight: 650; }
+    #banner {
+      margin: 14px 14px 0;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--panel-border);
+      background: var(--panel);
+      font-size: 15px;
       font-weight: 650;
-    }
-    .status {
-      display: inline-flex;
+      display: flex;
       align-items: center;
-      gap: 8px;
-      color: var(--muted);
+      gap: 10px;
+    }
+    #banner::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+    #banner.running { border-color: rgba(96,165,250,.5); } #banner.running::before { background: var(--blue); box-shadow: 0 0 12px var(--blue); }
+    #banner.paused { border-color: rgba(251,191,36,.5); } #banner.paused::before { background: var(--yellow); box-shadow: 0 0 12px var(--yellow); }
+    #banner.success { border-color: rgba(52,211,153,.6); background: rgba(52,211,153,.08); } #banner.success::before { background: var(--green); box-shadow: 0 0 14px var(--green); }
+    #banner.failure { border-color: rgba(248,113,113,.6); background: rgba(248,113,113,.08); } #banner.failure::before { background: var(--red); box-shadow: 0 0 14px var(--red); }
+    #banner.switching { border-color: rgba(251,191,36,.5); } #banner.switching::before { background: var(--yellow); animation: blink 1s infinite; }
+    #banner.ready::before { background: var(--accent); }
+    @keyframes blink { 50% { opacity: .2; } }
+    .panel {
+      margin: 14px;
+      padding: 14px 16px;
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .controls label { color: var(--muted); font-size: 13px; }
+    select, input[type=number] {
+      background: #0e1116;
+      color: var(--text);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 7px 10px;
       font-size: 13px;
-      white-space: nowrap;
     }
-    .status::before {
-      content: "";
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent);
-      box-shadow: 0 0 14px rgba(94, 234, 212, 0.75);
+    input[type=number] { width: 90px; }
+    #task-select { width: min(560px, 70vw); }
+    #config-select { min-width: 90px; }
+    .config-feedback { color: var(--muted); font-size: 13px; }
+    .config-feedback.pending { color: var(--yellow); }
+    .config-feedback.success { color: var(--green); }
+    .config-feedback.error { color: var(--red); }
+    button {
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      background: #1b212a;
+      color: var(--text);
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 650;
+      cursor: pointer;
     }
+    button:hover { border-color: var(--accent); }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+    button.primary { background: rgba(94,234,212,.14); border-color: rgba(94,234,212,.5); }
+    button.danger { background: rgba(248,113,113,.1); border-color: rgba(248,113,113,.4); }
+    .cam-toggles { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; color: var(--muted); font-size: 13px; }
+    .cam-toggles label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
     main {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
       gap: 14px;
       padding: 14px;
     }
@@ -90,63 +140,359 @@ INDEX_HTML = """<!doctype html>
       display: block;
       width: 100%;
       height: 100%;
-      min-height: 260px;
-      aspect-ratio: 1 / 1;
+      min-height: 240px;
       object-fit: contain;
       background: #080a0d;
     }
+    .view.hidden { display: none; }
     .task {
       margin: 0 14px 14px;
       padding: 14px 16px;
       border: 1px solid var(--panel-border);
       border-radius: 8px;
       background: var(--panel);
-      color: var(--text);
       font-size: 15px;
       line-height: 1.5;
     }
-    .task span {
-      color: var(--muted);
+    .task span { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--panel-border); }
+    th { color: var(--muted); font-weight: 600; }
+    td.outcome-success { color: var(--green); font-weight: 650; }
+    td.outcome-failure { color: var(--red); font-weight: 650; }
+    .stats { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+    .meta { color: var(--muted); font-size: 13px; margin-left: auto; }
+"""
+
+_VIEW_TEMPLATE = """    <section class="view" data-cam="{name}">
+      <h2>{label}</h2>
+      <img src="/{name}.mjpg" alt="{label}">
+    </section>"""
+
+_SCRIPT = """
+    const POLICY_CAMS = __POLICY_CAMS__;
+    let lastState = null;
+    let statusData = {};
+    let configDirty = false;
+    let applyingConfig = false;
+
+    function el(id) { return document.getElementById(id); }
+
+    function stateLabel(s) {
+      const m = {
+        ready: 'Ready — click "Start" to run the evaluation',
+        running: "Evaluation in progress",
+        paused: "Paused",
+        success: "✔ Evaluation succeeded",
+        failure: "✘ Evaluation failed (maximum step limit exceeded)",
+        switching: "Switching/rebuilding the scene, please wait…",
+      };
+      return m[s] || s || "Waiting for simulator status…";
     }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>LightX2V ROS</h1>
-    <div class="status">live streams</div>
-  </header>
-  <main>
-    <section class="view">
-      <h2>agentview</h2>
-      <img src="/agentview.mjpg" alt="agentview">
-    </section>
-    <section class="view">
-      <h2>wrist</h2>
-      <img src="/wrist.mjpg" alt="wrist">
-    </section>
-    <section class="view">
-      <h2>frontview</h2>
-      <img src="/frontview.mjpg" alt="frontview">
-    </section>
-    <section class="view">
-      <h2>galleryview</h2>
-      <img src="/galleryview.mjpg" alt="galleryview">
-    </section>
-  </main>
-  <section class="task" id="task"><span>waiting for task description</span></section>
-  <script>
+
+    async function post(cmd, extra) {
+      const body = Object.assign({ cmd: cmd }, extra || {});
+      const response = await fetch("/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      setTimeout(refreshStatus, 300);
+      return result;
+    }
+
+    function selectedConfig() {
+      const task = el("task-select").value;
+      const config = el("config-select").value;
+      const seed = el("seed-input").value;
+      const extra = { task_name: task, task_config: config };
+      if (seed !== "") extra.seed = parseInt(seed, 10);
+      return { task, config, seed: seed === "" ? null : parseInt(seed, 10), extra };
+    }
+
+    function setConfigFeedback(text, kind) {
+      const feedback = el("config-feedback");
+      feedback.textContent = text;
+      feedback.className = `config-feedback${kind ? ` ${kind}` : ""}`;
+    }
+
+    function markConfigDirty() {
+      configDirty = true;
+      setConfigFeedback("Configuration changes have not been applied", "pending");
+    }
+
+    async function waitForConfig(expected, timeoutMs = 60000) {
+      const deadline = Date.now() + timeoutMs;
+      let sawSwitching = false;
+      while (Date.now() < deadline) {
+        await refreshStatus();
+        sawSwitching ||= statusData.state === "switching";
+        const seedMatches = expected.seed === null || Number(statusData.seed) === expected.seed;
+        if (statusData.state !== "switching" &&
+            statusData.task_name === expected.task &&
+            String(statusData.task_config) === String(expected.config) && seedMatches) {
+          return statusData;
+        }
+        if (sawSwitching && statusData.state === "failure") {
+          throw new Error("Simulator switch failed; check the libero_node logs");
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      throw new Error("Timed out waiting for the simulator to apply the configuration");
+    }
+
+    async function waitForRestart(expected, previousEpisode, timeoutMs = 60000) {
+      const deadline = Date.now() + timeoutMs;
+      let sawSwitching = false;
+      while (Date.now() < deadline) {
+        await refreshStatus();
+        sawSwitching ||= statusData.state === "switching";
+        const configMatches =
+          statusData.task_name === expected.task &&
+          String(statusData.task_config) === String(expected.config) &&
+          Number(statusData.seed) === Number(expected.seed);
+        if (configMatches && statusData.state === "ready" &&
+            Number(statusData.episode) > Number(previousEpisode)) {
+          return statusData;
+        }
+        if (sawSwitching && statusData.state === "failure") {
+          throw new Error("Configuration was applied, but the automatic restart failed; check the libero_node logs");
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      throw new Error("Configuration was applied, but the automatic restart timed out");
+    }
+
+    async function applyTask() {
+      if (applyingConfig) return false;
+      const selected = selectedConfig();
+      applyingConfig = true;
+      updateButtons(statusData.state);
+      setConfigFeedback("Rebuilding the simulation environment…", "pending");
+      try {
+        await post("set_task", selected.extra);
+        let applied = await waitForConfig(selected);
+        let restarted = false;
+        if (applied.env === "libero") {
+          const appliedEpisode = Number(applied.episode);
+          const restartExpected = {
+            task: applied.task_name,
+            config: String(applied.task_config),
+            seed: Number(applied.seed),
+          };
+          setConfigFeedback("Configuration applied; restarting automatically…", "pending");
+          await post("restart");
+          applied = await waitForRestart(restartExpected, appliedEpisode);
+          restarted = true;
+        }
+        configDirty = false;
+        setConfigFeedback(
+          `${restarted ? "Applied and restarted" : "Applied"} ${applied.task_name} · Scenario ${applied.task_config} · seed ${applied.seed}`,
+          "success",
+        );
+        return true;
+      } catch (error) {
+        console.error(error);
+        setConfigFeedback(`Failed to apply configuration: ${error.message}`, "error");
+        return false;
+      } finally {
+        applyingConfig = false;
+        updateButtons(statusData.state);
+      }
+    }
+
+    async function startEvaluation() {
+      if (lastState === "paused") {
+        await post("resume");
+        return;
+      }
+      // A common failure mode was selecting a new task and pressing Start while
+      // the simulator still held the old task. Apply and verify pending config
+      // first; this Start click remains the explicit authorization to run.
+      if (configDirty && !(await applyTask())) return;
+      await post("start");
+    }
+
+    function fillSelect(select, options, current) {
+      if (!options || !options.length) return;
+      if (select.dataset.filled === "1") { select.dataset.current = current || ""; return; }
+      select.innerHTML = "";
+      for (const opt of options) {
+        const o = document.createElement("option");
+        if (opt && typeof opt === "object") {
+          o.value = String(opt.value);
+          o.textContent = String(opt.label || opt.value);
+        } else {
+          o.value = String(opt);
+          o.textContent = String(opt);
+        }
+        select.appendChild(o);
+      }
+      if (current && Array.from(select.options).some(o => o.value === String(current))) {
+        select.value = String(current);
+      }
+      select.dataset.filled = "1";
+    }
+
+    function renderHistory(history, stats) {
+      const tbody = el("history-body");
+      if (!history) return;
+      tbody.innerHTML = "";
+      for (const h of history.slice().reverse()) {
+        const tr = document.createElement("tr");
+        const outcome = h.outcome === "success" ? "Success" : "Failure";
+        tr.innerHTML = `<td>${h.episode}</td><td>${h.task}</td><td>${h.config || "-"}</td><td>${h.seed ?? "-"}</td>` +
+          `<td class="outcome-${h.outcome}">${outcome}</td><td>${h.steps}</td>`;
+        tbody.appendChild(tr);
+      }
+      if (stats && stats.episodes > 0) {
+        const rate = (100 * stats.successes / stats.episodes).toFixed(0);
+        el("stats").textContent = `${stats.episodes} episodes total, ${stats.successes} successful, ${rate}% success rate`;
+      } else {
+        el("stats").textContent = "No completed episodes yet";
+      }
+    }
+
+    function updateButtons(s) {
+      el("btn-start").disabled = (s === "running" || s === "switching" || applyingConfig);
+      el("btn-pause").disabled = (s !== "running");
+      el("btn-restart").disabled = (s === "switching");
+      el("btn-apply").disabled = (s === "switching" || applyingConfig);
+      el("btn-start").textContent = (s === "paused") ? "Resume" : "Start";
+    }
+
+    async function refreshStatus() {
+      try {
+        const r = await fetch("/status.json", { cache: "no-store" });
+        statusData = await r.json();
+      } catch (e) { return; }
+      const s = statusData.state;
+      const banner = el("banner");
+      banner.className = s || "";
+      let text = stateLabel(s);
+      if (s === "running" && statusData.max_episode_steps) {
+        text += ` (Episode ${statusData.episode} · ${statusData.episode_step}/${statusData.max_episode_steps} steps)`;
+      }
+      banner.querySelector("span").textContent = text;
+      el("meta").textContent = statusData.task_name
+        ? `${statusData.task_name} · ${statusData.task_config || ""} · seed ${statusData.seed ?? "-"}`
+        : "";
+      if (s !== lastState && (s === "success" || s === "failure") &&
+          (lastState === "running" || lastState === "paused")) {
+        // Episode just finished: make it unmissable.
+        banner.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+      lastState = s;
+
+      if (statusData.supports_task_switch) {
+        el("task-panel").style.display = "";
+        fillSelect(el("task-select"), statusData.available_tasks, statusData.task_name);
+        fillSelect(el("config-select"), statusData.available_task_configs, statusData.task_config);
+      }
+      renderHistory(statusData.history, statusData.stats);
+      updateButtons(s);
+    }
+
     async function refreshTask() {
       try {
         const response = await fetch("/task.txt", { cache: "no-store" });
         const text = (await response.text()).trim();
-        document.getElementById("task").textContent = text || "waiting for task description";
-      } catch {
-        document.getElementById("task").textContent = "waiting for task description";
+        el("task").textContent = text || "waiting for task description";
+      } catch {}
+    }
+
+    function toggleCam(name, visible) {
+      const view = document.querySelector(`.view[data-cam="${name}"]`);
+      if (!view) return;
+      const img = view.querySelector("img");
+      if (visible) {
+        view.classList.remove("hidden");
+        if (!img.getAttribute("src")) img.setAttribute("src", `/${name}.mjpg`);
+      } else {
+        view.classList.add("hidden");
+        img.removeAttribute("src");  // close the MJPEG stream to save bandwidth
       }
     }
-    refreshTask();
-    setInterval(refreshTask, 1000);
-  </script>
+
+    document.addEventListener("DOMContentLoaded", () => {
+      el("btn-start").addEventListener("click", () => startEvaluation().catch(console.error));
+      el("btn-pause").addEventListener("click", () => post("pause"));
+      el("btn-restart").addEventListener("click", () => post("restart"));
+      el("btn-apply").addEventListener("click", applyTask);
+      el("task-select").addEventListener("change", markConfigDirty);
+      el("config-select").addEventListener("change", markConfigDirty);
+      el("seed-input").addEventListener("input", markConfigDirty);
+      document.querySelectorAll(".cam-toggles input").forEach((box) => {
+        box.addEventListener("change", () => toggleCam(box.value, box.checked));
+      });
+      refreshStatus();
+      refreshTask();
+      setInterval(refreshStatus, 1000);
+      setInterval(refreshTask, 1500);
+    });
+"""
+
+
+def render_index(cameras, title="LightX2V ROS", policy_cameras=None):
+    views = "\n".join(_VIEW_TEMPLATE.format(name=html.escape(str(cam)), label=html.escape(str(cam))) for cam in cameras)
+    toggles = "\n".join(f'        <label><input type="checkbox" value="{html.escape(str(cam))}" checked> {html.escape(str(cam))}</label>' for cam in cameras)
+    safe_title = html.escape(str(title))
+    script = _SCRIPT.replace("__POLICY_CAMS__", json.dumps(list(policy_cameras or [])))
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{safe_title}</title>
+  <style>{_STYLE}</style>
+</head>
+<body>
+  <header>
+    <h1>{safe_title}</h1>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <div id="banner"><span>Waiting for simulator status…</span></div>
+
+  <section class="panel">
+    <div class="controls">
+      <button id="btn-start" class="primary">Start</button>
+      <button id="btn-pause">Pause</button>
+      <button id="btn-restart" class="danger">Restart (New Scene)</button>
+    </div>
+    <div class="controls" id="task-panel" style="margin-top: 10px; display: none;">
+      <label>Task</label>
+      <select id="task-select"></select>
+      <label>Scenario</label>
+      <select id="config-select"></select>
+      <label>seed</label>
+      <input id="seed-input" type="number" placeholder="Auto">
+      <button id="btn-apply">Apply Configuration</button>
+      <span id="config-feedback" class="config-feedback">Apply the configuration after making changes</span>
+      <label style="opacity:.7">(Switching rebuilds the scene and takes about 10–30 seconds)</label>
+    </div>
+    <div class="cam-toggles">
+{toggles}
+    </div>
+  </section>
+
+  <main>
+{views}
+  </main>
+
+  <section class="task" id="task"><span>waiting for task description</span></section>
+
+  <section class="panel">
+    <div class="stats" id="stats">No completed episodes yet</div>
+    <table>
+      <thead><tr><th>Episode</th><th>Task</th><th>Scenario</th><th>Seed</th><th>Outcome</th><th>Steps</th></tr></thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </section>
+
+  <script>{script}</script>
 </body>
 </html>
 """

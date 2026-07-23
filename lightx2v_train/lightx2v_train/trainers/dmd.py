@@ -8,14 +8,34 @@ import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 import torch.nn.functional as F
 from loguru import logger
-from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict, get_state_dict, set_model_state_dict, set_state_dict
 
 from lightx2v_train.model_zoo import build_model
+from lightx2v_train.model_zoo.native.ltx2 import (
+    AudioLatentShape,
+    AudioPatchifier,
+    Modality,
+    SpatioTemporalScaleFactors,
+    VideoLatentPatchifier,
+    VideoLatentShape,
+    get_pixel_coords,
+)
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
-from lightx2v_train.runtime.distributed import barrier, get_world_size, is_distributed, is_main_process, reduce_mean
+from lightx2v_train.runtime.distributed import (
+    barrier,
+    get_sequence_parallel_rank,
+    get_sequence_parallel_world_size,
+    get_world_size,
+    is_distributed,
+    is_main_process,
+    is_sequence_parallel_enabled,
+    reduce_mean,
+)
 from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradient_sync
+from lightx2v_train.runtime.sequence_parallel import all_gather_sequence, broadcast_sequence_parallel_value, sync_sequence_parallel_gradients
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
+from lightx2v_train.utils.constants import LINGBOT_VIDEO_NEGATIVE_PROMPT, LTX2_NEGATIVE_PROMPT, WAN_NEGATIVE_PROMPT
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from .base import BaseTrainer
@@ -23,23 +43,55 @@ from .base import BaseTrainer
 
 @TRAINER_REGISTER("dmd")
 class DmdTrainer(BaseTrainer):
+    default_negative_prompt = None
+
+    def _resolve_train_type(self):
+        if "train_type" in self.training_config:
+            raise ValueError("DMD trainers use training.student.train_type and training.fake.train_type; remove training.train_type.")
+        return None
+
     def __init__(self, config):
         super().__init__(config)
-        fake_config = self.training_config.get("fake", {})
-        self.fake_optimizer_config = fake_config.get("optimizer", {})
+        self.student_config = self.training_config["student"]
+        self.fake_config = self.training_config["fake"]
+        self.student_train_type = self.student_config["train_type"]
+        self.fake_train_type = self.fake_config["train_type"]
+
+        if "lora" in self.training_config:
+            raise ValueError("DMD trainers do not read training.lora. Use training.student.lora and training.fake.lora.")
+
+        self.student_lora_config = None
+        if self.student_train_type == "lora":
+            self.student_lora_config = copy.deepcopy(self.student_config["lora"])
+            self.student_lora_config["rank"] = int(self.student_lora_config["rank"])
+            self.student_lora_config["alpha"] = int(self.student_lora_config["alpha"])
+
+        self.fake_lora_config = None
+        if self.fake_train_type == "lora":
+            self.fake_lora_config = copy.deepcopy(self.fake_config["lora"])
+            self.fake_lora_config["rank"] = int(self.fake_lora_config["rank"])
+            self.fake_lora_config["alpha"] = int(self.fake_lora_config["alpha"])
+
+        self.fake_optimizer_config = self.fake_config["optimizer"]
         self.fake_optimizer_learning_rate = self.fake_optimizer_config.get("learning_rate", self.optimizer_learning_rate)
         self.fake_optimizer_adam_beta1 = self.fake_optimizer_config.get("adam_beta1", self.optimizer_adam_beta1)
         self.fake_optimizer_adam_beta2 = self.fake_optimizer_config.get("adam_beta2", self.optimizer_adam_beta2)
         self.fake_optimizer_weight_decay = self.fake_optimizer_config.get("weight_decay", self.optimizer_weight_decay)
         self.fake_optimizer_adam_epsilon = self.fake_optimizer_config.get("adam_epsilon", self.optimizer_adam_epsilon)
 
-        self.dmd_config = self.training_config.get("dmd", {})
-        teacher_config = self.training_config.get("teacher", {})
+        self.dmd_config = self.training_config["dmd"]
+        teacher_config = self.training_config["teacher"] if "teacher" in self.training_config else {}
         self.num_inference_steps = int(self.dmd_config.get("num_inference_steps", 4))
         self.fake_update_ratio = max(1, int(self.dmd_config.get("fake_update_ratio", 1)))
-        self.guidance_scale = float(teacher_config.get("guidance_scale", self.dmd_config.get("guidance_scale", 3.0)))
-        self.negative_prompt = teacher_config.get("negative_prompt", self.dmd_config.get("negative_prompt", " "))
-        self.cfg_norm = teacher_config.get("cfg_norm", self.dmd_config.get("cfg_norm", "layer_norm"))
+        self.guidance_scale = float(teacher_config["guidance_scale"] if "guidance_scale" in teacher_config else self.dmd_config.get("guidance_scale", 3.0))
+        configured_negative_prompt = teacher_config.get("negative_prompt", self.dmd_config.get("negative_prompt"))
+        if self.default_negative_prompt is not None:
+            self.negative_prompt = self.default_negative_prompt
+        elif configured_negative_prompt is not None:
+            self.negative_prompt = configured_negative_prompt
+        else:
+            raise ValueError("DMD training requires training.teacher.negative_prompt for this model.")
+        self.cfg_norm = teacher_config["cfg_norm"] if "cfg_norm" in teacher_config else self.dmd_config.get("cfg_norm", "layer_norm")
         self.image_sizes = self.dmd_config.get("image_sizes", [])
 
         random_schedule_config = self.dmd_config.get("random_schedule", {})
@@ -57,8 +109,53 @@ class DmdTrainer(BaseTrainer):
         self.cdm_norm_clip_min = float(self.cdm_config.get("norm_clip_min", 0.1))
 
     def _get_optimizer_config(self):
-        student_config = self.training_config.get("student", {})
-        return student_config.get("optimizer", self.training_config.get("optimizer", {}))
+        return self.training_config["student"]["optimizer"]
+
+    def _setup_trainable_model(self, model, role="student"):
+        if role == "student":
+            train_type = self.student_train_type
+            lora_config = self.student_lora_config
+        elif role == "fake":
+            train_type = self.fake_train_type
+            lora_config = self.fake_lora_config
+        else:
+            raise ValueError(f"Unsupported DMD model role: {role}")
+        if train_type == "lora":
+            model.add_lora(lora_config["rank"], lora_config["alpha"], lora_config.get("target_modules"))
+            model.set_lora_trainable()
+            return
+        model.set_full_trainable()
+
+    def _restore_trainable_model(self, model, role="student"):
+        if role == "student":
+            train_type = self.student_train_type
+        elif role == "fake":
+            train_type = self.fake_train_type
+        else:
+            raise ValueError(f"Unsupported DMD model role: {role}")
+        if train_type == "lora":
+            model.set_lora_trainable()
+            return
+        model.set_full_trainable()
+
+    def _save_model_weights(self, model, save_dir, role="student"):
+        train_type = self.student_train_type if role == "student" else self.fake_train_type
+        if train_type == "lora":
+            model.save_lora_weights(save_dir)
+            return
+        if is_main_process():
+            torch.save(model.denoiser_module().state_dict(), os.path.join(save_dir, "model_state.pt"))
+
+    def _load_model_weights(self, model, save_dir, role="student"):
+        train_type = self.student_train_type if role == "student" else self.fake_train_type
+        if train_type == "lora":
+            model.load_lora_weights_for_resume(save_dir)
+            return
+        model_state_path = os.path.join(save_dir, "model_state.pt")
+        if not os.path.exists(model_state_path):
+            raise RuntimeError(f"model_state.pt not found in {save_dir}")
+        state_dict = torch.load(model_state_path, map_location="cpu", weights_only=False)
+        model.denoiser_module().load_state_dict(state_dict)
 
     def setup(self, resume_ckpt_path=None):
         super().setup(resume_ckpt_path=None)
@@ -66,17 +163,23 @@ class DmdTrainer(BaseTrainer):
 
         fake_model_config = copy.deepcopy(self.config)
         fake_model_config["model"] = copy.deepcopy(base_model_config)
-        fake_model_config["model"].update(copy.deepcopy(self.model_config.get("fake", {}) or {}))
+        if "fake" in self.model_config:
+            if not isinstance(self.model_config["fake"], dict):
+                raise ValueError("model.fake must be a mapping.")
+            fake_model_config["model"].update(copy.deepcopy(self.model_config["fake"]))
         self.fake_model = build_model(fake_model_config)
         self.fake_model.load_components(transformer_only=True, reference_model=self.model)
-        self._setup_trainable_model(self.fake_model)
+        self._setup_trainable_model(self.fake_model, role="fake")
         apply_parallel(self.fake_model, self.config)
         if self.gradient_checkpointing:
             self.fake_model.enable_gradient_checkpointing()
 
         teacher_model_config = copy.deepcopy(self.config)
         teacher_model_config["model"] = copy.deepcopy(base_model_config)
-        teacher_model_config["model"].update(copy.deepcopy(self.model_config.get("teacher", {}) or {}))
+        if "teacher" in self.model_config:
+            if not isinstance(self.model_config["teacher"], dict):
+                raise ValueError("model.teacher must be a mapping.")
+            teacher_model_config["model"].update(copy.deepcopy(self.model_config["teacher"]))
         self.teacher_model = build_model(teacher_model_config)
         self.teacher_model.load_components(transformer_only=True, reference_model=self.model)
         self.teacher_model.transformer.requires_grad_(False)
@@ -106,9 +209,10 @@ class DmdTrainer(BaseTrainer):
         if resume_ckpt_path is not None:
             self._load_resume_state(resume_ckpt_path)
 
-        logger.info("[train] dmd student model={} path={}", self.model_config.get("name"), self.model_config.get("pretrained_model_name_or_path"))
-        logger.info("[train] dmd fake model={} path={}", fake_model_config["model"].get("name"), fake_model_config["model"].get("pretrained_model_name_or_path"))
-        logger.info("[train] dmd teacher model={} path={}", teacher_model_config["model"].get("name"), teacher_model_config["model"].get("pretrained_model_name_or_path"))
+        logger.info("[train] dmd student model={} path={}", self.model_config["name"], self.model_config["pretrained_model_name_or_path"])
+        logger.info("[train] dmd fake model={} path={}", fake_model_config["model"]["name"], fake_model_config["model"]["pretrained_model_name_or_path"])
+        logger.info("[train] dmd teacher model={} path={}", teacher_model_config["model"]["name"], teacher_model_config["model"]["pretrained_model_name_or_path"])
+        logger.info("[train] dmd train_types student={} fake={}", self.student_train_type, self.fake_train_type)
         logger.info("[train] dmd student trainable params={}", self._count_trainable(self.model.transformer))
         logger.info("[train] dmd fake trainable params={}", self._count_trainable(self.fake_model.transformer))
         if self.random_schedule_enabled:
@@ -177,28 +281,66 @@ class DmdTrainer(BaseTrainer):
         return progress * self.cdm_weight
 
     def _latent_shape(self, sample):
-        image = sample["target_image"]
+        image = sample["inputs"].get("target_image")
+        if image is None:
+            raise KeyError("DMD image latent shape expects inputs.target_image.")
         batch_size = image.shape[0]
         if self.image_sizes:
-            height, width = self.image_sizes[torch.randint(0, len(self.image_sizes), (1,), device=self.model.device).item()]
+            image_size_index = int(torch.randint(0, len(self.image_sizes), (1,), device=self.model.device).item())
+            image_size_index = broadcast_sequence_parallel_value(image_size_index)
+            height, width = self.image_sizes[image_size_index]
         else:
             height, width = image.shape[-2], image.shape[-1]
 
-        return self.model.dmd_latent_shape(batch_size, height, width)
+        latent_channels = getattr(self.model.vae.config, "z_dim", None)
+        if latent_channels is None:
+            latent_channels = self.model.transformer.config.in_channels // 4
+        return (
+            batch_size,
+            int(latent_channels),
+            1,
+            height // self.model.vae_scale_factor,
+            width // self.model.vae_scale_factor,
+        )
 
     def _encode_conditions(self, sample):
-        prompt = sample["prompt"]
+        conditioning = sample["conditioning"]
+        prompt = conditioning.get("prompt", "")
         with torch.no_grad():
             condition = self.model.encode_prompt_condition(prompt)
             if self.guidance_scale > 1:
-                if isinstance(prompt, str):
-                    negative_prompt = self.negative_prompt
-                else:
-                    negative_prompt = [self.negative_prompt] * len(prompt)
+                is_scalar_prompt = isinstance(prompt, str)
+                batch_size = 1 if is_scalar_prompt else len(prompt)
+                negative_prompt = self._negative_prompt_for_conditioning(
+                    conditioning,
+                    batch_size,
+                    return_scalar=is_scalar_prompt,
+                )
                 negative_condition = self.model.encode_prompt_condition(negative_prompt)
             else:
                 negative_condition = None
+        condition = broadcast_sequence_parallel_value(condition)
+        negative_condition = broadcast_sequence_parallel_value(negative_condition) if negative_condition is not None else None
         return condition, negative_condition
+
+    def _negative_prompt_for_conditioning(self, conditioning, batch_size, return_scalar=False):
+        negative_prompt = conditioning.get("negative_prompt")
+        if negative_prompt is None:
+            values = []
+        elif isinstance(negative_prompt, str):
+            values = [negative_prompt]
+        else:
+            values = list(negative_prompt)
+
+        if not values:
+            values = [self.negative_prompt] * batch_size
+        elif len(values) == 1 and batch_size > 1:
+            values *= batch_size
+        elif len(values) != batch_size:
+            raise ValueError(f"Expected {batch_size} negative prompts, got {len(values)}.")
+
+        values = [value if isinstance(value, str) and value.strip() else self.negative_prompt for value in values]
+        return values[0] if return_scalar else values
 
     def _predict_velocity(self, model, latents, sigma, condition):
         denoiser_input = model.prepare_denoiser_input(latents)
@@ -222,7 +364,7 @@ class DmdTrainer(BaseTrainer):
         return self._do_cfg(velocity_teacher_cond, velocity_teacher_uncond, self.guidance_scale, self.cfg_norm)
 
     def sample_initial_latents(self, latent_shape):
-        return torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype)
+        return broadcast_sequence_parallel_value(torch.randn(latent_shape, device=self.model.device, dtype=self.running_dtype))
 
     def _sample_synced_int(self, low, high):
         value = torch.randint(int(low), int(high), (1,), device=self.model.device, dtype=torch.int64)
@@ -287,7 +429,8 @@ class DmdTrainer(BaseTrainer):
         x0, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=(stage != "fake"), xt=xt_start)
 
         sigma = self.scheduler.sample_renoise_sigma(latent_shape[0], device=self.model.device, dtype=self.running_dtype)
-        noise = torch.randn(latent_shape, device=self.model.device, dtype=torch.float32)
+        sigma = broadcast_sequence_parallel_value(sigma)
+        noise = broadcast_sequence_parallel_value(torch.randn(latent_shape, device=self.model.device, dtype=torch.float32))
         renoised_xt = self.scheduler.add_noise(x0.detach(), noise, sigma)
 
         if stage == "fake":
@@ -337,9 +480,10 @@ class DmdTrainer(BaseTrainer):
         microbatches = []
 
         logger.info(
-            "[train] start method={} train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
+            "[train] start method={} student_train_type={} fake_train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
             self.training_config.get("method", "dmd"),
-            self.train_type,
+            self.student_train_type,
+            self.fake_train_type,
             current_iter,
             max_train_iters,
             get_world_size(),
@@ -377,6 +521,7 @@ class DmdTrainer(BaseTrainer):
                 if grad_accum_counter % grad_accum_iters != 0:
                     continue
 
+                self._sync_sequence_parallel_grads(self.trainable_params)
                 torch.nn.utils.clip_grad_norm_(self.trainable_params, max_grad_norm)
                 self.optimizer.step()
                 self.lr_scheduler.step()
@@ -384,25 +529,25 @@ class DmdTrainer(BaseTrainer):
 
                 fake_loss = 0.0
                 for _ in range(fake_update_ratio):
-                    fake_step_loss = 0.0
                     for microbatch_idx, (micro_latent_shape, micro_conditions) in enumerate(microbatches):
                         sync_fake_grad = microbatch_idx == len(microbatches) - 1
                         self._set_fake_gradient_sync(sync_fake_grad)
                         res_fake = self.forward_loss(micro_latent_shape, micro_conditions, stage="fake")
                         loss_fake = res_fake["fake"]
                         (loss_fake / len(microbatches)).backward()
-                        fake_step_loss += loss_fake.item() / len(microbatches)
+                        fake_loss += loss_fake.item() / len(microbatches)
+                    self._sync_sequence_parallel_grads(self.fake_trainable_params)
                     torch.nn.utils.clip_grad_norm_(self.fake_trainable_params, max_grad_norm)
                     self.fake_optimizer.step()
                     self.fake_lr_scheduler.step()
                     self.fake_optimizer.zero_grad(set_to_none=True)
-                    fake_loss += fake_step_loss
                 running_fake += fake_loss / fake_update_ratio
                 microbatches = []
 
                 current_iter += 1
                 display_dmd = reduce_mean(running_dmd)
                 display_fake = reduce_mean(running_fake)
+                current_lr = self.lr_scheduler.get_last_lr()[0]
                 if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
                     if self.cdm_enabled:
                         display_cdm = reduce_mean(running_cdm)
@@ -414,7 +559,17 @@ class DmdTrainer(BaseTrainer):
                             display_cdm,
                             running_cdm_weight,
                             display_fake,
-                            self.lr_scheduler.get_last_lr()[0],
+                            current_lr,
+                        )
+                        self.log_metrics(
+                            {
+                                "train/dmd": display_dmd,
+                                "train/cdm": display_cdm,
+                                "train/cdm_weight": running_cdm_weight,
+                                "train/fake": display_fake,
+                                "train/lr": current_lr,
+                            },
+                            step=current_iter,
                         )
                     else:
                         logger.info(
@@ -423,7 +578,15 @@ class DmdTrainer(BaseTrainer):
                             max_train_iters,
                             display_dmd,
                             display_fake,
-                            self.lr_scheduler.get_last_lr()[0],
+                            current_lr,
+                        )
+                        self.log_metrics(
+                            {
+                                "train/dmd": display_dmd,
+                                "train/fake": display_fake,
+                                "train/lr": current_lr,
+                            },
+                            step=current_iter,
                         )
                 running_dmd = 0.0
                 running_cdm = 0.0
@@ -452,8 +615,11 @@ class DmdTrainer(BaseTrainer):
         self._set_student_gradient_sync(enabled)
         self._set_fake_gradient_sync(enabled)
 
+    def _sync_sequence_parallel_grads(self, params):
+        sync_sequence_parallel_gradients(params)
+
     def _fake_weights_dir(self, root_dir):
-        return os.path.join(root_dir, "fake_lora" if self.train_type == "lora" else "fake_model")
+        return os.path.join(root_dir, "fake_lora" if self.fake_train_type == "lora" else "fake_model")
 
     def _load_resume_state(self, resume_ckpt_path):
         if self.model.is_fsdp2_wrapped() or self.fake_model.is_fsdp2_wrapped():
@@ -469,6 +635,12 @@ class DmdTrainer(BaseTrainer):
             logger.warning("Checkpoint {} has no world_size metadata. Assuming world_size=1 for backward compatibility.", state_path)
             state["world_size"] = 1
         self._validate_checkpoint_metadata(state, state_path, resume_ckpt_path)
+        checkpoint_student_train_type = state.get("student_train_type")
+        if checkpoint_student_train_type is not None and checkpoint_student_train_type != self.student_train_type:
+            raise RuntimeError(f"Cannot resume checkpoint saved with student_train_type={checkpoint_student_train_type!r} using training.student.train_type={self.student_train_type!r}: {state_path}")
+        checkpoint_fake_train_type = state.get("fake_train_type")
+        if checkpoint_fake_train_type is not None and checkpoint_fake_train_type != self.fake_train_type:
+            raise RuntimeError(f"Cannot resume checkpoint saved with fake_train_type={checkpoint_fake_train_type!r} using training.fake.train_type={self.fake_train_type!r}: {state_path}")
 
     def _load_single_process_state(self, resume_ckpt_path):
         training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
@@ -479,12 +651,12 @@ class DmdTrainer(BaseTrainer):
 
         state = torch.load(training_state_path, map_location="cpu", weights_only=False)
         self._validate_dmd_checkpoint_metadata(state, training_state_path, resume_ckpt_path)
-        self._load_model_weights(self.model, resume_ckpt_path)
+        self._load_model_weights(self.model, resume_ckpt_path, role="student")
         self.optimizer.load_state_dict(state["optimizer"])
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
 
         if os.path.exists(fake_weights_dir):
-            self._load_model_weights(self.fake_model, fake_weights_dir)
+            self._load_model_weights(self.fake_model, fake_weights_dir, role="fake")
         else:
             logger.warning("Fake model weights not found in {}. Fake model not restored.", fake_weights_dir)
 
@@ -549,18 +721,18 @@ class DmdTrainer(BaseTrainer):
             os.makedirs(save_dir, exist_ok=True)
         barrier()
 
-        save_student_weights = self.train_type == "lora" or not self.model.is_fsdp2_wrapped()
+        save_student_weights = self.student_train_type == "lora" or not self.model.is_fsdp2_wrapped()
         if save_student_weights:
-            self._save_model_weights(self.model, save_dir)
+            self._save_model_weights(self.model, save_dir, role="student")
         barrier()
 
         fake_save_dir = self._fake_weights_dir(save_dir)
-        save_fake_weights = self.train_type == "lora" or not self.fake_model.is_fsdp2_wrapped()
+        save_fake_weights = self.fake_train_type == "lora" or not self.fake_model.is_fsdp2_wrapped()
         if save_fake_weights and is_main_process():
             os.makedirs(fake_save_dir, exist_ok=True)
         barrier()
         if save_fake_weights:
-            self._save_model_weights(self.fake_model, fake_save_dir)
+            self._save_model_weights(self.fake_model, fake_save_dir, role="fake")
         barrier()
 
         config_path = self.config.get("config_path")
@@ -569,6 +741,8 @@ class DmdTrainer(BaseTrainer):
 
         if self.model.is_fsdp2_wrapped() or self.fake_model.is_fsdp2_wrapped():
             self._save_distributed_state(save_dir, iteration)
+            if self._should_save_consolidated_student():
+                self._save_consolidated_student_weights(save_dir)
             barrier()
             logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
             return
@@ -576,6 +750,8 @@ class DmdTrainer(BaseTrainer):
         training_state = {
             "iteration": iteration,
             "world_size": get_world_size(),
+            "student_train_type": self.student_train_type,
+            "fake_train_type": self.fake_train_type,
             "optimizer": self.optimizer.state_dict(),
             "lr_scheduler": self.lr_scheduler.state_dict(),
             "fake_optimizer": self.fake_optimizer.state_dict(),
@@ -586,6 +762,21 @@ class DmdTrainer(BaseTrainer):
         barrier()
         logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
 
+    def _should_save_consolidated_student(self):
+        enabled = bool(self.training_config.get("save_consolidated_student", False))
+        if not enabled:
+            return False
+        if self.student_train_type != "full":
+            logger.warning("save_consolidated_student=true is ignored because training.student.train_type='{}'.", self.student_train_type)
+            return False
+        return True
+
+    def _save_consolidated_student_weights(self, save_dir):
+        output_dir = os.path.join(save_dir, "student_consolidated")
+        logger.info("[train] saving consolidated student weights to {}", output_dir)
+        self.model.save_full_model(output_dir)
+        barrier()
+
     def _save_distributed_state(self, save_dir, iteration):
         dist_state_path = os.path.join(save_dir, "dist_state")
         if is_main_process():
@@ -594,6 +785,8 @@ class DmdTrainer(BaseTrainer):
                 {
                     "iteration": iteration,
                     "world_size": get_world_size(),
+                    "student_train_type": self.student_train_type,
+                    "fake_train_type": self.fake_train_type,
                     "lr_scheduler": self.lr_scheduler.state_dict(),
                     "fake_lr_scheduler": self.fake_lr_scheduler.state_dict(),
                 },
@@ -615,39 +808,460 @@ class DmdTrainer(BaseTrainer):
         )
 
 
-@TRAINER_REGISTER("video_dmd")
-class VideoDmdTrainer(DmdTrainer):
-    trainer_name = "video_dmd"
-    allowed_model_names = {"wan_t2v"}
+class _LTX2T2AVDmdMixin:
+    trainer_name = "ltx_t2av_dmd"
+    allowed_model_names = {"ltx_t2av"}
+    default_negative_prompt = LTX2_NEGATIVE_PROMPT
+    default_lora_target_modules = None
 
     def __init__(self, config):
         super().__init__(config)
-        if self.model_config.get("name") not in self.allowed_model_names:
+        model_name = self.model_config["name"]
+        if model_name not in self.allowed_model_names:
+            allowed = ", ".join(repr(name) for name in sorted(self.allowed_model_names))
+            raise ValueError(f"{self.trainer_name} trainer requires model.name in {{{allowed}}}.")
+
+        ltx2_config = self.training_config.get("ltx2", {})
+        self.video_loss_weight = float(ltx2_config.get("video_loss_weight", 1.0))
+        self.audio_loss_weight = float(ltx2_config.get("audio_loss_weight", 1.0))
+        self.default_fps = float(ltx2_config.get("default_fps", self.dmd_config.get("fps", 25.0)))
+        self.video_patchifier = VideoLatentPatchifier(patch_size=1)
+        self.audio_patchifier = AudioPatchifier(patch_size=1)
+        self.denoising_sigma_values = self._validate_denoising_sigma_values(self.dmd_config.get("denoising_sigma_values"))
+        self._logged_denoising_sigma_values = False
+
+        if self.cdm_enabled:
+            raise ValueError("ltx_t2av_dmd does not support training.dmd.cdm yet.")
+
+    def _load_student_checkpoint(self, checkpoint_path, strict=True):
+        loaded_path = getattr(self.model, "loaded_student_checkpoint_path", None)
+        requested_path = os.path.abspath(os.path.expanduser(str(checkpoint_path)))
+        if loaded_path == requested_path:
+            logger.info("[train] LTX2 AR student checkpoint was loaded during model construction: {}", requested_path)
+            return
+        super()._load_student_checkpoint(checkpoint_path, strict=strict)
+
+    def _encode_conditions(self, sample):
+        conditioning = sample["conditioning"]
+        positive = conditioning.get("positive")
+        if positive is None:
+            return super()._encode_conditions(sample)
+
+        with torch.no_grad():
+            condition = self._prepare_cached_condition(positive)
+            if self.guidance_scale > 1:
+                negative = conditioning.get("negative")
+                if negative is not None:
+                    negative_condition = self._prepare_cached_condition(negative)
+                else:
+                    prompt = conditioning.get("prompt", "")
+                    is_scalar_prompt = isinstance(prompt, str)
+                    batch_size = 1 if is_scalar_prompt else len(prompt)
+                    negative_prompt = self._negative_prompt_for_conditioning(
+                        conditioning,
+                        batch_size,
+                        return_scalar=is_scalar_prompt,
+                    )
+                    try:
+                        negative_condition = self.model.encode_prompt_condition(negative_prompt)
+                    except RuntimeError as exc:
+                        raise RuntimeError(
+                            "LTX DMD CFG needs negative conditions. Provide data.train.negative_condition_path or keep model.load_text_encoder=true for online negative prompt encoding."
+                        ) from exc
+            else:
+                negative_condition = None
+
+        condition = broadcast_sequence_parallel_value(condition)
+        negative_condition = broadcast_sequence_parallel_value(negative_condition) if negative_condition is not None else None
+        return condition, negative_condition
+
+    def _prepare_cached_condition(self, conditions):
+        if isinstance(conditions, (list, tuple)) and len(conditions) == 3:
+            video_context, audio_context, context_mask = conditions
+            return (
+                video_context.to(device=self.model.device, dtype=self.running_dtype),
+                audio_context.to(device=self.model.device, dtype=self.running_dtype),
+                context_mask.to(device=self.model.device),
+            )
+
+        if isinstance(conditions, dict) and {"video_context", "audio_context", "context_mask"}.issubset(conditions):
+            return (
+                conditions["video_context"].to(device=self.model.device, dtype=self.running_dtype),
+                conditions["audio_context"].to(device=self.model.device, dtype=self.running_dtype),
+                conditions["context_mask"].to(device=self.model.device),
+            )
+
+        return self.model.prepare_text_condition(conditions)
+
+    def _latent_shape(self, sample):
+        prompt = sample["conditioning"].get("prompt", "")
+        batch_size = 1 if isinstance(prompt, str) else len(prompt)
+        dmd_config = self.dmd_config
+
+        video_shape = dmd_config.get("video_latent_shape")
+        if video_shape is not None:
+            video_shape = self._shape_with_batch(video_shape, batch_size, "video_latent_shape")
+        else:
+            meta = sample["meta"]
+            height = int(meta["target_height"][0].item()) if "target_height" in meta else int(dmd_config.get("height", 512))
+            width = int(meta["target_width"][0].item()) if "target_width" in meta else int(dmd_config.get("width", 768))
+            num_frames = int(dmd_config.get("num_frames", 241))
+            latent_frames = (num_frames - 1) // int(dmd_config.get("video_temporal_scale", 8)) + 1
+            latent_height = int(height) // int(dmd_config.get("video_spatial_scale", 32))
+            latent_width = int(width) // int(dmd_config.get("video_spatial_scale", 32))
+            video_shape = (
+                batch_size,
+                int(dmd_config.get("video_latent_channels", 128)),
+                latent_frames,
+                latent_height,
+                latent_width,
+            )
+
+        audio_shape = dmd_config.get("audio_latent_shape")
+        if audio_shape is not None:
+            audio_shape = self._shape_with_batch(audio_shape, batch_size, "audio_latent_shape")
+        else:
+            if "audio_num_frames" in dmd_config:
+                audio_frames = int(dmd_config["audio_num_frames"])
+            else:
+                pixel_frames = int(dmd_config.get("num_frames", (video_shape[2] - 1) * 8 + 1))
+                fps = float(dmd_config.get("fps", self.default_fps))
+                audio_frames = round((pixel_frames / fps) * 25.0)
+            audio_shape = (
+                batch_size,
+                int(dmd_config.get("audio_latent_channels", 8)),
+                audio_frames,
+                int(dmd_config.get("audio_mel_bins", 16)),
+            )
+
+        video_tokens = video_shape[2] * video_shape[3] * video_shape[4]
+        audio_tokens = audio_shape[2]
+        return {
+            "video_latent": video_shape,
+            "audio_latent": audio_shape,
+            "video_tokens": (batch_size, video_tokens, video_shape[1]),
+            "audio_tokens": (batch_size, audio_tokens, audio_shape[1] * audio_shape[3]),
+            "fps": float(dmd_config.get("fps", self.default_fps)),
+        }
+
+    def _prepare_sampling_schedule(self, latent_shape):
+        if self.random_schedule_enabled:
+            num_steps = self._sample_synced_int(self.random_schedule_num_steps_min, self.random_schedule_num_steps_max + 1)
+            self.scheduler.set_random_timesteps(
+                self.random_schedule_num_steps_min,
+                self.random_schedule_num_steps_max,
+                sigma_min=self.random_schedule_sigma_min,
+                sigma_max=self.random_schedule_sigma_max,
+                sampling_method=self.random_schedule_sampling_method,
+                device=self.model.device,
+                num_steps=num_steps,
+            )
+            return
+        sigmas = None if self.denoising_sigma_values is None else self.denoising_sigma_values[:-1]
+        self.scheduler.set_timesteps(self.num_inference_steps, sigmas=sigmas, device=self.model.device)
+        if not self._logged_denoising_sigma_values:
+            logger.info("[train] {} denoising_sigma_values={}", self.trainer_name, [round(float(value), 6) for value in self.scheduler.sigmas.detach().cpu()])
+            self._logged_denoising_sigma_values = True
+
+    def _validate_denoising_sigma_values(self, values):
+        if values is None:
+            return None
+        values = tuple(float(value) for value in values)
+        expected = self.num_inference_steps + 1
+        if len(values) != expected:
+            raise ValueError(f"training.dmd.denoising_sigma_values must contain num_inference_steps + 1 values ({expected}), got {len(values)}.")
+        if abs(values[0] - 1.0) > 1e-6 or abs(values[-1]) > 1e-6:
+            raise ValueError("training.dmd.denoising_sigma_values must start at 1.0 and end at 0.0.")
+        if any(current <= following for current, following in zip(values, values[1:])):
+            raise ValueError("training.dmd.denoising_sigma_values must be strictly decreasing.")
+        return values
+
+    def sample_initial_latents(self, latent_shape):
+        video = torch.randn(latent_shape["video_tokens"], device=self.model.device, dtype=self.running_dtype)
+        audio = torch.randn(latent_shape["audio_tokens"], device=self.model.device, dtype=self.running_dtype)
+        return video, audio
+
+    def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
+        if xt is None:
+            xt = self.sample_initial_latents(latent_shape)
+        x0 = None
+        xt_end = None
+        vt_end = None
+        self.model.transformer.train()
+        for idx in range(end_step_idx + 1):
+            sigma = self.scheduler.sigma_at(idx, latent_shape["video_tokens"][0], device=self.model.device, dtype=self.running_dtype)
+            context = torch.enable_grad if (grad_enabled and idx == end_step_idx) else torch.no_grad
+            with context():
+                velocity = self._predict_velocity(self.model, xt, sigma, condition, latent_shape)
+            if idx == end_step_idx:
+                xt_end = self._detach_pair(xt)
+                vt_end = self._detach_pair(velocity)
+            xt, x0 = self._step_pair_by_index(velocity, idx, xt)
+        return self._to_dtype_pair(x0, self.running_dtype), xt_end, vt_end
+
+    def forward_loss(self, latent_shape, conditions, stage, current_iter=None):
+        condition, negative_condition = conditions
+        self._prepare_sampling_schedule(latent_shape)
+        end_step_idx = self.sample_end_step()
+        xt_start = self.sample_initial_latents(latent_shape)
+        x0, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=(stage != "fake"), xt=xt_start)
+
+        batch_size = latent_shape["video_tokens"][0]
+        sigma = self.scheduler.sample_renoise_sigma(batch_size, device=self.model.device, dtype=self.running_dtype)
+        noise = (
+            torch.randn_like(x0[0], dtype=torch.float32),
+            torch.randn_like(x0[1], dtype=torch.float32),
+        )
+        renoised_xt = self._add_noise_pair(x0, noise, sigma)
+
+        if stage == "fake":
+            self.fake_model.transformer.train()
+            velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition, latent_shape)
+            velocity_gt = (noise[0] - x0[0].float(), noise[1] - x0[1].float())
+            return self._weighted_mse_pair(velocity_fake, velocity_gt)
+
+        with torch.no_grad():
+            self.fake_model.transformer.eval()
+            self.teacher_model.transformer.eval()
+            velocity_fake = self._predict_velocity(self.fake_model, renoised_xt, sigma, condition, latent_shape)
+            velocity_teacher_cond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, condition, latent_shape)
+            if negative_condition is None or self.guidance_scale == 0:
+                velocity_teacher = velocity_teacher_cond
+            else:
+                velocity_teacher_uncond = self._predict_velocity(self.teacher_model, renoised_xt, sigma, negative_condition, latent_shape)
+                velocity_teacher = self._cfg_pair(velocity_teacher_cond, velocity_teacher_uncond)
+
+        x_pred_fake = self._x0_from_velocity(renoised_xt, velocity_fake, sigma)
+        x_pred_teacher = self._x0_from_velocity(renoised_xt, velocity_teacher, sigma)
+        return self._dmd_loss_pair(x0, x_pred_fake, x_pred_teacher)
+
+    def _predict_velocity(self, model, latents, sigma, condition, latent_shape):
+        video_context, audio_context, context_mask = condition
+        video_tokens, audio_tokens = latents
+        batch_size = video_tokens.shape[0]
+        sigma = sigma.to(device=self.model.device, dtype=self.running_dtype)
+        timesteps_video = sigma.view(-1, 1).expand(batch_size, video_tokens.shape[1]).clone()
+        timesteps_audio = sigma.view(-1, 1).expand(batch_size, audio_tokens.shape[1]).clone()
+        video_positions = self._get_video_positions(latent_shape, batch_size, video_tokens.device)
+        audio_positions = self._get_audio_positions(latent_shape, batch_size, audio_tokens.device)
+
+        video_modality = Modality(
+            enabled=True,
+            latent=video_tokens.to(device=model.device, dtype=self.running_dtype),
+            sigma=sigma,
+            timesteps=timesteps_video,
+            positions=video_positions,
+            context=video_context.to(device=model.device, dtype=self.running_dtype),
+            context_mask=context_mask.to(device=model.device),
+        )
+        audio_modality = Modality(
+            enabled=True,
+            latent=audio_tokens.to(device=model.device, dtype=self.running_dtype),
+            sigma=sigma,
+            timesteps=timesteps_audio,
+            positions=audio_positions,
+            context=audio_context.to(device=model.device, dtype=self.running_dtype),
+            context_mask=context_mask.to(device=model.device),
+        )
+        with model.transformer_forward_context():
+            return model.denoiser_module()(
+                video=video_modality,
+                audio=audio_modality,
+                perturbations=None,
+            )
+
+    def _get_video_positions(self, latent_shape, batch_size, device):
+        _, channels, frames, height, width = latent_shape["video_latent"]
+        latent_coords = self.video_patchifier.get_patch_grid_bounds(
+            output_shape=VideoLatentShape(
+                frames=frames,
+                height=height,
+                width=width,
+                batch=batch_size,
+                channels=channels,
+            ),
+            device=device,
+        )
+        pixel_coords = get_pixel_coords(
+            latent_coords=latent_coords,
+            scale_factors=SpatioTemporalScaleFactors.default(),
+            causal_fix=True,
+        ).float()
+        pixel_coords[:, 0, ...] = pixel_coords[:, 0, ...] / latent_shape["fps"]
+        return pixel_coords
+
+    def _get_audio_positions(self, latent_shape, batch_size, device):
+        _, channels, frames, mel_bins = latent_shape["audio_latent"]
+        return self.audio_patchifier.get_patch_grid_bounds(
+            output_shape=AudioLatentShape(
+                frames=frames,
+                mel_bins=mel_bins,
+                batch=batch_size,
+                channels=channels,
+            ),
+            device=device,
+        )
+
+    def _add_noise_pair(self, latents, noises, sigma):
+        return (
+            self.scheduler.add_noise(latents[0], noises[0], sigma).to(dtype=latents[0].dtype),
+            self.scheduler.add_noise(latents[1], noises[1], sigma).to(dtype=latents[1].dtype),
+        )
+
+    def _step_pair_by_index(self, velocity, step_idx, sample):
+        video_next, video_x0 = self.scheduler.step_by_index(velocity[0], step_idx, sample[0])
+        audio_next, audio_x0 = self.scheduler.step_by_index(velocity[1], step_idx, sample[1])
+        return (video_next, audio_next), (video_x0, audio_x0)
+
+    def _x0_from_velocity(self, xt, velocity, sigma):
+        sigma_video = self.scheduler._expand_to_ndim(sigma, xt[0].ndim)
+        sigma_audio = self.scheduler._expand_to_ndim(sigma, xt[1].ndim)
+        return (
+            (xt[0] - sigma_video * velocity[0]).to(dtype=xt[0].dtype),
+            (xt[1] - sigma_audio * velocity[1]).to(dtype=xt[1].dtype),
+        )
+
+    def _cfg_pair(self, cond, uncond):
+        return (
+            self._do_cfg(cond[0], uncond[0], self.guidance_scale, self.cfg_norm),
+            self._do_cfg(cond[1], uncond[1], self.guidance_scale, self.cfg_norm),
+        )
+
+    def _dmd_loss_pair(self, latents, x_pred_fake_flow, x_pred_teacher):
+        video_loss = self._dmd_loss(latents[0], x_pred_fake_flow[0], x_pred_teacher[0])
+        audio_loss = self._dmd_loss(latents[1], x_pred_fake_flow[1], x_pred_teacher[1])
+        return self.video_loss_weight * video_loss + self.audio_loss_weight * audio_loss
+
+    def _weighted_mse_pair(self, pred, target):
+        video_loss = F.mse_loss(pred[0].float(), target[0].float(), reduction="mean")
+        audio_loss = F.mse_loss(pred[1].float(), target[1].float(), reduction="mean")
+        return self.video_loss_weight * video_loss + self.audio_loss_weight * audio_loss
+
+    @staticmethod
+    def _detach_pair(value):
+        return value[0].detach(), value[1].detach()
+
+    @staticmethod
+    def _to_dtype_pair(value, dtype):
+        return value[0].to(dtype=dtype), value[1].to(dtype=dtype)
+
+    @staticmethod
+    def _shape_with_batch(shape, batch_size, name):
+        shape = tuple(int(dim) for dim in shape)
+        if name.startswith("audio") and len(shape) == 3:
+            return (batch_size, *shape)
+        if name.startswith("audio") and len(shape) == 4:
+            if shape[0] != batch_size:
+                return (batch_size, *shape[1:])
+            return shape
+        if name.startswith("video") and len(shape) == 4:
+            return (batch_size, *shape)
+        if name.startswith("video") and len(shape) == 5:
+            if shape[0] != batch_size:
+                return (batch_size, *shape[1:])
+            return shape
+        raise ValueError(f"training.dmd.{name} has unsupported shape {shape}.")
+
+
+@TRAINER_REGISTER("video_dmd")
+class VideoDmdTrainer(DmdTrainer):
+    trainer_name = "video_dmd"
+    allowed_model_names = {"wan_t2v", "wan_t2v_14b", "wan_ti2v_5b"}
+    default_negative_prompt = WAN_NEGATIVE_PROMPT
+    default_lora_target_modules = ("q", "k", "v", "o", "ffn.0", "ffn.2")
+
+    def __init__(self, config):
+        super().__init__(config)
+        model_name = self.model_config["name"]
+        if model_name not in self.allowed_model_names:
             allowed = ", ".join(repr(name) for name in sorted(self.allowed_model_names))
             raise ValueError(f"{self.trainer_name} trainer currently requires model.name in {{{allowed}}}.")
-        if self.train_type != "full":
-            raise ValueError(f"{self.trainer_name} trainer only supports training.train_type='full'.")
+        for role, lora_config in (("student", self.student_lora_config), ("fake", self.fake_lora_config)):
+            if lora_config is None or "target_modules" in lora_config:
+                continue
+            if self.default_lora_target_modules is None:
+                raise ValueError(f"training.{role}.lora.target_modules must be set for {self.trainer_name} training.")
+            lora_config["target_modules"] = list(self.default_lora_target_modules)
 
-        self.num_train_timestep = int(self.dmd_config.get("num_train_timestep", self.config["scheduler"].get("num_train_timesteps", 1000)))
+        scheduler_config = self.config["scheduler"]
+        self.num_train_timestep = int(self.dmd_config["num_train_timestep"] if "num_train_timestep" in self.dmd_config else scheduler_config.get("num_train_timesteps", 1000))
         default_denoising_steps = [int(round(self.num_train_timestep * (1.0 - step_idx / self.num_inference_steps))) for step_idx in range(self.num_inference_steps)]
         self.denoising_step_list = list(self.dmd_config.get("denoising_step_list", default_denoising_steps))
         self.num_inference_steps = len(self.denoising_step_list)
-        self.num_training_frames = int(self.dmd_config.get("num_training_frames", 21))
         self.warp_denoising_step = bool(self.dmd_config.get("warp_denoising_step", True))
         self.min_step = int(float(self.dmd_config.get("min_step_ratio", 0.02)) * self.num_train_timestep)
         self.max_step = int(float(self.dmd_config.get("max_step_ratio", 0.98)) * self.num_train_timestep)
-        self.score_timestep_shift = float(self.dmd_config.get("timestep_shift", self.config["scheduler"].get("time_shift_settings", {}).get("time_shift_mu", 5.0)))
+        time_shift_settings = scheduler_config["time_shift_settings"] if "time_shift_settings" in scheduler_config else {}
+        if not isinstance(time_shift_settings, dict):
+            raise ValueError("scheduler.time_shift_settings must be a mapping.")
+        self.score_timestep_shift = float(self.dmd_config["timestep_shift"] if "timestep_shift" in self.dmd_config else time_shift_settings.get("time_shift_mu", 5.0))
         self.ts_schedule = bool(self.dmd_config.get("ts_schedule", False))
         self.ts_schedule_max = bool(self.dmd_config.get("ts_schedule_max", False))
         self.min_score_timestep = int(self.dmd_config.get("min_score_timestep", 0))
 
-        student_config = self.training_config.get("student", {})
-        model_student_config = self.model_config.get("student", {})
-        self.student_checkpoint_path = model_student_config.get(
-            "checkpoint_path",
-            student_config.get("checkpoint_path", self.training_config.get("generator_ckpt", self.dmd_config.get("generator_ckpt"))),
-        )
-        self.student_checkpoint_strict = bool(model_student_config.get("checkpoint_strict", student_config.get("checkpoint_strict", True)))
+        self.student_checkpoint_path = None
+        self.student_checkpoint_strict = True
+        if "checkpoint_strict" in self.student_config:
+            self.student_checkpoint_strict = bool(self.student_config["checkpoint_strict"])
+        if "student" in self.model_config:
+            if not isinstance(self.model_config["student"], dict):
+                raise ValueError("model.student must be a mapping.")
+            model_student_config = self.model_config["student"]
+            if "checkpoint_path" in model_student_config:
+                self.student_checkpoint_path = model_student_config["checkpoint_path"]
+            if "checkpoint_strict" in model_student_config:
+                self.student_checkpoint_strict = bool(model_student_config["checkpoint_strict"])
+        if self.student_checkpoint_path is None and "checkpoint_path" in self.student_config:
+            self.student_checkpoint_path = self.student_config["checkpoint_path"]
+        if self.student_checkpoint_path is None and "generator_ckpt" in self.training_config:
+            self.student_checkpoint_path = self.training_config["generator_ckpt"]
+        if self.student_checkpoint_path is None and "generator_ckpt" in self.dmd_config:
+            self.student_checkpoint_path = self.dmd_config["generator_ckpt"]
+
+    def _prepare_cached_condition(self, condition):
+        if torch.is_tensor(condition):
+            prompt_embed = condition
+        elif isinstance(condition, dict) and "prompt_embed" in condition:
+            prompt_embed = condition["prompt_embed"]
+        else:
+            raise KeyError("WAN DMD cached condition expects conditioning.positive.prompt_embed.")
+
+        prompt_embed = prompt_embed.to(device=self.model.device, dtype=self.running_dtype)
+        if prompt_embed.ndim == 2:
+            prompt_embed = prompt_embed.unsqueeze(0)
+        return {"prompt_embed": prompt_embed}
+
+    def _encode_conditions(self, sample):
+        conditioning = sample["conditioning"]
+        positive = conditioning.get("positive")
+        if positive is None:
+            return super()._encode_conditions(sample)
+
+        with torch.no_grad():
+            condition = self._prepare_cached_condition(positive)
+            if self.guidance_scale > 1:
+                negative = conditioning.get("negative")
+                if negative is not None:
+                    negative_condition = self._prepare_cached_condition(negative)
+                else:
+                    batch_size = int(condition["prompt_embed"].shape[0])
+                    negative_prompt = self._negative_prompt_for_conditioning(
+                        conditioning,
+                        batch_size,
+                        return_scalar=batch_size == 1,
+                    )
+                    try:
+                        negative_condition = self.model.encode_prompt_condition(negative_prompt)
+                    except RuntimeError as exc:
+                        raise RuntimeError(
+                            "WAN DMD CFG needs negative conditions. Provide data.train.negative_condition_path or keep model.load_text_encoder=true for online negative prompt encoding."
+                        ) from exc
+            else:
+                negative_condition = None
+
+        condition = broadcast_sequence_parallel_value(condition)
+        negative_condition = broadcast_sequence_parallel_value(negative_condition) if negative_condition is not None else None
+        return condition, negative_condition
 
     def setup(self, resume_ckpt_path=None):
         if resume_ckpt_path is None and self.student_checkpoint_path:
@@ -675,6 +1289,20 @@ class VideoDmdTrainer(DmdTrainer):
     def _load_student_checkpoint(self, checkpoint_path, strict=True):
         model_state_path = checkpoint_path
         if os.path.isdir(model_state_path):
+            dist_state_path = os.path.join(model_state_path, "dist_state")
+            if os.path.isdir(dist_state_path):
+                module = self.model.fsdp2_state_module()
+                options = StateDictOptions(ignore_frozen_params=False, strict=strict)
+                model_state = get_model_state_dict(module, options=options)
+                state = {"model": model_state}
+                dcp.load(state, checkpoint_id=dist_state_path)
+                set_model_state_dict(
+                    module,
+                    model_state_dict=state["model"],
+                    options=options,
+                )
+                logger.info("[train] loaded {} student checkpoint from distributed state {}", self.trainer_name, dist_state_path)
+                return
             model_state_path = os.path.join(model_state_path, "model_state.pt")
         if not os.path.exists(model_state_path):
             raise RuntimeError(f"{self.trainer_name} student checkpoint not found: {checkpoint_path}")
@@ -721,9 +1349,10 @@ class VideoDmdTrainer(DmdTrainer):
         save_total_limit = self.save_total_limit
 
         logger.info(
-            "[train] start method={} train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
+            "[train] start method={} student_train_type={} fake_train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={} fake_update_ratio={}",
             self.training_config.get("method", self.trainer_name),
-            self.train_type,
+            self.student_train_type,
+            self.fake_train_type,
             current_iter,
             max_train_iters,
             get_world_size(),
@@ -752,6 +1381,7 @@ class VideoDmdTrainer(DmdTrainer):
             current_iter += 1
             display_fake = reduce_mean(loss_fake_value)
             display_dmd = reduce_mean(loss_dmd_value) if loss_dmd_value is not None else None
+            current_lr = self.lr_scheduler.get_last_lr()[0]
             if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
                 dmd_text = "nan" if display_dmd is None else f"{display_dmd:.6f}"
                 logger.info(
@@ -760,8 +1390,15 @@ class VideoDmdTrainer(DmdTrainer):
                     max_train_iters,
                     dmd_text,
                     display_fake,
-                    self.lr_scheduler.get_last_lr()[0],
+                    current_lr,
                 )
+                metrics = {
+                    "train/fake": display_fake,
+                    "train/lr": current_lr,
+                }
+                if display_dmd is not None:
+                    metrics["train/dmd"] = display_dmd
+                self.log_metrics(metrics, step=current_iter)
 
             if save_every_iters and current_iter % save_every_iters == 0:
                 self.save_checkpoint(current_iter, save_total_limit)
@@ -806,6 +1443,7 @@ class VideoDmdTrainer(DmdTrainer):
             (loss / grad_accum_iters).backward()
             loss_value += loss.item() / grad_accum_iters
 
+        self._sync_sequence_parallel_grads(params)
         torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
         optimizer.step()
         scheduler.step()
@@ -827,18 +1465,25 @@ class VideoDmdTrainer(DmdTrainer):
         return timesteps[indices]
 
     def _latent_shape(self, sample):
-        prompt = sample["prompt"]
+        prompt = sample["conditioning"].get("prompt", "")
         batch_size = 1 if isinstance(prompt, str) else len(prompt)
-        configured_shape = self.dmd_config.get("image_or_video_shape", self.training_config.get("image_or_video_shape"))
+        if "image_or_video_shape" in self.dmd_config:
+            configured_shape = self.dmd_config["image_or_video_shape"]
+        elif "image_or_video_shape" in self.training_config:
+            configured_shape = self.training_config["image_or_video_shape"]
+        else:
+            configured_shape = None
         if configured_shape is not None:
             shape = list(configured_shape)
             shape[0] = batch_size
             return tuple(int(dim) for dim in shape)
 
-        infer_config = self.config.get("inference", {})
-        height = infer_config.get("default_height", infer_config.get("height", 480))
-        width = infer_config.get("default_width", infer_config.get("width", 832))
-        num_frames = infer_config.get("num_frames", 81)
+        missing_shape_keys = [key for key in ("height", "width", "num_frames") if key not in self.dmd_config]
+        if missing_shape_keys:
+            raise ValueError(f"training.dmd must define video shape fields: {', '.join(missing_shape_keys)}.")
+        height = int(self.dmd_config["height"])
+        width = int(self.dmd_config["width"])
+        num_frames = int(self.dmd_config["num_frames"])
         num_latent_frames = (int(num_frames) - 1) // self.model.vae_scale_factor_temporal + 1
         return (
             batch_size,
@@ -860,6 +1505,7 @@ class VideoDmdTrainer(DmdTrainer):
             dtype=self.running_dtype,
         )
         noise = torch.randn(latent_shape, device=self.model.device, dtype=torch.float32)
+        noise = broadcast_sequence_parallel_value(noise)
 
         with torch.no_grad():
             renoised_xt = self.scheduler.add_noise(generated, noise, sigma)
@@ -926,7 +1572,7 @@ class VideoDmdTrainer(DmdTrainer):
             t = timestep / self.num_train_timestep
             timestep = self.score_timestep_shift * t / (1 + (self.score_timestep_shift - 1) * t) * self.num_train_timestep
         timestep = timestep.clamp(self.min_step, self.max_step)
-        return (timestep / self.num_train_timestep).to(dtype=dtype)
+        return broadcast_sequence_parallel_value((timestep / self.num_train_timestep).to(dtype=dtype))
 
     def _denoised_timestep_window(self, exit_idx):
         exit_idx = int(exit_idx)
@@ -945,16 +1591,28 @@ class VideoDmdTrainer(DmdTrainer):
         return self.denoising_scheduler.num_train_timesteps - int(index)
 
 
+@TRAINER_REGISTER("lingbot_video_dmd")
+class LingBotVideoDmdTrainer(VideoDmdTrainer):
+    trainer_name = "lingbot_video_dmd"
+    allowed_model_names = {"lingbot_video"}
+    default_negative_prompt = LINGBOT_VIDEO_NEGATIVE_PROMPT
+    default_lora_target_modules = None
+
+    def _prepare_cached_condition(self, condition):
+        return self.model.prepare_text_condition(condition)
+
+
 @TRAINER_REGISTER("video_ar_dmd")
 class VideoArDmdTrainer(VideoDmdTrainer):
     trainer_name = "video_ar_dmd"
-    allowed_model_names = {"wan_t2v_ar"}
+    allowed_model_names = {"wan_t2v_ar", "wan_t2v_14b_ar", "wan_ti2v_5b", "wan_ti2v_5b_ar"}
 
     def __init__(self, config):
         super().__init__(config)
-        self.num_frame_per_chunk = int(self.dmd_config.get("num_frame_per_chunk", self.model_config.get("num_frame_per_chunk", 3)))
+        self.num_frame_per_chunk = int(self.dmd_config["num_frame_per_chunk"] if "num_frame_per_chunk" in self.dmd_config else self.model_config.get("num_frame_per_chunk", 3))
         self.same_step_across_blocks = bool(self.dmd_config.get("same_step_across_blocks", True))
         self.context_noise = float(self.dmd_config.get("context_noise", 0.0))
+        self.sequence_parallel_cache = bool(self.dmd_config["sp_cache"] if "sp_cache" in self.dmd_config else False)
 
     def run_back_simulation(self, condition, latent_shape, grad_enabled, xt=None):
         transformer = self.model.denoiser_module()
@@ -967,24 +1625,36 @@ class VideoArDmdTrainer(VideoDmdTrainer):
         if num_frames % self.num_frame_per_chunk != 0:
             raise ValueError(f"ar_dmd latent frames={num_frames} must be divisible by num_frame_per_chunk={self.num_frame_per_chunk}.")
 
+        use_sp_cache = self._use_sequence_parallel_cache()
+        sp_size = get_sequence_parallel_world_size() if use_sp_cache else 1
+        sp_rank = get_sequence_parallel_rank() if use_sp_cache else 0
+        if use_sp_cache and self.num_frame_per_chunk % sp_size != 0:
+            raise ValueError(f"training.dmd.num_frame_per_chunk={self.num_frame_per_chunk} must be divisible by sequence_parallel.size={sp_size} when training.dmd.sp_cache=true.")
+
         self.model.transformer.train()
         output_chunks = []
         context = self.model._condition_to_context_tensor(condition, batch_size=batch_size)
         frame_seq_length = self._frame_seq_length(xt)
-        kv_cache, crossattn_cache = self._new_caches(batch_size, xt.dtype, xt.device, num_frames, frame_seq_length)
+        kv_cache, crossattn_cache = self._new_caches(batch_size, xt.dtype, xt.device, num_frames, frame_seq_length, sequence_parallel_cache=use_sp_cache)
         num_blocks = num_frames // self.num_frame_per_chunk
         exit_indices = self._sample_exit_indices(num_blocks, len(self.denoising_steps), xt.device)
 
         current_start_frame = 0
         for block_idx in range(num_blocks):
             current_num_frames = self.num_frame_per_chunk
-            latents = xt[:, :, current_start_frame : current_start_frame + current_num_frames]
+            if use_sp_cache:
+                local_num_frames = current_num_frames // sp_size
+                local_start_frame = current_start_frame + sp_rank * local_num_frames
+            else:
+                local_num_frames = current_num_frames
+                local_start_frame = current_start_frame
+            latents = xt[:, :, local_start_frame : local_start_frame + local_num_frames]
             exit_idx = int(exit_indices[0] if self.same_step_across_blocks else exit_indices[block_idx])
 
             x0 = None
             for step_idx, current_timestep in enumerate(self.denoising_steps):
                 timestep = torch.full(
-                    (batch_size, current_num_frames),
+                    (batch_size, local_num_frames),
                     float(current_timestep),
                     device=xt.device,
                     dtype=torch.float32,
@@ -1001,6 +1671,8 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                         crossattn_cache,
                         current_start=current_start_frame * frame_seq_length,
                         cache_start=current_start_frame * frame_seq_length,
+                        local_frame_offset=local_start_frame,
+                        balanced_sequence_parallel=use_sp_cache,
                     )
                     x0 = self._flow_to_x0(latents, flow_pred, timestep)
 
@@ -1008,7 +1680,7 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                     break
 
                 next_timestep = torch.full(
-                    (batch_size, current_num_frames),
+                    (batch_size, local_num_frames),
                     float(self.denoising_steps[step_idx + 1]),
                     device=xt.device,
                     dtype=torch.float32,
@@ -1016,11 +1688,11 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                 with torch.no_grad():
                     latents = self._add_noise_by_timestep(x0, torch.randn_like(x0), next_timestep)
 
-            output_chunks.append(x0)
+            output_chunks.append(all_gather_sequence(x0, dim=2) if use_sp_cache else x0)
 
             cache_latents = x0.detach()
             cache_timestep = torch.full(
-                (batch_size, current_num_frames),
+                (batch_size, local_num_frames),
                 self.context_noise,
                 device=xt.device,
                 dtype=torch.float32,
@@ -1037,6 +1709,8 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                     crossattn_cache,
                     current_start=current_start_frame * frame_seq_length,
                     cache_start=current_start_frame * frame_seq_length,
+                    local_frame_offset=local_start_frame,
+                    balanced_sequence_parallel=use_sp_cache,
                 )
 
             current_start_frame += current_num_frames
@@ -1045,6 +1719,12 @@ class VideoArDmdTrainer(VideoDmdTrainer):
             torch.cat(output_chunks, dim=2).to(dtype=self.running_dtype),
             *self._denoised_timestep_window(exit_indices),
         )
+
+    def _use_sequence_parallel_cache(self):
+        enabled = bool(self.sequence_parallel_cache and is_sequence_parallel_enabled())
+        if enabled and bool(getattr(self.model.denoiser_module(), "defer_kv_cache_updates", False)):
+            raise ValueError("training.dmd.sp_cache=true does not support model.defer_kv_cache_updates=true. Set model.defer_kv_cache_updates=false or disable training.dmd.sp_cache.")
+        return enabled
 
     def _denoised_timestep_window(self, exit_indices):
         if not self.same_step_across_blocks:
@@ -1069,7 +1749,19 @@ class VideoArDmdTrainer(VideoDmdTrainer):
             return indices.tolist()
         return torch.randint(0, num_steps, (count,), device=device).tolist()
 
-    def _forward_causal_chunk(self, model, latents, timestep, context, kv_cache, crossattn_cache, current_start, cache_start):
+    def _forward_causal_chunk(
+        self,
+        model,
+        latents,
+        timestep,
+        context,
+        kv_cache,
+        crossattn_cache,
+        current_start,
+        cache_start,
+        local_frame_offset=0,
+        balanced_sequence_parallel=False,
+    ):
         transformer = model.denoiser_module()
         seq_len = model._sequence_length(latents)
         forward_context = model.transformer_forward_context() if hasattr(model, "transformer_forward_context") else torch.no_grad()
@@ -1083,13 +1775,21 @@ class VideoArDmdTrainer(VideoDmdTrainer):
                 crossattn_cache=crossattn_cache,
                 current_start=current_start,
                 cache_start=cache_start,
+                local_frame_offset=local_frame_offset,
+                balanced_sequence_parallel=balanced_sequence_parallel,
             )
 
-    def _new_caches(self, batch_size, dtype, device, num_frames, frame_seq_length):
+    def _new_caches(self, batch_size, dtype, device, num_frames, frame_seq_length, sequence_parallel_cache=False):
         transformer = self.model.denoiser_module()
         num_layers = int(getattr(transformer, "num_layers", len(transformer.blocks)))
         num_heads = int(transformer.num_heads)
         head_dim = int(transformer.dim // transformer.num_heads)
+        kv_num_heads = num_heads
+        if sequence_parallel_cache:
+            sp_size = get_sequence_parallel_world_size()
+            if num_heads % sp_size != 0:
+                raise ValueError(f"transformer.num_heads={num_heads} must be divisible by sequence_parallel.size={sp_size}.")
+            kv_num_heads = num_heads // sp_size
         local_attn_size = int(getattr(transformer, "local_attn_size", -1))
         kv_cache_size = num_frames * frame_seq_length if local_attn_size == -1 else local_attn_size * frame_seq_length
 
@@ -1098,8 +1798,8 @@ class VideoArDmdTrainer(VideoDmdTrainer):
         for _ in range(num_layers):
             kv_cache.append(
                 {
-                    "k": torch.zeros((batch_size, kv_cache_size, num_heads, head_dim), dtype=dtype, device=device),
-                    "v": torch.zeros((batch_size, kv_cache_size, num_heads, head_dim), dtype=dtype, device=device),
+                    "k": torch.zeros((batch_size, kv_cache_size, kv_num_heads, head_dim), dtype=dtype, device=device),
+                    "v": torch.zeros((batch_size, kv_cache_size, kv_num_heads, head_dim), dtype=dtype, device=device),
                     "global_end_index": torch.tensor([0], dtype=torch.long, device=device),
                     "local_end_index": torch.tensor([0], dtype=torch.long, device=device),
                 }
@@ -1139,3 +1839,255 @@ class VideoArDmdTrainer(VideoDmdTrainer):
         sigma = self._sigma_from_timestep(timestep, x0.dtype)
         sigma = self._expand_frame_sigma(sigma, x0.ndim)
         return ((1.0 - sigma) * x0 + sigma * noise).to(dtype=x0.dtype)
+
+
+@TRAINER_REGISTER("ltx_t2av_dmd")
+class LTX2T2AVDmdTrainer(_LTX2T2AVDmdMixin, VideoDmdTrainer):
+    trainer_name = "ltx_t2av_dmd"
+
+
+@TRAINER_REGISTER("ltx_t2av_ar_dmd")
+class LTX2T2AVArDmdTrainer(_LTX2T2AVDmdMixin, VideoArDmdTrainer):
+    trainer_name = "ltx_t2av_ar_dmd"
+    allowed_model_names = {"ltx_t2av_ar"}
+
+    def __init__(self, config):
+        super().__init__(config)
+        if self.denoising_sigma_values is None:
+            raise ValueError("ltx_t2av_ar_dmd requires training.dmd.denoising_sigma_values so training and inference use the same distilled trajectory.")
+
+    def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
+        transformer = self.model.denoiser_module()
+        if not self._ltx_transformer_has_inference_cache(transformer):
+            raise RuntimeError("ltx_t2av_ar_dmd requires an LTX transformer with _forward_inference/KV cache support.")
+
+        if xt is None:
+            xt = self.sample_initial_latents(latent_shape)
+        video_tokens, audio_tokens = xt
+        batch_size = video_tokens.shape[0]
+        _, _, num_frames, latent_height, latent_width = latent_shape["video_latent"]
+        frame_seq_length = int(latent_height) * int(latent_width)
+        if video_tokens.shape[1] != num_frames * frame_seq_length:
+            if video_tokens.shape[1] % num_frames != 0:
+                raise ValueError(f"LTX AR-DMD video token length {video_tokens.shape[1]} is not divisible by latent frames {num_frames}.")
+            frame_seq_length = video_tokens.shape[1] // num_frames
+        if num_frames % self.num_frame_per_chunk != 0:
+            raise ValueError(f"LTX AR-DMD latent frames={num_frames} must be divisible by num_frame_per_chunk={self.num_frame_per_chunk}.")
+
+        self.model.transformer.train()
+        num_blocks = num_frames // self.num_frame_per_chunk
+        video_positions = self._get_video_positions(latent_shape, batch_size, video_tokens.device)
+        audio_positions = self._get_audio_positions(latent_shape, batch_size, audio_tokens.device)
+        kv_cache = self._new_ltx_kv_caches(
+            batch_size=batch_size,
+            dtype=video_tokens.dtype,
+            device=video_tokens.device,
+            video_total_tokens=video_tokens.shape[1],
+            audio_total_tokens=audio_tokens.shape[1],
+            video_frame_seq_length=frame_seq_length,
+            num_frames=num_frames,
+        )
+
+        output_video_chunks = []
+        output_audio_chunks = []
+        for block_idx in range(num_blocks):
+            frame_start = block_idx * self.num_frame_per_chunk
+            frame_end = frame_start + self.num_frame_per_chunk
+            video_start = frame_start * frame_seq_length
+            video_end = frame_end * frame_seq_length
+            audio_start, audio_end = self._audio_token_range(block_idx, num_blocks, audio_tokens.shape[1])
+            latents = (
+                video_tokens[:, video_start:video_end],
+                audio_tokens[:, audio_start:audio_end],
+            )
+            pos = (
+                video_positions[:, :, video_start:video_end],
+                audio_positions[:, :, audio_start:audio_end],
+            )
+
+            x0 = None
+            for idx in range(end_step_idx + 1):
+                sigma = self.scheduler.sigma_at(idx, batch_size, device=self.model.device, dtype=self.running_dtype)
+                context = torch.enable_grad if (grad_enabled and idx == end_step_idx) else torch.no_grad
+                with context():
+                    velocity = self._predict_velocity_chunk(
+                        self.model,
+                        latents,
+                        sigma,
+                        condition,
+                        pos,
+                        kv_cache=kv_cache,
+                        video_current_start=video_start,
+                        audio_current_start=audio_start,
+                    )
+                    x0 = self._x0_from_velocity(latents, velocity, sigma)
+
+                if idx < end_step_idx:
+                    next_sigma = self.scheduler.sigma_at(idx + 1, batch_size, device=self.model.device, dtype=self.running_dtype)
+                    with torch.no_grad():
+                        noise = (torch.randn_like(x0[0]), torch.randn_like(x0[1]))
+                        latents = self._add_noise_pair(x0, noise, next_sigma)
+
+            output_video_chunks.append(x0[0])
+            output_audio_chunks.append(x0[1])
+
+            cache_latents = self._detach_pair(x0)
+            if self.context_noise > 0:
+                cache_sigma = torch.full((batch_size,), self.context_noise, device=self.model.device, dtype=self.running_dtype)
+                cache_noise = (torch.randn_like(cache_latents[0]), torch.randn_like(cache_latents[1]))
+                cache_latents = self._add_noise_pair(cache_latents, cache_noise, cache_sigma)
+            else:
+                cache_sigma = torch.zeros((batch_size,), device=self.model.device, dtype=self.running_dtype)
+            with torch.no_grad():
+                self._predict_velocity_chunk(
+                    self.model,
+                    cache_latents,
+                    cache_sigma,
+                    condition,
+                    pos,
+                    kv_cache=kv_cache,
+                    video_current_start=video_start,
+                    audio_current_start=audio_start,
+                )
+
+        return (
+            self._to_dtype_pair((torch.cat(output_video_chunks, dim=1), torch.cat(output_audio_chunks, dim=1)), self.running_dtype),
+            None,
+            None,
+        )
+
+    def _predict_velocity_chunk(
+        self,
+        model,
+        latents,
+        sigma,
+        condition,
+        positions,
+        *,
+        kv_cache=None,
+        video_current_start=0,
+        audio_current_start=0,
+    ):
+        video_context, audio_context, context_mask = condition
+        video_tokens, audio_tokens = latents
+        video_positions, audio_positions = positions
+        batch_size = video_tokens.shape[0]
+        sigma = sigma.to(device=model.device, dtype=self.running_dtype)
+        video_modality = Modality(
+            enabled=True,
+            latent=video_tokens.to(device=model.device, dtype=self.running_dtype),
+            sigma=sigma,
+            timesteps=sigma.view(-1, 1).expand(batch_size, video_tokens.shape[1]).clone(),
+            positions=video_positions.to(device=model.device),
+            context=video_context.to(device=model.device, dtype=self.running_dtype),
+            context_mask=context_mask.to(device=model.device),
+        )
+        audio_modality = Modality(
+            enabled=True,
+            latent=audio_tokens.to(device=model.device, dtype=self.running_dtype),
+            sigma=sigma,
+            timesteps=sigma.view(-1, 1).expand(batch_size, audio_tokens.shape[1]).clone(),
+            positions=audio_positions.to(device=model.device),
+            context=audio_context.to(device=model.device, dtype=self.running_dtype),
+            context_mask=context_mask.to(device=model.device),
+        )
+        with model.transformer_forward_context():
+            return model.denoiser_module()(
+                video=video_modality,
+                audio=audio_modality,
+                perturbations=None,
+                kv_cache=kv_cache,
+                video_current_start=video_current_start,
+                audio_current_start=audio_current_start,
+            )
+
+    def _new_ltx_kv_caches(
+        self,
+        batch_size,
+        dtype,
+        device,
+        video_total_tokens,
+        audio_total_tokens,
+        video_frame_seq_length,
+        num_frames,
+    ):
+        transformer = self._unwrap_ltx_transformer(self.model.denoiser_module())
+        num_layers = len(transformer.transformer_blocks)
+        video_heads = int(transformer.num_attention_heads)
+        video_head_dim = int(transformer.inner_dim // transformer.num_attention_heads)
+        audio_heads = int(transformer.audio_num_attention_heads)
+        audio_head_dim = int(transformer.audio_inner_dim // transformer.audio_num_attention_heads)
+        local_attn_size = int(getattr(transformer, "local_attn_size", -1))
+        sink_size = int(getattr(transformer, "sink_size", 0))
+        video_chunk_tokens = self.num_frame_per_chunk * video_frame_seq_length
+        if local_attn_size == -1:
+            video_cache_size = int(video_total_tokens)
+            video_attention_window = int(video_total_tokens)
+        else:
+            video_attention_window = max(video_chunk_tokens, local_attn_size * video_frame_seq_length)
+            video_cache_size = max(video_attention_window, sink_size * video_frame_seq_length + video_chunk_tokens)
+
+        audio_tokens_per_frame = max(1, math.ceil(audio_total_tokens / max(1, num_frames)))
+        audio_chunk_tokens = max(1, math.ceil(audio_total_tokens / (num_frames // self.num_frame_per_chunk)))
+        if local_attn_size == -1:
+            audio_cache_size = int(audio_total_tokens)
+            audio_attention_window = int(audio_total_tokens)
+        else:
+            audio_attention_window = max(audio_chunk_tokens, local_attn_size * audio_tokens_per_frame)
+            audio_cache_size = max(audio_attention_window, sink_size * audio_tokens_per_frame + audio_chunk_tokens)
+
+        cache = {"video": [], "audio": []}
+        for _ in range(num_layers):
+            cache["video"].append(
+                self._empty_ltx_cache(
+                    batch_size,
+                    video_cache_size,
+                    video_heads,
+                    video_head_dim,
+                    dtype,
+                    device,
+                    attention_window_size=video_attention_window,
+                    sink_tokens=sink_size * video_frame_seq_length,
+                )
+            )
+            cache["audio"].append(
+                self._empty_ltx_cache(
+                    batch_size,
+                    audio_cache_size,
+                    audio_heads,
+                    audio_head_dim,
+                    dtype,
+                    device,
+                    attention_window_size=audio_attention_window,
+                    sink_tokens=sink_size * audio_tokens_per_frame,
+                )
+            )
+        return cache
+
+    @staticmethod
+    def _empty_ltx_cache(batch_size, cache_size, heads, head_dim, dtype, device, *, attention_window_size, sink_tokens):
+        return {
+            "k": torch.zeros((batch_size, cache_size, heads, head_dim), dtype=dtype, device=device),
+            "v": torch.zeros((batch_size, cache_size, heads, head_dim), dtype=dtype, device=device),
+            "global_end_index": torch.tensor([0], dtype=torch.long, device=device),
+            "local_end_index": torch.tensor([0], dtype=torch.long, device=device),
+            "attention_window_size": int(attention_window_size),
+            "sink_tokens": int(sink_tokens),
+        }
+
+    @staticmethod
+    def _audio_token_range(block_idx, num_blocks, audio_total_tokens):
+        start = (block_idx * audio_total_tokens + num_blocks - 1) // num_blocks
+        end = ((block_idx + 1) * audio_total_tokens + num_blocks - 1) // num_blocks
+        return start, end
+
+    @staticmethod
+    def _ltx_transformer_has_inference_cache(transformer):
+        return LTX2T2AVArDmdTrainer._unwrap_ltx_transformer(transformer) is not None
+
+    @staticmethod
+    def _unwrap_ltx_transformer(transformer):
+        for candidate in (transformer, getattr(transformer, "module", None), getattr(transformer, "_fsdp_wrapped_module", None)):
+            if candidate is not None and hasattr(candidate, "_forward_inference"):
+                return candidate
+        return None

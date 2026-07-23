@@ -14,7 +14,7 @@ export LD_LIBRARY_PATH=/usr/local/neuware/lib64:${LD_LIBRARY_PATH}
 # set environment variables
 source "${lightx2v_path}/scripts/base/base.sh"
 
-torchrun --nproc_per_node="${nproc_per_node}" --master_port="${master_port}" -m lightx2v.server \
+torchrun --nproc_per_node=4 -m lightx2v.server \
 --model_cls hidream_o1_image \
 --task t2i \
 --model_path "${model_path}" \

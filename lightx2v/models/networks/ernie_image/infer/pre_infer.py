@@ -48,9 +48,61 @@ class ErnieImagePreInfer:
         self.head_dim = config["hidden_size"] // config["num_attention_heads"]
         self.rope_theta = config.get("rope_theta", 256)
         self.rope_axes_dim = config.get("rope_axes_dim", (32, 48, 48))
+        self.rotary_dim = sum(self.rope_axes_dim)
+        self.rope = None
+        self.scheduler = None
+        self.clear_rope_cache()
+
+    def clear_rope_cache(self):
+        self._rope_cache_request_id = None
+        # True：infer_condition=True； False：infer_condition=False
+        self._rope_cache = {True: None, False: None}
+
+    def set_rope(self, rope):
+        self.rope = rope
+        self.clear_rope_cache()
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+        self.clear_rope_cache()
+
+    @staticmethod
+    def _device_key(device):
+        return device.type, device.index
+
+    def prepare_rope_cache(self, image_hw, text_len, device):
+        if self.rope is None:
+            raise RuntimeError("ErnieImagePreInfer RoPE is not initialized.")
+
+        rotary_pos_emb = self._pos_embed(self._build_position_ids(image_hw, text_len, device))
+        raw_freqs = (rotary_pos_emb.cos().squeeze(1), rotary_pos_emb.sin().squeeze(1))
+        rotary_freqs = self.rope.prepare_freqs(raw_freqs, rotary_dim=self.rotary_dim)
+        rotary_positions = self.rope.prepare_positions(rotary_freqs)
+        return rotary_freqs, rotary_positions
+
+    def get_rope_cache(self, image_hw, text_len, device):
+        if self.scheduler is None:
+            raise RuntimeError("ErnieImagePreInfer scheduler is not initialized.")
+
+        request_id = self.scheduler.rope_request_id
+        if request_id != self._rope_cache_request_id:
+            self._rope_cache_request_id = request_id
+            self._rope_cache = {True: None, False: None}
+
+        cache_key = (self._device_key(device), *image_hw, text_len)
+        branch = bool(self.scheduler.infer_condition)
+        cached = self._rope_cache[branch]
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+
+        shared = self._rope_cache[not branch]
+        if shared is not None and shared[0] == cache_key:
+            self._rope_cache[branch] = shared
+            return shared[1]
+
+        value = self.prepare_rope_cache(image_hw, text_len, device)
+        self._rope_cache[branch] = (cache_key, value)
+        return value
 
     def _pos_embed(self, ids: torch.Tensor) -> torch.Tensor:
         emb = torch.cat([_rope(ids[..., i], self.rope_axes_dim[i], self.rope_theta) for i in range(3)], dim=-1)
@@ -99,7 +151,7 @@ class ErnieImagePreInfer:
 
         hidden_states = torch.cat([image_tokens, encoder_hidden_states], dim=0)
         text_len = encoder_hidden_states.shape[0]
-        rotary_pos_emb = self._pos_embed(self._build_position_ids((height, width), text_len, device))
+        rotary_freqs, rotary_positions = self.get_rope_cache((height, width), text_len, device)
 
         timestep = self.scheduler.timestep.reshape(1).to(device=device)
         time_emb = get_ernie_timestep_embedding(
@@ -120,7 +172,8 @@ class ErnieImagePreInfer:
             hidden_states=hidden_states,
             image_tokens_len=height * width,
             image_hw=(height, width),
-            rotary_pos_emb=rotary_pos_emb,
+            rotary_freqs=rotary_freqs,
+            rotary_positions=rotary_positions,
             temb=temb,
             conditioning=conditioning,
         )

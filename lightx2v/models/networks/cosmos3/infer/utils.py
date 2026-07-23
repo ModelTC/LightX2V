@@ -3,6 +3,9 @@ import math
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.ops.rope import RopeTemplate, TorchRealRope
+from lightx2v.utils.registry_factory import ROPE_REGISTER
+
 try:
     import triton  # type: ignore
     import triton.language as tl  # type: ignore
@@ -10,15 +13,24 @@ except ImportError:
     triton = None
     tl = None
 
-try:
-    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
-except ImportError:
-    apply_rope_with_cos_sin_cache_inplace = None
 
+@ROPE_REGISTER("cosmos3_rope")
+class Cosmos3Rope(RopeTemplate):
+    def __init__(self, layout="split_half", compute_dtype=torch.float32):
+        super().__init__(layout=layout, compute_dtype=compute_dtype)
+        if layout != "split_half":
+            raise ValueError("Cosmos3Rope only supports split_half layout.")
+        self.torch_rope = TorchRealRope(layout=layout, compute_dtype=compute_dtype)
 
-def rotate_half(x: torch.Tensor) -> torch.Tensor:
-    half = x.shape[-1] // 2
-    return torch.cat((-x[..., half:], x[..., :half]), dim=-1)
+    def apply(self, query, key, freqs, **kwargs):
+        cos, sin = freqs
+        if query.is_cuda and triton is not None:
+            return apply_split_half_rotary_triton(query, cos, sin), apply_split_half_rotary_triton(key, cos, sin)
+        return self.torch_rope.apply(query, key, freqs, **kwargs)
+
+    def apply_single(self, x, freqs, **kwargs):
+        output, _ = self.apply(x, x.clone(), freqs, **kwargs)
+        return output
 
 
 if triton is not None:
@@ -87,32 +99,6 @@ def apply_split_half_rotary_triton(x: torch.Tensor, cos: torch.Tensor, sin: torc
             BLOCK_HS_HALF=block_hs_half,
         )
     return output
-
-
-def apply_cosmos3_rotary(query: torch.Tensor, key: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, rope_type: str = "triton"):
-    if query.is_cuda and rope_type == "flashinfer" and apply_rope_with_cos_sin_cache_inplace is not None:
-        seq_len, q_heads, head_dim = query.shape
-        kv_heads = key.shape[1]
-        positions = torch.arange(seq_len, device=query.device, dtype=torch.long)
-        cos_sin_cache = torch.cat([cos[:, : head_dim // 2].float(), sin[:, : head_dim // 2].float()], dim=-1).contiguous()
-        query_flat = query.reshape(seq_len, q_heads * head_dim).contiguous()
-        key_flat = key.reshape(seq_len, kv_heads * head_dim).contiguous()
-        apply_rope_with_cos_sin_cache_inplace(
-            positions=positions,
-            query=query_flat,
-            key=key_flat,
-            head_size=head_dim,
-            cos_sin_cache=cos_sin_cache,
-            is_neox=True,
-        )
-        return query_flat.view(seq_len, q_heads, head_dim), key_flat.view(seq_len, kv_heads, head_dim)
-
-    if query.is_cuda and rope_type in {"flashinfer", "triton"} and triton is not None:
-        return apply_split_half_rotary_triton(query, cos, sin), apply_split_half_rotary_triton(key, cos, sin)
-
-    cos = cos.unsqueeze(1)
-    sin = sin.unsqueeze(1)
-    return query * cos + rotate_half(query) * sin, key * cos + rotate_half(key) * sin
 
 
 def get_timestep_embedding(

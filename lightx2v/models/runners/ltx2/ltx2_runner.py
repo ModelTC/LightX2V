@@ -6,11 +6,12 @@ from math import gcd as _gcd
 import torch
 import torch.distributed as dist
 
+from lightx2v.common.kvcache.utils import causal_chunk_token_range
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX2TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
-from lightx2v.models.networks.ltx2.model import LTX2Model
+from lightx2v.models.networks.ltx2.model import LTX2ARModel, LTX2Model
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.schedulers.ltx2.scheduler import LTX2Scheduler
+from lightx2v.models.schedulers.ltx2.scheduler import LTX2ARScheduler, LTX2Scheduler, LatentState
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.audio_vae import encode_audio
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX2Upsampler, LTX2VideoVAE
@@ -136,6 +137,13 @@ class LTX2Runner(DefaultRunner):
         )
         return upsampler
 
+    def _component_checkpoint_path(self):
+        if self.config.get("dit_original_ckpt") is not None:
+            return self.config["dit_original_ckpt"]
+        if self.config.get("dit_quantized_ckpt") is not None:
+            return self.config["dit_quantized_ckpt"]
+        return os.path.join(self.config["model_path"], "transformer")
+
     def load_text_encoder(self):
         # offload config
         text_encoder_offload = self.config.get("gemma_cpu_offload", self.config.get("cpu_offload", False))
@@ -144,12 +152,7 @@ class LTX2Runner(DefaultRunner):
         else:
             text_encoder_device = torch.device(AI_DEVICE)
 
-        if self.config.get("dit_original_ckpt", None) is not None:
-            ckpt_path = self.config["dit_original_ckpt"]
-        elif self.config.get("dit_quantized_ckpt", None) is not None:
-            ckpt_path = self.config["dit_quantized_ckpt"]
-        else:
-            ckpt_path = os.path.join(self.config["model_path"], "transformer")
+        ckpt_path = self._component_checkpoint_path()
 
         if "gemma_original_ckpt" in self.config:
             gemma_ckpt = self.config["gemma_original_ckpt"]
@@ -181,12 +184,7 @@ class LTX2Runner(DefaultRunner):
         else:
             vae_device = torch.device(AI_DEVICE)
 
-        if self.config.get("dit_original_ckpt", None) is not None:
-            ckpt_path = self.config["dit_original_ckpt"]
-        elif self.config.get("dit_quantized_ckpt", None) is not None:
-            ckpt_path = self.config["dit_quantized_ckpt"]
-        else:
-            ckpt_path = os.path.join(self.config["model_path"], "transformer")
+        ckpt_path = self._component_checkpoint_path()
 
         # Video VAE
         video_vae = LTX2VideoVAE(
@@ -994,3 +992,179 @@ class LTX2Runner(DefaultRunner):
             torch_device_module.empty_cache()
 
         return self.model.scheduler.video_latent_state.latent, self.model.scheduler.audio_latent_state.latent
+
+
+@RUNNER_REGISTER("ltx2_ar")
+class LTX2ARRunner(LTX2Runner):
+    """Chunkwise autoregressive LTX2.3 runner for teacher-forcing checkpoints."""
+
+    def init_scheduler(self):
+        self.scheduler = LTX2ARScheduler(self.config)
+
+    def load_transformer(self, use_distilled_lora=False):
+        model_kwargs = {
+            "model_path": self.config["model_path"],
+            "config": self.config,
+            "device": self.init_device,
+        }
+        model = LTX2ARModel(**model_kwargs)
+        lora_configs = self.config.get("lora_configs")
+        if lora_configs:
+            LoraAdapter(model, model_prefix="model.diffusion_model.").apply_lora(lora_configs)
+        return model
+
+    def get_video_segment_num(self):
+        self.video_segment_num = 1
+
+    def init_run(self):
+        self._validate_ar_config()
+        super().init_run()
+        self._prepare_ar_states()
+
+    def _validate_ar_config(self):
+        if self.config.get("task") != "t2av":
+            raise NotImplementedError("ltx2_ar currently supports task=t2av only.")
+        if self.config.get("use_upsampler", False):
+            raise NotImplementedError("ltx2_ar does not support the latent upsampler.")
+        if self.config.get("compile", False):
+            raise NotImplementedError("ltx2_ar does not support compile mode.")
+        chunk = int(self.config.get("ar_config", {}).get("num_frame_per_chunk", 0))
+        if chunk <= 0:
+            raise ValueError("ltx2_ar requires ar_config.num_frame_per_chunk > 0.")
+
+    @staticmethod
+    def _slice_latent_state(state, start, end, *, clone_latent=True):
+        latent = state.latent[start:end]
+        return LatentState(
+            latent=latent.clone() if clone_latent else latent,
+            denoise_mask=state.denoise_mask[start:end],
+            positions=state.positions[..., start:end, :],
+            clean_latent=state.clean_latent[start:end],
+        )
+
+    def _prepare_ar_states(self):
+        scheduler = self.model.scheduler
+        video_state = scheduler.video_latent_state
+        audio_state = scheduler.audio_latent_state
+        _, video_frames, video_height, video_width = scheduler.video_latent_shape_orig
+        audio_channels, _, audio_mel_bins = scheduler.audio_latent_shape_orig
+        chunk_frames = int(self.config["ar_config"]["num_frame_per_chunk"])
+
+        video_main_tokens = int(getattr(scheduler, "_video_main_num_tokens", video_state.latent.shape[0]))
+        if video_main_tokens != video_state.latent.shape[0]:
+            raise NotImplementedError("ltx2_ar does not support appended guiding/reference video tokens.")
+        if video_main_tokens % video_frames != 0:
+            raise ValueError(f"Video token count {video_main_tokens} is not divisible by latent frames {video_frames}.")
+
+        keep_video_frames = (video_frames // chunk_frames) * chunk_frames
+        if keep_video_frames <= 0:
+            raise ValueError(f"LTX2 AR latent frames={video_frames} is smaller than chunk size={chunk_frames}.")
+        video_tokens_per_frame = video_main_tokens // video_frames
+        keep_video_tokens = keep_video_frames * video_tokens_per_frame
+        keep_audio_tokens = max(1, audio_state.latent.shape[0] * keep_video_frames // video_frames)
+
+        if keep_video_frames != video_frames:
+            output_frames = 1 + (keep_video_frames - 1) * int(scheduler.video_scale_factors[0])
+            logger.warning(
+                f"ltx2_ar trims latent frames from {video_frames} to {keep_video_frames} so they are divisible by num_frame_per_chunk={chunk_frames}; decoded video length becomes {output_frames}."
+            )
+            self.input_info.target_video_length = output_frames
+
+        self._ar_video_state = self._slice_latent_state(video_state, 0, keep_video_tokens, clone_latent=False)
+        self._ar_audio_state = self._slice_latent_state(audio_state, 0, keep_audio_tokens, clone_latent=False)
+        self._ar_video_frames = keep_video_frames
+        self._ar_video_tokens_per_frame = video_tokens_per_frame
+        self._ar_num_chunks = keep_video_frames // chunk_frames
+        if keep_audio_tokens < self._ar_num_chunks:
+            raise ValueError(f"LTX2 AR audio tokens={keep_audio_tokens} is smaller than chunk count={self._ar_num_chunks}.")
+        self._ar_chunk_ranges = []
+        for chunk_idx in range(self._ar_num_chunks):
+            video_start = chunk_idx * chunk_frames * video_tokens_per_frame
+            video_end = (chunk_idx + 1) * chunk_frames * video_tokens_per_frame
+            audio_start, audio_end = causal_chunk_token_range(chunk_idx, self._ar_num_chunks, keep_audio_tokens)
+            self._ar_chunk_ranges.append((video_start, video_end, audio_start, audio_end))
+
+        scheduler.video_latent_shape_orig = (
+            scheduler.video_latent_shape_orig[0],
+            keep_video_frames,
+            video_height,
+            video_width,
+        )
+        scheduler.audio_latent_shape_orig = (audio_channels, keep_audio_tokens, audio_mel_bins)
+        self.input_info.video_latent_shape = scheduler.video_latent_shape_orig
+        self.input_info.audio_latent_shape = scheduler.audio_latent_shape_orig
+        if self.config.get("distilled_sigma_values") is None:
+            scheduler.set_timesteps(infer_steps=scheduler.infer_steps, latent=self._ar_video_state.latent)
+
+        max_audio_chunk_tokens = max(audio_end - audio_start for _, _, audio_start, audio_end in self._ar_chunk_ranges)
+        audio_tokens_per_frame = max(1, (keep_audio_tokens + keep_video_frames - 1) // keep_video_frames)
+        self.model.configure_ar_cache(
+            video_total_tokens=keep_video_tokens,
+            audio_total_tokens=keep_audio_tokens,
+            video_chunk_tokens=chunk_frames * video_tokens_per_frame,
+            audio_chunk_tokens=max_audio_chunk_tokens,
+            video_tokens_per_frame=video_tokens_per_frame,
+            audio_tokens_per_frame=audio_tokens_per_frame,
+            dtype=self._ar_video_state.latent.dtype,
+            device=self._ar_video_state.latent.device,
+        )
+        logger.info(
+            f"LTX2 AR initialized: chunks={self._ar_num_chunks}, latent_frames_per_chunk={chunk_frames}, "
+            f"video_tokens_per_chunk={chunk_frames * video_tokens_per_frame}, audio_tokens={keep_audio_tokens}"
+        )
+
+    def _load_ar_chunk(self, video_start, video_end, audio_start, audio_end):
+        self.model.scheduler.video_latent_state = self._slice_latent_state(self._ar_video_state, video_start, video_end)
+        self.model.scheduler.audio_latent_state = self._slice_latent_state(self._ar_audio_state, audio_start, audio_end)
+        self.model.scheduler.mm_last_v_pred = None
+        self.model.scheduler.mm_last_a_pred = None
+        self.model.set_ar_chunk(video_start=video_start, audio_start=audio_start)
+
+    def run_segment(self, segment_idx=0, stage_name=None, cleanup_inputs=None):
+        infer_steps = self.model.scheduler.infer_steps
+        video_chunks = []
+        audio_chunks = []
+
+        for chunk_idx, (video_start, video_end, audio_start, audio_end) in enumerate(self._ar_chunk_ranges):
+            self.check_stop()
+            self._load_ar_chunk(video_start, video_end, audio_start, audio_end)
+            logger.info(f"LTX2 AR chunk {chunk_idx + 1}/{self._ar_num_chunks}")
+
+            for step_index in range(infer_steps):
+                logger.info(f"==> chunk: {chunk_idx + 1}/{self._ar_num_chunks}, step: {step_index + 1}/{infer_steps}")
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.model.scheduler.step_pre(step_index=step_index, is_rerun=False)
+                with ProfilingContext4DebugL1("infer_main"):
+                    self.model.infer(self.inputs)
+                with ProfilingContext4DebugL1("step_post"):
+                    self.model.scheduler.step_post()
+
+                if self.progress_callback:
+                    current_step = chunk_idx * infer_steps + step_index + 1
+                    total_steps = self._ar_num_chunks * infer_steps
+                    self.progress_callback((current_step / total_steps) * 100, 100)
+
+            with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                self.model.scheduler.step_pre(step_index=infer_steps - 1, is_rerun=True)
+            with ProfilingContext4DebugL1("infer_main_in_rerun"):
+                self.model.infer(self.inputs)
+
+            video_chunks.append(self.model.scheduler.video_latent_state.latent)
+            audio_chunks.append(self.model.scheduler.audio_latent_state.latent)
+
+        video_tokens = torch.cat(video_chunks, dim=0)
+        audio_tokens = torch.cat(audio_chunks, dim=0)
+        video_shape = self.model.scheduler.video_latent_shape_orig
+        audio_shape = self.model.scheduler.audio_latent_shape_orig
+        video_latent = self.model.scheduler.video_patchifier.unpatchify(
+            video_tokens,
+            frames=video_shape[1],
+            height=video_shape[2],
+            width=video_shape[3],
+        )
+        audio_latent = self.model.scheduler.audio_patchifier.unpatchify(
+            audio_tokens,
+            channels=audio_shape[0],
+            mel_bins=audio_shape[2],
+        )
+        return video_latent, audio_latent

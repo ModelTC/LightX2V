@@ -13,5 +13,5 @@
     "use_en_prompt": true,
     "use_additional_t_cond": true,
     "use_layer3d_rope": true,
-    "rope_type": "torch"
+    "rope_type": "torch_complex_rope"
 }

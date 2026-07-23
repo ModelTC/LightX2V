@@ -117,6 +117,11 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         self.scaling = self.head_dim**-0.5
         self.use_triton_qknorm_rope = config.get("use_triton_qknorm_rope", True)
         self.version = config.get("version", "moe")
+        # Conv "pixel head" variant. patch_size/merge_size mirror NeoppPreInfer so the
+        # conv head can reshape tokens -> 2D map and re-patchify back to token space.
+        self.use_pixel_head = config.get("use_pixel_head", False)
+        self.patch_size = config.get("patch_size", 16)
+        self.merge_size = 2
         self.fi_moe_autotune = MoeFiAutotune.from_neopp_config(config)
         if self.version == "moe":
             self.num_experts_per_tok = llm_config["num_experts_per_tok"]
@@ -164,7 +169,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         hidden_states = self.infer_without_offload(weights.blocks, hidden_states, cos_sin, past_key_values)
 
         hidden_states = weights.norm_mot_gen.apply(hidden_states)
-        hidden_states = self._fm_head(weights.fm_head, hidden_states)
+        hidden_states = self._fm_head(weights.fm_head, hidden_states, pre_infer_out.token_h, pre_infer_out.token_w)
         return hidden_states.unsqueeze(0)
 
     def infer_without_offload(self, blocks, hidden_states, cos_sin, past_key_values):
@@ -436,11 +441,43 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
         return output
 
     # @ProfilingContext4DebugL1("FM Head")
-    def _fm_head(self, fm_head_w, hidden_states):
+    def _fm_head(self, fm_head_w, hidden_states, token_h=None, token_w=None):
+        if self.use_pixel_head:
+            return self._fm_head_pixel(fm_head_w, hidden_states, token_h, token_w)
         hidden_states = fm_head_w.fm_head_0.apply(hidden_states)
         hidden_states = F.gelu(hidden_states)
         hidden_states = fm_head_w.fm_head_2.apply(hidden_states)
         return hidden_states
+
+    def _fm_head_pixel(self, fm_head_w, hidden_states, token_h, token_w):
+        """Conv "pixel head" (ConvDecoder): decode token hidden states directly to RGB
+        pixels via PixelShuffle + Conv2d, then re-patchify to the [L, patch_dim] token
+        space so the downstream v_pred / Euler / unpatchify path stays unchanged.
+
+        hidden_states: [L, hidden] with L == token_h * token_w in row-major order.
+        (Assumes non seq-parallel: full token sequence present on this rank.)
+        """
+        # [L, hidden] -> [1, hidden, token_h, token_w]
+        x = hidden_states.view(token_h, token_w, -1).permute(2, 0, 1).unsqueeze(0).contiguous()
+        # ConvDecoder: ps(2) -> conv1 -> gelu -> ps(2) -> conv2 -> ps(8) == x32 upsample
+        x = F.pixel_shuffle(x, 2)
+        x = fm_head_w.conv1.apply(x)
+        x = F.gelu(x)
+        x = F.pixel_shuffle(x, 2)
+        x = fm_head_w.conv2.apply(x)
+        x = F.pixel_shuffle(x, 8)  # [1, 3, H, W]
+        # Re-patchify to [1, L, (patch_size*merge_size)**2 * 3], mirrors NeoppPreInfer.patchify
+        x = self._patchify_pixels(x, self.patch_size * self.merge_size)
+        return x.squeeze(0)
+
+    @staticmethod
+    def _patchify_pixels(images, patch_size):
+        # images: [N, 3, H, W] -> [N, (H/ps)*(W/ps), ps*ps*3], row-major (h outer, w inner)
+        h, w = images.shape[2] // patch_size, images.shape[3] // patch_size
+        x = images.reshape(images.shape[0], 3, h, patch_size, w, patch_size)
+        x = torch.einsum("nchpwq->nhwpqc", x)
+        x = x.reshape(images.shape[0], h * w, patch_size * patch_size * 3)
+        return x
 
     def _dense_mlp(self, mlp_w, hidden_states):
         up_states = mlp_w.up_proj.apply(hidden_states)

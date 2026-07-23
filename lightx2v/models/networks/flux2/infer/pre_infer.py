@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 try:
@@ -30,9 +31,80 @@ class Flux2PreInfer:
         rope_theta = config.get("rope_theta", 2000)
         axes_dims_rope = config.get("axes_dims_rope", (32, 32, 32, 32))
         self.pos_embed = Flux2PosEmbed(theta=rope_theta, axes_dim=axes_dims_rope)
+        self.rope = None
+        self.head_dim = config["attention_head_dim"]
+        if config.get("seq_parallel", False):
+            self.seq_p_group = config.get("device_mesh").get_group(mesh_dim="seq_p")
+        else:
+            self.seq_p_group = None
+        self.clear_rope_cache()
+
+    def clear_rope_cache(self):
+        self._rope_cache = {True: None, False: None}
+
+    def set_rope(self, rope):
+        self.rope = rope
+        self.clear_rope_cache()
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+        self.clear_rope_cache()
+
+    def _prepare_sequence_parallel(self, image_rotary_emb, num_txt_tokens):
+        if self.seq_p_group is None:
+            return image_rotary_emb
+
+        world_size = dist.get_world_size(self.seq_p_group)
+        cur_rank = dist.get_rank(self.seq_p_group)
+        freqs_cos, freqs_sin = image_rotary_emb
+
+        txt_cos = freqs_cos[:num_txt_tokens]
+        img_cos = freqs_cos[num_txt_tokens:]
+        txt_sin = freqs_sin[:num_txt_tokens]
+        img_sin = freqs_sin[num_txt_tokens:]
+
+        seqlen = img_cos.shape[0]
+        padding_size = (world_size - (seqlen % world_size)) % world_size
+        if padding_size > 0:
+            img_cos = F.pad(img_cos, (0, 0, 0, padding_size))
+            img_sin = F.pad(img_sin, (0, 0, 0, padding_size))
+        img_cos = torch.chunk(img_cos, world_size, dim=0)[cur_rank]
+        img_sin = torch.chunk(img_sin, world_size, dim=0)[cur_rank]
+
+        return torch.cat([txt_cos, img_cos], dim=0), torch.cat([txt_sin, img_sin], dim=0)
+
+    def prepare_rope_cache(self, txt_ids, img_ids, num_txt_tokens):
+        if self.rope is None:
+            raise RuntimeError("Flux2 RoPE must be set before inference.")
+
+        if img_ids.ndim == 3:
+            img_ids = img_ids[0]
+        if txt_ids.ndim == 3:
+            txt_ids = txt_ids[0]
+
+        image_rope = self.pos_embed(img_ids)
+        text_rope = self.pos_embed(txt_ids)
+        image_rotary_emb = (
+            torch.cat([text_rope[0], image_rope[0]], dim=0),
+            torch.cat([text_rope[1], image_rope[1]], dim=0),
+        )
+        image_rotary_emb = self._prepare_sequence_parallel(image_rotary_emb, num_txt_tokens)
+        image_rotary_emb = self.rope.prepare_freqs(image_rotary_emb, rotary_dim=self.head_dim)
+        image_rotary_positions = self.rope.prepare_positions(image_rotary_emb)
+        return image_rotary_emb, image_rotary_positions
+
+    def get_rope_cache(self, txt_ids, img_ids, num_txt_tokens):
+        if txt_ids is None or img_ids is None:
+            return None, None
+
+        infer_condition = bool(getattr(self.scheduler, "infer_condition", True))
+        cached = self._rope_cache[infer_condition]
+        if cached is not None and cached[0][0] is txt_ids and cached[0][1] is img_ids and cached[0][2] == num_txt_tokens:
+            return cached[1]
+
+        rope_cache = self.prepare_rope_cache(txt_ids, img_ids, num_txt_tokens)
+        self._rope_cache[infer_condition] = ((txt_ids, img_ids, num_txt_tokens), rope_cache)
+        return rope_cache
 
     def infer(self, weights, hidden_states, encoder_hidden_states, txt_ids=None, img_ids=None):
         hidden_states = weights.x_embedder.apply(hidden_states.squeeze(0))
@@ -47,25 +119,11 @@ class Flux2PreInfer:
         txt_ids_final = txt_ids if txt_ids is not None else getattr(self.scheduler, "txt_ids", None)
         img_ids_final = img_ids if img_ids is not None else getattr(self.scheduler, "latent_image_ids", None)
 
-        image_rotary_emb = None
-        if img_ids_final is not None and txt_ids_final is not None:
-            if img_ids_final.ndim == 3:
-                img_ids_final = img_ids_final[0]
-            if txt_ids_final.ndim == 3:
-                txt_ids_final = txt_ids_final[0]
-
-            image_rope = self.pos_embed(img_ids_final)
-            text_rope = self.pos_embed(txt_ids_final)
-
-            freqs_cos = torch.cat([text_rope[0], image_rope[0]], dim=0)
-            freqs_sin = torch.cat([text_rope[1], image_rope[1]], dim=0)
-
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            cos_half = freqs_cos[:, ::2].contiguous()  # [L, D/2]
-            sin_half = freqs_sin[:, ::2].contiguous()  # [L, D/2]
-            image_rotary_emb = torch.cat([cos_half, sin_half], dim=-1)  # [L, D]
-        else:
-            image_rotary_emb = (freqs_cos, freqs_sin)
+        image_rotary_emb, image_rotary_positions = self.get_rope_cache(txt_ids_final, img_ids_final, encoder_hidden_states.shape[0])
+        if img_ids_final is not None and img_ids_final.ndim == 3:
+            img_ids_final = img_ids_final[0]
+        if txt_ids_final is not None and txt_ids_final.ndim == 3:
+            txt_ids_final = txt_ids_final[0]
 
         return Flux2PreInferModuleOutput(
             hidden_states=hidden_states,
@@ -74,6 +132,7 @@ class Flux2PreInfer:
             txt_ids=txt_ids_final,
             img_ids=img_ids_final,
             image_rotary_emb=image_rotary_emb,
+            image_rotary_positions=image_rotary_positions,
         )
 
 
@@ -105,25 +164,11 @@ class Flux2DevPreInfer(Flux2PreInfer):
         txt_ids_final = txt_ids if txt_ids is not None else getattr(self.scheduler, "txt_ids", None)
         img_ids_final = img_ids if img_ids is not None else getattr(self.scheduler, "latent_image_ids", None)
 
-        image_rotary_emb = None
-        if img_ids_final is not None and txt_ids_final is not None:
-            if img_ids_final.ndim == 3:
-                img_ids_final = img_ids_final[0]
-            if txt_ids_final.ndim == 3:
-                txt_ids_final = txt_ids_final[0]
-
-            image_rope = self.pos_embed(img_ids_final)
-            text_rope = self.pos_embed(txt_ids_final)
-
-            freqs_cos = torch.cat([text_rope[0], image_rope[0]], dim=0)
-            freqs_sin = torch.cat([text_rope[1], image_rope[1]], dim=0)
-
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            cos_half = freqs_cos[:, ::2].contiguous()
-            sin_half = freqs_sin[:, ::2].contiguous()
-            image_rotary_emb = torch.cat([cos_half, sin_half], dim=-1)
-        else:
-            image_rotary_emb = (freqs_cos, freqs_sin)
+        image_rotary_emb, image_rotary_positions = self.get_rope_cache(txt_ids_final, img_ids_final, encoder_hidden_states.shape[0])
+        if img_ids_final is not None and img_ids_final.ndim == 3:
+            img_ids_final = img_ids_final[0]
+        if txt_ids_final is not None and txt_ids_final.ndim == 3:
+            txt_ids_final = txt_ids_final[0]
 
         return Flux2PreInferModuleOutput(
             hidden_states=hidden_states,
@@ -132,6 +177,7 @@ class Flux2DevPreInfer(Flux2PreInfer):
             txt_ids=txt_ids_final,
             img_ids=img_ids_final,
             image_rotary_emb=image_rotary_emb,
+            image_rotary_positions=image_rotary_positions,
         )
 
 

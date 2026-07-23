@@ -3,6 +3,11 @@
 import argparse
 import os
 
+os.environ.setdefault(
+    "HF_MODULES_CACHE",
+    os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "hunyuan3d-mlu", "modules"),
+)
+
 from loguru import logger
 from paint_pipeline import PaintPipeline
 
@@ -14,7 +19,7 @@ def get_postprocess_paint_parser():
         "--hy_repo",
         type=str,
         default=None,
-        help="Optional override: Hunyuan3D-2.1 source tree containing hy3dpaint/. Defaults to tools/postprocess/hy3dpaint (symlink to upstream hy3dpaint/).",
+        help="Hunyuan3D-2.1 source tree containing hy3dpaint/. Platform scripts pass this explicitly.",
     )
     parser.add_argument(
         "--model_path",
@@ -63,6 +68,8 @@ def get_postprocess_paint_parser():
         default="facebook/dinov2-giant",
         help="DINOv2 checkpoint id or local path.",
     )
+    parser.add_argument("--render_size", type=int, default=2048, help="Per-view renderer resolution.")
+    parser.add_argument("--texture_size", type=int, default=4096, help="Baked texture resolution.")
 
     parser.add_argument("--use_remesh", action="store_true", default=True, help="Remesh input before texturing.")
     parser.add_argument("--no_remesh", action="store_false", dest="use_remesh", help="Skip remesh step.")
@@ -85,6 +92,8 @@ def process_paint(args):
         realesrgan_ckpt_path=args.realesrgan_ckpt_path,
         custom_pipeline=args.custom_pipeline,
         dino_ckpt_path=args.dino_ckpt_path,
+        render_size=args.render_size,
+        texture_size=args.texture_size,
     )
     result_path = pipeline(
         mesh_path=args.mesh_path,
@@ -94,9 +103,7 @@ def process_paint(args):
         save_glb=args.save_glb,
     )
     print(f"Saved textured mesh: {result_path}")
-    # bpy / custom_rasterizer may segfault during normal interpreter teardown after a
-    # successful run; exit immediately so shell scripts get a clean status code.
-    os._exit(0)
+    return result_path
 
 
 if __name__ == "__main__":
