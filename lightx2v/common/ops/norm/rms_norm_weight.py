@@ -5,7 +5,12 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.norm.triton_ops import fused_norm_3drope, fused_qk_norm_3drope, rms_norm_kernel
+from lightx2v.common.ops.norm.triton_ops import (
+    fused_norm_3drope,
+    fused_qk_norm_3drope,
+    fused_qk_rms_norm,
+    rms_norm_kernel,
+)
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
@@ -435,6 +440,42 @@ class RMSWeightOnePass(RMSWeight):
         if use_magi_custom_ops() and magi_register_custom_op is not None:
             return torch.ops.lightx2v.rms_norm(input_tensor, w, self.eps)
         return rms_norm_kernel(input_tensor, w, self.eps)
+
+
+def apply_qk_rms_norm(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    norm_q,
+    norm_k,
+    *,
+    use_triton: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if norm_q is None and norm_k is None:
+        return query, key
+
+    if use_triton and norm_q is not None and norm_k is not None and norm_q.eps == norm_k.eps and query.is_cuda and key.is_cuda and query.shape[-1] == key.shape[-1]:
+        q_shape = query.shape
+        k_shape = key.shape
+        head_dim = q_shape[-1]
+        q_flat = query.reshape(-1, head_dim)
+        k_flat = key.reshape(-1, head_dim)
+        q_flat, k_flat = fused_qk_rms_norm(
+            q_flat,
+            k_flat,
+            norm_q._get_actual_weight(),
+            norm_k._get_actual_weight(),
+            norm_q.eps,
+            match_torch_rms_cast=True,
+        )
+        return q_flat.reshape(q_shape), k_flat.reshape(k_shape)
+
+    if norm_q is not None:
+        q_shape = query.shape
+        query = norm_q.apply(query.reshape(-1, q_shape[-1])).reshape(q_shape)
+    if norm_k is not None:
+        k_shape = key.shape
+        key = norm_k.apply(key.reshape(-1, k_shape[-1])).reshape(k_shape)
+    return query, key
 
 
 class RMSWeightFusedQKNorm3DRope:

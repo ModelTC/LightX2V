@@ -19,6 +19,8 @@ class Hunyuan3DPreInfer:
     def infer(self, weights, hidden_states, cond, timestep, guidance_cond=None):
         t_freq = apply_timesteps_embedding(timestep, self.config["hidden_size"])
         weight_dtype = weights.t_embedder_mlp_0.weight.dtype
+        if weight_dtype == torch.float8_e4m3fn:
+            weight_dtype = hidden_states.dtype
         t_freq = t_freq.to(dtype=weight_dtype)
         if guidance_cond is not None and weights.t_embedder_cond_proj is not None:
             t_freq = t_freq + weights.t_embedder_cond_proj.apply(guidance_cond)
