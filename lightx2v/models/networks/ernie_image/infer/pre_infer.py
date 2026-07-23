@@ -55,6 +55,7 @@ class ErnieImagePreInfer:
 
     def clear_rope_cache(self):
         self._rope_cache_request_id = None
+        # True：infer_condition=True； False：infer_condition=False
         self._rope_cache = {True: None, False: None}
 
     def set_rope(self, rope):
