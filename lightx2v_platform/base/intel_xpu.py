@@ -60,4 +60,4 @@ class IntelXpuDevice:
 
 
 # Register alias "xpu" for backward compatibility
-PLATFORM_DEVICE_REGISTER._dict["xpu"] = IntelXpuDevice
+PLATFORM_DEVICE_REGISTER["xpu"] = IntelXpuDevice
