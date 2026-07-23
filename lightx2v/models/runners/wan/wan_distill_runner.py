@@ -52,7 +52,7 @@ class MultiDistillModelStruct(MultiModelStruct):
         self.cur_model_index = -1
         logger.info(f"boundary step index: {self.boundary_step_index}")
 
-    @ProfilingContext4DebugL2("Swtich models in infer_main costs")
+    @ProfilingContext4DebugL2("Switch models in infer_main costs")
     def get_current_model_index(self):
         if self.scheduler.step_index < self.boundary_step_index:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
