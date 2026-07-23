@@ -11,6 +11,7 @@ from loguru import logger
 from requests.exceptions import RequestException
 
 from lightx2v.models.runners.base_runner import BaseRunner
+from lightx2v.models.runners.tp_runner_mixin import TPRunnerMixin
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
@@ -83,7 +84,7 @@ def resize_image(img, resize_mode="adaptive", resolution="480p", bucket_shape=No
     return cropped_img, target_h, target_w
 
 
-class DefaultRunner(BaseRunner):
+class DefaultRunner(TPRunnerMixin, BaseRunner):
     def __init__(self, config):
         super().__init__(config)
         self.has_prompt_enhancer = False
