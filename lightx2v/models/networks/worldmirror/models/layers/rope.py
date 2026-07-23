@@ -66,6 +66,9 @@ class PositionGetter:
         """Initializes the position generator with an empty cache."""
         self.position_cache: Dict[Tuple[int, int, torch.device], torch.Tensor] = {}
 
+    def clear_cache(self) -> None:
+        self.position_cache.clear()
+
     def __call__(self, batch_size: int, height: int, width: int, device: torch.device) -> torch.Tensor:
         """Generates spatial positions for a batch of patches.
 
@@ -81,6 +84,7 @@ class PositionGetter:
         """
         cache_key = (height, width, torch.device(device))
         if cache_key not in self.position_cache:
+            self.position_cache.clear()
             y_coords = torch.arange(height, device=device)
             x_coords = torch.arange(width, device=device)
             positions = torch.cartesian_prod(y_coords, x_coords)
@@ -118,6 +122,9 @@ class RotaryPositionEmbedding2D(nn.Module):
         self.scaling_factor = scaling_factor
         self.frequency_cache: Dict[Tuple, Tuple[torch.Tensor, torch.Tensor]] = {}
 
+    def clear_cache(self) -> None:
+        self.frequency_cache.clear()
+
     def _compute_frequency_components(self, dim: int, seq_len: int, device: torch.device, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
         """Computes frequency components for rotary embeddings.
 
@@ -132,6 +139,7 @@ class RotaryPositionEmbedding2D(nn.Module):
         """
         cache_key = (dim, seq_len, device, dtype)
         if cache_key not in self.frequency_cache:
+            self.frequency_cache.clear()
             # Compute frequency bands
             exponents = torch.arange(0, dim, 2, device=device).float() / dim
             inv_freq = 1.0 / (self.base_frequency**exponents)

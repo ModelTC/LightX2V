@@ -12,12 +12,36 @@ class WanCausVidPreInfer(WanPreInfer):
 
     def __init__(self, config):
         super().__init__(config)
-        self._causvid_start_frame = 0
+        self.scheduler = None
         self._causvid_rope_cache: Dict[tuple, Tuple[torch.Tensor, torch.Tensor | None]] = {}
+        self._reset_request_cache()
+
+    def set_scheduler(self, scheduler):
+        super().set_scheduler(scheduler)
+        self._reset_request_cache()
+        self._rope_cache_request_id = scheduler.rope_request_id
 
     def set_rope(self, rope):
         super().set_rope(rope)
+        self._reset_request_cache()
+        if self.scheduler is not None:
+            self._rope_cache_request_id = self.scheduler.rope_request_id
+
+    def _reset_request_cache(self):
+        self._rope_cache_request_id = None
         self._causvid_rope_cache.clear()
+        self._causvid_start_frame = 0
+        self.cos_sin = None
+        self.rope_positions = None
+        self.grid_sizes = (0, 0, 0)
+
+    def _sync_request_cache(self):
+        request_id = self.scheduler.rope_request_id
+        if request_id == self._rope_cache_request_id:
+            return
+
+        self._reset_request_cache()
+        self._rope_cache_request_id = request_id
 
     def _rope_cache_key(self, grid_sizes, start_frame):
         device = self.freqs.device
@@ -44,6 +68,10 @@ class WanCausVidPreInfer(WanPreInfer):
             raise NotImplementedError("Sequence parallel inference is not implemented for CausVid.")
         if kv_start < 0 or kv_end <= kv_start:
             raise ValueError(f"Invalid CausVid KV range: [{kv_start}, {kv_end}).")
+        if self.scheduler is None:
+            raise RuntimeError("WanCausVidPreInfer scheduler is not initialized.")
+
+        self._sync_request_cache()
 
         # The previous local grid is the most accurate source of the number of
         # spatial tokens. On the first chunk, fall back to the configured value;

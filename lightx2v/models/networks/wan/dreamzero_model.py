@@ -29,9 +29,10 @@ class DreamZeroModel(WanModel):
     def cfg_cache_name(cache_name, infer_condition):
         return f"{cache_name}_{'cond' if infer_condition else 'uncond'}"
 
-    def clear_cache(self, cache_name=None):
+    def clear_cache(self, cache_name=None, clear_pre_infer=True):
         self.transformer_infer.clear_cache(cache_name)
-        self.pre_infer.clear_cache()
+        if clear_pre_infer:
+            self.pre_infer.clear_cache()
 
     @staticmethod
     def _gather_cfg_tensor(tensor, group):

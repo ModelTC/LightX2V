@@ -11,16 +11,45 @@ class MotusPreInfer(WanPreInfer):
         super().__init__(config)
         self.model = model
         self.scheduler = None
-        self._grid_cache = {}
+        self.clear_request_cache()
+
+    def clear_request_cache(self):
+        self._rope_cache_request_id = None
+        self._grid_cache = None
+        self.cos_sin = None
+        self.rope_positions = None
+        self.grid_sizes = (0, 0, 0)
+
+    def set_rope(self, rope):
+        super().set_rope(rope)
+        self.clear_request_cache()
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+        self.clear_request_cache()
+
+    def _begin_request(self):
+        request_id = self.scheduler.rope_request_id
+        if request_id != self._rope_cache_request_id:
+            self.clear_request_cache()
+            self._rope_cache_request_id = request_id
+
+    def _get_grid_output(self, batch_size, grid_tuple, device):
+        grid_key = (batch_size, grid_tuple, device.type, device.index)
+        if self._grid_cache is not None and self._grid_cache[0] == grid_key:
+            return self._grid_cache[1]
+
+        grid_sizes = torch.tensor([grid_tuple], dtype=torch.long, device=device).expand(batch_size, -1)
+        grid_output = GridOutput(tensor=grid_sizes, tuple=grid_tuple)
+        self._grid_cache = (grid_key, grid_output)
+        return grid_output
 
     @torch.no_grad()
     def infer(self, weights, inputs, kv_start=0, kv_end=0):
         del weights, kv_start, kv_end
         if self.scheduler is None:
             raise RuntimeError("MotusPreInfer requires a scheduler before infer().")
+        self._begin_request()
 
         first_frame = inputs["motus_first_frame"]
         state = inputs["motus_state"]
@@ -41,12 +70,7 @@ class MotusPreInfer(WanPreInfer):
             latent_h // self.model.video_backbone.patch_size[1],
             latent_w // self.model.video_backbone.patch_size[2],
         )
-        grid_key = (batch_size, grid_tuple, state.device.type, state.device.index)
-        grid_output = self._grid_cache.get(grid_key)
-        if grid_output is None:
-            grid_sizes = torch.tensor([grid_tuple], dtype=torch.long, device=state.device).expand(batch_size, -1)
-            grid_output = GridOutput(tensor=grid_sizes, tuple=grid_tuple)
-            self._grid_cache[grid_key] = grid_output
+        grid_output = self._get_grid_output(batch_size, grid_tuple, state.device)
 
         if self.cos_sin is None or self.grid_sizes != grid_output.tuple:
             self.grid_sizes = grid_output.tuple
