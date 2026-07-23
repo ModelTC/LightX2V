@@ -25,7 +25,7 @@ def _normalize_device_name(device):
     if device.isdigit():
         return f"cuda:{device}"
     if device == "cuda":
-        return "cuda:0"
+        return f"cuda:{torch.cuda.current_device()}"
     return device
 
 
@@ -114,10 +114,12 @@ class HunyuanImage3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, "hunyuan_image3", lora_path, lora_strength)
+        self._init_tensor_parallel()
         self.pipeline_devices = resolve_pipeline_devices(config, device)
         self.pipeline_parallel = len(set(self.pipeline_devices)) > 1
         self.sequence_parallel_attn_type = self._resolve_sequence_parallel_attn_type()
         self._sp_gather_buffers = {}
+        self._validate_tensor_parallel_config()
         self._validate_sequence_parallel_config()
         if self.lazy_load:
             self.remove_keys.extend(["model.layers."])
@@ -153,6 +155,112 @@ class HunyuanImage3Model(BaseTransformerModel):
                 f"attention={self.sequence_parallel_attn_type}, "
                 f"pipeline_devices={self.pipeline_devices}"
             )
+        elif self.tensor_parallel:
+            logger.info(f"HunyuanImage3 tensor parallel initialized: rank={self.tp_rank}, size={self.tp_size}, device={self.pipeline_devices[0]}")
+
+    def _init_tensor_parallel(self):
+        self.tensor_parallel = bool(self.config.get("tensor_parallel", False))
+        if self.tensor_parallel:
+            self.tp_group = self.config["device_mesh"].get_group(mesh_dim="tensor_p")
+            self.tp_rank = dist.get_rank(self.tp_group)
+            self.tp_size = dist.get_world_size(self.tp_group)
+        else:
+            self.tp_group = None
+            self.tp_rank = 0
+            self.tp_size = 1
+
+    @staticmethod
+    def _iter_config_ints(value):
+        if isinstance(value, list):
+            return [int(item) for item in value]
+        if value is None:
+            return []
+        return [int(value)]
+
+    def _validate_tensor_parallel_config(self):
+        if not self.tensor_parallel:
+            return
+        if self.pipeline_parallel:
+            raise ValueError("HunyuanImage3 tensor parallel cannot be combined with pipeline parallel; set pipeline_parallel=false.")
+        if self.config.get("seq_parallel", False) or self.config.get("cfg_parallel", False):
+            raise ValueError("HunyuanImage3 tensor parallel currently requires seq_parallel=false and cfg_parallel=false.")
+        if self.config.get("cpu_offload", False):
+            raise NotImplementedError("HunyuanImage3 tensor parallel does not support cpu_offload.")
+        if self.config.get("lazy_load", False):
+            raise NotImplementedError("HunyuanImage3 tensor parallel does not support lazy_load.")
+        if self.config.get("dit_quantized", False):
+            raise NotImplementedError("HunyuanImage3 tensor parallel currently supports the unquantized checkpoint only.")
+        if self.config.get("load_from_rank0", False):
+            raise NotImplementedError("HunyuanImage3 tensor parallel loads and shards safetensors locally on each rank; set load_from_rank0=false.")
+        if self.lora_path is not None:
+            raise NotImplementedError("HunyuanImage3 tensor parallel does not support LoRA weight loading yet.")
+        moe_impl = str(self.config.get("moe_impl", "eager")).strip().lower()
+        if moe_impl not in ("eager", "flashinfer"):
+            raise NotImplementedError("HunyuanImage3 tensor parallel supports moe_impl='eager' or 'flashinfer'.")
+
+        divisibility_checks = {
+            "num_attention_heads": [int(self.config.get("num_attention_heads") or self.config["num_heads"])],
+            "num_key_value_heads": [int(self.config.get("num_key_value_heads") or self.config.get("num_attention_heads") or self.config["num_heads"])],
+            "intermediate_size": self._iter_config_ints(self.config.get("intermediate_size")),
+            "moe_intermediate_size": self._iter_config_ints(self.config.get("moe_intermediate_size")),
+            "vocab_size": self._iter_config_ints(self.config.get("vocab_size")),
+        }
+        shared_experts = self._iter_config_ints(self.config.get("num_shared_expert"))
+        moe_intermediate = self._iter_config_ints(self.config.get("moe_intermediate_size"))
+        if shared_experts and moe_intermediate:
+            if len(shared_experts) == 1:
+                shared_experts *= len(moe_intermediate)
+            if len(moe_intermediate) == 1:
+                moe_intermediate *= len(shared_experts)
+            divisibility_checks["shared_mlp_intermediate_size"] = [experts * intermediate for experts, intermediate in zip(shared_experts, moe_intermediate)]
+
+        for name, values in divisibility_checks.items():
+            invalid = sorted({value for value in values if value % self.tp_size})
+            if invalid:
+                raise ValueError(f"HunyuanImage3 TP size {self.tp_size} must divide every {name}; invalid values: {invalid}.")
+
+    @staticmethod
+    def _tp_split_type(key):
+        if not key.startswith("model.layers.") and not key.startswith("lm_head."):
+            return None
+        if ".self_attn.qkv_proj." in key:
+            return "qkv_col"
+        if ".self_attn.o_proj." in key:
+            return "row"
+        if ".gate_and_up_proj." in key:
+            return "gate_up_col"
+        if ".down_proj." in key:
+            return "row"
+        if key.startswith("lm_head."):
+            return "col"
+        return None
+
+    def _select_tensor_parallel_shard(self, key, tensor):
+        split_type = self._tp_split_type(key)
+        if split_type is None:
+            return tensor
+
+        if split_type == "row":
+            # Row-parallel biases are replicated and added after the reduction.
+            if tensor.ndim == 1:
+                return tensor
+            if tensor.ndim != 2 or tensor.shape[1] % self.tp_size:
+                raise ValueError(f"Cannot row-shard HunyuanImage3 tensor {key} with shape {tuple(tensor.shape)} across TP size {self.tp_size}.")
+            return torch.chunk(tensor, self.tp_size, dim=1)[self.tp_rank].contiguous()
+
+        if split_type == "gate_up_col":
+            if tensor.shape[0] % 2:
+                raise ValueError(f"HunyuanImage3 fused gate/up tensor {key} has an odd output dimension: {tuple(tensor.shape)}.")
+            gate, up = tensor.chunk(2, dim=0)
+            if gate.shape[0] % self.tp_size:
+                raise ValueError(f"Cannot shard HunyuanImage3 fused gate/up tensor {key} with shape {tuple(tensor.shape)} across TP size {self.tp_size}.")
+            gate_shard = torch.chunk(gate, self.tp_size, dim=0)[self.tp_rank]
+            up_shard = torch.chunk(up, self.tp_size, dim=0)[self.tp_rank]
+            return torch.cat((gate_shard, up_shard), dim=0).contiguous()
+
+        if tensor.shape[0] % self.tp_size:
+            raise ValueError(f"Cannot column-shard HunyuanImage3 tensor {key} with shape {tuple(tensor.shape)} across TP size {self.tp_size}.")
+        return torch.chunk(tensor, self.tp_size, dim=0)[self.tp_rank].contiguous()
 
     def _resolve_sequence_parallel_attn_type(self):
         if not self.config.get("seq_parallel", False):
@@ -197,6 +305,8 @@ class HunyuanImage3Model(BaseTransformerModel):
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         ext = os.path.splitext(file_path)[-1]
         if ext in (".pt", ".pth", ".tar"):
+            if self.tensor_parallel:
+                raise NotImplementedError("HunyuanImage3 tensor parallel requires safetensors checkpoints.")
             return super()._load_safetensor_to_dict(file_path, unified_dtype, sensitive_layer)
 
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
@@ -210,6 +320,8 @@ class HunyuanImage3Model(BaseTransformerModel):
                     continue
 
                 tensor = f.get_tensor(key)
+                if self.tensor_parallel:
+                    tensor = self._select_tensor_parallel_shard(key, tensor)
                 if tensor.dtype.is_floating_point:
                     dtype = GET_DTYPE() if unified_dtype or all(s not in key for s in sensitive_layer) else GET_SENSITIVE_DTYPE()
                 else:

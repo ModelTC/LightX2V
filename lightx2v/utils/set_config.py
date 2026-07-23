@@ -237,6 +237,23 @@ def auto_calc_config(config):
         config["infer_steps"] = config["num_inference_steps"]
 
     if config["model_cls"] == "hunyuan_image3":
+        task = str(config.get("task", "t2i")).strip().lower()
+        supported_tasks = {"t2t", "t2i", "ti2t", "ti2i", "i2i"}
+        if task not in supported_tasks:
+            raise ValueError(f"HunyuanImage3 task must be one of {sorted(supported_tasks)}, got {task!r}.")
+
+        bot_task = str(config.get("bot_task", "image")).strip().lower()
+        supported_bot_tasks = {"image", "auto", "think", "recaption", "think_recaption"}
+        if bot_task not in supported_bot_tasks:
+            raise ValueError(f"HunyuanImage3 bot_task must be one of {sorted(supported_bot_tasks)}, got {bot_task!r}.")
+        config["bot_task"] = bot_task
+
+        if task in {"t2t", "ti2t"}:
+            if config.get("enable_cfg", False):
+                raise ValueError(f"HunyuanImage3 task={task} does not support diffusion CFG; set enable_cfg=false.")
+            if bot_task == "image":
+                raise ValueError(f"HunyuanImage3 task={task} requires a text bot_task such as 'auto' or 'think_recaption'.")
+
         if "vae_scale_factor" not in config:
             vae_downsample_factor = config.get("vae_downsample_factor")
             if isinstance(vae_downsample_factor, list) and vae_downsample_factor:
@@ -244,15 +261,29 @@ def auto_calc_config(config):
         parallel_config = config.get("parallel")
         if isinstance(parallel_config, dict):
             parallel_config = dict(parallel_config)
+            tensor_p_size = int(parallel_config.get("tensor_p_size", 1))
             cfg_p_size = int(parallel_config.get("cfg_p_size", 1))
             seq_p_size = int(parallel_config.get("seq_p_size", 1))
+            if tensor_p_size < 1:
+                raise ValueError(f"HunyuanImage3 parallel.tensor_p_size must be >= 1, got {tensor_p_size}.")
             if cfg_p_size not in (1, 2):
                 raise ValueError(f"HunyuanImage3 parallel.cfg_p_size must be 1 or 2, got {cfg_p_size}.")
             if seq_p_size < 1:
                 raise ValueError(f"HunyuanImage3 parallel.seq_p_size must be >= 1, got {seq_p_size}.")
+            if tensor_p_size > 1:
+                if cfg_p_size != 1 or seq_p_size != 1:
+                    raise ValueError("HunyuanImage3 tensor parallel cannot currently be combined with CFG or sequence parallel.")
+                if config.get("pipeline_parallel", True):
+                    raise ValueError("HunyuanImage3 tensor parallel requires pipeline_parallel=false.")
+                moe_impl = str(config.get("moe_impl", "eager")).strip().lower()
+                if moe_impl not in ("eager", "flashinfer"):
+                    raise ValueError("HunyuanImage3 tensor parallel supports moe_impl='eager' or 'flashinfer'.")
             if cfg_p_size == 2 and not config.get("enable_cfg", False):
                 raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires enable_cfg=true.")
+            if task in {"t2t", "ti2t"} and cfg_p_size != 1:
+                raise ValueError(f"HunyuanImage3 task={task} requires parallel.cfg_p_size=1.")
 
+            parallel_config["tensor_p_size"] = tensor_p_size
             parallel_config["cfg_p_size"] = cfg_p_size
             parallel_config["seq_p_size"] = seq_p_size
 

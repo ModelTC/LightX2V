@@ -18,7 +18,13 @@ def _linear_tensor_attr(linear, attr):
     tensor = getattr(linear, attr, None)
     if tensor is not None:
         return tensor
-    return getattr(linear, f"pin_{attr}", None)
+    tensor = getattr(linear, f"pin_{attr}", None)
+    if tensor is not None:
+        return tensor
+    wrapped_linear = getattr(linear, "_mm", None)
+    if wrapped_linear is not None and wrapped_linear is not linear:
+        return _linear_tensor_attr(wrapped_linear, attr)
+    return None
 
 
 def match_linear_dtype(input_tensor, linear):
@@ -67,8 +73,8 @@ def repeat_kv(hidden_states, n_rep):
 
 
 def weight_device(module):
-    for attr in ("weight", "pin_weight", "bias", "pin_bias"):
-        tensor = getattr(module, attr, None)
+    for attr in ("weight", "bias"):
+        tensor = _linear_tensor_attr(module, attr)
         if tensor is not None:
             return tensor.device
     return None

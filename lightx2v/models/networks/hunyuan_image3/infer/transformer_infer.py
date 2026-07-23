@@ -37,10 +37,20 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         self.config = config
         self.num_layers = int(config.get("num_layers") or config["num_hidden_layers"])
         self.hidden_size = config["hidden_size"]
-        self.num_heads = int(config.get("num_attention_heads") or config["num_heads"])
-        self.num_key_value_heads = config.get("num_key_value_heads") or self.num_heads
-        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
-        self.head_dim = config.get("attention_head_dim", self.hidden_size // self.num_heads)
+        self.global_num_heads = int(config.get("num_attention_heads") or config["num_heads"])
+        self.global_num_key_value_heads = int(config.get("num_key_value_heads") or self.global_num_heads)
+        self.num_key_value_groups = self.global_num_heads // self.global_num_key_value_heads
+        self.head_dim = config.get("attention_head_dim", self.hidden_size // self.global_num_heads)
+        if config.get("tensor_parallel", False):
+            self.tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+            self.tp_rank = dist.get_rank(self.tp_group)
+            self.tp_size = dist.get_world_size(self.tp_group)
+        else:
+            self.tp_group = None
+            self.tp_rank = 0
+            self.tp_size = 1
+        self.num_heads = self.global_num_heads // self.tp_size
+        self.num_key_value_heads = self.global_num_key_value_heads // self.tp_size
         self.hidden_act = config.get("hidden_act", "silu")
         self.flashinfer_tune_max_num_tokens = int(config.get("flashinfer_tune_max_num_tokens", 8192))
         self.attn_impl = self._normalize_attention_impl(config.get("attn_impl", "torch_sdpa"))
@@ -577,11 +587,15 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         moe = phase.moe
         moe_impl = getattr(moe, "moe_impl", self.config.get("moe_impl", "eager"))
         if moe_impl == "flashinfer":
-            return self._infer_mlp_flashinfer(moe, hidden_states)
-        if moe_impl != "eager":
+            output = self._infer_mlp_flashinfer(moe, hidden_states)
+        elif moe_impl == "eager":
+            output = self._infer_mlp_eager(moe, hidden_states)
+        else:
             raise ValueError(f"Unsupported HunyuanImage3 moe_impl={moe_impl!r}. Expected 'eager' or 'flashinfer'.")
 
-        return self._infer_mlp_eager(moe, hidden_states)
+        if self.tp_size > 1:
+            dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
+        return output
 
     def _moe_easy_topk(self, moe, hidden_states):
         flat = hidden_states.reshape(-1, hidden_states.shape[-1])
@@ -634,6 +648,8 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             compute_dtype,
             output=combined_output,
             quant_scales=None,
+            tp_size=self.tp_size,
+            tp_rank=self.tp_rank,
             tune_max_num_tokens=self.flashinfer_tune_max_num_tokens,
         )
         output = combined_output.reshape_as(hidden_states).to(original_dtype)

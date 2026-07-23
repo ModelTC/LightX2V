@@ -2,6 +2,7 @@ import importlib
 import os
 import sys
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import torch
@@ -127,23 +128,34 @@ class HunyuanImage3Runner(DefaultRunner):
             model_version=self.hunyuan_config.model_version,
         )
         self.hunyuan_image_processor = modules["HunyuanImage3ImageProcessor"](self.hunyuan_config)
+        # Newer transformers versions alias Siglip2ImageProcessorFast to the
+        # slow processor, whose default output is a Python list. The upstream
+        # Hunyuan processor expects tensors and calls .squeeze() immediately.
+        vit_processor = self.hunyuan_image_processor.vit_info.processor
+        self.hunyuan_image_processor.vit_info.processor = partial(vit_processor, return_tensors="pt")
         self.hunyuan_cached_rope = modules["CachedRoPE"](self.hunyuan_config)
         self.hunyuan_vae_cls = modules["AutoencoderKLConv3D"]
         self.hunyuan_vision_cls = modules["Siglip2VisionTransformer"]
         self.hunyuan_vision_aligner_cls = modules["LightProjector"]
         self.hunyuan_get_system_prompt = modules["get_system_prompt"]
 
-        # self.vae_decoder is a complete VAE model (encoder + decoder). T2I only
-        # decodes on rank 0, so other SP ranks do not need this extra allocation.
-        load_vae_on_this_rank = not (self.config.get("task") == "t2i" and self._sequence_parallel_enabled() and not self._is_output_rank())
-        if load_vae_on_this_rank:
-            self.vae_decoder = self._load_vae_decoder()
-        else:
-            self.vae_decoder = None
-            logger.info("Skipping HunyuanImage3 VAE load on non-output SP rank for T2I.")
+        # Text-only tasks do not need a VAE. Image paths load it on demand so
+        # T2T can run without paying the extra memory and initialization cost.
+        self.vae_decoder = None
         self.vision_model = None
         self.vision_aligner = None
         self._hunyuan_pipeline_modules_ready = True
+
+    def _ensure_vae(self):
+        if self.vae_decoder is not None:
+            return
+
+        task = str(self.config.get("task", "t2i")).lower()
+        load_vae_on_this_rank = not (task == "t2i" and self._sequence_parallel_enabled() and not self._is_output_rank())
+        if load_vae_on_this_rank:
+            self.vae_decoder = self._load_vae_decoder()
+        else:
+            logger.info("Skipping HunyuanImage3 VAE load on non-output SP rank for T2I.")
 
     def _pipeline_latent_device(self):
         devices = getattr(self.model, "pipeline_devices", None)
@@ -345,11 +357,13 @@ class HunyuanImage3Runner(DefaultRunner):
 
     def _build_flashinfer_autotune_controller(self):
         sequence_parallel_active = self._sequence_parallel_enabled()
+        tensor_parallel_active = self._tensor_parallel_enabled()
+        distributed_parallel_active = sequence_parallel_active or tensor_parallel_active
         distributed_context = DistributedAutotuneContext(
-            coordination_required=sequence_parallel_active,
-            process_group=self._parallel_control_group() if sequence_parallel_active else None,
-            status_device_resolver=self._pipeline_latent_device if sequence_parallel_active else None,
-            is_cache_writer=self._is_output_rank() if sequence_parallel_active else False,
+            coordination_required=distributed_parallel_active,
+            process_group=self._parallel_control_group() if distributed_parallel_active else None,
+            status_device_resolver=self._pipeline_latent_device if distributed_parallel_active else None,
+            is_cache_writer=self._is_output_rank() if distributed_parallel_active else False,
         )
         return FlashInferAutotuneController.from_config(
             config=self.config,
@@ -359,18 +373,20 @@ class HunyuanImage3Runner(DefaultRunner):
     def _sequence_parallel_enabled(self):
         return bool(self.config.get("seq_parallel", False) and dist.is_available() and dist.is_initialized() and getattr(self.model, "seq_p_group", None) is not None)
 
+    def _tensor_parallel_enabled(self):
+        return bool(self.config.get("tensor_parallel", False) and dist.is_available() and dist.is_initialized() and getattr(self.model, "tp_group", None) is not None)
+
     def _parallel_control_group(self):
         """Return the group used to keep replicated runner state identical.
 
-        Attention collectives remain scoped to ``seq_p_group`` and CFG prediction
-        exchange remains scoped to ``cfg_p_group``. Runner state such as sampled
-        tokens and latents is synchronized only for sequence-parallel runs.
-        Hybrid runs use WORLD so the state also spans the CFG dimension. Pure
-        CFG deliberately returns no runner control group: its only collective
-        is the prediction all-gather in the model, matching the known-good CFG
-        implementation and avoiding cfg_p collectives on both ends of a
-        multi-device pipeline.
+         Attention collectives remain scoped to ``seq_p_group`` and CFG prediction
+        exchange remains scoped to ``cfg_p_group``. Tensor-parallel runs keep
+        sampled tokens and initial latents synchronized through ``tensor_p``.
+        Sequence-parallel hybrid runs use WORLD so runner state also spans the
+        CFG dimension. Pure CFG deliberately returns no runner control group.
         """
+        if self._tensor_parallel_enabled():
+            return self.model.tp_group
         if not self._sequence_parallel_enabled():
             return None
         if self._cfg_parallel_enabled():
@@ -628,7 +644,7 @@ class HunyuanImage3Runner(DefaultRunner):
 
     def _resolve_bot_task(self):
         bot_task = self.config.get("bot_task", getattr(self.hunyuan_generation_config, "bot_task", "image"))
-        return bot_task or "image"
+        return str(bot_task or "image").strip().lower()
 
     def _resolve_system_prompt(self, bot_task):
         system_prompt_type = self.config.get("use_system_prompt", getattr(self.hunyuan_generation_config, "use_system_prompt", "None"))
@@ -641,6 +657,12 @@ class HunyuanImage3Runner(DefaultRunner):
 
     def _resolve_text_generation_plan(self, bot_task):
         tokenizer = self.hunyuan_tokenizer
+        if bot_task == "auto":
+            return HunyuanImage3TextGenerationPlan(
+                first_bot_task="auto",
+                stage_transitions=[],
+                final_stop_tokens=list(tokenizer.conversation.stop_token_ids),
+            )
         if bot_task == "recaption":
             return HunyuanImage3TextGenerationPlan(
                 first_bot_task="recaption",
@@ -682,13 +704,14 @@ class HunyuanImage3Runner(DefaultRunner):
         build_attention_mask=True,
         past_key_values=None,
         use_cache=False,
+        rope_image_info=None,
     ):
         device = input_ids.device
         if position_ids is None:
             position_ids = torch.arange(0, input_ids.shape[1], dtype=torch.long, device=device)[None].expand(input_ids.shape[0], -1)
         position_max = int(position_ids.max().item()) + 1 if position_ids.numel() > 0 else input_ids.shape[1]
         max_position = max(int(self.config.get("max_position_embeddings", self.hunyuan_config.max_position_embeddings)), position_max)
-        custom_pos_emb = self.hunyuan_cached_rope(max_position, device, rope_image_info=None, position_ids=position_ids)
+        custom_pos_emb = self.hunyuan_cached_rope(max_position, device, rope_image_info=rope_image_info, position_ids=position_ids)
         if build_attention_mask and attention_mask is None:
             attention_mask = self._build_attention_mask(input_ids, tokenizer_output)
         full_attn_slices = self._build_full_attn_slices(tokenizer_output, input_ids.shape[0], seq_len=input_ids.shape[1]) if attention_mask is not None else None
@@ -724,35 +747,38 @@ class HunyuanImage3Runner(DefaultRunner):
             batch_system_prompt=[system_prompt],
             max_length=getattr(generation_config, "max_length", self.config.get("max_position_embeddings")),
             bot_task=bot_task,
-            image_base_size=self.hunyuan_image_processor.vae_reso_group.base_size,
+            image_base_size=None if bot_task == "auto" else self.hunyuan_image_processor.vae_reso_group.base_size,
             sequence_template=getattr(generation_config, "sequence_template", "pretrain"),
             cfg_factor=1,
             drop_think=getattr(generation_config, "drop_think", False),
         )
         latent_device = self._pipeline_latent_device()
         output = tokenizer_out["output"]
+        rope_image_info = self._build_batch_rope_image_info(output, tokenizer_out["sections"])
         return {
             "input_ids": output.tokens.to(latent_device),
             "tokenizer_output": output,
             "cond_inputs": self._attach_tokenizer_cond_masks(cond_inputs, output, latent_device),
+            "rope_image_info": rope_image_info,
         }
 
-    def _sample_text_token(self, logits, generator):
-        do_sample = bool(self.config.get("text_do_sample", getattr(self.hunyuan_generation_config, "do_sample", False)))
+    def _sample_text_token(self, logits, generator, generation_options=None):
+        generation_options = generation_options or {}
+        do_sample = bool(generation_options.get("text_do_sample", self.config.get("text_do_sample", getattr(self.hunyuan_generation_config, "do_sample", False))))
         logits = logits.float()
         if not do_sample:
             return torch.argmax(logits, dim=-1)
 
-        temperature = float(self.config.get("text_temperature", getattr(self.hunyuan_generation_config, "temperature", 1.0)))
+        temperature = float(generation_options.get("text_temperature", self.config.get("text_temperature", getattr(self.hunyuan_generation_config, "temperature", 1.0))))
         if temperature > 0:
             logits = logits / temperature
 
-        top_k = int(self.config.get("text_top_k", getattr(self.hunyuan_generation_config, "top_k", 0)) or 0)
+        top_k = int(generation_options.get("text_top_k", self.config.get("text_top_k", getattr(self.hunyuan_generation_config, "top_k", 0))) or 0)
         if top_k > 0 and top_k < logits.shape[-1]:
             kth_values = torch.topk(logits, top_k, dim=-1).values[..., -1, None]
             logits = logits.masked_fill(logits < kth_values, torch.finfo(logits.dtype).min)
 
-        top_p = float(self.config.get("text_top_p", getattr(self.hunyuan_generation_config, "top_p", 1.0)))
+        top_p = float(generation_options.get("text_top_p", self.config.get("text_top_p", getattr(self.hunyuan_generation_config, "top_p", 1.0))))
         if 0.0 < top_p < 1.0:
             sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
             cumulative_probs = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
@@ -777,11 +803,22 @@ class HunyuanImage3Runner(DefaultRunner):
             print(text, end=end, flush=True)
 
     @torch.no_grad()
-    def _generate_text_tokens(self, input_ids, tokenizer_output, plan, stream_output=False, cond_inputs=None):
+    def _generate_text_tokens(
+        self,
+        input_ids,
+        tokenizer_output,
+        plan,
+        stream_output=False,
+        cond_inputs=None,
+        rope_image_info=None,
+        stream_callback=None,
+        generation_options=None,
+    ):
+        generation_options = generation_options or {}
         device = input_ids.device
-        seed = int(self.config.get("text_seed", self.config.get("seed", 42)))
+        seed = int(generation_options.get("text_seed", self.config.get("text_seed", self.config.get("seed", 42))))
         generator = torch.Generator(device=device).manual_seed(seed)
-        max_new_tokens = int(self.config.get("max_new_tokens", getattr(self.hunyuan_generation_config, "max_new_tokens", 2048)))
+        max_new_tokens = int(generation_options.get("max_new_tokens", self.config.get("max_new_tokens", getattr(self.hunyuan_generation_config, "max_new_tokens", 2048))))
         transition_map = {stop_id: list(append_ids) for stop_id, append_ids in plan.stage_transitions}
         completed_transitions = set()
         pending_tokens = []
@@ -813,23 +850,28 @@ class HunyuanImage3Runner(DefaultRunner):
                         build_attention_mask=first_cache_step,
                         past_key_values=kv_cache,
                         use_cache=True,
+                        rope_image_info=rope_image_info if first_cache_step else None,
                     )
                     cache_filled_length = input_ids.shape[1]
                 else:
                     if cond_inputs is None:
-                        model_inputs = self._build_text_model_inputs(input_ids, tokenizer_output)
+                        model_inputs = self._build_text_model_inputs(input_ids, tokenizer_output, rope_image_info=rope_image_info)
                     else:
-                        model_inputs = self._build_text_model_inputs(input_ids, tokenizer_output, cond_inputs=cond_inputs)
+                        model_inputs = self._build_text_model_inputs(input_ids, tokenizer_output, cond_inputs=cond_inputs, rope_image_info=rope_image_info)
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
                     logits = self.model.infer(model_inputs)["logits"][:, -1, :]
-                next_token = self._sample_text_token(logits, generator)
+                next_token = self._sample_text_token(logits, generator, generation_options=generation_options)
                 next_token = next_token.to(device=device, dtype=input_ids.dtype)
             next_token = self._broadcast_parallel_tensor(next_token)
             next_token_id = int(next_token.item())
 
             generated.append(next_token_id)
             if stream_output:
-                self._print_text_generation_chunk(self._decode_generated_text_token(next_token_id))
+                text_chunk = self._decode_generated_text_token(next_token_id)
+                if stream_callback is not None and self._is_output_rank():
+                    stream_callback(text_chunk)
+                else:
+                    self._print_text_generation_chunk(text_chunk)
             input_ids = torch.cat([input_ids, next_token.reshape(1, 1)], dim=1)
 
             if next_token_id in transition_map and next_token_id not in completed_transitions:
@@ -841,6 +883,20 @@ class HunyuanImage3Runner(DefaultRunner):
 
         return generated
 
+    def _decode_text_result(self, generated_tokens, plan):
+        tokens = list(generated_tokens)
+        while tokens and tokens[-1] in plan.final_stop_tokens:
+            tokens.pop()
+        if not tokens:
+            return ""
+
+        generated_text = self.hunyuan_tokenizer.decode(torch.tensor(tokens, dtype=torch.long))
+        if plan.first_bot_task == "think":
+            return self.hunyuan_tokenizer.think_token + generated_text
+        if plan.first_bot_task == "recaption":
+            return self.hunyuan_tokenizer.recaption_token + generated_text
+        return generated_text
+
     def _decode_cot_text(self, generated_tokens, plan):
         if not generated_tokens:
             return None
@@ -849,6 +905,67 @@ class HunyuanImage3Runner(DefaultRunner):
         if plan.first_bot_task == "think":
             return self.hunyuan_tokenizer.think_token + generated_text
         return self.hunyuan_tokenizer.recaption_token + generated_text
+
+    def _input_text_generation_options(self, input_info):
+        options = {}
+        for key in ("max_new_tokens", "text_do_sample", "text_temperature", "text_top_k", "text_top_p"):
+            value = getattr(input_info, key, None)
+            if value is not None:
+                options[key] = value
+        seed = getattr(input_info, "seed", None)
+        if seed is not None:
+            options["text_seed"] = seed
+        return options
+
+    def _stream_text_prefix(self, plan, stream_callback=None):
+        if plan.first_bot_task == "think":
+            prefix = self.hunyuan_tokenizer.think_token
+        elif plan.first_bot_task == "recaption":
+            prefix = self.hunyuan_tokenizer.recaption_token
+        else:
+            prefix = ""
+        if not prefix:
+            return
+        if stream_callback is not None and self._is_output_rank():
+            stream_callback(prefix)
+        else:
+            self._print_text_generation_chunk(prefix)
+
+    def _generate_text(self, input_info, batch_cond_images=None, cond_inputs=None):
+        bot_task = str(getattr(input_info, "bot_task", None) or self._resolve_bot_task()).strip().lower()
+        if bot_task == "image":
+            raise ValueError("HunyuanImage3 text generation requires bot_task='auto', 'think', 'recaption', or 'think_recaption'.")
+
+        plan = self._resolve_text_generation_plan(bot_task)
+        system_prompt = getattr(input_info, "system_prompt", None)
+        if system_prompt is None:
+            system_prompt = self._resolve_system_prompt(plan.first_bot_task)
+        prepared = self._prepare_text_generation_inputs(
+            getattr(input_info, "prompt", ""),
+            plan.first_bot_task,
+            system_prompt,
+            batch_cond_images=batch_cond_images,
+            cond_inputs=cond_inputs,
+        )
+
+        stream_callback = getattr(input_info, "stream_callback", None)
+        stream_output = self._text_stream_enabled() or stream_callback is not None
+        if stream_output:
+            self._stream_text_prefix(plan, stream_callback=stream_callback)
+        with self._build_flashinfer_autotune_controller().context():
+            generated_tokens = self._generate_text_tokens(
+                prepared["input_ids"],
+                prepared["tokenizer_output"],
+                plan,
+                stream_output=stream_output,
+                cond_inputs=prepared.get("cond_inputs"),
+                rope_image_info=prepared.get("rope_image_info"),
+                stream_callback=stream_callback,
+                generation_options=self._input_text_generation_options(input_info),
+            )
+        if stream_output and stream_callback is None:
+            self._print_text_generation_chunk("\n")
+        return self._decode_text_result(generated_tokens, plan)
 
     def _generate_cot_text(self, prompt, image_size, batch_cond_images=None, cond_inputs=None):
         bot_task = self._resolve_bot_task()
@@ -871,13 +988,15 @@ class HunyuanImage3Runner(DefaultRunner):
         if stream_output:
             prefix = self.hunyuan_tokenizer.think_token if plan.first_bot_task == "think" else self.hunyuan_tokenizer.recaption_token
             self._print_text_generation_chunk(prefix)
-        generated_tokens = self._generate_text_tokens(
-            prepared["input_ids"],
-            prepared["tokenizer_output"],
-            plan,
-            stream_output=stream_output,
-            cond_inputs=prepared.get("cond_inputs"),
-        )
+        with self._build_flashinfer_autotune_controller().context():
+            generated_tokens = self._generate_text_tokens(
+                prepared["input_ids"],
+                prepared["tokenizer_output"],
+                plan,
+                stream_output=stream_output,
+                cond_inputs=prepared.get("cond_inputs"),
+                rope_image_info=prepared.get("rope_image_info"),
+            )
         if stream_output:
             self._print_text_generation_chunk("\n")
         cot_text = self._decode_cot_text(generated_tokens, plan)
@@ -969,6 +1088,7 @@ class HunyuanImage3Runner(DefaultRunner):
         return int(self.config.get("target_height", 1024)), int(self.config.get("target_width", 1024))
 
     def _vae_encode_cond_tensor(self, image_tensor, generator=None):
+        self._ensure_vae()
         vae = self.vae_decoder
         vae_device = self._vae_device()
         image_tensor = image_tensor.unsqueeze(0).to(vae_device)
@@ -1063,6 +1183,19 @@ class HunyuanImage3Runner(DefaultRunner):
             "cond_timesteps": cond_timesteps,
             "cond_vit_embeds": cond_vit_embeds,
         }
+
+    def _repeat_cond_inputs(self, cond_inputs, factor):
+        if factor == 1:
+            return cond_inputs
+        repeated = {}
+        for key, value in cond_inputs.items():
+            if isinstance(value, torch.Tensor):
+                repeated[key] = value.repeat(factor, *([1] * (value.ndim - 1)))
+            elif isinstance(value, list):
+                repeated[key] = value * factor
+            else:
+                repeated[key] = value
+        return repeated
 
     def _prepare_latents(self, batch_size, image_size, generator):
         latent_device = self._pipeline_latent_device()
@@ -1239,6 +1372,7 @@ class HunyuanImage3Runner(DefaultRunner):
         return latents
 
     def _decode_latents(self, latents, generator):
+        self._ensure_vae()
         vae = self.vae_decoder
         vae_device = self._vae_device()
         latents = latents.to(vae_device)
@@ -1259,17 +1393,37 @@ class HunyuanImage3Runner(DefaultRunner):
         return [Image.fromarray((sample * 255.0).round().astype("uint8")) for sample in image]
 
     @torch.no_grad()
+    def generate_t2t(self, input_info):
+        self._ensure_pipeline_modules()
+        return self._generate_text(input_info)
+
+    @torch.no_grad()
+    def generate_ti2t(self, input_info):
+        self._ensure_pipeline_modules()
+        seed = getattr(input_info, "seed", None)
+        if seed is None:
+            seed = self.config.get("seed", 42)
+        image_paths = self._split_image_paths(getattr(input_info, "image_path", None) or self.config.get("image_path"))
+        infer_align_image_size = getattr(input_info, "infer_align_image_size", None)
+        if infer_align_image_size is None:
+            infer_align_image_size = self.config.get("infer_align_image_size", False)
+
+        batch_cond_images = self._build_batch_cond_images(image_paths, bool(infer_align_image_size))
+        cond_inputs = self._prepare_cond_inputs(batch_cond_images, cfg_factor=1, seed=seed)
+        return self._generate_text(input_info, batch_cond_images=batch_cond_images, cond_inputs=cond_inputs)
+
+    @torch.no_grad()
     def generate_t2i(self, input_info):
         self._ensure_pipeline_modules()
         prompt = getattr(input_info, "prompt_enhanced", None) or getattr(input_info, "prompt", "")
         image_size = self._resolve_image_size(input_info)
         seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
-        # cot_text = self._generate_cot_text(prompt, image_size)
+        cot_text = self._generate_cot_text(prompt, image_size)
         prepared_inputs = self._prepare_text_to_image_inputs(
             prompt,
             image_size,
             seed,
-            #  cot_text=cot_text
+            cot_text=cot_text,
         )
         latents = self._denoise_latents(prepared_inputs, image_size)
         if not self._is_output_rank():
@@ -1277,27 +1431,30 @@ class HunyuanImage3Runner(DefaultRunner):
         return self._decode_latents(latents, prepared_inputs["generator"])
 
     @torch.no_grad()
-    def generate_i2i(self, input_info):
+    def generate_ti2i(self, input_info):
         self._ensure_pipeline_modules()
         prompt = getattr(input_info, "prompt_enhanced", None) or getattr(input_info, "prompt", "")
         seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
         image_paths = self._split_image_paths(getattr(input_info, "image_path", None) or self.config.get("image_path"))
-        infer_align_image_size = bool(getattr(input_info, "infer_align_image_size", self.config.get("infer_align_image_size", False)))
+        infer_align_image_size = getattr(input_info, "infer_align_image_size", None)
+        if infer_align_image_size is None:
+            infer_align_image_size = self.config.get("infer_align_image_size", False)
+        infer_align_image_size = bool(infer_align_image_size)
 
         batch_cond_images = self._build_batch_cond_images(image_paths, infer_align_image_size)
         image_size = self._resolve_ti2i_image_size(self._resolve_image_size(input_info), batch_cond_images)
 
         text_cond_inputs = self._prepare_cond_inputs(batch_cond_images, cfg_factor=1, seed=seed)
-        # cot_text = self._generate_cot_text(prompt, image_size, batch_cond_images=batch_cond_images, cond_inputs=text_cond_inputs)
+        cot_text = self._generate_cot_text(prompt, image_size, batch_cond_images=batch_cond_images, cond_inputs=text_cond_inputs)
 
         # in default, we enable CFG for i2i/ti2i, but disable CFG if cfg_distilled is True
         do_cfg = bool(self.config.get("enable_cfg", False)) and not bool(self.config.get("cfg_distilled", False))
-        gen_cond_inputs = self._prepare_cond_inputs(batch_cond_images, cfg_factor=2 if do_cfg else 1, seed=seed)
+        gen_cond_inputs = self._repeat_cond_inputs(text_cond_inputs, factor=2 if do_cfg else 1)
         prepared_inputs = self._prepare_text_to_image_inputs(
             prompt,
             image_size,
             seed,
-            # cot_text=cot_text,
+            cot_text=cot_text,
             batch_cond_images=batch_cond_images,
             cond_inputs=gen_cond_inputs,
         )
@@ -1311,18 +1468,37 @@ class HunyuanImage3Runner(DefaultRunner):
             infer_align_image_size=infer_align_image_size,
         )
 
+    def generate_i2i(self, input_info):
+        """Compatibility alias for the pre-TI2I task name."""
+        return self.generate_ti2i(input_info)
+
     def run_pipeline(self, input_info):
         self.input_info = input_info
         task = self.config.get("task")
-        if task == "t2i":
+        if task == "t2t":
+            text = self.generate_t2t(input_info)
+        elif task == "ti2t":
+            text = self.generate_ti2t(input_info)
+        elif task == "t2i":
             images = self.generate_t2i(input_info)
         elif task in ("i2i", "ti2i"):
-            images = self.generate_i2i(input_info)
+            images = self.generate_ti2i(input_info)
         else:
-            raise NotImplementedError("HunyuanImage3 native runner currently supports task=t2i/i2i.")
+            raise NotImplementedError("HunyuanImage3 native runner supports task=t2t/t2i/ti2t/ti2i (i2i is a compatibility alias).")
 
         if not self._is_output_rank():
-            return {"image": None}
+            return {"text": None} if task in ("t2t", "ti2t") else {"image": None}
+
+        if task in ("t2t", "ti2t"):
+            if getattr(input_info, "return_result_tensor", False):
+                return {"text": text}
+            save_result_path = getattr(input_info, "save_result_path", None)
+            if save_result_path:
+                Path(save_result_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(save_result_path).write_text(text, encoding="utf-8")
+                logger.info(f"HunyuanImage3 text saved successfully to: {save_result_path}")
+            return {"text": None}
+
         if getattr(input_info, "return_result_tensor", False):
             return {"image": images}
 
