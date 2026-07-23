@@ -203,6 +203,11 @@ class WanRunner(DisaggMixin, DefaultRunner):
             model = build_wan_model_with_lora(WanModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
         return model
 
+    def _io_load_from_rank0(self):
+        # TP is limited to the DiT. Each rank owns and loads a full copy of
+        # the input encoders and VAE, so their weights must not be broadcast.
+        return self.config.get("load_from_rank0", False) and not self.config.get("tensor_parallel", False)
+
     def load_image_encoder(self):
         image_encoder = None
         if self.config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
@@ -236,7 +241,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 quant_scheme=clip_quant_scheme,
                 cpu_offload=clip_offload,
                 use_31_block=self.config.get("use_31_block", True),
-                load_from_rank0=self.config.get("load_from_rank0", False),
+                load_from_rank0=self._io_load_from_rank0(),
                 dummy_model=self.config.get("dummy_model", False),
             )
 
@@ -276,7 +281,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             t5_quantized=t5_quantized,
             t5_quantized_ckpt=t5_quantized_ckpt,
             quant_scheme=t5_quant_scheme,
-            load_from_rank0=self.config.get("load_from_rank0", False),
+            load_from_rank0=self._io_load_from_rank0(),
             lazy_load=self.config.get("t5_lazy_load", False),
             dummy_model=self.config.get("dummy_model", False),
         )
@@ -307,7 +312,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "parallel": self.get_vae_parallel(),
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
-            "load_from_rank0": self.config.get("load_from_rank0", False),
+            "load_from_rank0": self._io_load_from_rank0(),
             "use_lightvae": self.config.get("use_lightvae", False),
             "dummy_model": self.config.get("dummy_model", False),
             "dtype": GET_DTYPE() if not self.config.get("vae_dtype", None) else self.config["vae_dtype"],
@@ -334,7 +339,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "cpu_offload": vae_offload,
             "use_lightvae": self.config.get("use_lightvae", False),
             "dtype": GET_DTYPE() if not self.config.get("vae_dtype", None) else self.config["vae_dtype"],
-            "load_from_rank0": self.config.get("load_from_rank0", False),
+            "load_from_rank0": self._io_load_from_rank0(),
             "dummy_model": self.config.get("dummy_model", False),
         }
         if self.config.get("use_tae", False):
@@ -848,31 +853,6 @@ class WanRunner(DisaggMixin, DefaultRunner):
         ]
         return latent_shape
 
-    @ProfilingContext4DebugL2("Run Encoders")
-    def _run_input_encoder_local_t2v(self):
-        if self._use_tp_rank0_io():
-            payload = None
-            if self._is_rank0():
-                self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
-                self._load_rank0_text_encoder()
-                text_encoder_output = self.run_text_encoder(self.input_info)
-                self._unload_rank0_text_encoder()
-                payload = {"text_encoder_output": text_encoder_output, "latent_shape": self.input_info.latent_shape}
-            payload = self._broadcast_rank0_payload(payload)
-            self.input_info.latent_shape = payload["latent_shape"]
-            return {"text_encoder_output": payload["text_encoder_output"], "image_encoder_output": None}
-        return super()._run_input_encoder_local_t2v()
-
-    def run_vae_decoder(self, latents):
-        if self._use_tp_rank0_io():
-            images = None
-            if self._is_rank0():
-                images = super().run_vae_decoder(latents)
-            dist.barrier()
-            return images
-        return super().run_vae_decoder(latents)
-
-
 class MultiModelStruct:
     def __init__(self, model_list, config, boundary=0.875, num_train_timesteps=1000):
         self.model = model_list  # [high_noise_model, low_noise_model]
@@ -1117,7 +1097,7 @@ class Wan22DenseRunner(WanRunner):
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "dtype": GET_DTYPE(),
-            "load_from_rank0": self.config.get("load_from_rank0", False),
+            "load_from_rank0": self._io_load_from_rank0(),
             "vae_type": resolved_paths["vae_type"],
             "lightvae_pruning_rate": resolved_paths["lightvae_pruning_rate"],
             "lightvae_encoder_vae_pth": resolved_paths["lightvae_encoder_vae_pth"],
