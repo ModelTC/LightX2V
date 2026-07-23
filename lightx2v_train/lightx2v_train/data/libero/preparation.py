@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
 from pathlib import Path
 
 import torch
@@ -12,7 +11,7 @@ from loguru import logger
 
 from lightx2v_train.runtime.distributed import barrier, is_main_process
 
-from .dataset import _default_shape_meta
+from .dataset import _resolve_shape_meta
 from .lerobot_dataset import LiberoLeRobotDataset
 from .robot_video_dataset import PROMPT_TEMPLATE
 
@@ -101,7 +100,7 @@ def _aggregate_field_stats(episode_stats):
 
 
 def calculate_dataset_stats(split_config):
-    shape_meta = deepcopy(split_config.get("shape_meta") or _default_shape_meta())
+    shape_meta = _resolve_shape_meta(split_config)
     if len(shape_meta["action"]) != 1 or len(shape_meta["state"]) != 1:
         raise ValueError("Automatic LIBERO stats currently require one action field and one state field.")
 
