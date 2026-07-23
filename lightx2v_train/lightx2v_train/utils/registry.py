@@ -64,6 +64,8 @@ def _ensure_data_registered(data_name):
         return
     if data_name == "image_dataset":
         import lightx2v_train.data.image_dataset  # noqa: F401
+    elif data_name == "libero_fastwam_dataset":
+        import lightx2v_train.data.libero.dataset  # noqa: F401
     elif data_name in {"latent_dataset", "prompt_dataset", "video_dataset"}:
         import lightx2v_train.data.video_dataset  # noqa: F401
 
