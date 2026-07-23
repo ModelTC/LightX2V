@@ -1,4 +1,3 @@
-import functools
 import inspect
 import json
 import math
@@ -11,7 +10,6 @@ import torch
 import torch.distributed as dist
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from loguru import logger
-from torch import nn
 from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
@@ -216,104 +214,6 @@ def get_timestep_embedding(
     return emb
 
 
-class ZEmbedRope(nn.Module):
-    def __init__(self, theta: int, axes_dim: List[int], scale_rope=False):
-        super().__init__()
-        self.theta = theta
-        self.axes_dim = axes_dim
-        pos_index = torch.arange(4096)
-        neg_index = torch.arange(4096).flip(0) * -1 - 1
-        self.pos_freqs = torch.cat(
-            [
-                self.rope_params(pos_index, self.axes_dim[0], self.theta),
-                self.rope_params(pos_index, self.axes_dim[1], self.theta),
-                self.rope_params(pos_index, self.axes_dim[2], self.theta),
-            ],
-            dim=1,
-        )
-        self.neg_freqs = torch.cat(
-            [
-                self.rope_params(neg_index, self.axes_dim[0], self.theta),
-                self.rope_params(neg_index, self.axes_dim[1], self.theta),
-                self.rope_params(neg_index, self.axes_dim[2], self.theta),
-            ],
-            dim=1,
-        )
-        self.rope_cache = {}
-
-        # DO NOT USING REGISTER BUFFER HERE, IT WILL CAUSE COMPLEX NUMBERS LOSE ITS IMAGINARY PART
-        self.scale_rope = scale_rope
-
-    def rope_params(self, index, dim, theta=10000):
-        """
-        Args:
-            index: [0, 1, 2, 3] 1D Tensor representing the position index of the token
-        """
-        assert dim % 2 == 0
-        freqs = torch.outer(index, 1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float32).div(dim)))
-        freqs = torch.polar(torch.ones_like(freqs), freqs)
-        return freqs
-
-    def forward(self, video_fhw, txt_seq_lens, device):
-        """
-        Args: video_fhw: [frame, height, width] a list of 3 integers representing the shape of the video Args:
-        txt_length: [bs] a list of 1 integers representing the length of the text
-        """
-        if self.pos_freqs.device != device:
-            self.pos_freqs = self.pos_freqs.to(device)
-            self.neg_freqs = self.neg_freqs.to(device)
-
-        if isinstance(video_fhw, list):
-            video_fhw = video_fhw[0]
-        if not isinstance(video_fhw, list):
-            video_fhw = [video_fhw]
-
-        vid_freqs = []
-        max_vid_index = 0
-        for idx, fhw in enumerate(video_fhw):
-            frame, height, width = fhw
-            rope_key = f"{idx}_{height}_{width}"
-
-            if not torch.compiler.is_compiling():
-                if rope_key not in self.rope_cache:
-                    self.rope_cache[rope_key] = self._compute_video_freqs(frame, height, width, idx)
-                video_freq = self.rope_cache[rope_key]
-            else:
-                video_freq = self._compute_video_freqs(frame, height, width, idx)
-            video_freq = video_freq.to(device)
-            vid_freqs.append(video_freq)
-
-            if self.scale_rope:
-                max_vid_index = max(height // 2, width // 2, max_vid_index)
-            else:
-                max_vid_index = max(height, width, max_vid_index)
-
-        max_len = txt_seq_lens
-        txt_freqs = self.pos_freqs[max_vid_index : max_vid_index + max_len, ...]
-        vid_freqs = torch.cat(vid_freqs, dim=0)
-
-        return [vid_freqs, txt_freqs]
-
-    @functools.lru_cache(maxsize=None)
-    def _compute_video_freqs(self, frame, height, width, idx=0):
-        seq_lens = frame * height * width
-        freqs_pos = self.pos_freqs.split([x // 2 for x in self.axes_dim], dim=1)
-        freqs_neg = self.neg_freqs.split([x // 2 for x in self.axes_dim], dim=1)
-
-        freqs_frame = freqs_pos[0][idx : idx + frame].view(frame, 1, 1, -1).expand(frame, height, width, -1)
-        if self.scale_rope:
-            freqs_height = torch.cat([freqs_neg[1][-(height - height // 2) :], freqs_pos[1][: height // 2]], dim=0)
-            freqs_height = freqs_height.view(1, height, 1, -1).expand(frame, height, width, -1)
-            freqs_width = torch.cat([freqs_neg[2][-(width - width // 2) :], freqs_pos[2][: width // 2]], dim=0)
-            freqs_width = freqs_width.view(1, 1, width, -1).expand(frame, height, width, -1)
-        else:
-            freqs_height = freqs_pos[1][:height].view(1, height, 1, -1).expand(frame, height, width, -1)
-            freqs_width = freqs_pos[2][:width].view(1, 1, width, -1).expand(frame, height, width, -1)
-
-        freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(seq_lens, -1)
-        return freqs.clone().contiguous()
-
-
 class RopeEmbedder:
     def __init__(
         self,
@@ -374,8 +274,6 @@ class ZImageScheduler(BaseScheduler):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
-        self.pos_embed = ZEmbedRope(theta=10000, axes_dim=[16, 56, 56], scale_rope=True)
-
         # Initialize RopeEmbedder for generating freqs_cis from position IDs (used in pre_infer)
         rope_theta = config.get("rope_theta", 256.0)
         axes_dims = config.get("axes_dims", [32, 48, 48])
@@ -386,6 +284,7 @@ class ZImageScheduler(BaseScheduler):
             axes_lens=axes_lens,
         )
         self.freqs_cis_cache = {}
+        self.rope_request_id = 0
 
     @staticmethod
     def _pack_latents(latents, batch_size, num_channels_latents, height, width):
@@ -409,18 +308,6 @@ class ZImageScheduler(BaseScheduler):
         latents = latents.reshape(batch_size, channels // (2 * 2), 1, height, width)
 
         return latents
-
-    @staticmethod
-    def _prepare_latent_image_ids(batch_size, height, width, device, dtype):
-        latent_image_ids = torch.zeros(height, width, 3)
-
-        latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(height)[:, None]
-        latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(width)[None, :]
-
-        latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
-        latent_image_ids = latent_image_ids.reshape(latent_image_id_height * latent_image_id_width, latent_image_id_channels)
-
-        return latent_image_ids.to(device=device, dtype=dtype)
 
     @staticmethod
     def create_coordinate_grid(size, start=None, device=None):
@@ -492,14 +379,9 @@ class ZImageScheduler(BaseScheduler):
         if len(shape) != 4:
             raise ValueError(f"target_shape must be 4D [B, C, H, W], got {len(shape)}D: {shape}")
 
-        batch_size, num_channels, height, width = shape
-
         latents = randn_tensor(shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
 
-        latent_image_ids = self._prepare_latent_image_ids(1, height // 2, width // 2, AI_DEVICE, self.dtype)
-
         self.latents = latents
-        self.latent_image_ids = latent_image_ids
         self.noise_pred = None
 
     def generate_freqs_cis_from_position_ids(self, position_ids: torch.Tensor, device: torch.device = None) -> torch.Tensor:
@@ -507,9 +389,7 @@ class ZImageScheduler(BaseScheduler):
             device = position_ids.device
 
         position_ids = position_ids.to(device)
-        rope_type = self.config.get("rope_type", "flashinfer")
         cache_key = (
-            rope_type,
             str(device),
             str(position_ids.dtype),
             tuple(position_ids.shape),
@@ -520,11 +400,7 @@ class ZImageScheduler(BaseScheduler):
         if cached_freqs_cis is not None:
             return cached_freqs_cis
 
-        if rope_type in {"flashinfer", "torch"}:
-            freqs_cos, freqs_sin = self.rope_embedder(position_ids, return_real=True)
-            freqs_cis = torch.cat([freqs_cos, freqs_sin], dim=-1).float()
-        else:
-            freqs_cis = self.rope_embedder(position_ids)
+        freqs_cis = self.rope_embedder(position_ids)
 
         self.freqs_cis_cache[cache_key] = freqs_cis
         return freqs_cis
@@ -564,7 +440,9 @@ class ZImageScheduler(BaseScheduler):
         self.num_warmup_steps = num_warmup_steps
 
     def prepare(self, input_info):
+        self.rope_request_id += 1
         self.freqs_cis_cache = {}
+
         if self.generator is None:
             self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
         else:
@@ -574,42 +452,6 @@ class ZImageScheduler(BaseScheduler):
         strength = self._get_i2i_denoise_strength(input_info)
         if self.config["task"] == "i2i" and strength is not None:
             self.prepare_i2i_denoise_strength_latents(input_info)
-
-        self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
-
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            cos_half_img = self.image_rotary_emb[0].real.contiguous()
-            sin_half_img = self.image_rotary_emb[0].imag.contiguous()
-            cos_half_txt = self.image_rotary_emb[1].real.contiguous()
-            sin_half_txt = self.image_rotary_emb[1].imag.contiguous()
-            self.image_rotary_emb[0] = torch.cat([cos_half_img, sin_half_img], dim=-1)
-            self.image_rotary_emb[1] = torch.cat([cos_half_txt, sin_half_txt], dim=-1)
-        if self.seq_p_group is not None:
-            world_size = dist.get_world_size(self.seq_p_group)
-            cur_rank = dist.get_rank(self.seq_p_group)
-            seqlen = self.image_rotary_emb[0].shape[0]
-            padding_size = (world_size - (seqlen % world_size)) % world_size
-            if padding_size > 0:
-                self.image_rotary_emb[0] = F.pad(self.image_rotary_emb[0], (0, 0, 0, padding_size))
-            self.image_rotary_emb[0] = torch.chunk(self.image_rotary_emb[0], world_size, dim=0)[cur_rank]
-
-        if self.config["enable_cfg"]:
-            self.negative_image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[1], device=AI_DEVICE)
-            if self.config.get("rope_type", "flashinfer") == "flashinfer":
-                cos_half_img = self.negative_image_rotary_emb[0].real.contiguous()
-                sin_half_img = self.negative_image_rotary_emb[0].imag.contiguous()
-                cos_half_txt = self.negative_image_rotary_emb[1].real.contiguous()
-                sin_half_txt = self.negative_image_rotary_emb[1].imag.contiguous()
-                self.negative_image_rotary_emb[0] = torch.cat([cos_half_img, sin_half_img], dim=-1)
-                self.negative_image_rotary_emb[1] = torch.cat([cos_half_txt, sin_half_txt], dim=-1)
-            if self.seq_p_group is not None:
-                world_size = dist.get_world_size(self.seq_p_group)
-                cur_rank = dist.get_rank(self.seq_p_group)
-                seqlen = self.negative_image_rotary_emb[0].shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    self.negative_image_rotary_emb[0] = F.pad(self.negative_image_rotary_emb[0], (0, 0, 0, padding_size))
-                self.negative_image_rotary_emb[0] = torch.chunk(self.negative_image_rotary_emb[0], world_size, dim=0)[cur_rank]
 
         if self.zero_cond_t:
             self.modulate_index = torch.tensor([[0] * prod(sample[0]) + [1] * sum([prod(s) for s in sample[1:]]) for sample in self.input_info.image_shapes], device=AI_DEVICE, dtype=torch.int)

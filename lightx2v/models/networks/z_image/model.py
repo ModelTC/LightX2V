@@ -41,6 +41,7 @@ class ZImageTransformerModel(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
+        self.pre_infer.set_rope(self.transformer_weights.blocks[0].compute_phases[1].rope)
         if hasattr(self.transformer_infer, "offload_manager"):
             self._init_offload_manager()
 
@@ -82,10 +83,8 @@ class ZImageTransformerModel(BaseTransformerModel):
         padding_size = (world_size - (seqlen % world_size)) % world_size
         if padding_size > 0:
             pre_infer_out.hidden_states = F.pad(pre_infer_out.hidden_states, (0, 0, 0, padding_size))
-            pre_infer_out.x_freqs_cis = F.pad(pre_infer_out.x_freqs_cis, (0, 0, 0, padding_size))
 
         pre_infer_out.hidden_states = torch.chunk(pre_infer_out.hidden_states, world_size, dim=0)[cur_rank]
-        pre_infer_out.x_freqs_cis = torch.chunk(pre_infer_out.x_freqs_cis, world_size, dim=0)[cur_rank]
         pre_infer_out.x_item_seqlens = [pre_infer_out.hidden_states.shape[0]]
         return pre_infer_out
 

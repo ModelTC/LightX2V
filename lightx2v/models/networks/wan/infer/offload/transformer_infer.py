@@ -16,6 +16,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                 self.infer_func = self.infer_with_blocks_offload
             elif offload_granularity == "phase":
                 self.infer_func = self.infer_with_phases_offload
+                self.compiled_phases = {}
                 self.phase_params = {
                     "shift_msa": None,
                     "scale_msa": None,
@@ -54,10 +55,10 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             if AI_DEVICE == "xpu":
                 # XPU streams do not guarantee cross-stream memory visibility even
                 # after a device-wide sync, so run compute on the default stream.
-                x = self.infer_block(self.offload_manager.cuda_buffers[0], x, pre_infer_out)
+                x = self.run_block(block_idx, self.offload_manager.cuda_buffers[0], x, pre_infer_out)
             else:
                 with torch_device_module.stream(self.offload_manager.compute_stream):
-                    x = self.infer_block(self.offload_manager.cuda_buffers[0], x, pre_infer_out)
+                    x = self.run_block(block_idx, self.offload_manager.cuda_buffers[0], x, pre_infer_out)
 
             self.offload_manager.swap_blocks()
 
@@ -104,14 +105,37 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             if AI_DEVICE == "xpu":
                 # XPU streams do not guarantee cross-stream memory visibility even
                 # after a device-wide sync, so run compute on the default stream.
-                x = self.infer_phase(phase_idx, self.offload_manager.cuda_buffers[phase_idx], x, pre_infer_out)
+                x = self.run_phase(block_idx, phase_idx, self.offload_manager.cuda_buffers[phase_idx], x, pre_infer_out)
             else:
                 with torch_device_module.stream(self.offload_manager.compute_stream):
-                    x = self.infer_phase(phase_idx, self.offload_manager.cuda_buffers[phase_idx], x, pre_infer_out)
+                    x = self.run_phase(block_idx, phase_idx, self.offload_manager.cuda_buffers[phase_idx], x, pre_infer_out)
 
             self.offload_manager.swap_phases()
 
         return x
+
+    def get_compiled_phase(self, block_idx, phase_idx, phase):
+        key = (block_idx, phase_idx)
+        cached = self.compiled_phases.get(key)
+        if cached is not None and cached[0] is phase:
+            return cached[1]
+
+        # Keep distinct code objects so different phase types do not share guards.
+        phase_runner = (
+            lambda x, pre: self.infer_phase(0, phase, x, pre),
+            lambda x, pre: self.infer_phase(1, phase, x, pre),
+            lambda x, pre: self.infer_phase(2, phase, x, pre),
+        )[phase_idx]
+
+        compiled = torch.compile(phase_runner, dynamic=None)
+        self.compiled_phases[key] = (phase, compiled)
+        return compiled
+
+    def run_phase(self, block_idx, phase_idx, phase, x, pre_infer_out):
+        self.block_idx = block_idx
+        if self.use_compile and phase_idx < 3:
+            return self.get_compiled_phase(block_idx, phase_idx, phase)(x, pre_infer_out)
+        return self.infer_phase(phase_idx, phase, x, pre_infer_out)
 
     def infer_phase(self, cur_phase_idx, cur_phase, x, pre_infer_out):
         if cur_phase_idx == 0:

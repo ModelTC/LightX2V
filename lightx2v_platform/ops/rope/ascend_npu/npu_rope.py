@@ -36,8 +36,10 @@ def GET_SENSITIVE_DTYPE():
 
 @PLATFORM_ROPE_REGISTER("npu_rope")
 class NpuRope(RopeTemplate):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, layout="interleaved", compute_dtype=torch.float32):
+        super().__init__(layout=layout, compute_dtype=compute_dtype)
+        if layout != "interleaved":
+            raise ValueError("NpuRope only supports interleaved layout.")
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
     def _apply_rope_fp32(self, xq, xk, cos_sin_cache):

@@ -12,7 +12,7 @@
     "enable_cfg": true,
     "cpu_offload": false,
     "modulate_type": "torch",
-    "rope_type": "torch",
+    "rope_type": "torch_real_rope",
     "layer_norm_type": "torch",
     "rms_norm_type": "torch"
 }

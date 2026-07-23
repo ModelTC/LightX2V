@@ -3,8 +3,6 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 
-from .utils import apply_longcat_rope_with_flashinfer, apply_longcat_rope_with_torch
-
 
 class LongCatImageTransformerInfer(BaseTransformerInfer):
     """Transformer inference for LongCat Image model.
@@ -28,14 +26,6 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
             self.seq_p_fp8_comm = False
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
-
-        # RoPE function selection
-        rope_funcs = {
-            "flashinfer": apply_longcat_rope_with_flashinfer,
-            "torch": apply_longcat_rope_with_torch,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        self.apply_rope_func = rope_funcs.get(rope_type, apply_longcat_rope_with_torch)
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -79,6 +69,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states,
         temb,
         image_rotary_emb,
+        image_rotary_positions,
     ):
         """Inference for a single double-stream transformer block.
 
@@ -141,7 +132,8 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         value = torch.cat([txt_value, img_value], dim=0)
 
         # Apply rotary embedding: [L, H, D]
-        query, key = self.apply_rope_func(query, key, image_rotary_emb)
+        rope_kwargs = {} if image_rotary_positions is None else {"positions": image_rotary_positions}
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb, **rope_kwargs)
 
         # Calculate cu_seqlens for flash attention (batch_size=1)
         total_len = query.shape[0]
@@ -220,6 +212,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states,
         temb,
         image_rotary_emb,
+        image_rotary_positions,
     ):
         """Inference for a single single-stream transformer block.
 
@@ -268,7 +261,8 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         key = block_weights.norm_k.apply(key)
 
         # Apply rotary embedding: [L, H, D]
-        query, key = self.apply_rope_func(query, key, image_rotary_emb)
+        rope_kwargs = {} if image_rotary_positions is None else {"positions": image_rotary_positions}
+        query, key = block_weights.rope.apply(query, key, image_rotary_emb, **rope_kwargs)
 
         # Calculate cu_seqlens for flash attention (batch_size=1)
         total_len = query.shape[0]
@@ -333,6 +327,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         temb = pre_infer_out.temb
         image_rotary_emb = pre_infer_out.image_rotary_emb
+        image_rotary_positions = pre_infer_out.image_rotary_positions
 
         # For I2I task: concatenate output latents with input image latents
         output_seq_len = None
@@ -348,6 +343,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
                 encoder_hidden_states,
                 temb,
                 image_rotary_emb,
+                image_rotary_positions,
             )
 
         # Process single-stream blocks
@@ -358,6 +354,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
                 encoder_hidden_states,
                 temb,
                 image_rotary_emb,
+                image_rotary_positions,
             )
 
         # For I2I task: only return output image latents (not input image latents)

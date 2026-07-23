@@ -1,10 +1,12 @@
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import rearrange
 
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import GET_DTYPE
+
+from .rope import RotaryPositionalEmbedding1D
 
 
 def linear_interpolation(features, seq_len):
@@ -13,32 +15,11 @@ def linear_interpolation(features, seq_len):
     return output_features.transpose(1, 2)
 
 
-def rotate_half(x):
-    x = rearrange(x, "... (d r) -> ... d r", r=2)
-    x1, x2 = x.unbind(dim=-1)
-    return rearrange(torch.stack((-x2, x1), dim=-1), "... d r -> ... (d r)")
-
-
 def normalize_and_scale(column, source_range, target_range, epsilon=1e-8):
     source_min, source_max = source_range
     new_min, new_max = target_range
     normalized = (column - source_min) / (source_max - source_min + epsilon)
     return normalized * (new_max - new_min) + new_min
-
-
-class RotaryPositionalEmbedding1D:
-    def __init__(self, head_dim):
-        self.head_dim = head_dim
-        self.base = 10000
-
-    def __call__(self, x, pos_indices):
-        freqs = 1.0 / (self.base ** (torch.arange(0, self.head_dim, 2, device=pos_indices.device).float() / self.head_dim))
-        freqs = torch.einsum("..., f -> ... f", pos_indices.float(), freqs)
-        freqs = repeat(freqs, "... n -> ... (n r)", r=2)
-        cos = rearrange(freqs.cos().float(), "n d -> 1 1 n d").to(x.device)
-        sin = rearrange(freqs.sin().float(), "n d -> 1 1 n d").to(x.device)
-        x_float = x.float()
-        return (x_float * cos + rotate_half(x_float) * sin).type_as(x)
 
 
 class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
@@ -120,7 +101,10 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
         k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
         v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
-        q, k = self.apply_rope_func(q, k, cos_sin)
+        if self.rope_positions is None:
+            q, k = phase.rope.apply(q, k, cos_sin)
+        else:
+            q, k = phase.rope.apply(q, k, cos_sin, positions=self.rope_positions)
 
         x_ref_attn_map = None
         ref_target_masks = pre_infer_out.adapter_args.get("ref_target_masks")
@@ -215,7 +199,15 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         encoder_k, encoder_v = kv.unbind(dim=2)
 
         if human_num > 1:
-            q, encoder_k = self._apply_multi_human_audio_rope(q, encoder_k, x_ref_attn_map, grid_t, human_num)
+            q, encoder_k = self._apply_multi_human_audio_rope(
+                phase,
+                q,
+                encoder_k,
+                x_ref_attn_map,
+                grid_t,
+                human_num,
+                pre_infer_out,
+            )
 
         if self.audio_attn_cu_seqlens_q is None:
             self.audio_attn_cu_seqlens_q = torch.arange(0, (grid_t + 1) * spatial_tokens, spatial_tokens, dtype=torch.int32)
@@ -242,7 +234,16 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         ends = torch.linspace(h1[1], h2[1], human_num, dtype=dtype, device=device)
         return torch.stack([starts, ends], dim=1)
 
-    def _apply_multi_human_audio_rope(self, q, encoder_k, x_ref_attn_map, grid_t, human_num):
+    def _apply_multi_human_audio_rope(
+        self,
+        phase,
+        q,
+        encoder_k,
+        x_ref_attn_map,
+        grid_t,
+        human_num,
+        pre_infer_out,
+    ):
         if x_ref_attn_map is None:
             return q, encoder_k
 
@@ -250,7 +251,9 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         if human_map_count <= 0:
             return q, encoder_k
 
-        rope_ranges = self._multi_human_rope_ranges(human_map_count, x_ref_attn_map.dtype, x_ref_attn_map.device)
+        rope_ranges = pre_infer_out.adapter_args.get("audio_rope_ranges")
+        if rope_ranges is None:
+            rope_ranges = self._multi_human_rope_ranges(human_map_count, x_ref_attn_map.dtype, x_ref_attn_map.device)
         human_positions = []
         for idx in range(human_map_count):
             human_map = x_ref_attn_map[idx]
@@ -276,19 +279,21 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         normalized_pos = normalized_map[range(x_ref_attn_map.size(1)), max_indices]
 
         q_rope = rearrange(q, "t s h d -> 1 h (t s) d")
-        q_rope = self.rope_1d(q_rope, normalized_pos)
+        q_rope = self.rope_1d(phase.rope_1d, q_rope, normalized_pos)
         q = rearrange(q_rope, "1 h (t s) d -> t s h d", t=grid_t)
 
-        audio_tokens = encoder_k.shape[1]
-        per_frame = torch.zeros(audio_tokens, dtype=encoder_k.dtype, device=encoder_k.device)
-        token_edges = torch.linspace(0, audio_tokens, human_map_count + 1, dtype=torch.int64, device=encoder_k.device)
-        rope_centers = rope_ranges.mean(dim=1).to(dtype=encoder_k.dtype, device=encoder_k.device)
-        for idx in range(human_map_count):
-            start = int(token_edges[idx].item())
-            end = int(token_edges[idx + 1].item())
-            per_frame[start:end] = rope_centers[idx]
-        encoder_pos = torch.concat([per_frame] * grid_t, dim=0)
         k_rope = rearrange(encoder_k, "t s h d -> 1 h (t s) d")
-        k_rope = self.rope_1d(k_rope, encoder_pos)
+        encoder_rope = pre_infer_out.adapter_args.get("audio_encoder_rope")
+        if encoder_rope is None:
+            audio_tokens = encoder_k.shape[1]
+            per_frame = torch.zeros(audio_tokens, dtype=encoder_k.dtype, device=encoder_k.device)
+            token_edges = torch.linspace(0, audio_tokens, human_map_count + 1, dtype=torch.int64, device=encoder_k.device)
+            rope_centers = rope_ranges.mean(dim=1).to(dtype=encoder_k.dtype, device=encoder_k.device)
+            for idx in range(human_map_count):
+                per_frame[token_edges[idx] : token_edges[idx + 1]] = rope_centers[idx]
+            encoder_pos = per_frame.repeat(grid_t)
+            k_rope = self.rope_1d(phase.rope_1d, k_rope, encoder_pos)
+        else:
+            k_rope = self.rope_1d.apply_prepared(phase.rope_1d, k_rope, *encoder_rope)
         encoder_k = rearrange(k_rope, "1 h (t s) d -> t s h d", t=grid_t)
         return q, encoder_k

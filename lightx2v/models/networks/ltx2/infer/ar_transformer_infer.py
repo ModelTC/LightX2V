@@ -149,7 +149,6 @@ class LTX2ARTransformerInfer(LTX2TransformerInfer):
                 dtype=self._ar_cache_dtype,
                 device=self._ar_cache_device,
             )
-            print("init")
             cache._init_kv_buffer()
             self._ar_caches[key] = cache
         return cache, spec

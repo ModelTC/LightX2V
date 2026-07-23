@@ -1,6 +1,8 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.wan.weights.transformer_weights import WanCrossAttention, WanFFN, WanSelfAttention
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, TENSOR_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, ROPE_REGISTER, TENSOR_REGISTER
 
 
 class WanInfiniteTalkTransformerWeights(WeightModule):
@@ -184,6 +186,10 @@ class WanInfiniteTalkAudioCrossAttention(WeightModule):
         super().__init__()
         self.block_index = block_index
         self.config = config
+        self.add_module(
+            "rope_1d",
+            ROPE_REGISTER[config.get("audio_rope_type", "torch_real_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
         self.add_module(
             "norm_x",
             LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](

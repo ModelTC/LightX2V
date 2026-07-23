@@ -1,10 +1,9 @@
 import functools
 import math
-from typing import Callable, Tuple
+from typing import Callable
 
 import numpy as np
 import torch
-from einops import rearrange
 
 
 def rmsnorm_torch_naive(x, weight=None, bias=None, eps=1e-6):
@@ -68,55 +67,6 @@ def get_timestep_embedding(
     if embedding_dim % 2 == 1:
         emb = torch.nn.functional.pad(emb, (0, 1, 0, 0))
     return emb
-
-
-def apply_rotary_emb(
-    input_tensor: torch.Tensor,
-    freqs_cis: Tuple[torch.Tensor, torch.Tensor],
-    rope_type: str = "split",
-) -> torch.Tensor:
-    if rope_type == "interleaved":
-        return apply_interleaved_rotary_emb(input_tensor, *freqs_cis)
-    elif rope_type == "split":
-        return apply_split_rotary_emb(input_tensor, *freqs_cis)
-    else:
-        raise ValueError(f"Invalid rope type: {rope_type}")
-
-
-def apply_interleaved_rotary_emb(input_tensor: torch.Tensor, cos_freqs: torch.Tensor, sin_freqs: torch.Tensor) -> torch.Tensor:
-    t_dup = rearrange(input_tensor, "... (d r) -> ... d r", r=2)
-    t1, t2 = t_dup.unbind(dim=-1)
-    t_dup = torch.stack((-t2, t1), dim=-1)
-    input_tensor_rot = rearrange(t_dup, "... d r -> ... (d r)")
-
-    out = input_tensor * cos_freqs + input_tensor_rot * sin_freqs
-
-    return out
-
-
-def apply_split_rotary_emb(input_tensor: torch.Tensor, cos_freqs: torch.Tensor, sin_freqs: torch.Tensor) -> torch.Tensor:
-    needs_reshape = False
-    if input_tensor.ndim != 4 and cos_freqs.ndim == 4:
-        b, h, t, _ = cos_freqs.shape
-        input_tensor = input_tensor.reshape(b, t, h, -1).swapaxes(1, 2)
-        needs_reshape = True
-
-    split_input = rearrange(input_tensor, "... (d r) -> ... d r", d=2)
-    first_half_input = split_input[..., :1, :]
-    second_half_input = split_input[..., 1:, :]
-
-    output = split_input * cos_freqs.unsqueeze(-2)
-    first_half_output = output[..., :1, :]
-    second_half_output = output[..., 1:, :]
-
-    first_half_output.addcmul_(-sin_freqs.unsqueeze(-2), second_half_input)
-    second_half_output.addcmul_(sin_freqs.unsqueeze(-2), first_half_input)
-
-    output = rearrange(output, "... d r -> ... (d r)")
-    if needs_reshape:
-        output = output.swapaxes(1, 2).reshape(b, t, -1)
-
-    return output
 
 
 @functools.lru_cache(maxsize=5)

@@ -13,6 +13,7 @@ class WanPreInfer:
     def __init__(self, config):
         assert (config["dim"] % config["num_heads"]) == 0 and (config["dim"] // config["num_heads"]) % 2 == 0
         self.config = config
+        self.rope = None
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
         self.task = config["task"]
         self.freq_dim = config["freq_dim"]
@@ -28,6 +29,7 @@ class WanPreInfer:
             self.seq_p_group = None
 
         self.cos_sin = None
+        self.rope_positions = None
         self.grid_sizes = (0, 0, 0)  # (t, h, w)
         self.head_size = self.config["dim"] // self.config["num_heads"]
         self.freqs = torch.cat(
@@ -52,6 +54,19 @@ class WanPreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    def set_rope(self, rope):
+        self.rope = rope
+        self.cos_sin = None
+        self.rope_positions = None
+        self.grid_sizes = (0, 0, 0)
+
+    def prepare_rope_cache(self, freqs):
+        if self.rope is None:
+            raise RuntimeError("RoPE must be set before preparing the Wan frequency cache.")
+        freqs = self.rope.prepare_freqs(freqs, rotary_dim=self.head_size)
+        self.rope_positions = self.rope.prepare_positions(freqs)
+        return freqs
+
     def prepare_cos_sin(self, grid_sizes, freqs):
         c = self.head_size // 2
         freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
@@ -65,30 +80,15 @@ class WanPreInfer:
             ],
             dim=-1,
         )
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            cos_sin = cos_sin.reshape(seq_len, -1)
-            # Extract cos and sin parts separately and concatenate
-            cos_half = cos_sin.real.contiguous()
-            sin_half = cos_sin.imag.contiguous()
-            cos_sin = torch.cat([cos_half, sin_half], dim=-1)
-            if self.seq_p_group is not None:
-                world_size = dist.get_world_size(self.seq_p_group)
-                cur_rank = dist.get_rank(self.seq_p_group)
-                seqlen = cos_sin.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
-                cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
-        else:
-            cos_sin = cos_sin.reshape(seq_len, 1, -1)
-            if self.seq_p_group is not None:
-                world_size = dist.get_world_size(self.seq_p_group)
-                cur_rank = dist.get_rank(self.seq_p_group)
-                seqlen = cos_sin.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    cos_sin = F.pad(cos_sin, (0, 0, 0, 0, 0, padding_size))
-                cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
+        cos_sin = cos_sin.reshape(seq_len, 1, -1)
+        if self.seq_p_group is not None:
+            world_size = dist.get_world_size(self.seq_p_group)
+            cur_rank = dist.get_rank(self.seq_p_group)
+            seqlen = cos_sin.shape[0]
+            padding_size = (world_size - (seqlen % world_size)) % world_size
+            if padding_size > 0:
+                cos_sin = F.pad(cos_sin, (0, 0, 0, 0, 0, padding_size))
+            cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
         return cos_sin
 
     @torch.no_grad()
@@ -201,7 +201,7 @@ class WanPreInfer:
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
             freqs = self.freqs.clone()  # self.freqs init param can not be changed
             self.grid_sizes = grid_sizes.tuple
-            self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
+            self.cos_sin = self.prepare_rope_cache(self.prepare_cos_sin(grid_sizes.tuple, freqs))
 
         return WanPreInferModuleOutput(
             embed=embed,
@@ -210,5 +210,6 @@ class WanPreInfer:
             embed0=embed0.squeeze(0),
             context=context,
             cos_sin=self.cos_sin,
+            rope_positions=self.rope_positions,
             adapter_args={"motion_vec": motion_vec},
         )

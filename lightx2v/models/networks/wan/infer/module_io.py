@@ -19,6 +19,7 @@ class WanPreInferModuleOutput:
     context: torch.Tensor
     # 3D RoPE / position related
     cos_sin: Optional[torch.Tensor] = None
+    rope_positions: Optional[torch.Tensor] = None
     valid_token_len: int = 0
     valid_latent_num: int = 0
     # extra

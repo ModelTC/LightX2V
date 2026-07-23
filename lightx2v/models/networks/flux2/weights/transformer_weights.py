@@ -1,7 +1,8 @@
+import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 def _tp_info(config):
@@ -56,6 +57,10 @@ class Flux2DoubleBlockWeights(WeightModule):
         self.layer_norm_type = config.get("layer_norm_type", "torch")
         self.rms_norm_type = config.get("rms_norm_type", "torch")
         self.attn_type = config.get("attn_type", "flash_attn3")
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         p = f"transformer_blocks.{self.block_idx}"
 
@@ -115,6 +120,10 @@ class Flux2SingleBlockWeights(WeightModule):
         self.layer_norm_type = config.get("layer_norm_type", "torch")
         self.rms_norm_type = config.get("rms_norm_type", "torch")
         self.attn_type = config.get("attn_type", "flash_attn3")
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         p = f"single_transformer_blocks.{self.block_idx}"
 

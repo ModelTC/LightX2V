@@ -171,7 +171,7 @@ class LightX2VPipeline:
         boundary_step_index=2,
         denoising_step_list=[1000, 750, 500, 250],
         config_json=None,
-        rope_type="torch",
+        rope_type="torch_complex_rope",
         resize_mode=None,
         audio_fps=24000,
         double_precision_rope=True,

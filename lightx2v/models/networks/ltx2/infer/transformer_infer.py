@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 from lightx2v.models.networks.ltx2.infer.module_io import LTX2PreInferModuleOutput
 from lightx2v.models.networks.ltx2.infer.triton_ops import fuse_scale_shift_kernel, fused_rmsnorm_modulate
-from lightx2v.models.networks.ltx2.infer.utils import apply_rotary_emb, modulate_torch_naive, modulate_with_rmsnorm_torch_naive, rmsnorm_torch_naive
+from lightx2v.models.networks.ltx2.infer.utils import modulate_torch_naive, modulate_with_rmsnorm_torch_naive, rmsnorm_torch_naive
 from lightx2v.models.networks.wan.infer.triton_ops import norm_infer
 
 
@@ -35,7 +35,6 @@ class LTX2TransformerInfer:
             config: Model configuration dictionary
         """
         self.config = config
-        self.rope_type = config["rope_type"]
         self.blocks_num = config.get("num_layers", 48)
         self.v_num_heads = config.get("num_attention_heads", 32)
         self.v_head_dim = config.get("attention_head_dim", 128)
@@ -74,6 +73,15 @@ class LTX2TransformerInfer:
             self.modulate_with_rmsnorm_func = modulate_with_rmsnorm_torch_naive
         self.reset_infer_states()
         self.reset_guidance_perturbation()
+
+    def _apply_rope(self, rope, tensor, freqs):
+        cos, _ = freqs
+        if tensor.ndim != 4 and cos.ndim == 4:
+            batch, heads, tokens, _ = cos.shape
+            tensor = tensor.reshape(batch, tokens, heads, -1).swapaxes(1, 2)
+            output = rope.apply_single(tensor, freqs)
+            return output.swapaxes(1, 2).reshape(batch, tokens, -1)
+        return rope.apply_single(tensor, freqs)
 
     def set_scheduler(self, scheduler):
         """Set the scheduler for inference."""
@@ -266,8 +274,8 @@ class LTX2TransformerInfer:
         q = attn_phase.q_norm.apply(q)
         k = attn_phase.k_norm.apply(k)
         if pe is not None:
-            q = apply_rotary_emb(q, pe, self.rope_type)
-            k = apply_rotary_emb(k, pe if k_pe is None else k_pe, self.rope_type)
+            q = self._apply_rope(attn_phase.rope, q, pe)
+            k = self._apply_rope(attn_phase.rope, k, pe if k_pe is None else k_pe)
 
         q = q.view(-1, num_heads_effective, head_dim)
         k = k.view(-1, num_heads_effective, head_dim)

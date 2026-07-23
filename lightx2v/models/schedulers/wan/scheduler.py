@@ -28,6 +28,7 @@ class WanScheduler(BaseScheduler):
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.caching_records_2 = [True] * self.config["infer_steps"]
         self.head_size = self.config["dim"] // self.config["num_heads"]
+        self.rope_request_id = 0
 
     def refresh_from_config(self, config):
         self.config = config
@@ -53,6 +54,7 @@ class WanScheduler(BaseScheduler):
         return model_cls in {"wan2.2", "wan2.2_matrix_game3"}
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
+        self.rope_request_id += 1
         if self._uses_conditioned_latent_prefix():
             self.vae_encoder_out = image_encoder_output["vae_encoder_out"] if image_encoder_output is not None else None
 

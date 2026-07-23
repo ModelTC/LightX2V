@@ -1,4 +1,3 @@
-import functools
 import inspect
 import json
 import math
@@ -232,10 +231,14 @@ class QwenEmbedRope(nn.Module):
             ],
             dim=1,
         )
-        self.rope_cache = {}
+        self.begin_request()
 
         # DO NOT USING REGISTER BUFFER HERE, IT WILL CAUSE COMPLEX NUMBERS LOSE ITS IMAGINARY PART
         self.scale_rope = scale_rope
+
+    def begin_request(self):
+        self._request_video_cache_key = None
+        self._request_video_cache = None
 
     def rope_params(self, index, dim, theta=10000):
         """
@@ -261,33 +264,30 @@ class QwenEmbedRope(nn.Module):
         if not isinstance(video_fhw, list):
             video_fhw = [video_fhw]
 
-        vid_freqs = []
-        max_vid_index = 0
-        for idx, fhw in enumerate(video_fhw):
-            frame, height, width = fhw
-            rope_key = f"{idx}_{height}_{width}"
+        normalized_video_fhw = tuple(tuple(int(value) for value in fhw) for fhw in video_fhw)
+        device_key = (self.pos_freqs.device.type, self.pos_freqs.device.index)
+        cache_key = (normalized_video_fhw, device_key)
+        if self._request_video_cache_key != cache_key:
+            vid_freqs = []
+            max_vid_index = 0
+            for idx, (frame, height, width) in enumerate(normalized_video_fhw):
+                vid_freqs.append(self._compute_video_freqs(frame, height, width, idx))
 
-            if not torch.compiler.is_compiling():
-                if rope_key not in self.rope_cache:
-                    self.rope_cache[rope_key] = self._compute_video_freqs(frame, height, width, idx)
-                video_freq = self.rope_cache[rope_key]
-            else:
-                video_freq = self._compute_video_freqs(frame, height, width, idx)
-            video_freq = video_freq.to(device)
-            vid_freqs.append(video_freq)
+                if self.scale_rope:
+                    max_vid_index = max(height // 2, width // 2, max_vid_index)
+                else:
+                    max_vid_index = max(height, width, max_vid_index)
 
-            if self.scale_rope:
-                max_vid_index = max(height // 2, width // 2, max_vid_index)
-            else:
-                max_vid_index = max(height, width, max_vid_index)
+            self._request_video_cache_key = cache_key
+            self._request_video_cache = (torch.cat(vid_freqs, dim=0), max_vid_index)
+
+        vid_freqs, max_vid_index = self._request_video_cache
 
         max_len = txt_seq_lens
         txt_freqs = self.pos_freqs[max_vid_index : max_vid_index + max_len, ...]
-        vid_freqs = torch.cat(vid_freqs, dim=0)
 
         return [vid_freqs, txt_freqs]
 
-    @functools.lru_cache(maxsize=None)
     def _compute_video_freqs(self, frame, height, width, idx=0):
         seq_lens = frame * height * width
         freqs_pos = self.pos_freqs.split([x // 2 for x in self.axes_dim], dim=1)
@@ -332,6 +332,11 @@ class QwenEmbedLayer3DRope(nn.Module):
         )
 
         self.scale_rope = scale_rope
+        self.begin_request()
+
+    def begin_request(self):
+        self._request_video_cache_key = None
+        self._request_video_cache = None
 
     def rope_params(self, index, dim, theta=10000):
         """
@@ -357,33 +362,37 @@ class QwenEmbedLayer3DRope(nn.Module):
         if not isinstance(video_fhw, list):
             video_fhw = [video_fhw]
 
-        vid_freqs = []
-        max_vid_index = 0
-        layer_num = len(video_fhw) - 1
-        for idx, fhw in enumerate(video_fhw):
-            frame, height, width = fhw
-            if idx != layer_num:
-                video_freq = self._compute_video_freqs(frame, height, width, idx)
-            else:
-                ### For the condition image, we set the layer index to -1
-                video_freq = self._compute_condition_freqs(frame, height, width)
-            video_freq = video_freq.to(device)
-            vid_freqs.append(video_freq)
+        normalized_video_fhw = tuple(tuple(int(value) for value in fhw) for fhw in video_fhw)
+        device_key = (self.pos_freqs.device.type, self.pos_freqs.device.index)
+        cache_key = (normalized_video_fhw, device_key)
+        if self._request_video_cache_key != cache_key:
+            vid_freqs = []
+            max_vid_index = 0
+            layer_num = len(normalized_video_fhw) - 1
+            for idx, (frame, height, width) in enumerate(normalized_video_fhw):
+                if idx != layer_num:
+                    video_freq = self._compute_video_freqs(frame, height, width, idx)
+                else:
+                    ### For the condition image, we set the layer index to -1
+                    video_freq = self._compute_condition_freqs(frame, height, width)
+                vid_freqs.append(video_freq)
 
-            if self.scale_rope:
-                max_vid_index = max(height // 2, width // 2, max_vid_index)
-            else:
-                max_vid_index = max(height, width, max_vid_index)
+                if self.scale_rope:
+                    max_vid_index = max(height // 2, width // 2, max_vid_index)
+                else:
+                    max_vid_index = max(height, width, max_vid_index)
 
-        max_vid_index = max(max_vid_index, layer_num)
+            max_vid_index = max(max_vid_index, layer_num)
+            self._request_video_cache_key = cache_key
+            self._request_video_cache = (torch.cat(vid_freqs, dim=0), max_vid_index)
+
+        vid_freqs, max_vid_index = self._request_video_cache
 
         max_len = txt_seq_lens
         txt_freqs = self.pos_freqs[max_vid_index : max_vid_index + max_len, ...]
-        vid_freqs = torch.cat(vid_freqs, dim=0)
 
         return vid_freqs, txt_freqs
 
-    @functools.lru_cache(maxsize=None)
     def _compute_video_freqs(self, frame, height, width, idx=0):
         seq_lens = frame * height * width
         freqs_pos = self.pos_freqs.split([x // 2 for x in self.axes_dim], dim=1)
@@ -402,7 +411,6 @@ class QwenEmbedLayer3DRope(nn.Module):
         freqs = torch.cat([freqs_frame, freqs_height, freqs_width], dim=-1).reshape(seq_lens, -1)
         return freqs.clone().contiguous()
 
-    @functools.lru_cache(maxsize=None)
     def _compute_condition_freqs(self, frame, height, width):
         seq_lens = frame * height * width
         freqs_pos = self.pos_freqs.split([x // 2 for x in self.axes_dim], dim=1)
@@ -436,6 +444,7 @@ class QwenImageScheduler(BaseScheduler):
         self.dtype = torch.bfloat16
         self.sample_guide_scale = self.config.get("sample_guide_scale", None)
         self.zero_cond_t = config.get("zero_cond_t", False)
+        self.rope_request_id = 0
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
@@ -653,6 +662,9 @@ class QwenImageScheduler(BaseScheduler):
         self.num_warmup_steps = num_warmup_steps
 
     def prepare(self, input_info):
+        self.rope_request_id += 1
+        self.pos_embed.begin_request()
+
         if self.generator is None:
             if self.config["task"] == "i2i":
                 self.generator = torch.Generator().manual_seed(input_info.seed)
@@ -666,40 +678,28 @@ class QwenImageScheduler(BaseScheduler):
         if self.config["task"] == "i2i" and strength is not None:
             self.prepare_i2i_denoise_strength_latents(input_info)
 
-        self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            cos_half_img = self.image_rotary_emb[0].real.contiguous()
-            sin_half_img = self.image_rotary_emb[0].imag.contiguous()
-            cos_half_txt = self.image_rotary_emb[1].real.contiguous()
-            sin_half_txt = self.image_rotary_emb[1].imag.contiguous()
-            self.image_rotary_emb[0] = torch.cat([cos_half_img, sin_half_img], dim=-1)
-            self.image_rotary_emb[1] = torch.cat([cos_half_txt, sin_half_txt], dim=-1)
+        image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
+        shared_img_freqs = image_rotary_emb[0]
         if self.seq_p_group is not None:
             world_size = dist.get_world_size(self.seq_p_group)
             cur_rank = dist.get_rank(self.seq_p_group)
-            seqlen = self.image_rotary_emb[0].shape[0]
+            seqlen = shared_img_freqs.shape[0]
             padding_size = (world_size - (seqlen % world_size)) % world_size
             if padding_size > 0:
-                self.image_rotary_emb[0] = F.pad(self.image_rotary_emb[0], (0, 0, 0, padding_size))
-            self.image_rotary_emb[0] = torch.chunk(self.image_rotary_emb[0], world_size, dim=0)[cur_rank]
+                shared_img_freqs = F.pad(shared_img_freqs, (0, 0, 0, padding_size))
+            shared_img_freqs = torch.chunk(shared_img_freqs, world_size, dim=0)[cur_rank]
+
+        if isinstance(image_rotary_emb, list):
+            self.image_rotary_emb = [shared_img_freqs, image_rotary_emb[1]]
+        else:
+            self.image_rotary_emb = (shared_img_freqs, image_rotary_emb[1])
 
         if self.config["enable_cfg"]:
-            self.negative_image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[1], device=AI_DEVICE)
-            if self.config.get("rope_type", "flashinfer") == "flashinfer":
-                cos_half_img = self.negative_image_rotary_emb[0].real.contiguous()
-                sin_half_img = self.negative_image_rotary_emb[0].imag.contiguous()
-                cos_half_txt = self.negative_image_rotary_emb[1].real.contiguous()
-                sin_half_txt = self.negative_image_rotary_emb[1].imag.contiguous()
-                self.negative_image_rotary_emb[0] = torch.cat([cos_half_img, sin_half_img], dim=-1)
-                self.negative_image_rotary_emb[1] = torch.cat([cos_half_txt, sin_half_txt], dim=-1)
-            if self.seq_p_group is not None:
-                world_size = dist.get_world_size(self.seq_p_group)
-                cur_rank = dist.get_rank(self.seq_p_group)
-                seqlen = self.negative_image_rotary_emb[0].shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    self.negative_image_rotary_emb[0] = F.pad(self.negative_image_rotary_emb[0], (0, 0, 0, padding_size))
-                self.negative_image_rotary_emb[0] = torch.chunk(self.negative_image_rotary_emb[0], world_size, dim=0)[cur_rank]
+            negative_image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[1], device=AI_DEVICE)
+            if isinstance(negative_image_rotary_emb, list):
+                self.negative_image_rotary_emb = [shared_img_freqs, negative_image_rotary_emb[1]]
+            else:
+                self.negative_image_rotary_emb = (shared_img_freqs, negative_image_rotary_emb[1])
 
         if self.zero_cond_t:
             self.modulate_index = torch.tensor([[0] * prod(sample[0]) + [1] * sum([prod(s) for s in sample[1:]]) for sample in self.input_info.image_shapes], device=AI_DEVICE, dtype=torch.int)

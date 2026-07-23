@@ -8,7 +8,7 @@
     "enable_cfg": false,
     "patch_size": 2,
     "tokenizer_max_length": 512,
-    "rope_type": "flashinfer",
+    "rope_type": "flashinfer_rope",
     "fls": {
         "enable": true,
         "fovea_strength": 10,
