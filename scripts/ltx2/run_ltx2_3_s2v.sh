@@ -2,9 +2,9 @@
 
 # set path and first
 # The model_pathpoints to LTX-2, while the config includes the weights for LTX-2.3
-lightx2v_path=/path/to/LightX2V
-model_path=Lightricks/LTX-2
-AUDIO_PATH=
+lightx2v_path=/data/wushuo1/LightX2V
+model_path=/data/wushuo1/models/LTX-2
+AUDIO_PATH=/data/wushuo1/LightX2V/assets/inputs/audio/seko_input.mp3
 
 export CUDA_VISIBLE_DEVICES=0
 
