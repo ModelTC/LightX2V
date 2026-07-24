@@ -6,6 +6,7 @@ class WanSchedulerCaching(WanScheduler):
         super().__init__(config)
 
     def clear(self):
+        super().clear()
         self.transformer_infer.clear()
 
 

@@ -76,6 +76,7 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
 class WanRunner(DisaggMixin, DefaultRunner):
     _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
     _WARMUP_TASKS = ("t2v", "i2v", "flf2v")
+    _SUPPORTS_GENERIC_WARMUP = True
 
     def __init__(self, config):
         super().__init__(config)
@@ -86,20 +87,24 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
+        if not self.supports_generic_warmup():
+            logger.warning(f"Generic Wan warmup is not implemented for {type(self).__name__}")
+            return
         if self.config.get("task") not in self._WARMUP_TASKS:
             logger.warning(f"Warmup is not implemented for {self.config.get('task')}")
             return
 
-        if not self.config.get("lazy_load", False):
-            return self._run_warmup()
-
-        # Lazy-load warmup.
-        try:
-            self.model = self.load_transformer()
-            self.model.set_scheduler(self.scheduler)
+        if self.config.get("lazy_load", False):
+            try:
+                self.model = self.load_transformer()
+                self.model.set_scheduler(self.scheduler)
+                self._run_warmup()
+            finally:
+                self.clean_lazy_load_warmup()
+        else:
             self._run_warmup()
-        finally:
-            self.clean_lazy_load_warmup()
+
+        self._maybe_freeze_gc()
 
     def _run_warmup(self):
         input_info = T2VInputInfo(prompt="warmup", prompt_enhanced="warmup")
@@ -111,17 +116,22 @@ class WanRunner(DisaggMixin, DefaultRunner):
         try:
             for height, width in self._WARMUP_RESOLUTIONS:
                 latent_shape = self.get_warmup_latent_shape(height, width)
-                inputs["image_encoder_output"] = self.get_warmup_image_encoder_output(latent_shape)
                 logger.info(f"Warmup: {height}x{width}")
                 try:
+                    inputs["image_encoder_output"] = self.get_warmup_image_encoder_output(latent_shape)
                     scheduler.generator = None
                     scheduler.prepare(seed=input_info.seed, latent_shape=latent_shape, image_encoder_output=inputs["image_encoder_output"])
                     if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
                         inputs["image_encoder_output"]["vae_encoder_out"] = None
                     try:
+                        previous_step_index = None
                         for step_index in self.get_warmup_step_indices(scheduler):
+                            if previous_step_index is not None and step_index != previous_step_index + 1:
+                                scheduler.reset(seed=input_info.seed, latent_shape=latent_shape, step_index=step_index)
                             scheduler.step_pre(step_index=step_index)
                             self.model.infer(inputs)
+                            scheduler.step_post()
+                            previous_step_index = step_index
                     finally:
                         if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
                             for model in filter(None, self.get_warmup_models()):
@@ -135,9 +145,12 @@ class WanRunner(DisaggMixin, DefaultRunner):
             scheduler.generator = original_generator
             scheduler.sample_guide_scale = original_guide_scale
             del inputs
-            self._maybe_freeze_gc()
 
         logger.info("Warmup completed")
+
+    def supports_generic_warmup(self):
+        # Specialized runners must opt in themselves; inherited support is not enough.
+        return type(self).__dict__.get("_SUPPORTS_GENERIC_WARMUP", False)
 
     def get_warmup_latent_shape(self, target_height, target_width):
         _, stride_h, stride_w = self.config["vae_stride"]
@@ -167,16 +180,30 @@ class WanRunner(DisaggMixin, DefaultRunner):
         )
         last_frame = torch.zeros_like(first_frame) if task == "flf2v" else None
         clip_encoder_out = self.run_image_encoder(first_frame, last_frame) if self.config.get("use_image_encoder", True) else None
-        vae_encoder_out = self.get_vae_encoder_output(first_frame, latent_shape[-2], latent_shape[-1], last_frame)
+        vae_encoder_out = self.get_warmup_vae_encoder_output(first_frame, latent_shape, last_frame)
         return {
             "clip_encoder_out": clip_encoder_out,
             "vae_encoder_out": vae_encoder_out,
         }
 
+    def get_warmup_vae_encoder_output(self, first_frame, latent_shape, last_frame=None):
+        latent_h, latent_w = latent_shape[-2:]
+        if not self.config.get("changing_resolution", False):
+            return self.get_vae_encoder_output(first_frame, latent_h, latent_w, last_frame)
+
+        assert last_frame is None
+        outputs = []
+        for rate in self.config["resolution_rate"]:
+            height = int(latent_h * rate) // 2 * 2
+            width = int(latent_w * rate) // 2 * 2
+            outputs.append(self.get_vae_encoder_output(first_frame, height, width))
+        outputs.append(self.get_vae_encoder_output(first_frame, latent_h, latent_w))
+        return outputs
+
     def clear_warmup_state(self):
-        scheduler = self.model.scheduler
-        for name in ("latents", "noise_pred", "noise_pred_cond", "noise_pred_uncond", "noise_pred_guided", "vae_encoder_out", "mask"):
-            setattr(scheduler, name, None)
+        self.model.scheduler.clear()
+        if hasattr(self.model, "cur_model_index"):
+            self.model.cur_model_index = -1
 
     def clean_lazy_load_warmup(self):
         models = tuple(filter(None, self.get_warmup_models())) if getattr(self, "model", None) is not None else ()
@@ -184,13 +211,16 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if models:
             torch_device_module.synchronize()
         for model in models:
-            transformer_infer = getattr(model, "transformer_infer", None)
-            if hasattr(transformer_infer, "offload_manager"):
-                del transformer_infer.offload_manager
+            if hasattr(getattr(model, "transformer_infer", None), "offload_manager"):
+                del model.transformer_infer.offload_manager
+        self.scheduler.transformer_infer = None
         self.model = None
         for name in ("text_encoders", "image_encoder", "vae_encoder", "vae_decoder"):
             if hasattr(self, name):
                 delattr(self, name)
+        # Drop local model references before collecting device memory.
+        model = None
+        models = ()
         gc.collect()
         torch_device_module.empty_cache()
 
@@ -940,6 +970,8 @@ class MultiModelStruct:
 
 @RUNNER_REGISTER("wan2.2_moe")
 class Wan22MoeRunner(WanRunner):
+    _SUPPORTS_GENERIC_WARMUP = True
+
     def __init__(self, config):
         super().__init__(config)
         if self.config.get("dit_quantized", False) and self.config.get("high_noise_quantized_ckpt", None):
@@ -965,18 +997,10 @@ class Wan22MoeRunner(WanRunner):
         boundary = self.model.boundary_timestep
         high_noise_steps = torch.nonzero(timesteps >= boundary, as_tuple=True)[0]
         low_noise_steps = torch.nonzero(timesteps < boundary, as_tuple=True)[0]
-        return high_noise_steps[0].item(), low_noise_steps[0].item()
+        return tuple(indices[0].item() for indices in (high_noise_steps, low_noise_steps) if len(indices))
 
     def get_warmup_models(self):
         return tuple(self.model.model)
-
-    def clear_warmup_state(self):
-        super().clear_warmup_state()
-        scheduler = self.model.scheduler
-        scheduler.step_index = 0
-        scheduler.infer_condition = True
-        scheduler.timestep_input = None
-        self.model.cur_model_index = -1
 
     def load_transformer(self):
         # encoder -> high_noise_model -> low_noise_model -> vae -> video_output
@@ -1045,6 +1069,8 @@ class Wan22MoeRunner(WanRunner):
 
 @RUNNER_REGISTER("wan2.2")
 class Wan22DenseRunner(WanRunner):
+    _SUPPORTS_GENERIC_WARMUP = True
+
     def __init__(self, config):
         super().__init__(config)
         self.vae_encoder_need_img_original = True

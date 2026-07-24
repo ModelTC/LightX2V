@@ -256,7 +256,7 @@ def main():
     parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
-    parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
+    parser.add_argument("--target_video_length", type=int, default=None, help="The target video length for each generated clip. (set default: 81)")
     parser.add_argument("--aspect_ratio", type=str, default="")
     parser.add_argument(
         "--keep_original_aspect",

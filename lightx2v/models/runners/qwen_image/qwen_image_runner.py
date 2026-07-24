@@ -16,6 +16,7 @@ from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import I2IInputInfo, T2IInputInfo
 from lightx2v.utils.profiler import *
 
 # from lightx2v.utils.torch_trace_profiler import TorchTraceProfileContext
@@ -57,6 +58,8 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 class QwenImageRunner(DisaggMixin, DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
+    _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
+    _WARMUP_TASKS = ("t2i", "i2i")
 
     def __init__(self, config):
         super().__init__(config)
@@ -70,6 +73,116 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
+
+    @ProfilingContext4DebugL1("Warmup")
+    def run_warmup(self):
+        task = self.config.get("task")
+        if task not in self._WARMUP_TASKS:
+            logger.warning(f"Warmup is not implemented for Qwen-Image task: {task}")
+            return
+        if self.is_layered:
+            logger.warning("Qwen-Image warmup does not support layered generation yet; skipping warmup")
+            return
+
+        if self.config.get("lazy_load", False):
+            try:
+                self.model = self.load_transformer()
+                self.model.set_scheduler(self.scheduler)
+                self.text_encoders = self.load_text_encoder()
+                self._run_warmup()
+            finally:
+                self.clean_lazy_load_warmup()
+        else:
+            self._run_warmup()
+
+        self._maybe_freeze_gc()
+
+    def _run_warmup(self):
+        scheduler = self.model.scheduler
+        original_generator = scheduler.generator
+        original_input_info = self.input_info
+        had_inputs = hasattr(self, "inputs")
+        original_inputs = getattr(self, "inputs", None)
+        t2i_text_cache = None
+
+        try:
+            for height, width in self._WARMUP_RESOLUTIONS:
+                logger.info(f"Warmup: {height}x{width}")
+                try:
+                    t2i_text_cache = self._prepare_warmup_inputs(height, width, t2i_text_cache)
+                    scheduler.generator = None
+                    scheduler.prepare(self.input_info)
+                    scheduler.step_pre(step_index=0)
+                    self.model.infer(self.inputs)
+                    scheduler.step_post()
+                    self.run_vae_decoder(scheduler.latents)
+                    torch_device_module.synchronize()
+                finally:
+                    if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
+                        self.model.to_cpu()
+                    self.clear_warmup_state()
+                    self.input_info = None
+                    self.__dict__.pop("inputs", None)
+        finally:
+            scheduler.generator = original_generator
+            self.input_info = original_input_info
+            if had_inputs:
+                self.inputs = original_inputs
+            else:
+                self.__dict__.pop("inputs", None)
+
+        logger.info("Warmup completed")
+
+    def _prepare_warmup_inputs(self, height, width, t2i_text_cache=None):
+        task = self.config["task"]
+        input_info_cls = T2IInputInfo if task == "t2i" else I2IInputInfo
+        self.input_info = input_info_cls(
+            seed=0,
+            prompt="warmup",
+            negative_prompt=" " if self.config["enable_cfg"] else None,
+            target_shape=[height, width],
+            return_result_tensor=True,
+        )
+
+        if task == "t2i":
+            if t2i_text_cache is None:
+                text_encoder_output = self.run_text_encoder(self.input_info.prompt, neg_prompt=self.input_info.negative_prompt)
+                t2i_text_cache = text_encoder_output, tuple(self.input_info.txt_seq_lens)
+            else:
+                text_encoder_output, txt_seq_lens = t2i_text_cache
+                self.input_info.txt_seq_lens = list(txt_seq_lens)
+            image_encoder_output = None
+        else:
+            image = Image.new("RGB", (width, height), color=0)
+            text_encoder_output = self.run_text_encoder(self.input_info.prompt, [image], neg_prompt=self.input_info.negative_prompt)
+            image_encoder_output = [self.run_vae_encoder(vae_image) for vae_image in text_encoder_output["image_info"]["vae_image_list"]]
+
+        self.inputs = {
+            "text_encoder_output": text_encoder_output,
+            "image_encoder_output": image_encoder_output,
+        }
+        self.set_target_shape()
+        self.set_img_shapes()
+        return t2i_text_cache
+
+    def clear_warmup_state(self):
+        self.model.scheduler.clear()
+        self.model.pre_infer.clear_rope_cache()
+
+    def clean_lazy_load_warmup(self):
+        model = getattr(self, "model", None)
+        if model is not None:
+            torch_device_module.synchronize()
+            if hasattr(getattr(model, "transformer_infer", None), "offload_manager"):
+                del model.transformer_infer.offload_manager
+
+        self.model = None
+        for name in ("text_encoders", "vae"):
+            if hasattr(self, name):
+                delattr(self, name)
+        model = None
+        gc.collect()
+        torch_device_module.empty_cache()
 
     def set_config(self, config_modify):
         """Apply per-request overrides and optionally sync disagg fields."""
@@ -213,8 +326,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.text_encoders[0]
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": None,
@@ -257,8 +369,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         for vae_image in text_encoder_output["image_info"]["vae_image_list"]:
             image_encoder_output = self.run_vae_encoder(image=vae_image)
             image_encoder_output_list.append(image_encoder_output)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": image_encoder_output_list,

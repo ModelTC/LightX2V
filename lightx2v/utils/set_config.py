@@ -292,8 +292,9 @@ def auto_calc_config(config):
         config["target_video_length"] = (latent_frames - 1) * temporal_stride + 1
         logger.info(f"Auto-set LingBot-VA target_video_length={config['target_video_length']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
 
-    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
-        if config["target_video_length"] % config["vae_stride"][0] != 1:
+    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
+        config.setdefault("target_video_length", 81)
+        if "vae_stride" in config and config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
 

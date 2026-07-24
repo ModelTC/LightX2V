@@ -917,6 +917,7 @@ class LTX2Scheduler(BaseScheduler):
 
     def clear(self):
         """Clear scheduler state."""
+        self.generator = None
         self.audio_latents = None
         self.video_latent_state = None
         self.audio_latent_state = None
