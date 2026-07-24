@@ -1,14 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# 用法：
-#   bash run_hunyuan.sh 0
-#   bash run_hunyuan.sh 1,2
-#   bash run_hunyuan.sh 3,5,6
-#
-# 如果不传参数，则使用已有的 CUDA_VISIBLE_DEVICES
-# 如果也没有设置 CUDA_VISIBLE_DEVICES，则自动使用所有 GPU
-# HunyuanImage3 的模型和性能参数统一在 config_json 中设置。
+# Usage:
+#   image_path=/path/to/input.png bash scripts/hunyuan_image3/run_hunyuan_image3_ti2t.sh
+#   image_path=/path/to/input.png bash scripts/hunyuan_image3/run_hunyuan_image3_ti2t.sh 0,1
 
 GPU_IDS="${1:-${CUDA_VISIBLE_DEVICES:-}}"
 
@@ -26,18 +21,22 @@ elif command -v nvidia-smi >/dev/null 2>&1; then
     fi
 fi
 
-echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-not set}"
-
 source "${lightx2v_path}/scripts/base/base.sh"
 
-config_json="${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_t2i.json"
+config_json="${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_ti2t.json"
+image_path="${image_path:-${HUNYUAN_IMAGE3_REPO_PATH}/assets/demo_instruct_imgs/input_0_0.png}"
+prompt="${prompt:-请描述图像中的主要内容和视觉风格。}"
+save_result_path="${save_result_path:-${lightx2v_path}/save_results/hunyuan_image3_ti2t.txt}"
+
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-not set}"
 echo "config_json=${config_json}"
 
 python -m lightx2v.infer \
     --model_cls hunyuan_image3 \
-    --task t2i \
+    --task ti2t \
     --model_path "$model_path" \
     --config_json "$config_json" \
-    --prompt "${prompt:-生成图片：一辆汽车行驶在高速公路上，驾驶员在打电话，副驾驶坐着一只狗}" \
-    --save_result_path "${lightx2v_path}/save_results/hunyuan_image3_t2i.png" \
+    --prompt "$prompt" \
+    --image_path "$image_path" \
+    --save_result_path "$save_result_path" \
     --seed 42

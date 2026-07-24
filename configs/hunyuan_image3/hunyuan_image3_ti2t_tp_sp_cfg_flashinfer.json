@@ -1,0 +1,40 @@
+{
+    "feature_caching": "NoCaching",
+    "moe_impl": "flashinfer",
+    "attn_impl": "torch_sdpa",
+    "flashinfer_autotune_mode": "auto",
+    "flashinfer_autotune_cache": "save_results/hunyuan_image3_flashinfer_autotune_ti2t_tp2_sp2_cfg1.json",
+    "flashinfer_tune_max_num_tokens": 16384,
+    "flashinfer_tuning_buckets": [
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+        12288,
+        16384
+    ],
+    "flashinfer_autotune_round_up": true,
+    "enable_kv_cache": true,
+    "enable_text_kv_cache": true,
+    "parallel": {
+        "pipeline_parallel": false,
+        "tensor_p_size": 2,
+        "seq_p_size": 2,
+        "cfg_p_size": 1,
+        "seq_p_attn_type": "ulysses",
+        "cfg_mode": "batch"
+    },
+    "enable_cfg": false,
+    "infer_align_image_size": true,
+    "bot_task": "auto",
+    "use_system_prompt": "None",
+    "max_new_tokens": 2048,
+    "text_do_sample": true,
+    "text_top_k": 1024,
+    "text_top_p": 0.95,
+    "text_temperature": 0.6,
+    "text_stream_output": true
+}

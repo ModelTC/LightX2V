@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Usage:
-#   bash scripts/hunyuan_image3/run_hunyuan_image3_ti2i.sh
-#   bash scripts/hunyuan_image3/run_hunyuan_image3_ti2i.sh ti2iv2
-#   bash scripts/hunyuan_image3/run_hunyuan_image3_ti2i.sh 0,2,3,4,5,6,7 ti2iv2
+#   bash scripts/hunyuan_image3/run_hunyuan_image3_ti2i_tp.sh
+#   bash scripts/hunyuan_image3/run_hunyuan_image3_ti2i_tp.sh ti2iv2
+#   bash scripts/hunyuan_image3/run_hunyuan_image3_ti2i_tp.sh 0,1,2,3,4,5,6,7 ti2iv2
 
 GPU_IDS="${CUDA_VISIBLE_DEVICES:-}"
 DEMO="${DEMO:-ti2i}"
@@ -42,23 +42,42 @@ if [ "$DEMO" = "ti2iv2" ]; then
     prompt="让图1的猫咪与图2的猫咪自拍，图1的猫咪说:“妈妈，我在乡下遇到了好朋喵”，背景为图3。"
     image_path="${HUNYUAN_IMAGE3_REPO_PATH}/assets/demo_instruct_imgs/input_2_0.png,${HUNYUAN_IMAGE3_REPO_PATH}/assets/demo_instruct_imgs/input_2_1.png,${HUNYUAN_IMAGE3_REPO_PATH}/assets/demo_instruct_imgs/input_2_2.png"
     seed=43
-    save_result_path="${lightx2v_path}/save_results/hunyuan_image3_ti2iv3.png"
+    save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/hunyuan_image3_ti2iv3_tp.png}"
 else
     prompt="新年宠物海报，Q版圆润的可爱标题“新年快乐汪”，副标题“HAPPY NEW YEAR”。 鱼眼镜头，背景是房间门口，近景，上传的主体歪头笑，围着红色围巾，戴着红色毛线帽，高清，绒毛细节，面部特写。 宝丽莱相纸，超现实主义，写实主义，胶片摄影，打印颗粒感肌理。肌理，超写实，复古感。"
     image_path="${HUNYUAN_IMAGE3_REPO_PATH}/assets/demo_instruct_imgs/input_0_0.png"
     seed=42
-    save_result_path="${lightx2v_path}/save_results/hunyuan_image3_ti2i.png"
+    save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/hunyuan_image3_ti2i_tp.png}"
 fi
 
-echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-not set}"
-echo "Running HunyuanImage3 ${DEMO}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_ti2i_tp.json}"
+tp_size=$(python - "$config_json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    print(int(json.load(f)["parallel"]["tensor_p_size"]))
+PY
+)
+
+IFS=',' read -r -a visible_gpu_ids <<< "${CUDA_VISIBLE_DEVICES:-}"
+visible_gpu_count=${#visible_gpu_ids[@]}
+if [ "$visible_gpu_count" -ne "$tp_size" ] || [ -z "${visible_gpu_ids[0]:-}" ]; then
+    echo "HunyuanImage3 TP requires exactly ${tp_size} visible GPUs; CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-not set}" >&2
+    exit 2
+fi
+
+echo "Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "Running HunyuanImage3 ${DEMO} with TP_SIZE=${tp_size}"
+echo "config_json=${config_json}"
 
 source "${lightx2v_path}/scripts/base/base.sh"
 
-config_json="${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_ti2i.json"
-echo "config_json=${config_json}"
-
-python -m lightx2v.infer \
+torchrun \
+    --standalone \
+    --nproc_per_node="$tp_size" \
+    --max_restarts=0 \
+    -m lightx2v.infer \
     --model_cls hunyuan_image3 \
     --task ti2i \
     --model_path "$model_path" \
