@@ -3,7 +3,6 @@
     "target_video_length": 121,
     "target_height": 512,
     "target_width": 768,
-    "noise_generator_device": "cpu",
     "attn_type": "torch_sdpa",
     "gemma_attn_implementation": "mlu_flash_attn",
     "rope_type": "torch_real_rope",
