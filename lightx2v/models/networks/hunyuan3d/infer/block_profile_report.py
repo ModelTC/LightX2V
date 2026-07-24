@@ -18,7 +18,10 @@ from tools.profile.region_event_trace import (
 if TYPE_CHECKING:
     from lightx2v.utils.transformer_profile import ProfileRunMeta
 
-_PEAK_TFLOPS_BF16, _PEAK_TFLOPS_FP8 = infer_peak_tflops_from_device()
+try:
+    _PEAK_TFLOPS_BF16, _PEAK_TFLOPS_FP8 = infer_peak_tflops_from_device()
+except RuntimeError:
+    _PEAK_TFLOPS_BF16 = _PEAK_TFLOPS_FP8 = None
 
 _HUNYUAN3D_CONFIG = RegionTraceConfig(
     region_order=(
@@ -69,7 +72,7 @@ def _expand_moe_routed(op: OpEntry) -> list[OpEntry]:
     if op.kind != "MOE" or op.tag != "moe_routed":
         return [op]
 
-    backend = str(op.extra.get("backend", "pytorch_loop"))
+    backend = str(op.extra.get("backend", "torch_expert_loop"))
     fc_schema = str(op.extra.get("fc_schema", "fc1_fc2"))
     hidden = int(op.extra["hidden"])
     intermediate = int(op.extra["intermediate"])
@@ -79,7 +82,7 @@ def _expand_moe_routed(op: OpEntry) -> list[OpEntry]:
     expanded: list[OpEntry] = []
     offset = 0
     expert_tokens = op.extra.get("expert_tokens")
-    if backend == "pytorch_loop" and expert_tokens:
+    if backend in {"pytorch_loop", "torch_expert_loop"} and expert_tokens:
         for expert_idx, count in enumerate(expert_tokens):
             count = int(count)
             if count <= 0:

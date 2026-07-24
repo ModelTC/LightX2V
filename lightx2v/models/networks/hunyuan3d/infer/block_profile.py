@@ -1,41 +1,20 @@
-"""Hunyuan3D block profile: ``@region_profile`` regions + op-shape JSONL.
-
-Single master env ``HUNYUAN3D_BLOCK_PROFILE=1`` enables profiler ``record_function``
-labels and logical-op shape logging together.
-"""
+"""Hunyuan3D logical-op shapes for targeted block profiling."""
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from functools import partial
 
 import torch
 
 from lightx2v.utils import op_shape_trace as ost
-from lightx2v.utils.region_profile import (
-    active_profile,
-    get_active_profile,
-)
-from lightx2v.utils.region_profile import (
-    region_profile as _region_profile,
-)
-
-BLOCK_PROFILE_ENV = "HUNYUAN3D_BLOCK_PROFILE"
-
-region_profile = partial(_region_profile, annotate_env=BLOCK_PROFILE_ENV)
 
 
 def _op_shape_logging_enabled() -> bool:
-    return os.environ.get(BLOCK_PROFILE_ENV) == "1" and ost.is_recording()
+    return ost.is_recording()
 
 
 __all__ = [
-    "BLOCK_PROFILE_ENV",
     "Hunyuan3DBlockProfile",
-    "active_profile",
-    "get_active_profile",
-    "region_profile",
 ]
 
 
@@ -50,7 +29,6 @@ class _GemmSpec:
 class Hunyuan3DBlockProfile:
     """Bind static GEMM N/K and runtime M for op-shape emit hooks."""
 
-    profile_env = BLOCK_PROFILE_ENV
     block_profile_report_module = "lightx2v.models.networks.hunyuan3d.infer.block_profile_report"
 
     def __init__(self, config: dict):
@@ -58,14 +36,23 @@ class Hunyuan3DBlockProfile:
         self.hidden = int(config["hidden_size"])
         self.head_dim = self.hidden // self.num_heads
         self._moe_top_k = int(config.get("moe_top_k", 2))
-        self._moe_backend = str(config.get("moe_backend", "pytorch_loop"))
+        self._moe_backend = str(config.get("moe_backend", "torch_expert_loop"))
         self._moe_fc_schema = str(config.get("moe_fc_schema", "fc1_fc2"))
+        self._fused_qkv_enabled = bool(config.get("use_fused_qkv_attn", False))
+        self._use_fused_qkv = False
         self._cond_len = 0
-        self._moe_intermediate = 0
+        self._moe_intermediate = self._resolve_moe_intermediate(config)
         self._gemms: dict[str, _GemmSpec] = {}
         self._batch = 1
         self._seq_len = 0
         self._m = 0
+
+    @staticmethod
+    def _resolve_moe_intermediate(config: dict) -> int:
+        for key in ("moe_intermediate_size", "intermediate_size"):
+            if config.get(key):
+                return int(config[key])
+        return int(int(config["hidden_size"]) * float(config.get("mlp_ratio", 4)))
 
     @staticmethod
     def _register(store: dict[str, _GemmSpec], tag: str, region: str, linear) -> None:
@@ -80,9 +67,13 @@ class Hunyuan3DBlockProfile:
         g: dict[str, _GemmSpec] = {}
         if block_weights.skip_linear is not None:
             self._register(g, "skip_linear", "skip_connection", block_weights.skip_linear)
-        self._register(g, "self_q", "self_attn", block_weights.attn1.to_q)
-        self._register(g, "self_k", "self_attn", block_weights.attn1.to_k)
-        self._register(g, "self_v", "self_attn", block_weights.attn1.to_v)
+        self._use_fused_qkv = bool(self._fused_qkv_enabled and block_weights.attn1.has_fused_qkv)
+        if self._use_fused_qkv:
+            self._register(g, "self_qkv", "self_attn", block_weights.attn1.to_qkv)
+        else:
+            self._register(g, "self_q", "self_attn", block_weights.attn1.to_q)
+            self._register(g, "self_k", "self_attn", block_weights.attn1.to_k)
+            self._register(g, "self_v", "self_attn", block_weights.attn1.to_v)
         self._register(g, "self_o", "self_attn", block_weights.attn1.out_proj)
         self._register(g, "cross_q", "cross_attn", block_weights.attn2.to_q)
         self._register(g, "cross_k", "cross_attn", block_weights.attn2.to_k)
@@ -90,7 +81,6 @@ class Hunyuan3DBlockProfile:
         self._register(g, "cross_o", "cross_attn", block_weights.attn2.out_proj)
         if block_weights.moe is not None:
             self._register(g, "moe_gate", "moe", block_weights.moe.gate)
-            self._moe_intermediate = int(block_weights.moe.experts[0].fc1._get_actual_weight().shape[1])
             self._register(g, "moe_shared.fc1", "moe", block_weights.moe.shared_experts.fc1)
             self._register(g, "moe_shared.fc2", "moe", block_weights.moe.shared_experts.fc2)
         elif block_weights.mlp is not None:
@@ -112,12 +102,15 @@ class Hunyuan3DBlockProfile:
     def self_attn(self) -> None:
         if not _op_shape_logging_enabled():
             return
-        for tag in ("self_q", "self_k", "self_v"):
-            self._emit_gemm(tag)
+        if self._use_fused_qkv:
+            self._emit_gemm("self_qkv")
+        else:
+            for tag in ("self_q", "self_k", "self_v"):
+                self._emit_gemm(tag)
         ost.log_attn(
             "self_attn",
             "self_sdpa",
-            batch=1,
+            batch=self._batch,
             num_heads=self.num_heads,
             seq_q=self._seq_len,
             seq_k=self._seq_len,
@@ -141,7 +134,7 @@ class Hunyuan3DBlockProfile:
         ost.log_attn(
             "cross_attn",
             "cross_sdpa",
-            batch=1,
+            batch=self._batch,
             num_heads=self.num_heads,
             seq_q=self._seq_len,
             seq_k=self._cond_len,

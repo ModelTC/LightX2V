@@ -39,6 +39,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import T2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.transformer_profile import suspend_transformer_profile
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -100,6 +101,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             raise NotImplementedError(f"Wan reuse does not support task: {self.config['task']}")
 
     @ProfilingContext4DebugL1("Warmup")
+    @suspend_transformer_profile()
     def run_warmup(self):
         if not self.supports_generic_warmup():
             raise NotImplementedError(f"Wan warmup is not supported for {type(self).__name__}")

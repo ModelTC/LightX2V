@@ -1,41 +1,20 @@
-"""Wan / SekoTalk block profile: ``@region_profile`` regions + op-shape JSONL.
-
-Env ``SEKO_TALK_BLOCK_PROFILE=1`` (also used by ``wyr_seko.sh``) enables
-``record_function`` region labels and logical-op shape logging for Wan DiT blocks.
-"""
+"""Wan block logical-op shapes for targeted transformer profiling."""
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from functools import partial
 
 import torch
 
 from lightx2v.utils import op_shape_trace as ost
-from lightx2v.utils.region_profile import (
-    active_profile,
-    get_active_profile,
-)
-from lightx2v.utils.region_profile import (
-    region_profile as _region_profile,
-)
-
-BLOCK_PROFILE_ENV = "SEKO_TALK_BLOCK_PROFILE"
-
-region_profile = partial(_region_profile, annotate_env=BLOCK_PROFILE_ENV)
 
 
 def _op_shape_logging_enabled() -> bool:
-    return os.environ.get(BLOCK_PROFILE_ENV) == "1" and ost.is_recording()
+    return ost.is_recording()
 
 
 __all__ = [
-    "BLOCK_PROFILE_ENV",
     "WanBlockProfile",
-    "active_profile",
-    "get_active_profile",
-    "region_profile",
 ]
 
 
@@ -50,7 +29,6 @@ class _GemmSpec:
 class WanBlockProfile:
     """Bind Wan block phase weights + runtime token counts for op-shape hooks."""
 
-    profile_env = BLOCK_PROFILE_ENV
     block_profile_report_module = "lightx2v.models.networks.wan.infer.block_profile_report"
 
     def __init__(self, config: dict):
@@ -67,10 +45,12 @@ class WanBlockProfile:
         self._audio_q_len = 0
         self._audio_kv_len = 0
 
-    @staticmethod
-    def _register(store: dict[str, _GemmSpec], tag: str, region: str, linear) -> None:
+    def _register(self, store: dict[str, _GemmSpec], tag: str, region: str, linear) -> None:
         w = linear._get_actual_weight()
-        store[tag] = _GemmSpec(region, tag, int(w.shape[0]), int(w.shape[1]))
+        n, k = int(w.shape[0]), int(w.shape[1])
+        if self.config.get("dit_quant_scheme") in {"nvfp4", "mxfp4"} and w.element_size() == 1:
+            k *= 2
+        store[tag] = _GemmSpec(region, tag, n, k)
 
     def bind(self, block, x: torch.Tensor, pre_infer_out) -> None:
         self._m = int(x.shape[0])
@@ -122,6 +102,7 @@ class WanBlockProfile:
             seq_q=self._m,
             seq_k=self._m,
             head_dim=self.head_dim,
+            flops_semantics="dense-equivalent" if self.config.get("self_attn_1_type") == "dynamic_sparse_attn" else None,
         )
         self._emit_gemm("self_o")
 

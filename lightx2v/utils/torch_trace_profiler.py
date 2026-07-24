@@ -1,6 +1,6 @@
 """PyTorch profiler trace export (TensorBoard / Chrome Trace).
 
-Wrap the target call site with TorchProfileContext to collect traces.
+Wrap the target call site with TorchTraceProfileContext to collect traces.
 See docs/ZH_CN/source/method_tutorials/torch_profiling.md for usage.
 """
 
@@ -123,7 +123,7 @@ class TorchTraceProfiler:
         cls._session_done = False
         cls._profile_owner = None
         cls._warned_skipped = set()
-        TorchProfileContext._registered_labels.clear()
+        TorchTraceProfileContext._registered_labels.clear()
 
     @property
     def ran(self) -> bool:
@@ -172,7 +172,7 @@ class TorchTraceProfiler:
         return result
 
 
-class TorchProfileContext:
+class TorchTraceProfileContext:
     """Call-site context for torch trace profiling."""
 
     _registered_labels: set[str] = set()
@@ -224,7 +224,7 @@ class TorchProfileContext:
             return
         self._registered_labels.add(label)
         if len(self._registered_labels) > 1:
-            logger.warning(f"[Profile] Multiple TorchProfileContext call sites detected: {sorted(self._registered_labels)}. Only the first invoked site will be profiled once.")
+            logger.warning(f"[Profile] Multiple TorchTraceProfileContext call sites detected: {sorted(self._registered_labels)}. Only the first invoked site will be profiled once.")
 
     def __enter__(self):
         return self
@@ -239,6 +239,3 @@ class TorchProfileContext:
 
         log_profile_start(self._profiler.cfg, name=label)
         return self._profiler.run(lambda: func(*args, **kwargs))
-
-
-TorchTraceProfileContext = TorchProfileContext

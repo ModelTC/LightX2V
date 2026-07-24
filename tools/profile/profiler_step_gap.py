@@ -43,6 +43,8 @@ class RuntimeSync:
 @dataclass(frozen=True)
 class ProfilerStepGap:
     step_id: int
+    window_category: str
+    window_name: str
     wall_us: float
     gpu_active_us: float
     raw_gpu_sum_us: float
@@ -102,6 +104,7 @@ def merge_intervals(intervals: list[Interval]) -> list[Interval]:
 def analyze_events(events: list[dict]) -> list[ProfilerStepGap]:
     steps: list[tuple[int, Interval]] = []
     cpu_steps: dict[int, Interval] = {}
+    gpu_annotations: list[tuple[str, Interval]] = []
     gpu_events: list[GpuActivity] = []
     sync_events: list[RuntimeSync] = []
     for ev in events:
@@ -110,6 +113,7 @@ def analyze_events(events: list[dict]) -> list[ProfilerStepGap]:
         cat = ev.get("cat")
         name = ev.get("name", "")
         if cat == _STEP_CAT:
+            gpu_annotations.append((name, event_interval(ev)))
             step_id = parse_step_id(name)
             if step_id is not None:
                 steps.append((step_id, event_interval(ev)))
@@ -122,8 +126,18 @@ def analyze_events(events: list[dict]) -> list[ProfilerStepGap]:
         elif cat == "cuda_runtime" and name in _SYNC_RUNTIME_NAMES:
             sync_events.append(RuntimeSync(event_interval(ev), name))
 
+    step_windows: list[tuple[int, Interval, str, str]] = [(step_id, window, _STEP_CAT, f"ProfilerStep#{step_id}") for step_id, window in steps]
+    if not step_windows:
+        for step_id, cpu_window in sorted(cpu_steps.items()):
+            candidates = [(name, interval) for name, interval in gpu_annotations if is_started_in(cpu_window, interval)]
+            if candidates:
+                name, window = max(candidates, key=lambda item: item[1].duration)
+                step_windows.append((step_id, window, _STEP_CAT, name))
+            else:
+                step_windows.append((step_id, cpu_window, _CPU_STEP_CAT, f"ProfilerStep#{step_id}"))
+
     stats: list[ProfilerStepGap] = []
-    for step_id, window in sorted(steps, key=lambda item: item[0]):
+    for step_id, window, window_category, window_name in sorted(step_windows, key=lambda item: item[0]):
         contained = [event for event in gpu_events if is_contained(window, event.interval)]
         intervals = [event.interval for event in contained]
         counts = {cat: 0 for cat in sorted(_GPU_CATS)}
@@ -138,6 +152,8 @@ def analyze_events(events: list[dict]) -> list[ProfilerStepGap]:
         stats.append(
             ProfilerStepGap(
                 step_id=step_id,
+                window_category=window_category,
+                window_name=window_name,
                 wall_us=window.duration,
                 gpu_active_us=sum(interval.duration for interval in merge_intervals(intervals)),
                 raw_gpu_sum_us=sum(event.interval.duration for event in contained),
@@ -159,10 +175,12 @@ def format_sync_counts(counts: dict[str, int]) -> str:
 
 def render_summary(trace_path: Path, stats: list[ProfilerStepGap], *, brief: bool = False) -> str:
     if not stats:
-        return f"{trace_path}: no ProfilerStep#* events found in {_STEP_CAT}\n"
+        return f"{trace_path}: no ProfilerStep#* events found\n"
+
+    window_sources = ", ".join(dict.fromkeys(f"{step.window_category}:{step.window_name}" for step in stats))
 
     if brief:
-        lines = [f"Trace: {trace_path}", f"Step annotation category: {_STEP_CAT}"]
+        lines = [f"Trace: {trace_path}", f"Step windows: {window_sources}"]
         for step in stats:
             lines.append(
                 f"ProfilerStep#{step.step_id}: "
@@ -177,7 +195,7 @@ def render_summary(trace_path: Path, stats: list[ProfilerStepGap], *, brief: boo
 
     lines = [
         f"Trace: {trace_path}",
-        f"Step annotation category: {_STEP_CAT}",
+        f"Step windows: {window_sources}",
         f"{'Step':>6}  {'Wall':>10}  {'GPU act':>10}  {'Raw GPU':>10}  {'#ev':>6}  {'Gap':>10}  {'Gap%':>7}  GPU event counts  Sync API counts",
     ]
     for step in stats:
