@@ -325,7 +325,6 @@ def encode_audio(
     audio: Audio,
     audio_encoder: AudioEncoder,
     audio_processor: AudioProcessor | None = None,
-    *,
     audio_mel_cpu_offload: bool = False,
 ) -> torch.Tensor:
     """Encode audio waveform into latent representation.
