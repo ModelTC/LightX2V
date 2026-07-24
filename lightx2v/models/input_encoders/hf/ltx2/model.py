@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 from safetensors import safe_open
-from transformers import AutoImageProcessor, Gemma3ForConditionalGeneration, Gemma3Processor
+from transformers import AutoImageProcessor, Gemma3Processor
 
 from lightx2v.models.input_encoders.hf.ltx2.gemma.encoders.base_encoder import (
     GemmaTextEncoder,
@@ -12,6 +12,9 @@ from lightx2v.models.input_encoders.hf.ltx2.gemma.encoders.base_encoder import (
 from lightx2v.models.input_encoders.hf.ltx2.gemma.encoders.encoder_configurator import (
     GEMMA_MODEL_OPS,
     GemmaTextEncoderConfigurator,
+)
+from lightx2v.models.input_encoders.hf.ltx2.gemma.model import (
+    Gemma3ForConditionalGeneration,
 )
 from lightx2v.models.input_encoders.hf.ltx2.gemma.tokenizer import LTXVGemmaTokenizer
 from lightx2v.utils.envs import GET_DTYPE
@@ -82,7 +85,9 @@ class LTX2TextEncoder:
             device: Target device for the model
             dtype: Data type for model parameters
             gemma_attn_implementation: Optional Transformers attention
-                implementation override (for example, ``"eager"``).
+                override. Registered platform backends such as
+                ``"mlu_flash_attn"`` are scoped to Gemma text layers. When
+                omitted, Transformers keeps its native default (currently SDPA).
         """
         self.checkpoint_path = checkpoint_path
         self.gemma_root = gemma_root

@@ -369,19 +369,6 @@ class LTX2Scheduler(BaseScheduler):
         self.v_noise_pred = None
         self.a_noise_pred = None
         self.keep_latents_dtype_in_scheduler = config.get("keep_latents_dtype_in_scheduler", False)
-        # Device-local RNG algorithms differ across CUDA and MLU. Allow callers
-        # to generate noise on CPU, where the same seed produces identical
-        # latent noise on both platforms, and then copy it to the target device.
-        self.noise_generator_device = config.get("noise_generator_device", AI_DEVICE)
-
-    def _randn(self, shape, dtype, target_device):
-        noise = torch.randn(
-            shape,
-            dtype=dtype,
-            device=self.noise_generator_device,
-            generator=self.generator,
-        )
-        return noise.to(device=target_device)
 
     def step_pre(self, step_index):
         self.step_index = step_index
@@ -435,8 +422,7 @@ class LTX2Scheduler(BaseScheduler):
 
         # Initialize generator
         if self.generator is None:
-            self.generator = torch.Generator(device=self.noise_generator_device).manual_seed(seed)
-            logger.info(f"Noise generator device: {self.noise_generator_device}")
+            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         else:
             logger.info(f"Generator is not None, using existing generator for latents")
 
@@ -633,10 +619,11 @@ class LTX2Scheduler(BaseScheduler):
 
     def _noise_video_latent_state(self, noise_scale: float) -> None:
         st = self.video_latent_state
-        noise = self._randn(
+        noise = torch.randn(
             st.latent.shape,
             dtype=st.latent.dtype,
-            target_device=AI_DEVICE,
+            device=AI_DEVICE,
+            generator=self.generator,
         )
         latent = torch.lerp(st.latent.float(), noise.float(), noise_scale)
         st.latent = torch.lerp(st.clean_latent.float(), latent, st.denoise_mask).to(st.latent.dtype)
@@ -798,10 +785,11 @@ class LTX2Scheduler(BaseScheduler):
             patchified_audio_mask = patchified_audio_mask.unsqueeze(-1)
 
         # Add noise after patchify (aligned with source code: GaussianNoiser operates on patchified latent)
-        noise_audio = self._randn(
+        noise_audio = torch.randn(
             patchified_audio_latent.shape,
             dtype=patchified_audio_latent.dtype,
-            target_device=AI_DEVICE,
+            device=AI_DEVICE,
+            generator=self.generator,
         )
         noised_audio_latent = torch.lerp(patchified_audio_latent.float(), noise_audio.float(), noise_scale)
         patchified_audio_latent = torch.lerp(
@@ -984,10 +972,11 @@ class LTX2ARScheduler(LTX2Scheduler):
         return ((1.0 - sigma) * denoised.float() + sigma * noise.float()).to(denoised.dtype)
 
     def _next_self_forcing_latent(self, denoised, denoise_mask, clean, sigma_next):
-        noise = self._randn(
+        noise = torch.randn(
             denoised.shape,
             dtype=denoised.dtype,
-            target_device=denoised.device,
+            device=denoised.device,
+            generator=self.generator,
         )
         latent = self.self_forcing_renoise(denoised, noise, sigma_next)
         return self.post_process_latent(latent, denoise_mask, clean)
