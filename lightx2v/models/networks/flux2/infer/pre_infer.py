@@ -149,25 +149,12 @@ class Flux2PreInfer:
         txt_ids_final = txt_ids if txt_ids is not None else getattr(self.scheduler, "txt_ids", None)
         img_ids_final = img_ids if img_ids is not None else getattr(self.scheduler, "latent_image_ids", None)
 
-        image_rotary_emb = None
-        if img_ids_final is not None and txt_ids_final is not None:
-            if img_ids_final.ndim == 3:
-                img_ids_final = img_ids_final[0]
-            if txt_ids_final.ndim == 3:
-                txt_ids_final = txt_ids_final[0]
-
-            image_rope = self.pos_embed(img_ids_final)
-            text_rope = self.pos_embed(txt_ids_final)
-
-            freqs_cos = torch.cat([text_rope[0], image_rope[0]], dim=0)
-            freqs_sin = torch.cat([text_rope[1], image_rope[1]], dim=0)
-
-        if self.config.get("rope_type", "flashinfer") == "flashinfer":
-            cos_half = freqs_cos[:, ::2].contiguous()
-            sin_half = freqs_sin[:, ::2].contiguous()
-            image_rotary_emb = torch.cat([cos_half, sin_half], dim=-1)
-        else:
-            image_rotary_emb = (freqs_cos, freqs_sin)
+        num_txt_tokens = encoder_hidden_states.shape[0] if encoder_hidden_states is not None else 0
+        image_rotary_emb, image_rotary_positions = self.get_rope_cache(txt_ids_final, img_ids_final, num_txt_tokens)
+        if img_ids_final is not None and img_ids_final.ndim == 3:
+            img_ids_final = img_ids_final[0]
+        if txt_ids_final is not None and txt_ids_final.ndim == 3:
+            txt_ids_final = txt_ids_final[0]
 
         return Flux2PreInferModuleOutput(
             hidden_states=hidden_states,
@@ -176,6 +163,7 @@ class Flux2PreInfer:
             txt_ids=txt_ids_final,
             img_ids=img_ids_final,
             image_rotary_emb=image_rotary_emb,
+            image_rotary_positions=image_rotary_positions,
         )
 
 
