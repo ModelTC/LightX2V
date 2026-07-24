@@ -19,10 +19,7 @@ def _get_platform_attention_op(attn_implementation: str):
     if attn_implementation not in _platform_attention_ops:
         op_cls = ATTN_WEIGHT_REGISTER.get(attn_implementation)
         if op_cls is None:
-            raise RuntimeError(
-                f"`{attn_implementation}` is not registered for the active platform. "
-                "For MLU, set PLATFORM=cambricon_mlu and install torch_mlu_ops."
-            )
+            raise RuntimeError(f"`{attn_implementation}` is not registered for the active platform. For MLU, set PLATFORM=cambricon_mlu and install torch_mlu_ops.")
         _platform_attention_ops[attn_implementation] = op_cls()
     return _platform_attention_ops[attn_implementation]
 
@@ -46,10 +43,7 @@ def _prepare_attn_bias(
         attn_bias = attn_bias.to(device=query.device, dtype=query.dtype)
 
     if attn_bias.shape[0] not in (1, batch_size) or attn_bias.shape[1] not in (1, num_heads):
-        raise ValueError(
-            "Gemma 3 MLU attention mask must be broadcastable to "
-            f"{(batch_size, num_heads, query_length, key_length)}, got {tuple(attn_bias.shape)}."
-        )
+        raise ValueError(f"Gemma 3 MLU attention mask must be broadcastable to {(batch_size, num_heads, query_length, key_length)}, got {tuple(attn_bias.shape)}.")
 
     # torch_mlu_ops requires a dense [B, Hq, Q, K] bias. It produces NaNs
     # with the bfloat16 finfo.min sentinel at Gemma's real attention shape,
@@ -121,10 +115,7 @@ def mlu_flash_attention_forward(
 def register_gemma_attention_backend(attn_implementation: str) -> None:
     """Register a platform attention backend with Transformers' Gemma interface."""
     if attn_implementation != MLU_FLASH_ATTN:
-        raise ValueError(
-            f"Unsupported Gemma attention backend: {attn_implementation!r}. "
-            f"Currently only {MLU_FLASH_ATTN!r} is supported."
-        )
+        raise ValueError(f"Unsupported Gemma attention backend: {attn_implementation!r}. Currently only {MLU_FLASH_ATTN!r} is supported.")
     # Resolve and instantiate before loading model weights so missing platform
     # dependencies fail early instead of at the first forward pass.
     _get_platform_attention_op(attn_implementation)
@@ -139,11 +130,7 @@ class Gemma3ForConditionalGeneration(HFGemma3ForConditionalGeneration):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         requested_implementation = kwargs.get("attn_implementation")
-        text_implementation = (
-            requested_implementation.get("text_config")
-            if isinstance(requested_implementation, dict)
-            else requested_implementation
-        )
+        text_implementation = requested_implementation.get("text_config") if isinstance(requested_implementation, dict) else requested_implementation
         if text_implementation == MLU_FLASH_ATTN:
             register_gemma_attention_backend(text_implementation)
             if isinstance(requested_implementation, str):
