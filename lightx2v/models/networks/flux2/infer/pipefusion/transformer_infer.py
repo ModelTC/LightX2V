@@ -149,6 +149,7 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         timestep = pre_infer_out.timestep
         image_rotary_emb = pre_infer_out.image_rotary_emb
+        image_rotary_positions = pre_infer_out.image_rotary_positions
 
         # Compute num_txt_tokens
         if encoder_hidden_states is not None:
@@ -160,8 +161,6 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
             if num_txt_tokens > 0:
                 encoder_hidden_states = hidden_states[:num_txt_tokens, ...]
                 hidden_states = hidden_states[num_txt_tokens:, ...]
-
-        image_rotary_emb = self._prepare_image_rotary_emb(image_rotary_emb, num_txt_tokens)
 
         # Modulation embeddings (computed on every stage)
         timestep_act = F.silu(timestep)
@@ -178,6 +177,7 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
                 double_stream_mod_img,
                 double_stream_mod_txt,
                 image_rotary_emb,
+                image_rotary_positions,
             )
 
         # Single-stream blocks: cat [text, image], run, then split back
@@ -192,6 +192,7 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
                     None,
                     single_stream_mod,
                     image_rotary_emb,
+                    image_rotary_positions,
                     num_txt_tokens=num_txt_tokens,
                 )
 

@@ -429,6 +429,7 @@ class Flux2BaseRunner(DefaultRunner):
             num_pipeline_patch=num_pipeline_patch,
             warmup_steps=warmup_steps,
             vae_scale_factor=self.config.get("vae_scale_factor", 16),
+            total_tokens=self.input_info.latent_shape[1],
         )
 
         # Prepare inputs

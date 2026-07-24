@@ -183,9 +183,10 @@ class Flux2TransformerWeights(WeightModule):
             # stage 1 the next, etc.  A stage may span the double→single
             # boundary (it will then have both types).
             total_blocks = self.num_layers + self.num_single_layers
-            blocks_per_stage = (total_blocks + pp_world_size - 1) // pp_world_size
-            stage_start = pp_rank * blocks_per_stage
-            stage_end = min((pp_rank + 1) * blocks_per_stage, total_blocks)
+            base = total_blocks // pp_world_size
+            remainder = total_blocks % pp_world_size
+            stage_start = pp_rank * base + min(pp_rank, remainder)
+            stage_end = stage_start + base + (1 if pp_rank < remainder else 0)
 
             double_start = min(stage_start, self.num_layers)
             double_end = min(stage_end, self.num_layers)

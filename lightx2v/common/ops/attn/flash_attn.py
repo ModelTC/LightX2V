@@ -52,9 +52,10 @@ class FlashAttn2Weight(AttnWeightTemplate):
         softmax_scale = kwargs.get("softmax_scale", None)
         if len(q.shape) == 3:
             bs = 1
+            total_seqlen = q.shape[0]
         elif len(q.shape) == 4:
             bs = q.shape[0]
-        total_seqlen = bs * max_seqlen_q
+            total_seqlen = bs * q.shape[1]
 
         if bs == 1:
             if len(q.shape) == 3:
@@ -127,9 +128,10 @@ class FlashAttn3Weight(AttnWeightTemplate):
         softmax_scale = kwargs.get("softmax_scale", None)
         if len(q.shape) == 3:
             bs = 1
+            total_seqlen = q.shape[0]
         elif len(q.shape) == 4:
             bs = q.shape[0]
-        total_seqlen = bs * max_seqlen_q
+            total_seqlen = bs * q.shape[1]
 
         if bs == 1:
             if len(q.shape) == 3:
@@ -209,7 +211,7 @@ class FlashAttn4Weight(AttnWeightTemplate):
             k,
             v,
         )
-        x = x.reshape(bs * max_seqlen_q, -1)
+        x = x.reshape(q.shape[1], -1)
         return x
 
 

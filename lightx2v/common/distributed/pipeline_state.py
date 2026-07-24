@@ -101,6 +101,7 @@ class PipelineRuntimeState:
         warmup_steps: int = 1,
         vae_scale_factor: int = 16,
         patch_size: int = 1,
+        total_tokens: Optional[int] = None,
     ):
         self.height = height
         self.width = width
@@ -111,15 +112,20 @@ class PipelineRuntimeState:
         if num_pipeline_patch is not None:
             self.num_pipeline_patch = num_pipeline_patch
 
-        # Compute packed dimensions (matching Flux2Runner.set_target_shape)
-        multiple_of = vae_scale_factor * 2
-        self.packed_h = height // multiple_of
-        self.packed_w = width // multiple_of
-        total_tokens = self.packed_h * self.packed_w
+        if total_tokens is not None:
+            self.packed_h = 0
+            self.packed_w = 0
+            tok_count = total_tokens
+        else:
+            # Compute packed dimensions
+            multiple_of = vae_scale_factor * 2
+            self.packed_h = height // multiple_of
+            self.packed_w = width // multiple_of
+            tok_count = self.packed_h * self.packed_w
 
         # Split tokens evenly across patches
-        base = total_tokens // self.num_pipeline_patch
-        remainder = total_tokens % self.num_pipeline_patch
+        base = tok_count // self.num_pipeline_patch
+        remainder = tok_count % self.num_pipeline_patch
         self.pp_patches_token_num = []
         self.pp_patches_token_start_end_idx_global = []
         start = 0
