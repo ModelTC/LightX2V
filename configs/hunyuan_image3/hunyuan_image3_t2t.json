@@ -1,0 +1,18 @@
+{
+    "feature_caching": "NoCaching",
+    "moe_impl": "flashinfer",
+    "attn_impl": "sdpa",
+    "hunyuan_cfg_mode": "batch",
+    "pipeline_parallel": true,
+    "enable_cfg": false,
+    "enable_kv_cache": true,
+    "enable_text_kv_cache": true,
+    "bot_task": "auto",
+    "use_system_prompt": "None",
+    "max_new_tokens": 2048,
+    "text_do_sample": true,
+    "text_top_k": 1024,
+    "text_top_p": 0.95,
+    "text_temperature": 0.6,
+    "text_stream_output": true
+}

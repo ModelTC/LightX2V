@@ -18,10 +18,11 @@ except Exception:
     flashinfer_autotune = None
 
 
-FlashInferAutotuneMode = Literal["off", "tune", "load"]
+FlashInferAutotuneMode = Literal["off", "auto", "tune", "load"]
 AutotuneFactory = Callable[..., AbstractContextManager]
 TunerProvider = Callable[[], Any]
 StatusDeviceResolver = Callable[[], torch.device]
+LIGHTX2V_ROOT = Path(__file__).resolve().parents[4]
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,13 @@ class FlashInferAutotuneOptions:
     @property
     def tune_mode(self) -> bool:
         return self.mode == "tune"
+
+    def effective_tune_mode(self) -> bool:
+        if self.mode == "tune":
+            return True
+        if self.mode == "auto":
+            return self.cache_path is None or not self.cache_path.is_file()
+        return False
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> FlashInferAutotuneOptions:
@@ -78,8 +86,8 @@ class FlashInferAutotuneOptions:
             "n": "off",
         }
         normalized = bool_aliases.get(normalized, normalized)
-        if normalized not in ("off", "tune", "load"):
-            raise ValueError("flashinfer_autotune_mode must be one of: off, tune, load.")
+        if normalized not in ("off", "auto", "tune", "load"):
+            raise ValueError("flashinfer_autotune_mode must be one of: off, auto, tune, load.")
         return normalized
 
     @staticmethod
@@ -102,7 +110,10 @@ class FlashInferAutotuneOptions:
     def _resolve_cache_path(value: Any) -> Path | None:
         if value in (None, ""):
             return None
-        return Path(value).expanduser()
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = LIGHTX2V_ROOT / path
+        return path.resolve()
 
     @staticmethod
     def _parse_tuning_buckets(value: Any) -> tuple[int, ...] | None:
@@ -179,16 +190,17 @@ class FlashInferAutotuneController:
 
         autotune_factory = self._resolve_autotune_factory()
         self._prepare_cache_path()
+        effective_tune_mode = self.options.effective_tune_mode()
         logger.info(
             "HunyuanImage3 FlashInfer autotune enabled: "
-            f"mode={self.options.mode}, cache={self.options.cache_path}, "
+            f"mode={self.options.mode}, effective_tune_mode={effective_tune_mode}, cache={self.options.cache_path}, "
             f"buckets={self.options.tuning_buckets}, round_up={self.options.round_up}, "
             f"tune_max_num_tokens={self.options.tune_max_num_tokens}"
         )
 
         if self.distributed_context.coordination_required:
-            return self._distributed_autotune_context(autotune_factory)
-        return self._local_autotune_context(autotune_factory)
+            return self._distributed_autotune_context(autotune_factory, effective_tune_mode)
+        return self._local_autotune_context(autotune_factory, effective_tune_mode)
 
     def _resolve_autotune_factory(self) -> AutotuneFactory:
         factory = self._autotune_factory or flashinfer_autotune
@@ -205,29 +217,28 @@ class FlashInferAutotuneController:
 
     def _prepare_cache_path(self) -> None:
         cache_path = self.options.cache_path
-        if cache_path is not None:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-        if self.options.mode == "load" and cache_path is None:
-            raise ValueError("flashinfer_autotune_mode='load' requires flashinfer_autotune_cache.")
+        if cache_path is None:
+            raise ValueError(f"flashinfer_autotune_mode={self.options.mode!r} requires flashinfer_autotune_cache.")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _local_autotune_context(self, autotune_factory: AutotuneFactory) -> AbstractContextManager:
+    def _local_autotune_context(self, autotune_factory: AutotuneFactory, effective_tune_mode: bool) -> AbstractContextManager:
         cache_path = self.options.cache_path
         if self.options.mode == "load" and (cache_path is None or not cache_path.is_file()):
             raise FileNotFoundError(f"FlashInfer autotune cache does not exist for load mode: {cache_path}")
         return autotune_factory(
-            tune_mode=self.options.tune_mode,
+            tune_mode=effective_tune_mode,
             cache=None if cache_path is None else str(cache_path),
             tuning_buckets=self.options.tuning_buckets,
             round_up=self.options.round_up,
         )
 
     @contextmanager
-    def _distributed_autotune_context(self, autotune_factory: AutotuneFactory):
+    def _distributed_autotune_context(self, autotune_factory: AutotuneFactory, effective_tune_mode: bool):
         tuner = self._resolve_tuner()
         runtime = self.distributed_context
         group = runtime.process_group
         if group is None:
-            raise RuntimeError("Distributed FlashInfer autotune requires an initialized CFG or sequence parallel group.")
+            raise RuntimeError("Distributed FlashInfer autotune requires an initialized tensor, CFG, or sequence parallel group.")
 
         if dist.get_backend(group) == "nccl":
             if runtime.status_device_resolver is None:
@@ -245,14 +256,14 @@ class FlashInferAutotuneController:
             raise RuntimeError(f"Distributed FlashInfer autotune cache preflight failed for {cache_path}.") from load_error
 
         with autotune_factory(
-            tune_mode=self.options.tune_mode,
+            tune_mode=effective_tune_mode,
             cache=None,
             tuning_buckets=self.options.tuning_buckets,
             round_up=self.options.round_up,
         ):
             yield
 
-        save_error = self._save_distributed_cache(tuner, cache_path)
+        save_error = self._save_distributed_cache(tuner, cache_path, effective_tune_mode)
         save_succeeded = torch.tensor([0 if save_error is not None else 1], device=status_device, dtype=torch.int32)
         source_rank = dist.get_global_rank(group, 0)
         dist.broadcast(save_succeeded, src=source_rank, group=group)
@@ -273,11 +284,15 @@ class FlashInferAutotuneController:
             return ValueError("FlashInfer load mode requires a cache path.")
         return None
 
-    def _save_distributed_cache(self, tuner: Any, cache_path: str | None) -> Exception | None:
-        if not self.options.tune_mode or cache_path is None or not self.distributed_context.is_cache_writer:
+    def _save_distributed_cache(self, tuner: Any, cache_path: str | None, effective_tune_mode: bool) -> Exception | None:
+        if not effective_tune_mode or cache_path is None or not self.distributed_context.is_cache_writer:
             return None
         try:
             tuner.save_configs(cache_path)
+            cache_file = Path(cache_path)
+            if not cache_file.is_file() or cache_file.stat().st_size == 0:
+                raise RuntimeError(f"FlashInfer autotune did not create a non-empty cache file: {cache_path}")
+            logger.info(f"HunyuanImage3 FlashInfer autotune cache saved to: {cache_path}")
         except Exception as error:
             logger.exception(f"Failed to persist distributed FlashInfer autotune cache: {cache_path}")
             return error

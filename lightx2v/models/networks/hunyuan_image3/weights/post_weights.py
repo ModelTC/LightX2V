@@ -2,8 +2,9 @@ from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.models.networks.hunyuan_image3.weights.common import (
     HunyuanImage3TimestepEmbedderWeights,
     HunyuanImage3UNetUpWeights,
+    hunyuan_image3_mm_weight,
 )
-from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
 
 
 class HunyuanImage3PostWeights(WeightModule):
@@ -18,7 +19,15 @@ class HunyuanImage3PostWeights(WeightModule):
                 eps=config.get("rms_norm_eps", 1e-5),
             ),
         )
-        self.add_module("lm_head", MM_WEIGHT_REGISTER["Default"]("lm_head.weight"))
+        self.add_module(
+            "lm_head",
+            hunyuan_image3_mm_weight(
+                config,
+                "Default",
+                "lm_head.weight",
+                split_dim="col",
+            ),
+        )
         self.add_module("final_layer", HunyuanImage3UNetUpWeights("final_layer", config))
 
     def to_cpu(self, non_blocking=True):
