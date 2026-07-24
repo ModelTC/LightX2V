@@ -264,6 +264,27 @@ def auto_calc_config(config):
             tensor_p_size = int(parallel_config.get("tensor_p_size", 1))
             cfg_p_size = int(parallel_config.get("cfg_p_size", 1))
             seq_p_size = int(parallel_config.get("seq_p_size", 1))
+
+            nested_pipeline_parallel = parallel_config.get("pipeline_parallel")
+            legacy_pipeline_parallel = config.get("pipeline_parallel")
+            if nested_pipeline_parallel is not None and legacy_pipeline_parallel is not None and nested_pipeline_parallel != legacy_pipeline_parallel:
+                raise ValueError(f"Conflicting HunyuanImage3 pipeline settings: parallel.pipeline_parallel={nested_pipeline_parallel!r}, pipeline_parallel={legacy_pipeline_parallel!r}.")
+            pipeline_parallel = nested_pipeline_parallel if nested_pipeline_parallel is not None else legacy_pipeline_parallel
+            if pipeline_parallel is None:
+                pipeline_parallel = True
+            if not isinstance(pipeline_parallel, bool):
+                raise ValueError(f"HunyuanImage3 parallel.pipeline_parallel must be a boolean, got {pipeline_parallel!r}.")
+
+            nested_cfg_mode = parallel_config.get("cfg_mode")
+            legacy_cfg_mode = config.get("hunyuan_cfg_mode")
+            if nested_cfg_mode is not None and legacy_cfg_mode is not None:
+                if str(nested_cfg_mode).strip().lower() != str(legacy_cfg_mode).strip().lower():
+                    raise ValueError(f"Conflicting HunyuanImage3 CFG modes: parallel.cfg_mode={nested_cfg_mode!r}, hunyuan_cfg_mode={legacy_cfg_mode!r}.")
+            cfg_mode = nested_cfg_mode if nested_cfg_mode is not None else legacy_cfg_mode
+            cfg_mode = str(cfg_mode or "batch").strip().lower()
+            if cfg_mode not in ("batch", "serial", "parallel"):
+                raise ValueError(f"HunyuanImage3 parallel.cfg_mode must be one of batch/serial/parallel, got {cfg_mode!r}.")
+
             if tensor_p_size < 1:
                 raise ValueError(f"HunyuanImage3 parallel.tensor_p_size must be >= 1, got {tensor_p_size}.")
             if cfg_p_size not in (1, 2):
@@ -271,10 +292,8 @@ def auto_calc_config(config):
             if seq_p_size < 1:
                 raise ValueError(f"HunyuanImage3 parallel.seq_p_size must be >= 1, got {seq_p_size}.")
             if tensor_p_size > 1:
-                if cfg_p_size != 1 or seq_p_size != 1:
-                    raise ValueError("HunyuanImage3 tensor parallel cannot currently be combined with CFG or sequence parallel.")
-                if config.get("pipeline_parallel", True):
-                    raise ValueError("HunyuanImage3 tensor parallel requires pipeline_parallel=false.")
+                if pipeline_parallel:
+                    raise ValueError("HunyuanImage3 tensor parallel requires parallel.pipeline_parallel=false.")
                 moe_impl = str(config.get("moe_impl", "eager")).strip().lower()
                 if moe_impl not in ("eager", "flashinfer"):
                     raise ValueError("HunyuanImage3 tensor parallel supports moe_impl='eager' or 'flashinfer'.")
@@ -286,6 +305,8 @@ def auto_calc_config(config):
             parallel_config["tensor_p_size"] = tensor_p_size
             parallel_config["cfg_p_size"] = cfg_p_size
             parallel_config["seq_p_size"] = seq_p_size
+            parallel_config["pipeline_parallel"] = pipeline_parallel
+            parallel_config["cfg_mode"] = cfg_mode
 
             if seq_p_size > 1:
                 attn_type = parallel_config.get("seq_p_attn_type", "kv_all_gather")
@@ -297,18 +318,24 @@ def auto_calc_config(config):
                 parallel_config["seq_p_attn_type"] = attn_type
 
             config["parallel"] = parallel_config
+            # Runtime aliases keep existing model code and legacy callers
+            # compatible while JSON files use the canonical parallel branch.
+            config["pipeline_parallel"] = pipeline_parallel
+            config["hunyuan_cfg_mode"] = cfg_mode
 
-            cfg_mode = str(config.get("hunyuan_cfg_mode", "batch")).strip().lower()
             if cfg_p_size == 2 and cfg_mode != "parallel":
-                raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires hunyuan_cfg_mode='parallel'.")
+                raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires parallel.cfg_mode='parallel'.")
             if cfg_p_size == 1 and seq_p_size > 1 and config.get("enable_cfg", False) and cfg_mode != "serial":
-                raise ValueError("HunyuanImage3 sequence parallel with cfg_p_size=1 requires hunyuan_cfg_mode='serial'.")
+                raise ValueError("HunyuanImage3 sequence parallel with cfg_p_size=1 requires parallel.cfg_mode='serial'.")
 
             if seq_p_size > 1 and parallel_config["seq_p_attn_type"] == "ulysses":
                 q_heads = int(config.get("num_attention_heads") or config["num_heads"])
                 kv_heads = int(config.get("num_key_value_heads") or q_heads)
-                if q_heads % seq_p_size or kv_heads % seq_p_size:
-                    raise ValueError(f"HunyuanImage3 Ulysses requires seq_p_size to divide Q and KV heads: Q={q_heads}, KV={kv_heads}, seq_p_size={seq_p_size}.")
+                combined_head_parallel_size = tensor_p_size * seq_p_size
+                if q_heads % combined_head_parallel_size or kv_heads % combined_head_parallel_size:
+                    raise ValueError(
+                        f"HunyuanImage3 Ulysses requires tensor_p_size * seq_p_size to divide Q and KV heads: Q={q_heads}, KV={kv_heads}, tensor_p_size={tensor_p_size}, seq_p_size={seq_p_size}."
+                    )
 
     if config["model_cls"] == "lingbot_va" and "target_video_length" not in config:
         ar_config = config.get("ar_config", {})
@@ -366,28 +393,45 @@ def set_config(args):
 
 def set_parallel_config(config):
     if config["parallel"]:
-        tensor_p_size = config["parallel"].get("tensor_p_size", 1)
+        tensor_p_size = int(config["parallel"].get("tensor_p_size", 1))
+        cfg_p_size = int(config["parallel"].get("cfg_p_size", 1))
+        seq_p_size = int(config["parallel"].get("seq_p_size", 1))
+        world_size = dist.get_world_size()
+        expected_world_size = tensor_p_size * cfg_p_size * seq_p_size
+        if expected_world_size != world_size:
+            raise ValueError(
+                f"Parallel sizes must match the distributed world size: tensor_p_size ({tensor_p_size}) * cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) != world_size ({world_size})."
+            )
 
         if tensor_p_size > 1:
-            # Tensor parallel only: 1D mesh
-            assert tensor_p_size == dist.get_world_size(), f"tensor_p_size ({tensor_p_size}) must be equal to world_size ({dist.get_world_size()})"
-            config["device_mesh"] = init_device_mesh(AI_DEVICE, (tensor_p_size,), mesh_dim_names=("tensor_p",))
+            # Tensor parallel is the innermost dimension. Optional CFG and
+            # sequence dimensions are prepended so ranks with the same
+            # non-TP coordinates form contiguous TP groups. For TP+SP+CFG:
+            #   mesh shape/names = [cfg_p, seq_p, tensor_p].
+            mesh_shape = []
+            mesh_dim_names = []
+            if cfg_p_size > 1:
+                mesh_shape.append(cfg_p_size)
+                mesh_dim_names.append("cfg_p")
+            if seq_p_size > 1:
+                mesh_shape.append(seq_p_size)
+                mesh_dim_names.append("seq_p")
+            mesh_shape.append(tensor_p_size)
+            mesh_dim_names.append("tensor_p")
+            config["device_mesh"] = init_device_mesh(
+                AI_DEVICE,
+                tuple(mesh_shape),
+                mesh_dim_names=tuple(mesh_dim_names),
+            )
             config["tensor_parallel"] = True
-            config["seq_parallel"] = False
-            config["cfg_parallel"] = False
+            config["seq_parallel"] = seq_p_size > 1
+            config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
         else:
             # Original 2D mesh for cfg_p and seq_p
-            cfg_p_size = config["parallel"].get("cfg_p_size", 1)
-            seq_p_size = config["parallel"].get("seq_p_size", 1)
-            assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) must be equal to world_size ({dist.get_world_size()})"
             config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
             config["tensor_parallel"] = False
-
-            if config["parallel"] and config["parallel"].get("seq_p_size", False) and config["parallel"]["seq_p_size"] > 1:
-                config["seq_parallel"] = True
-
-            if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
-                config["cfg_parallel"] = True
+            config["seq_parallel"] = seq_p_size > 1
+            config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
 
         # warmup dist
         if AI_DEVICE == "cuda":

@@ -42,9 +42,10 @@ def _resolve_sequence_parallel_pipeline_lane(config, devices):
     if len(devices) % parallel_world_size:
         raise ValueError(f"HunyuanImage3 sequence parallel requires pipeline device count ({len(devices)}) to be divisible by cfg_p_size * seq_p_size ({parallel_world_size}).")
 
-    layout = str(config.get("hunyuan_image3_pipeline_layout", "interleaved")).strip().lower()
+    parallel = config.get("parallel") or {}
+    layout = str(parallel.get("pipeline_layout", config.get("hunyuan_image3_pipeline_layout", "interleaved"))).strip().lower()
     if layout != "interleaved":
-        raise ValueError(f"HunyuanImage3 sequence parallel uses Wan-style rank/device initialization and currently requires hunyuan_image3_pipeline_layout='interleaved'; got {layout!r}.")
+        raise ValueError(f"HunyuanImage3 sequence parallel uses Wan-style rank/device initialization and currently requires parallel.pipeline_layout='interleaved'; got {layout!r}.")
 
     lane = devices[global_rank::parallel_world_size]
     expected_device = f"cuda:{torch.cuda.current_device()}"
@@ -54,7 +55,8 @@ def _resolve_sequence_parallel_pipeline_lane(config, devices):
 
 
 def resolve_pipeline_devices(config, fallback_device):
-    configured = config.get("pipeline_parallel_devices") or config.get("hunyuan_image3_pipeline_devices")
+    parallel = config.get("parallel") or {}
+    configured = parallel.get("pipeline_devices") or config.get("pipeline_parallel_devices") or config.get("hunyuan_image3_pipeline_devices")
     if configured:
         if isinstance(configured, str):
             devices = [item.strip() for item in configured.split(",") if item.strip()]
@@ -65,7 +67,8 @@ def resolve_pipeline_devices(config, fallback_device):
             return _resolve_sequence_parallel_pipeline_lane(config, devices)
         return devices
 
-    if config.get("pipeline_parallel", True) and torch.cuda.is_available():
+    pipeline_parallel = parallel.get("pipeline_parallel", config.get("pipeline_parallel", True))
+    if pipeline_parallel and torch.cuda.is_available():
         device_count = torch.cuda.device_count()
         if device_count > 0:
             if config.get("seq_parallel", False):
@@ -147,7 +150,17 @@ class HunyuanImage3Model(BaseTransformerModel):
         self._init_weights()
         self._init_infer()
 
-        if self.config.get("seq_parallel", False):
+        if self.config.get("seq_parallel", False) and self.tensor_parallel:
+            logger.info(
+                "HunyuanImage3 tensor + sequence parallel initialized: "
+                f"tp_rank={self.tp_rank}, "
+                f"tp_size={self.tp_size}, "
+                f"sp_rank={dist.get_rank(self.seq_p_group)}, "
+                f"sp_size={dist.get_world_size(self.seq_p_group)}, "
+                f"attention={self.sequence_parallel_attn_type}, "
+                f"device={self.pipeline_devices[0]}"
+            )
+        elif self.config.get("seq_parallel", False):
             logger.info(
                 "HunyuanImage3 sequence parallel initialized: "
                 f"rank={dist.get_rank(self.seq_p_group)}, "
@@ -181,9 +194,7 @@ class HunyuanImage3Model(BaseTransformerModel):
         if not self.tensor_parallel:
             return
         if self.pipeline_parallel:
-            raise ValueError("HunyuanImage3 tensor parallel cannot be combined with pipeline parallel; set pipeline_parallel=false.")
-        if self.config.get("seq_parallel", False) or self.config.get("cfg_parallel", False):
-            raise ValueError("HunyuanImage3 tensor parallel currently requires seq_parallel=false and cfg_parallel=false.")
+            raise ValueError("HunyuanImage3 tensor parallel cannot be combined with pipeline parallel; set parallel.pipeline_parallel=false.")
         if self.config.get("cpu_offload", False):
             raise NotImplementedError("HunyuanImage3 tensor parallel does not support cpu_offload.")
         if self.config.get("lazy_load", False):
@@ -282,22 +293,29 @@ class HunyuanImage3Model(BaseTransformerModel):
             return
         if self.seq_p_group is None:
             raise RuntimeError("HunyuanImage3 sequence parallel requires an initialized seq_p process group.")
-        cfg_mode = str(self.config.get("hunyuan_cfg_mode", "batch")).strip().lower()
+        parallel = self.config.get("parallel") or {}
+        cfg_mode = str(parallel.get("cfg_mode", self.config.get("hunyuan_cfg_mode", "batch"))).strip().lower()
         if self.config.get("cfg_parallel", False):
             if not self.config.get("enable_cfg", False):
                 raise ValueError("HunyuanImage3 cfg_parallel requires enable_cfg=true.")
             if cfg_mode != "parallel":
-                raise ValueError("HunyuanImage3 CFG+SP requires hunyuan_cfg_mode='parallel'.")
+                raise ValueError("HunyuanImage3 CFG+SP requires parallel.cfg_mode='parallel'.")
         elif self.config.get("enable_cfg", False) and cfg_mode != "serial":
-            raise ValueError("HunyuanImage3 sequence parallel requires hunyuan_cfg_mode='serial' so every transformer forward has batch size 1.")
+            raise ValueError("HunyuanImage3 sequence parallel requires parallel.cfg_mode='serial' so every transformer forward has batch size 1.")
         if self.config.get("use_taylor_cache", False) and self.config.get("enable_kv_cache", False):
             raise ValueError("HunyuanImage3 sequence parallel does not support enabling Taylor cache and KV cache together.")
         if self.sequence_parallel_attn_type == "ulysses":
             world_size = dist.get_world_size(self.seq_p_group)
-            q_heads = int(self.config.get("num_attention_heads") or self.config["num_heads"])
-            kv_heads = int(self.config.get("num_key_value_heads") or q_heads)
-            if q_heads % world_size or kv_heads % world_size:
-                raise ValueError(f"HunyuanImage3 Ulysses requires seq_p_size to divide both Q and KV heads: Q={q_heads}, KV={kv_heads}, seq_p_size={world_size}.")
+            global_q_heads = int(self.config.get("num_attention_heads") or self.config["num_heads"])
+            global_kv_heads = int(self.config.get("num_key_value_heads") or global_q_heads)
+            local_q_heads = global_q_heads // self.tp_size
+            local_kv_heads = global_kv_heads // self.tp_size
+            if local_q_heads % world_size or local_kv_heads % world_size:
+                raise ValueError(
+                    "HunyuanImage3 Ulysses requires seq_p_size to divide TP-local Q and KV heads: "
+                    f"global_Q={global_q_heads}, global_KV={global_kv_heads}, tp_size={self.tp_size}, "
+                    f"local_Q={local_q_heads}, local_KV={local_kv_heads}, seq_p_size={world_size}."
+                )
 
     def _tensor_target_device(self, key):
         return resolve_pipeline_device_for_key(key, self.config, self.pipeline_devices)
@@ -414,7 +432,9 @@ class HunyuanImage3Model(BaseTransformerModel):
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
         if pre_infer_out.hidden_states.shape[0] != 1:
-            raise ValueError("HunyuanImage3 sequence parallel expects batch size 1 per transformer forward; use hunyuan_cfg_mode='serial' for pure SP or 'parallel' for CFG+SP.")
+            raise ValueError(
+                "HunyuanImage3 sequence parallel expects batch size 1 per transformer forward; use parallel.cfg_mode='serial' when cfg_p_size=1 (including TP+SP), or 'parallel' for CFG+SP."
+            )
 
         world_size = dist.get_world_size(self.seq_p_group)
         rank = dist.get_rank(self.seq_p_group)

@@ -379,19 +379,22 @@ class HunyuanImage3Runner(DefaultRunner):
     def _parallel_control_group(self):
         """Return the group used to keep replicated runner state identical.
 
-         Attention collectives remain scoped to ``seq_p_group`` and CFG prediction
+        Attention collectives remain scoped to ``seq_p_group`` and CFG prediction
         exchange remains scoped to ``cfg_p_group``. Tensor-parallel runs keep
         sampled tokens and initial latents synchronized through ``tensor_p``.
-        Sequence-parallel hybrid runs use WORLD so runner state also spans the
-        CFG dimension. Pure CFG deliberately returns no runner control group.
+        Hybrid TP/SP/CFG runs use WORLD so runner state spans every active
+        mesh dimension. Pure CFG deliberately returns no runner control group.
         """
-        if self._tensor_parallel_enabled():
-            return self.model.tp_group
-        if not self._sequence_parallel_enabled():
-            return None
-        if self._cfg_parallel_enabled():
+        tensor_parallel_active = self._tensor_parallel_enabled()
+        sequence_parallel_active = self._sequence_parallel_enabled()
+        cfg_parallel_active = self._cfg_parallel_enabled()
+        if sum((tensor_parallel_active, sequence_parallel_active, cfg_parallel_active)) > 1:
             return dist.group.WORLD
-        return self.model.seq_p_group
+        if tensor_parallel_active:
+            return self.model.tp_group
+        if sequence_parallel_active:
+            return self.model.seq_p_group
+        return None
 
     def _is_output_rank(self):
         return not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0
@@ -536,11 +539,12 @@ class HunyuanImage3Runner(DefaultRunner):
         if not prepared_inputs.get("do_cfg", False):
             return "none"
 
-        mode = str(self.config.get("hunyuan_cfg_mode", "batch")).lower()
+        parallel = self.config.get("parallel") or {}
+        mode = str(parallel.get("cfg_mode", self.config.get("hunyuan_cfg_mode", "batch"))).lower()
         if mode not in ("batch", "serial", "parallel"):
-            raise ValueError(f"HunyuanImage3 hunyuan_cfg_mode must be one of batch/serial/parallel, got {mode!r}.")
+            raise ValueError(f"HunyuanImage3 parallel.cfg_mode must be one of batch/serial/parallel, got {mode!r}.")
         if mode == "parallel" and not self._cfg_parallel_enabled():
-            raise ValueError("HunyuanImage3 hunyuan_cfg_mode='parallel' requires enable_cfg=true and a distributed config with parallel.cfg_p_size=2.")
+            raise ValueError("HunyuanImage3 parallel.cfg_mode='parallel' requires enable_cfg=true and parallel.cfg_p_size=2.")
         return mode
 
     def _prepare_cfg_parallel_branch_inputs(self, prepared_inputs, cfg_p_rank, mark_parallel_branch=True):
@@ -1232,7 +1236,7 @@ class HunyuanImage3Runner(DefaultRunner):
         use_kv_cache = self._hunyuan_kv_cache_enabled()
         taylor_cache_dic = self._build_taylor_cache_dic(num_steps) if self._hunyuan_taylor_cache_enabled() else None
         if taylor_cache_dic is not None and cfg_mode in ("serial", "parallel"):
-            raise NotImplementedError("HunyuanImage3 Taylor cache currently supports hunyuan_cfg_mode='batch' only.")
+            raise NotImplementedError("HunyuanImage3 Taylor cache currently supports parallel.cfg_mode='batch' only.")
         if taylor_cache_dic is not None and hasattr(self.model, "reset_taylor_cache"):
             self.model.reset_taylor_cache()
         if taylor_cache_dic is not None:
