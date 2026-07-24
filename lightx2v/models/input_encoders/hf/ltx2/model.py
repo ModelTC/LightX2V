@@ -71,6 +71,7 @@ class LTX2TextEncoder:
         device: torch.device,
         dtype: torch.dtype = torch.bfloat16,
         cpu_offload: bool = False,
+        gemma_attn_implementation: str | None = None,
     ):
         """
         Initialize the simplified text encoder loader.
@@ -80,19 +81,28 @@ class LTX2TextEncoder:
             gemma_root: Root directory containing Gemma model, tokenizer, and processor
             device: Target device for the model
             dtype: Data type for model parameters
+            gemma_attn_implementation: Optional Transformers attention
+                implementation override (for example, ``"eager"``).
         """
         self.checkpoint_path = checkpoint_path
         self.gemma_root = gemma_root
         self.device = device
         self.dtype = dtype
         self.cpu_offload = cpu_offload
+        self.gemma_attn_implementation = gemma_attn_implementation
         self.loader = SafetensorsModelStateDictLoader()
         self.text_encoder = self.load()
 
     def _load_gemma_model(self) -> Gemma3ForConditionalGeneration:
         """Load Gemma model from gemma_root."""
         gemma_path = _find_matching_dir(self.gemma_root, "model*.safetensors")
-        return Gemma3ForConditionalGeneration.from_pretrained(gemma_path, local_files_only=True, torch_dtype=torch.bfloat16)
+        kwargs = {
+            "local_files_only": True,
+            "torch_dtype": torch.bfloat16,
+        }
+        if self.gemma_attn_implementation is not None:
+            kwargs["attn_implementation"] = self.gemma_attn_implementation
+        return Gemma3ForConditionalGeneration.from_pretrained(gemma_path, **kwargs)
 
     def _load_tokenizer(self) -> LTXVGemmaTokenizer:
         """Load tokenizer from gemma_root."""
