@@ -16,13 +16,18 @@ class HidreamO1ImagePreInfer:
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
         self.vision_infer = HidreamO1ImageVisionInfer(config)
+        self.rope = None
         self.rotary_emb = None
+        self.head_dim = None
         if config.get("_hidream_model_config") is not None:
-            self.rotary_emb = Qwen3VLTextRotaryEmbedding(config=config["_hidream_model_config"].text_config)
+            text_config = config["_hidream_model_config"].text_config
+            self.rotary_emb = Qwen3VLTextRotaryEmbedding(config=text_config)
+            self.head_dim = getattr(text_config, "head_dim", text_config.hidden_size // text_config.num_attention_heads)
         self._rope_cache = {}
         self._idx_ar_cache = {}
-        self._rope_positions_cache = {}
+        self._idx_gen_cache = {}
         self._seq_p_rope_cache = {}
+        self._seq_p_cu_seqlens_cache = {}
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
@@ -31,11 +36,16 @@ class HidreamO1ImagePreInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    def set_rope(self, rope):
+        self.rope = rope
+        self.clear_cache()
+
     def clear_cache(self):
         self._rope_cache.clear()
         self._idx_ar_cache.clear()
-        self._rope_positions_cache.clear()
+        self._idx_gen_cache.clear()
         self._seq_p_rope_cache.clear()
+        self._seq_p_cu_seqlens_cache.clear()
 
     def infer(self, weights, sample, z_in, t_pixeldit, precomputed_image_embeds=None, precomputed_deepstack_image_embeds=None):
         input_ids = sample["input_ids"]
@@ -111,18 +121,23 @@ class HidreamO1ImagePreInfer:
         if token_types.shape[0] == 1 and inputs_embeds.shape[0] > 1:
             token_types = token_types.expand(inputs_embeds.shape[0], -1)
 
-        rope_cos_sin = self._prepare_rope_cos_sin(sample["position_ids"], inputs_embeds)
+        raw_rope, rope_cos_sin, rope_positions = self._prepare_rope_cos_sin(sample["position_ids"], inputs_embeds)
         idx_ar = self._idx_ar(token_types)
         idx_gen = self._idx_gen(token_types)
         rope_cos_sin_ar = None
+        rope_positions_ar = None
         rope_cos_sin_gen = None
+        rope_positions_gen = None
+        seq_p_cu_seqlens_qkv = None
         seq_p_padding_size = 0
         if self.seq_p_group is not None:
-            rope_cos_sin_ar, rope_cos_sin_gen, seq_p_padding_size = self._prepare_seq_parallel_rope(rope_cos_sin, idx_ar, idx_gen)
+            rope_cos_sin_ar, rope_positions_ar, rope_cos_sin_gen, rope_positions_gen, seq_p_padding_size = self._prepare_seq_parallel_rope(raw_rope, idx_ar, idx_gen)
+            seq_p_cu_seqlens_qkv = self._prepare_seq_parallel_cu_seqlens(idx_ar, idx_gen, seq_p_padding_size)
 
         return HidreamPreInferOutput(
             inputs_embeds=inputs_embeds,
             rope_cos_sin=rope_cos_sin,
+            rope_positions=rope_positions,
             idx_ar=idx_ar,
             idx_gen=idx_gen,
             vinput_mask=sample["vinput_mask"],
@@ -132,7 +147,10 @@ class HidreamO1ImagePreInfer:
             cond_deepstack_image_embeds=cond_deepstack_image_embeds,
             tgt_image_len=sample.get("tgt_image_len"),
             rope_cos_sin_ar=rope_cos_sin_ar,
+            rope_positions_ar=rope_positions_ar,
             rope_cos_sin_gen=rope_cos_sin_gen,
+            rope_positions_gen=rope_positions_gen,
+            seq_p_cu_seqlens_qkv=seq_p_cu_seqlens_qkv,
             seq_p_padding_size=seq_p_padding_size,
         )
 
@@ -144,6 +162,14 @@ class HidreamO1ImagePreInfer:
         if dim % 2:
             embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
         return embedding
+
+    def _prepare_backend_rope(self, rope_cos_sin):
+        if self.rope is None:
+            raise RuntimeError("HiDream attention RoPE must be set before inference.")
+        if self.head_dim is None:
+            raise RuntimeError("HiDream attention head dimension is not initialized.")
+        rope_freqs = self.rope.prepare_freqs(rope_cos_sin, rotary_dim=self.head_dim)
+        return rope_freqs, self.rope.prepare_positions(rope_freqs)
 
     def _prepare_rope_cos_sin(self, position_ids, inputs_embeds):
         if self.rotary_emb is None:
@@ -157,14 +183,15 @@ class HidreamO1ImagePreInfer:
             position_ids = position_ids[1:]
 
         cache_key = (pass_key, position_ids.data_ptr(), tuple(position_ids.shape), device.type, device.index, inputs_embeds.dtype)
-        rope_cos_sin = self._rope_cache.get(cache_key)
-        if rope_cos_sin is None:
+        rope_cache = self._rope_cache.get(cache_key)
+        if rope_cache is None:
             self.rotary_emb = self.rotary_emb.to(device)
             cos, sin = self.rotary_emb(inputs_embeds, position_ids)
-            positions = self._rope_positions(position_ids.shape[-1], device)
-            rope_cos_sin = (cos, sin, positions)
-            self._rope_cache[cache_key] = rope_cos_sin
-        return rope_cos_sin
+            raw_rope = (cos, sin)
+            rope_freqs, positions = self._prepare_backend_rope(raw_rope)
+            rope_cache = (raw_rope, rope_freqs, positions)
+            self._rope_cache[cache_key] = rope_cache
+        return rope_cache
 
     def _idx_ar(self, token_types):
         pass_key = self._cfg_pass_key()
@@ -176,7 +203,13 @@ class HidreamO1ImagePreInfer:
         return idx_ar
 
     def _idx_gen(self, token_types):
-        return torch.nonzero(token_types[0].bool(), as_tuple=False).squeeze(-1)
+        pass_key = self._cfg_pass_key()
+        cache_key = (pass_key, token_types.data_ptr(), tuple(token_types.shape), token_types.device.type, token_types.device.index)
+        idx_gen = self._idx_gen_cache.get(cache_key)
+        if idx_gen is None:
+            idx_gen = torch.nonzero(token_types[0].bool(), as_tuple=False).squeeze(-1)
+            self._idx_gen_cache[cache_key] = idx_gen
+        return idx_gen
 
     def _prepare_seq_parallel_rope(self, rope_cos_sin, idx_ar, idx_gen):
         world_size = dist.get_world_size(self.seq_p_group)
@@ -184,7 +217,17 @@ class HidreamO1ImagePreInfer:
         padding_size = (world_size - (idx_gen.shape[0] % world_size)) % world_size
         rope_cos_sin_ar = self._slice_rope(rope_cos_sin, idx_ar)
         rope_cos_sin_gen = self._slice_rope(rope_cos_sin, idx_gen, padding_size, world_size, cur_rank)
-        return rope_cos_sin_ar, rope_cos_sin_gen, padding_size
+        return rope_cos_sin_ar[0], rope_cos_sin_ar[1], rope_cos_sin_gen[0], rope_cos_sin_gen[1], padding_size
+
+    def _prepare_seq_parallel_cu_seqlens(self, idx_ar, idx_gen, padding_size):
+        world_size = dist.get_world_size(self.seq_p_group)
+        cache_key = (self._cfg_pass_key(), idx_ar.shape[0], idx_gen.shape[0], padding_size, world_size)
+        cu_seqlens = self._seq_p_cu_seqlens_cache.get(cache_key)
+        if cu_seqlens is None:
+            local_gen_len = (idx_gen.shape[0] + padding_size) // world_size
+            cu_seqlens = torch.tensor([0, local_gen_len + idx_ar.shape[0]], dtype=torch.int32, device="cpu")
+            self._seq_p_cu_seqlens_cache[cache_key] = cu_seqlens
+        return cu_seqlens
 
     def _slice_rope(self, rope_cos_sin, idx, padding_size=0, world_size=None, cur_rank=None):
         cos, sin = rope_cos_sin[:2]
@@ -213,18 +256,9 @@ class HidreamO1ImagePreInfer:
         if world_size is not None:
             cos = torch.chunk(cos, world_size, dim=1)[cur_rank].contiguous()
             sin = torch.chunk(sin, world_size, dim=1)[cur_rank].contiguous()
-        positions = torch.arange(cos.shape[1], device=cos.device, dtype=torch.long)
-        rope_slice = (cos, sin, positions)
+        rope_slice = self._prepare_backend_rope((cos, sin))
         self._seq_p_rope_cache[cache_key] = rope_slice
         return rope_slice
 
     def _cfg_pass_key(self):
         return "cond" if self.scheduler.infer_condition else "uncond"
-
-    def _rope_positions(self, seq_len, device):
-        cache_key = (seq_len, device.type, device.index)
-        positions = self._rope_positions_cache.get(cache_key)
-        if positions is None:
-            positions = torch.arange(seq_len, device=device, dtype=torch.long)
-            self._rope_positions_cache[cache_key] = positions
-        return positions

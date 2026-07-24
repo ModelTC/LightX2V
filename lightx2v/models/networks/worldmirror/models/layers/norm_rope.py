@@ -1,4 +1,5 @@
 import math
+from dataclasses import dataclass
 from typing import Dict, Literal, Tuple, Union
 
 import numpy as np
@@ -11,20 +12,50 @@ from lightx2v.common.ops.rope import TorchRealRope
 _WORLDMIRROR_NORMALIZED_ROPE = TorchRealRope(layout="split_half")
 
 
+@dataclass(frozen=True)
+class NormalizedRotaryPositionEmbedding2DCache:
+    """Per-forward, position-gathered normalized RoPE values."""
+
+    cos: torch.Tensor
+    sin: torch.Tensor
+
+    def reshape(self, batch_size: int, token_count: int) -> "NormalizedRotaryPositionEmbedding2DCache":
+        def reshape_tensor(tensor: torch.Tensor) -> torch.Tensor:
+            if tensor.shape[0] * tensor.shape[2] != batch_size * token_count:
+                raise ValueError(f"Cannot reshape RoPE cache from batch/tokens={tensor.shape[0]}/{tensor.shape[2]} to {batch_size}/{token_count}.")
+            return tensor.reshape(batch_size, 1, token_count, tensor.shape[-1])
+
+        return NormalizedRotaryPositionEmbedding2DCache(
+            cos=reshape_tensor(self.cos),
+            sin=reshape_tensor(self.sin),
+        )
+
+    def select_batch(self, indices: torch.Tensor) -> "NormalizedRotaryPositionEmbedding2DCache":
+        return NormalizedRotaryPositionEmbedding2DCache(
+            cos=self.cos.index_select(0, indices),
+            sin=self.sin.index_select(0, indices),
+        )
+
+
 class PositionGetter:
     """Generates and caches 2D spatial positions for patches in a grid."""
 
     def __init__(self) -> None:
-        self.position_cache: Dict[Tuple[int, int], torch.Tensor] = {}
+        self.position_cache: Dict[Tuple[int, int, torch.device], torch.Tensor] = {}
+
+    def clear_cache(self) -> None:
+        self.position_cache.clear()
 
     def __call__(self, batch_size: int, height: int, width: int, device: torch.device) -> torch.Tensor:
-        if (height, width) not in self.position_cache:
+        cache_key = (height, width, torch.device(device))
+        if cache_key not in self.position_cache:
+            self.position_cache.clear()
             y_coords = torch.arange(height, device=device)
             x_coords = torch.arange(width, device=device)
-            self.position_cache[height, width] = torch.cartesian_prod(y_coords, x_coords)
+            self.position_cache[cache_key] = torch.cartesian_prod(y_coords, x_coords)
 
-        cached_positions = self.position_cache[height, width]
-        return cached_positions.view(1, height * width, 2).expand(batch_size, -1, -1).clone()
+        cached_positions = self.position_cache[cache_key]
+        return cached_positions.view(1, height * width, 2).expand(batch_size, -1, -1)
 
 
 class NormalizedRotaryPositionEmbedding2D(nn.Module):
@@ -117,22 +148,43 @@ class NormalizedRotaryPositionEmbedding2D(nn.Module):
         sin = torch.sin(angles)
         return sin, cos
 
+    def prepare_cache(self, positions: torch.Tensor, head_dim: int, dtype: torch.dtype) -> NormalizedRotaryPositionEmbedding2DCache:
+        """Sample coordinates and gather their cos/sin values once per forward."""
+        if head_dim != self.head_dim:
+            raise ValueError(f"Head dim {head_dim} doesn't match configured {self.head_dim}.")
+        if positions.ndim != 3 or positions.shape[-1] != 2:
+            raise ValueError("Positions must have shape (batch_size, n_tokens, 2).")
+
+        batch_size, token_count = positions.shape[:2]
+        height = int(positions[..., 0].max().item() + 1)
+        width = int(positions[..., 1].max().item() + 1)
+        sin, cos = self._get_sincos_for_grid(height, width, positions.device, dtype)
+
+        indices = (positions[..., 0] * width + positions[..., 1]).long()
+        flat_indices = indices.reshape(-1)
+        gathered_sin = sin[flat_indices].view(batch_size, 1, token_count, head_dim)
+        gathered_cos = cos[flat_indices].view(batch_size, 1, token_count, head_dim)
+        return NormalizedRotaryPositionEmbedding2DCache(cos=gathered_cos, sin=gathered_sin)
+
+    @staticmethod
+    def _validate_cache(tokens: torch.Tensor, cache: NormalizedRotaryPositionEmbedding2DCache) -> None:
+        if tokens.shape[0] != cache.cos.shape[0] or tokens.shape[-2] != cache.cos.shape[-2]:
+            raise ValueError(f"RoPE cache shape does not match tokens: cache={cache.cos.shape}, tokens={tokens.shape}.")
+
+    def apply_single(self, tokens: torch.Tensor, cache: NormalizedRotaryPositionEmbedding2DCache) -> torch.Tensor:
+        self._validate_cache(tokens, cache)
+        return _WORLDMIRROR_NORMALIZED_ROPE.apply_single(tokens, (cache.cos, cache.sin))
+
+    def apply_qk(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        cache: NormalizedRotaryPositionEmbedding2DCache,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self._validate_cache(q, cache)
+        self._validate_cache(k, cache)
+        return _WORLDMIRROR_NORMALIZED_ROPE.apply(q, k, (cache.cos, cache.sin))
+
     def forward(self, tokens: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
-        # Validate inputs
-        assert tokens.size(-1) % 2 == 0, "Feature dimension must be even"
-        assert positions.ndim == 3 and positions.shape[-1] == 2, "Positions must have shape (batch_size, n_tokens, 2)"
-
-        B, _, N, C_head = tokens.shape
-        if C_head != self.head_dim:
-            raise ValueError(f"Head dim {C_head} doesn't match configured {self.head_dim}")
-
-        H = int(positions[..., 0].max().item() + 1)
-        W = int(positions[..., 1].max().item() + 1)
-
-        sin, cos = self._get_sincos_for_grid(H, W, tokens.device, tokens.dtype)
-
-        indices = (positions[..., 0] * W + positions[..., 1]).long()
-        flat_indices = indices.view(-1)
-        gathered_sin = sin[flat_indices].view(B, 1, N, C_head)
-        gathered_cos = cos[flat_indices].view(B, 1, N, C_head)
-        return _WORLDMIRROR_NORMALIZED_ROPE.apply_single(tokens, (gathered_cos, gathered_sin))
+        cache = self.prepare_cache(positions, head_dim=tokens.shape[-1], dtype=tokens.dtype)
+        return self.apply_single(tokens, cache)

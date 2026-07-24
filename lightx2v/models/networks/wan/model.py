@@ -81,6 +81,12 @@ class WanModel(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
+        if hasattr(self.pre_infer, "set_rope"):
+            first_attn = self.transformer_weights.blocks[0].compute_phases[0]
+            rope = getattr(first_attn, "dreamzero_rope", None)
+            self.pre_infer.set_rope(rope if rope is not None else first_attn.rope)
+        if hasattr(self.pre_infer, "set_audio_rope"):
+            self.pre_infer.set_audio_rope(self.transformer_weights.blocks[0].compute_phases[2].rope_1d)
         if hasattr(self.transformer_infer, "offload_manager"):
             self._init_offload_manager()
 

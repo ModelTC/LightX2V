@@ -11,6 +11,10 @@ class ZPreInferModuleOutput:
     temb_txt_silu: torch.Tensor
     x_freqs_cis: torch.Tensor
     cap_freqs_cis: torch.Tensor
+    unified_freqs_cis: torch.Tensor
+    x_rope_positions: torch.Tensor | None
+    cap_rope_positions: torch.Tensor | None
+    unified_rope_positions: torch.Tensor | None
     image_tokens_len: int
     x_item_seqlens: list
     cap_item_seqlens: list

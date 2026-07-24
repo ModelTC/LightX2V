@@ -2,7 +2,7 @@ import argparse
 
 import torch
 
-from lightx2v_train.data import build_data
+from lightx2v_train.data import build_data, prepare_data
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
 from lightx2v_train.trainers import build_trainer
@@ -23,6 +23,7 @@ def main():
     setup_logger(config)
 
     try:
+        prepare_data(config)
         model = build_model(config)
         model.load_components()
 

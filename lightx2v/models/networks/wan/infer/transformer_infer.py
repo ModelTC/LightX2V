@@ -38,19 +38,47 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
-            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
-            self.seq_p_tensor_fusion = self.config["parallel"].get("seq_p_tensor_fusion", False)
+            parallel_config = self.config["parallel"]
+            self.seq_p_attn_type = parallel_config.get("seq_p_attn_type", "ulysses")
+            self.seq_p_fp8_comm = parallel_config.get("seq_p_fp8_comm", False)
+            self.seq_p_fp4_comm = parallel_config.get("seq_p_fp4_comm", False)
+            self.seq_p_head_parallel = parallel_config.get("seq_p_head_parallel", False)
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
+            self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel_config.get("seq_p_a2a_backend", "torch")
+            legacy_quant_scheme = None
+            if self.seq_p_fp8_comm and self.seq_p_fp4_comm:
+                raise ValueError("seq_p_fp8_comm and seq_p_fp4_comm cannot both be enabled.")
+            if self.seq_p_fp8_comm:
+                legacy_quant_scheme = "fp8"
+            elif self.seq_p_fp4_comm:
+                legacy_quant_scheme = "fp4"
+
+            self.seq_p_configured_quant_scheme = parallel_config.get("seq_p_quant_scheme")
+            self.seq_p_quant_scheme = self.seq_p_configured_quant_scheme
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+            if self.seq_p_quant_scheme is not None and legacy_quant_scheme is not None and self.seq_p_quant_scheme != legacy_quant_scheme:
+                raise ValueError("seq_p_quant_scheme conflicts with legacy seq_p_fp8_comm/seq_p_fp4_comm settings.")
+            if self.seq_p_quant_scheme is None:
+                self.seq_p_quant_scheme = legacy_quant_scheme
+            self.use_new_seq_p_interface = True
         else:
             self.seq_p_group = None
+            self.seq_p_attn_type = None
             self.seq_p_fp8_comm = False
             self.seq_p_fp4_comm = False
-            self.enable_head_parallel = False
+            self.seq_p_head_parallel = False
             self.seq_p_tensor_fusion = False
+            self.seq_p_prepost_backend = "torch"
+            self.seq_p_a2a_backend = "torch"
+            self.seq_p_quant_scheme = None
+            self.seq_p_configured_quant_scheme = None
+            self.use_new_seq_p_interface = False
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
+        self.rope_positions = None
         self.use_compile = config.get("use_compile", False)
         if self.use_compile:
             self.compiled_blocks = {}
@@ -87,6 +115,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
+        self.rope_positions = getattr(pre_infer_out, "rope_positions", None)
         self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
         self.reset_attention_states(weights.blocks)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
@@ -132,14 +161,15 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.compiled_blocks[block_idx] = (block, compiled)
         return compiled
 
+    def run_block(self, block_idx, block, x, pre_infer_out):
+        self.block_idx = block_idx
+        if self.use_compile:
+            return self.get_compiled_block(block_idx, block)(x, pre_infer_out)
+        return self.infer_block(block, x, pre_infer_out)
+
     def infer_without_offload(self, blocks, x, pre_infer_out):
         for block_idx, block in enumerate(blocks):
-            self.block_idx = block_idx
-            if self.use_compile:
-                compiled_block = self.get_compiled_block(block_idx, block)
-                x = compiled_block(x, pre_infer_out)
-            else:
-                x = self.infer_block(block, x, pre_infer_out)
+            x = self.run_block(block_idx, block, x, pre_infer_out)
         return x
 
     def infer_block(self, block, x, pre_infer_out):
@@ -228,9 +258,11 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(s, n, d)
             k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(s, n, d)
             v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
-        q, k = phase.rope.apply(q, k, cos_sin)
+        if self.rope_positions is None:
+            q, k = phase.rope.apply(q, k, cos_sin)
+        else:
+            q, k = phase.rope.apply(q, k, cos_sin, positions=self.rope_positions)
         img_qkv_len = q.shape[0]
-
         if self.clean_cuda_cache:
             del norm1_out, shift_msa, scale_msa
             if norm1_quant is not None:
@@ -244,20 +276,40 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         }
 
         if self.config["seq_parallel"]:
-            attn_out = phase.self_attn_1_parallel.apply(
-                q=q,
-                k=k,
-                v=v,
-                slice_qkv_len=img_qkv_len,
-                cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
-                attention_module=phase.self_attn_1,
-                seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                use_tensor_fusion=self.seq_p_tensor_fusion,
-                enable_head_parallel=self.enable_head_parallel,
-                **attn_running_args,
-            )
+            if self.use_new_seq_p_interface:
+                attn_out, aux_attn_out = phase.self_attn_1_parallel.apply_new(
+                    q=q,
+                    k=k,
+                    v=v,
+                    attention_module=phase.self_attn_1,
+                    seq_p_group=self.seq_p_group,
+                    prepost_backend=self.seq_p_prepost_backend,
+                    a2a_backend=self.seq_p_a2a_backend,
+                    quant_scheme=self.seq_p_quant_scheme,
+                    tensor_fusion=self.seq_p_tensor_fusion,
+                    head_parallel=self.seq_p_head_parallel,
+                    attention_kwargs=attn_running_args,
+                )
+                if aux_attn_out is not None:
+                    raise RuntimeError("Wan self-attention does not have an auxiliary token output.")
+            else:
+                attn_out = phase.self_attn_1_parallel.apply(
+                    q=q,
+                    k=k,
+                    v=v,
+                    slice_qkv_len=img_qkv_len,
+                    cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
+                    attention_module=phase.self_attn_1,
+                    seq_p_group=self.seq_p_group,
+                    use_fp8_comm=self.seq_p_fp8_comm,
+                    use_fp4_comm=self.seq_p_fp4_comm,
+                    use_tensor_fusion=self.seq_p_tensor_fusion,
+                    enable_head_parallel=self.seq_p_head_parallel,
+                    seq_p_prepost_backend=self.seq_p_prepost_backend,
+                    seq_p_a2a_backend=self.seq_p_a2a_backend,
+                    seq_p_quant_scheme=self.seq_p_configured_quant_scheme,
+                    **attn_running_args,
+                )
         else:
             attn_out = phase.self_attn_1.apply(
                 q=q,

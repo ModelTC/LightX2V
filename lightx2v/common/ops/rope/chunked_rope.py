@@ -27,24 +27,55 @@ class ChunkedRope(RopeTemplate):
         if hasattr(self.inner, "set_config"):
             self.inner.set_config(config)
 
-    def apply_single(self, x: torch.Tensor, freqs, **kwargs):
+    def prepare_freqs(self, freqs, rotary_dim: int | None = None):
+        return self.inner.prepare_freqs(freqs, rotary_dim=rotary_dim)
+
+    def prepare_positions(self, freqs):
+        return self.inner.prepare_positions(freqs)
+
+    def apply_single(self, x: torch.Tensor, freqs, positions: torch.Tensor | None = None, **kwargs):
         freq_len = freqs[0].shape[0] if isinstance(freqs, tuple) else freqs.shape[0]
         seq_len = min(x.shape[0], freq_len)
+        if positions is not None:
+            seq_len = min(seq_len, positions.shape[0])
         output = torch.empty_like(x)
         for start in range(0, seq_len, self.chunk_size):
             end = min(start + self.chunk_size, seq_len)
-            output[start:end] = self.inner.apply_single(x[start:end], _slice_freqs(freqs, start, end), **kwargs)
+            chunk_freqs = freqs if positions is not None else _slice_freqs(freqs, start, end)
+            chunk_positions = positions[start:end] if positions is not None else None
+            if chunk_positions is None:
+                output[start:end] = self.inner.apply_single(x[start:end], chunk_freqs, **kwargs)
+            else:
+                output[start:end] = self.inner.apply_single(
+                    x[start:end],
+                    chunk_freqs,
+                    positions=chunk_positions,
+                    **kwargs,
+                )
         if seq_len < x.shape[0]:
             output[seq_len:] = x[seq_len:]
         return output
 
-    def apply(self, q: torch.Tensor, k: torch.Tensor, freqs, **kwargs):
+    def apply(self, q: torch.Tensor, k: torch.Tensor, freqs, positions: torch.Tensor | None = None, **kwargs):
         freq_len = freqs[0].shape[0] if isinstance(freqs, tuple) else freqs.shape[0]
         seq_len = min(q.shape[0], k.shape[0], freq_len)
+        if positions is not None:
+            seq_len = min(seq_len, positions.shape[0])
         q_out, k_out = torch.empty_like(q), torch.empty_like(k)
         for start in range(0, seq_len, self.chunk_size):
             end = min(start + self.chunk_size, seq_len)
-            q_chunk, k_chunk = self.inner.apply(q[start:end], k[start:end], _slice_freqs(freqs, start, end), **kwargs)
+            chunk_freqs = freqs if positions is not None else _slice_freqs(freqs, start, end)
+            chunk_positions = positions[start:end] if positions is not None else None
+            if chunk_positions is None:
+                q_chunk, k_chunk = self.inner.apply(q[start:end], k[start:end], chunk_freqs, **kwargs)
+            else:
+                q_chunk, k_chunk = self.inner.apply(
+                    q[start:end],
+                    k[start:end],
+                    chunk_freqs,
+                    positions=chunk_positions,
+                    **kwargs,
+                )
             q_out[start:end], k_out[start:end] = q_chunk, k_chunk
         if seq_len < q.shape[0]:
             q_out[seq_len:], k_out[seq_len:] = q[seq_len:], k[seq_len:]
