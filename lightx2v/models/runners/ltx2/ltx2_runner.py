@@ -165,6 +165,7 @@ class LTX2Runner(DefaultRunner):
             device=text_encoder_device,
             dtype=GET_DTYPE(),
             cpu_offload=text_encoder_offload,
+            gemma_attn_implementation=self.config.get("gemma_attn_implementation"),
         )
 
         # Apply LoRA to text encoder if configured
