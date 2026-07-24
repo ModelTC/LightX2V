@@ -1,193 +1,111 @@
-# reserved_dev_tool/transformer-profile 分支说明
+# Transformer Profile 分支维护契约
 
 ## 分支定位
 
-`reserved_dev_tool/transformer-profile` 是一个保留开发工具分支，用来沉淀 transformer full/block profile 的通用做法。它更像可参考、可迁移的性能分析模板，不是必须合入 `main` 的产品功能。
+本分支是保留开发工具分支，用于沉淀 DiT 单步和单层 profile。它不要求立即进入 `main`，但必须能够由 AI 编程助手或开发者定期 rebase 到最新 `main`，并以有限、明确的模型适配层继续扩展。
 
-这个分支主要解决两个问题：
+稳定备份为 `yr/bk_torch_profile`；持续维护分支为 `reserved_dev_tool/transformer-profile`。
 
-- 用常规运行脚本，通过 `LIGHTX2V_PROFILE_MODE=full|block` 临时打开 profile。
-- 在保持模型推理逻辑基本不变的前提下，把单个 transformer block 的粗粒度 region、核心 op shape、kernel 时间对应起来。
+## 不变量
 
-当前已经验证过的路径：
+维护时必须保持以下约束：
 
-- Hunyuan3D shape transformer
-- SekoTalk / Wan audio transformer
+1. 未设置 `LIGHTX2V_PROFILE_MODE` 时，不改变模型数值路径、调用次数和 scheduler 状态。
+2. profile 只执行一次真实模型调用，不为 profiler schedule 重放 diffusion step 或 block。
+3. warmup 不得提前消费目标 step。
+4. `full` 只负责完整 step trace；`block` 只包目标 block，并生成 trace、op JSONL 和文本报告。
+5. 通用模块不得导入具体模型；模型差异留在 `block_profile.py`、`block_profile_report.py` 和少量自然计算边界 hook 中。
+6. 不为了 profile 大规模重写 transformer；优先在既有 self-attention、cross-attention、FFN、MoE、adapter 函数上加 region。
+7. 不支持的 compile/offload/layout 必须明确报错，不能静默生成不具代表性的报告。
+8. 未知 GPU 不得阻断报告，但不能猜测 peak TFLOPS。
+9. 稀疏算子的 FLOPs 必须注明口径；当前动态稀疏 attention 使用 `dense-equivalent`。
+10. 不提交 `prof_results/`、模型、媒体结果、个人路径或临时运行配置。
 
-## 功能边界
+## 文件边界
 
-`full` 模式只 profile 目标 infer step 的 transformer 执行，输出 PyTorch Profiler trace，适合用 TensorBoard 看整体 timeline。
+通用核心：
 
-`block` 模式只 profile 目标 infer step 的目标 block，输出：
+| 文件 | 职责 |
+|---|---|
+| `lightx2v/utils/transformer_profile.py` | env 解析、目标校验、一次性 full/block 生命周期、输出目录 |
+| `lightx2v/utils/region_profile.py` | 仅在目标 block 激活的 region 与 active model profile |
+| `lightx2v/utils/op_shape_trace.py` | 记录逻辑 GEMM / ATTN / MoE shape 和 FLOPs 口径 |
+| `lightx2v/utils/torch_trace_profiler.py` | PyTorch profiler trace 导出 |
+| `tools/profile/region_event_trace.py` | kernel 分类、region 归属、op 配对、文本报告 |
+| `tools/profile/trace_correlation.py` | GPU event 与 CPU runtime launch 关联 |
+| `tools/profile/profiler_step_gap.py` | full trace 的 GPU active/gap/sync API 快速统计 |
 
-- `*.pt.trace.json`
-- `block_{layer}_op_trace.jsonl`
-- `block_{layer}_layer_trace.txt`
+模型适配层：
 
-为了降低 review 负担，当前只保留一个环境变量开关。默认 infer step 和 block index 直接写在 `lightx2v/utils/transformer_profile.py` 的 `TransformerProfile` 类里，开发者临时分析时直接修改对应默认值。
+| 文件形态 | 职责 |
+|---|---|
+| `models/networks/<model>/infer/block_profile.py` | 从真实权重和运行时 tensor 绑定逻辑 op shape |
+| `models/networks/<model>/infer/block_profile_report.py` | region 顺序、特殊 op 展开、报告配置 |
+| `transformer_infer.py` | 在 step 入口调用 `record_transformer()`，在 block loop 调用 `record_block()` |
+| attention / MoE / adapter 文件 | 只添加自然 region 或必要的动态 shape hook |
 
-## 文件组织
+## 支持矩阵
 
-通用文件：
+| model class | canonical config / script | full | block | 最新验证状态 |
+|---|---|---:|---:|---|
+| `hunyuan3d` | `configs/hunyuan3d/hunyuan3d_shape.json` / `scripts/hunyuan3d/run_hunyuan3d.sh` | 是 | 是，含 self/cross attention、dense FFN、MoE | 已适配最新 main 并静态编译；本机缺模型，尚未重跑 E2E |
+| `seko_talk` | `configs/seko_talk/seko_talk_01_base.json` / `scripts/seko_talk/run_seko_talk_01_base.sh` | 是 | 是，含 audio adapter | 已适配最新 main，Wan 回归测试通过；本机缺模型，尚未重跑 E2E |
+| `wan2.2_moe_distill` | `configs/wan22/extreme/wan_moe_t2v_distill_nvfp4_sparse_attn.json` / `scripts/wan22/extreme/run_wan22_moe_t2v_extreme.sh` | 是 | 是，含 NVFP4、dynamic sparse attention、text cross-attention | 2026-07-24 在 RTX 5090 单卡完成 full step 1 与 block layer 20 E2E；两次视频、full trace 和三类 block 产物均成功 |
 
-| 文件 | 角色 |
-|------|------|
-| `lightx2v/utils/transformer_profile.py` | 读取 profile mode，管理 full/block 输出目录和一次性 profiler context |
-| `lightx2v/utils/torch_trace_profiler.py` | 封装 PyTorch Profiler trace 导出 |
-| `lightx2v/utils/region_profile.py` | 提供 region decorator 和当前 active profile |
-| `lightx2v/utils/op_shape_trace.py` | 写出逻辑 op shape JSONL |
-| `tools/profile/region_event_trace.py` | 解析 torch trace + op trace，生成 block report |
-| `tools/profile/trace_correlation.py` | kernel 与 CPU launch / region 的关联辅助 |
-| `tools/profile/profiler_step_gap.py` | 解析 ProfilerStep，快速统计 wall/gpu_active/self_gap/raw_gpu_sum、GPU event 数量和 CUDA sync runtime API 数量 |
+基础 Wan transformer 的 hook 可能自然覆盖更多派生模型，但未进入此表的模型不能视为已支持；必须拿到模型、canonical config 和脚本后再确认。
 
-模型侧文件：
+## 跟进最新 main
 
-| 文件 | 角色 |
-|------|------|
-| `lightx2v/models/networks/<model>/infer/block_profile.py` | 模型侧 op shape hook，绑定权重 shape 和运行时 shape |
-| `lightx2v/models/networks/<model>/infer/block_profile_report.py` | 模型侧 report 配置，例如 region 顺序、特殊 op 展开 |
-| `lightx2v/models/networks/<model>/infer/transformer_infer.py` | 在 transformer infer / block loop 附近接入 full/block profile |
-| 其他 attention / moe / ffn 文件 | 只在已有自然边界上加 `@region_profile(...)` 或少量 op logging hook |
+每次更新按以下顺序执行：
 
-## 新模型迁移步骤
+1. 先把当前稳定 HEAD 备份到新的 `yr/bk_torch_profile[_date]`。
+2. 从维护分支执行 `git rebase main`，逐个解决冲突，不用 `ours/theirs` 整体覆盖模型文件。
+3. 优先检查这些高冲突位置：
+   - transformer 构造函数和 block loop；
+   - Wan 的 `torch.compile`、sequence parallel 与 offload 分支；
+   - Hunyuan3D MoE 中 expert count 的含义，profile 必须记录 cumsum 前的每 expert token 数；
+   - runner warmup 生命周期。
+4. 对比 `main..HEAD`，确认通用工具没有重新引入模型语义，模型 hook 没有扩散到无关文件。
+5. 执行下文最低验证；没有模型权重的条目必须在支持矩阵中如实标注，不能用静态检查冒充 E2E。
 
-假设要在另一个分支上给模型 C 增加同类 profile，建议按下面顺序迁移。
+发生 rebase conflict 时：编辑冲突文件保留 main 的新功能和 profile 的必要 hook，`git add <file>` 后执行 `git rebase --continue`；需要放弃本次 rebase 时使用 `git rebase --abort`，稳定备份分支不受影响。
 
-1. 从模型 C 的开发分支拉出新分支，再从 `reserved_dev_tool/transformer-profile` 参考或拷贝通用文件。
+## 适配新模型或配置
 
-2. 先迁移通用文件：
+1. 确认 canonical model class、config、run script、模型准备方式和预期输出。
+2. 找到一次 diffusion step 的 transformer 入口与实际 block loop。
+3. 先接 `full`：在入口根据 scheduler 的 0-based step index 调用 `mode_for_step()` 和 `record_transformer()`。
+4. 再接 `block`：目标 block 执行前绑定真实权重/输入 shape，用 `should_record_block()` 和 `record_block()` 包住原调用。
+5. 按模型自然边界添加 region；不得为追求报告细粒度拆散核心推理结构。
+6. 在 `block_profile.py` 记录逻辑 shape。量化权重必须还原逻辑维度，例如 packed FP4 的 K 不能直接使用存储 shape。
+7. 用真实 trace 扩展 kernel 分类规则；不要仅凭 kernel 名称猜测 op 顺序。
+8. 将 canonical 案例与实测日期加入支持矩阵。
 
-```text
-lightx2v/utils/transformer_profile.py
-lightx2v/utils/torch_trace_profiler.py
-lightx2v/utils/region_profile.py
-lightx2v/utils/op_shape_trace.py
-tools/profile/region_event_trace.py
-tools/profile/trace_correlation.py
-tools/profile/profiler_step_gap.py
-```
+## 最低验证
 
-如果目标分支上这些文件已经有本地改动，优先手工合并，避免直接覆盖。
-
-3. 找到模型 C 的 transformer infer 入口和 block loop。目标代码形态尽量保持直观：
-
-```python
-mode = self.transformer_profile.mode_for_step(infer_step)
-if mode == "full":
-    with self.transformer_profile.record_full():
-        return self._infer(...)
-if mode == "block":
-    block_profile = self.transformer_profile.start_block()
-    output = self._infer(...)
-    block_profile.write_block_report()
-    return output
-return self._infer(...)
-```
-
-实际迁移时不要求完全照抄这段伪代码，原则是让 `full`、`block`、普通推理三个路径在入口处一眼可见。
-
-4. 在 block loop 里只处理目标 block。普通 block 继续走原有调用；目标 block 在运行前绑定 shape，然后用 `record_block()` 包住原本的 block 调用。
-
-```python
-if mode == "block" and block_idx == self.transformer_profile.block_idx:
-    self.block_profile.bind(block_weights, cond_len, hidden_states)
-    with self.transformer_profile.record_block(block_idx):
-        hidden_states = self.infer_block(...)
-else:
-    hidden_states = self.infer_block(...)
-```
-
-5. 新增模型侧 `block_profile.py`。这个文件负责两件事：绑定 shape，以及在 region hook 被调用时写 op trace。
-
-通常需要包含：
-
-- 模型专属 env，例如 `MODEL_C_BLOCK_PROFILE`。
-- `region_profile = partial(_region_profile, annotate_env=...)`。
-- `ModelCBlockProfile.profile_env`。
-- `ModelCBlockProfile.block_profile_report_module`。
-- `bind(...)`：记录运行时 `M/seq/context`，以及从权重读取 GEMM 的 `N/K`。
-- `self_attn()`、`cross_attn()`、`dense_ffn()`、`moe()` 等 hook。
-
-6. 在模型已有计算边界上添加 region decorator。region 名称保持粗粒度，op tag 可以更细：
-
-```python
-@region_profile("self_attn", emit="self_attn")
-def infer_self_attn(...):
-    ...
-```
-
-如果模型已有 `infer_self_attn`、`infer_cross_attn`、`infer_moe_block` 这类自然边界，优先只加 decorator。只有在原代码完全没有合适边界时，才考虑拆一个小函数。
-
-7. 新增模型侧 `block_profile_report.py`。常规内容是：
-
-- `RegionTraceConfig(region_order=...)`
-- 必要的 `skip_regions` / `gpu_skip_prefixes`
-- `analyze(...)` 包装 `analyze_region_trace(...)`
-
-只有当模型存在特殊 op 统计方式时，才添加 `expand_op`。例如 MoE routed 部分可能需要根据 backend 展开成两组或三组 GEMM。
-
-8. 用常规脚本验证。
+每次跟进 main：
 
 ```bash
-python -m py_compile lightx2v/models/networks/<model>/infer/transformer_infer.py
+python -m py_compile \
+  lightx2v/utils/transformer_profile.py \
+  lightx2v/utils/region_profile.py \
+  lightx2v/models/networks/hunyuan3d/infer/transformer_infer.py \
+  lightx2v/models/networks/wan/infer/transformer_infer.py
 
-export LIGHTX2V_PROFILE_MODE=full
-bash scripts/<model>/run_<model>.sh
-
-export LIGHTX2V_PROFILE_MODE=block
-bash scripts/<model>/run_<model>.sh
+python -m unittest \
+  test_cases.test_transformer_profile \
+  test_cases.test_region_event_trace \
+  test_cases.test_transformer_block_profile_shapes \
+  test_cases.test_wan_mxfp8_fuse_forwarding \
+  test_cases.test_wan_feature_cache_cfg_state
 ```
 
-`full` 至少应生成 `*.pt.trace.json`。`block` 至少应生成 `*.pt.trace.json`、`block_{layer}_op_trace.jsonl`、`block_{layer}_layer_trace.txt`。
+每个具有本地模型的 support-matrix 条目，还必须执行：
 
-如需快速对比两个 full trace 的 GPU timeline gap，可使用：
+1. 不开 profile 的 canonical E2E，确认媒体/mesh 输出成功。
+2. `full` 模式，确认只生成 `*.pt.trace.json`。
+3. `block` 模式，确认生成 trace、op JSONL、文本报告。
+4. 检查目标 step/layer、主要 token 数、GEMM K/N、region assigned 比例和核心 kernel 配对。
+5. 对量化、稀疏、MoE、adapter 等特例检查 FLOPs 口径，不只检查文件存在。
 
-```bash
-python tools/profile/profiler_step_gap.py --brief prof_results/<model>_transformer_profile/full_step_10_*/*.pt.trace.json
-```
-
-其中 `wall/gpu_active/self_gap/raw_gpu_sum` 使用 `gpu_user_annotation` 的 `ProfilerStep#N` 窗口统计，不影响 `block` report 中基于 CPU launch timestamp 的 kernel/region 归属逻辑。`cudaStreamSynchronize/cudaDeviceSynchronize` 使用 trace 里的 `cuda_runtime` 事件直接计数，按 CPU `user_annotation` 的 `ProfilerStep#N` 窗口归属。
-
-## Kernel / Region 归属口径
-
-`block` report 的目标是回答“这个 GPU work 是哪个粗粒度 region 发起的”。这个问题不要只用 GPU timeline 上的 `gpu_user_annotation` 重叠关系来判断：region 末尾 launch 的 kernel 可能在 GPU 上延后执行，kernel 尾部也可能越过 annotation 边界；如果强依赖 GPU annotation overlap，就容易把尾部 op 漏到下一个 region 或漏成未归属。
-
-因此 `tools/profile/region_event_trace.py` 会先通过 trace correlation 找到 GPU event 对应的 CPU runtime 事件，并取 `cudaLaunchKernel` / `LaunchKernel` 的 CPU timestamp。region 归属优先使用这个 launch timestamp 所在的 CPU `user_annotation` 半开区间。这个口径更贴近“谁发起了 kernel”，也和 Python / C++ launch 顺序一致。
-
-`gpu_user_annotation` 仍然有价值，但用途不同：
-
-- `profiler_step_gap.py --brief` 用它的 `ProfilerStep#N` 窗口统计 wall/gpu_active/self_gap，目的是观察 GPU timeline 空白。
-- `region_event_trace.py` 只把 GPU annotation overlap 当作 CPU launch correlation 找不到时的 fallback，目的是提升 report 归属率，而不是改变归属语义。
-
-## 迁移原则
-
-迁移时优先保证 review 友好：
-
-- 不为了 profile 重写原有推理逻辑。
-- 不做格式化、空行、条件改写等无关变动。
-- 不新增大量 env 配置；默认只保留 `LIGHTX2V_PROFILE_MODE`，具体 step / block 由开发者改默认值。
-- region 保持粗粒度，例如 `self_attn`、`cross_attn`、`dense_ffn`、`moe`、`audio_adapter`。
-- op logging 可以比 region 更细，但只服务于计算量和 kernel 对照。
-- `full` 路径只负责 TensorBoard trace，不要求复用 block report 逻辑。
-- `block` 路径只包目标 block，不扩大到整网或多个 step。
-- 不提交 `prof_results/`、临时 mesh、个人 docker/run 脚本等生成物。
-
-如果模型 C 的 block 结构差异很大，先迁移 `full` 模式也可以。等确认整体 timeline 有价值，再补 `block_profile.py` 和 `block_profile_report.py`。
-
-适配新模型时，下面几类功能可能需要扩展：
-
-- 硬件峰值算力：report 里的 TFLOPS / efficiency 需要硬件 BF16/FP8 峰值；非 H100 机器需要补 `infer_peak_tflops_from_device()`。
-- op shape hook：不同模型的 QKV、FFN、MoE、adapter、fused linear 形态不同，`block_profile.py` 需要按模型实际权重和运行时 shape 写出逻辑 op。
-- 特殊 op 展开：如果某个逻辑 op 会对应多组 kernel，例如不同 backend 的 MoE routed GEMM，需要在 `block_profile_report.py` 里扩展 `expand_op`。
-- kernel 识别与关联：新 attention / GEMM backend 可能有新的 kernel 名称或 trace 关联字段，需要扩展 `tools/profile/region_event_trace.py` 或 `trace_correlation.py`。
-- region 边界：如果模型没有自然的 self-attn / cross-attn / ffn 函数边界，可能需要极少量拆分，原因是 PyTorch trace 只能按实际 `record_function` 区间归属 kernel。
-
-## 验证检查
-
-迁移完成后，重点检查：
-
-- 普通推理不开 `LIGHTX2V_PROFILE_MODE` 时结果不变。
-- `full` 模式只输出 TensorBoard trace，不生成 block report。
-- `block` 模式的 report 里有 `ProfilerStep`、`Region assigned` 和各 region 的 `kernel_sum`。
-- 关键 GEMM / ATTN / MOE op 能在 report 里看到 shape、FLOPs、TFLOPS。
-- 非 H100 硬件如需计算效率，需要在 `infer_peak_tflops_from_device()` 中补充对应硬件峰值。
+生成物只作为本地验证证据，不进入 Git。提交前运行 `pre-commit run --all-files` 并确认格式化修改被纳入对应功能提交。
