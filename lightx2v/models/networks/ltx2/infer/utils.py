@@ -7,7 +7,7 @@ import torch
 
 
 def rmsnorm_torch_naive(x, weight=None, bias=None, eps=1e-6):
-    return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + eps)
+    return torch.nn.functional.rms_norm(x, (x.shape[-1],), weight=weight, eps=eps)
 
 
 def modulate_torch_naive(x, scale, shift):

@@ -40,9 +40,12 @@ def _multimodal_guider_calculate(
     """与 ltx_core MultiModalGuider.calculate 一致（避免从 scheduler 大模块导入导致循环依赖/旧缓存问题）。"""
     if not math.isclose(cfg_scale, 1.0) and uncond_text is None:
         raise ValueError("mm_guider: cfg_scale != 1 时需要 uncond 前向，但 uncond_text 为 None")
-    ut = uncond_text if not math.isclose(cfg_scale, 1.0) else cond
-    up = uncond_perturbed if not math.isclose(stg_scale, 0.0) else cond
-    um = uncond_modality if not math.isclose(modality_scale, 1.0) else cond
+
+    dtype = cond.dtype
+    cond = cond.float()
+    ut = uncond_text.float() if not math.isclose(cfg_scale, 1.0) else cond
+    up = uncond_perturbed.float() if not math.isclose(stg_scale, 0.0) else cond
+    um = uncond_modality.float() if not math.isclose(modality_scale, 1.0) else cond
 
     pred = cond + (cfg_scale - 1.0) * (cond - ut) + stg_scale * (cond - up) + (modality_scale - 1.0) * (cond - um)
 
@@ -51,7 +54,7 @@ def _multimodal_guider_calculate(
         factor = rescale_scale * factor + (1.0 - rescale_scale)
         pred = pred * factor
 
-    return pred
+    return pred.to(dtype)
 
 
 def _mm_guider_should_skip_step(skip_step: int, step_index: int) -> bool:

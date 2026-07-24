@@ -3,11 +3,18 @@ from enum import Enum
 from typing import Protocol
 
 import torch
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from lightx2v.models.input_encoders.hf.ltx2.gemma.rope import LTXRopeType, apply_rotary_emb
 
 _DISABLE_XFORMERS_PLATFORMS = {"metax_cuda"}
 _USE_XFORMERS = os.getenv("PLATFORM") not in _DISABLE_XFORMERS_PLATFORMS
+_FULL_SDPA_PRIORITY = [
+    SDPBackend.CUDNN_ATTENTION,
+    SDPBackend.FLASH_ATTENTION,
+    SDPBackend.EFFICIENT_ATTENTION,
+    SDPBackend.MATH,
+]
 
 memory_efficient_attention = None
 flash_attn_interface = None
@@ -42,7 +49,15 @@ class PytorchAttention(AttentionCallable):
             if mask.ndim == 3:
                 mask = mask.unsqueeze(1)
 
-        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=False)
+        with sdpa_kernel(_FULL_SDPA_PRIORITY, set_priority=True):
+            out = torch.nn.functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=mask,
+                dropout_p=0.0,
+                is_causal=False,
+            )
         out = out.transpose(1, 2).reshape(b, -1, heads * dim_head)
         return out
 
