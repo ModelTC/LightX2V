@@ -1,7 +1,6 @@
 {
   "task_hint": "motion",
   "infer_steps": 8,
-  "target_video_length": 121,
   "target_height": 768,
   "target_width": 1280,
   "attn_type": "sage_attn2",

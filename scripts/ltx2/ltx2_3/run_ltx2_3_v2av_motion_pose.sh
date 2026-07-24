@@ -50,3 +50,4 @@ python -m lightx2v.infer \
 --negative_prompt "blurry, out of focus, overexposed, underexposed, low contrast, excessive noise, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, disfigured hands, artifacts, inconsistent perspective, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, off-sync audio, AI artifacts." \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_ltx2_3_v2av_motion_pose.mp4 \
 --image_strength 1.0 \
+--target_video_length 241

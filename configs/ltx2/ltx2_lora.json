@@ -1,6 +1,5 @@
 {
     "infer_steps": 8,
-    "target_video_length": 121,
     "target_height": 512,
     "target_width": 768,
     "attn_type": "sage_attn2",
