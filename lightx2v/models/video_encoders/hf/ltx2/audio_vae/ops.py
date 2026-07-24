@@ -4,6 +4,8 @@ import torch
 import torchaudio
 from torch import nn
 
+from lightx2v.models.video_encoders.hf.ltx2.audio_vae.real_mel import RealMelSpectrogram
+
 
 @dataclass(frozen=True)
 class Audio:
@@ -30,24 +32,33 @@ class AudioProcessor(nn.Module):
         mel_bins: int,
         mel_hop_length: int,
         n_fft: int,
+        use_real_mel_spectrogram: bool = False,
     ) -> None:
         super().__init__()
         self.target_sample_rate = target_sample_rate
-        self.mel_transform = torchaudio.transforms.MelSpectrogram(
-            sample_rate=target_sample_rate,
-            n_fft=n_fft,
-            win_length=n_fft,
-            hop_length=mel_hop_length,
-            f_min=0.0,
-            f_max=target_sample_rate / 2.0,
-            n_mels=mel_bins,
-            window_fn=torch.hann_window,
-            center=True,
-            pad_mode="reflect",
-            power=1.0,
-            mel_scale="slaney",
-            norm="slaney",
-        )
+        if use_real_mel_spectrogram:
+            self.mel_transform = RealMelSpectrogram(
+                sample_rate=target_sample_rate,
+                n_fft=n_fft,
+                hop_length=mel_hop_length,
+                n_mels=mel_bins,
+            )
+        else:
+            self.mel_transform = torchaudio.transforms.MelSpectrogram(
+                sample_rate=target_sample_rate,
+                n_fft=n_fft,
+                win_length=n_fft,
+                hop_length=mel_hop_length,
+                f_min=0.0,
+                f_max=target_sample_rate / 2.0,
+                n_mels=mel_bins,
+                window_fn=torch.hann_window,
+                center=True,
+                pad_mode="reflect",
+                power=1.0,
+                mel_scale="slaney",
+                norm="slaney",
+            )
 
     def resample_audio(self, audio: Audio) -> Audio:
         """Resample audio to the processor's target sample rate if needed."""
