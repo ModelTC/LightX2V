@@ -9,7 +9,7 @@
     "rms_norm_type": "torch",
     "norm_modulate_backend": "torch",
     "modulate_with_rmsnorm": "torch",
-    "gemma_attn_implementation": "eager",
+    "gemma_attn_implementation": "mlu_flash_attn",
     "sample_guide_scale": 3.0,
     "sample_shift": [2.05, 0.95],
     "enable_cfg": true,
