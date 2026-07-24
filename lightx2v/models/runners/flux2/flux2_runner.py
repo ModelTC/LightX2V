@@ -4,7 +4,6 @@ import os
 
 import numpy as np
 import torch
-import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
@@ -49,103 +48,9 @@ class Flux2BaseRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
-        if self._use_tp_rank0_io():
-            self.text_encoders = None
-            self.vae = None
-            self.model = self.load_transformer()
-            return
-
         self.text_encoders = self.load_text_encoder()
         self.vae = self.load_vae()
         self.model = self.load_transformer()
-
-    def _use_tp_rank0_io(self):
-        return self.config.get("tensor_parallel", False) and dist.is_initialized()
-
-    def _is_rank0(self):
-        return not dist.is_initialized() or dist.get_rank() == 0
-
-    def _rank_device(self):
-        if dist.is_initialized():
-            return torch.device(f"{AI_DEVICE}:{dist.get_rank()}")
-        return torch.device(AI_DEVICE)
-
-    def _tensor_meta_tree(self, obj):
-        if torch.is_tensor(obj):
-            return {"__tensor__": True, "shape": tuple(obj.shape), "dtype": obj.dtype}
-        if isinstance(obj, dict):
-            return {"__dict__": [(key, self._tensor_meta_tree(value)) for key, value in obj.items()]}
-        if isinstance(obj, list):
-            return {"__list__": [self._tensor_meta_tree(value) for value in obj]}
-        if isinstance(obj, tuple):
-            return {"__tuple__": [self._tensor_meta_tree(value) for value in obj]}
-        return {"__object__": obj}
-
-    def _materialize_meta_tree(self, meta, device):
-        if meta.get("__tensor__", False):
-            return torch.empty(meta["shape"], dtype=meta["dtype"], device=device)
-        if "__dict__" in meta:
-            return {key: self._materialize_meta_tree(value, device) for key, value in meta["__dict__"]}
-        if "__list__" in meta:
-            return [self._materialize_meta_tree(value, device) for value in meta["__list__"]]
-        if "__tuple__" in meta:
-            return tuple(self._materialize_meta_tree(value, device) for value in meta["__tuple__"])
-        return meta["__object__"]
-
-    def _broadcast_tensor_tree(self, obj, src_obj, src=0):
-        if torch.is_tensor(obj):
-            if self._is_rank0():
-                obj = src_obj.to(self._rank_device(), non_blocking=True)
-            dist.broadcast(obj, src=src)
-            return obj
-        if isinstance(obj, dict):
-            return {key: self._broadcast_tensor_tree(value, src_obj[key] if self._is_rank0() else None, src=src) for key, value in obj.items()}
-        if isinstance(obj, list):
-            return [self._broadcast_tensor_tree(value, src_obj[idx] if self._is_rank0() else None, src=src) for idx, value in enumerate(obj)]
-        if isinstance(obj, tuple):
-            return tuple(self._broadcast_tensor_tree(value, src_obj[idx] if self._is_rank0() else None, src=src) for idx, value in enumerate(obj))
-        return obj
-
-    def _broadcast_rank0_payload(self, payload):
-        if not self._use_tp_rank0_io():
-            return payload
-
-        meta_list = [self._tensor_meta_tree(payload) if self._is_rank0() else None]
-        dist.broadcast_object_list(meta_list, src=0)
-        payload_tree = payload if self._is_rank0() else self._materialize_meta_tree(meta_list[0], self._rank_device())
-        payload_tree = self._broadcast_tensor_tree(payload_tree, payload if self._is_rank0() else None, src=0)
-        dist.barrier()
-        return payload_tree
-
-    def _load_rank0_text_encoder(self):
-        if not self._is_rank0():
-            return
-        if self.text_encoders is None or self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.text_encoders = self.load_text_encoder()
-
-    def _unload_rank0_text_encoder(self):
-        if not self._is_rank0():
-            return
-        if self.text_encoders is not None and (self._use_tp_rank0_io() or self.config.get("lazy_load", False) or self.config.get("unload_modules", False)):
-            del self.text_encoders
-            self.text_encoders = None
-            torch_device_module.empty_cache()
-            gc.collect()
-
-    def _load_rank0_vae(self):
-        if not self._is_rank0():
-            return
-        if self.vae is None or self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.vae = self.load_vae()
-
-    def _unload_rank0_vae(self):
-        if not self._is_rank0():
-            return
-        if self.vae is not None and (self._use_tp_rank0_io() or self.config.get("lazy_load", False) or self.config.get("unload_modules", False)):
-            del self.vae
-            self.vae = None
-            torch_device_module.empty_cache()
-            gc.collect()
 
     def load_vae(self):
         return Flux2VAE(self.config)
@@ -159,8 +64,6 @@ class Flux2BaseRunner(DefaultRunner):
             assert self.config.get("cpu_offload", False)
 
         task = self.config.get("task", "t2i")
-        if self._use_tp_rank0_io() and task == "i2i":
-            raise NotImplementedError("Flux2 tensor parallel currently supports t2i only; i2i needs rank0 VAE encode broadcast.")
         if task == "i2i":
             self.run_input_encoder = self._run_input_encoder_local_i2i
             self.run_dit = self._run_dit_local_i2i
@@ -170,24 +73,6 @@ class Flux2BaseRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2i(self):
-        if self._use_tp_rank0_io():
-            payload = None
-            if self._is_rank0():
-                self._load_rank0_text_encoder()
-                prompt = self.input_info.prompt
-                text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
-                self._unload_rank0_text_encoder()
-                payload = {
-                    "inputs": {
-                        "text_encoder_output": text_encoder_output,
-                        "image_encoder_output": None,
-                    },
-                    "target_shape": self.input_info.target_shape,
-                }
-            payload = self._broadcast_rank0_payload(payload)
-            self.input_info.target_shape = payload["target_shape"]
-            return payload["inputs"]
-
         prompt = self.input_info.prompt
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_encoders = self.load_text_encoder()
@@ -203,22 +88,6 @@ class Flux2BaseRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders I2I")
     def _run_input_encoder_local_i2i(self):
-        if self._use_tp_rank0_io():
-            payload = None
-            if self._is_rank0():
-                self._load_rank0_text_encoder()
-                payload = {
-                    "inputs": self._run_input_encoder_local_i2i_rank0(),
-                    "target_shape": self.input_info.target_shape,
-                }
-                self._unload_rank0_text_encoder()
-            payload = self._broadcast_rank0_payload(payload)
-            self.input_info.target_shape = payload["target_shape"]
-            return payload["inputs"]
-
-        return self._run_input_encoder_local_i2i_rank0()
-
-    def _run_input_encoder_local_i2i_rank0(self):
         prompt = self.input_info.prompt
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_encoders = self.load_text_encoder()
@@ -461,15 +330,6 @@ class Flux2BaseRunner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
-        if self._use_tp_rank0_io():
-            images = None
-            if self._is_rank0():
-                self._load_rank0_vae()
-                images = self._decode_latents_with_vae(latents)
-                self._unload_rank0_vae()
-            dist.barrier()
-            return images
-
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae = self.load_vae()
 

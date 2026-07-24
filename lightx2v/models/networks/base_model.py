@@ -91,6 +91,19 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
             self._check_dit_quantized()
+        self._init_tensor_parallel()
+
+    def _init_tensor_parallel(self):
+        if self.config.get("tensor_parallel", False):
+            self.use_tp = True
+            self.tp_group = self.config.get("device_mesh").get_group(mesh_dim="tensor_p")
+            self.tp_rank = dist.get_rank(self.tp_group)
+            self.tp_size = dist.get_world_size(self.tp_group)
+        else:
+            self.use_tp = False
+            self.tp_group = None
+            self.tp_rank = 0
+            self.tp_size = 1
 
     def _check_dit_quantized(self):
         """Check if the model is quantized.
@@ -291,13 +304,10 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             # Single GPU mode
             return True
         elif dist.is_initialized():
-            if self.config.get("load_from_rank0", False):
-                # Multi-GPU mode, only rank 0 loads
-                if dist.get_rank() == 0:
-                    logger.info(f"Loading weights from {self.model_path}")
-                    return True
-            else:
-                return True
+            if self.use_tp or self.config.get("load_from_rank0", False):
+                # TP or explicit rank0-only loading: only rank 0 reads from disk
+                return dist.get_rank() == 0
+            return True
         return False
 
     def _apply_weights(self, weight_dict=None):
@@ -424,6 +434,10 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         Returns:
             dict: Dictionary of weights
         """
+        _tp_dev = self.use_tp
+        if _tp_dev:
+            _saved_device, self.device = self.device, torch.device("cpu")
+
         if self.config.get("dit_original_ckpt", None):
             safetensors_path = self.config["dit_original_ckpt"]
         else:
@@ -456,6 +470,8 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             file_weights = self._load_safetensor_to_dict(file_path, unified_dtype, sensitive_layer)
             weight_dict.update(file_weights)
 
+        if _tp_dev:
+            self.device = _saved_device
         return weight_dict
 
     def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
@@ -468,6 +484,10 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         Returns:
             dict: Dictionary of weights
         """
+        _tp_dev = self.use_tp
+        if _tp_dev:
+            _saved_device, self.device = self.device, torch.device("cpu")
+
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
 
         if self.config.get("dit_quantized_ckpt", None):
@@ -485,6 +505,8 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
             else:
                 gguf_path = safetensors_path
             weight_dict = self._load_gguf_ckpt(gguf_path)
+            if _tp_dev:
+                self.device = _saved_device
             return weight_dict
 
         if os.path.isdir(safetensors_path):
@@ -527,6 +549,8 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
                 for k, v in calib_data["absmax"].items():
                     weight_dict[k.replace(".weight", ".input_absmax")] = v.to(self.device)
 
+        if _tp_dev:
+            self.device = _saved_device
         return weight_dict
 
     def _load_gguf_ckpt(self, gguf_path):

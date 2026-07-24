@@ -72,7 +72,7 @@ class WanDancerRunner(WanRunner):
             "parallel": False,
             "use_tiling": False,
             "cpu_offload": offload,
-            "load_from_rank0": self.config.get("load_from_rank0", False),
+            "load_from_rank0": False,
             "dummy_model": self.config.get("dummy_model", False),
             "dtype": GET_DTYPE(),
         }

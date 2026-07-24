@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
@@ -10,6 +11,39 @@ from lightx2v.utils.registry_factory import (
     ROPE_REGISTER,
     TENSOR_REGISTER,
 )
+
+
+def _mm_weight(config, weight_name, bias_name, split_dim=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, lora_prefix="", lora_path=""):
+    mm_type = config.get("dit_quant_scheme", "Default")
+    if config.get("do_mm_calib", False):
+        mm_type = "Calib"
+    if config.get("tensor_parallel", False) and split_dim is not None:
+        tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+        return MM_WEIGHT_REGISTER["TensorParallel"](
+            weight_name=weight_name,
+            bias_name=bias_name,
+            mm_type=mm_type,
+            tp_group=tp_group,
+            tp_rank=dist.get_rank(tp_group),
+            tp_size=dist.get_world_size(tp_group),
+            split_dim=split_dim,
+            create_cuda_buffer=create_cuda_buffer,
+            create_cpu_buffer=create_cpu_buffer,
+            lazy_load=lazy_load,
+            lazy_load_file=lazy_load_file,
+            lora_prefix=lora_prefix,
+            lora_path=lora_path,
+        )
+    return MM_WEIGHT_REGISTER[mm_type](
+        weight_name,
+        bias_name,
+        create_cuda_buffer,
+        create_cpu_buffer,
+        lazy_load,
+        lazy_load_file,
+        lora_prefix=lora_prefix,
+        lora_path=lora_path,
+    )
 
 
 class WanTransformerWeights(WeightModule):
@@ -285,55 +319,63 @@ class WanSelfAttention(WeightModule):
             LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
+        p = f"{block_prefix}.{self.block_index}"
         self.add_module(
             "self_attn_q",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.self_attn.q.weight",
-                f"{block_prefix}.{self.block_index}.self_attn.q.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{p}.self_attn.q.weight",
+                f"{p}.self_attn.q.bias",
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
         )
-
         self.add_module(
             "self_attn_k",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.self_attn.k.weight",
-                f"{block_prefix}.{self.block_index}.self_attn.k.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{p}.self_attn.k.weight",
+                f"{p}.self_attn.k.bias",
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
         )
         self.add_module(
             "self_attn_v",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.self_attn.v.weight",
-                f"{block_prefix}.{self.block_index}.self_attn.v.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{p}.self_attn.v.weight",
+                f"{p}.self_attn.v.bias",
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
         )
         self.add_module(
             "self_attn_o",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.self_attn.o.weight",
-                f"{block_prefix}.{self.block_index}.self_attn.o.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{p}.self_attn.o.weight",
+                f"{p}.self_attn.o.bias",
+                split_dim="row",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
@@ -520,54 +562,63 @@ class WanCrossAttention(WeightModule):
                 lora_path=lora_path,
             ),
         )
+        cp = f"{block_prefix}.{self.block_index}"
         self.add_module(
             "cross_attn_q",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.cross_attn.q.weight",
-                f"{block_prefix}.{self.block_index}.cross_attn.q.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{cp}.cross_attn.q.weight",
+                f"{cp}.cross_attn.q.bias",
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
         )
         self.add_module(
             "cross_attn_k",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.cross_attn.k.weight",
-                f"{block_prefix}.{self.block_index}.cross_attn.k.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{cp}.cross_attn.k.weight",
+                f"{cp}.cross_attn.k.bias",
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
         )
         self.add_module(
             "cross_attn_v",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.cross_attn.v.weight",
-                f"{block_prefix}.{self.block_index}.cross_attn.v.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{cp}.cross_attn.v.weight",
+                f"{cp}.cross_attn.v.bias",
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
         )
         self.add_module(
             "cross_attn_o",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.cross_attn.o.weight",
-                f"{block_prefix}.{self.block_index}.cross_attn.o.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{cp}.cross_attn.o.weight",
+                f"{cp}.cross_attn.o.bias",
+                split_dim="row",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
@@ -601,26 +652,30 @@ class WanCrossAttention(WeightModule):
         if self.config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True) and self.config["model_cls"] != "wan2.1_sf_mtxg2":
             self.add_module(
                 "cross_attn_k_img",
-                MM_WEIGHT_REGISTER[self.mm_type](
-                    f"{block_prefix}.{self.block_index}.cross_attn.k_img.weight",
-                    f"{block_prefix}.{self.block_index}.cross_attn.k_img.bias",
-                    create_cuda_buffer,
-                    create_cpu_buffer,
-                    self.lazy_load,
-                    self.lazy_load_file,
+                _mm_weight(
+                    config,
+                    f"{cp}.cross_attn.k_img.weight",
+                    f"{cp}.cross_attn.k_img.bias",
+                    split_dim="col",
+                    create_cuda_buffer=create_cuda_buffer,
+                    create_cpu_buffer=create_cpu_buffer,
+                    lazy_load=self.lazy_load,
+                    lazy_load_file=self.lazy_load_file,
                     lora_prefix=block_prefix,
                     lora_path=lora_path,
                 ),
             )
             self.add_module(
                 "cross_attn_v_img",
-                MM_WEIGHT_REGISTER[self.mm_type](
-                    f"{block_prefix}.{self.block_index}.cross_attn.v_img.weight",
-                    f"{block_prefix}.{self.block_index}.cross_attn.v_img.bias",
-                    create_cuda_buffer,
-                    create_cpu_buffer,
-                    self.lazy_load,
-                    self.lazy_load_file,
+                _mm_weight(
+                    config,
+                    f"{cp}.cross_attn.v_img.weight",
+                    f"{cp}.cross_attn.v_img.bias",
+                    split_dim="col",
+                    create_cuda_buffer=create_cuda_buffer,
+                    create_cpu_buffer=create_cpu_buffer,
+                    lazy_load=self.lazy_load,
+                    lazy_load_file=self.lazy_load_file,
                     lora_prefix=block_prefix,
                     lora_path=lora_path,
                 ),
@@ -668,28 +723,33 @@ class WanFFN(WeightModule):
             LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
+        fp = f"{block_prefix}.{self.block_index}"
         self.add_module(
             "ffn_0",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.ffn.0.weight",
-                f"{block_prefix}.{self.block_index}.ffn.0.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{fp}.ffn.0.weight",
+                f"{fp}.ffn.0.bias",
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
         )
         self.add_module(
             "ffn_2",
-            MM_WEIGHT_REGISTER[self.mm_type](
-                f"{block_prefix}.{self.block_index}.ffn.2.weight",
-                f"{block_prefix}.{self.block_index}.ffn.2.bias",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                self.lazy_load,
-                self.lazy_load_file,
+            _mm_weight(
+                config,
+                f"{fp}.ffn.2.weight",
+                f"{fp}.ffn.2.bias",
+                split_dim="row",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
