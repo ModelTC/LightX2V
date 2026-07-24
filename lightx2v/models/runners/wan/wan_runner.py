@@ -40,6 +40,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import T2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.transformer_profile import suspend_transformer_profile
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -85,6 +86,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.tiny_vae_name = "taew2_1.pth"
 
     @ProfilingContext4DebugL1("Warmup")
+    @suspend_transformer_profile()
     def run_warmup(self):
         if self.config.get("task") not in self._WARMUP_TASKS:
             logger.warning(f"Warmup is not implemented for {self.config.get('task')}")

@@ -2,12 +2,11 @@ import torch
 from loguru import logger
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
-from lightx2v.models.networks.wan.infer.block_profile import (
-    WanBlockProfile,
-    region_profile,
-)
+from lightx2v.models.networks.wan.infer.block_profile import WanBlockProfile
 from lightx2v.utils.envs import *
+from lightx2v.utils.region_profile import region_profile
 from lightx2v.utils.registry_factory import *
+from lightx2v.utils.transformer_profile import TransformerProfile
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .mxfp8_fuse import WanMxfp8FuseMixin, scaled_mxfp8_modulate_quant
@@ -63,7 +62,17 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
         self._block_profile = WanBlockProfile(config)
-        self._transformer_profile = None
+        profile_model_name = "seko_talk" if config.get("model_cls") == "seko_talk" else "wan"
+        self._transformer_profile = TransformerProfile(
+            profile_model_name,
+            self._block_profile,
+            infer_steps=config.get("infer_steps"),
+            num_layers=self.blocks_num,
+        )
+        if self._transformer_profile.mode == "block" and self.use_compile:
+            raise ValueError("Block profiling requires use_compile=false so the target block remains observable.")
+        if self._transformer_profile.mode == "block" and config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "phase":
+            raise ValueError("Block profiling does not support phase-granularity CPU offload.")
 
     @torch.no_grad()
     def reset_post_adapter_states(self):
@@ -93,12 +102,14 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
-        self.cos_sin = pre_infer_out.cos_sin
-        self.rope_positions = getattr(pre_infer_out, "rope_positions", None)
-        self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
-        self.reset_attention_states(weights.blocks)
-        x = self.infer_main_blocks(weights.blocks, pre_infer_out)
-        return self.infer_non_blocks(weights, x, pre_infer_out.embed)
+        profile_mode = self._transformer_profile.mode_for_step(self.scheduler.step_index)
+        with self._transformer_profile.record_transformer(profile_mode):
+            self.cos_sin = pre_infer_out.cos_sin
+            self.rope_positions = getattr(pre_infer_out, "rope_positions", None)
+            self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
+            self.reset_attention_states(weights.blocks)
+            x = self.infer_main_blocks(weights.blocks, pre_infer_out)
+            return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
     def infer_main_blocks(self, blocks, pre_infer_out):
         x = self.infer_func(blocks, pre_infer_out.x, pre_infer_out)
@@ -143,7 +154,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     def infer_without_offload(self, blocks, x, pre_infer_out):
         for block_idx, block in enumerate(blocks):
             self.block_idx = block_idx
-            if self._transformer_profile is not None and self._transformer_profile.block_idx == block_idx:
+            if self._transformer_profile.should_record_block(block_idx):
                 self._block_profile.bind(block, x, pre_infer_out)
                 with self._transformer_profile.record_block(block_idx):
                     x = self.infer_block(block, x, pre_infer_out)

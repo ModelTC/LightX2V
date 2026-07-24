@@ -18,7 +18,10 @@ from tools.profile.region_event_trace import (
 if TYPE_CHECKING:
     from lightx2v.utils.transformer_profile import ProfileRunMeta
 
-_PEAK_TFLOPS_BF16, _PEAK_TFLOPS_FP8 = infer_peak_tflops_from_device()
+try:
+    _PEAK_TFLOPS_BF16, _PEAK_TFLOPS_FP8 = infer_peak_tflops_from_device()
+except RuntimeError:
+    _PEAK_TFLOPS_BF16 = _PEAK_TFLOPS_FP8 = None
 
 _HUNYUAN3D_CONFIG = RegionTraceConfig(
     region_order=(

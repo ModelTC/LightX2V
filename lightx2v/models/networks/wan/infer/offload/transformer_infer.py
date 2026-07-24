@@ -55,7 +55,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             if AI_DEVICE == "xpu":
                 # XPU streams do not guarantee cross-stream memory visibility even
                 # after a device-wide sync, so run compute on the default stream.
-                if self._transformer_profile is not None and self._transformer_profile.block_idx == block_idx:
+                if self._transformer_profile.should_record_block(block_idx):
                     self._block_profile.bind(block, x, pre_infer_out)
                     with self._transformer_profile.record_block(block_idx):
                         x = self.infer_block(block, x, pre_infer_out)
@@ -63,7 +63,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
                     x = self.infer_block(block, x, pre_infer_out)
             else:
                 with torch_device_module.stream(self.offload_manager.compute_stream):
-                    if self._transformer_profile is not None and self._transformer_profile.block_idx == block_idx:
+                    if self._transformer_profile.should_record_block(block_idx):
                         self._block_profile.bind(block, x, pre_infer_out)
                         with self._transformer_profile.record_block(block_idx):
                             x = self.infer_block(block, x, pre_infer_out)

@@ -20,10 +20,10 @@ _GPU_CATS = frozenset({"kernel", "gpu_memcpy", "gpu_memset"})
 
 # Core-kernel patterns (extend when new GEMM/ATTN/MoE backends appear in traces).
 _CORE_GEMM = re.compile(
-    r"nvjet|cutlass.*GemmUniversal|cutlass_3x_gemm|cutlass::device_kernel<.*gemm|_grouped_mm",
+    r"nvjet|cutlass.*GemmUniversal|cutlass_3x_gemm|cutlass::device_kernel<.*gemm|cutlass_scaled_.*mm|_grouped_mm",
     re.I,
 )
-_CORE_ATTN = re.compile(r"cudnn.*sdpa|flash.*attn|flash_fwd_kernel|fmha|sv_f8_attn|qk_int8.*attn", re.I)
+_CORE_ATTN = re.compile(r"cudnn.*sdpa|flash.*attn|flash_fwd_kernel|_attn_fwd|fmha|sv_f8_attn|qk_int.*attn", re.I)
 _CORE_MOE = re.compile(r"cutlass.*GemmUniversal", re.I)
 
 OpExpander = Callable[["OpEntry"], list["OpEntry"]]
@@ -58,8 +58,8 @@ class RegionTraceConfig:
     """Per-model region layout and skip rules for trace parsing."""
 
     region_order: tuple[str, ...]
-    peak_tflops_bf16: float
-    peak_tflops_fp8: float
+    peak_tflops_bf16: float | None
+    peak_tflops_fp8: float | None
     skip_regions: frozenset[str] = frozenset({"ProfilerStep"})
     gpu_skip_prefixes: tuple[str, ...] = ("ProfilerStep#",)
     cpu_skip_prefixes: tuple[str, ...] = ("ProfilerStep",)
@@ -242,7 +242,7 @@ def is_core_kernel(raw: str, cat: str) -> tuple[bool, str]:
     return False, ""
 
 
-def _launch_ts(ev: dict, by_corr: dict, by_ext: dict) -> float:
+def _launch_ts(ev: dict, by_corr: dict, by_ext: dict) -> float | None:
     related = related_events_for_kernel(ev, by_corr, by_ext)
     for rel in related:
         if rel.get("cat") != "cuda_runtime":
@@ -250,13 +250,13 @@ def _launch_ts(ev: dict, by_corr: dict, by_ext: dict) -> float:
         name = rel.get("name", "")
         if "cudaLaunchKernel" in name or "LaunchKernel" in name:
             return float(rel["ts"])
-    return float(ev["ts"])
+    return None
 
 
 def assign_parent_region(
     ts: float,
     te: float,
-    launch_ts: float,
+    launch_ts: float | None,
     cpu_anns: list[tuple[float, float, str]],
     gpu_anns: list[tuple[float, float, str]],
     config: RegionTraceConfig,
@@ -267,7 +267,7 @@ def assign_parent_region(
     2. Largest overlap with ``gpu_user_annotation`` intervals (fallback).
     3. ``"-"`` if no match.
     """
-    if cpu_anns:
+    if launch_ts is not None and cpu_anns:
         for i, (start, _end, name) in enumerate(cpu_anns):
             next_start = cpu_anns[i + 1][0] if i + 1 < len(cpu_anns) else float("inf")
             if start <= launch_ts < next_start:
@@ -275,14 +275,6 @@ def assign_parent_region(
         last = cpu_anns[-1]
         if launch_ts >= last[0]:
             return last[2]
-
-    cand = [a for a in cpu_anns if a[0] <= launch_ts < a[1]]
-    if not cand:
-        cand = [a for a in cpu_anns if a[0] < te and a[1] > ts]
-    if not cand and cpu_anns and launch_ts < cpu_anns[0][0]:
-        return cpu_anns[0][2]
-    if cand:
-        return min(cand, key=lambda a: a[1] - a[0])[2]
 
     best = ("-", 0.0)
     for a0, a1, name in gpu_anns:
@@ -364,6 +356,14 @@ def collect_gpu_events(
             )
         )
     out.sort(key=lambda e: (e.ts, e.idx))
+    anchored = [index for index, event in enumerate(out) if event.region != "-"]
+    for index, event in enumerate(out):
+        if event.region != "-":
+            continue
+        previous = next((anchor for anchor in reversed(anchored) if anchor < index), None)
+        following = next((anchor for anchor in anchored if anchor > index), None)
+        if previous is not None and following is not None and out[previous].region == out[following].region:
+            event.region = out[previous].region
     return out
 
 
@@ -403,17 +403,26 @@ def group_by_region(
     return ordered
 
 
-def peak_tflops_for_kernel(kernel_raw: str, config: RegionTraceConfig) -> float:
+def peak_tflops_for_kernel(kernel_raw: str, config: RegionTraceConfig) -> float | None:
     """Pick H100 roofline by kernel dtype (BF16 vs FP8/quant)."""
     if re.search(r"fp8|e4m3|int8", kernel_raw, re.I):
         return config.peak_tflops_fp8
     return config.peak_tflops_bf16
 
 
-def tflops_str(flops: float, dur_ms: float, peak_tflops: float) -> str:
+def tflops_str(
+    flops: float,
+    dur_ms: float,
+    peak_tflops: float | None,
+    flops_semantics: str | None = None,
+) -> str:
     if dur_ms <= 0:
         return "unknown"
     t = flops / (dur_ms / 1000.0) / 1e12
+    if flops_semantics is not None:
+        return f"{t:.0f} {flops_semantics} TFLOPS"
+    if peak_tflops is None:
+        return f"{t:.0f} TFLOPS"
     pct = 100.0 * t / peak_tflops
     return f"{t:.0f} TFLOPS ({pct:.0f}% peak)"
 
@@ -440,15 +449,19 @@ def format_evt_line(
     ev: GpuEvent,
     op: OpEntry | None,
     *,
-    peak_tflops: float,
+    peak_tflops: float | None,
 ) -> str:
     base = f"    evt {ev.idx:03d}  {ev.dur_ms:7.3f} ms  {ev.kernel}"
     if op is None:
         return base
     shape = format_op_shape(op)
     flops_g = op.flops / 1e9
-    eff = tflops_str(op.flops, ev.dur_ms, peak_tflops)
-    return f"{base}  {op.kind} {op.tag}  {shape}  {flops_g:.1f} GF  {eff}"
+    flops_semantics = op.extra.get("flops_semantics")
+    eff = tflops_str(op.flops, ev.dur_ms, peak_tflops, flops_semantics)
+    flops_label = f"{flops_g:.1f} GF"
+    if flops_semantics is not None:
+        flops_label += f" ({flops_semantics})"
+    return f"{base}  {op.kind} {op.tag}  {shape}  {flops_label}  {eff}"
 
 
 def format_unmatched_op_line(op: OpEntry) -> str:

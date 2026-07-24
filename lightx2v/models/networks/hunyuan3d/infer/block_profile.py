@@ -1,41 +1,20 @@
-"""Hunyuan3D block profile: ``@region_profile`` regions + op-shape JSONL.
-
-Single master env ``HUNYUAN3D_BLOCK_PROFILE=1`` enables profiler ``record_function``
-labels and logical-op shape logging together.
-"""
+"""Hunyuan3D logical-op shapes for targeted block profiling."""
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from functools import partial
 
 import torch
 
 from lightx2v.utils import op_shape_trace as ost
-from lightx2v.utils.region_profile import (
-    active_profile,
-    get_active_profile,
-)
-from lightx2v.utils.region_profile import (
-    region_profile as _region_profile,
-)
-
-BLOCK_PROFILE_ENV = "HUNYUAN3D_BLOCK_PROFILE"
-
-region_profile = partial(_region_profile, annotate_env=BLOCK_PROFILE_ENV)
 
 
 def _op_shape_logging_enabled() -> bool:
-    return os.environ.get(BLOCK_PROFILE_ENV) == "1" and ost.is_recording()
+    return ost.is_recording()
 
 
 __all__ = [
-    "BLOCK_PROFILE_ENV",
     "Hunyuan3DBlockProfile",
-    "active_profile",
-    "get_active_profile",
-    "region_profile",
 ]
 
 
@@ -50,7 +29,6 @@ class _GemmSpec:
 class Hunyuan3DBlockProfile:
     """Bind static GEMM N/K and runtime M for op-shape emit hooks."""
 
-    profile_env = BLOCK_PROFILE_ENV
     block_profile_report_module = "lightx2v.models.networks.hunyuan3d.infer.block_profile_report"
 
     def __init__(self, config: dict):
@@ -90,7 +68,7 @@ class Hunyuan3DBlockProfile:
         self._register(g, "cross_o", "cross_attn", block_weights.attn2.out_proj)
         if block_weights.moe is not None:
             self._register(g, "moe_gate", "moe", block_weights.moe.gate)
-            self._moe_intermediate = int(block_weights.moe.experts[0].fc1._get_actual_weight().shape[1])
+            self._moe_intermediate = int(block_weights.moe.experts[0].fc1._get_actual_weight().shape[0])
             self._register(g, "moe_shared.fc1", "moe", block_weights.moe.shared_experts.fc1)
             self._register(g, "moe_shared.fc2", "moe", block_weights.moe.shared_experts.fc2)
         elif block_weights.mlp is not None:
@@ -117,7 +95,7 @@ class Hunyuan3DBlockProfile:
         ost.log_attn(
             "self_attn",
             "self_sdpa",
-            batch=1,
+            batch=self._batch,
             num_heads=self.num_heads,
             seq_q=self._seq_len,
             seq_k=self._seq_len,
@@ -141,7 +119,7 @@ class Hunyuan3DBlockProfile:
         ost.log_attn(
             "cross_attn",
             "cross_sdpa",
-            batch=1,
+            batch=self._batch,
             num_heads=self.num_heads,
             seq_q=self._seq_len,
             seq_k=self._cond_len,

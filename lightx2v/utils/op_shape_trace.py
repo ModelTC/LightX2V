@@ -59,8 +59,8 @@ def _gemm_flops(m: int, n: int, k: int) -> float:
     return float(2 * m * n * k)
 
 
-def _attn_flops(num_heads: int, sq: int, sk: int, head_dim: int) -> float:
-    return float(4 * num_heads * sq * sk * head_dim)
+def _attn_flops(batch: int, num_heads: int, sq: int, sk: int, head_dim: int) -> float:
+    return float(4 * batch * num_heads * sq * sk * head_dim)
 
 
 def _moe_routed_flops(routed_tokens: int, hidden: int, intermediate: int, fc_schema: str) -> float:
@@ -92,20 +92,22 @@ def log_attn(
     seq_q: int,
     seq_k: int,
     head_dim: int,
+    flops_semantics: str | None = None,
 ) -> None:
-    _write(
-        {
-            "region": region,
-            "kind": "ATTN",
-            "tag": tag,
-            "B": int(batch),
-            "H": int(num_heads),
-            "Sq": int(seq_q),
-            "Sk": int(seq_k),
-            "D": int(head_dim),
-            "flops": _attn_flops(num_heads, seq_q, seq_k, head_dim),
-        }
-    )
+    entry = {
+        "region": region,
+        "kind": "ATTN",
+        "tag": tag,
+        "B": int(batch),
+        "H": int(num_heads),
+        "Sq": int(seq_q),
+        "Sk": int(seq_k),
+        "D": int(head_dim),
+        "flops": _attn_flops(batch, num_heads, seq_q, seq_k, head_dim),
+    }
+    if flops_semantics is not None:
+        entry["flops_semantics"] = flops_semantics
+    _write(entry)
 
 
 def log_moe_routed(

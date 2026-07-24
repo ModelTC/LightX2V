@@ -10,11 +10,10 @@ except ImportError:
 
 from lightx2v.common.ops.attn.utils.all2all import all2all_seq2head
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import align_hidden_states_and_mask, calculate_n_query_tokens, get_qk_lens_audio_range
-from lightx2v.models.networks.wan.infer.block_profile import get_active_profile, region_profile
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.models.networks.wan.infer.self_forcing.transformer_infer import WanSFTransformerInfer
+from lightx2v.utils.region_profile import get_active_profile, region_profile
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-from lightx2v.utils.transformer_profile import TransformerProfile
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -127,31 +126,6 @@ class WanAudioTransformerInfer(WanAudioPostAdapterMixin, WanOffloadTransformerIn
     def __init__(self, config):
         super().__init__(config)
         self._setup_audio_post_adapter(config)
-        self._transformer_profile = TransformerProfile(
-            "seko_talk",
-            self._block_profile,
-        )
-
-    def _infer(self, weights, pre_infer_out):
-        return super().infer(weights, pre_infer_out)
-
-    def _infer_with_full_profile(self, weights, pre_infer_out):
-        with self._transformer_profile.record_full():
-            return self._infer(weights, pre_infer_out)
-
-    def _infer_with_block_profile(self, weights, pre_infer_out):
-        transformer_profile = self._transformer_profile.start_block()
-        output = self._infer(weights, pre_infer_out)
-        transformer_profile.write_block_report()
-        return output
-
-    def infer(self, weights, pre_infer_out):
-        profile_mode = self._transformer_profile.mode_for_step(self.scheduler.step_index)
-        if profile_mode == "full":
-            return self._infer_with_full_profile(weights, pre_infer_out)
-        if profile_mode == "block":
-            return self._infer_with_block_profile(weights, pre_infer_out)
-        return self._infer(weights, pre_infer_out)
 
 
 class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer):

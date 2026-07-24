@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from lightx2v.models.networks.hunyuan3d.infer.block_profile import get_active_profile, region_profile
+from lightx2v.utils.region_profile import get_active_profile, region_profile
 
 
 @torch.no_grad()
