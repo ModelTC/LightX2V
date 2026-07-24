@@ -243,6 +243,12 @@ class Flux2BaseRunner(DefaultRunner):
         return latents, generator
 
     def run(self, total_steps=None):
+        if self.config.get("pipefusion_parallel", False):
+            return self._run_pipefusion(total_steps)
+        return self._run_sequential(total_steps)
+
+    def _run_sequential(self, total_steps=None):
+        """Existing synchronous denoising loop (single-GPU or non-PipeFusion)."""
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
         for step_index in range(total_steps):
@@ -259,6 +265,75 @@ class Flux2BaseRunner(DefaultRunner):
 
             if self.progress_callback:
                 self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+
+        return self.model.scheduler.latents, self.model.scheduler.generator
+
+    def _run_pipefusion(self, total_steps=None):
+        """PipeFusion denoising loop: pipeline driver controls all timesteps."""
+        from lightx2v.common.distributed import (
+            get_pipeline_runtime_state,
+            is_pipeline_last_stage,
+        )
+
+        if total_steps is None:
+            total_steps = self.model.scheduler.infer_steps
+
+        # Initialize pipeline runtime state with image dimensions
+        pipeline_state = get_pipeline_runtime_state()
+        height = self.input_info.latent_shape[1]  # packed_h * packed_w tokens
+        # Reconstruct actual height/width from latent_image_ids
+        latent_image_ids = self.model.scheduler.latent_image_ids
+        if self.input_info.target_shape is not None:
+            actual_height, actual_width = self.input_info.target_shape
+        else:
+            actual_height = actual_width = 1024
+
+        num_pipeline_patch = self.config.get("parallel", {}).get("num_pipeline_patch", 4)
+        warmup_steps = self.config.get("parallel", {}).get("pipeline_warmup_steps", 1)
+
+        pipeline_state.set_input_parameters(
+            height=actual_height,
+            width=actual_width,
+            batch_size=1,
+            num_pipeline_patch=num_pipeline_patch,
+            warmup_steps=warmup_steps,
+            vae_scale_factor=self.config.get("vae_scale_factor", 16),
+            total_tokens=self.input_info.latent_shape[1],
+        )
+
+        # Prepare inputs
+        latents = self.model.scheduler.latents
+        text_encoder_output = self.inputs["text_encoder_output"]
+        prompt_embeds = text_encoder_output["prompt_embeds"]
+        text_ids = text_encoder_output.get("text_ids")
+        latent_image_ids = self.model.scheduler.latent_image_ids
+
+        do_cfg = self.config.get("enable_cfg", True) and self.config.get("sample_guide_scale", 1.0) > 1.0
+        negative_prompt_embeds = text_encoder_output.get("negative_prompt_embeds") if do_cfg else None
+        negative_text_ids = text_encoder_output.get("negative_text_ids") if do_cfg else None
+
+        timesteps = self.model.scheduler.timesteps
+
+        # Run pipeline
+        from lightx2v.models.networks.flux2.infer.pipefusion.pipeline_driver import (
+            Flux2PipelineDriver,
+        )
+
+        driver = Flux2PipelineDriver(self.model, self.config)
+        latents = driver.run_pipeline(
+            latents=latents,
+            prompt_embeds=prompt_embeds,
+            text_ids=text_ids,
+            latent_image_ids=latent_image_ids,
+            timesteps=timesteps,
+            scheduler=self.model.scheduler,
+            do_cfg=do_cfg,
+            negative_prompt_embeds=negative_prompt_embeds,
+            negative_text_ids=negative_text_ids,
+        )
+
+        if latents is not None and is_pipeline_last_stage():
+            self.model.scheduler.latents = latents
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
@@ -370,13 +445,27 @@ class Flux2BaseRunner(DefaultRunner):
         self.set_img_shapes()
 
         latents, generator = self.run_dit()
-        images = self.run_vae_decoder(latents)
+
+        # In PipeFusion mode, only the last stage has final latents
+        if self.config.get("pipefusion_parallel", False):
+            from lightx2v.common.distributed import is_pipeline_last_stage
+
+            if is_pipeline_last_stage():
+                images = self.run_vae_decoder(latents)
+            else:
+                images = None
+        else:
+            images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor and is_main_process():
-            image = images[0]
-            image.save(input_info.save_result_path)
-            logger.info(f"Image saved: {input_info.save_result_path}")
+        # Save image: in PipeFusion mode, last stage has the image;
+        # in normal mode, main process (rank 0) has it.
+        if not input_info.return_result_tensor:
+            should_save = is_pipeline_last_stage() if self.config.get("pipefusion_parallel", False) else is_main_process()
+            if should_save and images is not None:
+                image = images[0]
+                image.save(input_info.save_result_path)
+                logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator
         torch_device_module.empty_cache()

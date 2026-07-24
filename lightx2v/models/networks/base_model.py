@@ -399,7 +399,11 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
         preserve_keys = self.preserved_keys if hasattr(self, "preserved_keys") else None  # None means all keys are preserved, otherwise only keys in preserve_keys are preserved
 
-        if self.device.type != "cpu" and dist.is_initialized():
+        # In PipeFusion mode, load weights to CPU first to avoid OOM — each
+        # stage only needs a subset of block weights on GPU.
+        if self.config.get("pipefusion_parallel", False):
+            device = "cpu"
+        elif self.device.type != "cpu" and dist.is_initialized():
             device = dist.get_rank()
         else:
             device = str(self.device)
