@@ -493,9 +493,8 @@ class LTX2Runner(DefaultRunner):
         max_duration = num_frames / fps
 
         enc_device = next(self.audio_vae.encoder.parameters()).device
-        audio_mel_cpu_offload = self.config.get("audio_mel_cpu_offload", False)
-        decode_device = torch.device("cpu") if audio_mel_cpu_offload else enc_device
-        decoded = decode_audio_from_file(ap, decode_device, 0.0, max_duration)
+        use_real_mel_spectrogram = self.config.get("use_real_mel_spectrogram", False)
+        decoded = decode_audio_from_file(ap, enc_device, 0.0, max_duration)
         if decoded is None:
             raise ValueError(f"ltx2_s2v: failed to decode audio from {ap!r}.")
         decoded = _ltx2_audio_to_stereo(decoded)
@@ -504,7 +503,7 @@ class LTX2Runner(DefaultRunner):
             encoded = encode_audio(
                 decoded,
                 self.audio_vae.encoder,
-                audio_mel_cpu_offload=audio_mel_cpu_offload,
+                use_real_mel_spectrogram=use_real_mel_spectrogram,
             )
         if encoded.dim() == 4:
             encoded = encoded.squeeze(0)

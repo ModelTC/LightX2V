@@ -325,18 +325,17 @@ def encode_audio(
     audio: Audio,
     audio_encoder: AudioEncoder,
     audio_processor: AudioProcessor | None = None,
-    audio_mel_cpu_offload: bool = False,
+    use_real_mel_spectrogram: bool = False,
 ) -> torch.Tensor:
     """Encode audio waveform into latent representation.
     Args:
         audio: Audio container with waveform tensor of shape (batch, channels, samples) and sampling rate.
         audio_encoder: Audio encoder model
         audio_processor: Audio processor model (optional, if not provided, it will be created from the audio encoder)
-        audio_mel_cpu_offload: Whether to run resampling and mel-spectrogram processing on CPU.
+        use_real_mel_spectrogram: Whether to avoid complex-valued magnitude operations in the mel frontend.
     """
     dtype = next(audio_encoder.parameters()).dtype
     device = next(audio_encoder.parameters()).device
-    frontend_device = torch.device("cpu") if audio_mel_cpu_offload else device
 
     if audio_processor is None:
         audio_processor = AudioProcessor(
@@ -344,17 +343,10 @@ def encode_audio(
             mel_bins=audio_encoder.mel_bins,
             mel_hop_length=audio_encoder.mel_hop_length,
             n_fft=audio_encoder.n_fft,
-        ).to(device=frontend_device)
+            use_real_mel_spectrogram=use_real_mel_spectrogram,
+        ).to(device=device)
 
-    # Some accelerator backends do not support the complex64 operations used
-    # by torchaudio. The config can keep only this lightweight frontend on CPU
-    # while leaving the substantially heavier Audio VAE encoder accelerated.
-    if audio_mel_cpu_offload:
-        audio_processor = audio_processor.to(device=frontend_device, dtype=torch.float32)
-        audio = audio.to(device=frontend_device, dtype=torch.float32)
-    else:
-        audio = audio.to(device=frontend_device)
-
+    audio = audio.to(device=device)
     mel_spectrogram = audio_processor.waveform_to_mel(audio)
     latent = audio_encoder(mel_spectrogram.to(device=device, dtype=dtype))
     return latent

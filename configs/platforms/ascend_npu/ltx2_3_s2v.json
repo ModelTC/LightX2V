@@ -11,7 +11,7 @@
     "offload_granularity": "block",
     "gemma_cpu_offload": true,
     "vae_cpu_offload": false,
-    "audio_mel_cpu_offload": true,
+    "use_real_mel_spectrogram": true,
     "norm_modulate_backend": "torch",
     "modulate_type": "torch",
     "rope_type": "torch_real_rope",
