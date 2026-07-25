@@ -456,6 +456,12 @@ class Flux2BaseRunner(DefaultRunner):
             from lightx2v.common.distributed import is_pipeline_last_stage
 
             if is_pipeline_last_stage():
+                # Offload transformer weights and clear KV cache before VAE decode to avoid OOM
+                self.model.transformer_weights.to_cpu()
+                if hasattr(self.model.transformer_infer, "clear_kv_cache"):
+                    self.model.transformer_infer.clear_kv_cache()
+                torch_device_module.empty_cache()
+                gc.collect()
                 images = self.run_vae_decoder(latents)
             else:
                 images = None
