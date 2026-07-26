@@ -26,7 +26,6 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
@@ -549,12 +548,10 @@ class LTX2Model(BaseTransformerModel):
                     v_cross_ss = F.pad(v_cross_ss, (0, 0, 0, padding_size))
                 pre_infer_out.video_args.cross_scale_shift_timestep = torch.chunk(v_cross_ss, world_size, dim=0)[cur_rank]
 
-            if pre_infer_out.video_args.cross_gate_timestep is not None:
-                v_cross_gate = pre_infer_out.video_args.cross_gate_timestep
-                padding_size = (world_size - (v_cross_gate.shape[0] % world_size)) % world_size
-                if padding_size > 0:
-                    v_cross_gate = F.pad(v_cross_gate, (0, 0, 0, padding_size))
-                pre_infer_out.video_args.cross_gate_timestep = torch.chunk(v_cross_gate, world_size, dim=0)[cur_rank]
+            # cross_gate_timestep is a global [1, hidden_dim] gate derived from
+            # the scheduler sigma, not a per-token tensor. Every sequence-
+            # parallel rank must retain the same gate and broadcast it over its
+            # local video tokens in the transformer block.
 
         # Audio remains global - no splitting needed
         # Audio has fewer tokens, so we keep it on all ranks
