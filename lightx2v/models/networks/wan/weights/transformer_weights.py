@@ -12,6 +12,36 @@ from lightx2v.utils.registry_factory import (
     TENSOR_REGISTER,
 )
 
+_CAUSAL_ROPE_COMPUTE_DTYPES = {
+    "float32": torch.float32,
+    "float64": torch.float64,
+}
+
+
+def _resolve_causal_rope_compute_dtype(config):
+    value = config.get("causal_rope_compute_dtype", "float64")
+    if isinstance(value, torch.dtype):
+        if value in _CAUSAL_ROPE_COMPUTE_DTYPES.values():
+            return value
+    elif isinstance(value, str):
+        dtype = _CAUSAL_ROPE_COMPUTE_DTYPES.get(value.lower())
+        if dtype is not None:
+            return dtype
+    raise ValueError(
+        f"Unsupported causal_rope_compute_dtype {value!r}; "
+        "expected 'float32' or 'float64'."
+    )
+
+
+def _build_causal_rope(config):
+    rope_type = config.get("causal_rope_type")
+    if rope_type is None:
+        return None
+    return ROPE_REGISTER[rope_type](
+        layout="interleaved",
+        compute_dtype=_resolve_causal_rope_compute_dtype(config),
+    )
+
 
 def _mm_weight(config, weight_name, bias_name, split_dim=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, lora_prefix="", lora_path=""):
     mm_type = config.get("dit_quant_scheme", "Default")
@@ -297,11 +327,9 @@ class WanSelfAttention(WeightModule):
         if config.get("rope_chunk", False):
             rope = ROPE_REGISTER["chunked_rope"](inner=rope, chunk_size=config.get("rope_chunk_size", 100))
         self.add_module("rope", rope)
-        if config.get("causal_rope_type") is not None:
-            self.add_module(
-                "causal_rope",
-                ROPE_REGISTER[config.get("causal_rope_type", "wan_causal_rope")](layout="interleaved", compute_dtype=torch.float64),
-            )
+        causal_rope = _build_causal_rope(config)
+        if causal_rope is not None:
+            self.add_module("causal_rope", causal_rope)
 
         self.add_module(
             "modulation",
