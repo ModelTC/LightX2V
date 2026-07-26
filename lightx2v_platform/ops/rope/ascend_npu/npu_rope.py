@@ -49,34 +49,21 @@ class NpuRope(RopeTemplate):
             sin = freqs.imag.repeat_interleave(2, dim=-1)
         elif torch.is_tensor(freqs):
             if freqs.shape[-1] != rotary_dim:
-                raise ValueError(
-                    "A real RoPE cache must concatenate half-width cosine and "
-                    f"sine values and have width {rotary_dim}, got "
-                    f"{freqs.shape[-1]}."
-                )
+                raise ValueError(f"A real RoPE cache must concatenate half-width cosine and sine values and have width {rotary_dim}, got {freqs.shape[-1]}.")
             cos, sin = freqs.chunk(2, dim=-1)
             cos = cos.repeat_interleave(2, dim=-1)
             sin = sin.repeat_interleave(2, dim=-1)
         elif isinstance(freqs, tuple) and len(freqs) >= 2:
             cos, sin = freqs[:2]
             if cos.shape != sin.shape:
-                raise ValueError(
-                    f"RoPE cosine/sine shapes must match, got {cos.shape} and {sin.shape}."
-                )
+                raise ValueError(f"RoPE cosine/sine shapes must match, got {cos.shape} and {sin.shape}.")
             if cos.shape[-1] == rotary_dim // 2:
                 cos = cos.repeat_interleave(2, dim=-1)
                 sin = sin.repeat_interleave(2, dim=-1)
             elif cos.shape[-1] != rotary_dim:
-                raise ValueError(
-                    f"RoPE frequency width must be {rotary_dim // 2} or "
-                    f"{rotary_dim}, got {cos.shape[-1]}."
-                )
+                raise ValueError(f"RoPE frequency width must be {rotary_dim // 2} or {rotary_dim}, got {cos.shape[-1]}.")
         else:
-            raise TypeError(
-                "NpuRope expects a complex tensor, a concatenated real "
-                "cosine/sine cache, or a (cos, sin) tuple, "
-                f"got {type(freqs)!r}."
-            )
+            raise TypeError(f"NpuRope expects a complex tensor, a concatenated real cosine/sine cache, or a (cos, sin) tuple, got {type(freqs)!r}.")
 
         # Keep the prepared cache compact. The fused NPU call below adds the
         # singleton batch/head axes required by its SBND/S11D contract.
@@ -84,10 +71,7 @@ class NpuRope(RopeTemplate):
             cos = cos.squeeze(-2)
             sin = sin.squeeze(-2)
         if cos.ndim != 2:
-            raise ValueError(
-                "NpuRope frequency tensors must have shape [L, D] or "
-                f"[L, 1, D], got {cos.shape}."
-            )
+            raise ValueError(f"NpuRope frequency tensors must have shape [L, D] or [L, 1, D], got {cos.shape}.")
         if positions is not None:
             positions = positions.reshape(-1).to(device=cos.device, dtype=torch.long)
             cos = cos.index_select(0, positions)
@@ -95,13 +79,9 @@ class NpuRope(RopeTemplate):
         return cos, sin
 
     def prepare_freqs(self, freqs, rotary_dim=None):
-        if isinstance(freqs, tuple) or (
-            torch.is_tensor(freqs) and not torch.is_complex(freqs)
-        ):
+        if isinstance(freqs, tuple) or (torch.is_tensor(freqs) and not torch.is_complex(freqs)):
             if rotary_dim is None:
-                raise ValueError(
-                    "rotary_dim is required for real RoPE frequencies."
-                )
+                raise ValueError("rotary_dim is required for real RoPE frequencies.")
             cos, sin = self._normalize_cos_sin(freqs, rotary_dim)
             return cos.contiguous(), sin.contiguous()
         return freqs
@@ -127,16 +107,12 @@ class NpuRope(RopeTemplate):
 
     def apply(self, xq: torch.Tensor, xk: torch.Tensor, freqs, positions=None, **kwargs):
         if xq.ndim != 3 or xk.ndim != 3:
-            raise ValueError(
-                f"NpuRope expects [L, H, D] tensors, got q={xq.shape}, k={xk.shape}."
-            )
+            raise ValueError(f"NpuRope expects [L, H, D] tensors, got q={xq.shape}, k={xk.shape}.")
         s, _, d = xq.shape
         cos, sin = self._normalize_cos_sin(freqs, d, positions=positions)
         seq_len = cos.size(0)
         if seq_len > s:
-            raise ValueError(
-                f"RoPE sequence length {seq_len} exceeds query length {s}."
-            )
+            raise ValueError(f"RoPE sequence length {seq_len} exceeds query length {s}.")
         xq_part = xq[:seq_len]
         xk_part = xk[:seq_len]
 
@@ -160,12 +136,8 @@ class NpuRope(RopeTemplate):
             xk_sbnd = xk_part.unsqueeze(1)
             cos_s11d = cos.unsqueeze(1).unsqueeze(1)
             sin_s11d = sin.unsqueeze(1).unsqueeze(1)
-            xq_rotated = torch_npu.npu_rotary_mul(
-                xq_sbnd, cos_s11d, sin_s11d, "interleave"
-            ).squeeze(1)
-            xk_rotated = torch_npu.npu_rotary_mul(
-                xk_sbnd, cos_s11d, sin_s11d, "interleave"
-            ).squeeze(1)
+            xq_rotated = torch_npu.npu_rotary_mul(xq_sbnd, cos_s11d, sin_s11d, "interleave").squeeze(1)
+            xk_rotated = torch_npu.npu_rotary_mul(xk_sbnd, cos_s11d, sin_s11d, "interleave").squeeze(1)
             if s > seq_len:
                 xq = torch.cat([xq_rotated.to(self.infer_dtype), xq[seq_len:]], dim=0)
                 xk = torch.cat([xk_rotated.to(self.infer_dtype), xk[seq_len:]], dim=0)

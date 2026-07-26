@@ -28,10 +28,7 @@ def _resolve_causal_rope_compute_dtype(config):
         dtype = _CAUSAL_ROPE_COMPUTE_DTYPES.get(value.lower())
         if dtype is not None:
             return dtype
-    raise ValueError(
-        f"Unsupported causal_rope_compute_dtype {value!r}; "
-        "expected 'float32' or 'float64'."
-    )
+    raise ValueError(f"Unsupported causal_rope_compute_dtype {value!r}; expected 'float32' or 'float64'.")
 
 
 def _build_causal_rope(config):

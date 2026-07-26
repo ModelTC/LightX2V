@@ -179,9 +179,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
             pre_infer_out.freqs,
             shift_msa,
             scale_msa,
-            getattr(pre_infer_out, "adapter_args", {}).get(
-                "is_ref_prefill", False
-            ),
+            getattr(pre_infer_out, "adapter_args", {}).get("is_ref_prefill", False),
         )
 
         x, attn_out = self.infer_cross_attn_with_kvcache(
