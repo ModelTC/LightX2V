@@ -763,8 +763,15 @@ class LTX2Runner(DefaultRunner):
             v_latent.unsqueeze(0).to(GET_DTYPE()),
             generator=self.model.scheduler.generator,
         )
-        # Decode audio latents
-        audio = self.audio_vae.decode(a_latent.unsqueeze(0).to(GET_DTYPE()))
+        # S2V preserves the conditioning audio in the final artifact. Decoding
+        # the generated audio latent here would be discarded by
+        # end_run_segment/process_images_after_vae_decoder, so avoid that
+        # unnecessary decoder/vocoder work.
+        mux_audio = getattr(self, "_ltx2_s2v_mux_audio", None)
+        if self.config.get("task") == "ltx2_s2v" and mux_audio is not None:
+            audio = mux_audio
+        else:
+            audio = self.audio_vae.decode(a_latent.unsqueeze(0).to(GET_DTYPE()))
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.video_vae
