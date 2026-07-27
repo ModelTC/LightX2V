@@ -47,19 +47,13 @@ def block_mean(x, block_size):
 
 def _validate_qk(q, k, sparsity_ratio, q_block_size, kv_block_size):
     if q.ndim != 4 or k.ndim != 4:
-        raise ValueError(
-            "build_dynamic_sparse_mask expects q and k in BNSD layout, "
-            f"but got q={tuple(q.shape)}, k={tuple(k.shape)}."
-        )
+        raise ValueError(f"build_dynamic_sparse_mask expects q and k in BNSD layout, but got q={tuple(q.shape)}, k={tuple(k.shape)}.")
     if q.shape[0] != k.shape[0]:
         raise ValueError(f"q and k batch sizes must match, but got {q.shape[0]} and {k.shape[0]}.")
     if q.shape[-1] != k.shape[-1]:
         raise ValueError(f"q and k head dimensions must match, but got {q.shape[-1]} and {k.shape[-1]}.")
     if q.shape[1] % k.shape[1] != 0:
-        raise ValueError(
-            "The query head count must be divisible by the key/value head count for GQA, "
-            f"but got {q.shape[1]} and {k.shape[1]}."
-        )
+        raise ValueError(f"The query head count must be divisible by the key/value head count for GQA, but got {q.shape[1]} and {k.shape[1]}.")
     if q.device != k.device:
         raise ValueError(f"q and k must be on the same device, but got {q.device} and {k.device}.")
     if q.dtype != k.dtype:
@@ -124,23 +118,14 @@ def build_dynamic_sparse_mask(
 def topk_indices_to_v2_indices(topk_indices, kv_block_count):
     """Convert exact TopK indices to MindIE v2 selectors without a full-K sort."""
     if topk_indices.ndim != 4:
-        raise ValueError(
-            "topk_indices_to_v2_indices expects B,H,Q,Kkeep indices, "
-            f"but got shape {tuple(topk_indices.shape)}."
-        )
+        raise ValueError(f"topk_indices_to_v2_indices expects B,H,Q,Kkeep indices, but got shape {tuple(topk_indices.shape)}.")
     if topk_indices.shape[0] != 1:
-        raise ValueError(
-            "MindIE RainFusion v2 selector conversion currently supports batch size 1, "
-            f"but got {topk_indices.shape[0]}."
-        )
+        raise ValueError(f"MindIE RainFusion v2 selector conversion currently supports batch size 1, but got {topk_indices.shape[0]}.")
     if not isinstance(kv_block_count, int) or isinstance(kv_block_count, bool) or kv_block_count <= 0:
         raise ValueError(f"kv_block_count must be a positive integer, but got {kv_block_count!r}.")
     keep_block_count = topk_indices.shape[-1]
     if keep_block_count == 0 or keep_block_count > kv_block_count:
-        raise ValueError(
-            "The number of TopK indices must be in [1, kv_block_count], "
-            f"but got {keep_block_count} and kv_block_count={kv_block_count}."
-        )
+        raise ValueError(f"The number of TopK indices must be in [1, kv_block_count], but got {keep_block_count} and kv_block_count={kv_block_count}.")
 
     sorted_indices = torch.sort(topk_indices.to(torch.int64), dim=-1).values
     padding_size = kv_block_count - keep_block_count
@@ -166,15 +151,9 @@ def topk_indices_to_v2_indices(topk_indices, kv_block_count):
 def binary_mask_to_v2_indices(block_mask):
     """Convert a B=1 binary mask to the selector layout required by MindIE v2."""
     if block_mask.ndim != 4:
-        raise ValueError(
-            "binary_mask_to_v2_indices expects a BHQK mask, "
-            f"but got shape {tuple(block_mask.shape)}."
-        )
+        raise ValueError(f"binary_mask_to_v2_indices expects a BHQK mask, but got shape {tuple(block_mask.shape)}.")
     if block_mask.shape[0] != 1:
-        raise ValueError(
-            "MindIE RainFusion v2 selector conversion currently supports batch size 1, "
-            f"but got {block_mask.shape[0]}."
-        )
+        raise ValueError(f"MindIE RainFusion v2 selector conversion currently supports batch size 1, but got {block_mask.shape[0]}.")
     if block_mask.shape[-1] == 0:
         raise ValueError("The block mask must contain at least one KV block.")
 
@@ -217,10 +196,7 @@ def _disable_v3_runtime(error):
     global _V3_RUNTIME_UNAVAILABLE
 
     if not _V3_RUNTIME_UNAVAILABLE:
-        logger.warning(
-            "MindIE RainFusion v3 cannot run because aclnnBlockSparseAttention "
-            f"is unavailable; falling back to RainFusion v2. Original error: {error}"
-        )
+        logger.warning(f"MindIE RainFusion v3 cannot run because aclnnBlockSparseAttention is unavailable; falling back to RainFusion v2. Original error: {error}")
     _V3_RUNTIME_UNAVAILABLE = True
     # Backend resolution is cached. Clear it so the next layer observes the
     # process-wide capability result and resolves directly to RF v2.
@@ -239,60 +215,38 @@ def _load_mindie_backend(backend=_V2_BACKEND, allow_v2_fallback=True):
     if backend in ("auto", "v3", _V3_BACKEND):
         if _V3_RUNTIME_UNAVAILABLE:
             if not allow_v2_fallback:
-                raise RuntimeError(
-                    "MindIE RainFusion v3 was disabled because "
-                    "aclnnBlockSparseAttention is unavailable and v2 fallback is disabled."
-                )
+                raise RuntimeError("MindIE RainFusion v3 was disabled because aclnnBlockSparseAttention is unavailable and v2 fallback is disabled.")
             try:
                 return _V2_BACKEND, _import_v2_backend()
             except ImportError as v2_error:
-                raise RuntimeError(
-                    "MindIE RainFusion v3 is unavailable at runtime and its v2 fallback "
-                    "could not be imported."
-                ) from v2_error
+                raise RuntimeError("MindIE RainFusion v3 is unavailable at runtime and its v2 fallback could not be imported.") from v2_error
         try:
             return _V3_BACKEND, _import_v3_backend()
         except ImportError as v3_error:
             if not allow_v2_fallback:
-                raise RuntimeError(
-                    "MindIE RainFusion v3 is unavailable and v2 fallback is disabled."
-                ) from v3_error
+                raise RuntimeError("MindIE RainFusion v3 is unavailable and v2 fallback is disabled.") from v3_error
             logger.warning("MindIE RainFusion v3 API is unavailable; falling back to RainFusion v2.")
             try:
                 return _V2_BACKEND, _import_v2_backend()
             except ImportError as v2_error:
-                raise RuntimeError(
-                    "Neither MindIE RainFusion v3 nor its v2 fallback is available. "
-                    "Install a compatible MindIE-SD package."
-                ) from v2_error
+                raise RuntimeError("Neither MindIE RainFusion v3 nor its v2 fallback is available. Install a compatible MindIE-SD package.") from v2_error
     if backend in ("v2", _V2_BACKEND):
         try:
             return _V2_BACKEND, _import_v2_backend()
         except ImportError as v2_error:
-            raise RuntimeError(
-                "MindIE RainFusion v2 is unavailable. Install a compatible MindIE-SD package."
-            ) from v2_error
-    raise ValueError(
-        f"Unsupported NPU dynamic sparse attention backend {backend!r}; "
-        f"expected 'auto', '{_V3_BACKEND}', or '{_V2_BACKEND}'."
-    )
+            raise RuntimeError("MindIE RainFusion v2 is unavailable. Install a compatible MindIE-SD package.") from v2_error
+    raise ValueError(f"Unsupported NPU dynamic sparse attention backend {backend!r}; expected 'auto', '{_V3_BACKEND}', or '{_V2_BACKEND}'.")
 
 
 def _validate_inputs(q, k, v):
     if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
-        raise ValueError(
-            "npu_dynamic_sparse_attn expects q, k, and v in [S,H,D] layout, "
-            f"but got q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}."
-        )
+        raise ValueError(f"npu_dynamic_sparse_attn expects q, k, and v in [S,H,D] layout, but got q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}.")
     if k.shape != v.shape:
         raise ValueError(f"k and v must have identical shapes, but got {tuple(k.shape)} and {tuple(v.shape)}.")
     if q.shape[-1] != k.shape[-1]:
         raise ValueError(f"q and k/v head dimensions must match, but got {q.shape[-1]} and {k.shape[-1]}.")
     if q.shape[1] % k.shape[1] != 0:
-        raise ValueError(
-            "The query head count must be divisible by the key/value head count for GQA, "
-            f"but got {q.shape[1]} and {k.shape[1]}."
-        )
+        raise ValueError(f"The query head count must be divisible by the key/value head count for GQA, but got {q.shape[1]} and {k.shape[1]}.")
     if q.shape[0] == 0 or k.shape[0] == 0:
         raise ValueError("q and k/v sequence lengths must be greater than zero.")
     if q.device != k.device or q.device != v.device:
@@ -308,20 +262,14 @@ def _validate_cu_seqlens(cu_seqlens, sequence_length, name):
         return
     if torch.is_tensor(cu_seqlens):
         if cu_seqlens.numel() != 2:
-            raise ValueError(
-                f"{name} must describe exactly one sequence and contain 2 elements, "
-                f"but got {cu_seqlens.numel()}."
-            )
+            raise ValueError(f"{name} must describe exactly one sequence and contain 2 elements, but got {cu_seqlens.numel()}.")
         if cu_seqlens.device.type != "cpu":
             return
         values = cu_seqlens.detach().tolist()
     else:
         values = list(cu_seqlens)
     if values != [0, sequence_length]:
-        raise ValueError(
-            f"{name} must describe exactly one sequence [0, {sequence_length}], "
-            f"but got {values}. Packed batches are not supported."
-        )
+        raise ValueError(f"{name} must describe exactly one sequence [0, {sequence_length}], but got {values}. Packed batches are not supported.")
 
 
 @PLATFORM_ATTN_WEIGHT_REGISTER("npu_dynamic_sparse_attn")
@@ -353,10 +301,7 @@ class NpuDynamicSparseAttnWeight(AttnWeightTemplate):
         q_block_size = setting.get("q_block_size", setting.get("block_size", cls.q_block_size))
         kv_block_size = setting.get("kv_block_size", setting.get("block_size", cls.kv_block_size))
         if q_block_size != 128 or kv_block_size != 128:
-            raise ValueError(
-                "MindIE NPU dynamic sparse attention currently requires "
-                f"q_block_size=kv_block_size=128, but got {q_block_size} and {kv_block_size}."
-            )
+            raise ValueError(f"MindIE NPU dynamic sparse attention currently requires q_block_size=kv_block_size=128, but got {q_block_size} and {kv_block_size}.")
 
         sparsity_ratio = setting.get("sparsity_ratio", setting.get("sparsity", cls.sparsity_ratio))
         if not isinstance(sparsity_ratio, (int, float)) or isinstance(sparsity_ratio, bool):
@@ -460,10 +405,7 @@ class NpuDynamicSparseAttnWeight(AttnWeightTemplate):
 
         if backend_name == _V2_BACKEND:
             if query_head_count != key_value_head_count:
-                raise NotImplementedError(
-                    "MindIE RainFusion v2 fallback does not support GQA in this integration; "
-                    f"got {query_head_count} query heads and {key_value_head_count} KV heads."
-                )
+                raise NotImplementedError(f"MindIE RainFusion v2 fallback does not support GQA in this integration; got {query_head_count} query heads and {key_value_head_count} KV heads.")
             # RF v2 consumes padded block selectors instead of the binary
             # block mask accepted by RF v3. The Top-K choice itself is shared.
             select_idx, select_num_idx = topk_indices_to_v2_indices(
@@ -491,7 +433,5 @@ class NpuDynamicSparseAttnWeight(AttnWeightTemplate):
             raise TypeError(f"MindIE sparse attention must return a tensor, but got {type(out).__name__}.")
         expected_shape = (1, query_head_count, query_length, head_dim)
         if tuple(out.shape) != expected_shape:
-            raise RuntimeError(
-                f"MindIE sparse attention returned shape {tuple(out.shape)}, expected {expected_shape}."
-            )
+            raise RuntimeError(f"MindIE sparse attention returned shape {tuple(out.shape)}, expected {expected_shape}.")
         return out.squeeze(0).transpose(0, 1).contiguous().reshape(query_length, query_head_count * head_dim)
