@@ -15,7 +15,8 @@ except ImportError:
 class MluFlashAttnWeight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
-        assert tmo is not None, "torch_mlu_ops is not installed."
+        if tmo is None:
+            raise RuntimeError("mlu_flash_attn requires torch_mlu_ops.")
 
     def apply(self, q, k, v, cu_seqlens_q=None, cu_seqlens_kv=None, max_seqlen_q=None, max_seqlen_kv=None, **kwds):
         if q.dim() == 3:
@@ -53,6 +54,9 @@ class MluFlashAttnWeight(AttnWeightTemplate):
         if softmax_scale is None:
             softmax_scale = 1 / math.sqrt(q.shape[-1])
         causal = kwds.get("causal", False)
+        attn_bias = kwds.get("attn_bias")
+        window_size_left = kwds.get("window_size_left", -1)
+        window_size_right = kwds.get("window_size_right", -1)
         compute_dtype = torch.bfloat16 if q.dtype == torch.bfloat16 else torch.half
         x = tmo.flash_attention(
             q=q,
@@ -68,7 +72,9 @@ class MluFlashAttnWeight(AttnWeightTemplate):
             is_causal=causal,
             out=None,
             alibi_slope=None,
-            attn_bias=None,
+            attn_bias=attn_bias,
+            window_size_left=window_size_left,
+            window_size_right=window_size_right,
             compute_dtype=compute_dtype,
         )
         return x.reshape(total_seqlen, -1)

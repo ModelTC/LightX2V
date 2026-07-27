@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
@@ -23,7 +24,12 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.blocks_num = config["num_layers"]
         self.phases_num = 3
         self.has_post_adapter = False
-        self.num_heads = config["num_heads"]
+        if config.get("tensor_parallel", False):
+            _tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+            _tp_size = dist.get_world_size(_tp_group)
+        else:
+            _tp_size = 1
+        self.num_heads = config["num_heads"] // _tp_size
         self.head_dim = config["dim"] // config["num_heads"]
         self.window_size = config.get("window_size", (-1, -1))
         self.parallel_attention = None

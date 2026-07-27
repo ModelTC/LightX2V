@@ -99,13 +99,19 @@ class DefaultRunner(BaseRunner):
         self.init_scheduler()
 
     def warmup(self):
-        if not self.config.get("warmup", False) or self.config.get("disagg_mode") or self.config.get("unload_modules", False) or self.config.get("feature_caching", "NoCaching") != "NoCaching":
+        if not self.config.get("warmup", False):
             return
+        if self.config.get("disagg_mode"):
+            raise NotImplementedError("Warmup does not support disaggregated inference")
+        if self.config.get("unload_modules", False):
+            raise NotImplementedError("Warmup does not support unload_modules")
+        if self.config.get("feature_caching", "NoCaching") != "NoCaching":
+            raise NotImplementedError("Warmup does not support feature caching")
 
         self.run_warmup()
 
     def run_warmup(self):
-        logger.warning(f"Warmup is not implemented for {type(self).__name__}")
+        raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
 
     def init_modules(self):
         logger.info("Initializing runner modules...")

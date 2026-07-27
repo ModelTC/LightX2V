@@ -75,6 +75,9 @@ class DreamZeroPreInfer:
 
     def clear_cache(self):
         self._context_projection_cache.clear()
+        self._freqs_cache.clear()
+        self._prepared_freqs_cache.clear()
+        self._time_embedding_cache.clear()
 
     @staticmethod
     def _rope_params(max_seq_len, dim, theta=10000):

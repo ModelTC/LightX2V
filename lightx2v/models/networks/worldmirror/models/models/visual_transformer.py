@@ -9,7 +9,7 @@ from torch.utils.checkpoint import checkpoint
 from ...comm.communication import _Allgather
 from ...comm.padding import depad_by_length, minimal_pad_to_divisible, pad_by_length
 from ..layers import PatchEmbed, PatchEmbed_Mlp
-from ..layers.block import Block
+from ..layers.block import Block, clear_attn_bias_cache
 from ..layers.vision_transformer import vit_base, vit_giant2, vit_large, vit_small
 
 logger = logging.getLogger(__name__)
@@ -212,6 +212,15 @@ class VisualGeometryTransformer(nn.Module):
             )
             self.pos_getter = PositionGetter() if self.rope is not None else None
 
+    def begin_cache_request(self) -> None:
+        clear_attn_bias_cache()
+        if self.pos_getter is None:
+            return
+        self.pos_getter.clear_cache()
+        clear_rope_cache = getattr(self.rope, "clear_cache", None)
+        if clear_rope_cache is not None:
+            clear_rope_cache()
+
     def _init_transformer_blocks(self, block_fn, embed_dim, num_heads, mlp_ratio, qkv_bias, proj_bias, ffn_bias, init_values, qk_norm):
         self.frame_blocks = nn.ModuleList(
             [
@@ -264,6 +273,7 @@ class VisualGeometryTransformer(nn.Module):
         Returns:
             (list[torch.Tensor], int): List of attention block outputs and patch_start_idx
         """
+        self.begin_cache_request()
         depth_maps, ray_dirs, poses = priors if priors is not None else (None, None, None)
 
         # Slice to context frames if specified

@@ -47,14 +47,25 @@ class MotusTransformerInfer(BaseTransformerInfer):
         self.cos_sin = None
         self.rope_positions = None
         self.weights = None
-        self._cu_seqlens_cache = {}
-        self.reset_infer_states()
+        self.clear_request_cache()
 
-    def reset_infer_states(self):
-        self.joint_attn_cu_seqlens_q = None
-        self.joint_attn_cu_seqlens_kv = None
-        self.cross_attn_cu_seqlens_q = None
-        self.cross_attn_cu_seqlens_kv = None
+    def clear_request_cache(self):
+        self._cu_seqlens_cache_request_id = None
+        self._cu_seqlens_cache = {
+            "joint_attn_cu_seqlens_q": None,
+            "cross_attn_cu_seqlens_q": None,
+            "cross_attn_cu_seqlens_kv": None,
+        }
+
+    def set_scheduler(self, scheduler):
+        super().set_scheduler(scheduler)
+        self.clear_request_cache()
+
+    def _begin_request(self):
+        request_id = self.scheduler.rope_request_id
+        if request_id != self._cu_seqlens_cache_request_id:
+            self.clear_request_cache()
+            self._cu_seqlens_cache_request_id = request_id
 
     def _maybe_empty_cache(self):
         if self.clean_cuda_cache:
@@ -70,12 +81,17 @@ class MotusTransformerInfer(BaseTransformerInfer):
         return self.weights.und.blocks[layer_idx]
 
     def _get_cu_seqlens(self, cache_name, batch, seq_len, device, attn_type):
+        if cache_name not in self._cu_seqlens_cache:
+            raise ValueError(f"Unsupported Motus attention metadata cache: {cache_name}")
+
         cache_key = (cache_name, batch, seq_len, device.type, device.index, attn_type)
-        cu_seqlens = self._cu_seqlens_cache.get(cache_key)
-        if cu_seqlens is None:
-            tensor = torch.arange(0, (batch + 1) * seq_len, seq_len, dtype=torch.int32)
-            cu_seqlens = tensor.to(device, non_blocking=True) if attn_type in ["flash_attn2", "flash_attn3"] else tensor
-            self._cu_seqlens_cache[cache_key] = cu_seqlens
+        cached = self._cu_seqlens_cache[cache_name]
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+
+        tensor = torch.arange(0, (batch + 1) * seq_len, seq_len, dtype=torch.int32)
+        cu_seqlens = tensor.to(device, non_blocking=True) if attn_type in ["flash_attn2", "flash_attn3"] else tensor
+        self._cu_seqlens_cache[cache_name] = (cache_key, cu_seqlens)
         return cu_seqlens
 
     def _normalize_attention_dtype(self, tensor):
@@ -332,7 +348,7 @@ class MotusTransformerInfer(BaseTransformerInfer):
         self.weights = weights
         self.cos_sin = pre_infer_out.cos_sin
         self.rope_positions = pre_infer_out.rope_positions
-        self.reset_infer_states()
+        self._begin_request()
 
         processed_t5_context = pre_infer_out.context
         und_tokens = pre_infer_out.und_tokens.clone()

@@ -849,8 +849,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         audio_adapter.to(device)
         if not self.config.get("dummy_model", False):
-            load_from_rank0 = self.config.get("load_from_rank0", False)
-            weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=load_from_rank0)
+            weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=False)
             audio_adapter.load_state_dict(weights_dict, strict=False)
         else:
             logger.info("[DummyModel] Skipping audio adapter weight loading, using random init")
@@ -1052,8 +1051,7 @@ class WanAudioARRunner(WanAudioRunner):
         )
         audio_adapter.to(device)
         if not self.config.get("dummy_model", False):
-            load_from_rank0 = self.config.get("load_from_rank0", False)
-            weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=load_from_rank0)
+            weights_dict = load_weights(self.config["adapter_model_path"], cpu_offload=audio_adapter_offload, remove_key="ca", load_from_rank0=False)
             audio_adapter.load_state_dict(weights_dict, strict=False)
         else:
             logger.info("[DummyModel] Skipping causal audio adapter weight loading, using random init")

@@ -17,15 +17,20 @@ class ZImagePreInfer:
         self.cpu_offload = config.get("cpu_offload", False)
         self.zero_cond_t = config.get("zero_cond_t", False)
         self.rope = None
-        self._rope_cache = {}
+        self.scheduler = None
+        self.clear_rope_cache()
+
+    def clear_rope_cache(self):
+        self._cached_request_id = None
+        self._rope_cache = {True: None, False: None}
 
     def set_rope(self, rope):
         self.rope = rope
-        self._rope_cache.clear()
+        self.clear_rope_cache()
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
-        self._rope_cache.clear()
+        self.clear_rope_cache()
 
     @staticmethod
     def _device_key(device):
@@ -41,6 +46,14 @@ class ZImagePreInfer:
         x_padded_len,
         cap_padded_len,
     ):
+        if self.scheduler is None:
+            raise RuntimeError("ZImagePreInfer scheduler is not initialized.")
+
+        request_id = self.scheduler.rope_request_id
+        if request_id != self._cached_request_id:
+            self._cached_request_id = request_id
+            self._rope_cache = {True: None, False: None}
+
         if self.rope is None:
             raise RuntimeError("ZImagePreInfer RoPE is not initialized.")
 
@@ -62,9 +75,10 @@ class ZImagePreInfer:
             world_size,
             rank,
         )
-        cached = self._rope_cache.get(cache_key)
-        if cached is not None:
-            return cached
+        branch = bool(self.scheduler.infer_condition)
+        cached = self._rope_cache[branch]
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
 
         cap_pos_ids = self.scheduler.create_coordinate_grid(
             size=(cap_padded_len, 1, 1),
@@ -97,7 +111,7 @@ class ZImagePreInfer:
         x_freqs_cis = self.rope.prepare_freqs(x_freqs_cis, rotary_dim=rotary_dim)
         cap_freqs_cis = self.rope.prepare_freqs(cap_freqs_cis, rotary_dim=rotary_dim)
         unified_freqs_cis = torch.cat([x_freqs_cis, cap_freqs_cis], dim=0)
-        cached = (
+        value = (
             x_freqs_cis,
             cap_freqs_cis,
             unified_freqs_cis,
@@ -105,8 +119,8 @@ class ZImagePreInfer:
             self.rope.prepare_positions(cap_freqs_cis),
             self.rope.prepare_positions(unified_freqs_cis),
         )
-        self._rope_cache[cache_key] = cached
-        return cached
+        self._rope_cache[branch] = (cache_key, value)
+        return value
 
     def infer(self, weights, hidden_states, encoder_hidden_states):
         patch_size = self.config.get("patch_size", 2)

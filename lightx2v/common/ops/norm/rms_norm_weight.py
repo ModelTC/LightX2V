@@ -193,6 +193,17 @@ class RMSWeight(RMSWeightTemplate):
         return input_tensor
 
 
+@RMS_WEIGHT_REGISTER("torch_native")
+class RMSWeightNative(RMSWeight):
+    def apply(self, input_tensor):
+        return torch.nn.functional.rms_norm(
+            input_tensor,
+            (input_tensor.shape[-1],),
+            weight=self._get_actual_weight(),
+            eps=self.eps,
+        )
+
+
 @RMS_WEIGHT_REGISTER("TensorParallel")
 class RMSWeightTP(RMSWeightTemplate):
     """

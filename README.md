@@ -51,6 +51,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **July 23, 2026:** ⚡️ We release the blog: [LightX2V ROS: Closing the Loop for Action-Generating World Models](https://light-ai.top/LightX2V-BLOG/posts/LightX2V_ROS/)
+
 - **July 19, 2026:** ⚡️ We release the blog: [Wan2.2-NVFP4-Sparse: Extremely Fast Wan 2.2 14B Inference](https://light-ai.top/LightX2V-BLOG/posts/Wan22-NVFP4-Sparse/)
 
 - **June 15, 2026:** 🚀 Supported deployment on T-head PPU.

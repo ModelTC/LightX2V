@@ -12,14 +12,19 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
 
     def __init__(self, config):
         super().__init__(config)
+        self.scheduler = None
         self.num_frames = config["num_frames"]
         self.frame_seq_length = config["frame_seq_length"]
         self.kv_cache = None
         self.crossattn_cache = None
         self._cache_meta = None
-        self._kv_start = 0
-        self._kv_end = 0
         self._cu_seqlens_cache = {}
+        self._reset_request_cache()
+
+    def set_scheduler(self, scheduler):
+        super().set_scheduler(scheduler)
+        self._reset_request_cache()
+        self._kv_cache_request_id = scheduler.rope_request_id
 
     def _init_kv_cache(self, dtype, device, kv_size=None):
         kv_size = kv_size or self.num_frames * self.frame_seq_length
@@ -44,10 +49,48 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
 
     def _ensure_attention_caches(self, x):
         configured_size = self.num_frames * self.frame_seq_length
-        kv_size = max(configured_size, self._kv_end)
-        expected_meta = (x.dtype, x.device, kv_size)
-        if self._cache_meta != expected_meta or self.kv_cache is None:
-            self._init_kv_cache(x.dtype, x.device, kv_size)
+        required_capacity = max(configured_size, self._kv_end, self._valid_kv_end)
+        if self._cache_meta is None or self.kv_cache is None:
+            self._init_kv_cache(x.dtype, x.device, required_capacity)
+            return
+
+        cached_dtype, cached_device, cached_capacity = self._cache_meta
+        if cached_dtype == x.dtype and cached_device == x.device and cached_capacity >= required_capacity:
+            return
+
+        old_kv_cache = self.kv_cache
+        valid_kv_end = self._valid_kv_end
+        self._init_kv_cache(x.dtype, x.device, required_capacity)
+        if valid_kv_end == 0:
+            return
+
+        for old_block_cache, new_block_cache in zip(old_kv_cache, self.kv_cache, strict=True):
+            new_block_cache["k"][:valid_kv_end].copy_(old_block_cache["k"][:valid_kv_end])
+            new_block_cache["v"][:valid_kv_end].copy_(old_block_cache["v"][:valid_kv_end])
+
+    def _reset_request_cache(self):
+        self._kv_cache_request_id = None
+        self._kv_start = 0
+        self._kv_end = 0
+        self._valid_kv_end = 0
+        self._cu_seqlens_cache.clear()
+        if self.crossattn_cache is None:
+            return
+        for block_cache in self.crossattn_cache:
+            block_cache["k"] = None
+            block_cache["v"] = None
+            block_cache["k_img"] = None
+            block_cache["v_img"] = None
+            block_cache["is_init"] = False
+
+    def _sync_request_cache(self):
+        request_id = self.scheduler.rope_request_id
+        if request_id == self._kv_cache_request_id:
+            return request_id
+
+        self._reset_request_cache()
+        self._kv_cache_request_id = request_id
+        return request_id
 
     def _get_cu_seqlens(self, q_len, kv_len):
         key = (int(q_len), int(kv_len))
@@ -77,17 +120,29 @@ class WanTransformerInferCausVid(WanOffloadTransformerInfer):
     def infer(self, weights, pre_infer_out, kv_start, kv_end):
         if self.config["seq_parallel"]:
             raise NotImplementedError("Sequence parallel inference is not implemented for CausVid.")
+        if self.scheduler is None:
+            raise RuntimeError("WanTransformerInferCausVid scheduler is not initialized.")
 
-        self._kv_start = int(kv_start)
-        self._kv_end = int(kv_end)
+        request_id = self._sync_request_cache()
+
+        kv_start = int(kv_start)
+        kv_end = int(kv_end)
         query_len = pre_infer_out.x.shape[0]
-        if self._kv_start < 0 or self._kv_end <= self._kv_start:
-            raise ValueError(f"Invalid CausVid KV range: [{self._kv_start}, {self._kv_end}).")
-        if self._kv_end - self._kv_start != query_len:
-            raise ValueError(f"CausVid query length must match its KV cache range: query_len={query_len}, range=[{self._kv_start}, {self._kv_end}).")
+        if kv_start < 0 or kv_end <= kv_start:
+            raise ValueError(f"Invalid CausVid KV range: [{kv_start}, {kv_end}).")
+        if self._valid_kv_end == 0 and kv_start != 0:
+            raise ValueError(f"CausVid request_id={request_id} must start at kv_start=0; got kv_start={kv_start}, kv_end={kv_end}.")
+        if kv_start > self._valid_kv_end:
+            raise ValueError(f"CausVid request_id={request_id} leaves an uninitialized KV gap: valid_kv_end={self._valid_kv_end}, kv_start={kv_start}, kv_end={kv_end}.")
+        if kv_end - kv_start != query_len:
+            raise ValueError(f"CausVid query length must match its KV cache range: query_len={query_len}, range=[{kv_start}, {kv_end}).")
 
+        self._kv_start = kv_start
+        self._kv_end = kv_end
         self._ensure_attention_caches(pre_infer_out.x)
-        return super().infer(weights, pre_infer_out)
+        output = super().infer(weights, pre_infer_out)
+        self._valid_kv_end = max(self._valid_kv_end, kv_end)
+        return output
 
     def infer_self_attn(self, phase, x, shift_msa, scale_msa, grid_sizes=None):
         norm1_quant = None

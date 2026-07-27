@@ -43,9 +43,13 @@ class PositionGetter:
     def __init__(self) -> None:
         self.position_cache: Dict[Tuple[int, int, torch.device], torch.Tensor] = {}
 
+    def clear_cache(self) -> None:
+        self.position_cache.clear()
+
     def __call__(self, batch_size: int, height: int, width: int, device: torch.device) -> torch.Tensor:
         cache_key = (height, width, torch.device(device))
         if cache_key not in self.position_cache:
+            self.position_cache.clear()
             y_coords = torch.arange(height, device=device)
             x_coords = torch.arange(width, device=device)
             self.position_cache[cache_key] = torch.cartesian_prod(y_coords, x_coords)

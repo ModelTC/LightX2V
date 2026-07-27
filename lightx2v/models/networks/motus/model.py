@@ -233,7 +233,6 @@ class MotusModel(BaseTransformerModel):
         logger.info("[Motus] Loading VLM processor")
         self.vlm_processor = AutoProcessor.from_pretrained(self.config["vlm_path"], trust_remote_code=True)
         self._load_normalization_stats()
-        self._rope_cos_sin_cache = {}
         self._patch_qwen3_vl_rope_index(self.vlm_model)
         logger.info("[Motus] Building Motus backbone helpers")
         self.video_backbone = MotusVideoBackbone(self.config, self.pre_weight.video, self.transformer_weights.video)
@@ -501,31 +500,6 @@ class MotusModel(BaseTransformerModel):
         flat = actions.reshape(-1, shape[-1])
         restored = flat * self.action_range.unsqueeze(0) + self.action_min.unsqueeze(0)
         return restored.reshape(shape)
-
-    def get_wan_freqs(self):
-        return self.pre_infer.freqs
-
-    def get_wan_rotary_cos_sin(self, grid_size):
-        if grid_size in self._rope_cos_sin_cache:
-            return self._rope_cos_sin_cache[grid_size]
-        freqs = self.get_wan_freqs()
-        head_dim_half = freqs.shape[1]
-        c_f = head_dim_half - 2 * (head_dim_half // 3)
-        c_h = head_dim_half // 3
-        c_w = head_dim_half // 3
-        fpart, hpart, wpart = freqs.split([c_f, c_h, c_w], dim=1)
-        f, h, w = grid_size
-        freq_grid = torch.cat(
-            [
-                fpart[:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-                hpart[:h].view(1, h, 1, -1).expand(f, h, w, -1),
-                wpart[:w].view(1, 1, w, -1).expand(f, h, w, -1),
-            ],
-            dim=-1,
-        ).reshape(f * h * w, -1)
-        cos_sin = (freq_grid.real.contiguous(), freq_grid.imag.contiguous())
-        self._rope_cos_sin_cache[grid_size] = cos_sin
-        return cos_sin
 
     def prepare_frame(self, image_path):
         image = Image.open(image_path).convert("RGB")

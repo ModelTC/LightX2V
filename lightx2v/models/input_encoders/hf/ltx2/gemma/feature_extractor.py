@@ -75,7 +75,7 @@ def norm_and_concat_per_token_rms(
     normed = encoded_text * torch.rsqrt(variance + 1e-6)
     normed = normed.reshape(B, T, D * L)
     mask_3d = attention_mask.bool().unsqueeze(-1)  # [B, T, 1]
-    return torch.where(mask_3d, normed, torch.zeros_like(normed))
+    return normed.masked_fill_(~mask_3d, 0.0)
 
 
 def _rescale_norm(x: torch.Tensor, target_dim: int, source_dim: int) -> torch.Tensor:

@@ -125,7 +125,7 @@ class WanDreamZeroRunner(WanRunner):
             quant_scheme=None,
             cpu_offload=clip_offload,
             use_31_block=self.config.get("use_31_block", True),
-            load_from_rank0=self.config.get("load_from_rank0", False),
+            load_from_rank0=False,
             dummy_model=self.config.get("dummy_model", False),
         )
         if not self.config.get("dummy_model", False):
@@ -150,7 +150,7 @@ class WanDreamZeroRunner(WanRunner):
             t5_quantized=False,
             t5_quantized_ckpt=None,
             quant_scheme=None,
-            load_from_rank0=self.config.get("load_from_rank0", False),
+            load_from_rank0=False,
             lazy_load=self.config.get("t5_lazy_load", False),
             dummy_model=self.config.get("dummy_model", False),
         )
@@ -167,7 +167,7 @@ class WanDreamZeroRunner(WanRunner):
             "parallel": self.get_vae_parallel(),
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
-            "load_from_rank0": self.config.get("load_from_rank0", False),
+            "load_from_rank0": False,
             "use_lightvae": self.config.get("use_lightvae", False),
             "dummy_model": self.config.get("dummy_model", False),
             "dtype": GET_DTYPE() if not self.config.get("vae_dtype", None) else self.config["vae_dtype"],
@@ -193,7 +193,7 @@ class WanDreamZeroRunner(WanRunner):
             "cpu_offload": vae_offload,
             "use_lightvae": self.config.get("use_lightvae", False),
             "dtype": GET_DTYPE() if not self.config.get("vae_dtype", None) else self.config["vae_dtype"],
-            "load_from_rank0": self.config.get("load_from_rank0", False),
+            "load_from_rank0": False,
             "dummy_model": self.config.get("dummy_model", False),
         }
         vae_decoder = self.vae_cls(**vae_config)
@@ -568,7 +568,7 @@ class WanDreamZeroRunner(WanRunner):
         self.last_chunk_started_new_segment = len(frame_indices) == 1 or self.current_start_frame >= int(self.config.get("local_attn_size", 9))
         if self.last_chunk_started_new_segment:
             self.current_start_frame = 0
-            self.model.clear_cache(self.cache_name)
+            self.model.clear_cache(self.cache_name, clear_pre_infer=False)
 
         observed_latents = None
         if self.current_start_frame == 0:

@@ -195,7 +195,6 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
         if cache_name is None:
             self.kv_caches.clear()
             self.cross_attn_kv_caches.clear()
-            self._cu_seqlens_cache.clear()
         else:
             cache_names = {cache_name, f"{cache_name}_cond", f"{cache_name}_uncond"}
             for name in cache_names:
@@ -204,6 +203,7 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
                 key_cache_name = key[0] if isinstance(key, tuple) else key
                 if key_cache_name in cache_names:
                     self.cross_attn_kv_caches.pop(key, None)
+        self._cu_seqlens_cache.clear()
 
     @staticmethod
     def _token_modulation(x):

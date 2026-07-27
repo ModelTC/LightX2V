@@ -6,15 +6,15 @@ class RotaryPositionalEmbedding1D:
     def __init__(self, head_dim, base=10000):
         self.head_dim = head_dim
         self.base = base
-        self._inv_freq_cache = {}
+        self._inv_freq_cache_key = None
+        self._inv_freq = None
 
     def _get_inv_freq(self, device):
         cache_key = (device.type, device.index)
-        inv_freq = self._inv_freq_cache.get(cache_key)
-        if inv_freq is None:
-            inv_freq = 1.0 / (self.base ** (torch.arange(0, self.head_dim, 2, device=device, dtype=torch.float32) / self.head_dim))
-            self._inv_freq_cache[cache_key] = inv_freq
-        return inv_freq
+        if cache_key != self._inv_freq_cache_key:
+            self._inv_freq_cache_key = cache_key
+            self._inv_freq = 1.0 / (self.base ** (torch.arange(0, self.head_dim, 2, device=device, dtype=torch.float32) / self.head_dim))
+        return self._inv_freq
 
     def prepare(self, rope, pos_indices):
         angles = torch.einsum("..., f -> ... f", pos_indices.float(), self._get_inv_freq(pos_indices.device))

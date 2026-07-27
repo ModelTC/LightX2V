@@ -28,6 +28,7 @@ class WanScheduler(BaseScheduler):
         self.sample_guide_scale = self.config["sample_guide_scale"]
         self.caching_records_2 = [True] * self.config["infer_steps"]
         self.head_size = self.config["dim"] // self.config["num_heads"]
+        self.rope_request_id = 0
 
     def refresh_from_config(self, config):
         self.config = config
@@ -38,6 +39,34 @@ class WanScheduler(BaseScheduler):
         self.caching_records = [True] * self.infer_steps
         self.caching_records_2 = [True] * self.infer_steps
         self.step_index = 0
+
+    def clear(self):
+        for name in (
+            "generator",
+            "latents",
+            "latents_list",
+            "noise_pred",
+            "noise_pred_cond",
+            "noise_pred_uncond",
+            "noise_pred_guided",
+            "vae_encoder_out",
+            "mask",
+            "timesteps",
+            "sigmas",
+            "timestep_input",
+            "timestep_input_r",
+            "model_outputs",
+            "timestep_list",
+            "last_sample",
+            "this_order",
+        ):
+            setattr(self, name, None)
+        self.step_index = 0
+        self.lower_order_nums = 0
+        self.infer_condition = True
+        self._begin_index = None
+        if hasattr(self, "changing_resolution_index"):
+            self.changing_resolution_index = 0
 
     def _uses_conditioned_latent_prefix(self):
         """Whether this Wan variant keeps a fixed latent prefix during diffusion.
@@ -53,6 +82,7 @@ class WanScheduler(BaseScheduler):
         return model_cls in {"wan2.2", "wan2.2_matrix_game3"}
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
+        self.rope_request_id += 1
         if self._uses_conditioned_latent_prefix():
             self.vae_encoder_out = image_encoder_output["vae_encoder_out"] if image_encoder_output is not None else None
 

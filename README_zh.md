@@ -51,6 +51,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年7月23日：** 🎉 我们发布 [LightX2V ROS: Closing the Loop for Action-Generating World Models](https://light-ai.top/LightX2V-BLOG/posts/LightX2V_ROS/) 博客
+
 - **2026年7月19日：** ⚡️ 我们发布 [Wan2.2-NVFP4-Sparse: Extremely Fast Wan 2.2 14B Inference](https://light-ai.top/LightX2V-BLOG/posts/Wan22-NVFP4-Sparse/) 博客
 
 - **2026年6月15日：** 🚀 支持 平头哥 PPU 的部署。

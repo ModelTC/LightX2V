@@ -1,0 +1,65 @@
+model:
+  name: wan_fastwam
+  running_dtype: bf16
+  model_path: /path/to/Wan-AI/Wan2.2-TI2V-5B
+
+data:
+  train: &libero_plus_data
+    name: libero_fastwam_dataset
+    dataset_dirs:
+      # https://huggingface.co/datasets/Sylvest/libero_plus_lerobot
+      - /path/to/datasets/libero_plus_lerobot
+    shape_meta:
+      images: [front, wrist]
+    # Match the released Kairos recipe; training-time eval is in-sample.
+    val_set_proportion: 0.0
+    batch_size: 8
+    num_workers: 8
+  val:
+    <<: *libero_plus_data
+
+training:
+  method: fastwam
+  output_dir: runs/fastwam_libero_plus_4gpu
+  # Approximately 10 epochs over 2,238,036 frames at global batch 128.
+  max_train_iters: 174848
+  gradient_accumulation_iters: 4
+  max_grad_norm: 1.0
+  # One checkpoint per approximately 2,238,036 / 128 optimizer steps.
+  save_every_iters: 17485
+  save_total_limit: 10
+  save_final: true
+  lr_scheduler: cosine
+  lr_warmup_iters: 8742
+  optimizer:
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-2
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_epsilon: 1.0e-8
+
+inference:
+  infer_every_iters: 200
+  eval_num_inference_steps: 5
+  num_samples: 4
+  sample_strategy: rotating
+  run_inference: true
+  save_video: true
+  save_preview: true
+  fps: 8
+  tiled: false
+  seed: 42
+
+logging:
+  train_log_every_iters: 10
+
+resume:
+  auto_resume: true
+  resume_ckpt_path: null
+
+distributed:
+  backend: nccl
+  zero1:
+    enabled: true
+  sequence_parallel:
+    enabled: false
