@@ -12,6 +12,8 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 @RUNNER_REGISTER("wan2.1_distill")
 class WanDistillRunner(WanRunner):
+    _SUPPORTS_GENERIC_WARMUP = True
+
     def __init__(self, config):
         super().__init__(config)
 
@@ -33,6 +35,8 @@ class WanDistillRunner(WanRunner):
 
 @RUNNER_REGISTER("wan2.1_mean_flow_distill")
 class Wan21MeanFlowDistillRunner(WanDistillRunner):
+    _SUPPORTS_GENERIC_WARMUP = True
+
     def __init__(self, config):
         super().__init__(config)
 
@@ -119,6 +123,8 @@ class MultiDistillModelStruct(MultiModelStruct):
 
 @RUNNER_REGISTER("wan2.2_moe_distill")
 class Wan22MoeDistillRunner(WanDistillRunner):
+    _SUPPORTS_GENERIC_WARMUP = True
+
     def __init__(self, config):
         super().__init__(config)
         if self.config.get("dit_quantized", False) and self.config.get("high_noise_quantized_ckpt", None):
@@ -140,18 +146,14 @@ class Wan22MoeDistillRunner(WanDistillRunner):
                 raise FileNotFoundError(f"Low Noise Model does not find")
 
     def get_warmup_step_indices(self, scheduler):
-        return 0, scheduler.boundary_step_index
+        step_count = len(scheduler.timesteps)
+        if step_count == 0:
+            return ()
+        boundary = scheduler.boundary_step_index
+        return (0, boundary) if 0 < boundary < step_count else (0,)
 
     def get_warmup_models(self):
         return tuple(self.model.model)
-
-    def clear_warmup_state(self):
-        super().clear_warmup_state()
-        scheduler = self.model.scheduler
-        scheduler.step_index = 0
-        scheduler.infer_condition = True
-        scheduler.timestep_input = None
-        self.model.cur_model_index = -1
 
     def load_transformer(self):
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
