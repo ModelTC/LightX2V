@@ -155,7 +155,7 @@ def main():
         "--image_path",
         type=str,
         default="",
-        help="The path to input image file(s), including HunyuanImage3 ti2t/ti2i. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
+        help="The path to input image file(s). Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
     parser.add_argument("--state_path", type=str, default="", help="The path to input robot state file for robot i2v/i2va inference.")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
