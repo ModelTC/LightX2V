@@ -1,9 +1,20 @@
 #!/bin/bash
-set -euo pipefail
 
-# Example (the CFG/SP sizes come from the selected JSON config):
-#   bash scripts/dist_infer/run_hunyuan_image3_t2i_dist_cfg_ulysses.sh 0,1,2,3,4,5,6,7
+# Set paths first.
+lightx2v_path=/data/nvme0/lhd_codes/LightX2V
+model_path=/data/nvme0/lhd_codes/HunyuanImage-3.0-instruct/HunyuanImage-3-Instruct
+hunyuan_image3_path=/data/nvme0/lhd_codes/HunyuanImage-3.0
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-export SP_ATTN_TYPE=ulysses
-exec bash "${SCRIPT_DIR}/run_hunyuan_image3_t2i_dist_cfg_sp.sh" "$@"
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export PYTHONPATH="${hunyuan_image3_path}:${PYTHONPATH:-}"
+
+source "${lightx2v_path}/scripts/base/base.sh"
+
+torchrun --standalone --nproc_per_node=4 -m lightx2v.infer \
+    --model_cls hunyuan_image3 \
+    --task t2i \
+    --model_path "${model_path}" \
+    --config_json "${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_t2i_dist_cfg_ulysses.json" \
+    --prompt "生成图片：一辆汽车行驶在高速公路上，驾驶员在打电话，副驾驶坐着一只狗" \
+    --save_result_path "${lightx2v_path}/save_results/hunyuan_image3_t2i_cfg2_ulysses.png" \
+    --seed 42
