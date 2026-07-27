@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightTP
 from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
@@ -11,6 +12,33 @@ from lightx2v.utils.registry_factory import (
     ROPE_REGISTER,
     TENSOR_REGISTER,
 )
+
+_CAUSAL_ROPE_COMPUTE_DTYPES = {
+    "float32": torch.float32,
+    "float64": torch.float64,
+}
+
+
+def _resolve_causal_rope_compute_dtype(config):
+    value = config.get("causal_rope_compute_dtype", "float64")
+    if isinstance(value, torch.dtype):
+        if value in _CAUSAL_ROPE_COMPUTE_DTYPES.values():
+            return value
+    elif isinstance(value, str):
+        dtype = _CAUSAL_ROPE_COMPUTE_DTYPES.get(value.lower())
+        if dtype is not None:
+            return dtype
+    raise ValueError(f"Unsupported causal_rope_compute_dtype {value!r}; expected 'float32' or 'float64'.")
+
+
+def _build_causal_rope(config):
+    rope_type = config.get("causal_rope_type")
+    if rope_type is None:
+        return None
+    return ROPE_REGISTER[rope_type](
+        layout="interleaved",
+        compute_dtype=_resolve_causal_rope_compute_dtype(config),
+    )
 
 
 def _mm_weight(config, weight_name, bias_name, split_dim=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, lora_prefix="", lora_path=""):
@@ -37,6 +65,46 @@ def _mm_weight(config, weight_name, bias_name, split_dim=None, create_cuda_buffe
     return MM_WEIGHT_REGISTER[mm_type](
         weight_name,
         bias_name,
+        create_cuda_buffer,
+        create_cpu_buffer,
+        lazy_load,
+        lazy_load_file,
+        lora_prefix=lora_prefix,
+        lora_path=lora_path,
+    )
+
+
+class WanTensorParallelRMSWeight(RMSWeightTP):
+    """RMSNorm over the full Q/K hidden dimension sharded by Wan TP."""
+
+    def apply(self, input_tensor):
+        input_fp32 = input_tensor.float()
+        local_sum = input_fp32.square().sum(dim=-1, keepdim=True)
+        if self.tp_size > 1 and self.tp_group is not None:
+            dist.all_reduce(local_sum, op=dist.ReduceOp.SUM, group=self.tp_group)
+
+        global_hidden_dim = input_tensor.shape[-1] * self.tp_size
+        normalized = input_fp32 * torch.rsqrt(local_sum / global_hidden_dim + self.eps)
+        return (normalized * self._get_actual_weight().float()).to(input_tensor.dtype)
+
+
+def _rms_weight(config, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, lora_prefix="", lora_path=""):
+    if config.get("tensor_parallel", False):
+        tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+        return WanTensorParallelRMSWeight(
+            weight_name=weight_name,
+            tp_group=tp_group,
+            tp_rank=dist.get_rank(tp_group),
+            tp_size=dist.get_world_size(tp_group),
+            create_cuda_buffer=create_cuda_buffer,
+            create_cpu_buffer=create_cpu_buffer,
+            lazy_load=lazy_load,
+            lazy_load_file=lazy_load_file,
+            lora_prefix=lora_prefix,
+            lora_path=lora_path,
+        )
+    return RMS_WEIGHT_REGISTER[config.get("rms_norm_type", "sgl-kernel")](
+        weight_name,
         create_cuda_buffer,
         create_cpu_buffer,
         lazy_load,
@@ -297,11 +365,9 @@ class WanSelfAttention(WeightModule):
         if config.get("rope_chunk", False):
             rope = ROPE_REGISTER["chunked_rope"](inner=rope, chunk_size=config.get("rope_chunk_size", 100))
         self.add_module("rope", rope)
-        if config.get("causal_rope_type") is not None:
-            self.add_module(
-                "causal_rope",
-                ROPE_REGISTER[config.get("causal_rope_type", "wan_causal_rope")](layout="interleaved", compute_dtype=torch.float64),
-            )
+        causal_rope = _build_causal_rope(config)
+        if causal_rope is not None:
+            self.add_module("causal_rope", causal_rope)
 
         self.add_module(
             "modulation",
@@ -382,7 +448,8 @@ class WanSelfAttention(WeightModule):
         )
         self.add_module(
             "self_attn_norm_q",
-            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
+            _rms_weight(
+                config,
                 f"{block_prefix}.{self.block_index}.self_attn.norm_q.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -394,7 +461,8 @@ class WanSelfAttention(WeightModule):
         )
         self.add_module(
             "self_attn_norm_k",
-            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
+            _rms_weight(
+                config,
                 f"{block_prefix}.{self.block_index}.self_attn.norm_k.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -625,7 +693,8 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module(
             "cross_attn_norm_q",
-            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
+            _rms_weight(
+                config,
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_q.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -637,7 +706,8 @@ class WanCrossAttention(WeightModule):
         )
         self.add_module(
             "cross_attn_norm_k",
-            RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
+            _rms_weight(
+                config,
                 f"{block_prefix}.{self.block_index}.cross_attn.norm_k.weight",
                 create_cuda_buffer,
                 create_cpu_buffer,
@@ -682,7 +752,8 @@ class WanCrossAttention(WeightModule):
             )
             self.add_module(
                 "cross_attn_norm_k_img",
-                RMS_WEIGHT_REGISTER[self.attn_rms_norm_type](
+                _rms_weight(
+                    config,
                     f"{block_prefix}.{self.block_index}.cross_attn.norm_k_img.weight",
                     create_cuda_buffer,
                     create_cpu_buffer,

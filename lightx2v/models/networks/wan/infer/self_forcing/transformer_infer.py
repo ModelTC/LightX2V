@@ -179,6 +179,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
             pre_infer_out.freqs,
             shift_msa,
             scale_msa,
+            getattr(pre_infer_out, "adapter_args", {}).get("is_ref_prefill", False),
         )
 
         x, attn_out = self.infer_cross_attn_with_kvcache(
@@ -194,7 +195,17 @@ class WanSFTransformerInfer(WanTransformerInfer):
         x = self.post_process(x, y, c_gate_msa, pre_infer_out)
         return x
 
-    def infer_self_attn_with_kvcache(self, phase, grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa):
+    def infer_self_attn_with_kvcache(
+        self,
+        phase,
+        grid_sizes,
+        x,
+        seq_lens,
+        freqs,
+        shift_msa,
+        scale_msa,
+        is_ref_prefill=False,
+    ):
         norm1_weight = 1 + scale_msa.squeeze()
         norm1_bias = shift_msa.squeeze()
         if hasattr(phase, "smooth_norm1_weight"):
@@ -213,7 +224,7 @@ class WanSFTransformerInfer(WanTransformerInfer):
         v = phase.self_attn_v.apply(norm1_out).view(s, n, d)
 
         seg_index = int(self.scheduler.seg_index)
-        is_ref_prefill = bool(pre_infer_out.adapter_args.get("is_ref_prefill", False))
+        is_ref_prefill = bool(is_ref_prefill)
         ref_num_frames = int(self.kv_cache_manager.ref_num_frames)
         current_start_frame = 0 if is_ref_prefill else ref_num_frames + seg_index * self.num_frame_per_chunk
 

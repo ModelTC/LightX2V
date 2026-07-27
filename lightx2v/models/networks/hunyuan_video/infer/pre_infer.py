@@ -34,6 +34,7 @@ class HunyuanVideo15PreInfer:
         self.heads_num = config["heads_num"]
         self.frequency_embedding_size = 256
         self.max_period = 10000
+        self.rope = None
         self.cos_sin = None
         self.grid_sizes = (0, 0, 0)  # (t, h, w)
         if self.config["seq_parallel"]:
@@ -43,6 +44,11 @@ class HunyuanVideo15PreInfer:
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
+
+    def set_rope(self, rope):
+        self.rope = rope
+        self.cos_sin = None
+        self.grid_sizes = (0, 0, 0)
 
     def prepare_cos_sin(self, rope_sizes):
         target_ndim = 3
@@ -63,6 +69,8 @@ class HunyuanVideo15PreInfer:
             if padding_size > 0:
                 cos_sin = F.pad(cos_sin, (0, 0, 0, padding_size))
             cos_sin = torch.chunk(cos_sin, world_size, dim=0)[cur_rank]
+        if self.rope is not None:
+            cos_sin = self.rope.prepare_freqs(cos_sin, rotary_dim=head_dim)
         return cos_sin
 
     @torch.no_grad()

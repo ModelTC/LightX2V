@@ -21,4 +21,5 @@ python -m lightx2v.infer \
   --audio_path "${AUDIO_PATH}" \
   --prompt "A person speaks clearly in a quiet room, natural lighting, cinematic medium shot." \
   --negative_prompt "blurry, out of focus, overexposed, underexposed, low contrast, excessive noise, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, disfigured hands, artifacts, inconsistent perspective, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, off-sync audio, AI artifacts." \
-  --save_result_path "${lightx2v_path}/save_results/output_lightx2v_ltx2_3_s2v_ascend.mp4"
+  --save_result_path "${lightx2v_path}/save_results/output_lightx2v_ltx2_3_s2v_ascend.mp4" \
+  --target_video_length 241

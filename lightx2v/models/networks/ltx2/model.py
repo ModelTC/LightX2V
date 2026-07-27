@@ -24,6 +24,9 @@ from lightx2v.models.networks.ltx2.weights.transformer_weights import (
 from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def _multimodal_guider_calculate(
@@ -144,14 +147,14 @@ class LTX2Model(BaseTransformerModel):
         """
         Load and distribute weights from rank 0 to all ranks.
 
-        Only supports tensor parallel mode with CUDA device.
+        Supports tensor parallel mode on the configured accelerator platform.
         CPU offload is not supported.
         """
         # CPU offload is not supported
         if self.cpu_offload:
             raise NotImplementedError("_load_weights_from_rank0 does not support CPU offload. Please set cpu_offload=False.")
 
-        logger.info("Loading distributed weights with tensor parallel (CUDA only)")
+        logger.info(f"Loading distributed weights with tensor parallel on {AI_DEVICE}")
         global_src_rank = 0
 
         if is_weight_loader:
@@ -202,11 +205,11 @@ class LTX2Model(BaseTransformerModel):
             dist.broadcast_object_list(obj_list, src=global_src_rank)
             synced_meta_dict = obj_list[0]
 
-        # Allocate tensors on CUDA
+        # Allocate tensors on the accelerator selected by the platform layer.
         distributed_weight_dict = {}
+        device = torch.device(f"{AI_DEVICE}:{torch_device_module.current_device()}")
         for key, meta in synced_meta_dict.items():
             is_tp = meta.get("is_tp", False)
-            device = torch.device(f"cuda:{torch.cuda.current_device()}")
             if is_tp:
                 # TP weight: each rank gets its own slice
                 distributed_weight_dict[key] = torch.empty(meta["shape"], dtype=meta["dtype"], device=device)
@@ -247,9 +250,9 @@ class LTX2Model(BaseTransformerModel):
 
                 dist.broadcast(distributed_weight_dict[key], src=global_src_rank)
 
-        torch.cuda.synchronize()
+        torch_device_module.synchronize()
 
-        logger.info(f"Weights distributed across {dist.get_world_size()} devices on CUDA")
+        logger.info(f"Weights distributed across {dist.get_world_size()} devices on {AI_DEVICE}")
 
         return distributed_weight_dict
 
@@ -545,12 +548,10 @@ class LTX2Model(BaseTransformerModel):
                     v_cross_ss = F.pad(v_cross_ss, (0, 0, 0, padding_size))
                 pre_infer_out.video_args.cross_scale_shift_timestep = torch.chunk(v_cross_ss, world_size, dim=0)[cur_rank]
 
-            if pre_infer_out.video_args.cross_gate_timestep is not None:
-                v_cross_gate = pre_infer_out.video_args.cross_gate_timestep
-                padding_size = (world_size - (v_cross_gate.shape[0] % world_size)) % world_size
-                if padding_size > 0:
-                    v_cross_gate = F.pad(v_cross_gate, (0, 0, 0, padding_size))
-                pre_infer_out.video_args.cross_gate_timestep = torch.chunk(v_cross_gate, world_size, dim=0)[cur_rank]
+            # cross_gate_timestep is a global [1, hidden_dim] gate derived from
+            # the scheduler sigma, not a per-token tensor. Every sequence-
+            # parallel rank must retain the same gate and broadcast it over its
+            # local video tokens in the transformer block.
 
         # Audio remains global - no splitting needed
         # Audio has fewer tokens, so we keep it on all ranks

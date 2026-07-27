@@ -16,6 +16,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -401,7 +402,7 @@ class ZImageRunner(DefaultRunner):
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor:
+        if not input_info.return_result_tensor and is_main_process():
             image = images[0]
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")

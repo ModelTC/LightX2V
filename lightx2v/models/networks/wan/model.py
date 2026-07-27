@@ -73,6 +73,7 @@ class WanModel(BaseTransformerModel):
             ".cross_attn.v.",
             ".cross_attn.norm_q.",
             ".cross_attn.norm_k.",
+            ".cross_attn.norm_k_img.",
             ".cross_attn.k_img.",
             ".cross_attn.v_img.",
         )
@@ -87,16 +88,22 @@ class WanModel(BaseTransformerModel):
 
     def _split_bias_for_tp(self, bias, split_type, tp_size):
         if split_type == "col":
+            if bias.shape[0] % tp_size != 0:
+                raise ValueError(f"Cannot split bias shape {tuple(bias.shape)} across tensor parallel size {tp_size}")
             return list(torch.chunk(bias, tp_size, dim=0))
         raise ValueError(f"Unsupported bias split_type: {split_type}")
 
     def _split_weight_for_tp(self, key, weight, tp_size):
         split_type = self._get_split_type(key)
         if split_type == "col":
-            return list(torch.chunk(weight, tp_size, dim=0))
-        if split_type == "row":
-            return list(torch.chunk(weight, tp_size, dim=1))
-        raise ValueError(f"Unknown split_type for {key}")
+            split_dim = 0
+        elif split_type == "row":
+            split_dim = 1
+        else:
+            raise ValueError(f"Unknown split_type for {key}")
+        if weight.shape[split_dim] % tp_size != 0:
+            raise ValueError(f"Cannot split {key} shape {tuple(weight.shape)} across tensor parallel size {tp_size} on dimension {split_dim}")
+        return list(torch.chunk(weight, tp_size, dim=split_dim))
 
     def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
         if not self.use_tp:
