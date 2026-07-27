@@ -61,8 +61,9 @@ class BaseRunner(ABC):
             cls.init_modules = init_modules
 
     def warmup(self):
-        """Optional post-initialization warmup hook."""
-        pass
+        """Reject explicit warmup when a runner has no implementation."""
+        if self.config.get("warmup", False):
+            raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
 
     def _maybe_freeze_gc(self):
         """Move the steady-state object graph into the GC's permanent generation once."""

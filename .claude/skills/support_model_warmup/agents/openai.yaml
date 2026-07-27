@@ -1,0 +1,4 @@
+interface:
+  display_name: "Adapt LightX2V Warmup"
+  short_description: "为 LightX2V 新模型适配并验证 warmup 流程"
+  default_prompt: "Use $adapt-lightx2v-warmup to add and validate warmup support for a new LightX2V model."
