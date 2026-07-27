@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.models.networks.hunyuan_image3.infer.utils import apply_linear, apply_timestep_embedder, first_weight_device, to_device
@@ -7,6 +8,12 @@ from lightx2v.models.networks.hunyuan_image3.infer.utils import apply_linear, ap
 class HunyuanImage3PostInfer:
     def __init__(self, config):
         self.config = config
+        if config.get("tensor_parallel", False):
+            self.tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+            self.tp_size = dist.get_world_size(self.tp_group)
+        else:
+            self.tp_group = None
+            self.tp_size = 1
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -52,6 +59,15 @@ class HunyuanImage3PostInfer:
                 image_output = hidden_states.masked_select(image_mask.unsqueeze(-1).bool()).reshape(-1, token_h * token_w, hidden)
             return {"diffusion_prediction": self._final_layer(weights, image_output, timesteps, token_h, token_w)}
 
-        normed = weights.final_norm.apply(hidden_states)
+        # Autoregressive generation only consumes the last position. Limiting
+        # the TP vocabulary projection to that token avoids materializing and
+        # gathering prompt-length logits on every rank.
+        logits_hidden_states = hidden_states[:, -1:, :] if self.tp_size > 1 else hidden_states
+        normed = weights.final_norm.apply(logits_hidden_states)
         logits = apply_linear(weights.lm_head, normed.reshape(-1, normed.shape[-1])).reshape(*normed.shape[:-1], -1)
+        if self.tp_size > 1:
+            local_logits = logits.contiguous()
+            gathered_logits = [torch.empty_like(local_logits) for _ in range(self.tp_size)]
+            dist.all_gather(gathered_logits, local_logits, group=self.tp_group)
+            logits = torch.cat(gathered_logits, dim=-1)
         return {"logits": logits}

@@ -2444,6 +2444,7 @@ class MMWeightTP(MMWeightTemplate):
         is_post_adapter=False,
         lora_prefix="diffusion_model.blocks",
         lora_path="",
+        reduce_output=True,
     ):
         super().__init__(
             weight_name,
@@ -2460,6 +2461,7 @@ class MMWeightTP(MMWeightTemplate):
         self.tp_rank = tp_rank
         self.tp_size = tp_size
         self.split_dim = split_dim  # "col" for column split, "row" for row split
+        self.reduce_output = reduce_output
         assert split_dim in ["col", "row"], f"split_dim must be 'col' or 'row', got {split_dim}"
 
         self._mm = MM_WEIGHT_REGISTER.get(mm_type, MMWeight)(
@@ -2497,7 +2499,7 @@ class MMWeightTP(MMWeightTemplate):
         output = self._mm.apply(input_tensor)
 
         # For row split, need all-reduce to combine results from all ranks
-        if self.split_dim == "row" and self.tp_size > 1 and self.tp_group is not None:
+        if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
             dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
             # Add bias after all-reduce (bias is not split for row split)
             if self._row_split_bias is not None:

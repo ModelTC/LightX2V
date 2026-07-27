@@ -10,11 +10,12 @@ export PYTHONPATH="${hunyuan_image3_path}:${PYTHONPATH:-}"
 
 source "${lightx2v_path}/scripts/base/base.sh"
 
-torchrun --standalone --nproc_per_node=2 -m lightx2v.infer \
+torchrun --standalone --nproc_per_node=4 -m lightx2v.infer \
     --model_cls hunyuan_image3 \
-    --task t2i \
+    --task ti2t \
     --model_path "${model_path}" \
-    --config_json "${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_t2i_dist_cfg.json" \
-    --prompt "生成图片：一辆汽车行驶在高速公路上，驾驶员在打电话，副驾驶坐着一只狗" \
-    --save_result_path "${lightx2v_path}/save_results/hunyuan_image3_t2i_cfg_parallel.png" \
+    --config_json "${lightx2v_path}/configs/hunyuan_image3/hunyuan_image3_ti2t_tp_sp_cfg_flashinfer.json" \
+    --prompt "请描述图像中的主要内容和视觉风格。" \
+    --image_path "${hunyuan_image3_path}/assets/demo_instruct_imgs/input_0_0.png" \
+    --save_result_path "${lightx2v_path}/save_results/hunyuan_image3_ti2t_tp2_sp2_cfg1_flashinfer.txt" \
     --seed 42
