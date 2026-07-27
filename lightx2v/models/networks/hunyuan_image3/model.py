@@ -172,6 +172,9 @@ class HunyuanImage3Model(BaseTransformerModel):
             logger.info(f"HunyuanImage3 tensor parallel initialized: rank={self.tp_rank}, size={self.tp_size}, device={self.pipeline_devices[0]}")
 
     def _init_tensor_parallel(self):
+        # HunyuanImage3 shards safetensors locally on every TP rank instead of
+        # using BaseTransformerModel's rank-0 loading and broadcast path.
+        self.use_tp = False
         self.tensor_parallel = bool(self.config.get("tensor_parallel", False))
         if self.tensor_parallel:
             self.tp_group = self.config["device_mesh"].get_group(mesh_dim="tensor_p")

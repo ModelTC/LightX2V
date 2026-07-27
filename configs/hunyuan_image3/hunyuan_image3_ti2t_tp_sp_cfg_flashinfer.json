@@ -30,11 +30,11 @@
     "enable_cfg": false,
     "infer_align_image_size": true,
     "bot_task": "auto",
-    "use_system_prompt": "None",
-    "max_new_tokens": 2048,
-    "text_do_sample": true,
+    "use_system_prompt": "en_unified",
+    "max_new_tokens": 768,
+    "text_do_sample": false,
     "text_top_k": 1024,
     "text_top_p": 0.95,
     "text_temperature": 0.6,
-    "text_stream_output": true
+    "text_stream_output": false
 }

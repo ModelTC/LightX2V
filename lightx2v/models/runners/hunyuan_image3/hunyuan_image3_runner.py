@@ -662,10 +662,21 @@ class HunyuanImage3Runner(DefaultRunner):
     def _resolve_text_generation_plan(self, bot_task):
         tokenizer = self.hunyuan_tokenizer
         if bot_task == "auto":
+            final_stop_tokens = list(tokenizer.conversation.stop_token_ids)
+            if self.config.get("task") in ("t2t", "ti2t"):
+                # Text-only tasks must stop before the model transitions into
+                # recaption/answer completion or image-generation control tokens.
+                final_stop_tokens.extend(
+                    [
+                        tokenizer.end_of_recaption_token_id,
+                        tokenizer.end_of_answer_token_id,
+                        tokenizer.boi_token_id,
+                    ]
+                )
             return HunyuanImage3TextGenerationPlan(
                 first_bot_task="auto",
                 stage_transitions=[],
-                final_stop_tokens=list(tokenizer.conversation.stop_token_ids),
+                final_stop_tokens=list(dict.fromkeys(final_stop_tokens)),
             )
         if bot_task == "recaption":
             return HunyuanImage3TextGenerationPlan(
