@@ -239,8 +239,7 @@ class InfiniteTalkRunner(WanRunner):
     def _sorted_person_items(cls, person_map):
         return sorted(person_map.items(), key=lambda item: cls._person_sort_key(item[0]))
 
-    @staticmethod
-    def _load_directory_audio_input(audio_dir):
+    def _load_directory_audio_input(self, audio_dir):
         config_path = os.path.join(audio_dir, "config.json")
         if not os.path.exists(config_path):
             raise ValueError(f"InfiniteTalk audio directory requires config.json: {audio_dir}")
@@ -272,6 +271,13 @@ class InfiniteTalkRunner(WanRunner):
             person_bbox = item.get("bbox")
             if person_bbox:
                 bbox[person_name] = person_bbox
+
+        if self.config.get("infinitetalk_mode") == "multi" and len(cond_audio) == 1 and (mask_files or bbox):
+            existing_person = next(iter(cond_audio))
+            dummy_person = "person2" if existing_person == "person1" and "person2" not in cond_audio else f"{existing_person}_dummy"
+            cond_audio[dummy_person] = "None"
+            bbox[dummy_person] = [0, 0, 2, 2]
+            logger.info("InfiniteTalk multi mode added dummy silent person for single masked talk_object input.")
 
         return cond_audio, mask_files, bbox
 
@@ -608,54 +614,64 @@ class InfiniteTalkRunner(WanRunner):
 
     def _build_ref_target_masks(self, human_num, latent_h, latent_w):
         human_masks = []
-        if human_num == 1:
+        mask_files = self.input_data.get("mask_files") or {}
+        bbox = self.input_data.get("bbox") or {}
+        if mask_files or bbox:
+            person_items = self._sorted_person_items(self.input_data.get("cond_audio", {}))[:human_num]
+            if len(person_items) < human_num:
+                raise ValueError("InfiniteTalk multi-person input requires one mask file or bbox for each person audio.")
+            background_mask = torch.zeros([self.src_h, self.src_w])
+
+            for person_name, _ in person_items:
+                if person_name in mask_files:
+                    mask_image = Image.open(mask_files[person_name]).convert("L")
+                    if mask_image.size != (self.src_w, self.src_h):
+                        mask_image = mask_image.resize((self.src_w, self.src_h), resample=Image.NEAREST)
+                    mask_array = np.array(mask_image)
+                    human_mask = torch.from_numpy((mask_array > 127).astype(np.float32))
+                elif person_name in bbox:
+                    x_min, y_min, x_max, y_max = bbox[person_name]
+                    x_min = max(0, min(self.src_w - 1, int(x_min)))
+                    y_min = max(0, min(self.src_h - 1, int(y_min)))
+                    x_max = max(x_min + 1, min(self.src_w, int(math.ceil(x_max))))
+                    y_max = max(y_min + 1, min(self.src_h, int(math.ceil(y_max))))
+                    human_mask = torch.zeros([self.src_h, self.src_w])
+                    human_mask[y_min:y_max, x_min:x_max] = 1
+                else:
+                    raise ValueError("InfiniteTalk multi-person input requires one mask file or bbox for each person audio.")
+
+                background_mask += human_mask
+                human_masks.append(human_mask)
+        elif human_num == 1:
             background_mask = torch.ones([self.src_h, self.src_w])
             human_mask1 = torch.ones([self.src_h, self.src_w])
             human_mask2 = torch.ones([self.src_h, self.src_w])
             human_masks = [human_mask1, human_mask2, background_mask]
         else:
-            if "mask_files" in self.input_data:
-                if len(self.input_data["mask_files"]) < human_num:
-                    raise ValueError("InfiniteTalk multi-person input requires one mask file for each person audio.")
-                background_mask = torch.zeros([self.src_h, self.src_w])
-                for _, mask_file in self._sorted_person_items(self.input_data["mask_files"]):
-                    mask_image = Image.open(mask_file).convert("L")
-                    if mask_image.size != (self.src_w, self.src_h):
-                        mask_image = mask_image.resize((self.src_w, self.src_h), resample=Image.NEAREST)
-                    mask_array = np.array(mask_image)
-                    human_mask = torch.from_numpy((mask_array > 127).astype(np.float32))
-                    background_mask += human_mask
-                    human_masks.append(human_mask)
-            elif "bbox" in self.input_data:
-                background_mask = torch.zeros([self.src_h, self.src_w])
-                for _, person_bbox in self._sorted_person_items(self.input_data["bbox"]):
-                    x_min, y_min, x_max, y_max = person_bbox
-                    human_mask = torch.zeros([self.src_h, self.src_w])
-                    human_mask[int(y_min) : int(y_max), int(x_min) : int(x_max)] = 1
-                    background_mask += human_mask
-                    human_masks.append(human_mask)
-            else:
-                if human_num > 2:
-                    raise ValueError("InfiniteTalk 3+ person input requires mask_files or bbox for each person.")
-                face_scale = float(self.config.get("face_scale", 0.05))
-                x_min, x_max = int(self.src_h * face_scale), int(self.src_h * (1 - face_scale))
-                human_mask1 = torch.zeros([self.src_h, self.src_w])
-                human_mask2 = torch.zeros([self.src_h, self.src_w])
-                background_mask = torch.zeros([self.src_h, self.src_w])
-                lefty_min, lefty_max = int((self.src_w // 2) * face_scale), int((self.src_w // 2) * (1 - face_scale))
-                righty_min = int((self.src_w // 2) * face_scale + (self.src_w // 2))
-                righty_max = int((self.src_w // 2) * (1 - face_scale) + (self.src_w // 2))
-                human_mask1[x_min:x_max, lefty_min:lefty_max] = 1
-                human_mask2[x_min:x_max, righty_min:righty_max] = 1
-                background_mask += human_mask1 + human_mask2
-                human_masks = [human_mask1, human_mask2]
-            background_mask = torch.where(background_mask > 0, torch.tensor(0), torch.tensor(1))
-            human_masks.append(background_mask)
+            if human_num > 2:
+                raise ValueError("InfiniteTalk 3+ person input requires mask_files or bbox for each person.")
+            face_scale = float(self.config.get("face_scale", 0.05))
+            x_min, x_max = int(self.src_h * face_scale), int(self.src_h * (1 - face_scale))
+            human_mask1 = torch.zeros([self.src_h, self.src_w])
+            human_mask2 = torch.zeros([self.src_h, self.src_w])
+            background_mask = torch.zeros([self.src_h, self.src_w])
+            lefty_min, lefty_max = int((self.src_w // 2) * face_scale), int((self.src_w // 2) * (1 - face_scale))
+            righty_min = int((self.src_w // 2) * face_scale + (self.src_w // 2))
+            righty_max = int((self.src_w // 2) * (1 - face_scale) + (self.src_w // 2))
+            human_mask1[x_min:x_max, lefty_min:lefty_max] = 1
+            human_mask2[x_min:x_max, righty_min:righty_max] = 1
+            background_mask += human_mask1 + human_mask2
+            human_masks = [human_mask1, human_mask2]
+
+        background_mask = torch.where(background_mask > 0, torch.tensor(0), torch.tensor(1))
+        human_masks.append(background_mask)
 
         masks = torch.stack(human_masks, dim=0)
         masks = self._resize_and_centercrop(masks, (self.target_h, self.target_w))
         masks = F.interpolate(masks.unsqueeze(0), size=(latent_h, latent_w), mode="nearest").squeeze(0)
-        return (masks > 0).float().to(AI_DEVICE)
+        masks = (masks > 0).float().to(AI_DEVICE)
+        logger.info(f"InfiniteTalk ref_target_masks built: human_num={human_num}, mask_shape={tuple(masks.shape)}")
+        return masks
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_s2v(self):
