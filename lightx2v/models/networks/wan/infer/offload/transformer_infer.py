@@ -40,7 +40,6 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
     def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
-
             if self.lazy_load:
                 next_prefetch = (block_idx + 1) % len(blocks)
                 self.offload_manager.start_prefetch_block(next_prefetch)

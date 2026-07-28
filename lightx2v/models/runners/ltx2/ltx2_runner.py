@@ -1,4 +1,3 @@
-import gc
 import os
 import time
 from math import gcd as _gcd
@@ -601,8 +600,7 @@ class LTX2Runner(DefaultRunner):
         self._ref_video_latent = (ref_latent, ref_strength, ref_downscale_factor)
         logger.info(f"  ✓ Reference IC-LoRA latent ready (strength={ref_strength}, ref_downscale_factor={ref_downscale_factor})")
 
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
         }
@@ -678,8 +676,7 @@ class LTX2Runner(DefaultRunner):
         else:
             self.video_denoise_mask, self.initial_video_latent = self.run_vae_encoder()
 
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
         }
@@ -865,8 +862,7 @@ class LTX2Runner(DefaultRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.text_encoders[0]
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
 
         return text_encoder_output
 
@@ -899,8 +895,7 @@ class LTX2Runner(DefaultRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.video_vae
             del self.audio_vae
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
 
         return video, audio
 
@@ -922,8 +917,7 @@ class LTX2Runner(DefaultRunner):
         upsampled_v_latent = self.upsampler.upsample(v_latent, self.video_vae.encoder).squeeze(0)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.upsampler
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
 
         self.input_info.target_shape = [self.input_info.target_shape[0] * 2, self.input_info.target_shape[1] * 2]
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()

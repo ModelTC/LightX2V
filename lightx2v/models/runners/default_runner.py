@@ -267,17 +267,19 @@ class DefaultRunner(BaseRunner):
 
         self.run_main(total_steps=1)
 
-    def maybe_empty_cache(self, force: bool = False) -> bool:
+    def maybe_empty_cache(self, *, force: bool = False, collect_garbage: bool = False) -> bool:
+        """Collect Python garbage when requested and release cached device memory under pressure."""
         gib = 1024**3
         min_free_bytes = float(self.config.get("empty_cache_min_free_gib", 4)) * gib
         min_reclaimable_bytes = float(self.config.get("empty_cache_min_reclaimable_gib", 2)) * gib
 
         free_bytes, _ = torch_device_module.mem_get_info()
-
-        if not force and free_bytes >= min_free_bytes:
+        check_cache = force or free_bytes < min_free_bytes
+        if collect_garbage or check_cache:
+            gc.collect()
+        if not check_cache:
             return False
 
-        gc.collect()
         allocated_bytes = torch_device_module.memory_allocated()
         reserved_bytes = torch_device_module.memory_reserved()
         reclaimable_bytes = max(reserved_bytes - allocated_bytes, 0)
@@ -294,6 +296,7 @@ class DefaultRunner(BaseRunner):
         return False
 
     def end_run(self):
+        release_transformer = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
         if self.model is not None:
             self.model.scheduler.clear()
         elif hasattr(self, "scheduler") and self.scheduler is not None:
@@ -301,25 +304,19 @@ class DefaultRunner(BaseRunner):
         if hasattr(self, "inputs"):
             del self.inputs
         self.input_info = None
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            if hasattr(self.model, "model") and len(self.model.model) == 2:  # MultiModelStruct
-                for model in self.model.model:
-                    if hasattr(model.transformer_infer, "offload_manager"):
-                        del model.transformer_infer.offload_manager
-                        torch_device_module.empty_cache()
-                        gc.collect()
-                    del model
-            else:
-                if hasattr(self.model.transformer_infer, "offload_manager"):
-                    del self.model.transformer_infer.offload_manager
-                    torch_device_module.empty_cache()
-                    gc.collect()
-                del self.model
+        if release_transformer:
+            self.scheduler.transformer_infer = None
+            models = self.model.model if hasattr(self.model, "model") and len(self.model.model) == 2 else (self.model,)
+            for model in filter(None, models):
+                if hasattr(model.transformer_infer, "offload_manager"):
+                    del model.transformer_infer.offload_manager
+            self.model = None
+            models = model = None
         if self.config.get("do_mm_calib", False):
             calib_path = os.path.join(os.getcwd(), "calib.pt")
             torch.save(CALIB, calib_path)
             logger.info(f"[CALIB] Saved calibration data successfully to: {calib_path}")
-        self.maybe_empty_cache()
+        self.maybe_empty_cache(collect_garbage=release_transformer)
 
     def read_image_input(self, img_path):
         if isinstance(img_path, Image.Image):
@@ -414,15 +411,13 @@ class DefaultRunner(BaseRunner):
         vae_encoder_out, latent_shape = self.run_vae_encoder(src_video, src_ref_images, src_mask)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(None, vae_encoder_out, text_encoder_output)
 
     @ProfilingContext4DebugL2("Run Text Encoder")
     def _run_input_encoder_local_animate(self):
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(None, None, text_encoder_output, None)
 
     def _run_input_encoder_local_s2v(self):
@@ -487,8 +482,7 @@ class DefaultRunner(BaseRunner):
         images = self.vae_decoder.decode(latents.to(GET_DTYPE()))
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
         return images
 
     @ProfilingContext4DebugL1("Run VAE Decoder Stream", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_decode_duration, metrics_labels=["DefaultRunner"])
@@ -501,8 +495,7 @@ class DefaultRunner(BaseRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
 
     def post_prompt_enhancer(self):
         while True:

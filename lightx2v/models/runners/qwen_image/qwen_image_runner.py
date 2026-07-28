@@ -1,4 +1,3 @@
-import gc
 import math
 
 import torch
@@ -58,7 +57,7 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
 class QwenImageRunner(DisaggMixin, DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-    _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
+    _WARMUP_RESOLUTIONS = ((480, 480), (832, 1248))
     _WARMUP_TASKS = ("t2i", "i2i")
 
     def __init__(self, config):
@@ -162,13 +161,13 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             if hasattr(getattr(model, "transformer_infer", None), "offload_manager"):
                 del model.transformer_infer.offload_manager
 
+        self.scheduler.transformer_infer = None
         self.model = None
         for name in ("text_encoders", "vae"):
             if hasattr(self, name):
                 delattr(self, name)
         model = None
-        gc.collect()
-        torch_device_module.empty_cache()
+        self.maybe_empty_cache(collect_garbage=True)
 
     def set_config(self, config_modify):
         """Apply per-request overrides and optionally sync disagg fields."""
@@ -392,8 +391,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         image_latents = self.vae.encode_vae_image(image.to(GET_DTYPE()))
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
         return {"image_latents": image_latents}
 
     @ProfilingContext4DebugL1(
@@ -408,8 +406,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         images = self.vae.decode(latents, self.input_info)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
         return images
 
     def run(self, total_steps=None):

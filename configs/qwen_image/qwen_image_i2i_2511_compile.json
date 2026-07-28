@@ -4,6 +4,7 @@
     "prompt_template_encode_start_idx": 64,
     "resize_mode": "adaptive",
     "attn_type": "flash_attn3",
+    "rms_norm_type": "sgl-kernel",
     "enable_cfg": true,
     "sample_guide_scale": 4.0,
     "CONDITION_IMAGE_SIZE": 147456,
