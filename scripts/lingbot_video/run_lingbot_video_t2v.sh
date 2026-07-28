@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme5/gushiqiao/codes/debug/lingbot-x2v/LightX2V
-model_path=/data/nvme5/gushiqiao/models/lingbot-video-moe-30b-a3b
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/lingbot-video-moe-30b-a3b
 
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -16,7 +16,161 @@ export LINGBOT_MOE_PAD_BACKEND=vectorized
 export LINGBOT_MOE_EXPERT_BACKEND=grouped_mm
 
 prompt=$(cat <<'EOF'
-{"comprehensive_description":{"scene_content_description":"A young woman with long, wavy brown hair is standing in a bright, modern apartment living room. She is wearing a stylish, oversized cream-colored knit cardigan over a white tank top, paired with high-waisted, wide-leg beige trousers. She holds a small, structured tan leather handbag in her left hand. The background features a neutral-toned interior with a beige sofa, a potted plant, and large windows that let in soft, natural light, creating a warm and inviting atmosphere. The woman is smiling and looking directly at the camera, showcasing her outfit with a confident and friendly demeanor.","camera_movement_description":"The camera is positioned at eye level and remains essentially stationary throughout the video, maintaining a medium shot that captures the subject from the waist up. There is a very shallow depth of field, keeping the woman in sharp focus while the background remains softly blurred."},"camera_info":{"color":"Warm","frame_size":"Medium","shot_type_angle":"Eye level","lens_size":"Medium","composition":"Center","lighting":"Soft light","lighting_type":"Daylight"},"world_knowledge":[],"prominent_elements":[{"name":"young woman","description":"A woman with long, wavy brown hair and a friendly expression, modeling a fashion outfit.","actions":[{"timestamp":"[0.0s - 0.5s]","action":"stands still, smiling at the camera"},{"timestamp":"[0.5s - 2.0s]","action":"shifts her weight and turns her body slightly to the right"},{"timestamp":"[2.0s - 3.5s]","action":"adjusts the collar of her cardigan with her right hand"},{"timestamp":"[3.5s - 5.0s]","action":"returns to a neutral pose, smiling at the camera"}],"location":"center of the frame","relative_size":"dominant","shape_and_color":"slender build; wearing cream, white, and beige","texture":"soft knit cardigan, smooth fabric trousers","appearance_details":"long wavy brown hair, gold hoop earrings, tan leather handbag","relationship":"the main subject of the video, standing in front of a blurred apartment background","orientation":"upright, facing the camera","pose":"standing, shifting weight, and adjusting clothing","expression":"smiling and confident","clothing":"oversized cream knit cardigan, white tank top, high-waisted wide-leg beige trousers","gender":"female","skin_tone_and_texture":"fair skin with a smooth texture"},{"name":"tan handbag","description":"A small, structured leather handbag with a top handle.","actions":[{"timestamp":"[0.0s - 5.0s]","action":"held steady in the woman's left hand"}],"location":"held in the woman's left hand, lower center of the frame","relative_size":"small","shape_and_color":"rectangular, tan or light brown","texture":"smooth leather","appearance_details":"structured shape with a top handle","relationship":"held by the woman as an accessory","orientation":"upright","pose":"","expression":"","clothing":"","gender":"","skin_tone_and_texture":""}]}
+{
+  "caption": {
+    "comprehensive_description": {
+      "scene_content_description": "The video presents a first-person perspective of a workspace, likely a desk, viewed from a fixed, slightly elevated angle. The environment is well-lit with neutral, even lighting, creating a clear and focused atmosphere. The desk surface is a light grey color. On the left side of the desk, there is a black game controller with a glowing blue light bar, resting on a black mousepad. In the center of the desk lies a pair of black over-ear headphones. To the right, there is an open, empty black box with a white interior. In the foreground, two robotic arms are visible. The left robotic arm, featuring a black and silver body with a two-fingered gripper, remains completely stationary throughout the video. The right robotic arm, similar in design, is the active subject. It begins by moving forward and to the left, positioning its gripper over the game controller. It then grasps the controller, lifts it off the desk, and transports it to the right, moving it over the open box. Finally, the right robotic arm lowers the controller into the box and releases it. The headphones and the left robotic arm remain undisturbed during this entire sequence.",
+      "camera_movement_description": ""
+    },
+    "camera_info": {
+      "color": "Cyan",
+      "frame_size": "Wide",
+      "shot_type_angle": "High angle",
+      "lens_size": "Ultra Wide / Fisheye",
+      "composition": "Balanced",
+      "lighting": "Soft light",
+      "lighting_type": "Artificial light"
+    },
+    "world_knowledge": [],
+    "prominent_elements": [
+      {
+        "name": "right robotic arm",
+        "description": "A mechanical arm with a black and silver body, equipped with a two-fingered gripper and visible wiring.",
+        "actions": [
+          {
+            "timestamp": "[0.0s - 1.5s]",
+            "action": "Moves forward and to the left towards the game controller."
+          },
+          {
+            "timestamp": "[1.5s - 2.5s]",
+            "action": "Grasps the game controller and lifts it upward."
+          },
+          {
+            "timestamp": "[2.5s - 4.0s]",
+            "action": "Moves to the right, carrying the game controller over the open box."
+          },
+          {
+            "timestamp": "[4.0s - 5.0s]",
+            "action": "Lowers the game controller into the box and releases it."
+          }
+        ],
+        "location": "Originates from the bottom right, moves to the center, then to the right.",
+        "relative_size": "large",
+        "shape_and_color": "Cylindrical and angular segments, black and silver.",
+        "texture": "Metallic and matte plastic.",
+        "appearance_details": "Visible joints, wiring, and a two-fingered gripper mechanism.",
+        "relationship": "Interacts directly with the game controller.",
+        "orientation": "Extends forward and slightly upward from the bottom right.",
+        "pose": "",
+        "expression": "",
+        "clothing": "",
+        "is_cluster": false,
+        "number_of_objects": ""
+      },
+      {
+        "name": "left robotic arm",
+        "description": "A mechanical arm with a black and silver body, equipped with a two-fingered gripper.",
+        "actions": [
+          {
+            "timestamp": "[0.0s - 5.0s]",
+            "action": "Remains stationary."
+          }
+        ],
+        "location": "Bottom left corner of the frame.",
+        "relative_size": "large",
+        "shape_and_color": "Cylindrical and angular segments, black and silver.",
+        "texture": "Metallic and matte plastic.",
+        "appearance_details": "Visible joints and a two-fingered gripper mechanism.",
+        "relationship": "Positioned opposite the right robotic arm, not interacting with other objects.",
+        "orientation": "Extends forward and slightly upward from the bottom left.",
+        "pose": "",
+        "expression": "",
+        "clothing": "",
+        "is_cluster": false,
+        "number_of_objects": ""
+      },
+      {
+        "name": "game controller",
+        "description": "A standard video game controller with joysticks, buttons, and a glowing light bar.",
+        "actions": [
+          {
+            "timestamp": "[0.0s - 1.5s]",
+            "action": "Rests stationary on the desk."
+          },
+          {
+            "timestamp": "[1.5s - 2.5s]",
+            "action": "Is grasped and lifted upward by the right robotic arm."
+          },
+          {
+            "timestamp": "[2.5s - 4.0s]",
+            "action": "Is moved to the right by the right robotic arm."
+          },
+          {
+            "timestamp": "[4.0s - 5.0s]",
+            "action": "Is lowered into the open box and released."
+          }
+        ],
+        "location": "Initially on the left side of the desk, moved to the right side inside the box.",
+        "relative_size": "medium",
+        "shape_and_color": "Contoured shape, black with a blue light bar.",
+        "texture": "Matte plastic.",
+        "appearance_details": "Two joysticks, directional pad, action buttons, and a glowing blue light bar in the center.",
+        "relationship": "Initially on the desk, then grasped and moved by the right robotic arm, finally placed in the open box.",
+        "orientation": "Horizontal on the desk, then tilted while being carried.",
+        "pose": "",
+        "expression": "",
+        "clothing": "",
+        "is_cluster": false,
+        "number_of_objects": ""
+      },
+      {
+        "name": "headphones",
+        "description": "A pair of over-ear headphones with a headband and ear cups.",
+        "actions": [
+          {
+            "timestamp": "[0.0s - 5.0s]",
+            "action": "Remains stationary on the desk."
+          }
+        ],
+        "location": "Center of the desk.",
+        "relative_size": "medium",
+        "shape_and_color": "Curved headband with circular ear cups, black.",
+        "texture": "Matte plastic and soft ear cushions.",
+        "appearance_details": "Visible ear cushions and a headband.",
+        "relationship": "Rests on the desk, untouched by the robotic arms.",
+        "orientation": "Lying flat on the desk.",
+        "pose": "",
+        "expression": "",
+        "clothing": "",
+        "is_cluster": false,
+        "number_of_objects": ""
+      },
+      {
+        "name": "open box",
+        "description": "A rectangular box with the lid open, revealing a white interior.",
+        "actions": [
+          {
+            "timestamp": "[0.0s - 5.0s]",
+            "action": "Remains stationary on the desk."
+          }
+        ],
+        "location": "Right side of the desk.",
+        "relative_size": "medium",
+        "shape_and_color": "Rectangular, black exterior with a white interior.",
+        "texture": "Smooth cardboard or plastic.",
+        "appearance_details": "Open lid, empty interior.",
+        "relationship": "Serves as the receptacle for the game controller.",
+        "orientation": "Horizontal on the desk.",
+        "pose": "",
+        "expression": "",
+        "clothing": "",
+        "is_cluster": false,
+        "number_of_objects": ""
+      }
+    ]
+  },
+  "duration": 5
+}
 EOF
 )
 
@@ -29,7 +183,7 @@ python -m lightx2v.infer \
 --model_cls lingbot_video \
 --task t2v \
 --model_path ${model_path} \
---config_json ${lightx2v_path}/configs/lingbot_video/lingbot_video_t2v.json \
+--config_json ${lightx2v_path}/configs/lingbot_video/lingbot_video_lora.json \
 --prompt "${prompt}" \
 --negative_prompt "${negative_prompt}" \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_lingbot_video_t2v.mp4 \

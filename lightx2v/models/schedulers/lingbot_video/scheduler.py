@@ -28,6 +28,7 @@ class LingBotVideoScheduler(WanScheduler):
         self._begin_index = None
         self.current_timestep = None
         self.keep_latents_dtype_in_scheduler = True
+        self.rope_request_id = 0
 
     def refresh_from_config(self, config):
         self.config = config
