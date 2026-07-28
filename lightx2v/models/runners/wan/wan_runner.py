@@ -1,4 +1,3 @@
-import gc
 import os
 
 import numpy as np
@@ -216,8 +215,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         # Drop local model references before collecting device memory.
         model = None
         models = ()
-        gc.collect()
-        torch_device_module.empty_cache()
+        self.maybe_empty_cache(collect_garbage=True)
 
     def load_transformer(self):
         wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
@@ -559,8 +557,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.text_encoders[0]
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
 
         return text_encoder_output
 
@@ -579,8 +576,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             clip_encoder_out = self.image_encoder.visual([first_frame, last_frame]).squeeze(0).to(GET_DTYPE())
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.image_encoder
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
         return clip_encoder_out
 
     def _adjust_latent_for_grid_splitting(self, latent_h, latent_w, world_size):
@@ -837,8 +833,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_encoder
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
         vae_encoder_out = torch.concat([msk, vae_encoder_out]).to(GET_DTYPE())
         return vae_encoder_out
 
@@ -1188,8 +1183,7 @@ class Wan22DenseRunner(WanRunner):
         finally:
             if transient:
                 del self.vae_encoder
-                gc.collect()
-                torch_device_module.empty_cache()
+                self.maybe_empty_cache()
 
 
 @RUNNER_REGISTER("lingbot_world")

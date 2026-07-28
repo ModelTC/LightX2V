@@ -1,6 +1,5 @@
 import torch
 import torch.distributed as dist
-from loguru import logger
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
@@ -85,10 +84,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         self.cos_sin = None
         self.rope_positions = None
-        self.use_compile = config.get("use_compile", False)
-        if self.use_compile:
-            self.compiled_blocks = {}
-            logger.info("Using torch.compile for WanTransformerInfer blocks")
+        self.init_compile(config)
 
         self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
 
@@ -155,26 +151,9 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             torch_device_module.empty_cache()
         return x
 
-    def get_compiled_block(self, block_idx, block):
-        cached = self.compiled_blocks.get(block_idx)
-        if cached is not None and cached[0] is block:
-            return cached[1]
-
-        def block_runner(x, pre_infer_out):
-            return self.infer_block(block, x, pre_infer_out)
-
-        compiled = torch.compile(block_runner, dynamic=None)
-        self.compiled_blocks[block_idx] = (block, compiled)
-        return compiled
-
-    def run_block(self, block_idx, block, x, pre_infer_out):
-        self.block_idx = block_idx
-        if self.use_compile:
-            return self.get_compiled_block(block_idx, block)(x, pre_infer_out)
-        return self.infer_block(block, x, pre_infer_out)
-
     def infer_without_offload(self, blocks, x, pre_infer_out):
         for block_idx, block in enumerate(blocks):
+            self.block_idx = block_idx
             x = self.run_block(block_idx, block, x, pre_infer_out)
         return x
 
