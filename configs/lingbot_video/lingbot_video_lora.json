@@ -2,7 +2,7 @@
     "infer_steps": 4,
     "target_height": 480,
     "target_width": 832,
-    "target_video_length":121,
+    "target_video_length": 121,
     "target_fps": 24,
     "sample_shift": 3.0,
     "sample_guide_scale": 1.0,
@@ -13,7 +13,7 @@
     "lora_dynamic_apply": false,
     "lora_configs": [
         {
-            "path": "/path/to/lingbot_video_4steps_rank128_v2.safetensors",
+            "path": "lightx2v/LightLingBot-Video/lightlingbot_video_moe30b_4steps_rank128_v2.safetensors",
             "strength": 1.0
         }
     ]
