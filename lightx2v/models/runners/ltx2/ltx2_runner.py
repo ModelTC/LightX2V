@@ -87,7 +87,7 @@ def _ltx2_resize_video_denoise_mask_for_stage2(mask: torch.Tensor, target_h: int
 
 @RUNNER_REGISTER("ltx2")
 class LTX2Runner(DefaultRunner):
-    _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
+    _WARMUP_RESOLUTIONS = ((480, 480), (512, 768))
     _UPSAMPLER_WARMUP_RESOLUTIONS = ((480, 480), (1024, 1536))
 
     def __init__(self, config):
@@ -97,9 +97,6 @@ class LTX2Runner(DefaultRunner):
     def run_warmup(self):
         if type(self) is not LTX2Runner:
             raise NotImplementedError(f"LTX2 warmup is not supported for {type(self).__name__}")
-        is_ltx2_3 = self.config.get("caption_proj_before_connector", False) and self.config.get("cross_attention_adaln", False) and self.config.get("apply_gated_attention", False)
-        if is_ltx2_3:
-            raise NotImplementedError("Warmup is not supported for LTX2.3")
         task = self.config.get("task")
         if task not in ("t2av", "i2av"):
             raise NotImplementedError(f"LTX2 warmup does not support task: {task}")

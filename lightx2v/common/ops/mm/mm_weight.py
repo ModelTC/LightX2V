@@ -2386,17 +2386,15 @@ class MMWeightWfp8tensorAfp8tensordynamic(MMWeightQuantTemplate):
         if bias is not None and bias.dtype != mm_dtype:
             bias = bias.to(mm_dtype)
         input_tensor_quant = self.act_quant_func(input_tensor)
-        # weight_scale shape: () / (1,) for per-tensor, (1, N) for
-        # per-output-channel. ``torch._scaled_mm`` wants scale_b shape
-        # (1, 1) for per-tensor or (1, N) for per-channel — and when
-        # *either* scale is 2D (RowWise/ColWise scaling), both must be 2D.
+        # Inductor requires matching scale ranks: (1,) per tensor or
+        # (1, N) per output channel.
         ws = self.weight_scale
         if ws.dim() == 2:
             scale_b = ws
             scale_a = self.input_scale.reshape(1, 1)
         else:
             scale_b = ws.reshape(1)
-            scale_a = self.input_scale
+            scale_a = self.input_scale.reshape(1)
         output_tensor = torch._scaled_mm(
             input_tensor_quant,
             self.weight,

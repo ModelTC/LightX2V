@@ -13,6 +13,8 @@ from lightx2v.utils.registry_factory import (
 class QwenImageTransformerWeights(WeightModule):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
+        if config.get("use_compile") and config.get("rms_norm_type", "one-pass") == "one-pass":
+            raise ValueError("Qwen Image torch.compile does not support one-pass RMSNorm.")
         self.blocks_num = config["num_layers"]
         self.task = config["task"]
         self.config = config
