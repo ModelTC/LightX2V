@@ -123,19 +123,16 @@ class LTX2PreInfer:
             x_dtype=v_latent.dtype,
         )
 
-        # 6. Cross-attention timestep embeddings — match ltx_core MultiModalTransformerArgsPreprocessor:
-        # uses *global* step sigma (broadcast), not one embedding row per video token. Shapes are
-        # like [1, 4*D] / [1, D] and broadcast in the block; numerically same as repeating when mask is all-1.
-        sigma_step = self.scheduler.current_sigma().to(device=v_latent.device, dtype=torch.float32)
-        cross_scaled = (sigma_step * self.timestep_scale_multiplier).reshape(1)
-        v_cross_proj = get_timestep_embedding(cross_scaled).to(GET_DTYPE())
+        # Cross-attention scale/shift follows each token's masked timestep.
+        v_cross_proj = get_timestep_embedding(v_timestep.flatten()).to(GET_DTYPE())
         v_cross_emb_1 = weights.av_ca_video_scale_shift_adaln_single_emb_linear_1.apply(v_cross_proj)
         v_cross_emb_1 = torch.nn.functional.silu(v_cross_emb_1)
         v_cross_emb_2 = weights.av_ca_video_scale_shift_adaln_single_emb_linear_2.apply(v_cross_emb_1)
         v_cross_scale_shift_timestep = weights.av_ca_video_scale_shift_adaln_single_linear.apply(torch.nn.functional.silu(v_cross_emb_2))
 
-        # Video cross gate AdaLN
-        v_gate_proj = get_timestep_embedding((cross_scaled * av_ca_factor).reshape(1)).to(GET_DTYPE())
+        # The cross gate is controlled by the other modality's global sigma.
+        cross_sigma_scaled = (self.scheduler.current_sigma().to(device=v_latent.device, dtype=torch.float32) * self.timestep_scale_multiplier).reshape(1)
+        v_gate_proj = get_timestep_embedding(cross_sigma_scaled * av_ca_factor).to(GET_DTYPE())
         v_gate_emb_1 = weights.av_ca_a2v_gate_adaln_single_emb_linear_1.apply(v_gate_proj)
         v_gate_emb_1 = torch.nn.functional.silu(v_gate_emb_1)
         v_gate_emb_2 = weights.av_ca_a2v_gate_adaln_single_emb_linear_2.apply(v_gate_emb_1)
@@ -216,17 +213,16 @@ class LTX2PreInfer:
             x_dtype=a_latent.dtype,
         )
 
-        # 6. Audio cross-attention timestep — same global sigma as video (ltx pipeline passes same sigma)
-        sigma_step = self.scheduler.current_sigma().to(device=a_latent.device, dtype=torch.float32)
-        cross_scaled = (sigma_step * self.timestep_scale_multiplier).reshape(1)
-        a_cross_proj = get_timestep_embedding(cross_scaled).to(GET_DTYPE())
+        # Cross-attention scale/shift follows each token's masked timestep.
+        a_cross_proj = get_timestep_embedding(a_timestep.flatten()).to(GET_DTYPE())
         a_cross_emb_1 = weights.av_ca_audio_scale_shift_adaln_single_emb_linear_1.apply(a_cross_proj)
         a_cross_emb_1 = torch.nn.functional.silu(a_cross_emb_1)
         a_cross_emb_2 = weights.av_ca_audio_scale_shift_adaln_single_emb_linear_2.apply(a_cross_emb_1)
         a_cross_scale_shift_timestep = weights.av_ca_audio_scale_shift_adaln_single_linear.apply(torch.nn.functional.silu(a_cross_emb_2))
 
-        # Audio cross gate AdaLN
-        a_gate_proj = get_timestep_embedding((cross_scaled * av_ca_factor).reshape(1)).to(GET_DTYPE())
+        # The cross gate is controlled by the other modality's global sigma.
+        cross_sigma_scaled = (self.scheduler.current_sigma().to(device=a_latent.device, dtype=torch.float32) * self.timestep_scale_multiplier).reshape(1)
+        a_gate_proj = get_timestep_embedding(cross_sigma_scaled * av_ca_factor).to(GET_DTYPE())
         a_gate_emb_1 = weights.av_ca_v2a_gate_adaln_single_emb_linear_1.apply(a_gate_proj)
         a_gate_emb_1 = torch.nn.functional.silu(a_gate_emb_1)
         a_gate_emb_2 = weights.av_ca_v2a_gate_adaln_single_emb_linear_2.apply(a_gate_emb_1)

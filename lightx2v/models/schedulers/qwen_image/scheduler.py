@@ -714,6 +714,27 @@ class QwenImageScheduler(BaseScheduler):
         else:
             self.modulate_index = None
 
+    def clear(self):
+        for name in (
+            "generator",
+            "latents",
+            "latent_image_ids",
+            "noise_pred",
+            "timesteps",
+            "timesteps_proj",
+            "image_rotary_emb",
+            "negative_image_rotary_emb",
+            "modulate_index",
+            "input_info",
+        ):
+            setattr(self, name, None)
+        self.step_index = 0
+        self.infer_condition = True
+        self.pos_embed.begin_request()
+
+        self.scheduler._step_index = None
+        self.scheduler._begin_index = None
+
     def step_pre(self, step_index):
         super().step_pre(step_index)
         timestep_input = torch.tensor([self.timesteps[self.step_index]], device=AI_DEVICE, dtype=self.dtype) / 1000

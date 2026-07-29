@@ -204,16 +204,13 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             world_size,
             aux_first,
         )
+        dense_attention_kwargs = UlyssesAttnWeight._dense_attention_kwargs(attention_kwargs, attn_q, attn_k)
 
         attn = attention_module.apply(
             q=attn_q,
             k=attn_k,
             v=attn_v,
-            cu_seqlens_q=None,
-            cu_seqlens_kv=None,
-            max_seqlen_q=None,
-            max_seqlen_kv=None,
-            **attention_kwargs,
+            **dense_attention_kwargs,
         ).reshape(attn_q.shape[0], -1)
         output, local_aux_attn = split_main_aux_output(attn, global_len, aux_len, aux_first)
 
@@ -279,15 +276,12 @@ class UlyssesAttnWeight(AttnWeightTemplate):
                 aux_first,
                 head_index=head_index,
             )
+            dense_attention_kwargs = UlyssesAttnWeight._dense_attention_kwargs(attention_kwargs, attn_q, attn_k)
             head_attn = attention_module.apply(
                 q=attn_q,
                 k=attn_k,
                 v=attn_v,
-                cu_seqlens_q=None,
-                cu_seqlens_kv=None,
-                max_seqlen_q=None,
-                max_seqlen_kv=None,
-                **attention_kwargs,
+                **dense_attention_kwargs,
             ).reshape(attn_q.shape[0], -1)
             if head_attn.shape[1] != hidden_dims:
                 raise ValueError(f"head_parallel attention output must flatten to hidden_dims={hidden_dims}, got shape={tuple(head_attn.shape)}.")
@@ -343,6 +337,15 @@ class UlyssesAttnWeight(AttnWeightTemplate):
     def _wait_works(works):
         for work in works:
             work.wait()
+
+    @staticmethod
+    def _dense_attention_kwargs(attention_kwargs, q, k):
+        dense_kwargs = dict(attention_kwargs)
+        dense_kwargs.setdefault("cu_seqlens_q", None)
+        dense_kwargs.setdefault("cu_seqlens_kv", None)
+        dense_kwargs.setdefault("max_seqlen_q", q.shape[0])
+        dense_kwargs.setdefault("max_seqlen_kv", k.shape[0])
+        return dense_kwargs
 
     @staticmethod
     def _gather_aux(local_aux, world_size, group):

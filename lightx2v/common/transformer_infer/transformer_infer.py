@@ -1,8 +1,38 @@
 import math
 from abc import ABC, abstractmethod
 
+import torch
+from loguru import logger
+
 
 class BaseTransformerInfer(ABC):
+    def init_compile(self, config):
+        self.use_compile = config.get("use_compile", False)
+        self.compiled_blocks = {}
+        if self.use_compile:
+            logger.info(f"Using torch.compile for {type(self).__name__}")
+
+    def get_compiled_block(self, block_idx, block):
+        key = self.get_compile_block_key(block_idx, block)
+        cached = self.compiled_blocks.get(key)
+        if cached is not None and cached[0] is block:
+            return cached[1]
+
+        def block_runner(*args):
+            return self.infer_block(block, *args)
+
+        compiled = torch.compile(block_runner, dynamic=None)
+        self.compiled_blocks[key] = (block, compiled)
+        return compiled
+
+    def get_compile_block_key(self, block_idx, block):
+        return block_idx
+
+    def run_block(self, block_idx, block, *args):
+        if self.use_compile:
+            return self.get_compiled_block(block_idx, block)(*args)
+        return self.infer_block(block, *args)
+
     @abstractmethod
     def infer(self):
         pass

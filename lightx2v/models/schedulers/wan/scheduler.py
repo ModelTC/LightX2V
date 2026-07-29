@@ -40,6 +40,34 @@ class WanScheduler(BaseScheduler):
         self.caching_records_2 = [True] * self.infer_steps
         self.step_index = 0
 
+    def clear(self):
+        for name in (
+            "generator",
+            "latents",
+            "latents_list",
+            "noise_pred",
+            "noise_pred_cond",
+            "noise_pred_uncond",
+            "noise_pred_guided",
+            "vae_encoder_out",
+            "mask",
+            "timesteps",
+            "sigmas",
+            "timestep_input",
+            "timestep_input_r",
+            "model_outputs",
+            "timestep_list",
+            "last_sample",
+            "this_order",
+        ):
+            setattr(self, name, None)
+        self.step_index = 0
+        self.lower_order_nums = 0
+        self.infer_condition = True
+        self._begin_index = None
+        if hasattr(self, "changing_resolution_index"):
+            self.changing_resolution_index = 0
+
     def _uses_conditioned_latent_prefix(self):
         """Whether this Wan variant keeps a fixed latent prefix during diffusion.
 

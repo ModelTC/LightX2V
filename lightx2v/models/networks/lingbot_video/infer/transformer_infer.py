@@ -12,6 +12,7 @@ def _round_up_to_multiple(value, multiple):
 class LingBotVideoTransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
+        self.compute_dtype = GET_DTYPE()
         self.hidden_size = int(config.get("hidden_size", 2048))
         self.num_heads = int(config.get("num_attention_heads", 16))
         self.head_dim = self.hidden_size // self.num_heads
@@ -22,6 +23,7 @@ class LingBotVideoTransformerInfer(BaseTransformerInfer):
         self.n_group = config.get("n_group", 4)
         self.topk_group = config.get("topk_group", 2)
         self.route_scale = float(config.get("routed_scaling_factor", 2.5))
+        self.init_compile(config)
 
     def _attention(self, weights, hidden_states, rotary_emb):
         q = weights.attn.to_q.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
@@ -44,7 +46,7 @@ class LingBotVideoTransformerInfer(BaseTransformerInfer):
             max_seqlen_q=seq_len,
             max_seqlen_kv=seq_len,
         )
-        return weights.attn.to_out.apply(hidden_states.to(dtype=GET_DTYPE()))
+        return weights.attn.to_out.apply(hidden_states.to(dtype=self.compute_dtype))
 
     def _dense_mlp(self, weights, hidden_states):
         gate = weights.gate_proj.apply(hidden_states)
@@ -201,24 +203,23 @@ class LingBotVideoTransformerInfer(BaseTransformerInfer):
             return self._moe(weights.ffn, hidden_states)
         return self._dense_mlp(weights.ffn.dense, hidden_states)
 
-    def _block(self, weights, hidden_states, temb6, rotary_emb):
+    def infer_block(self, weights, hidden_states, temb6, rotary_emb):
         mod = temb6 + weights.scale_shift_table.tensor.squeeze(0)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod.chunk(6, dim=-1)
         gate_msa, gate_mlp = gate_msa.tanh(), gate_mlp.tanh()
         scale_msa, scale_mlp = 1.0 + scale_msa, 1.0 + scale_mlp
 
-        bulk_dtype = GET_DTYPE()
-        attn_in = (weights.norm1.apply(hidden_states) * scale_msa + shift_msa).to(bulk_dtype)
+        attn_in = (weights.norm1.apply(hidden_states) * scale_msa + shift_msa).to(self.compute_dtype)
         attn_out = self._attention(weights, attn_in, rotary_emb)
         hidden_states = hidden_states + (gate_msa * weights.norm_post_attn.apply(attn_out)).to(hidden_states.dtype)
 
-        ffn_in = (weights.norm2.apply(hidden_states) * scale_mlp + shift_mlp).to(bulk_dtype)
+        ffn_in = (weights.norm2.apply(hidden_states) * scale_mlp + shift_mlp).to(self.compute_dtype)
         ffn_out = self._ffn(weights, ffn_in)
         hidden_states = hidden_states + (gate_mlp * weights.norm_post_ffn.apply(ffn_out)).to(hidden_states.dtype)
         return hidden_states
 
     def infer(self, block_weights, pre_infer_out):
         hidden_states = pre_infer_out.hidden_states
-        for block in block_weights.blocks:
-            hidden_states = self._block(block, hidden_states, pre_infer_out.temb6, pre_infer_out.rotary_emb)
+        for block_idx, block in enumerate(block_weights.blocks):
+            hidden_states = self.run_block(block_idx, block, hidden_states, pre_infer_out.temb6, pre_infer_out.rotary_emb)
         return hidden_states

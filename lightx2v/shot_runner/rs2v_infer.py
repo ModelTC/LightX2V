@@ -269,7 +269,6 @@ def main():
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--infer_steps", type=int, default=4, help="Number of inference steps")
-    parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
     parser.add_argument("--video_duration", type=float, default=20, help="Video duration in seconds")
     parser.add_argument("--stream_save_video", action="store_true", help="Whether to save video by stream")
 

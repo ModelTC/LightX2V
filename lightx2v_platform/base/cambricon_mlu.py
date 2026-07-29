@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.distributed as dist
 
@@ -10,7 +12,9 @@ class MluDevice:
 
     @staticmethod
     def init_device_env():
-        pass
+        local_rank = os.environ.get("LOCAL_RANK")
+        if local_rank is not None:
+            torch.mlu.set_device(int(local_rank))
 
     @staticmethod
     def is_available() -> bool:
@@ -27,5 +31,5 @@ class MluDevice:
 
     @staticmethod
     def init_parallel_env():
+        MluDevice.init_device_env()
         dist.init_process_group(backend="cncl")
-        torch.mlu.set_device(dist.get_rank())

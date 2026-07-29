@@ -125,8 +125,8 @@ class LTX2PostInfer:
         # Result shape: [seq_len, 2, hidden_dim]
         scale_shift_values = scale_shift_table[None, :, :].to(device=x.device, dtype=x.dtype) + embedded_timestep[:, None, :]
         shift, scale = scale_shift_values[:, 0], scale_shift_values[:, 1]
-        x = self.modulate_with_rmsnorm_func(x, scale, shift, weight=None, bias=None, eps=1e-6)
-        # Output projection
+        x = torch.nn.functional.layer_norm(x, (x.shape[-1],), eps=1e-6)
+        x = x * (1 + scale) + shift
         x = proj_out.apply(x)
 
         return x

@@ -325,12 +325,14 @@ def encode_audio(
     audio: Audio,
     audio_encoder: AudioEncoder,
     audio_processor: AudioProcessor | None = None,
+    use_real_mel_spectrogram: bool = False,
 ) -> torch.Tensor:
     """Encode audio waveform into latent representation.
     Args:
         audio: Audio container with waveform tensor of shape (batch, channels, samples) and sampling rate.
         audio_encoder: Audio encoder model
         audio_processor: Audio processor model (optional, if not provided, it will be created from the audio encoder)
+        use_real_mel_spectrogram: Whether to avoid complex-valued magnitude operations in the mel frontend.
     """
     dtype = next(audio_encoder.parameters()).dtype
     device = next(audio_encoder.parameters()).device
@@ -341,11 +343,12 @@ def encode_audio(
             mel_bins=audio_encoder.mel_bins,
             mel_hop_length=audio_encoder.mel_hop_length,
             n_fft=audio_encoder.n_fft,
+            use_real_mel_spectrogram=use_real_mel_spectrogram,
         ).to(device=device)
 
-    mel_spectrogram = audio_processor.waveform_to_mel(audio.to(device=device))
-
-    latent = audio_encoder(mel_spectrogram.to(dtype=dtype))
+    audio = audio.to(device=device)
+    mel_spectrogram = audio_processor.waveform_to_mel(audio)
+    latent = audio_encoder(mel_spectrogram.to(device=device, dtype=dtype))
     return latent
 
 

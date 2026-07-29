@@ -1,6 +1,7 @@
 import math
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 import lightx2v.common.ops  # noqa: F401
@@ -32,6 +33,50 @@ def _patch_size(config):
 def _patch_embed_hidden_dim(config):
     hidden_dim = config.get("patch_embed_hidden_dim")
     return 1024 if hidden_dim is None else int(hidden_dim)
+
+
+def hunyuan_image3_mm_weight(
+    config,
+    mm_type,
+    weight_name,
+    bias_name=None,
+    split_dim=None,
+    reduce_output=True,
+    create_cuda_buffer=False,
+    create_cpu_buffer=False,
+    lazy_load=False,
+    lazy_load_file=None,
+    lora_prefix="diffusion_model.blocks",
+    lora_path=None,
+):
+    if config.get("tensor_parallel", False) and split_dim is not None:
+        tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+        return MM_WEIGHT_REGISTER["TensorParallel"](
+            weight_name=weight_name,
+            bias_name=bias_name,
+            mm_type=mm_type,
+            tp_group=tp_group,
+            tp_rank=dist.get_rank(tp_group),
+            tp_size=dist.get_world_size(tp_group),
+            split_dim=split_dim,
+            create_cuda_buffer=create_cuda_buffer,
+            create_cpu_buffer=create_cpu_buffer,
+            lazy_load=lazy_load,
+            lazy_load_file=lazy_load_file,
+            lora_prefix=lora_prefix,
+            lora_path=lora_path,
+            reduce_output=reduce_output,
+        )
+    return MM_WEIGHT_REGISTER[mm_type](
+        weight_name,
+        bias_name,
+        create_cuda_buffer,
+        create_cpu_buffer,
+        lazy_load,
+        lazy_load_file,
+        lora_prefix=lora_prefix,
+        lora_path=lora_path,
+    )
 
 
 class TensorPairWeight:
@@ -245,8 +290,10 @@ class HunyuanImage3DenseMLPWeights(WeightModule):
     def __init__(
         self,
         prefix,
+        config,
         mm_type,
         mlp_bias=False,
+        defer_down_reduce=False,
         create_cuda_buffer=False,
         create_cpu_buffer=False,
         lazy_load=False,
@@ -258,26 +305,33 @@ class HunyuanImage3DenseMLPWeights(WeightModule):
         down_bias = f"{prefix}.down_proj.bias" if mlp_bias else None
         self.add_module(
             "gate_and_up_proj",
-            MM_WEIGHT_REGISTER[mm_type](
+            hunyuan_image3_mm_weight(
+                config,
+                mm_type,
                 f"{prefix}.gate_and_up_proj.weight",
                 gate_and_up_bias,
-                create_cuda_buffer,
-                create_cpu_buffer,
-                lazy_load,
-                lazy_load_file,
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=lazy_load,
+                lazy_load_file=lazy_load_file,
                 lora_prefix=prefix,
                 lora_path=lora_path,
             ),
         )
         self.add_module(
             "down_proj",
-            MM_WEIGHT_REGISTER[mm_type](
+            hunyuan_image3_mm_weight(
+                config,
+                mm_type,
                 f"{prefix}.down_proj.weight",
                 down_bias,
-                create_cuda_buffer,
-                create_cpu_buffer,
-                lazy_load,
-                lazy_load_file,
+                split_dim="row",
+                reduce_output=not defer_down_reduce,
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=lazy_load,
+                lazy_load_file=lazy_load_file,
                 lora_prefix=prefix,
                 lora_path=lora_path,
             ),
@@ -324,8 +378,10 @@ class HunyuanImage3MoEWeights(WeightModule):
                 "shared_mlp",
                 HunyuanImage3DenseMLPWeights(
                     f"{prefix}.shared_mlp",
+                    config,
                     mm_type,
                     config.get("mlp_bias", False),
+                    True,
                     create_cuda_buffer,
                     create_cpu_buffer,
                     lazy_load,
@@ -339,8 +395,10 @@ class HunyuanImage3MoEWeights(WeightModule):
             [
                 HunyuanImage3DenseMLPWeights(
                     f"{prefix}.experts.{i}",
+                    config,
                     mm_type,
                     config.get("mlp_bias", False),
+                    True,
                     create_cuda_buffer,
                     create_cpu_buffer,
                     lazy_load,
@@ -352,7 +410,25 @@ class HunyuanImage3MoEWeights(WeightModule):
         )
         self.add_module("experts", self.experts)
 
+    @staticmethod
+    def _unwrap_linear_weight(linear):
+        """Return the concrete MM weight hidden behind TP wrappers."""
+        current = linear
+        visited = set()
+        while getattr(current, "_mm", None) is not None:
+            if id(current) in visited:
+                raise RuntimeError("Detected a cycle while unwrapping a HunyuanImage3 MM weight.")
+            visited.add(id(current))
+            current = current._mm
+        return current
+
     def _linear_weight_for_flashinfer(self, linear, device, dtype):
+        if getattr(linear, "has_lora_branch", False):
+            raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' does not support dynamic LoRA branches.")
+        if hasattr(linear, "weight_diff"):
+            raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' does not support runtime diff weights.")
+
+        linear = self._unwrap_linear_weight(linear)
         if getattr(linear, "has_lora_branch", False):
             raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' does not support dynamic LoRA branches.")
         if hasattr(linear, "weight_diff"):
@@ -373,8 +449,9 @@ class HunyuanImage3MoEWeights(WeightModule):
         # FlashInfer follows torch.nn.Linear/checkpoint layout [out, in].
         return weight.t().to(device=device, dtype=dtype).contiguous()
 
-    @staticmethod
-    def _release_linear_weight(linear, device, dtype):
+    @classmethod
+    def _release_linear_weight(cls, linear, device, dtype):
+        linear = cls._unwrap_linear_weight(linear)
         empty = torch.empty(0, device=device, dtype=dtype)
         for attr in ("weight", "pin_weight", "bias", "pin_bias"):
             if hasattr(linear, attr):
@@ -444,26 +521,32 @@ class HunyuanImage3AttentionWeights(WeightModule):
         attn_bias = ".bias" if config.get("attention_bias", False) else None
         self.add_module(
             "qkv_proj",
-            MM_WEIGHT_REGISTER[mm_type](
+            hunyuan_image3_mm_weight(
+                config,
+                mm_type,
                 f"{prefix}.self_attn.qkv_proj.weight",
                 attn_bias and f"{prefix}.self_attn.qkv_proj{attn_bias}",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                lazy_load,
-                lazy_load_file,
+                split_dim="col",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=lazy_load,
+                lazy_load_file=lazy_load_file,
                 lora_prefix=prefix,
                 lora_path=lora_path,
             ),
         )
         self.add_module(
             "o_proj",
-            MM_WEIGHT_REGISTER[mm_type](
+            hunyuan_image3_mm_weight(
+                config,
+                mm_type,
                 f"{prefix}.self_attn.o_proj.weight",
                 attn_bias and f"{prefix}.self_attn.o_proj{attn_bias}",
-                create_cuda_buffer,
-                create_cpu_buffer,
-                lazy_load,
-                lazy_load_file,
+                split_dim="row",
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=lazy_load,
+                lazy_load_file=lazy_load_file,
                 lora_prefix=prefix,
                 lora_path=lora_path,
             ),
@@ -533,8 +616,10 @@ class HunyuanImage3MLPPhaseWeights(WeightModule):
                 "dense_mlp",
                 HunyuanImage3DenseMLPWeights(
                     f"{prefix}.mlp",
+                    config,
                     mm_type,
                     config.get("mlp_bias", False),
+                    False,
                     create_cuda_buffer,
                     create_cpu_buffer,
                     lazy_load,

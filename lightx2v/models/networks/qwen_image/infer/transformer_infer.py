@@ -23,6 +23,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         self.config = config
         self.infer_conditional = True
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
+        self.init_compile(config)
 
         self.use_magi_compile = config.get("use_magi_compile", False)
         if self.use_magi_compile and magi_compile is None:
@@ -446,16 +447,17 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 trace_path,
             )
 
-        for idx in range(len(blocks)):
-            encoder_hidden_states, hidden_states = self.infer_block(
-                block=blocks[idx],
-                hidden_states=hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                temb_img_silu=temb_img_silu,
-                temb_txt_silu=temb_txt_silu,
-                image_rotary_emb=image_rotary_emb,
-                image_rotary_positions=image_rotary_positions,
-                modulate_index=modulate_index,
+        for block_idx, block in enumerate(blocks):
+            encoder_hidden_states, hidden_states = self.run_block(
+                block_idx,
+                block,
+                hidden_states,
+                encoder_hidden_states,
+                temb_img_silu,
+                temb_txt_silu,
+                image_rotary_emb,
+                image_rotary_positions,
+                modulate_index,
             )
         return hidden_states
 
