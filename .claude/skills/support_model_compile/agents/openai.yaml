@@ -1,0 +1,4 @@
+interface:
+  display_name: "Support LightX2V Compile"
+  short_description: "为 LightX2V 新模型适配并验证 torch.compile"
+  default_prompt: "Use $support-model-compile to add and validate torch.compile support for a new LightX2V model."
