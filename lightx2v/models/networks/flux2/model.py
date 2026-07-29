@@ -10,7 +10,12 @@ from lightx2v.models.networks.flux2.infer.pre_infer import Flux2DevPreInfer, Flu
 from lightx2v.models.networks.flux2.infer.transformer_infer import Flux2TransformerInfer
 from lightx2v.models.networks.flux2.weights.post_weights import Flux2PostWeights
 from lightx2v.models.networks.flux2.weights.pre_weights import Flux2DevPreWeights, Flux2PreWeights
-from lightx2v.models.networks.flux2.weights.transformer_weights import Flux2TransformerWeights
+from lightx2v.models.networks.flux2.weights.transformer_weights import (
+    Flux2TransformerWeights,
+    preserve_weight_module_cpu_tensors,
+    release_weight_module_device_tensors,
+    validate_flux2_block_slab_config,
+)
 from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v_platform.base import global_var
 
@@ -23,6 +28,12 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
 
     def __init__(self, config, model_path, device):
         super().__init__(model_path, config, device)
+        self.use_block_slab_offload = validate_flux2_block_slab_config(
+            self.config,
+            global_var.AI_DEVICE,
+        )
+        self._offload_weights_loaded = False
+        self._offload_weights_preparing = False
         self.in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
         self.attention_kwargs = {}
         self._combined_img_ids_cache = None
@@ -277,8 +288,83 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
             self._init_offload_manager()
 
     def _init_offload_manager(self):
-        self.transformer_infer.offload_manager_double.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_double_block_cuda_buffers)
-        self.transformer_infer.offload_manager_single.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_single_block_cuda_buffers)
+        if hasattr(self.transformer_weights, "offload_double_block_cuda_buffers"):
+            self.transformer_infer.offload_manager_double.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_double_block_cuda_buffers)
+        if hasattr(self.transformer_weights, "offload_single_block_cuda_buffers"):
+            self.transformer_infer.offload_manager_single.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_single_block_cuda_buffers)
+        if self.use_block_slab_offload:
+            double_slabs, single_slabs = self.transformer_weights.prepare_offload_block_slabs()
+            if double_slabs:
+                self.transformer_infer.offload_manager_double.init_block_slabs(double_slabs)
+            if single_slabs:
+                self.transformer_infer.offload_manager_single.init_block_slabs(single_slabs)
+
+    def _prepare_infer_weights(self):
+        if not self.cpu_offload or self._offload_weights_loaded:
+            return
+        if self._offload_weights_preparing:
+            raise RuntimeError("Flux2 offload weights are already being prepared")
+
+        self._offload_weights_preparing = True
+        try:
+            if self.offload_granularity == "model":
+                self.to_cuda()
+            else:
+                # These weights are used on every diffusion step, so keep them
+                # resident for the complete denoising loop.
+                preserve_weight_module_cpu_tensors(self.pre_weight)
+                preserve_weight_module_cpu_tensors(self.post_weight)
+                self.pre_weight.to_cuda()
+                self.post_weight.to_cuda()
+                self.transformer_weights.non_block_weights_to_cuda()
+                self.transformer_weights.resident_blocks_to_cuda()
+        except BaseException as prepare_error:
+            try:
+                self.force_cleanup_offload_weights()
+            except BaseException as cleanup_error:
+                if hasattr(prepare_error, "add_note"):
+                    prepare_error.add_note(f"Flux2 offload cleanup also failed: {cleanup_error!r}")
+            raise
+        else:
+            self._offload_weights_loaded = True
+            self._offload_weights_preparing = False
+
+    def _release_infer_weights(self):
+        if not self.cpu_offload or self.scheduler.step_index != self.scheduler.infer_steps - 1:
+            return
+        self.force_cleanup_offload_weights()
+
+    def _flush_npu_event_offload_managers(self):
+        if not getattr(self.transformer_infer, "use_npu_event_offload", False):
+            return
+        for manager_name in ("offload_manager_double", "offload_manager_single"):
+            manager = getattr(self.transformer_infer, manager_name, None)
+            if manager is not None and hasattr(manager, "flush"):
+                manager.flush()
+
+    def force_cleanup_offload_weights(self):
+        """Release loaded offload weights and reset NPU staging state.
+
+        This method is intentionally idempotent and may be called from a
+        runner ``finally`` block after a short run, cancellation, or error.
+        """
+        if not self.cpu_offload or not (self._offload_weights_loaded or self._offload_weights_preparing):
+            return False
+
+        self._flush_npu_event_offload_managers()
+        # Device execution and non-blocking H2D copies are asynchronous.
+        self._sync_device()
+        if self.offload_granularity == "model":
+            self.to_cpu()
+        else:
+            release_weight_module_device_tensors(self.pre_weight)
+            release_weight_module_device_tensors(self.post_weight)
+            self.transformer_weights.release_non_block_weights()
+            self.transformer_weights.release_resident_blocks()
+
+        self._offload_weights_loaded = False
+        self._offload_weights_preparing = False
+        return True
 
     def _get_combined_img_ids(self, img_ids, input_image_ids):
         cached = self._combined_img_ids_cache
@@ -374,13 +460,7 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
     @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0:
-                self.to_cuda()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cuda()
-                self.post_weight.to_cuda()
-                self.transformer_weights.non_block_weights_to_cuda()
+        self._prepare_infer_weights()
 
         latents = self.scheduler.latents
         do_cfg = self.config.get("enable_cfg", True) and self.config.get("sample_guide_scale", 1.0) > 1.0
@@ -465,13 +545,7 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
             )
             self.scheduler.noise_pred = noise_pred
 
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
-                self.to_cpu()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cpu()
-                self.post_weight.to_cpu()
-                self.transformer_weights.non_block_weights_to_cpu()
+        self._release_infer_weights()
 
 
 class Flux2DevTransformerModel(_Flux2TransformerModelBase):
@@ -498,13 +572,7 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
     @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0:
-                self.to_cuda()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cuda()
-                self.post_weight.to_cuda()
-                self.transformer_weights.non_block_weights_to_cuda()
+        self._prepare_infer_weights()
 
         latents = self.scheduler.latents
         txt_ids = inputs["text_encoder_output"].get("text_ids", None)
@@ -519,10 +587,4 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
         )
         self.scheduler.noise_pred = noise_pred
 
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
-                self.to_cpu()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cpu()
-                self.post_weight.to_cpu()
-                self.transformer_weights.non_block_weights_to_cpu()
+        self._release_infer_weights()
