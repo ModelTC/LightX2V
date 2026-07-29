@@ -102,10 +102,5 @@ class LingBotVideoScheduler(WanScheduler):
         self.noise_pred = None
 
     def clear(self):
-        self.noise_pred = None
+        super().clear()
         self.current_timestep = None
-        self.model_outputs = [None] * self.solver_order
-        self.timestep_list = [None] * self.solver_order
-        self.last_sample = None
-        self.this_order = None
-        self.lower_order_nums = 0
