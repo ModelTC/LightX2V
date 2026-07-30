@@ -4,7 +4,16 @@ __license__ = "Apache 2.0"
 
 import lightx2v_platform.set_ai_device
 from lightx2v import common, models, utils
-from lightx2v.pipeline import LightX2VPipeline
+
+
+def __getattr__(name):
+    # Importing a model-specific runner (including ROS and RoboDojo adapters)
+    # should not eagerly require every optional dependency in pipeline.py.
+    if name == "LightX2VPipeline":
+        from lightx2v.pipeline import LightX2VPipeline
+
+        return LightX2VPipeline
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "__version__",
