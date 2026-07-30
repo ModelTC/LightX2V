@@ -1,6 +1,6 @@
 model:
     name: wan_ti2v_5b
-    pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
+    pretrained_model_name_or_path: models/Wan2.2-TI2V-5B
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -19,10 +19,10 @@ model:
         - 2
     fake:
         name: wan_ti2v_5b
-        pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
+        pretrained_model_name_or_path: models/Wan2.2-TI2V-5B/
     teacher:
         name: wan_ti2v_5b
-        pretrained_model_name_or_path: /path/to/models/wan2.2/Wan2.2-TI2V-5B
+        pretrained_model_name_or_path: models/Wan2.2-TI2V-5B/
         transformer_param_dtype: bf16
 
 distributed:
@@ -47,7 +47,7 @@ data:
     train:
         name: prompt_dataset
         data_path:
-            - /path/to/prompts/vidprom_filtered_extended.txt
+            - data/prompts/wan22_train_prompts.txt
         batch_size: 1
         num_workers: 8
         pin_memory: true
@@ -56,7 +56,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /path/to/prompts/wan_t2v_prompts.txt
+            - data/prompts/wan22_val_prompts.txt
         max_samples: 1
         batch_size: 1
         num_workers: 0
@@ -76,7 +76,7 @@ scheduler:
         extra_one_step: true
 
 training:
-    method: video_dmd
+    method: video_sgmd
     max_train_iters: 5000
     gradient_accumulation_iters: 4
     gradient_checkpointing: true
@@ -86,11 +86,13 @@ training:
     save_every_iters: 100
     save_total_limit: 1
     dmd:
-        ida:
-            enabled: true
-            decay: 0.97
         num_inference_steps: 4
-        fake_update_ratio: 5
+        fake_update_ratio: 1
+        div_loss:
+            enabled: false
+            weight: 5.0e-2
+            teacher_inference_steps: 30
+            anchor_step: 5
         height: 704
         width: 1280
         num_frames: 121
@@ -126,7 +128,7 @@ training:
     teacher:
         guidance_scale: 3.0
         cfg_norm: none
-    output_dir: ./output_train/wan2_2_ti2v_5b_dmd
+    output_dir: ./output_train/wan2_2_ti2v_5b_sgmd
 
 inference:
     method: wan_ti2v_5b_infer
@@ -144,7 +146,7 @@ inference:
     enable_cfg: false
     cfg_guidance_scale: 1.0
     seed: 42
-    output_dir: ./output_infer/wan2_2_ti2v_5b_dmd
+    output_dir: ./output_infer/wan2_2_ti2v_5b_sgmd
     infer_every_iters: ${training.save_every_iters}
 
 logging:

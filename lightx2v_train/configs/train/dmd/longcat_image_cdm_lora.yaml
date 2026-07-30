@@ -41,7 +41,6 @@ scheduler:
 
 training:
     method: dmd
-    train_type: lora
     max_train_iters: 1000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
@@ -73,15 +72,16 @@ training:
             norm_clip_min: 0.1
             weight: 1.0
             warmup_iters: 200
-    lora:
-        rank: 16
-        alpha: 16
-        target_modules:
-            - to_k
-            - to_q
-            - to_v
-            - to_out.0
     student:
+        train_type: lora
+        lora:
+            rank: 16
+            alpha: 16
+            target_modules:
+                - to_k
+                - to_q
+                - to_v
+                - to_out.0
         optimizer:
             learning_rate: 0.0001
             adam_beta1: 0.9
@@ -89,6 +89,15 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     fake:
+        train_type: lora
+        lora:
+            rank: 16
+            alpha: 16
+            target_modules:
+                - to_k
+                - to_q
+                - to_v
+                - to_out.0
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9

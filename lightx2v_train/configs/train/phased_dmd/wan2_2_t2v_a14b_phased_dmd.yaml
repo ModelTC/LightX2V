@@ -1,6 +1,6 @@
 model:
     name: wan_t2v_14b
-    pretrained_model_name_or_path: models/Wan2.1-T2V-14B/
+    pretrained_model_name_or_path: models/Wan2.2-T2V-A14B/high_noise_model
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: bf16
@@ -10,15 +10,25 @@ model:
     load_transformer: true
     fake:
         name: wan_t2v_14b
-        pretrained_model_name_or_path: models/Wan2.1-T2V-14B/
+        pretrained_model_name_or_path: models/Wan2.2-T2V-A14B/high_noise_model
     teacher:
         name: wan_t2v_14b
-        pretrained_model_name_or_path: models/Wan2.1-T2V-14B/
+        pretrained_model_name_or_path: models/Wan2.2-T2V-A14B/high_noise_model
+        transformer_param_dtype: bf16
+    student_2:
+        name: wan_t2v_14b
+        pretrained_model_name_or_path: models/Wan2.2-T2V-A14B/low_noise_model
+    fake_2:
+        name: wan_t2v_14b
+        pretrained_model_name_or_path: models/Wan2.2-T2V-A14B/low_noise_model
+    teacher_2:
+        name: wan_t2v_14b
+        pretrained_model_name_or_path: models/Wan2.2-T2V-A14B/low_noise_model
         transformer_param_dtype: bf16
 
 distributed:
     backend: nccl
-    timeout_minutes: 60
+    timeout_minutes: 10
     sequence_parallel:
         enabled: false
         size: 1
@@ -62,42 +72,37 @@ data:
 scheduler:
     num_train_timesteps: 1000
     timestep_distribution: uniform
-    min_t: 0.001
+    min_t: 1.0e-3
     max_t: 1.0
     time_shift_settings:
         do_time_shift: true
         shift_type: linear
-        time_shift_mu: 5.0
+        time_shift_mu: 7.0
         time_shift_power: 1.0
         sigma_min: 0.0
         extra_one_step: true
 
 training:
-    method: video_dmd
-    max_train_iters: 5000
+    method: video_phased_dmd
+    max_train_iters: 4000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
-    max_grad_norm: 10.0
+    max_grad_norm: 1.0
     lr_scheduler: constant
     lr_warmup_iters: 0
-    save_every_iters: 100
-    save_total_limit: 2
+    save_every_iters: 50
+    save_total_limit: 5
     dmd:
         ida:
             enabled: true
             decay: 0.97
+        num_inference_steps: 4
+        fake_update_ratio: 5
         div_loss:
             enabled: true
             weight: 5.0e-2
             teacher_inference_steps: 40
             anchor_step: 10
-        fake_real:
-            enabled: true
-            weight: 0.2
-            timestep_list:
-                - 750
-        num_inference_steps: 4
-        fake_update_ratio: 5
         height: 480
         width: 832
         num_frames: 81
@@ -107,36 +112,65 @@ training:
             - 500
             - 250
         warp_denoising_step: true
-        ts_schedule: false
-        ts_schedule_max: false
         num_train_timestep: 1000
-        timestep_shift: 5.0
-        min_score_timestep: 0
-        min_step_ratio: 0.02
-        max_step_ratio: 0.98
+        timestep_shift: 7.0
+        norm_clip_min: 1.0e-4
+        phased:
+            match_timestep: 500
+            enable_fake_low_high: true
+            score_timestep_min: 20
+            score_timestep_max: 980
+            score_timestep_margin: 20
+            guidance_distill: 4.0
+            fake_real_high:
+                enabled: true
+                weight: 1.0e-1
+                timestep_list:
+                    - 750
+            fake_real_low:
+                enabled: true
+                weight: 1.0e-1
+                timestep_list:
+                    - 500
     student:
         train_type: full
         optimizer:
-            learning_rate: 0.000002
+            learning_rate: 2.0e-6
             adam_beta1: 0.0
-            adam_beta2: 0.999
-            weight_decay: 0.01
-            adam_epsilon: 0.00000001
+            adam_beta2: 9.99e-1
+            weight_decay: 1.0e-2
+            adam_epsilon: 1.0e-8
     fake:
         train_type: full
         optimizer:
-            learning_rate: 0.0000004
+            learning_rate: 4.0e-7
             adam_beta1: 0.0
-            adam_beta2: 0.999
-            weight_decay: 0.01
-            adam_epsilon: 0.00000001
+            adam_beta2: 9.99e-1
+            weight_decay: 1.0e-2
+            adam_epsilon: 1.0e-8
+    student_2:
+        train_type: full
+        optimizer:
+            learning_rate: 2.0e-6
+            adam_beta1: 0.0
+            adam_beta2: 9.99e-1
+            weight_decay: 1.0e-2
+            adam_epsilon: 1.0e-8
+    fake_2:
+        train_type: full
+        optimizer:
+            learning_rate: 4.0e-7
+            adam_beta1: 0.0
+            adam_beta2: 9.99e-1
+            weight_decay: 1.0e-2
+            adam_epsilon: 1.0e-8
     teacher:
-        guidance_scale: 3.0
+        guidance_scale: 6.0
         cfg_norm: none
-    output_dir: ./output_train/wan2_1_t2v_14b_dmd
+    output_dir: ./output_train/wan2_2_t2v_a14b_phased_dmd
 
 inference:
-    method: wan_t2v_14b_infer
+    method: wan_t2v_dual_infer
     default_width: 832
     default_height: 480
     num_frames: 81
@@ -146,12 +180,13 @@ inference:
         - 750
         - 500
         - 250
+    boundary_step_index: 2
     warp_denoising_step: true
     fps: 16
     enable_cfg: false
     cfg_guidance_scale: 1.0
     seed: 42
-    output_dir: ./output_infer/wan2_1_t2v_14b_dmd
+    output_dir: ./output_infer/wan2_2_t2v_a14b_phased_dmd
     infer_every_iters: 10
 
 logging:
