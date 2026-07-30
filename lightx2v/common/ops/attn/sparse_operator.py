@@ -10,9 +10,11 @@ from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordin
 
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
+    from flash_attn.cute.block_sparsity import BlockSparseTensorsTorch
 except ImportError:
     logger.info("flash_attn.cute not found, please install flashattention4 first")
     flash_attn_func_v4 = None
+    BlockSparseTensorsTorch = None
 
 try:
     from sageattn3_sparse import sage3_block_sparse_attn
@@ -165,16 +167,19 @@ class SparseFlashAttentionV4Operator:
         full_block_idx, full_block_cnt = block_map_ordinal_lut_triton(mask)
         mask_block_cnt = torch.zeros_like(full_block_cnt)
         mask_block_idx = torch.zeros_like(full_block_idx)
-
-        out, _ = flash_attn_func_v4(
-            q=q,
-            k=k,
-            v=v,
+        block_sparse_tensors = BlockSparseTensorsTorch(
             mask_block_cnt=mask_block_cnt,
             mask_block_idx=mask_block_idx,
             full_block_cnt=full_block_cnt,
             full_block_idx=full_block_idx,
             block_size=(self.q_block_size, self.k_block_size),
+        )
+
+        out, _ = flash_attn_func_v4(
+            q=q,
+            k=k,
+            v=v,
+            block_sparse_tensors=block_sparse_tensors,
         )
 
         out = out.reshape(max_seqlen_q, -1)
