@@ -11,7 +11,6 @@ from lightx2v.models.networks.cosmos3.infer.transformer_infer import Cosmos3Tran
 from lightx2v.models.networks.cosmos3.weights.post_weights import Cosmos3PostWeights
 from lightx2v.models.networks.cosmos3.weights.pre_weights import Cosmos3PreWeights
 from lightx2v.models.networks.cosmos3.weights.transformer_weights import Cosmos3TransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 
 
 class Cosmos3TransformerModel(BaseTransformerModel):
@@ -148,7 +147,6 @@ class Cosmos3TransformerModel(BaseTransformerModel):
 
         return self.post_infer.infer(self.post_weight, transformer_out, pre_infer_out)
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:

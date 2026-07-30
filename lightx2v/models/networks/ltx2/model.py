@@ -21,7 +21,6 @@ from lightx2v.models.networks.ltx2.weights.pre_weights import LTX2PreWeights
 from lightx2v.models.networks.ltx2.weights.transformer_weights import (
     LTX2TransformerWeights,
 )
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -344,7 +343,6 @@ class LTX2Model(BaseTransformerModel):
         if hasattr(self.transformer_infer, "offload_manager"):
             self._init_offload_manager()
 
-    @compiled_method()
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True, mm_perturb=None):
         self.transformer_infer.reset_guidance_perturbation()

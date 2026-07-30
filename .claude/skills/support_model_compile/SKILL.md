@@ -9,7 +9,7 @@ description: 为 LightX2V 新模型或新推理路径实现、审查、调试和
 
 用最小改动让目标模型优先复用 LightX2V 的公共 block compile 机制，只支持 eager 已经可运行的模式，并保持 `use_compile=false` 的行为不变。
 
-本 skill 只处理 `use_compile` 驱动的 `torch.compile`。不要混入 `compiled_method`、`use_magi_compile` 或 CUDA Graph；需要比较时另做实验。
+本 skill 只处理 `use_compile` 驱动的 `torch.compile`。不要混入 `use_magi_compile` 或 CUDA Graph；需要比较时另做实验。
 
 若任务同时要求 warmup，或需要可信性能验收，而目标尚无可靠 warmup，先使用 [adapt-lightx2v-warmup](../support_model_warmup/SKILL.md) 完成 eager warmup，再接入 compile。两者共享正式算子路径，但各自只维护自己的生命周期和分派逻辑。
 

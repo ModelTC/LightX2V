@@ -11,7 +11,6 @@ from lightx2v.models.networks.flux2.infer.transformer_infer import Flux2Transfor
 from lightx2v.models.networks.flux2.weights.post_weights import Flux2PostWeights
 from lightx2v.models.networks.flux2.weights.pre_weights import Flux2DevPreWeights, Flux2PreWeights
 from lightx2v.models.networks.flux2.weights.transformer_weights import Flux2TransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v_platform.base import global_var
 
 
@@ -371,7 +370,6 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
         self.pre_infer_class = Flux2PreInfer
         self.post_infer_class = Flux2PostInfer
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:
@@ -495,7 +493,6 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
         self.pre_infer_class = Flux2DevPreInfer
         self.post_infer_class = Flux2PostInfer
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:

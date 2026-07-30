@@ -367,23 +367,6 @@ class LightX2VPipeline:
         elif self.model_cls == "z_image":
             self.qwen3_cpu_offload = text_encoder_offload
 
-    def enable_compile(
-        self,
-    ):
-        self.compile = True
-        self.compile_shapes = [
-            [480, 832],
-            [544, 960],
-            [720, 1280],
-            [832, 480],
-            [960, 544],
-            [1280, 720],
-            [480, 480],
-            [576, 576],
-            [704, 704],
-            [960, 960],
-        ]
-
     def enable_lora(self, lora_configs, lora_dynamic_apply=False):
         self.lora_configs = lora_configs
         self.lora_dynamic_apply = lora_dynamic_apply

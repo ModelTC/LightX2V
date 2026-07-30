@@ -24,7 +24,6 @@ from lightx2v.models.networks.wan.weights.motus import (
     build_motus_expert_configs,
 )
 from lightx2v.models.networks.wan.weights.motus._shared import apply_time_embedding
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v.utils.utils import load_weights
 
@@ -212,8 +211,6 @@ class MotusModel(BaseTransformerModel):
     def __init__(self, config, device):
         config = self._apply_motus_defaults(dict(config))
         model_path = config.get("model_path", config.get("wan_path", ""))
-        # CompiledMethodsMixin discovers attributes during BaseTransformerModel init.
-        # Seed config early so property access is safe before super() assigns it.
         self.config = config
         self._cached_vlm_state = None
         super().__init__(model_path=model_path, config=config, device=device, model_type="motus")
@@ -577,7 +574,6 @@ class MotusModel(BaseTransformerModel):
         )
         return inputs
 
-    @compiled_method()
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):
         del infer_condition
