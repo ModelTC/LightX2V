@@ -83,6 +83,12 @@ _STYLE = """
       font-size: 13px;
     }
     input[type=number] { width: 90px; }
+    #task-select { width: min(560px, 70vw); }
+    #config-select { min-width: 90px; }
+    .config-feedback { color: var(--muted); font-size: 13px; }
+    .config-feedback.pending { color: var(--yellow); }
+    .config-feedback.success { color: var(--green); }
+    .config-feedback.error { color: var(--red); }
     button {
       border: 1px solid var(--panel-border);
       border-radius: 6px;
@@ -167,36 +173,146 @@ _SCRIPT = """
     const POLICY_CAMS = __POLICY_CAMS__;
     let lastState = null;
     let statusData = {};
+    let configDirty = false;
+    let applyingConfig = false;
 
     function el(id) { return document.getElementById(id); }
 
     function stateLabel(s) {
       const m = {
-        ready: "就绪 — 点击「开始」运行评测",
-        running: "评测运行中",
-        paused: "已暂停",
-        success: "✔ 评测成功",
-        failure: "✘ 评测失败（超过步数上限）",
-        switching: "切换/重建场景中，请稍候…",
+        ready: 'Ready — click "Start" to run the evaluation',
+        running: "Evaluation in progress",
+        paused: "Paused",
+        success: "✔ Evaluation succeeded",
+        failure: "✘ Evaluation failed (maximum step limit exceeded)",
+        switching: "Switching/rebuilding the scene, please wait…",
       };
-      return m[s] || s || "等待模拟器状态…";
+      return m[s] || s || "Waiting for simulator status…";
     }
 
     async function post(cmd, extra) {
       const body = Object.assign({ cmd: cmd }, extra || {});
-      try {
-        await fetch("/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      } catch (e) { console.error(e); }
+      const response = await fetch("/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `HTTP ${response.status}`);
       setTimeout(refreshStatus, 300);
+      return result;
     }
 
-    function applyTask() {
+    function selectedConfig() {
       const task = el("task-select").value;
       const config = el("config-select").value;
       const seed = el("seed-input").value;
       const extra = { task_name: task, task_config: config };
       if (seed !== "") extra.seed = parseInt(seed, 10);
-      post("set_task", extra);
+      return { task, config, seed: seed === "" ? null : parseInt(seed, 10), extra };
+    }
+
+    function setConfigFeedback(text, kind) {
+      const feedback = el("config-feedback");
+      feedback.textContent = text;
+      feedback.className = `config-feedback${kind ? ` ${kind}` : ""}`;
+    }
+
+    function markConfigDirty() {
+      configDirty = true;
+      setConfigFeedback("Configuration changes have not been applied", "pending");
+    }
+
+    async function waitForConfig(expected, timeoutMs = 60000) {
+      const deadline = Date.now() + timeoutMs;
+      let sawSwitching = false;
+      while (Date.now() < deadline) {
+        await refreshStatus();
+        sawSwitching ||= statusData.state === "switching";
+        const seedMatches = expected.seed === null || Number(statusData.seed) === expected.seed;
+        if (statusData.state !== "switching" &&
+            statusData.task_name === expected.task &&
+            String(statusData.task_config) === String(expected.config) && seedMatches) {
+          return statusData;
+        }
+        if (sawSwitching && statusData.state === "failure") {
+          throw new Error("Simulator switch failed; check the libero_node logs");
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      throw new Error("Timed out waiting for the simulator to apply the configuration");
+    }
+
+    async function waitForRestart(expected, previousEpisode, timeoutMs = 60000) {
+      const deadline = Date.now() + timeoutMs;
+      let sawSwitching = false;
+      while (Date.now() < deadline) {
+        await refreshStatus();
+        sawSwitching ||= statusData.state === "switching";
+        const configMatches =
+          statusData.task_name === expected.task &&
+          String(statusData.task_config) === String(expected.config) &&
+          Number(statusData.seed) === Number(expected.seed);
+        if (configMatches && statusData.state === "ready" &&
+            Number(statusData.episode) > Number(previousEpisode)) {
+          return statusData;
+        }
+        if (sawSwitching && statusData.state === "failure") {
+          throw new Error("Configuration was applied, but the automatic restart failed; check the libero_node logs");
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      throw new Error("Configuration was applied, but the automatic restart timed out");
+    }
+
+    async function applyTask() {
+      if (applyingConfig) return false;
+      const selected = selectedConfig();
+      applyingConfig = true;
+      updateButtons(statusData.state);
+      setConfigFeedback("Rebuilding the simulation environment…", "pending");
+      try {
+        await post("set_task", selected.extra);
+        let applied = await waitForConfig(selected);
+        let restarted = false;
+        if (applied.env === "libero") {
+          const appliedEpisode = Number(applied.episode);
+          const restartExpected = {
+            task: applied.task_name,
+            config: String(applied.task_config),
+            seed: Number(applied.seed),
+          };
+          setConfigFeedback("Configuration applied; restarting automatically…", "pending");
+          await post("restart");
+          applied = await waitForRestart(restartExpected, appliedEpisode);
+          restarted = true;
+        }
+        configDirty = false;
+        setConfigFeedback(
+          `${restarted ? "Applied and restarted" : "Applied"} ${applied.task_name} · Scenario ${applied.task_config} · seed ${applied.seed}`,
+          "success",
+        );
+        return true;
+      } catch (error) {
+        console.error(error);
+        setConfigFeedback(`Failed to apply configuration: ${error.message}`, "error");
+        return false;
+      } finally {
+        applyingConfig = false;
+        updateButtons(statusData.state);
+      }
+    }
+
+    async function startEvaluation() {
+      if (lastState === "paused") {
+        await post("resume");
+        return;
+      }
+      // A common failure mode was selecting a new task and pressing Start while
+      // the simulator still held the old task. Apply and verify pending config
+      // first; this Start click remains the explicit authorization to run.
+      if (configDirty && !(await applyTask())) return;
+      await post("start");
     }
 
     function fillSelect(select, options, current) {
@@ -205,10 +321,18 @@ _SCRIPT = """
       select.innerHTML = "";
       for (const opt of options) {
         const o = document.createElement("option");
-        o.value = opt; o.textContent = opt;
+        if (opt && typeof opt === "object") {
+          o.value = String(opt.value);
+          o.textContent = String(opt.label || opt.value);
+        } else {
+          o.value = String(opt);
+          o.textContent = String(opt);
+        }
         select.appendChild(o);
       }
-      if (current && options.includes(current)) select.value = current;
+      if (current && Array.from(select.options).some(o => o.value === String(current))) {
+        select.value = String(current);
+      }
       select.dataset.filled = "1";
     }
 
@@ -218,25 +342,25 @@ _SCRIPT = """
       tbody.innerHTML = "";
       for (const h of history.slice().reverse()) {
         const tr = document.createElement("tr");
-        const outcome = h.outcome === "success" ? "成功" : "失败";
+        const outcome = h.outcome === "success" ? "Success" : "Failure";
         tr.innerHTML = `<td>${h.episode}</td><td>${h.task}</td><td>${h.config || "-"}</td><td>${h.seed ?? "-"}</td>` +
           `<td class="outcome-${h.outcome}">${outcome}</td><td>${h.steps}</td>`;
         tbody.appendChild(tr);
       }
       if (stats && stats.episodes > 0) {
         const rate = (100 * stats.successes / stats.episodes).toFixed(0);
-        el("stats").textContent = `共 ${stats.episodes} 个 episode，成功 ${stats.successes} 个，成功率 ${rate}%`;
+        el("stats").textContent = `${stats.episodes} episodes total, ${stats.successes} successful, ${rate}% success rate`;
       } else {
-        el("stats").textContent = "暂无已完成的 episode";
+        el("stats").textContent = "No completed episodes yet";
       }
     }
 
     function updateButtons(s) {
-      el("btn-start").disabled = (s === "running" || s === "switching");
+      el("btn-start").disabled = (s === "running" || s === "switching" || applyingConfig);
       el("btn-pause").disabled = (s !== "running");
       el("btn-restart").disabled = (s === "switching");
-      el("btn-apply").disabled = (s === "switching");
-      el("btn-start").textContent = (s === "paused") ? "继续" : "开始";
+      el("btn-apply").disabled = (s === "switching" || applyingConfig);
+      el("btn-start").textContent = (s === "paused") ? "Resume" : "Start";
     }
 
     async function refreshStatus() {
@@ -249,7 +373,7 @@ _SCRIPT = """
       banner.className = s || "";
       let text = stateLabel(s);
       if (s === "running" && statusData.max_episode_steps) {
-        text += `（第 ${statusData.episode} 轮 · ${statusData.episode_step}/${statusData.max_episode_steps} 步）`;
+        text += ` (Episode ${statusData.episode} · ${statusData.episode_step}/${statusData.max_episode_steps} steps)`;
       }
       banner.querySelector("span").textContent = text;
       el("meta").textContent = statusData.task_name
@@ -293,10 +417,13 @@ _SCRIPT = """
     }
 
     document.addEventListener("DOMContentLoaded", () => {
-      el("btn-start").addEventListener("click", () => post(lastState === "paused" ? "resume" : "start"));
+      el("btn-start").addEventListener("click", () => startEvaluation().catch(console.error));
       el("btn-pause").addEventListener("click", () => post("pause"));
       el("btn-restart").addEventListener("click", () => post("restart"));
       el("btn-apply").addEventListener("click", applyTask);
+      el("task-select").addEventListener("change", markConfigDirty);
+      el("config-select").addEventListener("change", markConfigDirty);
+      el("seed-input").addEventListener("input", markConfigDirty);
       document.querySelectorAll(".cam-toggles input").forEach((box) => {
         box.addEventListener("change", () => toggleCam(box.value, box.checked));
       });
@@ -327,23 +454,24 @@ def render_index(cameras, title="LightX2V ROS", policy_cameras=None):
     <div class="meta" id="meta"></div>
   </header>
 
-  <div id="banner"><span>等待模拟器状态…</span></div>
+  <div id="banner"><span>Waiting for simulator status…</span></div>
 
   <section class="panel">
     <div class="controls">
-      <button id="btn-start" class="primary">开始</button>
-      <button id="btn-pause">暂停</button>
-      <button id="btn-restart" class="danger">重启 (新场景)</button>
+      <button id="btn-start" class="primary">Start</button>
+      <button id="btn-pause">Pause</button>
+      <button id="btn-restart" class="danger">Restart (New Scene)</button>
     </div>
     <div class="controls" id="task-panel" style="margin-top: 10px; display: none;">
-      <label>任务</label>
+      <label>Task</label>
       <select id="task-select"></select>
-      <label>场景</label>
+      <label>Scenario</label>
       <select id="config-select"></select>
       <label>seed</label>
-      <input id="seed-input" type="number" placeholder="自动">
-      <button id="btn-apply">切换任务</button>
-      <label style="opacity:.7">（切换需重建场景，约 10~30 秒）</label>
+      <input id="seed-input" type="number" placeholder="Auto">
+      <button id="btn-apply">Apply Configuration</button>
+      <span id="config-feedback" class="config-feedback">Apply the configuration after making changes</span>
+      <label style="opacity:.7">(Switching rebuilds the scene and takes about 10–30 seconds)</label>
     </div>
     <div class="cam-toggles">
 {toggles}
@@ -357,9 +485,9 @@ def render_index(cameras, title="LightX2V ROS", policy_cameras=None):
   <section class="task" id="task"><span>waiting for task description</span></section>
 
   <section class="panel">
-    <div class="stats" id="stats">暂无已完成的 episode</div>
+    <div class="stats" id="stats">No completed episodes yet</div>
     <table>
-      <thead><tr><th>Episode</th><th>任务</th><th>场景</th><th>Seed</th><th>结果</th><th>步数</th></tr></thead>
+      <thead><tr><th>Episode</th><th>Task</th><th>Scenario</th><th>Seed</th><th>Outcome</th><th>Steps</th></tr></thead>
       <tbody id="history-body"></tbody>
     </table>
   </section>

@@ -41,12 +41,15 @@ def _save_image_from_item(item: dict[str, Any], output_path: Path) -> Path:
 
 
 def run_generate(client: Any, args: argparse.Namespace) -> Path:
-    response = client.images.generate(
-        model=args.model,
-        prompt=args.prompt,
-        size=args.size,
-        response_format=args.response_format,
-    )
+    kwargs = {
+        "model": args.model,
+        "prompt": args.prompt,
+        "size": args.size,
+        "response_format": args.response_format,
+    }
+    if args.seed is not None:
+        kwargs["extra_body"] = {"seed": args.seed}
+    response = client.images.generate(**kwargs)
     item = _extract_data_item(response)
     # print(f"[generate] response item: {item}")
     return _save_image_from_item(item, Path(args.output_dir) / "generate.png")
@@ -94,6 +97,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=["generate", "edit", "all"], default="all", help="Test mode")
     parser.add_argument("--prompt", type=str, default="a futuristic city at sunset", help="Prompt for generation/edit")
     parser.add_argument("--size", type=str, default="1024x1024", help="Image size, e.g. 1024x1024")
+    parser.add_argument("--seed", type=int, default=42, help="Optional random seed")
     parser.add_argument("--response_format", choices=["url", "b64_json"], default="url", help="OpenAI response format")
     parser.add_argument("--image", type=str, default="", help="Input image path for edit mode. Use comma-separated paths for multiple images.")
     parser.add_argument("--mask", type=str, default="", help="Optional mask image path for edit mode")

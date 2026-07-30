@@ -133,6 +133,7 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             action_latents=getattr(self.scheduler, "action_latents", None),
             action_domain_id=getattr(self.scheduler, "action_domain_id", None),
             action_condition_frame_indexes=getattr(self.scheduler, "action_condition_frame_indexes", None),
+            action_start_frame_offset=getattr(self.scheduler, "action_start_frame_offset", 1),
             raw_action_dim=getattr(self.scheduler, "raw_action_dim", None),
         )
         if self.config["seq_parallel"]:

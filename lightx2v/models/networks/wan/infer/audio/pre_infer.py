@@ -189,9 +189,10 @@ class WanAudioPreInfer(WanPreInfer):
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
             self.grid_sizes = grid_sizes.tuple
             if self.task in ["rs2v"]:
-                self.cos_sin = self.init_rope_param(grid_sizes.tuple, valid_latent_num, ref_latent_num, prev_latent_num)
+                cos_sin = self.init_rope_param(grid_sizes.tuple, valid_latent_num, ref_latent_num, prev_latent_num)
             else:
-                self.cos_sin = self.init_rope_param(grid_sizes.tuple, valid_latent_num)
+                cos_sin = self.init_rope_param(grid_sizes.tuple, valid_latent_num)
+            self.cos_sin = self.prepare_rope_cache(cos_sin)
 
         return WanPreInferModuleOutput(
             embed=embed,
@@ -276,13 +277,18 @@ class WanAudioARPreInfer(WanSFPreInfer):
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:
             freqs = self.freqs.clone()
             self.grid_sizes = grid_sizes.tuple
-            self.cos_sin = self.prepare_cos_sin(grid_sizes.tuple, freqs)
+            self.cos_sin = self.prepare_rope_cache(self.prepare_cos_sin(grid_sizes.tuple, freqs))
 
         audio_encoder_output = inputs.get("audio_encoder_output")
         if audio_encoder_output is not None and not is_ref_prefill:
-            segment_idx = self.scheduler.seg_index
-            chunk_size = self.scheduler.chunk_size
-            audio_encoder_output = audio_encoder_output[:, segment_idx * chunk_size : segment_idx * chunk_size + grid_sizes_t]
+            if inputs.get("audio_encoder_output_is_chunk", False):
+                if audio_encoder_output.shape[1] < grid_sizes_t:
+                    raise ValueError(f"stream audio feature is too short: got {audio_encoder_output.shape[1]}, need {grid_sizes_t}")
+                audio_encoder_output = audio_encoder_output[:, :grid_sizes_t]
+            else:
+                segment_idx = self.scheduler.seg_index
+                chunk_size = self.scheduler.chunk_size
+                audio_encoder_output = audio_encoder_output[:, segment_idx * chunk_size : segment_idx * chunk_size + grid_sizes_t]
         elif is_ref_prefill:
             audio_encoder_output = None
 

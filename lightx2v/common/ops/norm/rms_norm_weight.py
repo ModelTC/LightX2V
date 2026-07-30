@@ -5,7 +5,12 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.norm.triton_ops import fused_norm_3drope, fused_qk_norm_3drope, rms_norm_kernel
+from lightx2v.common.ops.norm.triton_ops import (
+    fused_norm_3drope,
+    fused_qk_norm_3drope,
+    fused_qk_rms_norm,
+    rms_norm_kernel,
+)
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
@@ -19,11 +24,40 @@ except ImportError:
     is_arch_support_pdl = None
 
 try:
+    from flashinfer.norm import rmsnorm as flashinfer_rmsnorm
+except ImportError:
+    flashinfer_rmsnorm = None
+
+try:
     from magi_compiler import magi_register_custom_op
 except ImportError:
     magi_register_custom_op = None
 
 from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
+
+
+@torch.library.custom_op(
+    "lightx2v::rmsnorm_flashinfer",
+    mutates_args=(),
+    device_types="cuda",
+)
+def rmsnorm_flashinfer(
+    input_tensor: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+    enable_pdl: bool,
+) -> torch.Tensor:
+    return flashinfer_rmsnorm(input_tensor, weight, eps, enable_pdl=enable_pdl)
+
+
+@rmsnorm_flashinfer.register_fake
+def rmsnorm_flashinfer_fake(
+    input_tensor: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+    enable_pdl: bool,
+) -> torch.Tensor:
+    return torch.empty_like(input_tensor)
 
 
 class RMSWeightTemplate(metaclass=ABCMeta):
@@ -70,6 +104,8 @@ class RMSWeightTemplate(metaclass=ABCMeta):
     def _get_actual_weight(self):
         if not hasattr(self, "weight_diff"):
             return self.weight
+        if self.weight_diff.device != self.weight.device or self.weight_diff.dtype != self.weight.dtype:
+            self.weight_diff = self.weight_diff.to(device=self.weight.device, dtype=self.weight.dtype)
         return self.weight + self.weight_diff
 
     def register_diff(self, weight_dict):
@@ -186,6 +222,17 @@ class RMSWeight(RMSWeightTemplate):
         return input_tensor
 
 
+@RMS_WEIGHT_REGISTER("torch_native")
+class RMSWeightNative(RMSWeight):
+    def apply(self, input_tensor):
+        return torch.nn.functional.rms_norm(
+            input_tensor,
+            (input_tensor.shape[-1],),
+            weight=self._get_actual_weight(),
+            eps=self.eps,
+        )
+
+
 @RMS_WEIGHT_REGISTER("TensorParallel")
 class RMSWeightTP(RMSWeightTemplate):
     """
@@ -277,12 +324,12 @@ class RMSWeightSgl(RMSWeight):
             input_tensor = input_tensor.contiguous()
             orig_shape = input_tensor.shape
             input_tensor = input_tensor.view(-1, orig_shape[-1])
-            input_tensor = sgl_kernel.rmsnorm(
-                input_tensor,
-                self._get_actual_weight(),
-                self.eps,
-                enable_pdl=self.enable_pdl,
-            ).view(orig_shape)
+            weight = self._get_actual_weight()
+            if torch.compiler.is_compiling() and flashinfer_rmsnorm is not None and input_tensor.dtype in (torch.float16, torch.bfloat16):
+                input_tensor = rmsnorm_flashinfer(input_tensor, weight, self.eps, self.enable_pdl)
+            else:
+                input_tensor = sgl_kernel.rmsnorm(input_tensor, weight, self.eps, enable_pdl=self.enable_pdl)
+            input_tensor = input_tensor.view(orig_shape)
         else:
             # sgl_kernel is not available or dtype!=torch.bfloat16/float16, fallback to default implementation
             if self.sensitive_layer_dtype != self.infer_dtype:
@@ -433,6 +480,42 @@ class RMSWeightOnePass(RMSWeight):
         if use_magi_custom_ops() and magi_register_custom_op is not None:
             return torch.ops.lightx2v.rms_norm(input_tensor, w, self.eps)
         return rms_norm_kernel(input_tensor, w, self.eps)
+
+
+def apply_qk_rms_norm(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    norm_q,
+    norm_k,
+    *,
+    use_triton: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if norm_q is None and norm_k is None:
+        return query, key
+
+    if use_triton and norm_q is not None and norm_k is not None and norm_q.eps == norm_k.eps and query.is_cuda and key.is_cuda and query.shape[-1] == key.shape[-1]:
+        q_shape = query.shape
+        k_shape = key.shape
+        head_dim = q_shape[-1]
+        q_flat = query.reshape(-1, head_dim)
+        k_flat = key.reshape(-1, head_dim)
+        q_flat, k_flat = fused_qk_rms_norm(
+            q_flat,
+            k_flat,
+            norm_q._get_actual_weight(),
+            norm_k._get_actual_weight(),
+            norm_q.eps,
+            match_torch_rms_cast=True,
+        )
+        return q_flat.reshape(q_shape), k_flat.reshape(k_shape)
+
+    if norm_q is not None:
+        q_shape = query.shape
+        query = norm_q.apply(query.reshape(-1, q_shape[-1])).reshape(q_shape)
+    if norm_k is not None:
+        k_shape = key.shape
+        key = norm_k.apply(key.reshape(-1, k_shape[-1])).reshape(k_shape)
+    return query, key
 
 
 class RMSWeightFusedQKNorm3DRope:

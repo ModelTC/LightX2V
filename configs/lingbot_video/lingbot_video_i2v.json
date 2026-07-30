@@ -2,7 +2,7 @@
     "infer_steps": 40,
     "target_height": 480,
     "target_width": 832,
-    "target_video_length": 81,
+    "target_video_length": 121,
     "target_fps": 24,
     "sample_shift": 3.0,
     "sample_guide_scale": 3.0,

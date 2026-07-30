@@ -29,5 +29,5 @@
         },
         "kv_offload": false
     },
-    "causal_rope_type": "triton"
+    "causal_rope_type": "wan_causal_rope"
 }

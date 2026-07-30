@@ -1,10 +1,10 @@
 import importlib
+from collections.abc import MutableMapping
 
 
-class Register(dict):
+class Register(MutableMapping):
     def __init__(self, *args, **kwargs):
-        super(Register, self).__init__(*args, **kwargs)
-        self._dict = {}
+        self._dict = dict(*args, **kwargs)
 
     def __call__(self, target_or_name):
         if callable(target_or_name):
@@ -30,6 +30,15 @@ class Register(dict):
 
     def __getitem__(self, key):
         return self._dict[key]
+
+    def __delitem__(self, key):
+        del self._dict[key]
+
+    def __iter__(self):
+        return iter(self._dict)
+
+    def __len__(self):
+        return len(self._dict)
 
     def __contains__(self, key):
         return key in self._dict
@@ -75,6 +84,7 @@ _MODEL_MODULES = {
     "wan_t2v_ar": "lightx2v_train.model_zoo.wan_t2v",
     "wan_t2v_14b": "lightx2v_train.model_zoo.wan_t2v",
     "wan_t2v_14b_ar": "lightx2v_train.model_zoo.wan_t2v",
+    "wan_fastwam": "lightx2v_train.model_zoo.wan_fastwam",
     "wan_ti2v_5b": "lightx2v_train.model_zoo.wan_ti2v_5b",
     "wan_ti2v_5b_ar": "lightx2v_train.model_zoo.wan_ti2v_5b",
 }
@@ -82,6 +92,7 @@ _MODEL_MODULES = {
 _TRAINER_MODULES = {
     "dmd": "lightx2v_train.trainers.dmd.trainer",
     "dopsd": "lightx2v_train.trainers.dopsd",
+    "fastwam": "lightx2v_train.trainers.fastwam",
     "flow": "lightx2v_train.trainers.flow",
     "lingbot_video_dmd": "lightx2v_train.trainers.dmd.video_trainer",
     "ltx_t2av_ar_dmd": "lightx2v_train.trainers.dmd.ltx_trainer",
@@ -122,6 +133,8 @@ def _ensure_data_registered(data_name):
         return
     if data_name == "image_dataset":
         import lightx2v_train.data.image_dataset  # noqa: F401
+    elif data_name == "libero_fastwam_dataset":
+        import lightx2v_train.data.libero.dataset  # noqa: F401
     elif data_name in {"latent_dataset", "prompt_dataset", "video_dataset"}:
         import lightx2v_train.data.video_dataset  # noqa: F401
 

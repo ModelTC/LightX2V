@@ -1,5 +1,6 @@
 import gc
 import os
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -12,14 +13,53 @@ from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.networks.wan.lingbot_va_model import WanLingbotVAModel
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.wan.lingbot_va.scheduler import LingbotVAFlowMatchScheduler
+from lightx2v.models.video_encoders.hf.wan.vae_2_2 import count_conv3d, patchify
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
+from lightx2v.utils.input_info import I2VAInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
+
+
+class _StreamingVAEEncoder:
+    """Causal Wan VAE encoder state used by LingBot-VA closed-loop rollout.
+
+    The offline runner encodes one complete clip at a time.  A robot policy sees
+    only the new camera frames after executing each action chunk, so it must keep
+    the encoder's causal convolution state between calls.  Separate streams are
+    required for RoboTwin's full-resolution head camera and half-resolution wrist
+    camera batch.
+    """
+
+    def __init__(self, vae):
+        self.vae = vae
+        self.reset()
+
+    def reset(self):
+        self._feature_caches = {}
+
+    @torch.no_grad()
+    def encode_chunk(self, video, stream_name):
+        if self.vae.cpu_offload:
+            self.vae.to_cuda()
+        try:
+            encode_model = self.vae.encoder_model if self.vae.vae_type == "mg_lightvae" and self.vae.encoder_model is not None else self.vae.model
+            cache = self._feature_caches.get(stream_name)
+            if cache is None:
+                cache = [None] * count_conv3d(encode_model.encoder)
+                self._feature_caches[stream_name] = cache
+
+            video = patchify(video, patch_size=2)
+            encoded = encode_model.encoder(video, feat_cache=cache, feat_idx=[0])
+            mu, _ = encode_model.conv1(encoded).chunk(2, dim=1)
+            return (mu - self.vae.mean.view(1, -1, 1, 1, 1)) * self.vae.inv_std.view(1, -1, 1, 1, 1)
+        finally:
+            if self.vae.cpu_offload:
+                self.vae.to_cpu()
 
 
 @RUNNER_REGISTER("lingbot_va")
@@ -63,11 +103,6 @@ class LingbotVARunner(Wan22DenseRunner):
             raise ValueError("LingBot-VA requires ar_config.num_chunks.")
         return ar_config
 
-    def _cache_name_for_cfg_mode(self, enable_cfg):
-        if enable_cfg or not (self.use_cfg or self.use_action_cfg):
-            return self.cache_name
-        return self.model.cfg_cache_name(self.cache_name, True)
-
     def init_modules(self):
         super().init_modules()
         if self.config["task"] == "i2va":
@@ -83,10 +118,12 @@ class LingbotVARunner(Wan22DenseRunner):
             "image_encoder_output": None,
         }
 
-    def _encode_obs(self, obs):
+    def _encode_obs(self, obs, *, streaming=False):
         images = obs["obs"]
         if not isinstance(images, list):
             images = [images]
+        if not images:
+            raise ValueError("LingBot-VA observation history must not be empty.")
         videos = []
         for cam_idx, key in enumerate(self.config["obs_cam_keys"]):
             if self.config["env_type"] == "robotwin_tshape":
@@ -100,8 +137,12 @@ class LingbotVARunner(Wan22DenseRunner):
         if self.config["env_type"] == "robotwin_tshape":
             videos_high = videos[0] / 255.0 * 2.0 - 1.0
             videos_left_and_right = torch.cat(videos[1:], dim=0) / 255.0 * 2.0 - 1.0
-            enc_high = self.vae_encoder.encode(videos_high.to(AI_DEVICE).to(self.vae_encoder.dtype))
-            enc_left_right = self.vae_encoder.encode(videos_left_and_right.to(AI_DEVICE).to(self.vae_encoder.dtype))
+            if streaming:
+                enc_high = self._streaming_vae_encoder.encode_chunk(videos_high.to(AI_DEVICE).to(self.vae_encoder.dtype), "robotwin_high")
+                enc_left_right = self._streaming_vae_encoder.encode_chunk(videos_left_and_right.to(AI_DEVICE).to(self.vae_encoder.dtype), "robotwin_wrists")
+            else:
+                enc_high = self.vae_encoder.encode(videos_high.to(AI_DEVICE).to(self.vae_encoder.dtype))
+                enc_left_right = self.vae_encoder.encode(videos_left_and_right.to(AI_DEVICE).to(self.vae_encoder.dtype))
             if enc_high.dim() == 4:
                 enc_high = enc_high.unsqueeze(0)
             if enc_left_right.dim() == 4:
@@ -109,7 +150,10 @@ class LingbotVARunner(Wan22DenseRunner):
             enc_out = torch.cat([torch.cat(enc_left_right.split(1, dim=0), dim=-1), enc_high], dim=-2)
         else:
             videos_all = torch.cat(videos, dim=0) / 255.0 * 2.0 - 1.0
-            enc_out = self.vae_encoder.encode(videos_all.to(AI_DEVICE).to(self.vae_encoder.dtype))
+            if streaming:
+                enc_out = self._streaming_vae_encoder.encode_chunk(videos_all.to(AI_DEVICE).to(self.vae_encoder.dtype), "default")
+            else:
+                enc_out = self.vae_encoder.encode(videos_all.to(AI_DEVICE).to(self.vae_encoder.dtype))
             if enc_out.dim() == 4:
                 enc_out = enc_out.unsqueeze(0)
             enc_out = torch.cat(enc_out.split(1, dim=0), dim=-1)
@@ -124,8 +168,15 @@ class LingbotVARunner(Wan22DenseRunner):
         self.pred_latent_lst = []
         self.pred_action_lst = []
         self.init_obs = self._load_init_obs()
+        if getattr(self, "_online_policy_mode", False):
+            self._streaming_vae_encoder = _StreamingVAEEncoder(self.vae_encoder)
         self.use_cfg = self.config.get("enable_cfg", False)
         self.use_action_cfg = self.config.get("enable_action_cfg", False)
+        # Video and action tokens form one autoregressive history. When either
+        # branch uses classifier-free guidance, both modalities must update both
+        # cache branches; a guidance scale of 1 still returns the conditional
+        # prediction while keeping the unconditional history complete.
+        self.use_cache_cfg = self.use_cfg or self.use_action_cfg
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
@@ -152,7 +203,7 @@ class LingbotVARunner(Wan22DenseRunner):
         local_attn_size = ar_config.get("local_attn_size")
         if local_attn_size is None:
             raise ValueError("LingBot-VA requires ar_config.local_attn_size for FIFO KV cache sizing.")
-        cache_names = [self.model.cfg_cache_name(self.cache_name, True), self.model.cfg_cache_name(self.cache_name, False)] if self.use_cfg or self.use_action_cfg else [self.cache_name]
+        cache_names = [self.model.cfg_cache_name(self.cache_name, True), self.model.cfg_cache_name(self.cache_name, False)] if self.use_cache_cfg else [self.cache_name]
         kv_size = (local_attn_size // 2) * latent_token_per_chunk + (local_attn_size // 2) * action_token_per_chunk
         for cache_name in cache_names:
             kv_mgr.create_self_attn_kv_cache(
@@ -172,7 +223,7 @@ class LingbotVARunner(Wan22DenseRunner):
         self.negative_prompt_embeds = text_encoder_output.get("context_null")
         if self.negative_prompt_embeds is not None:
             self.negative_prompt_embeds = self.negative_prompt_embeds.to(AI_DEVICE)
-        elif self.use_cfg or self.use_action_cfg:
+        elif self.use_cache_cfg:
             raise ValueError("LingBot-VA CFG is enabled but text_encoder_output does not include context_null.")
 
     def init_run_segment(self, segment_idx):
@@ -205,7 +256,7 @@ class LingbotVARunner(Wan22DenseRunner):
                 )[None].to(AI_DEVICE),
                 "text_emb": self.prompt_embeds.to(GET_DTYPE()).clone(),
             }
-            if self.use_cfg:
+            if self.use_cache_cfg:
                 latent_res["negative_text_emb"] = self.negative_prompt_embeds.to(GET_DTYPE()).clone()
             if latent_cond is not None:
                 latent_res["noisy_latents"][:, :, 0:1] = latent_cond[:, :, 0:1]
@@ -227,7 +278,7 @@ class LingbotVARunner(Wan22DenseRunner):
                 )[None].to(AI_DEVICE),
                 "text_emb": self.prompt_embeds.to(GET_DTYPE()).clone(),
             }
-            if self.use_action_cfg:
+            if self.use_cache_cfg:
                 action_res["negative_text_emb"] = self.negative_prompt_embeds.to(GET_DTYPE()).clone()
             if action_cond is not None:
                 action_res["noisy_latents"][:, :, 0:1] = action_cond[:, :, 0:1]
@@ -252,8 +303,8 @@ class LingbotVARunner(Wan22DenseRunner):
             {
                 "action_mode": False,
                 "update_cache": 1 if scheduler.last_step else 0,
-                "cache_name": self._cache_name_for_cfg_mode(self.use_cfg),
-                "enable_cfg": self.use_cfg,
+                "cache_name": self.cache_name,
+                "enable_cfg": self.use_cache_cfg,
                 "guide_scale": self.config["sample_guide_scale"],
             }
         )
@@ -276,8 +327,8 @@ class LingbotVARunner(Wan22DenseRunner):
             {
                 "action_mode": True,
                 "update_cache": 1 if scheduler.last_step else 0,
-                "cache_name": self._cache_name_for_cfg_mode(self.use_action_cfg),
-                "enable_cfg": self.use_action_cfg,
+                "cache_name": self.cache_name,
+                "enable_cfg": self.use_cache_cfg,
                 "guide_scale": self.config["action_sample_guide_scale"],
             }
         )
@@ -326,7 +377,7 @@ class LingbotVARunner(Wan22DenseRunner):
         num_frame_per_chunk = self.num_frame_per_chunk
         init_latent = None
         if self.frame_st_id == 0:
-            init_latent = self._encode_obs(self.init_obs)
+            init_latent = self._encode_obs(self.init_obs, streaming=getattr(self, "_online_policy_mode", False))
             self.init_latent = init_latent
 
         latent_shape = (
@@ -381,6 +432,14 @@ class LingbotVARunner(Wan22DenseRunner):
         return self._postprocess_action(actions), latents
 
     def _load_init_obs(self):
+        policy_image = getattr(self.input_info, "policy_image", None)
+        if policy_image is not None:
+            if not isinstance(policy_image, dict):
+                raise TypeError("LingBot-VA policy_image must be an observation dictionary.")
+            if "obs" in policy_image:
+                return policy_image
+            return {"obs": [policy_image]}
+
         image_path = getattr(self.input_info, "image_path", "")
         if not image_path:
             raise ValueError("LingBot-VA requires image_path from input_info.")
@@ -458,6 +517,75 @@ class LingbotVARunner(Wan22DenseRunner):
         torch_device_module.empty_cache()
         gc.collect()
 
+    def _preprocess_online_action(self, action):
+        """Map an environment action chunk back into the model's 30 channels."""
+        action = torch.as_tensor(action, dtype=torch.float32, device=AI_DEVICE)
+        if action.ndim != 3:
+            raise ValueError(f"LingBot-VA action chunk must be [C,F,H], got {tuple(action.shape)}")
+        used_channels = len(self.config["used_action_channel_ids"])
+        if action.shape[0] != used_channels:
+            raise ValueError(f"LingBot-VA action chunk has {action.shape[0]} channels, expected {used_channels}.")
+
+        # The inverse map uses one sentinel channel for every unused model channel.
+        action = F.pad(action, (0, 0, 0, 0, 0, 1), mode="constant", value=0)
+        action = action[self.config["inverse_used_action_channel_ids"]]
+        action = (action - self.actions_q01) / (self.actions_q99 - self.actions_q01 + 1e-6) * 2.0 - 1.0
+        return action.to(GET_DTYPE()).unsqueeze(0).unsqueeze(-1)
+
+    @torch.no_grad()
+    def update_online_cache(self, observation_history, action):
+        """Replace the last predicted cache entries with real rollout history."""
+        if not observation_history:
+            raise ValueError("LingBot-VA needs real key-frame observations before updating its cache.")
+        previous_frame_st_id = self.frame_st_id
+        self.model.clear_pred_cache(self.cache_name)
+
+        latent_model_input = self._encode_obs({"obs": observation_history}, streaming=True)
+        if self.frame_st_id == 0:
+            latent_model_input = torch.cat([self.init_latent, latent_model_input], dim=2)
+        if latent_model_input.shape[2] != self.num_frame_per_chunk:
+            raise ValueError(f"LingBot-VA real observation history encoded to {latent_model_input.shape[2]} latent frames; expected {self.num_frame_per_chunk}. Check the action/key-frame cadence.")
+
+        action_model_input = self._preprocess_online_action(action).to(latent_model_input)
+        input_dict = self._prepare_model_input(
+            latent_model_input,
+            action_model_input,
+            frame_st_id=self.frame_st_id,
+        )
+        latent_inputs = input_dict["latent_res_lst"]
+        action_inputs = input_dict["action_res_lst"]
+        self.model.infer_latent(
+            latent_inputs,
+            update_cache=2,
+            cache_name=self.cache_name,
+            enable_cfg=self.use_cache_cfg,
+            guide_scale=self.config["sample_guide_scale"],
+        )
+        self.model.infer_action(
+            action_inputs,
+            update_cache=2,
+            cache_name=self.cache_name,
+            enable_cfg=self.use_cache_cfg,
+            guide_scale=self.config["action_sample_guide_scale"],
+        )
+        self.frame_st_id += int(latent_model_input.shape[2])
+        logger.info(
+            "LingBot-VA refreshed online cache: real_keyframes={} latent_frames={} frame_st_id={} -> {}",
+            len(observation_history),
+            latent_model_input.shape[2],
+            previous_frame_st_id,
+            self.frame_st_id,
+        )
+
+    def reset_online_state(self):
+        self.model.clear_cache(self.cache_name)
+        if hasattr(self, "_streaming_vae_encoder"):
+            self._streaming_vae_encoder.reset()
+        self.scheduler.clear()
+        self.action_scheduler.clear()
+        self.scheduler.generator = None
+        self.action_scheduler.generator = None
+
     def _run_pipeline_local(self):
         if self.config["use_prompt_enhancer"]:
             self.input_info.prompt_enhanced = self.post_prompt_enhancer()
@@ -474,3 +602,127 @@ class LingbotVARunner(Wan22DenseRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
         return gen_video_final
+
+
+class LingbotVAPolicy:
+    """Stateful LingBot-VA adapter for closed-loop robot control.
+
+    It mirrors the released evaluation protocol: generate one joint video/action
+    chunk, execute its actions, sample real camera frames at the Wan VAE cadence,
+    and replace predicted KV entries with the real image/action history.
+    """
+
+    CAMERA_NAMES = {
+        "libero": ("agentview", "wrist"),
+        "robotwin": ("head_camera", "left_camera", "right_camera"),
+    }
+
+    def __init__(self, runner, policy_profile):
+        self.runner = runner
+        self.policy_profile = str(policy_profile).strip().lower()
+        if self.policy_profile not in self.CAMERA_NAMES:
+            raise ValueError(f"Unsupported LingBot-VA policy_profile: {policy_profile!r}")
+        if len(self.CAMERA_NAMES[self.policy_profile]) != len(self.runner.config["obs_cam_keys"]):
+            raise ValueError("LingBot-VA camera profile does not match config obs_cam_keys.")
+        self.output_action_dim = len(self.runner.config["used_action_channel_ids"])
+        self.temporal_stride = int(self.runner.config["vae_stride"][0])
+        self.actions_per_frame = int(self.runner.config["ar_config"]["num_action_per_frame"])
+        if self.actions_per_frame % self.temporal_stride:
+            raise ValueError("LingBot-VA num_action_per_frame must be divisible by the VAE temporal stride.")
+        self.keyframe_interval = self.actions_per_frame // self.temporal_stride
+        self.reset()
+
+    @classmethod
+    def from_config(cls, config, policy_profile=None):
+        runner = LingbotVARunner(config)
+        runner.init_modules()
+        profile = policy_profile or config.get("policy_profile") or ("robotwin" if config.get("env_type") == "robotwin_tshape" else "libero")
+        return cls(runner, profile)
+
+    def reset(self):
+        if getattr(self, "_episode_started", False):
+            self.runner.reset_online_state()
+        self.pending_actions = deque()
+        self._episode_started = False
+        self._task_description = None
+        self._seed = 0
+        self._awaiting_observation = False
+        self._executed_actions = 0
+        self._real_observation_history = []
+        self._last_action_chunk = None
+
+    def _format_observation(self, images):
+        observation = {}
+        for camera, key in zip(self.CAMERA_NAMES[self.policy_profile], self.runner.config["obs_cam_keys"]):
+            image = images.get(camera)
+            if image is None:
+                raise KeyError(f"LingBot-VA profile '{self.policy_profile}' requires camera '{camera}'.")
+            image = np.asarray(image)
+            if image.ndim != 3 or image.shape[2] != 3:
+                raise ValueError(f"LingBot-VA camera '{camera}' must be HxWx3 RGB, got {image.shape}.")
+            observation[key] = np.ascontiguousarray(image.astype(np.uint8, copy=False))
+        return observation
+
+    def _start_episode(self, images, task_description, seed):
+        initial_observation = self._format_observation(images)
+        input_info = I2VAInputInfo(
+            seed=int(seed),
+            prompt=str(task_description),
+            negative_prompt="",
+            policy_image=initial_observation,
+        )
+        self.runner.input_info = input_info
+        self.runner.inputs = self.runner._run_input_encoder_local_i2va()
+        self.runner._online_policy_mode = True
+        self.runner.init_run()
+        self._episode_started = True
+        self._task_description = str(task_description)
+        self._seed = int(seed)
+
+    def _record_last_action_observation(self, images):
+        if not self._awaiting_observation:
+            return
+        self._awaiting_observation = False
+        self._executed_actions += 1
+        if self._executed_actions % self.keyframe_interval == 0:
+            self._real_observation_history.append(self._format_observation(images))
+
+    def _plan(self):
+        if self._last_action_chunk is not None:
+            self.runner.update_online_cache(self._real_observation_history, self._last_action_chunk)
+            self._real_observation_history = []
+            self._executed_actions = 0
+
+        first_chunk = self.runner.frame_st_id == 0
+        action_chunk, _ = self.runner.run_segment()
+        self._last_action_chunk = action_chunk
+        start_frame = 1 if first_chunk else 0
+        executable = action_chunk[:, start_frame:, :].transpose(1, 2, 0).reshape(-1, self.output_action_dim)
+        if executable.shape[0] == 0:
+            raise RuntimeError("LingBot-VA produced an empty executable action chunk.")
+        self.pending_actions.extend(np.asarray(action, dtype=np.float32) for action in executable)
+        logger.info(
+            "LingBot-VA generated action chunk: first_chunk={} queued_actions={}",
+            first_chunk,
+            len(executable),
+        )
+
+    def next_action(self, images, task_description, seed=0):
+        task_description = str(task_description).strip()
+        if not task_description:
+            raise ValueError("LingBot-VA requires a non-empty task description.")
+        if self._episode_started and task_description != self._task_description:
+            self.reset()
+        if not self._episode_started:
+            self._start_episode(images, task_description, seed)
+        else:
+            self._record_last_action_observation(images)
+
+        if not self.pending_actions:
+            self._plan()
+        action = self.pending_actions.popleft()
+        self._awaiting_observation = True
+        return action
+
+    def close(self):
+        self.reset()

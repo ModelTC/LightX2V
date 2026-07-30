@@ -24,5 +24,5 @@ class WanInfiniteTalkPreWeights(WanPreWeights):
         if config.get("norm_output_audio", True):
             self.add_module(
                 "audio_proj_norm",
-                LN_WEIGHT_REGISTER["torch"]("audio_proj.norm.weight", "audio_proj.norm.bias"),
+                LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]("audio_proj.norm.weight", "audio_proj.norm.bias"),
             )

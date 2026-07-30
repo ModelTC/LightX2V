@@ -1,8 +1,11 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
 )
 
 
@@ -260,6 +263,10 @@ class ZImageAttention(WeightModule):
         self.config = config
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.rms_norm_type = config.get("rms_norm_type", "one-pass")
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file

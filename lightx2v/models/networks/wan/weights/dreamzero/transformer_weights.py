@@ -2,9 +2,10 @@ import torch
 
 from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.common.ops.attn.flash_attn import flash_attn_varlen_func_v2, flash_attn_varlen_func_v3
+from lightx2v.models.networks.wan.infer.dreamzero.transformer_infer import DreamZeroRope  # noqa: F401
 from lightx2v.models.networks.wan.weights.dreamzero.pre_weights import DreamZeroCategoryLinearWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import WanTransformerWeights
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 @ATTN_WEIGHT_REGISTER("dreamzero_fa2")
@@ -163,6 +164,11 @@ class DreamZeroActionDecoderWeights(WeightModule):
 class DreamZeroTransformerWeights(WanTransformerWeights):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__(config, lazy_load_path=lazy_load_path, lora_path=lora_path)
+        for phase in self.iter_self_attention_phases():
+            phase.add_module(
+                "dreamzero_rope",
+                ROPE_REGISTER[config.get("dreamzero_rope_type", "dreamzero_rope")](layout="interleaved", compute_dtype=torch.float32),
+            )
         for block in self.blocks:
             self._ensure_image_cross_attn(block.compute_phases[1])
         if getattr(self, "offload_block_cuda_buffers", None) is not None:

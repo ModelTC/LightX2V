@@ -2,7 +2,6 @@ import importlib
 
 from lightx2v_train.utils.registry import build_model
 
-
 _LAZY_EXPORTS = {
     "Flux2DevModel": (".flux2_dev", "Flux2DevModel"),
     "Flux2KleinModel": (".flux2_klein", "Flux2KleinModel"),
@@ -11,6 +10,7 @@ _LAZY_EXPORTS = {
     "LTX2T2AVModel": (".ltx_t2av", "LTX2T2AVModel"),
     "QwenImageModel": (".qwen_image", "QwenImageModel"),
     "QwenImageEditModel": (".qwen_image_edit", "QwenImageEditModel"),
+    "WanFastWAMModel": (".wan_fastwam", "WanFastWAMModel"),
     "WanT2VModel": (".wan_t2v", "WanT2VModel"),
     "WanTI2V5BModel": (".wan_ti2v_5b", "WanTI2V5BModel"),
 }
@@ -36,4 +36,5 @@ __all__ = [
     "LTX2T2AVModel",
     "WanT2VModel",
     "WanTI2V5BModel",
+    "WanFastWAMModel",
 ]

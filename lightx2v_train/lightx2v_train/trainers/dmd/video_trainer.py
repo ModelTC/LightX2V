@@ -399,6 +399,10 @@ class VideoDmdTrainer(DmdTrainer):
             current_iter += 1
             display_fake = reduce_mean(loss_fake_value)
             display_dmd = reduce_mean(loss_dmd_value) if loss_dmd_value is not None else None
+            display_div = reduce_mean(loss_div_value)
+            display_real_dmd = reduce_mean(loss_real_dmd_value)
+            display_fake_real = reduce_mean(loss_fake_real_value)
+            current_lr = self.lr_scheduler.get_last_lr()[0]
             if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
                 dmd_text = "nan" if display_dmd is None else f"{display_dmd:.6f}"
                 logger.info(
@@ -408,12 +412,22 @@ class VideoDmdTrainer(DmdTrainer):
                     current_iter,
                     max_train_iters,
                     dmd_text,
-                    reduce_mean(loss_div_value),
-                    reduce_mean(loss_real_dmd_value),
+                    display_div,
+                    display_real_dmd,
                     display_fake,
-                    reduce_mean(loss_fake_real_value),
-                    self.lr_scheduler.get_last_lr()[0],
+                    display_fake_real,
+                    current_lr,
                 )
+                metrics = {
+                    "train/div_loss": display_div,
+                    "train/real_dmd": display_real_dmd,
+                    "train/fake": display_fake,
+                    "train/fake_real": display_fake_real,
+                    "train/lr": current_lr,
+                }
+                if display_dmd is not None:
+                    metrics["train/dmd"] = display_dmd
+                self.log_metrics(metrics, step=current_iter)
 
             if save_every_iters and current_iter % save_every_iters == 0:
                 self.save_checkpoint(current_iter, save_total_limit)

@@ -3,7 +3,6 @@ from .dynamic_sparse_attn import DynamicSparseAttnWeight
 from .flash_attn import FlashAttn2Weight, FlashAttn3Weight, FlashAttn4Weight, SparseFlashAttn4Weight
 from .general_sparse_attn import GeneralSparseAttnWeight
 from .nbhd_attn import NbhdAttnWeight, NbhdAttnWeightFlashInfer
-from .opt_ulysses_attn import OptUlyssesAttnWeight
 from .radial_attn import RadialAttnWeight
 from .rainfusion_attn import RainfusionAttnWeight
 from .ring_attn import RingAttnWeight
@@ -14,4 +13,4 @@ from .sparse_operator import FlashinferOperator, FlexBlockOperator, MagiOperator
 from .svg2_attn import Svg2AttnWeight
 from .svg_attn import SvgAttnWeight
 from .torch_sdpa import TorchSDPAWeight
-from .ulysses_attn import Ulysses4090AttnWeight, UlyssesAttnWeight
+from .ulysses_attn import UlyssesAttnWeight

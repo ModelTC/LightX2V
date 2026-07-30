@@ -61,8 +61,9 @@ class BaseRunner(ABC):
             cls.init_modules = init_modules
 
     def warmup(self):
-        """Optional post-initialization warmup hook."""
-        pass
+        """Reject explicit warmup when a runner has no implementation."""
+        if self.config.get("warmup", False):
+            raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
 
     def _maybe_freeze_gc(self):
         """Move the steady-state object graph into the GC's permanent generation once."""
@@ -363,8 +364,4 @@ class BaseRunner(ABC):
                 print(f"end_run failed: {e}")
             raise Exception(f"find rank: {rank} stop_signal, stop running, it's an expected behavior")
         if paused == 1:
-            try:
-                self.end_run()
-            except Exception as e:
-                print(f"end_run failed: {e}")
             raise Exception(f"find rank: {rank} pause_signal, pause running, it's an expected behavior")

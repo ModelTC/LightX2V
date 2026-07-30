@@ -118,7 +118,10 @@ class Hunyuan3DImagePreprocessor:
 
     def __init__(self, enable_rembg: bool = True):
         self.enable_rembg = enable_rembg
-        self.rembg = BackgroundRemover() if enable_rembg else None
+        # rembg is an optional CPU/ONNX dependency. Initialize it only when an
+        # RGB input actually needs background removal; RGBA inputs already carry
+        # the alpha mask and should not require rembg just because the flag is on.
+        self.rembg = None
 
     def __call__(self, image_path: str) -> Image.Image:
         image = Image.open(image_path)

@@ -1,166 +1,112 @@
 import torch
 import torch.distributed as dist
 
-try:
-    from flashinfer.rope import apply_rope_with_cos_sin_cache_inplace
-except ImportError:
-    apply_rope_with_cos_sin_cache_inplace = None
-
+from lightx2v.common.ops.rope import RopeTemplate, TorchComplexRope
 from lightx2v.utils.envs import *
+from lightx2v.utils.registry_factory import ROPE_REGISTER
 
 
-# FlashInfer's Python wrapper performs JIT/cache bookkeeping that Dynamo cannot
-# trace. Keep it behind an opaque, in-place torch operator while compiling.
-@torch.library.custom_op(
-    "lightx2v::wan_rope_flashinfer_",
-    mutates_args=("query", "key"),
-    device_types="cuda",
-    schema=("(Tensor positions, Tensor(a!) query, Tensor(b!) key, Tensor cos_sin_cache, int head_size) -> ()"),
-)
-def wan_rope_flashinfer_(
-    positions: torch.Tensor,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-    head_size: int,
-) -> None:
-    apply_rope_with_cos_sin_cache_inplace(
-        positions=positions,
-        query=query,
-        key=key,
-        head_size=head_size,
-        cos_sin_cache=cos_sin_cache,
-        is_neox=False,
-    )
+@ROPE_REGISTER("wan_causal_rope")
+class WanCausalRope(RopeTemplate):
+    def __init__(self, layout="interleaved", compute_dtype=torch.float64):
+        super().__init__(layout=layout, compute_dtype=compute_dtype)
+        if layout != "interleaved":
+            raise ValueError("WanCausalRope only supports interleaved layout.")
+        self.torch_rope = TorchComplexRope(compute_dtype=compute_dtype)
 
-
-@wan_rope_flashinfer_.register_fake
-def wan_rope_flashinfer_fake(
-    positions: torch.Tensor,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-    head_size: int,
-) -> None:
-    return None
-
-
-def apply_wan_rope_with_torch(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-):
-    n = xq.size(1)
-    seq_len = cos_sin_cache.size(0)
-
-    xq = torch.view_as_complex(xq[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2))
-    xk = torch.view_as_complex(xk[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2))
-    # Apply rotary embedding
-    xq = torch.view_as_real(xq * cos_sin_cache).flatten(2)
-    xk = torch.view_as_real(xk * cos_sin_cache).flatten(2)
-    xq = torch.cat([xq, xq[seq_len:]])
-    xk = torch.cat([xk, xk[seq_len:]])
-
-    return xq.to(GET_DTYPE()), xk.to(GET_DTYPE())
-
-
-def apply_wan_rope_with_torch_naive(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-):
-    n = xq.size(1)
-    seq_len = cos_sin_cache.size(0)
-    total_len = xq.size(0)
-
-    cos = cos_sin_cache.real.expand(-1, n, -1)
-    sin = cos_sin_cache.imag.expand(-1, n, -1)
-
-    def _rotate_part(x_part: torch.Tensor):
-        x_even = x_part[..., 0::2]
-        x_odd = x_part[..., 1::2]
-
-        x_rot_even = x_even * cos - x_odd * sin
-        x_rot_odd = x_even * sin + x_odd * cos
-
-        x_part[..., 0::2] = x_rot_even
-        x_part[..., 1::2] = x_rot_odd
-
-    # Q
-    xq_part = xq[:seq_len]
-    _rotate_part(xq_part)
-
-    # K
-    xk_part = xk[:seq_len]
-    _rotate_part(xk_part)
-
-    if seq_len < total_len:
-        xq_out = torch.cat([xq_part, xq[seq_len:]], dim=0)
-        xk_out = torch.cat([xk_part, xk[seq_len:]], dim=0)
-    else:
-        xq_out = xq_part
-        xk_out = xk_part
-
-    return xq_out.to(GET_DTYPE()), xk_out.to(GET_DTYPE())
-
-
-def apply_wan_rope_with_chunk(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-    chunk_size: int,
-    rope_func,
-):
-    seq_len = cos_sin_cache.size(0)
-    x_q = torch.empty_like(xq)
-    x_k = torch.empty_like(xk)
-
-    for start in range(0, seq_len, chunk_size):
-        end = min(start + chunk_size, seq_len)
-        xq_chunk = xq[start:end]
-        xk_chunk = xk[start:end]
-        cos_sin_chunk = cos_sin_cache[start:end]
-        xq_chunk_out, xk_chunk_out = rope_func(xq_chunk, xk_chunk, cos_sin_chunk)
-        x_q[start:end].copy_(xq_chunk_out, non_blocking=True)
-        x_k[start:end].copy_(xk_chunk_out, non_blocking=True)
-        del xq_chunk_out, xk_chunk_out
-
-    target_dtype = GET_DTYPE()
-    if x_q.dtype != target_dtype:
-        x_q = x_q.to(target_dtype)
-    if x_k.dtype != target_dtype:
-        x_k = x_k.to(target_dtype)
-
-    return x_q, x_k
-
-
-def apply_wan_rope_with_flashinfer(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    cos_sin_cache: torch.Tensor,
-):
-    L, H, D = xq.shape
-
-    query = xq.reshape(L, H * D).contiguous()
-    key = xk.reshape(L, H * D).contiguous()
-
-    positions = torch.arange(L, device=xq.device, dtype=torch.long)
-
-    if torch.compiler.is_compiling():
-        wan_rope_flashinfer_(positions, query, key, cos_sin_cache, D)
-    else:
-        apply_rope_with_cos_sin_cache_inplace(
-            positions=positions,
-            query=query,
-            key=key,
-            head_size=D,
-            cos_sin_cache=cos_sin_cache,
-            is_neox=False,
+    def apply(self, q, k, freqs, grid_sizes=None, start_frame=0, **kwargs):
+        if grid_sizes is None:
+            return self.torch_rope.apply(q, k, freqs, **kwargs)
+        return (
+            self.apply_single(q, freqs, grid_sizes=grid_sizes, start_frame=start_frame),
+            self.apply_single(k, freqs, grid_sizes=grid_sizes, start_frame=start_frame),
         )
 
-    xq_out = query.view(L, H, D)
-    xk_out = key.view(L, H, D)
-    return xq_out, xk_out
+    def apply_single(self, x, freqs, grid_sizes=None, start_frame=0, **kwargs):
+        if grid_sizes is None:
+            return self.torch_rope.apply_single(x, freqs, **kwargs)
+        if x.is_cuda:
+            from lightx2v.models.networks.wan.infer.triton_ops import causal_rope_apply_triton
+
+            return causal_rope_apply_triton(x, grid_sizes, freqs, start_frame=start_frame)
+        c = x.size(3) // 2
+        freq_parts = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+        output = []
+        for i, (frames, height, width) in enumerate(grid_sizes.tolist()):
+            seq_len = frames * height * width
+            pos_freqs = torch.cat(
+                [
+                    freq_parts[0][start_frame : start_frame + frames].view(frames, 1, 1, -1).expand(frames, height, width, -1),
+                    freq_parts[1][:height].view(1, height, 1, -1).expand(frames, height, width, -1),
+                    freq_parts[2][:width].view(1, 1, width, -1).expand(frames, height, width, -1),
+                ],
+                dim=-1,
+            ).reshape(seq_len, 1, -1)
+            output.append(self.torch_rope.apply_single(x[i], pos_freqs))
+        return torch.stack(output).type_as(x)
+
+    def apply_audio_cache(
+        self,
+        x,
+        freqs,
+        *,
+        h,
+        w,
+        token_start,
+        token_end,
+        ref_tokens,
+        local_per_frame,
+        world_size=1,
+        rank=0,
+        global_end=None,
+        sink_tokens=0,
+    ):
+        if x.is_cuda:
+            from lightx2v.models.networks.wan.infer.triton_ops import apply_audio_cache_rope
+
+            return apply_audio_cache_rope(
+                x,
+                freqs,
+                h=h,
+                w=w,
+                token_start=token_start,
+                ref_tokens=ref_tokens,
+                local_per_frame=local_per_frame,
+                world_size=world_size,
+                rank=rank,
+                global_end=global_end,
+                sink_tokens=sink_tokens,
+            ).to(x.dtype)
+
+        c = x.size(-1) // 2
+        temporal_dim = c - 2 * (c // 3)
+        freq_parts = freqs.split([temporal_dim, c // 3, c // 3], dim=1)
+        spatial = torch.cat(
+            [
+                freq_parts[1][:h].view(h, 1, -1).expand(h, w, -1),
+                freq_parts[2][:w].view(1, w, -1).expand(h, w, -1),
+            ],
+            dim=-1,
+        ).reshape(h * w, -1)
+        if world_size > 1:
+            padding = (world_size - spatial.size(0) % world_size) % world_size
+            if padding:
+                spatial = torch.cat([spatial, torch.ones(padding, spatial.size(1), dtype=spatial.dtype, device=spatial.device)], dim=0)
+            spatial = torch.chunk(spatial, world_size, dim=0)[rank][:local_per_frame]
+
+        positions = torch.arange(token_start, token_end, device=freqs.device, dtype=torch.long)
+        if global_end is not None:
+            recent_local = max(0, token_end - int(sink_tokens))
+            recent_start = int(global_end) - recent_local
+            recent = recent_start + positions - int(sink_tokens)
+            positions = torch.where(positions < int(sink_tokens), positions, recent)
+        is_ref = positions < ref_tokens
+        gen_idx = torch.clamp(positions - ref_tokens, min=0)
+        ref_frames = ref_tokens // local_per_frame
+        frame_idx = torch.where(is_ref, positions // local_per_frame, ref_frames + gen_idx // local_per_frame)
+        spatial_idx = torch.where(is_ref, positions % local_per_frame, gen_idx % local_per_frame)
+        pos_freqs = torch.cat([freq_parts[0][frame_idx], spatial[spatial_idx]], dim=-1).unsqueeze(1)
+        return self.torch_rope.apply_single(x, pos_freqs.to(torch.complex64)).to(x.dtype)
 
 
 def compute_freqs(c, grid_sizes, freqs):
@@ -224,50 +170,6 @@ def pad_freqs(original_tensor, target_len):
     return padded_tensor
 
 
-def apply_rotary_emb(x, freqs_i):
-    n = x.size(1)
-    seq_len = freqs_i.size(0)
-
-    x_i = torch.view_as_complex(x[:seq_len].to(torch.float32).reshape(seq_len, n, -1, 2))
-    # Apply rotary embedding
-    x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-    x_i = torch.cat([x_i, x[seq_len:]])
-    return x_i.to(GET_DTYPE())
-
-
-def apply_rotary_emb_chunk(x, freqs_i, chunk_size, remaining_chunk_size=100):
-    n = x.size(1)
-    seq_len = freqs_i.size(0)
-
-    output_chunks = []
-    for start in range(0, seq_len, chunk_size):
-        end = min(start + chunk_size, seq_len)
-        x_chunk = x[start:end]
-        freqs_chunk = freqs_i[start:end]
-
-        x_chunk_complex = torch.view_as_complex(x_chunk.to(torch.float32).reshape(end - start, n, -1, 2))
-        x_chunk_embedded = torch.view_as_real(x_chunk_complex * freqs_chunk).flatten(2).to(GET_DTYPE())
-        output_chunks.append(x_chunk_embedded)
-        del x_chunk_complex, x_chunk_embedded
-        torch.cuda.empty_cache()
-
-    result = []
-    for chunk in output_chunks:
-        result.append(chunk)
-    del output_chunks
-    torch.cuda.empty_cache()
-
-    for start in range(seq_len, x.size(0), remaining_chunk_size):
-        end = min(start + remaining_chunk_size, x.size(0))
-        result.append(x[start:end])
-
-    x_i = torch.cat(result, dim=0)
-    del result
-    torch.cuda.empty_cache()
-
-    return x_i.to(GET_DTYPE())
-
-
 def rope_params(max_seq_len, dim, theta=10000):
     assert dim % 2 == 0
     freqs = torch.outer(
@@ -316,21 +218,3 @@ def guidance_scale_embedding(w, embedding_dim=256, cfg_range=(1.0, 6.0), target_
         emb = torch.nn.functional.pad(emb, (0, 1).to(w.device))
     assert emb.shape == (w.shape[0], embedding_dim)
     return emb
-
-
-def causal_rope_apply(x, grid_sizes, freqs, start_frame=0):
-    n, c = x.size(2), x.size(3) // 2
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-    output = []
-
-    for i, (f, h, w) in enumerate(grid_sizes.tolist()):
-        seq_len = f * h * w
-        x_i = torch.view_as_complex(x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2))
-        freqs_i = torch.cat(
-            [freqs[0][start_frame : start_frame + f].view(f, 1, 1, -1).expand(f, h, w, -1), freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1), freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)],
-            dim=-1,
-        ).reshape(seq_len, 1, -1)
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
-        output.append(x_i)
-    return torch.stack(output).type_as(x)

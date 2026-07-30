@@ -437,6 +437,14 @@ class DopsdTrainer(BaseTrainer):
                         current_lr,
                         current_ema_decay,
                     )
+                    self.log_metrics(
+                        {
+                            "train/loss_dopsd": display_loss,
+                            "train/lr": current_lr,
+                            "train/ema_decay": current_ema_decay,
+                        },
+                        step=current_iter,
+                    )
                 running_loss = 0.0
 
                 if should_save_trajectory:

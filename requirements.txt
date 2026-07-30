@@ -17,6 +17,9 @@ imageio
 imageio-ffmpeg
 einops
 loguru
+omegaconf
+peft
+swanlab
 langdetect>=1.0.9
 sgl-kernel
 qtorch

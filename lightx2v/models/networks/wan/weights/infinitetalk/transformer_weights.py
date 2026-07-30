@@ -1,6 +1,8 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.wan.weights.transformer_weights import WanCrossAttention, WanFFN, WanSelfAttention
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, TENSOR_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, ROPE_REGISTER, TENSOR_REGISTER
 
 
 class WanInfiniteTalkTransformerWeights(WeightModule):
@@ -29,7 +31,7 @@ class WanInfiniteTalkTransformerWeights(WeightModule):
         self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.add_module("blocks", self.blocks)
 
-        self.register_parameter("norm", LN_WEIGHT_REGISTER["torch"]())
+        self.register_parameter("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
         self.add_module(
             "head",
             MM_WEIGHT_REGISTER["Default"](
@@ -185,8 +187,12 @@ class WanInfiniteTalkAudioCrossAttention(WeightModule):
         self.block_index = block_index
         self.config = config
         self.add_module(
+            "rope_1d",
+            ROPE_REGISTER[config.get("audio_rope_type", "torch_real_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
+        self.add_module(
             "norm_x",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 f"{block_prefix}.{block_index}.norm_x.weight",
                 f"{block_prefix}.{block_index}.norm_x.bias",
                 create_cuda_buffer,

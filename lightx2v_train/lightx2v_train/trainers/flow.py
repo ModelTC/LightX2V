@@ -120,6 +120,17 @@ class FlowMatchingTrainer(BaseTrainer):
                         logger.info("[train] iter={}/{} loss={:.6f} {} lr={:.8f}", current_iter, max_train_iters, display_loss, metric_text, current_lr)
                     else:
                         logger.info("[train] iter={}/{} loss={:.6f} lr={:.8f}", current_iter, max_train_iters, display_loss, current_lr)
+                    logged_metrics = {
+                        "train/loss": display_loss,
+                        "train/lr": current_lr,
+                    }
+                    logged_metrics.update(
+                        {
+                            f"train/{name}": value
+                            for name, value in display_metrics.items()
+                        }
+                    )
+                    self.log_metrics(logged_metrics, step=current_iter)
                 running_loss = 0.0
                 running_metrics = {}
 

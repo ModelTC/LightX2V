@@ -2,11 +2,11 @@ import importlib
 
 from lightx2v_train.utils.registry import build_trainer
 
-
 _LAZY_EXPORTS = {
     "ARDmdTrainer": (".dmd.video_ar_trainer", "VideoArDmdTrainer"),
     "DmdTrainer": (".dmd.trainer", "DmdTrainer"),
     "DopsdTrainer": (".dopsd", "DopsdTrainer"),
+    "FastWAMTrainer": (".fastwam", "FastWAMTrainer"),
     "FlowMatchingTrainer": (".flow", "FlowMatchingTrainer"),
     "LTX2T2AVArDmdTrainer": (
         ".dmd.ltx_trainer",
@@ -67,4 +67,5 @@ __all__ = [
     "VideoPhasedDmdTrainer",
     "VideoSgmdTrainer",
     "DopsdTrainer",
+    "FastWAMTrainer",
 ]

@@ -667,6 +667,25 @@ class Attention(torch.nn.Module):
                     "new_k": k,
                     "new_v": v,
                 }
+            elif detach_cache_update:
+                with torch.no_grad():
+                    if num_rolled_tokens > 0:
+                        kv_cache["k"][:, sink_tokens : sink_tokens + num_rolled_tokens] = kv_cache["k"][
+                            :, sink_tokens + num_evicted_tokens : sink_tokens + num_evicted_tokens + num_rolled_tokens
+                        ].clone()
+                        kv_cache["v"][:, sink_tokens : sink_tokens + num_rolled_tokens] = kv_cache["v"][
+                            :, sink_tokens + num_evicted_tokens : sink_tokens + num_evicted_tokens + num_rolled_tokens
+                        ].clone()
+                    kv_cache["k"][:, local_start_index:local_end_index] = k.detach()
+                    kv_cache["v"][:, local_start_index:local_end_index] = v.detach()
+                window_k, window_v = self._window_with_current_kv(
+                    kv_cache,
+                    k,
+                    v,
+                    window_start,
+                    local_start_index,
+                    num_new_tokens,
+                )
             else:
                 self._roll_cache(
                     kv_cache,
@@ -675,9 +694,9 @@ class Attention(torch.nn.Module):
                     num_evicted_tokens,
                     local_start_index,
                     local_end_index,
-                    k.detach() if detach_cache_update else k,
-                    v.detach() if detach_cache_update else v,
-                    no_grad=detach_cache_update,
+                    k,
+                    v,
+                    no_grad=False,
                 )
                 window_k = kv_cache["k"][:, window_start:local_end_index]
                 window_v = kv_cache["v"][:, window_start:local_end_index]
@@ -704,11 +723,19 @@ class Attention(torch.nn.Module):
                     with torch.no_grad():
                         kv_cache["k"][:, local_start_index:local_end_index] = k.detach()
                         kv_cache["v"][:, local_start_index:local_end_index] = v.detach()
+                    window_k, window_v = self._window_with_current_kv(
+                        kv_cache,
+                        k,
+                        v,
+                        window_start,
+                        local_start_index,
+                        num_new_tokens,
+                    )
                 else:
                     kv_cache["k"][:, local_start_index:local_end_index] = k
                     kv_cache["v"][:, local_start_index:local_end_index] = v
-                window_k = kv_cache["k"][:, window_start:local_end_index]
-                window_v = kv_cache["v"][:, window_start:local_end_index]
+                    window_k = kv_cache["k"][:, window_start:local_end_index]
+                    window_v = kv_cache["v"][:, window_start:local_end_index]
 
         out = _flatten_heads(_sdpa_shaped(q, window_k, window_v))
         if not defer_cache_update:
@@ -716,6 +743,22 @@ class Attention(torch.nn.Module):
             kv_cache["local_end_index"].fill_(local_end_index)
             return out
         return out, (current_end, local_end_index, cache_update_info)
+
+    @staticmethod
+    def _window_with_current_kv(kv_cache, current_k, current_v, window_start, local_start_index, num_new_tokens):
+        window_k_pieces = []
+        window_v_pieces = []
+        if window_start < local_start_index:
+            window_k_pieces.append(kv_cache["k"][:, window_start:local_start_index])
+            window_v_pieces.append(kv_cache["v"][:, window_start:local_start_index])
+        current_start = max(window_start, local_start_index) - local_start_index
+        if current_start < num_new_tokens:
+            window_k_pieces.append(current_k[:, current_start:])
+            window_v_pieces.append(current_v[:, current_start:])
+        return (
+            torch.cat(window_k_pieces, dim=1) if len(window_k_pieces) > 1 else window_k_pieces[0],
+            torch.cat(window_v_pieces, dim=1) if len(window_v_pieces) > 1 else window_v_pieces[0],
+        )
 
     @staticmethod
     def _deferred_window(kv_cache, new_k, new_v, window_start, local_start_index, num_new_tokens):

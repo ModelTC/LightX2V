@@ -1,15 +1,20 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
     RMS_WEIGHT_REGISTER,
+    ROPE_REGISTER,
 )
 
 
 class QwenImageTransformerWeights(WeightModule):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
+        if config.get("use_compile") and config.get("rms_norm_type", "one-pass") == "one-pass":
+            raise ValueError("Qwen Image torch.compile does not support one-pass RMSNorm.")
         self.blocks_num = config["num_layers"]
         self.task = config["task"]
         self.config = config
@@ -210,6 +215,10 @@ class QwenImageImgAttention(WeightModule):
         self.layer_norm_type = config.get("layer_norm_type", "Triton")
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         self.add_module(
             "img_mod",
@@ -331,6 +340,10 @@ class QwenImageTxtAttention(WeightModule):
         self.layer_norm_type = config.get("layer_norm_type", "Triton")
         self.lazy_load = lazy_load
         self.lazy_load_file = lazy_load_file
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("rope_type", "flashinfer_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         self.add_module(
             "txt_mod",

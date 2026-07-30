@@ -76,6 +76,10 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        if max_seqlen_q is None:
+            max_seqlen_q = q.shape[0]
+        if max_seqlen_kv is None:
+            max_seqlen_kv = k.shape[0]
         return self.apply_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv, **kwargs)
 
     def apply_triton(

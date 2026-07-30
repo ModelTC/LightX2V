@@ -84,7 +84,7 @@ class DreamZeroPreWeights(WeightModule):
         )
         self.add_module(
             "proj_0",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 "img_emb.proj.0.weight",
                 "img_emb.proj.0.bias",
                 eps=1e-5,
@@ -109,7 +109,7 @@ class DreamZeroPreWeights(WeightModule):
         )
         self.add_module(
             "proj_4",
-            LN_WEIGHT_REGISTER["torch"](
+            LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                 "img_emb.proj.4.weight",
                 "img_emb.proj.4.bias",
                 eps=1e-5,

@@ -333,6 +333,16 @@ class Flux2BaseRunner(DefaultRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae = self.load_vae()
 
+        images = self._decode_latents_with_vae(latents)
+
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae
+            torch_device_module.empty_cache()
+            gc.collect()
+
+        return images
+
+    def _decode_latents_with_vae(self, latents):
         B, _, C = latents.shape
 
         H = int((self.input_info.latent_image_ids[0, :, 1].max() + 1).item())
@@ -348,14 +358,7 @@ class Flux2BaseRunner(DefaultRunner):
         latents = latents.permute(0, 1, 4, 2, 5, 3)
         latents = latents.reshape(B, C // 4, H * 2, W * 2)
 
-        images = self.vae.decode(latents, self.input_info)
-
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            del self.vae
-            torch_device_module.empty_cache()
-            gc.collect()
-
-        return images
+        return self.vae.decode(latents, self.input_info)
 
     @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):

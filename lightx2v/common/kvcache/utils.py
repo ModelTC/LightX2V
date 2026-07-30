@@ -24,3 +24,17 @@ def lcm(a: int, b: int) -> int:
     if a == 0 or b == 0:
         return max(a, b) or 1
     return a * b // math.gcd(a, b)
+
+
+def causal_chunk_token_range(chunk_index: int, num_chunks: int, total_tokens: int) -> tuple[int, int]:
+    """Map a temporal chunk to token bounds using the teacher-forcing convention."""
+    if num_chunks <= 0:
+        raise ValueError(f"num_chunks must be positive, got {num_chunks}.")
+    if not 0 <= chunk_index < num_chunks:
+        raise ValueError(f"chunk_index must be in [0, {num_chunks}), got {chunk_index}.")
+    if total_tokens < num_chunks:
+        raise ValueError(f"total_tokens={total_tokens} must be at least num_chunks={num_chunks}.")
+
+    start = (chunk_index * total_tokens + num_chunks - 1) // num_chunks
+    end = ((chunk_index + 1) * total_tokens + num_chunks - 1) // num_chunks
+    return start, end

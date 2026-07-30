@@ -1,5 +1,7 @@
+import torch
+
 from lightx2v.common.modules.weight_module import WeightModule
-from lightx2v.utils.registry_factory import CONV2D_WEIGHT_REGISTER, MM_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import CONV2D_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 class NeoppPreWeights(WeightModule):
@@ -9,6 +11,10 @@ class NeoppPreWeights(WeightModule):
         self.patch_size = config.get("patch_size", 16)
         self.merge_size = config.get("merge_size", 2)
         self.mm_type = "Default"
+        self.add_module(
+            "rope",
+            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="interleaved", compute_dtype=torch.float32),
+        )
 
         self.add_module(
             "vision_model_mot_gen_patch_embedding",

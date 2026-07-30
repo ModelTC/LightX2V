@@ -565,12 +565,31 @@ class Cosmos3Scheduler(BaseScheduler):
         self.action_latents = None
         self.action_domain_id = getattr(input_info, "action_domain_id", None)
         self.action_condition_frame_indexes = getattr(input_info, "action_condition_frame_indexes", None)
+        self.action_start_frame_offset = getattr(input_info, "action_start_frame_offset", 1)
         self.raw_action_dim = getattr(input_info, "raw_action_dim", None)
+        self.action_condition_mask = None
+        self.action_condition_reference = None
         action_latents = getattr(input_info, "action_latents", None)
         if action_latents is not None:
-            self.action_latents = action_latents.to(device=AI_DEVICE, dtype=GET_DTYPE())
+            action_reference = action_latents.to(device=AI_DEVICE, dtype=GET_DTYPE())
             if self.raw_action_dim is not None:
-                self.action_latents[:, int(self.raw_action_dim) :] = 0
+                action_reference[:, int(self.raw_action_dim) :] = 0
+            condition_indexes = self.action_condition_frame_indexes
+            if condition_indexes is None:
+                self.action_latents = action_reference
+            else:
+                action_len = int(action_reference.shape[0])
+                condition_indexes = [int(idx) for idx in condition_indexes if 0 <= int(idx) < action_len]
+                mask = torch.zeros((action_len, 1), device=AI_DEVICE, dtype=GET_DTYPE())
+                if condition_indexes:
+                    mask[condition_indexes] = 1.0
+                noise = torch.randn(tuple(action_reference.shape), generator=self.generator, device=AI_DEVICE, dtype=GET_DTYPE())
+                if self.raw_action_dim is not None:
+                    noise[:, int(self.raw_action_dim) :] = 0
+                self.action_latents = mask * action_reference + (1.0 - mask) * noise
+                self.action_condition_frame_indexes = condition_indexes
+                self.action_condition_mask = mask
+                self.action_condition_reference = action_reference
         else:
             action_shape = getattr(input_info, "action_latent_shape", None)
             if action_shape is not None:
@@ -623,6 +642,8 @@ class Cosmos3Scheduler(BaseScheduler):
                 self.action_latents.unsqueeze(0),
                 return_dict=False,
             )[0].squeeze(0)
+            if self.action_condition_mask is not None and self.action_condition_reference is not None:
+                self.action_latents = self.action_condition_mask * self.action_condition_reference + (1.0 - self.action_condition_mask) * self.action_latents
             if self.raw_action_dim is not None:
                 self.action_latents[:, int(self.raw_action_dim) :] = 0
         self.noise_pred = None
@@ -645,4 +666,7 @@ class Cosmos3Scheduler(BaseScheduler):
         self.vision_condition_mask = None
         self.action_domain_id = None
         self.action_condition_frame_indexes = None
+        self.action_start_frame_offset = 1
+        self.action_condition_mask = None
+        self.action_condition_reference = None
         self.raw_action_dim = None

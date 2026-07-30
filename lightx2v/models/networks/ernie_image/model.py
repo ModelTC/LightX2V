@@ -39,6 +39,7 @@ class ErnieImageTransformerModel(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
+        self.pre_infer.set_rope(self.transformer_weights.blocks[0].rope)
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):

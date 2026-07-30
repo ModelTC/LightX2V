@@ -628,6 +628,7 @@ class DmdTrainer(BaseTrainer):
             current_iter += 1
             display_dmd = reduce_mean(running_dmd)
             display_fake = reduce_mean(running_fake)
+            current_lr = self.lr_scheduler.get_last_lr()[0]
             if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
                 if self.cdm_enabled:
                     display_cdm = reduce_mean(running_cdm)
@@ -639,7 +640,17 @@ class DmdTrainer(BaseTrainer):
                         display_cdm,
                         running_cdm_weight,
                         display_fake,
-                        self.lr_scheduler.get_last_lr()[0],
+                        current_lr,
+                    )
+                    self.log_metrics(
+                        {
+                            "train/dmd": display_dmd,
+                            "train/cdm": display_cdm,
+                            "train/cdm_weight": running_cdm_weight,
+                            "train/fake": display_fake,
+                            "train/lr": current_lr,
+                        },
+                        step=current_iter,
                     )
                 else:
                     logger.info(
@@ -648,7 +659,15 @@ class DmdTrainer(BaseTrainer):
                         max_train_iters,
                         display_dmd,
                         display_fake,
-                        self.lr_scheduler.get_last_lr()[0],
+                        current_lr,
+                    )
+                    self.log_metrics(
+                        {
+                            "train/dmd": display_dmd,
+                            "train/fake": display_fake,
+                            "train/lr": current_lr,
+                        },
+                        step=current_iter,
                     )
 
             if save_every_iters and current_iter % save_every_iters == 0:

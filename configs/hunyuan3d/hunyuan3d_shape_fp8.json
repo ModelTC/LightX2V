@@ -1,0 +1,21 @@
+{
+    "infer_steps": 50,
+    "guidance_scale": 5.0,
+    "enable_rembg": true,
+    "enable_pbar": true,
+    "box_v": 1.01,
+    "mc_level": 0.0,
+    "num_chunks": 8000,
+    "octree_resolution": 384,
+    "attn_type": "torch_sdpa",
+    "use_fused_qk_rms_norm": true,
+    "use_fused_qkv_attn": true,
+    "moe_backend": "flashinfer",
+    "moe_flashinfer_setting": {
+        "autotune": true,
+        "tune_max_num_tokens": 8192
+    },
+    "dit_original_ckpt": "/path/to/hunyuan3d/model.fp8.safetensors",
+    "dit_quant_scheme": "fp8-sgl",
+    "rms_norm_type": "torch"
+}

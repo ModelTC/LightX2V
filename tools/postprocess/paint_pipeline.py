@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import shutil
 import sys
+import tempfile
 from contextlib import contextmanager
 from types import ModuleType
 from typing import Any, Callable, Iterator
@@ -16,6 +16,15 @@ from torchvision_fix import apply_fix
 _POSTPROCESS_DIR = os.path.dirname(os.path.abspath(__file__))
 _HY3DPAINT_LINK = os.path.join(_POSTPROCESS_DIR, "hy3dpaint")
 _HF_PAINT_REPO_ID = "tencent/Hunyuan3D-2.1"
+
+
+def _bootstrap_torch_backend(device: str) -> None:
+    """Register torch_mlu before loading upstream modules or native extensions."""
+    if str(device).split(":", 1)[0].lower() == "mlu":
+        try:
+            import torch_mlu  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError("--device mlu requires torch_mlu. Use the Cambricon PyTorch environment and set NEUWARE_HOME/LD_LIBRARY_PATH before starting paint inference.") from exc
 
 
 def default_hy3dpaint_root() -> str:
@@ -77,33 +86,73 @@ def _resolve_local_paint_hf_root(model_path: str) -> str:
 
 
 @contextmanager
-def _use_local_paint_weights(model_path: str) -> Iterator[None]:
-    """Redirect upstream snapshot_download to local HF weights without patching hy3dpaint."""
+def _paint_model_source_overlay(model_path: str, hy3dpaint_root: str) -> Iterator[str]:
+    """Expose local weights together with the patched inference Python sources.
+
+    The paint model's ``model_index.json`` dynamically loads ``unet/modules.py``
+    from the weight snapshot.  Those files are an unmodified copy of the upstream
+    CUDA sources, so loading the snapshot directly would bypass our MLU fixes.  A
+    temporary symlink view avoids mutating or duplicating the multi-GB checkpoint.
+    """
     local_root = _resolve_local_paint_hf_root(model_path)
+    paint_name = "hunyuan3d-paintpbr-v2-1"
+    paint_source = os.path.abspath(os.path.join(local_root, paint_name))
+    patched_unet_source = os.path.abspath(os.path.join(hy3dpaint_root, "hunyuanpaintpbr", "unet"))
+
+    with tempfile.TemporaryDirectory(prefix="hunyuan3d-paint-model-") as overlay_root:
+        paint_overlay = os.path.join(overlay_root, paint_name)
+        os.makedirs(paint_overlay)
+
+        for entry in os.scandir(paint_source):
+            target = os.path.join(paint_overlay, entry.name)
+            if entry.name != "unet":
+                os.symlink(entry.path, target, target_is_directory=entry.is_dir())
+                continue
+
+            os.makedirs(target)
+            for unet_entry in os.scandir(entry.path):
+                source = unet_entry.path
+                patched_source = os.path.join(patched_unet_source, unet_entry.name)
+                if unet_entry.name.endswith(".py") and os.path.isfile(patched_source):
+                    source = patched_source
+                os.symlink(
+                    source,
+                    os.path.join(target, unet_entry.name),
+                    target_is_directory=unet_entry.is_dir(),
+                )
+
+        yield overlay_root
+
+
+@contextmanager
+def _use_local_paint_weights(model_path: str, hy3dpaint_root: str) -> Iterator[None]:
+    """Redirect upstream snapshot_download to local, MLU-patched model assets."""
     import huggingface_hub
     from diffusers import DiffusionPipeline
 
     original_download: Callable = huggingface_hub.snapshot_download
     original_from_pretrained = DiffusionPipeline.from_pretrained
 
-    def patched_download(repo_id, *args, **kwargs):
-        if repo_id == _HF_PAINT_REPO_ID:
-            logger.info(f"Using local paint weights from {local_root} (skip HF download)")
-            return local_root
-        return original_download(repo_id, *args, **kwargs)
+    with _paint_model_source_overlay(model_path, hy3dpaint_root) as overlay_root:
 
-    @classmethod
-    def patched_from_pretrained(cls, *args, **kwargs):
-        kwargs.setdefault("trust_remote_code", True)
-        return original_from_pretrained(*args, **kwargs)
+        def patched_download(repo_id, *args, **kwargs):
+            if repo_id == _HF_PAINT_REPO_ID:
+                logger.info(f"Using local paint weights from {model_path} with patched MLU sources")
+                return overlay_root
+            return original_download(repo_id, *args, **kwargs)
 
-    huggingface_hub.snapshot_download = patched_download
-    DiffusionPipeline.from_pretrained = patched_from_pretrained
-    try:
-        yield
-    finally:
-        huggingface_hub.snapshot_download = original_download
-        DiffusionPipeline.from_pretrained = original_from_pretrained
+        @classmethod
+        def patched_from_pretrained(cls, *args, **kwargs):
+            kwargs.setdefault("trust_remote_code", True)
+            return original_from_pretrained(*args, **kwargs)
+
+        huggingface_hub.snapshot_download = patched_download
+        DiffusionPipeline.from_pretrained = patched_from_pretrained
+        try:
+            yield
+        finally:
+            huggingface_hub.snapshot_download = original_download
+            DiffusionPipeline.from_pretrained = original_from_pretrained
 
 
 def build_paint_config(
@@ -111,12 +160,15 @@ def build_paint_config(
     hy_repo: str | None = None,
     max_num_view: int = 6,
     resolution: int = 512,
-    device: str = "cuda",
+    device: str | None = None,
     multiview_cfg_path: str | None = None,
     realesrgan_ckpt_path: str | None = None,
     custom_pipeline: str | None = None,
     dino_ckpt_path: str = "facebook/dinov2-giant",
+    render_size: int = 2048,
+    texture_size: int = 4096,
 ):
+    device = device or os.environ.get("AI_DEVICE", "cuda")
     hy3dpaint_root = resolve_hy3dpaint_root(hy_repo)
     tgp = _load_texture_gen_pipeline_module(hy3dpaint_root)
 
@@ -128,6 +180,8 @@ def build_paint_config(
     paint_conf.realesrgan_ckpt_path = realesrgan_ckpt_path or os.path.join(hy3dpaint_root, "ckpt", "RealESRGAN_x4plus.pth")
     paint_conf.custom_pipeline = custom_pipeline or os.path.join(hy3dpaint_root, "hunyuanpaintpbr")
     paint_conf.dino_ckpt_path = dino_ckpt_path
+    paint_conf.render_size = render_size
+    paint_conf.texture_size = texture_size
     return paint_conf, tgp
 
 
@@ -138,12 +192,16 @@ class PaintPipeline:
         hy_repo: str | None = None,
         max_num_view: int = 6,
         resolution: int = 512,
-        device: str = "cuda",
+        device: str | None = None,
         multiview_cfg_path: str | None = None,
         realesrgan_ckpt_path: str | None = None,
         custom_pipeline: str | None = None,
         dino_ckpt_path: str = "facebook/dinov2-giant",
+        render_size: int = 2048,
+        texture_size: int = 4096,
     ):
+        device = device or os.environ.get("AI_DEVICE", "cuda")
+        _bootstrap_torch_backend(device)
         try:
             apply_fix()
         except Exception as exc:
@@ -159,6 +217,8 @@ class PaintPipeline:
             realesrgan_ckpt_path=realesrgan_ckpt_path,
             custom_pipeline=custom_pipeline,
             dino_ckpt_path=dino_ckpt_path,
+            render_size=render_size,
+            texture_size=texture_size,
         )
         if not os.path.isfile(paint_conf.realesrgan_ckpt_path):
             raise FileNotFoundError(
@@ -174,8 +234,10 @@ class PaintPipeline:
             "max_num_view": max_num_view,
             "resolution": resolution,
             "device": device,
+            "render_size": render_size,
+            "texture_size": texture_size,
         }
-        with _use_local_paint_weights(model_path):
+        with _use_local_paint_weights(model_path, self.config["hy3dpaint_root"]):
             self._pipeline = tgp.Hunyuan3DPaintPipeline(paint_conf)
 
     def __call__(
@@ -204,9 +266,7 @@ class PaintPipeline:
         )
 
         if save_glb and os.path.isfile(glb_path):
-            if glb_path != save_path:
-                shutil.copy2(glb_path, save_path)
-            result_path = save_path
+            result_path = glb_path
         elif os.path.isfile(obj_path):
             result_path = obj_path
         else:

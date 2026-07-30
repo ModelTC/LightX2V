@@ -2,11 +2,11 @@ import os
 
 import torch
 
+from lightx2v.models.networks.wan.infer.causvid.pre_infer import WanCausVidPreInfer
 from lightx2v.models.networks.wan.infer.causvid.transformer_infer import (
     WanTransformerInferCausVid,
 )
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
-from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.post_weights import WanPostWeights
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
@@ -26,7 +26,7 @@ class WanCausVidModel(WanModel):
         super().__init__(model_path, config, device)
 
     def _init_infer_class(self):
-        self.pre_infer_class = WanPreInfer
+        self.pre_infer_class = WanCausVidPreInfer
         self.post_infer_class = WanPostInfer
         self.transformer_infer_class = WanTransformerInferCausVid
 
@@ -44,15 +44,20 @@ class WanCausVidModel(WanModel):
 
     @torch.no_grad()
     def infer(self, inputs, kv_start, kv_end):
-        if self.config["cpu_offload"]:
-            self.pre_weight.to_cuda()
-            self.transformer_weights.post_weights_to_cuda()
+        if self.cpu_offload:
+            if self.offload_granularity == "model":
+                self.to_cuda()
+            else:
+                self.pre_weight.to_cuda()
+                self.transformer_weights.non_block_weights_to_cuda()
 
-        embed, grid_sizes, pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs, kv_start=kv_start, kv_end=kv_end)
+        pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs, kv_start=kv_start, kv_end=kv_end)
+        x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out, kv_start, kv_end)
+        self.scheduler.noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
 
-        x = self.transformer_infer.infer(self.transformer_weights, grid_sizes, embed, *pre_infer_out, kv_start, kv_end)
-        self.scheduler.noise_pred = self.post_infer.infer(x, embed, grid_sizes)[0]
-
-        if self.config["cpu_offload"]:
-            self.pre_weight.to_cpu()
-            self.transformer_weights.post_weights_to_cpu()
+        if self.cpu_offload:
+            if self.offload_granularity == "model":
+                self.to_cpu()
+            else:
+                self.pre_weight.to_cpu()
+                self.transformer_weights.non_block_weights_to_cpu()

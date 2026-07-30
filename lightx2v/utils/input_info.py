@@ -209,6 +209,28 @@ class T2IInputInfo:
 
 
 @dataclass
+class T2TInputInfo:
+    seed: int = field(default_factory=int)
+    prompt: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    max_new_tokens: Optional[int] = None
+    text_do_sample: Optional[bool] = None
+    text_temperature: Optional[float] = None
+    text_top_k: Optional[int] = None
+    text_top_p: Optional[float] = None
+    bot_task: Optional[str] = None
+    system_prompt: Optional[str] = None
+    stream_callback: Any = None
+
+
+@dataclass
+class TI2TInputInfo(T2TInputInfo):
+    image_path: str = field(default_factory=str)
+    infer_align_image_size: Optional[bool] = None
+
+
+@dataclass
 class I2IInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
@@ -229,6 +251,11 @@ class I2IInputInfo:
     processed_image_size: list = field(default_factory=list)
     original_size: list = field(default_factory=list)
     aspect_ratio: str = field(default_factory=str)
+
+
+@dataclass
+class TI2IInputInfo(I2IInputInfo):
+    infer_align_image_size: Optional[bool] = None
 
 
 @dataclass
@@ -290,6 +317,11 @@ class I2VAInputInfo:
     latent_shape: list = field(default_factory=list)
     target_shape: list = field(default_factory=list)
     target_video_length: int = field(default_factory=int)
+    # Optional in-memory policy inputs.  Offline/CLI inference continues to use
+    # image_path/state_path; long-running integrations (for example ROS) can
+    # avoid writing a PNG and NPY file for every control step.
+    policy_image: Any = field(default=None, repr=False)
+    policy_state: Any = field(default=None, repr=False)
 
 
 @dataclass
@@ -447,7 +479,10 @@ task_dict = {
     "s2v": S2VInputInfo,
     "rs2v": RS2VInputInfo,
     "animate": AnimateInputInfo,
+    "t2t": T2TInputInfo,
     "t2i": T2IInputInfo,
+    "ti2t": TI2TInputInfo,
+    "ti2i": TI2IInputInfo,
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,

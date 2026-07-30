@@ -85,6 +85,27 @@ class FlashAttn2Weight(AttnWeightTemplate):
 
         return x
 
+    def apply_with_lse(self, q, k, v, softmax_scale=None):
+        """Apply one dense attention block and return LSE as [tokens, heads]."""
+        if flash_attn_func_v2 is None:
+            raise ImportError("FlashAttention2 is not installed.")
+        if q.ndim == 3:
+            q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+        elif q.ndim != 4:
+            raise ValueError(f"Dense FlashAttention2 expects 3D or 4D Q/K/V, got q.ndim={q.ndim}.")
+
+        output, lse, *_ = flash_attn_func_v2(
+            q.contiguous(),
+            k.contiguous(),
+            v.contiguous(),
+            softmax_scale=softmax_scale,
+            causal=False,
+            return_attn_probs=True,
+        )
+        output = output.reshape(q.shape[0] * q.shape[1], -1)
+        lse = lse.transpose(1, 2).reshape(q.shape[0] * q.shape[1], q.shape[2])
+        return output, lse
+
 
 @ATTN_WEIGHT_REGISTER("flash_attn3")
 class FlashAttn3Weight(AttnWeightTemplate):
@@ -138,6 +159,27 @@ class FlashAttn3Weight(AttnWeightTemplate):
             ).reshape(total_seqlen, -1)
 
         return x
+
+    def apply_with_lse(self, q, k, v, softmax_scale=None):
+        """Apply one dense attention block and return LSE as [tokens, heads]."""
+        if flash_attn_func_v3 is None:
+            raise ImportError("FlashAttention3 is not installed.")
+        if q.ndim == 3:
+            q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+        elif q.ndim != 4:
+            raise ValueError(f"Dense FlashAttention3 expects 3D or 4D Q/K/V, got q.ndim={q.ndim}.")
+
+        output, lse, *_ = flash_attn_func_v3(
+            q.contiguous(),
+            k.contiguous(),
+            v.contiguous(),
+            softmax_scale=softmax_scale,
+            causal=False,
+            return_attn_probs=True,
+        )
+        output = output.reshape(q.shape[0] * q.shape[1], -1)
+        lse = lse.transpose(1, 2).reshape(q.shape[0] * q.shape[1], q.shape[2])
+        return output, lse
 
 
 @ATTN_WEIGHT_REGISTER("flash_attn4")

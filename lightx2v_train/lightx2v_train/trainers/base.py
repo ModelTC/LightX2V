@@ -10,6 +10,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_
 from lightx2v_train.infer import build_inferencer
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process
+from lightx2v_train.runtime.monitor import build_monitor
 from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradient_sync
 from lightx2v_train.schedulers.flow_matching import RectifiedFlowMatchingScheduler
 from lightx2v_train.utils.utils import get_running_dtype
@@ -59,6 +60,7 @@ class BaseTrainer:
             self.infer_every_iters = self.infer_config.get("infer_every_iters", None)
         logging_config = self.config.get("logging", {})
         self.train_log_every_iters = max(1, int(logging_config.get("train_log_every_iters", 10)))
+        self.monitor = build_monitor(self.config)
 
         resume_config = self.config.get("resume", {})
         self.auto_resume = resume_config.get("auto_resume", False)
@@ -83,6 +85,12 @@ class BaseTrainer:
     def set_data(self, dataloader_train, dataloader_eval=None):
         self.dataloader_train = dataloader_train
         self.dataloader_eval = dataloader_eval
+
+    def log_metrics(self, metrics, step=None):
+        self.monitor.log_metrics(metrics, step=step)
+
+    def finish_monitor(self):
+        self.monitor.finish()
 
     def _setup_trainable_model(self, model):
         if self.train_type == "lora":

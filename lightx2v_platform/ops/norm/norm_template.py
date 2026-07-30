@@ -253,25 +253,34 @@ class LayerNormWeightTemplate(metaclass=ABCMeta):
             self.bias = None
 
     def to_cpu(self, non_blocking=False):
-        if hasattr(self, "pin_weight"):
+        if getattr(self, "pin_weight", None) is not None and getattr(self, "weight", None) is not None:
             self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
-        else:
+        elif getattr(self, "weight", None) is not None:
             self.weight = self.weight.to("cpu", non_blocking=non_blocking)
-        if hasattr(self, "pin_bias"):
-            self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
         else:
-            if self.bias is not None:
-                self.bias = self.bias.to("cpu", non_blocking=non_blocking)
+            self.weight = None
+        if getattr(self, "pin_bias", None) is not None and getattr(self, "bias", None) is not None:
+            self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
+        elif getattr(self, "bias", None) is not None:
+            self.bias = self.bias.to("cpu", non_blocking=non_blocking)
+        else:
+            self.bias = None
 
     def state_dict(self, destination=None):
         if destination is None:
             destination = {}
-        destination[self.weight_name] = self.pin_weight if hasattr(self, "pin_weight") else self.weight
+        if self.weight_name is not None:
+            destination[self.weight_name] = self.pin_weight if getattr(self, "pin_weight", None) is not None else self.weight
         if self.bias_name is not None:
-            destination[self.bias_name] = self.pin_bias if hasattr(self, "pin_bias") else self.bias
+            destination[self.bias_name] = self.pin_bias if getattr(self, "pin_bias", None) is not None else self.bias
         return destination
 
     def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        if self.weight_name is None:
+            self.weight = None
+            self.bias = None
+            return
+
         if self.is_post_adapter:
             assert adapter_block_index is not None
             weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
@@ -288,6 +297,11 @@ class LayerNormWeightTemplate(metaclass=ABCMeta):
             self.bias = self.bias_cuda_buffer.copy_(destination[bias_name], non_blocking=True)
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        if self.weight_name is None:
+            self.weight = None
+            self.bias = None
+            return
+
         if self.is_post_adapter:
             self.weight_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.weight_name, count=1)
             self.bias_name = re.sub(r"\.\d+", lambda m: f".{adapter_block_index}", self.bias_name, count=1) if self.bias_name is not None else None

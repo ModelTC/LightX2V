@@ -14,6 +14,7 @@ from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.lingbot_video.scheduler import LingBotVideoScheduler
 from lightx2v.models.video_encoders.hf.lingbot_video.vae import LingBotVideoWanVAE
+from lightx2v.utils.input_info import I2VInputInfo, T2IInputInfo, T2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import save_to_video
@@ -76,6 +77,7 @@ def smart_resize(height, width, factor, min_pixels=None, max_pixels=None):
 @RUNNER_REGISTER("lingbot_video")
 class LingBotVideoRunner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
+    _WARMUP_RESOLUTIONS = ((480, 480), (320, 832))
 
     def __init__(self, config):
         if config.get("task") not in {"t2i", "t2v", "i2v"}:
@@ -83,6 +85,60 @@ class LingBotVideoRunner(DefaultRunner):
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("LingBot-Video lazy_load/unload_modules are not implemented yet.")
         super().__init__(config)
+
+    @ProfilingContext4DebugL1("Warmup")
+    def run_warmup(self):
+        self._run_warmup()
+        self._maybe_freeze_gc()
+
+    def _run_warmup(self):
+        scheduler = self.model.scheduler
+        text_encoder_output = None
+
+        for height, width in self._WARMUP_RESOLUTIONS:
+            logger.info(f"Warmup: {height}x{width}")
+            try:
+                scheduler.generator = None
+                text_encoder_output = self._prepare_warmup_inputs(height, width, text_encoder_output)
+                scheduler.prepare(self.input_info)
+                self._apply_condition_latent()
+                scheduler.step_pre(step_index=0)
+                self.model.infer(self.inputs)
+                scheduler.step_post()
+                self._apply_condition_latent()
+                self.run_vae_decoder(scheduler.latents)
+                torch_device_module.synchronize()
+            finally:
+                self.clear_warmup_state()
+
+        logger.info("Warmup completed")
+
+    def _prepare_warmup_inputs(self, height, width, text_encoder_output=None):
+        input_cls = {"t2i": T2IInputInfo, "t2v": T2VInputInfo, "i2v": I2VInputInfo}[self.config["task"]]
+        self.input_info = input_cls(
+            seed=0,
+            prompt="warmup",
+            negative_prompt="",
+            target_shape=[height, width],
+            return_result_tensor=True,
+        )
+
+        if self.config["task"] == "i2v":
+            self.inputs = self._run_input_encoder_local_i2v(Image.new("RGB", (width, height), color=0))
+        else:
+            if text_encoder_output is None:
+                text_encoder_output = self._run_input_encoder_local_t2v()["text_encoder_output"]
+            self.inputs = {
+                "text_encoder_output": text_encoder_output,
+                "image_encoder_output": None,
+            }
+        self.set_target_shape()
+        return text_encoder_output
+
+    def clear_warmup_state(self):
+        self.model.scheduler.clear()
+        self.input_info = None
+        self.__dict__.pop("inputs", None)
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -146,8 +202,7 @@ class LingBotVideoRunner(DefaultRunner):
     def _run_input_encoder_local_t2v(self):
         negative_prompt = self.input_info.negative_prompt or ""
         text_encoder_output = self.run_text_encoder(self.input_info.prompt, neg_prompt=negative_prompt)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": None,
@@ -190,20 +245,20 @@ class LingBotVideoRunner(DefaultRunner):
         return self.scheduler.generator
 
     @ProfilingContext4DebugL2("Run Encoders")
-    def _run_input_encoder_local_i2v(self):
+    def _run_input_encoder_local_i2v(self, image=None):
         height, width = self._resolve_output_size()
-        image_path = self.input_info.image_path.split(",")[0]
-        if not image_path:
-            raise ValueError("LingBot-Video i2v requires --image_path.")
-        image = Image.open(image_path).convert("RGB")
+        if image is None:
+            image_path = self.input_info.image_path.split(",")[0]
+            if not image_path:
+                raise ValueError("LingBot-Video i2v requires --image_path.")
+            image = Image.open(image_path).convert("RGB")
         pixel = self.preprocess_image(image, height, width)
         vlm_image = self._vlm_image(pixel)
         generator = self._ensure_scheduler_generator()
         cond_latent = self.vae.encode_image_latent(pixel, generator=generator)
         negative_prompt = self.input_info.negative_prompt or ""
         text_encoder_output = self.run_text_encoder(self.input_info.prompt, neg_prompt=negative_prompt, images=[vlm_image])
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": {"cond_latent": cond_latent},

@@ -5,3 +5,6 @@
 	path = lightx2v_ros/src/simulator/simulator/robotwin_node/RoboTwin
 	url = https://github.com/robotwin-Platform/robotwin.git
 	branch = main
+[submodule "lightx2v_ros/src/simulator/simulator/robolab_node/RoboLab"]
+	path = lightx2v_ros/src/simulator/simulator/robolab_node/RoboLab
+	url = https://github.com/ModelTC/RoboLab.git

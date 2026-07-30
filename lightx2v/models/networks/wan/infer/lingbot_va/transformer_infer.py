@@ -23,15 +23,6 @@ class LingbotVATransformerInfer(WanTransformerInfer):
         values = table + timestep_proj
         return [_token_modulation(item) for item in values.chunk(6, dim=1)]
 
-    @staticmethod
-    def _apply_rotary(x: torch.Tensor, rotary_emb: torch.Tensor) -> torch.Tensor:
-        x_dtype = x.dtype
-        seq_len, num_heads, head_dim = x.shape
-        freqs = rotary_emb.to(x.device)
-        x_complex = torch.view_as_complex(x.to(torch.float64).reshape(seq_len, num_heads, -1, 2))
-        out = torch.view_as_real(x_complex * freqs).flatten(2)
-        return out.to(x_dtype)
-
     def infer_self_attn_with_kvcache(self, phase, x, shift_msa, scale_msa, rotary_emb, update_cache, cache_name):
         query_len = x.shape[0]
         norm1_out = phase.norm1.apply(x).to(x.dtype)
@@ -40,8 +31,7 @@ class LingbotVATransformerInfer(WanTransformerInfer):
         q = phase.self_attn_norm_q.apply(phase.self_attn_q.apply(norm1_out)).view(query_len, self.num_heads, self.head_dim)
         k = phase.self_attn_norm_k.apply(phase.self_attn_k.apply(norm1_out)).view(query_len, self.num_heads, self.head_dim)
         v = phase.self_attn_v.apply(norm1_out).view(query_len, self.num_heads, self.head_dim)
-        q = self._apply_rotary(q, rotary_emb)
-        k = self._apply_rotary(k, rotary_emb)
+        q, k = phase.lingbot_rope.apply(q, k, rotary_emb.to(q.device))
 
         cache = self.kv_cache_manager.get_self_attn_kv_cache(cache_name) if self.kv_cache_manager is not None else None
         slots = None

@@ -9,7 +9,7 @@ from torch.utils.checkpoint import checkpoint
 from ...comm.communication import _Allgather
 from ...comm.padding import depad_by_length, minimal_pad_to_divisible, pad_by_length
 from ..layers import PatchEmbed, PatchEmbed_Mlp
-from ..layers.block import Block
+from ..layers.block import Block, clear_attn_bias_cache
 from ..layers.vision_transformer import vit_base, vit_giant2, vit_large, vit_small
 
 logger = logging.getLogger(__name__)
@@ -179,6 +179,7 @@ class VisualGeometryTransformer(nn.Module):
             raise NotImplementedError
 
     def _init_rotary_position_embedding(self, rope_base, normalized_rope, head_dim, rope_normalize_coords, rope_shift_coords, rope_jitter_coords, rope_rescale_coords):
+        self.rope_head_dim = head_dim
         if normalized_rope:
             print("[INFO] Using normalized RoPE!")
             from ..layers.norm_rope import NormalizedRotaryPositionEmbedding2D, PositionGetter
@@ -210,6 +211,15 @@ class VisualGeometryTransformer(nn.Module):
                 else None
             )
             self.pos_getter = PositionGetter() if self.rope is not None else None
+
+    def begin_cache_request(self) -> None:
+        clear_attn_bias_cache()
+        if self.pos_getter is None:
+            return
+        self.pos_getter.clear_cache()
+        clear_rope_cache = getattr(self.rope, "clear_cache", None)
+        if clear_rope_cache is not None:
+            clear_rope_cache()
 
     def _init_transformer_blocks(self, block_fn, embed_dim, num_heads, mlp_ratio, qkv_bias, proj_bias, ffn_bias, init_values, qk_norm):
         self.frame_blocks = nn.ModuleList(
@@ -263,6 +273,7 @@ class VisualGeometryTransformer(nn.Module):
         Returns:
             (list[torch.Tensor], int): List of attention block outputs and patch_start_idx
         """
+        self.begin_cache_request()
         depth_maps, ray_dirs, poses = priors if priors is not None else (None, None, None)
 
         # Slice to context frames if specified
@@ -303,6 +314,8 @@ class VisualGeometryTransformer(nn.Module):
 
         # Position embedding
         pos_emb = None
+        frame_rope_cache = None
+        global_rope_cache = None
         if self.rope is not None:
             pos_emb = self.pos_getter(b * seq_len, h // self.patch_size, w // self.patch_size, device=images.device)
             if self.patch_start_idx > 0:
@@ -319,6 +332,11 @@ class VisualGeometryTransformer(nn.Module):
         token_shape = (b, seq_len, patch_count, embed_dim)
         # Forward through attention blocks
         with torch.amp.autocast("cuda", enabled=(not enable_bf16), dtype=torch.bfloat16):
+            if self.rope is not None:
+                rope_dtype = torch.get_autocast_dtype("cuda") if torch.is_autocast_enabled("cuda") else all_tokens.dtype
+                frame_rope_cache = self.rope.prepare_cache(pos_emb, head_dim=self.rope_head_dim, dtype=rope_dtype)
+                global_rope_cache = frame_rope_cache.reshape(b, seq_len * pos_emb.shape[1])
+
             outputs = []
             global_tokens = None
             if sp_size > 1:
@@ -333,6 +351,7 @@ class VisualGeometryTransformer(nn.Module):
                         blocks=self.frame_blocks,
                         block_type="frame",
                         pos=pos_emb,
+                        rope_cache=frame_rope_cache,
                         sp_size=sp_size,
                         sp_group=sp_group,
                         padding_tokens=tk_padding_len,
@@ -347,6 +366,7 @@ class VisualGeometryTransformer(nn.Module):
                         blocks=self.global_blocks,
                         block_type="global",
                         pos=pos_emb,
+                        rope_cache=global_rope_cache,
                         sp_size=sp_size,
                         sp_group=sp_group,
                         padding_tokens=tk_padding_len,
@@ -380,6 +400,7 @@ class VisualGeometryTransformer(nn.Module):
                         blocks=self.frame_blocks,
                         block_type="frame",
                         pos=pos_emb,
+                        rope_cache=frame_rope_cache,
                     )
                     global_tokens = self._process_attention_blocks(
                         tokens=local_tokens,
@@ -391,6 +412,7 @@ class VisualGeometryTransformer(nn.Module):
                         blocks=self.global_blocks,
                         block_type="global",
                         pos=pos_emb,
+                        rope_cache=global_rope_cache,
                     )
                     # Combine frame and global intermediates
                     if idx in self.intermediate_idxs:
@@ -434,7 +456,7 @@ class VisualGeometryTransformer(nn.Module):
 
         return pose_tokens, depth_tokens, ray_tokens
 
-    def _process_attention_blocks(self, tokens, b, seq_len, patch_count, embed_dim, block_idx, blocks, block_type, pos=None):
+    def _process_attention_blocks(self, tokens, b, seq_len, patch_count, embed_dim, block_idx, blocks, block_type, pos=None, rope_cache=None):
         """Process attention blocks with tokens in shape (B*S, P, C)."""
         token_shape = (b, seq_len, patch_count, embed_dim)
         if block_type == "frame":  # local
@@ -452,13 +474,13 @@ class VisualGeometryTransformer(nn.Module):
 
         if self.training:
             # tokens = blocks[block_idx](tokens, pos=pos)
-            tokens = checkpoint(blocks[block_idx], tokens, pos=pos, use_reentrant=self.use_reentrant)
+            tokens = checkpoint(blocks[block_idx], tokens, pos=pos, rope_cache=rope_cache, use_reentrant=self.use_reentrant)
         else:
-            tokens = blocks[block_idx](tokens, pos=pos)
+            tokens = blocks[block_idx](tokens, pos=pos, rope_cache=rope_cache)
 
         return tokens.reshape(*token_shape)
 
-    def _process_dist_attention_blocks(self, tokens, b, seq_len, patch_count, embed_dim, block_idx, blocks, block_type, pos=None, sp_size=1, sp_group=None, padding_tokens=0):
+    def _process_dist_attention_blocks(self, tokens, b, seq_len, patch_count, embed_dim, block_idx, blocks, block_type, pos=None, rope_cache=None, sp_size=1, sp_group=None, padding_tokens=0):
         """Process attention blocks with tokens in shape (B*S, P, C)."""
         token_shape = (b, seq_len, patch_count, embed_dim)
         if block_type == "frame":  # local
@@ -487,10 +509,28 @@ class VisualGeometryTransformer(nn.Module):
         if self.training:
             # tokens = blocks[block_idx](tokens, pos=pos)
             tokens = checkpoint(
-                blocks[block_idx], tokens, pos=pos, use_reentrant=self.use_reentrant, sp_size=sp_size, sp_group=sp_group, padding_tokens=padding_tokens, block_type=block_type, token_shape=token_shape
+                blocks[block_idx],
+                tokens,
+                pos=pos,
+                rope_cache=rope_cache,
+                use_reentrant=self.use_reentrant,
+                sp_size=sp_size,
+                sp_group=sp_group,
+                padding_tokens=padding_tokens,
+                block_type=block_type,
+                token_shape=token_shape,
             )
         else:
-            tokens = blocks[block_idx](tokens, pos=pos, sp_size=sp_size, sp_group=sp_group, padding_tokens=padding_tokens, block_type=block_type, token_shape=token_shape)
+            tokens = blocks[block_idx](
+                tokens,
+                pos=pos,
+                rope_cache=rope_cache,
+                sp_size=sp_size,
+                sp_group=sp_group,
+                padding_tokens=padding_tokens,
+                block_type=block_type,
+                token_shape=token_shape,
+            )
 
         return tokens.reshape(*token_shape)
 

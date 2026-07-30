@@ -126,57 +126,32 @@ def reshape_for_broadcast(
         return freqs_cis.view(*shape)
 
 
-def rotate_half(x):
-    x_real, x_imag = x.float().reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
-    return torch.stack([-x_imag, x_real], dim=-1).flatten(3)
-
-
 def apply_rotary_emb(
+    rope,
     xq: torch.Tensor,
     xk: torch.Tensor,
     freqs_cis: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
     head_first: bool = False,
     start_offset: int = 0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply rotary embeddings to input tensors using the given frequency tensor.
-
-    This function applies rotary embeddings to the given query 'xq' and key 'xk' tensors using the provided
-    frequency tensor 'freqs_cis'. The input tensors are reshaped as complex numbers, and the frequency tensor
-    is reshaped for broadcasting compatibility. The resulting tensors contain rotary embeddings and are
-    returned as real tensors.
-
-    Args:
-        xq (torch.Tensor): Query tensor to apply rotary embeddings. [B, S, H, D]
-        xk (torch.Tensor): Key tensor to apply rotary embeddings.   [B, S, H, D]
-        freqs_cis (torch.Tensor or tuple): Precomputed frequency tensor for complex exponential.
-        head_first (bool): head dimension first (except batch dim) or not.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
-
-    """
-    # print(freqs_cis[0].shape, xq.shape, xk.shape)
-    xk_out = None
-    assert isinstance(freqs_cis, tuple)
     if isinstance(freqs_cis, tuple):
-        cos, sin = reshape_for_broadcast(freqs_cis, xq, head_first)  # [S, D]
-        cos, sin = cos.to(xq.device), sin.to(xq.device)
-        # real * cos - imag * sin
-        # imag * cos + real * sin
-        xq_out = (xq.float() * cos[:, start_offset : start_offset + xq.shape[1], :, :] + rotate_half(xq.float()) * sin[:, start_offset : start_offset + xq.shape[1], :, :]).type_as(xq)
-        xk_out = (xk.float() * cos[:, start_offset : start_offset + xk.shape[1], :, :] + rotate_half(xk.float()) * sin[:, start_offset : start_offset + xk.shape[1], :, :]).type_as(xk)
-    else:
-        # view_as_complex will pack [..., D/2, 2](real) to [..., D/2](complex)
-        xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))  # [B, S, H, D//2]
-        freqs_cis = reshape_for_broadcast(freqs_cis, xq_, head_first).to(xq.device)  # [S, D//2] --> [1, S, 1, D//2]
-        # (real, imag) * (cos, sin) = (real * cos - imag * sin, imag * cos + real * sin)
-        # view_as_real will expand [..., D/2](complex) to [..., D/2, 2](real)
-        xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3).type_as(xq)
-        xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))  # [B, S, H, D//2]
-        xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3).type_as(xk)
+        cos, sin = freqs_cis
+        if head_first:
+            shape = [1] * xq.ndim
+            shape[-2], shape[-1] = cos.shape
+            cos, sin = cos.view(*shape), sin.view(*shape)
+        else:
+            cos = cos[start_offset : start_offset + xq.shape[1]].view(1, xq.shape[1], 1, cos.shape[-1])
+            sin = sin[start_offset : start_offset + xq.shape[1]].view(1, xq.shape[1], 1, sin.shape[-1])
+        return rope.apply(xq, xk, (cos.to(xq.device), sin.to(xq.device)))
 
-    return xq_out, xk_out
+    if head_first:
+        shape = [1] * xq.ndim
+        shape[-2], shape[-1] = freqs_cis.shape
+        freqs_cis = freqs_cis.view(*shape)
+    else:
+        freqs_cis = freqs_cis.view(1, freqs_cis.shape[0], 1, freqs_cis.shape[1])
+    return rope.apply(xq, xk, freqs_cis.to(xq.device))
 
 
 def get_nd_rotary_pos_embed(

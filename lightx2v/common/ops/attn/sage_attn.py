@@ -92,11 +92,38 @@ class SageAttn2Weight(AttnWeightTemplate):
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
         elif len(q.shape) == 4:
             bs = q.shape[0]
+        if max_seqlen_q is None:
+            max_seqlen_q = q.shape[-3]
+        if max_seqlen_kv is None:
+            max_seqlen_kv = k.shape[-3]
         if magi_register_custom_op is not None and sageattn is not None:
             x = torch.ops.lightx2v.sage_attn2(q, k, v).view(bs * max_seqlen_q, -1)
         else:
             x = sageattn(q, k, v, tensor_layout="NHD").view(bs * max_seqlen_q, -1)
         return x
+
+    def apply_with_lse(self, q, k, v, softmax_scale=None):
+        """Apply one dense attention block and return LSE as [tokens, heads]."""
+        if sageattn is None:
+            raise ImportError("sageattention is required for SageAttention2.")
+        q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        if q.ndim == 3:
+            q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+        elif q.ndim != 4:
+            raise ValueError(f"Dense SageAttention2 expects 3D or 4D Q/K/V, got q.ndim={q.ndim}.")
+
+        output, lse = sageattn(
+            q,
+            k,
+            v,
+            tensor_layout="NHD",
+            is_causal=False,
+            sm_scale=softmax_scale,
+            return_lse=True,
+        )
+        output = output.reshape(q.shape[0] * q.shape[1], -1)
+        lse = lse.transpose(1, 2).reshape(q.shape[0] * q.shape[1], q.shape[2])
+        return output, lse
 
 
 @ATTN_WEIGHT_REGISTER("sage_attn3")
@@ -121,6 +148,10 @@ class SageAttn3Weight(AttnWeightTemplate):
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
         elif len(q.shape) == 4:
             bs = q.shape[0]
+        if max_seqlen_q is None:
+            max_seqlen_q = q.shape[-3]
+        if max_seqlen_kv is None:
+            max_seqlen_kv = k.shape[-3]
 
         x = sageattn3_blackwell(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2).reshape(bs * max_seqlen_q, -1)
         return x
@@ -304,6 +335,10 @@ class SageAttn2KInt8VFP8Weight(AttnWeightTemplate):
                 v_fp8 = v_fp8.unsqueeze(0)
         elif len(q.shape) == 4:
             bs = q.shape[0]
+        if max_seqlen_q is None:
+            max_seqlen_q = q.shape[-3]
+        if max_seqlen_kv is None:
+            max_seqlen_kv = k_int8.shape[-3]
 
         head_dim_og = q.size(-1)
         if sm_scale is None:

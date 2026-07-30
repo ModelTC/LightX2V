@@ -151,7 +151,7 @@ class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
 
         img_mod1_shift, img_mod1_scale, _, _, _, _ = img_mod_layer.apply(vec_).chunk(6, dim=-1)
         inp = inp.squeeze(0)
-        normed_inp = torch.nn.functional.layer_norm(inp, (inp.shape[1],), None, None, 1e-6)
+        normed_inp = block.img_branch.img_norm1.apply(inp)
         modulated_inp = normed_inp * (1 + img_mod1_scale) + img_mod1_shift
 
         del normed_inp, inp, vec_
