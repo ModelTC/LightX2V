@@ -26,15 +26,40 @@ class BaseInferencer:
     def set_model(self, model):
         self.model = model
 
-    def cfg_guided_denoise(self, latents, timestep_or_sigma, pos_cond, neg_cond):
-        denoiser_input = self.model.prepare_denoiser_input(latents, condition=pos_cond)
+    def cfg_guided_denoise(
+        self,
+        latents,
+        timestep_or_sigma,
+        pos_cond,
+        neg_cond,
+        model=None,
+    ):
+        model = self.model if model is None else model
+        denoiser_input = model.prepare_denoiser_input(
+            latents,
+            condition=pos_cond,
+        )
 
-        pred_pos = self.model.denoise(denoiser_input, timestep_or_sigma, pos_cond)
-        pred_pos = self.model.postprocess_denoiser_output(pred_pos, denoiser_input)
+        pred_pos = model.denoise(
+            denoiser_input,
+            timestep_or_sigma,
+            pos_cond,
+        )
+        pred_pos = model.postprocess_denoiser_output(
+            pred_pos,
+            denoiser_input,
+        )
 
         if self.enable_cfg:
-            pred_neg = self.model.denoise(denoiser_input, timestep_or_sigma, neg_cond)
-            pred_neg = self.model.postprocess_denoiser_output(pred_neg, denoiser_input)
+            pred_neg = model.denoise(
+                denoiser_input,
+                timestep_or_sigma,
+                neg_cond,
+            )
+            pred_neg = model.postprocess_denoiser_output(
+                pred_neg,
+                denoiser_input,
+            )
             pred = pred_neg + self.guidance_scale * (pred_pos - pred_neg)
         else:
             pred = pred_pos

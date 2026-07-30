@@ -1,12 +1,56 @@
+import importlib
+
 from lightx2v_train.utils.registry import build_trainer
 
-from .dmd import DmdTrainer, LTX2T2AVArDmdTrainer, LTX2T2AVDmdTrainer, LingBotVideoDmdTrainer, VideoArDmdTrainer, VideoDmdTrainer
-from .dopsd import DopsdTrainer
-from .fastwam import FastWAMTrainer
-from .flow import FlowMatchingTrainer, LTX2T2AVFlowTrainer
-from .tf import LTX2T2AVTeacherForcingTrainer, TFTrainer
+_LAZY_EXPORTS = {
+    "ARDmdTrainer": (".dmd.video_ar_trainer", "VideoArDmdTrainer"),
+    "DmdTrainer": (".dmd.trainer", "DmdTrainer"),
+    "DopsdTrainer": (".dopsd", "DopsdTrainer"),
+    "FastWAMTrainer": (".fastwam", "FastWAMTrainer"),
+    "FlowMatchingTrainer": (".flow", "FlowMatchingTrainer"),
+    "LTX2T2AVArDmdTrainer": (
+        ".dmd.ltx_trainer",
+        "LTX2T2AVArDmdTrainer",
+    ),
+    "LTX2T2AVDmdTrainer": (
+        ".dmd.ltx_trainer",
+        "LTX2T2AVDmdTrainer",
+    ),
+    "LTX2T2AVFlowTrainer": (".flow", "LTX2T2AVFlowTrainer"),
+    "LTX2T2AVTeacherForcingTrainer": (
+        ".tf",
+        "LTX2T2AVTeacherForcingTrainer",
+    ),
+    "LingBotVideoDmdTrainer": (
+        ".dmd.video_trainer",
+        "LingBotVideoDmdTrainer",
+    ),
+    "TFTrainer": (".tf", "TFTrainer"),
+    "VideoArDmdTrainer": (
+        ".dmd.video_ar_trainer",
+        "VideoArDmdTrainer",
+    ),
+    "VideoDmdTrainer": (
+        ".dmd.video_trainer",
+        "VideoDmdTrainer",
+    ),
+    "VideoPhasedDmdTrainer": (
+        ".phased_dmd.trainer",
+        "VideoPhasedDmdTrainer",
+    ),
+    "VideoSgmdTrainer": (".sgmd", "VideoSgmdTrainer"),
+}
 
-ARDmdTrainer = VideoArDmdTrainer
+
+def __getattr__(name):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = target
+    value = getattr(importlib.import_module(module_name, __name__), attribute_name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "build_trainer",
@@ -21,6 +65,8 @@ __all__ = [
     "TFTrainer",
     "VideoArDmdTrainer",
     "VideoDmdTrainer",
+    "VideoPhasedDmdTrainer",
+    "VideoSgmdTrainer",
     "DopsdTrainer",
     "FastWAMTrainer",
 ]

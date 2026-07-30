@@ -80,6 +80,8 @@ def read_records(path, prompt_column="prompt", prompt_index=0):
         known_columns = {
             prompt_column,
             *PROMPT_KEYS,
+            "prompt_path",
+            "text_path",
             "video",
             "video_path",
             "audio",

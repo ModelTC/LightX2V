@@ -193,7 +193,26 @@ class VideoDataset(torch.utils.data.Dataset):
                 if image_path is not None:
                     meta["image_path"] = str(image_path)
 
-                samples.append({"prompt": prompt_text(row, self.prompt_column), "meta": meta})
+                prompt = prompt_text(row, self.prompt_column)
+                prompt_path_value = record_value(
+                    row,
+                    "prompt_path",
+                    "text_path",
+                )
+                if prompt_path_value is not None:
+                    prompt_path = resolve_data_path(
+                        prompt_path_value,
+                        metadata_path.parent,
+                        subdirs=("prompt", "prompts", "text", "texts"),
+                    )
+                    if prompt_path is None or not prompt_path.is_file():
+                        if self.skip_missing:
+                            continue
+                        raise FileNotFoundError(f"prompt_path points to a missing file: {prompt_path}")
+                    prompt = " ".join(prompt_path.read_text(encoding="utf-8").split())
+                    meta["prompt_path"] = str(prompt_path)
+
+                samples.append({"prompt": prompt, "meta": meta})
                 if self.max_samples is not None and len(samples) >= int(self.max_samples):
                     return samples
         return samples

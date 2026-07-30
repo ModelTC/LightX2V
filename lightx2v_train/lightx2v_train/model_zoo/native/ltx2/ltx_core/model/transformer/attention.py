@@ -56,7 +56,7 @@ except ImportError:
     flash_attn_interface = None
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_4_func
-except ImportError:
+except (ImportError, AttributeError):
     flash_attn_4_func = None
 
 

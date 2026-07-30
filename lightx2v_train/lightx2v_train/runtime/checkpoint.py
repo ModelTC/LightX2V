@@ -2,13 +2,28 @@ import os
 import shutil
 
 
+def _is_complete_checkpoint(checkpoint_dir):
+    return any(
+        os.path.isfile(os.path.join(checkpoint_dir, marker))
+        for marker in (
+            "_SUCCESS",
+            "trainer_state.pt",
+            "training_state.pt",
+        )
+    )
+
+
+def _completed_checkpoint_names(output_dir):
+    return [name for name in os.listdir(output_dir) if name.startswith("checkpoint-") and os.path.isdir(os.path.join(output_dir, name)) and _is_complete_checkpoint(os.path.join(output_dir, name))]
+
+
 def prune_checkpoints(output_dir, total_limit):
     if total_limit is None:
         return
     if not os.path.exists(output_dir):
         return
 
-    checkpoints = [name for name in os.listdir(output_dir) if name.startswith("checkpoint-")]
+    checkpoints = _completed_checkpoint_names(output_dir)
     checkpoints = sorted(checkpoints, key=lambda name: parse_checkpoint_iteration(name))
     if len(checkpoints) < total_limit:
         return
@@ -25,7 +40,7 @@ def find_latest_checkpoint(output_dir):
     if not os.path.exists(output_dir):
         return None, 0
 
-    checkpoints = [name for name in os.listdir(output_dir) if name.startswith("checkpoint-")]
+    checkpoints = _completed_checkpoint_names(output_dir)
     if not checkpoints:
         return None, 0
 

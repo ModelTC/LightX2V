@@ -41,6 +41,9 @@ class WanT2VInferencer(BaseInferencer):
     def _inference_sigmas(self, num_inference_steps):
         return None
 
+    def _denoise_model_for_step(self, step_index, total_steps):
+        return self.model
+
     @torch.no_grad()
     def infer(self):
         samples = self.dataloader_eval.dataset.samples
@@ -117,11 +120,16 @@ class WanT2VInferencer(BaseInferencer):
                     logger.info("[infer] sample={}/{} seed={} size={}x{} start", i + 1, len(prompts), seed, height, width)
                 for step_idx, _ in enumerate(self.scheduler.infer_timesteps):
                     sigma = self.scheduler.infer_sigmas[step_idx].unsqueeze(0)
+                    denoise_model = self._denoise_model_for_step(
+                        step_idx,
+                        total_steps,
+                    )
                     model_output = self.cfg_guided_denoise(
                         latents=latent,
                         timestep_or_sigma=sigma,
                         pos_cond=pos_cond,
                         neg_cond=neg_cond,
+                        model=denoise_model,
                     )
                     latent = self.scheduler.step(model_output, step_idx, latent)
                     step = step_idx + 1
@@ -158,6 +166,33 @@ class WanT2VInferencer(BaseInferencer):
             saved_count = saved_count_tensor.item()
         logger.info("[infer] finished saved={}", saved_count)
         return saved_paths
+
+
+@INFERENCER_REGISTER("wan_t2v_dual_infer")
+class WanT2VDualInferencer(WanT2VInferencer):
+    def __init__(self, config):
+        super().__init__(config)
+        self.low_model = None
+        self.boundary_step_index = int(self.infer_config.get("boundary_step_index", 2))
+
+    def set_low_model(self, model):
+        self.low_model = model
+
+    def _denoise_model_for_step(self, step_index, total_steps):
+        if self.low_model is None:
+            raise RuntimeError("wan_t2v_dual_infer requires a Low Student model.")
+        if not 0 < self.boundary_step_index < total_steps:
+            raise ValueError("inference.boundary_step_index must split the denoising steps into non-empty High and Low regions.")
+        if step_index < self.boundary_step_index:
+            return self.model
+        return self.low_model
+
+    @torch.no_grad()
+    def infer(self):
+        if self.low_model is None:
+            raise RuntimeError("wan_t2v_dual_infer requires set_low_model before infer.")
+        self.low_model.set_denoiser_eval()
+        return super().infer()
 
 
 @INFERENCER_REGISTER("lingbot_video_t2v_infer")
