@@ -1,9 +1,11 @@
 import copy
 import os
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from loguru import logger
+
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime.distributed import (
     barrier,
@@ -21,15 +23,6 @@ from lightx2v_train.runtime.sequence_parallel import (
     sync_sequence_parallel_gradients,
 )
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
-from lightx2v_train.utils.registry import TRAINER_REGISTER
-from ..base import BaseTrainer
-from .checkpoint import DmdCheckpointManager
-from .config import DmdConfig
-from .math import (
-    dmd_loss,
-    do_cfg,
-)
-from .roles import DmdRoleRegistry
 from lightx2v_train.tricks import (
     CdmStepContext,
     CdmTrainerConstraints,
@@ -39,6 +32,17 @@ from lightx2v_train.tricks import (
     IdaStepContext,
     ImplicitDistributionAlignmentTrick,
 )
+from lightx2v_train.utils.registry import TRAINER_REGISTER
+
+from ..base import BaseTrainer
+from .checkpoint import DmdCheckpointManager
+from .config import DmdConfig
+from .math import (
+    dmd_loss,
+    do_cfg,
+)
+from .roles import DmdRoleRegistry
+
 
 @TRAINER_REGISTER("dmd")
 class DmdTrainer(BaseTrainer):
@@ -84,9 +88,7 @@ class DmdTrainer(BaseTrainer):
         self.fake_optimizer_adam_epsilon = self.fake_optimizer_config.get("adam_epsilon", self.optimizer_adam_epsilon)
 
         self.dmd_config = parsed.dmd
-        self.cdm_trick = CdmTrick.from_mapping(
-            self.dmd_config.get("cdm", {})
-        )
+        self.cdm_trick = CdmTrick.from_mapping(self.dmd_config.get("cdm", {}))
         self.cdm_trick.validate_trainer(
             CdmTrainerConstraints(
                 supported=self.supports_cdm,
@@ -95,15 +97,9 @@ class DmdTrainer(BaseTrainer):
             ),
             self.trainer_name,
         )
-        self.ida_trick = (
-            ImplicitDistributionAlignmentTrick.from_mapping(
-                self.dmd_config.get("ida", {})
-            )
-        )
+        self.ida_trick = ImplicitDistributionAlignmentTrick.from_mapping(self.dmd_config.get("ida", {}))
         if self.ida_trick.enabled and not self.supports_ida:
-            raise ValueError(
-                f"{self.trainer_name} does not support training.dmd.ida."
-            )
+            raise ValueError(f"{self.trainer_name} does not support training.dmd.ida.")
         self.num_inference_steps = parsed.num_inference_steps
         self.fake_update_ratio = parsed.fake_update_ratio
         self.guidance_scale = parsed.guidance_scale
@@ -111,21 +107,11 @@ class DmdTrainer(BaseTrainer):
         self.cfg_norm = parsed.cfg_norm
         self.image_sizes = parsed.image_sizes
         self.random_schedule_enabled = parsed.random_schedule_enabled
-        self.random_schedule_num_steps_min = (
-            parsed.random_schedule_num_steps_min
-        )
-        self.random_schedule_num_steps_max = (
-            parsed.random_schedule_num_steps_max
-        )
-        self.random_schedule_sigma_min = (
-            parsed.random_schedule_sigma_min
-        )
-        self.random_schedule_sigma_max = (
-            parsed.random_schedule_sigma_max
-        )
-        self.random_schedule_sampling_method = (
-            parsed.random_schedule_sampling_method
-        )
+        self.random_schedule_num_steps_min = parsed.random_schedule_num_steps_min
+        self.random_schedule_num_steps_max = parsed.random_schedule_num_steps_max
+        self.random_schedule_sigma_min = parsed.random_schedule_sigma_min
+        self.random_schedule_sigma_max = parsed.random_schedule_sigma_max
+        self.random_schedule_sampling_method = parsed.random_schedule_sampling_method
 
     @property
     def cdm_enabled(self):
@@ -287,9 +273,7 @@ class DmdTrainer(BaseTrainer):
         }
 
     def _setup_ida_trick(self):
-        self.ida_trick.setup(
-            IdaSetupContext(model_pairs=self._ida_model_pairs())
-        )
+        self.ida_trick.setup(IdaSetupContext(model_pairs=self._ida_model_pairs()))
         logger.info(
             "[train] {} SenseFlow IDA enabled={} decay={}",
             self.trainer_name,
@@ -578,9 +562,7 @@ class DmdTrainer(BaseTrainer):
                 sample = next(samples)
                 conditions = self._encode_conditions(sample)
                 latent_shape = self._latent_shape(sample)
-                self._set_student_gradient_sync(
-                    micro_idx == grad_accum_iters - 1
-                )
+                self._set_student_gradient_sync(micro_idx == grad_accum_iters - 1)
                 res_student = self.forward_loss(latent_shape, conditions, stage="student", current_iter=current_iter)
                 loss_student = res_student["student"]
                 (loss_student / grad_accum_iters).backward()
@@ -604,9 +586,7 @@ class DmdTrainer(BaseTrainer):
                     sample = next(samples)
                     conditions = self._encode_conditions(sample)
                     latent_shape = self._latent_shape(sample)
-                    self._set_fake_gradient_sync(
-                        micro_idx == grad_accum_iters - 1
-                    )
+                    self._set_fake_gradient_sync(micro_idx == grad_accum_iters - 1)
                     res_fake = self.forward_loss(
                         latent_shape,
                         conditions,
@@ -733,6 +713,3 @@ class DmdTrainer(BaseTrainer):
 
     def _save_distributed_state(self, save_dir, iteration):
         return self.checkpoint_manager._save_distributed_state(save_dir, iteration)
-
-
-

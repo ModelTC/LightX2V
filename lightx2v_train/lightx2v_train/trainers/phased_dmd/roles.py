@@ -1,15 +1,19 @@
 import copy
+
 from loguru import logger
+
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime.parallel import (
     apply_parallel,
     set_parallel_gradient_sync,
 )
 from lightx2v_train.tricks import IdaModelPair
+
 from ..dmd.roles import (
     DmdRoleRegistry,
     RoleSpec,
 )
+
 
 class PhasedRoleRegistry(DmdRoleRegistry):
     """Extend the DMD role view with Low and Low-High resources."""
@@ -122,11 +126,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             "fake_real_low",
             "teacher_2",
         }
-        base_model_config = {
-            key: copy.deepcopy(value)
-            for key, value in self.model_config.items()
-            if key not in excluded_roles
-        }
+        base_model_config = {key: copy.deepcopy(value) for key, value in self.model_config.items() if key not in excluded_roles}
         override = self.model_config.get(role, {})
         if not isinstance(override, dict):
             raise ValueError(f"model.{role} must be a mapping.")
@@ -181,11 +181,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
         )
 
     def active_fake_real_state(self, region):
-        role = (
-            "fake_real_high"
-            if region == "high"
-            else "fake_real_low"
-        )
+        role = "fake_real_high" if region == "high" else "fake_real_low"
         runtime = self.runtime(role)
         params = getattr(
             self.owner,
@@ -216,10 +212,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
         return tuple(names)
 
     def trainable_models(self):
-        return tuple(
-            (name, self.runtime(name).model)
-            for name in self.trainable_names()
-        )
+        return tuple((name, self.runtime(name).model) for name in self.trainable_names())
 
     def trainable_states(self):
         return tuple(
@@ -288,15 +281,9 @@ class PhasedRoleRegistry(DmdRoleRegistry):
         fake_low_high_model_config = None
         fake_low_high_model_path = None
         if self.enable_fake_low_high:
-            fake_low_high_model_config = self._role_model_config(
-                "teacher"
-            )
-            self.fake_low_high_model = build_model(
-                fake_low_high_model_config
-            )
-            fake_low_high_model_path = fake_low_high_model_config[
-                "model"
-            ]["pretrained_model_name_or_path"]
+            fake_low_high_model_config = self._role_model_config("teacher")
+            self.fake_low_high_model = build_model(fake_low_high_model_config)
+            fake_low_high_model_path = fake_low_high_model_config["model"]["pretrained_model_name_or_path"]
             self.fake_low_high_model.load_components(
                 transformer_only=True,
                 reference_model=self.model,
@@ -329,37 +316,23 @@ class PhasedRoleRegistry(DmdRoleRegistry):
                 model.enable_gradient_checkpointing()
             setattr(self, f"{role}_model", model)
             logger.info(
-                "[train] phased_dmd independent {} path={} "
-                "train_type={}",
+                "[train] phased_dmd independent {} path={} train_type={}",
                 role,
-                role_config["model"][
-                    "pretrained_model_name_or_path"
-                ],
+                role_config["model"]["pretrained_model_name_or_path"],
                 getattr(self, f"{role}_train_type"),
             )
 
         teacher_2_override = self.model_config.get("teacher_2", {})
         if not isinstance(teacher_2_override, dict):
             raise ValueError("model.teacher_2 must be a mapping.")
-        share_teacher_2 = bool(
-            teacher_2_override.get("share_with_teacher", False)
-        )
+        share_teacher_2 = bool(teacher_2_override.get("share_with_teacher", False))
         if share_teacher_2:
-            teacher_model_config = self._role_model_config(
-                "teacher"
-            )["model"]
-            teacher_2_model_config = self._role_model_config(
-                "teacher_2"
-            )["model"]
+            teacher_model_config = self._role_model_config("teacher")["model"]
+            teacher_2_model_config = self._role_model_config("teacher_2")["model"]
             if teacher_model_config != teacher_2_model_config:
-                raise ValueError(
-                    "model.teacher_2 can share with teacher only when "
-                    "their model configurations match."
-                )
+                raise ValueError("model.teacher_2 can share with teacher only when their model configurations match.")
             self.teacher_2_model = self.teacher_model
-            logger.info(
-                "[train] phased_dmd teacher_2 shares teacher weights"
-            )
+            logger.info("[train] phased_dmd teacher_2 shares teacher weights")
         else:
             teacher_2_model_config = self._role_model_config("teacher_2")
             self.teacher_2_model = build_model(teacher_2_model_config)
@@ -372,27 +345,11 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             apply_parallel(self.teacher_2_model, self.config)
             self.teacher_2_model.transformer.eval()
 
-        self.student_2_trainable_params = list(
-            self.student_2_model.trainable_parameters()
-        )
-        self.fake_2_trainable_params = list(
-            self.fake_2_model.trainable_parameters()
-        )
-        self.fake_low_high_trainable_params = (
-            list(self.fake_low_high_model.trainable_parameters())
-            if self.fake_low_high_model is not None
-            else []
-        )
-        self.fake_real_high_trainable_params = (
-            list(self.fake_real_high_model.trainable_parameters())
-            if self.fake_real_high_model is not None
-            else []
-        )
-        self.fake_real_low_trainable_params = (
-            list(self.fake_real_low_model.trainable_parameters())
-            if self.fake_real_low_model is not None
-            else []
-        )
+        self.student_2_trainable_params = list(self.student_2_model.trainable_parameters())
+        self.fake_2_trainable_params = list(self.fake_2_model.trainable_parameters())
+        self.fake_low_high_trainable_params = list(self.fake_low_high_model.trainable_parameters()) if self.fake_low_high_model is not None else []
+        self.fake_real_high_trainable_params = list(self.fake_real_high_model.trainable_parameters()) if self.fake_real_high_model is not None else []
+        self.fake_real_low_trainable_params = list(self.fake_real_low_model.trainable_parameters()) if self.fake_real_low_model is not None else []
         self.student_2_optimizer = self._build_optimizer(
             self.student_2_trainable_params,
             self.student_2_optimizer_config,
@@ -483,9 +440,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
         )
         if self.infer_every_iters:
             if not hasattr(self.inferencer, "set_low_model"):
-                raise RuntimeError(
-                    "video_phased_dmd requires wan_t2v_dual_infer."
-                )
+                raise RuntimeError("video_phased_dmd requires wan_t2v_dual_infer.")
             self.inferencer.set_low_model(self.student_2_model)
 
         if resume_ckpt_path is not None:
@@ -496,13 +451,10 @@ class PhasedRoleRegistry(DmdRoleRegistry):
         logger.info(
             "[train] phased_dmd High Student={} Low Student={}",
             self.model_config["pretrained_model_name_or_path"],
-            student_2_model_config["model"][
-                "pretrained_model_name_or_path"
-            ],
+            student_2_model_config["model"]["pretrained_model_name_or_path"],
         )
         logger.info(
-            "[train] phased_dmd High Fake={} Low Fake={} "
-            "Low-High Fake={} enabled={}",
+            "[train] phased_dmd High Fake={} Low Fake={} Low-High Fake={} enabled={}",
             self.model_config.get("fake", {}).get(
                 "pretrained_model_name_or_path",
                 self.model_config["pretrained_model_name_or_path"],
@@ -512,12 +464,10 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             self.enable_fake_low_high,
         )
         logger.info(
-            "[train] phased_dmd schedule={} boundary={} "
-            "updates=1G+{}F fake_real_high={} fake_real_low={}",
+            "[train] phased_dmd schedule={} boundary={} updates=1G+{}F fake_real_high={} fake_real_low={}",
             list(self.denoising_step_list),
             self.match_timestep,
             self.fake_update_ratio,
             self.real_data_fake_trick.enabled_for("high"),
             self.real_data_fake_trick.enabled_for("low"),
         )
-

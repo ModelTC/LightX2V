@@ -1,8 +1,10 @@
+import copy
 import math
 import os
-import copy
+
 import torch
 from loguru import logger
+
 from lightx2v_train.runtime.distributed import (
     barrier,
     is_main_process,
@@ -14,6 +16,7 @@ from lightx2v_train.tricks import (
     RealDataFakeTrick,
 )
 from lightx2v_train.utils.registry import TRAINER_REGISTER
+
 from ..dmd import VideoDmdTrainer
 from ..dmd.math import euler_step
 from .checkpoint import PhasedCheckpointManager
@@ -31,6 +34,7 @@ from .math import (
 )
 from .roles import PhasedRoleRegistry
 from .rollout import PhasedRolloutEngine
+
 
 @TRAINER_REGISTER("video_phased_dmd")
 class VideoPhasedDmdTrainer(VideoDmdTrainer):
@@ -50,18 +54,14 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
             dmd_config=self.dmd_config,
             infer_config=self.infer_config,
             max_train_iters=self.max_train_iters,
-            default_lora_target_modules=(
-                self.default_lora_target_modules
-            ),
+            default_lora_target_modules=(self.default_lora_target_modules),
         )
         self.parsed_phased_dmd_config = parsed
         self._checkpoint_process_group = None
         self.phased_config = parsed.phased
         self.match_timestep = parsed.match_timestep
         self.match_step_index = parsed.match_step_index
-        self.infer_boundary_step_index = (
-            parsed.infer_boundary_step_index
-        )
+        self.infer_boundary_step_index = parsed.infer_boundary_step_index
         self.score_timestep_margin = parsed.score_timestep_margin
         self.score_timestep_min = parsed.score_timestep_min
         self.score_timestep_max = parsed.score_timestep_max
@@ -73,19 +73,13 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
         self.enable_fake_low_high = parsed.enable_fake_low_high
         self.student_2_train_type = parsed.student_2_train_type
         self.fake_2_train_type = parsed.fake_2_train_type
-        self.fake_low_high_train_type = (
-            parsed.fake_low_high_train_type
-        )
+        self.fake_low_high_train_type = parsed.fake_low_high_train_type
         self.student_2_lora_config = parsed.student_2_lora
         self.fake_2_lora_config = parsed.fake_2_lora
-        self.fake_low_high_lora_config = (
-            parsed.fake_low_high_lora
-        )
+        self.fake_low_high_lora_config = parsed.fake_low_high_lora
         self.student_2_optimizer_config = parsed.student_2_optimizer
         self.fake_2_optimizer_config = parsed.fake_2_optimizer
-        self.fake_low_high_optimizer_config = (
-            parsed.fake_low_high_optimizer
-        )
+        self.fake_low_high_optimizer_config = parsed.fake_low_high_optimizer
 
         self.diversity_trick.validate_trainer(
             DiversityTrainerConstraints(
@@ -115,28 +109,17 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
         )
         self.fake_real_high_train_type = self.fake_train_type
         self.fake_real_low_train_type = self.fake_2_train_type
-        self.fake_real_high_lora_config = copy.deepcopy(
-            self.fake_lora_config
-        )
-        self.fake_real_low_lora_config = copy.deepcopy(
-            self.fake_2_lora_config
-        )
-        self.fake_real_high_optimizer_config = copy.deepcopy(
-            self.fake_optimizer_config
-        )
-        self.fake_real_low_optimizer_config = copy.deepcopy(
-            self.fake_2_optimizer_config
-        )
+        self.fake_real_high_lora_config = copy.deepcopy(self.fake_lora_config)
+        self.fake_real_low_lora_config = copy.deepcopy(self.fake_2_lora_config)
+        self.fake_real_high_optimizer_config = copy.deepcopy(self.fake_optimizer_config)
+        self.fake_real_low_optimizer_config = copy.deepcopy(self.fake_2_optimizer_config)
         if self.real_data_fake_trick.enabled:
             train_data_name = self.config["data"]["train"].get("name")
             if train_data_name not in {
                 "latent_dataset",
                 "video_dataset",
             }:
-                raise ValueError(
-                    "Fake-real training requires data.train.name="
-                    "latent_dataset or video_dataset."
-                )
+                raise ValueError("Fake-real training requires data.train.name=latent_dataset or video_dataset.")
 
     def _setup_fake_real_resources(self):
         # Phased resources are created after the Low roles are available.
@@ -145,7 +128,6 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
         self.fake_real_lr_scheduler = None
         self.fake_real_trainable_params = []
         return
-
 
     def _parse_lora_config(self, role_config, role):
         return parse_role_lora_config(
@@ -343,9 +325,7 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
         region,
         teacher_branch,
     ):
-        optimizer, scheduler, params, set_sync = (
-            self._active_student_state(region)
-        )
+        optimizer, scheduler, params, set_sync = self._active_student_state(region)
         optimizer.zero_grad(set_to_none=True)
         total_loss = 0.0
         total_real_dmd_loss = 0.0
@@ -356,10 +336,7 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
             conditions = self._encode_conditions(sample)
             latent_shape = self._latent_shape(sample)
             use_fake_real = self.real_data_fake_trick.enabled_for(region)
-            set_sync(
-                use_fake_real
-                or micro_index == grad_accum_iters - 1
-            )
+            set_sync(use_fake_real or micro_index == grad_accum_iters - 1)
             initial_noise = self.sample_initial_latents(latent_shape)
             (
                 anchor,
@@ -401,17 +378,10 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
                         region,
                     )
                 )
-                (
-                    real_result.loss / grad_accum_iters
-                ).backward()
-                total_real_dmd_loss += (
-                    real_result.metrics["real_dmd"].item()
-                    / grad_accum_iters
-                )
+                (real_result.loss / grad_accum_iters).backward()
+                total_real_dmd_loss += real_result.metrics["real_dmd"].item() / grad_accum_iters
                 del real_result
-            total_rollout_timestep += (
-                float(rollout_timestep) / grad_accum_iters
-            )
+            total_rollout_timestep += float(rollout_timestep) / grad_accum_iters
 
         self._sync_sequence_parallel_grads(params)
         torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
@@ -432,24 +402,14 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
         grad_accum_iters,
         region,
     ):
-        optimizer, scheduler, params, set_sync = (
-            self._active_fake_state(region)
-        )
-        fake_model = (
-            self.fake_model
-            if region == "high"
-            else self.fake_2_model
-        )
+        optimizer, scheduler, params, set_sync = self._active_fake_state(region)
+        fake_model = self.fake_model if region == "high" else self.fake_2_model
         optimizer.zero_grad(set_to_none=True)
         total_loss = 0.0
         total_fake_low_high_loss = 0.0
         total_fake_real_loss = 0.0
         use_fake_real = self.real_data_fake_trick.enabled_for(region)
-        fake_real_state = (
-            self._active_fake_real_state(region)
-            if use_fake_real
-            else None
-        )
+        fake_real_state = self._active_fake_real_state(region) if use_fake_real else None
         if fake_real_state is not None:
             fake_real_optimizer = fake_real_state[0]
             fake_real_optimizer.zero_grad(set_to_none=True)
@@ -477,10 +437,7 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
                 raw_max,
             ) = specifications[0]
             if active_fake_model is not fake_model:
-                raise RuntimeError(
-                    "Active fake model does not match the phased score "
-                    "specification."
-                )
+                raise RuntimeError("Active fake model does not match the phased score specification.")
             sync_gradients = micro_index == grad_accum_iters - 1
             set_sync(sync_gradients)
             loss = self._fake_loss_for_score_range(
@@ -503,26 +460,17 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
                     low_high_raw_min,
                     low_high_raw_max,
                 ) = specifications[1]
-                self._set_fake_low_high_gradient_sync(
-                    sync_gradients
+                self._set_fake_low_high_gradient_sync(sync_gradients)
+                fake_low_high_loss = self._fake_loss_for_score_range(
+                    fake_low_high_model,
+                    low_high_anchor,
+                    low_high_sigma_s,
+                    conditions[0],
+                    low_high_raw_min,
+                    low_high_raw_max,
                 )
-                fake_low_high_loss = (
-                    self._fake_loss_for_score_range(
-                        fake_low_high_model,
-                        low_high_anchor,
-                        low_high_sigma_s,
-                        conditions[0],
-                        low_high_raw_min,
-                        low_high_raw_max,
-                    )
-                )
-                (
-                    fake_low_high_loss / grad_accum_iters
-                ).backward()
-                total_fake_low_high_loss += (
-                    fake_low_high_loss.detach().item()
-                    / grad_accum_iters
-                )
+                (fake_low_high_loss / grad_accum_iters).backward()
+                total_fake_low_high_loss += fake_low_high_loss.detach().item() / grad_accum_iters
                 del fake_low_high_loss
             if use_fake_real:
                 fake_real_state[3](sync_gradients)
@@ -533,13 +481,8 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
                         region,
                     )
                 )
-                (
-                    fake_real_result.loss / grad_accum_iters
-                ).backward()
-                total_fake_real_loss += (
-                    fake_real_result.metrics["fake_real"].item()
-                    / grad_accum_iters
-                )
+                (fake_real_result.loss / grad_accum_iters).backward()
+                total_fake_real_loss += fake_real_result.metrics["fake_real"].item() / grad_accum_iters
                 del fake_real_result
             del x_bound, x0, anchor, sigma_s, specifications
 
@@ -549,9 +492,7 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
         if self.fake_low_high_optimizer is not None:
-            self._sync_sequence_parallel_grads(
-                self.fake_low_high_trainable_params
-            )
+            self._sync_sequence_parallel_grads(self.fake_low_high_trainable_params)
             torch.nn.utils.clip_grad_norm_(
                 self.fake_low_high_trainable_params,
                 self.max_grad_norm,
@@ -630,9 +571,7 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
             int(self.gradient_accumulation_iters),
         )
         logger.info(
-            "[train] start method={} iter={}/{} grad_accum={} "
-            "fake_update_ratio={} div_loss={} "
-            "div_weight={} div_teacher_steps={} div_anchor_step={}",
+            "[train] start method={} iter={}/{} grad_accum={} fake_update_ratio={} div_loss={} div_weight={} div_teacher_steps={} div_anchor_step={}",
             self.trainer_name,
             current_iter,
             self.max_train_iters,
@@ -679,23 +618,12 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
                     grad_accum_iters,
                     region,
                 )
-                fake_loss += (
-                    current_fake_loss / self.fake_update_ratio
-                )
-                fake_low_high_loss += (
-                    current_fake_low_high_loss
-                    / self.fake_update_ratio
-                )
-                fake_real_loss += (
-                    current_fake_real_loss / self.fake_update_ratio
-                )
+                fake_loss += current_fake_loss / self.fake_update_ratio
+                fake_low_high_loss += current_fake_low_high_loss / self.fake_update_ratio
+                fake_real_loss += current_fake_real_loss / self.fake_update_ratio
 
             current_iter += 1
-            if (
-                current_iter == 1
-                or current_iter % self.train_log_every_iters == 0
-                or current_iter >= self.max_train_iters
-            ):
+            if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= self.max_train_iters:
                 active_student = self._active_student_state(region)
                 active_fake = self._active_fake_state(region)
                 logger.info(
@@ -718,27 +646,15 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
                     reduce_mean(rollout_timestep),
                     active_student[1].get_last_lr()[0],
                     active_fake[1].get_last_lr()[0],
-                    (
-                        self.fake_low_high_lr_scheduler.get_last_lr()[
-                            0
-                        ]
-                        if self.fake_low_high_lr_scheduler is not None
-                        else 0.0
-                    ),
+                    (self.fake_low_high_lr_scheduler.get_last_lr()[0] if self.fake_low_high_lr_scheduler is not None else 0.0),
                 )
 
-            if (
-                self.save_every_iters
-                and current_iter % self.save_every_iters == 0
-            ):
+            if self.save_every_iters and current_iter % self.save_every_iters == 0:
                 self.save_checkpoint(
                     current_iter,
                     self.save_total_limit,
                 )
-            if (
-                self.infer_every_iters
-                and current_iter % self.infer_every_iters == 0
-            ):
+            if self.infer_every_iters and current_iter % self.infer_every_iters == 0:
                 self.run_inference(current_iter)
 
         logger.info(

@@ -28,15 +28,9 @@ def normalized_fisher_loss(
     """Compute the SGMD Fisher loss and its per-sample normalizer."""
     reduce_dims = tuple(range(1, generated.ndim))
     with torch.no_grad():
-        normalizer = (
-            generated.float() - x_pred_teacher.float()
-        ).abs().mean(dim=reduce_dims, keepdim=True)
+        normalizer = (generated.float() - x_pred_teacher.float()).abs().mean(dim=reduce_dims, keepdim=True)
 
-    per_element = (
-        0.5
-        * (x_pred_fake.float() - x_pred_teacher.float()).square()
-        / (normalizer + 1e-8)
-    )
+    per_element = 0.5 * (x_pred_fake.float() - x_pred_teacher.float()).square() / (normalizer + 1e-8)
     per_sample = per_element.flatten(1).mean(dim=1)
     return per_sample.mean(), normalizer
 
@@ -53,9 +47,7 @@ def generator_fake_correction_loss(
         x_pred_fake.ndim,
     ).clamp_min(1e-8)
     with torch.no_grad():
-        grad = (
-            x_pred_fake.float() - generated.detach().float()
-        ) / expanded_sigma
+        grad = (x_pred_fake.float() - generated.detach().float()) / expanded_sigma
         pseudo_target = x_pred_fake.float() - grad
     return 0.5 * F.mse_loss(
         x_pred_fake.float(),
@@ -76,10 +68,7 @@ class VideoSgmdTrainer(VideoDmdTrainer):
     def __init__(self, config):
         super().__init__(config)
         if self.fake_update_ratio != 1:
-            raise ValueError(
-                "video_sgmd strictly uses one student and one fake-score "
-                "update per iteration; set training.dmd.fake_update_ratio=1."
-            )
+            raise ValueError("video_sgmd strictly uses one student and one fake-score update per iteration; set training.dmd.fake_update_ratio=1.")
         if self.cdm_enabled:
             raise ValueError("video_sgmd does not support training.dmd.cdm.")
 
@@ -151,9 +140,7 @@ class VideoSgmdTrainer(VideoDmdTrainer):
         )
         x_pred_fake = renoised_xt - expanded_sigma * velocity_fake
         with torch.no_grad():
-            x_pred_teacher = (
-                renoised_xt - expanded_sigma * velocity_teacher
-            )
+            x_pred_teacher = renoised_xt - expanded_sigma * velocity_teacher
         loss_fisher, normalizer = normalized_fisher_loss(
             generated,
             x_pred_fake,
@@ -165,10 +152,7 @@ class VideoSgmdTrainer(VideoDmdTrainer):
             sigma,
             self.scheduler._expand_to_ndim,
         )
-        loss_generator = (
-            loss_fisher
-            - self.fake_correction_weight * loss_fake_correction
-        )
+        loss_generator = loss_fisher - self.fake_correction_weight * loss_fake_correction
         score_context = (
             generated.detach(),
             noise,
@@ -212,16 +196,8 @@ class VideoSgmdTrainer(VideoDmdTrainer):
                 sigma,
                 renoised_xt.ndim,
             )
-            x_pred_fake = (
-                renoised_xt - expanded_sigma * velocity_fake
-            )
-            loss_x_pred = (
-                0.5
-                * (
-                    x_pred_fake.float() - generated.float()
-                ).square()
-                / (normalizer.float() + 1e-8)
-            ).mean()
+            x_pred_fake = renoised_xt - expanded_sigma * velocity_fake
+            loss_x_pred = (0.5 * (x_pred_fake.float() - generated.float()).square() / (normalizer.float() + 1e-8)).mean()
         return {
             "score": loss_v_pred,
             "v_pred": loss_v_pred.detach(),
@@ -284,46 +260,27 @@ class VideoSgmdTrainer(VideoDmdTrainer):
                 self._set_student_gradient_sync(sync_grad)
                 self._set_fake_gradient_sync(False)
                 initial_noise = self.sample_initial_latents(latent_shape)
-                generator_result, score_context = (
-                    self._generator_forward(
-                        latent_shape,
-                        conditions,
-                        initial_noise=initial_noise,
-                    )
+                generator_result, score_context = self._generator_forward(
+                    latent_shape,
+                    conditions,
+                    initial_noise=initial_noise,
                 )
-                (
-                    generator_result["generator"]
-                    / grad_accum_iters
-                ).backward()
+                (generator_result["generator"] / grad_accum_iters).backward()
                 # Generator loss differentiates through the fake score with
                 # respect to its input, but fake parameters are not updated here.
                 self.fake_optimizer.zero_grad(set_to_none=True)
 
-                running_generator += (
-                    generator_result["generator"].detach().item()
-                    / grad_accum_iters
-                )
-                running_fisher += (
-                    generator_result["fisher"].item()
-                    / grad_accum_iters
-                )
-                running_fake_correction += (
-                    generator_result["fake_correction"].item()
-                    / grad_accum_iters
-                )
-                running_sgmd_step += (
-                    generator_result["sgmd_step"]
-                    / grad_accum_iters
-                )
+                running_generator += generator_result["generator"].detach().item() / grad_accum_iters
+                running_fisher += generator_result["fisher"].item() / grad_accum_iters
+                running_fake_correction += generator_result["fake_correction"].item() / grad_accum_iters
+                running_sgmd_step += generator_result["sgmd_step"] / grad_accum_iters
                 del generator_result, score_context
 
                 if self.diversity_trick.enabled:
-                    div_raw, div_weighted = (
-                        self._backward_diversity_loss(
-                            initial_noise,
-                            conditions,
-                            grad_accum_iters,
-                        )
+                    div_raw, div_weighted = self._backward_diversity_loss(
+                        initial_noise,
+                        conditions,
+                        grad_accum_iters,
                     )
                     running_generator += div_weighted
                     running_div_loss += div_raw
@@ -350,27 +307,17 @@ class VideoSgmdTrainer(VideoDmdTrainer):
                 sync_grad = micro_idx == grad_accum_iters - 1
 
                 with torch.no_grad():
-                    unused_generator_result, score_context = (
-                        self._generator_forward(
-                            latent_shape,
-                            conditions,
-                        )
+                    unused_generator_result, score_context = self._generator_forward(
+                        latent_shape,
+                        conditions,
                     )
                 del unused_generator_result
 
                 self._set_fake_gradient_sync(sync_grad)
                 score_result = self._fake_score_forward(score_context)
-                (
-                    score_result["score"] / grad_accum_iters
-                ).backward()
-                running_v_pred += (
-                    score_result["v_pred"].item()
-                    / grad_accum_iters
-                )
-                running_x_pred += (
-                    score_result["x_pred"].item()
-                    / grad_accum_iters
-                )
+                (score_result["score"] / grad_accum_iters).backward()
+                running_v_pred += score_result["v_pred"].item() / grad_accum_iters
+                running_x_pred += score_result["x_pred"].item() / grad_accum_iters
 
             self._sync_sequence_parallel_grads(
                 self.fake_trainable_params,
@@ -384,17 +331,9 @@ class VideoSgmdTrainer(VideoDmdTrainer):
             self.fake_optimizer.zero_grad(set_to_none=True)
 
             current_iter += 1
-            if (
-                current_iter == 1
-                or current_iter % self.train_log_every_iters == 0
-                or current_iter >= max_train_iters
-            ):
+            if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
                 logger.info(
-                    "[train] iter={}/{} generator={:.6f} "
-                    "fisher={:.6f} fake_correction={:.6f} "
-                    "div_loss={:.6f} sgmd_step={:.2f} "
-                    "v_pred={:.6f} x_pred={:.6f} "
-                    "lr={:.8f} fake_lr={:.8f}",
+                    "[train] iter={}/{} generator={:.6f} fisher={:.6f} fake_correction={:.6f} div_loss={:.6f} sgmd_step={:.2f} v_pred={:.6f} x_pred={:.6f} lr={:.8f} fake_lr={:.8f}",
                     current_iter,
                     max_train_iters,
                     reduce_mean(running_generator),
@@ -408,19 +347,13 @@ class VideoSgmdTrainer(VideoDmdTrainer):
                     self.fake_lr_scheduler.get_last_lr()[0],
                 )
 
-            if (
-                save_every_iters
-                and current_iter % save_every_iters == 0
-            ):
+            if save_every_iters and current_iter % save_every_iters == 0:
                 self.save_checkpoint(
                     current_iter,
                     save_total_limit,
                 )
 
-            if (
-                self.infer_every_iters
-                and current_iter % self.infer_every_iters == 0
-            ):
+            if self.infer_every_iters and current_iter % self.infer_every_iters == 0:
                 self.run_inference(current_iter)
 
         logger.info(

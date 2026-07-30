@@ -38,10 +38,7 @@ class RealDataFakeRegionConfig:
             role=role,
             enabled=bool(config.get("enabled", False)),
             weight=float(config.get("weight", 0.1)),
-            timestep_list=tuple(
-                int(timestep)
-                for timestep in config.get("timestep_list", ())
-            ),
+            timestep_list=tuple(int(timestep) for timestep in config.get("timestep_list", ())),
         )
 
 
@@ -111,9 +108,7 @@ class RealDataFakeTrick(
     name = "real_data_fake"
 
     def __init__(self, config: RealDataFakeConfig):
-        super().__init__(
-            enabled=any(region.enabled for region in config.regions.values())
-        )
+        super().__init__(enabled=any(region.enabled for region in config.regions.values()))
         self.config = config
         self._setup_context: RealDataFakeSetupContext | None = None
         self.validate()
@@ -143,39 +138,22 @@ class RealDataFakeTrick(
     def validate(self) -> None:
         for region, config in self.config.regions.items():
             if config.weight < 0:
-                raise ValueError(
-                    f"Real-data fake region {region!r} weight must be "
-                    "non-negative."
-                )
+                raise ValueError(f"Real-data fake region {region!r} weight must be non-negative.")
             if config.enabled and not config.timestep_list:
-                raise ValueError(
-                    f"Real-data fake region {region!r} requires a "
-                    "non-empty timestep_list."
-                )
+                raise ValueError(f"Real-data fake region {region!r} requires a non-empty timestep_list.")
             if any(timestep < 0 for timestep in config.timestep_list):
-                raise ValueError(
-                    f"Real-data fake region {region!r} timesteps must be "
-                    "non-negative."
-                )
+                raise ValueError(f"Real-data fake region {region!r} timesteps must be non-negative.")
 
     def setup(self, context: RealDataFakeSetupContext) -> None:
         if context.mode not in {"standard", "phased"}:
-            raise ValueError(
-                "Real-data fake mode must be 'standard' or 'phased'."
-            )
+            raise ValueError("Real-data fake mode must be 'standard' or 'phased'.")
         if context.num_train_timestep < 1:
-            raise ValueError(
-                "Real-data fake num_train_timestep must be positive."
-            )
+            raise ValueError("Real-data fake num_train_timestep must be positive.")
         if context.mode == "phased":
             if not 0 < context.match_timestep <= context.num_train_timestep:
-                raise ValueError(
-                    "Phased real-data fake match_timestep is out of range."
-                )
+                raise ValueError("Phased real-data fake match_timestep is out of range.")
             if context.phased_eps <= 0:
-                raise ValueError(
-                    "Phased real-data fake epsilon must be positive."
-                )
+                raise ValueError("Phased real-data fake epsilon must be positive.")
         self.validate_schedule(
             mode=context.mode,
             num_train_timestep=context.num_train_timestep,
@@ -193,38 +171,12 @@ class RealDataFakeTrick(
         for region, config in self.config.regions.items():
             if not config.enabled:
                 continue
-            if any(
-                timestep < 1 or timestep > num_train_timestep
-                for timestep in config.timestep_list
-            ):
-                raise ValueError(
-                    f"Real-data fake region {region!r} timestep_list "
-                    f"values must be in [1, {num_train_timestep}]."
-                )
-            if (
-                mode == "phased"
-                and region == "high"
-                and any(
-                    timestep <= match_timestep
-                    for timestep in config.timestep_list
-                )
-            ):
-                raise ValueError(
-                    "High real-data fake timestep_list must be above "
-                    "match_timestep."
-                )
-            if (
-                mode == "phased"
-                and region == "low"
-                and any(
-                    timestep > match_timestep
-                    for timestep in config.timestep_list
-                )
-            ):
-                raise ValueError(
-                    "Low real-data fake timestep_list must not exceed "
-                    "match_timestep."
-                )
+            if any(timestep < 1 or timestep > num_train_timestep for timestep in config.timestep_list):
+                raise ValueError(f"Real-data fake region {region!r} timestep_list values must be in [1, {num_train_timestep}].")
+            if mode == "phased" and region == "high" and any(timestep <= match_timestep for timestep in config.timestep_list):
+                raise ValueError("High real-data fake timestep_list must be above match_timestep.")
+            if mode == "phased" and region == "low" and any(timestep > match_timestep for timestep in config.timestep_list):
+                raise ValueError("Low real-data fake timestep_list must not exceed match_timestep.")
 
     @property
     def setup_context(self) -> RealDataFakeSetupContext:
@@ -242,10 +194,7 @@ class RealDataFakeTrick(
     def _region_config(self, region: str) -> RealDataFakeRegionConfig:
         if region not in self.config.regions:
             available = ", ".join(sorted(self.config.regions))
-            raise ValueError(
-                f"Unknown real-data fake region {region!r}. "
-                f"Available regions: {available}."
-            )
+            raise ValueError(f"Unknown real-data fake region {region!r}. Available regions: {available}.")
         return self.config.regions[region]
 
     def raw_timesteps_to_sigmas(
@@ -263,16 +212,11 @@ class RealDataFakeTrick(
                 device=raw_timesteps.device,
                 dtype=torch.float32,
             )
-            indices = (
-                setup.denoising_scheduler.num_train_timesteps
-                - raw_timesteps
-            )
+            indices = setup.denoising_scheduler.num_train_timesteps - raw_timesteps
             warped_timesteps = timesteps[indices]
         else:
             warped_timesteps = raw_timesteps.float()
-        return (
-            warped_timesteps / setup.num_train_timestep
-        ).to(dtype=dtype)
+        return (warped_timesteps / setup.num_train_timestep).to(dtype=dtype)
 
     def _expand_to_ndim(
         self,
@@ -368,24 +312,12 @@ class RealDataFakeTrick(
             ).float()
             if setup.score_timestep_shift > 1:
                 normalized = timestep / setup.num_train_timestep
-                timestep = (
-                    setup.score_timestep_shift
-                    * normalized
-                    / (
-                        1
-                        + (setup.score_timestep_shift - 1)
-                        * normalized
-                    )
-                    * setup.num_train_timestep
-                )
+                timestep = setup.score_timestep_shift * normalized / (1 + (setup.score_timestep_shift - 1) * normalized) * setup.num_train_timestep
             timestep = timestep.clamp(setup.min_step, setup.max_step)
             sigma = timestep / setup.num_train_timestep
         else:
             if context.region == "high":
-                raw_min = (
-                    setup.match_timestep
-                    + setup.score_timestep_margin
-                )
+                raw_min = setup.match_timestep + setup.score_timestep_margin
                 raw_max = setup.num_train_timestep
             else:
                 raw_min = 1
@@ -407,10 +339,7 @@ class RealDataFakeTrick(
                 dtype=torch.float32,
             )
             if candidate_sigmas.numel() == 0:
-                raise RuntimeError(
-                    "No valid real-data fake score timesteps remain in "
-                    f"raw range [{raw_min}, {raw_max})."
-                )
+                raise RuntimeError(f"No valid real-data fake score timesteps remain in raw range [{raw_min}, {raw_max}).")
             candidate_indices = torch.randint(
                 0,
                 candidate_sigmas.numel(),
@@ -419,9 +348,7 @@ class RealDataFakeTrick(
                 dtype=torch.long,
             )
             sigma = candidate_sigmas[candidate_indices]
-        return context.broadcast_noise(
-            sigma.to(dtype=context.dtype)
-        )
+        return context.broadcast_noise(sigma.to(dtype=context.dtype))
 
     def _phased_coefficients(
         self,
@@ -510,9 +437,7 @@ class RealDataFakeTrick(
             raw_timestep,
             context.dtype,
         )
-        noise = context.broadcast_noise(
-            torch.randn_like(real_latents, dtype=torch.float32)
-        )
+        noise = context.broadcast_noise(torch.randn_like(real_latents, dtype=torch.float32))
         with torch.no_grad():
             xt = self.setup_context.scheduler.add_noise(
                 real_latents,
@@ -539,17 +464,13 @@ class RealDataFakeTrick(
     ) -> TrickLossResult:
         config = self._region_config(context.region)
         if not config.enabled:
-            raise RuntimeError(
-                f"Real-data fake region {context.region!r} is disabled."
-            )
+            raise RuntimeError(f"Real-data fake region {context.region!r} is disabled.")
         anchor, student_x0, sigma_s = self._real_state(
             context,
             grad_enabled=True,
         )
         sigma_t = self._sample_score_sigma(context, anchor.shape[0])
-        noise = context.broadcast_noise(
-            torch.randn_like(anchor, dtype=torch.float32)
-        )
+        noise = context.broadcast_noise(torch.randn_like(anchor, dtype=torch.float32))
         with torch.no_grad():
             score_xt = self._score_forward(
                 anchor.detach(),
@@ -597,17 +518,13 @@ class RealDataFakeTrick(
     ) -> TrickLossResult:
         config = self._region_config(context.region)
         if not config.enabled:
-            raise RuntimeError(
-                f"Real-data fake region {context.region!r} is disabled."
-            )
+            raise RuntimeError(f"Real-data fake region {context.region!r} is disabled.")
         anchor, _, sigma_s = self._real_state(
             context,
             grad_enabled=False,
         )
         sigma_t = self._sample_score_sigma(context, anchor.shape[0])
-        noise = context.broadcast_noise(
-            torch.randn_like(anchor, dtype=torch.float32)
-        )
+        noise = context.broadcast_noise(torch.randn_like(anchor, dtype=torch.float32))
         with torch.no_grad():
             score_xt = self._score_forward(
                 anchor.detach(),
@@ -643,7 +560,5 @@ class RealDataFakeTrick(
         for config in self.config.regions.values():
             metadata[f"{config.role}_enabled"] = config.enabled
             metadata[f"{config.role}_weight"] = config.weight
-            metadata[f"{config.role}_timestep_list"] = list(
-                config.timestep_list
-            )
+            metadata[f"{config.role}_timestep_list"] = list(config.timestep_list)
         return metadata

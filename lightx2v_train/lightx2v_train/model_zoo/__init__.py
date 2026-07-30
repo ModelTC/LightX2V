@@ -25,6 +25,7 @@ def __getattr__(name):
     globals()[name] = value
     return value
 
+
 __all__ = [
     "build_model",
     "QwenImageModel",

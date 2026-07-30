@@ -1,6 +1,7 @@
 import os
 import shutil
 import warnings
+
 import torch
 import torch.distributed.checkpoint as dcp
 from loguru import logger
@@ -11,12 +12,14 @@ from torch.distributed.checkpoint.state_dict import (
     set_model_state_dict,
     set_state_dict,
 )
+
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
 from lightx2v_train.runtime.distributed import (
     barrier,
     get_world_size,
     is_main_process,
 )
+
 
 class DmdCheckpointManager:
     """Coordinate DMD checkpoint I/O without owning trainer resources."""
@@ -60,8 +63,7 @@ class DmdCheckpointManager:
                 strict=True,
             )
         logger.warning(
-            "[checkpoint][resume][fallback] role={} model=copied "
-            "source={} reason=missing_in_checkpoint",
+            "[checkpoint][resume][fallback] role={} model=copied source={} reason=missing_in_checkpoint",
             target_role,
             source_role,
         )
@@ -75,9 +77,7 @@ class DmdCheckpointManager:
             warnings.simplefilter("ignore")
             scheduler.step(completed_steps)
         logger.warning(
-            "[checkpoint][resume][fallback] role={} "
-            "scheduler=fast_forward step={} "
-            "reason=missing_in_checkpoint",
+            "[checkpoint][resume][fallback] role={} scheduler=fast_forward step={} reason=missing_in_checkpoint",
             role,
             completed_steps,
         )
@@ -87,8 +87,7 @@ class DmdCheckpointManager:
             runtime = self.role_registry.runtime(role)
             if runtime.model is None:
                 logger.info(
-                    "[checkpoint][resume][role] role={} "
-                    "status=disabled",
+                    "[checkpoint][resume][role] role={} status=disabled",
                     role,
                 )
 
@@ -116,29 +115,21 @@ class DmdCheckpointManager:
             if enabled_key not in state:
                 if trick.enabled:
                     logger.warning(
-                        "Checkpoint has no {} metadata; assuming the "
-                        "current configuration is compatible: {}",
+                        "Checkpoint has no {} metadata; assuming the current configuration is compatible: {}",
                         trick.name,
                         state_path,
                     )
                 continue
             checkpoint_enabled = bool(state[enabled_key])
             if checkpoint_enabled != trick.enabled:
-                raise RuntimeError(
-                    f"Checkpoint {enabled_key}={checkpoint_enabled!r} "
-                    f"does not match the current value {trick.enabled!r}: "
-                    f"{state_path}"
-                )
+                raise RuntimeError(f"Checkpoint {enabled_key}={checkpoint_enabled!r} does not match the current value {trick.enabled!r}: {state_path}")
             if not trick.enabled:
                 continue
             for key, value in expected.items():
                 if key == enabled_key:
                     continue
                 if key in state and state[key] != value:
-                    raise RuntimeError(
-                        f"Checkpoint {key}={state[key]!r} does not match "
-                        f"the current value {value!r}: {state_path}"
-                    )
+                    raise RuntimeError(f"Checkpoint {key}={state[key]!r} does not match the current value {value!r}: {state_path}")
 
     def _load_resume_state(self, resume_ckpt_path):
         if self.model.is_fsdp2_wrapped() or self.fake_model.is_fsdp2_wrapped():
@@ -163,50 +154,23 @@ class DmdCheckpointManager:
         self._validate_optional_trick_metadata(state, state_path)
         trick = getattr(self, "real_data_fake_trick", None)
         if trick is not None:
-            checkpoint_enabled = bool(
-                state.get("fake_real_enabled", False)
-            )
+            checkpoint_enabled = bool(state.get("fake_real_enabled", False))
             current_enabled = trick.enabled_for("main")
-            checkpoint_fake_real_train_type = state.get(
-                "fake_real_train_type"
-            )
-            if (
-                checkpoint_fake_real_train_type is not None
-                and checkpoint_fake_real_train_type
-                != self.fake_real_train_type
-            ):
-                raise RuntimeError(
-                    "Cannot resume checkpoint with "
-                    "fake_real_train_type="
-                    f"{checkpoint_fake_real_train_type!r}, expected "
-                    f"{self.fake_real_train_type!r}: {state_path}"
-                )
+            checkpoint_fake_real_train_type = state.get("fake_real_train_type")
+            if checkpoint_fake_real_train_type is not None and checkpoint_fake_real_train_type != self.fake_real_train_type:
+                raise RuntimeError(f"Cannot resume checkpoint with fake_real_train_type={checkpoint_fake_real_train_type!r}, expected {self.fake_real_train_type!r}: {state_path}")
             if checkpoint_enabled and not current_enabled:
-                raise RuntimeError(
-                    "Cannot resume a fake_real-enabled checkpoint with "
-                    f"fake_real disabled: {state_path}"
-                )
+                raise RuntimeError(f"Cannot resume a fake_real-enabled checkpoint with fake_real disabled: {state_path}")
             if current_enabled and not checkpoint_enabled:
                 logger.warning(
-                    "Checkpoint has fake_real disabled; enabling it from "
-                    "the current configuration: {}",
+                    "Checkpoint has fake_real disabled; enabling it from the current configuration: {}",
                     state_path,
                 )
             if checkpoint_enabled and current_enabled:
-                checkpoint_timesteps = state.get(
-                    "fake_real_timestep_list"
-                )
-                current_timesteps = list(
-                    trick.config.regions["main"].timestep_list
-                )
-                if (
-                    checkpoint_timesteps is not None
-                    and list(checkpoint_timesteps) != current_timesteps
-                ):
-                    raise RuntimeError(
-                        "Cannot resume fake_real with a different "
-                        f"timestep_list: {state_path}"
-                    )
+                checkpoint_timesteps = state.get("fake_real_timestep_list")
+                current_timesteps = list(trick.config.regions["main"].timestep_list)
+                if checkpoint_timesteps is not None and list(checkpoint_timesteps) != current_timesteps:
+                    raise RuntimeError(f"Cannot resume fake_real with a different timestep_list: {state_path}")
 
     def _load_single_process_state(self, resume_ckpt_path):
         training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
@@ -217,8 +181,7 @@ class DmdCheckpointManager:
 
         state = torch.load(training_state_path, map_location="cpu", weights_only=False)
         logger.info(
-            "[checkpoint][resume][start] path={} mode=single "
-            "iteration={} roles={}",
+            "[checkpoint][resume][start] path={} mode=single iteration={} roles={}",
             resume_ckpt_path,
             state.get("iteration"),
             list(self.role_registry.names()),
@@ -250,21 +213,13 @@ class DmdCheckpointManager:
                 self.role_registry.weight_directory_name(role),
             )
             restored = os.path.exists(weights_dir)
-            if (
-                not restored
-                and int(state.get("dmd_checkpoint_version", 1)) >= 2
-                and bool(state.get("fake_real_enabled", False))
-            ):
+            if not restored and int(state.get("dmd_checkpoint_version", 1)) >= 2 and bool(state.get("fake_real_enabled", False)):
                 logger.error(
-                    "[checkpoint][resume][error] role={} "
-                    "component=model path={} reason=missing",
+                    "[checkpoint][resume][error] role={} component=model path={} reason=missing",
                     role,
                     weights_dir,
                 )
-                raise RuntimeError(
-                    "Checkpoint declares an independent fake_real role, "
-                    f"but its weights are missing: {weights_dir}"
-                )
+                raise RuntimeError(f"Checkpoint declares an independent fake_real role, but its weights are missing: {weights_dir}")
             if restored:
                 self._load_model_weights(
                     self.fake_real_model,
@@ -274,21 +229,16 @@ class DmdCheckpointManager:
             else:
                 self._copy_role_model("fake", role)
             if restored and "fake_real_optimizer" in state:
-                self.fake_real_optimizer.load_state_dict(
-                    state["fake_real_optimizer"]
-                )
+                self.fake_real_optimizer.load_state_dict(state["fake_real_optimizer"])
                 optimizer_status = "restored"
             else:
                 optimizer_status = "fresh"
                 logger.warning(
-                    "[checkpoint][resume][fallback] role={} "
-                    "optimizer=fresh reason=missing_in_checkpoint",
+                    "[checkpoint][resume][fallback] role={} optimizer=fresh reason=missing_in_checkpoint",
                     role,
                 )
             if restored and "fake_real_lr_scheduler" in state:
-                self.fake_real_lr_scheduler.load_state_dict(
-                    state["fake_real_lr_scheduler"]
-                )
+                self.fake_real_lr_scheduler.load_state_dict(state["fake_real_lr_scheduler"])
                 scheduler_status = "restored"
             else:
                 self._fast_forward_scheduler(
@@ -297,8 +247,7 @@ class DmdCheckpointManager:
                 )
                 scheduler_status = "fast_forward"
             logger.info(
-                "[checkpoint][resume][role] role={} model={} "
-                "optimizer={} scheduler={} path={}",
+                "[checkpoint][resume][role] role={} model={} optimizer={} scheduler={} path={}",
                 role,
                 "restored" if restored else "copied_from:fake",
                 optimizer_status,
@@ -322,8 +271,7 @@ class DmdCheckpointManager:
             raise RuntimeError(f"trainer_state.pt not found in {resume_ckpt_path}")
         trainer_state = torch.load(trainer_state_path, map_location="cpu", weights_only=False)
         logger.info(
-            "[checkpoint][resume][start] path={} mode=fsdp "
-            "layout=flat_with_optional_roles iteration={} roles={}",
+            "[checkpoint][resume][start] path={} mode=fsdp layout=flat_with_optional_roles iteration={} roles={}",
             resume_ckpt_path,
             trainer_state.get("iteration"),
             list(self.role_registry.names()),
@@ -361,27 +309,13 @@ class DmdCheckpointManager:
             role = "fake_real"
             role_path = os.path.join(dist_state_path, role)
             restored = os.path.isdir(role_path)
-            if (
-                not restored
-                and int(
-                    trainer_state.get("dmd_checkpoint_version", 1)
-                )
-                >= 2
-                and bool(
-                    trainer_state.get("fake_real_enabled", False)
-                )
-            ):
+            if not restored and int(trainer_state.get("dmd_checkpoint_version", 1)) >= 2 and bool(trainer_state.get("fake_real_enabled", False)):
                 logger.error(
-                    "[checkpoint][resume][error] role={} "
-                    "component=model path={} reason=missing",
+                    "[checkpoint][resume][error] role={} component=model path={} reason=missing",
                     role,
                     role_path,
                 )
-                raise RuntimeError(
-                    "Checkpoint declares an independent fake_real role, "
-                    "but its distributed state is missing: "
-                    f"{role_path}"
-                )
+                raise RuntimeError(f"Checkpoint declares an independent fake_real role, but its distributed state is missing: {role_path}")
             if restored:
                 model_state, optimizer_state = get_state_dict(
                     self.fake_real_model.fsdp2_state_module(),
@@ -405,9 +339,7 @@ class DmdCheckpointManager:
                 self._copy_role_model("fake", role)
                 optimizer_status = "fresh"
             if restored and "fake_real_lr_scheduler" in trainer_state:
-                self.fake_real_lr_scheduler.load_state_dict(
-                    trainer_state["fake_real_lr_scheduler"]
-                )
+                self.fake_real_lr_scheduler.load_state_dict(trainer_state["fake_real_lr_scheduler"])
                 scheduler_status = "restored"
             else:
                 self._fast_forward_scheduler(
@@ -416,8 +348,7 @@ class DmdCheckpointManager:
                 )
                 scheduler_status = "fast_forward"
             logger.info(
-                "[checkpoint][resume][role] role={} model={} "
-                "optimizer={} scheduler={} path={}",
+                "[checkpoint][resume][role] role={} model={} optimizer={} scheduler={} path={}",
                 role,
                 "restored" if restored else "copied_from:fake",
                 optimizer_status,
@@ -468,10 +399,7 @@ class DmdCheckpointManager:
                 save_dir,
                 self.role_registry.weight_directory_name(role),
             )
-            save_fake_real_weights = (
-                self.fake_real_train_type == "lora"
-                or not self.fake_real_model.is_fsdp2_wrapped()
-            )
+            save_fake_real_weights = self.fake_real_train_type == "lora" or not self.fake_real_model.is_fsdp2_wrapped()
             if save_fake_real_weights and is_main_process():
                 os.makedirs(fake_real_save_dir, exist_ok=True)
             barrier()
@@ -483,8 +411,7 @@ class DmdCheckpointManager:
                 )
             barrier()
             logger.info(
-                "[checkpoint][save][role] role={} path={} "
-                "weights={}",
+                "[checkpoint][save][role] role={} path={} weights={}",
                 role,
                 fake_real_save_dir,
                 save_fake_real_weights,
@@ -520,15 +447,9 @@ class DmdCheckpointManager:
             "fake_lr_scheduler": self.fake_lr_scheduler.state_dict(),
         }
         if getattr(self, "fake_real_optimizer", None) is not None:
-            training_state["fake_real_train_type"] = (
-                self.fake_real_train_type
-            )
-            training_state["fake_real_optimizer"] = (
-                self.fake_real_optimizer.state_dict()
-            )
-            training_state["fake_real_lr_scheduler"] = (
-                self.fake_real_lr_scheduler.state_dict()
-            )
+            training_state["fake_real_train_type"] = self.fake_real_train_type
+            training_state["fake_real_optimizer"] = self.fake_real_optimizer.state_dict()
+            training_state["fake_real_lr_scheduler"] = self.fake_real_lr_scheduler.state_dict()
         training_state.update(self._trick_checkpoint_metadata())
         if is_main_process():
             torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
@@ -568,12 +489,8 @@ class DmdCheckpointManager:
             "fake_lr_scheduler": self.fake_lr_scheduler.state_dict(),
         }
         if getattr(self, "fake_real_lr_scheduler", None) is not None:
-            trainer_state["fake_real_train_type"] = (
-                self.fake_real_train_type
-            )
-            trainer_state["fake_real_lr_scheduler"] = (
-                self.fake_real_lr_scheduler.state_dict()
-            )
+            trainer_state["fake_real_train_type"] = self.fake_real_train_type
+            trainer_state["fake_real_lr_scheduler"] = self.fake_real_lr_scheduler.state_dict()
         trainer_state.update(self._trick_checkpoint_metadata())
         if is_main_process():
             os.makedirs(dist_state_path, exist_ok=True)
@@ -601,8 +518,7 @@ class DmdCheckpointManager:
                 options=options,
             )
             logger.debug(
-                "[checkpoint][save][role] role=fake_real path={} "
-                "status=writing",
+                "[checkpoint][save][role] role=fake_real path={} status=writing",
                 role_path,
             )
             dcp.save(
@@ -613,8 +529,6 @@ class DmdCheckpointManager:
                 checkpoint_id=role_path,
             )
             logger.info(
-                "[checkpoint][save][role] role=fake_real path={} "
-                "status=restorable",
+                "[checkpoint][save][role] role=fake_real path={} status=restorable",
                 role_path,
             )
-

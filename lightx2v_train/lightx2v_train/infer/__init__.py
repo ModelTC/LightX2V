@@ -2,7 +2,6 @@ import importlib
 
 from lightx2v_train.utils.registry import build_inferencer
 
-
 _LAZY_EXPORTS = {
     "ImageInferencer": (".image", "ImageInferencer"),
     "NativeImageInferencer": (".image_native", "NativeImageInferencer"),
@@ -27,6 +26,7 @@ def __getattr__(name):
     value = getattr(importlib.import_module(module_name, __name__), attribute_name)
     globals()[name] = value
     return value
+
 
 __all__ = [
     "build_inferencer",

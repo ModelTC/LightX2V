@@ -6,7 +6,6 @@ from typing import Any, Generic, Mapping, Sequence, TypeVar
 
 import torch
 
-
 SetupContextT = TypeVar("SetupContextT")
 StudentContextT = TypeVar("StudentContextT")
 FakeContextT = TypeVar("FakeContextT")
@@ -105,6 +104,4 @@ class TrainerTrick(
         """Restore mutable runtime state owned by this trick."""
         if strict and state_dict:
             unexpected = ", ".join(sorted(state_dict))
-            raise RuntimeError(
-                f"{self.name} received unexpected state keys: {unexpected}"
-            )
+            raise RuntimeError(f"{self.name} received unexpected state keys: {unexpected}")

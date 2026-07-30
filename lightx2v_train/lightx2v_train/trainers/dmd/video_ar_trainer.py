@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+
 from lightx2v_train.runtime.distributed import (
     get_sequence_parallel_rank,
     get_sequence_parallel_world_size,
@@ -7,7 +8,9 @@ from lightx2v_train.runtime.distributed import (
 )
 from lightx2v_train.runtime.sequence_parallel import all_gather_sequence
 from lightx2v_train.utils.registry import TRAINER_REGISTER
+
 from .video_trainer import VideoDmdTrainer
+
 
 @TRAINER_REGISTER("video_ar_dmd")
 class VideoArDmdTrainer(VideoDmdTrainer):
@@ -248,5 +251,3 @@ class VideoArDmdTrainer(VideoDmdTrainer):
         sigma = self._sigma_from_timestep(timestep, x0.dtype)
         sigma = self._expand_frame_sigma(sigma, x0.ndim)
         return ((1.0 - sigma) * x0 + sigma * noise).to(dtype=x0.dtype)
-
-

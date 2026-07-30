@@ -1,12 +1,13 @@
 import math
 import os
+
 import torch
 from loguru import logger
+
 from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
 from lightx2v_train.utils.constants import LTX2_NEGATIVE_PROMPT
 from lightx2v_train.utils.registry import TRAINER_REGISTER
-from .video_ar_trainer import VideoArDmdTrainer
-from .video_trainer import VideoDmdTrainer
+
 from .math import (
     detach_pair,
     dmd_loss_pair,
@@ -14,6 +15,9 @@ from .math import (
     velocity_to_x0,
     weighted_mse_pair,
 )
+from .video_ar_trainer import VideoArDmdTrainer
+from .video_trainer import VideoDmdTrainer
+
 
 class _LTX2T2AVDmdMixin:
     trainer_name = "ltx_t2av_dmd"
@@ -51,9 +55,7 @@ class _LTX2T2AVDmdMixin:
         self.default_fps = float(ltx2_config.get("default_fps", self.dmd_config.get("fps", 25.0)))
         self.video_patchifier = VideoLatentPatchifier(patch_size=1)
         self.audio_patchifier = AudioPatchifier(patch_size=1)
-        self.denoising_sigma_values = self._validate_denoising_sigma_values(
-            self.dmd_config.get("denoising_sigma_values")
-        )
+        self.denoising_sigma_values = self._validate_denoising_sigma_values(self.dmd_config.get("denoising_sigma_values"))
         self._logged_denoising_sigma_values = False
 
         if self.cdm_enabled:
@@ -183,11 +185,7 @@ class _LTX2T2AVDmdMixin:
                 num_steps=num_steps,
             )
             return
-        sigmas = (
-            None
-            if self.denoising_sigma_values is None
-            else self.denoising_sigma_values[:-1]
-        )
+        sigmas = None if self.denoising_sigma_values is None else self.denoising_sigma_values[:-1]
         self.scheduler.set_timesteps(
             self.num_inference_steps,
             sigmas=sigmas,
@@ -197,10 +195,7 @@ class _LTX2T2AVDmdMixin:
             logger.info(
                 "[train] {} denoising_sigma_values={}",
                 self.trainer_name,
-                [
-                    round(float(value), 6)
-                    for value in self.scheduler.sigmas.detach().cpu()
-                ],
+                [round(float(value), 6) for value in self.scheduler.sigmas.detach().cpu()],
             )
             self._logged_denoising_sigma_values = True
 
@@ -210,24 +205,11 @@ class _LTX2T2AVDmdMixin:
         values = tuple(float(value) for value in values)
         expected = self.num_inference_steps + 1
         if len(values) != expected:
-            raise ValueError(
-                "training.dmd.denoising_sigma_values must contain "
-                f"num_inference_steps + 1 values ({expected}), "
-                f"got {len(values)}."
-            )
+            raise ValueError(f"training.dmd.denoising_sigma_values must contain num_inference_steps + 1 values ({expected}), got {len(values)}.")
         if abs(values[0] - 1.0) > 1e-6 or abs(values[-1]) > 1e-6:
-            raise ValueError(
-                "training.dmd.denoising_sigma_values must start at 1.0 "
-                "and end at 0.0."
-            )
-        if any(
-            current <= following
-            for current, following in zip(values, values[1:])
-        ):
-            raise ValueError(
-                "training.dmd.denoising_sigma_values must be strictly "
-                "decreasing."
-            )
+            raise ValueError("training.dmd.denoising_sigma_values must start at 1.0 and end at 0.0.")
+        if any(current <= following for current, following in zip(values, values[1:])):
+            raise ValueError("training.dmd.denoising_sigma_values must be strictly decreasing.")
         return values
 
     def sample_initial_latents(self, latent_shape):
@@ -264,11 +246,7 @@ class _LTX2T2AVDmdMixin:
         condition, negative_condition = conditions
         self._prepare_sampling_schedule(latent_shape)
         end_step_idx = self.sample_end_step()
-        xt_start = (
-            self.sample_initial_latents(latent_shape)
-            if initial_noise is None
-            else initial_noise
-        )
+        xt_start = self.sample_initial_latents(latent_shape) if initial_noise is None else initial_noise
         x0, xt_end, vt_end = self.run_back_simulation(condition, latent_shape, end_step_idx, grad_enabled=(stage != "fake"), xt=xt_start)
 
         batch_size = latent_shape["video_tokens"][0]
@@ -446,11 +424,7 @@ class LTX2T2AVArDmdTrainer(_LTX2T2AVDmdMixin, VideoArDmdTrainer):
     def __init__(self, config):
         super().__init__(config)
         if self.denoising_sigma_values is None:
-            raise ValueError(
-                "ltx_t2av_ar_dmd requires "
-                "training.dmd.denoising_sigma_values so training and "
-                "inference use the same distilled trajectory."
-            )
+            raise ValueError("ltx_t2av_ar_dmd requires training.dmd.denoising_sigma_values so training and inference use the same distilled trajectory.")
 
     def run_back_simulation(self, condition, latent_shape, end_step_idx, grad_enabled, xt=None):
         transformer = self.model.denoiser_module()

@@ -6,6 +6,7 @@ from typing import (
     Optional,
 )
 
+
 def _lora_config(
     role_config: Dict[str, Any],
     role: str,
@@ -53,15 +54,9 @@ class DmdConfig:
     ):
         training = config["training"]
         if "train_type" in training:
-            raise ValueError(
-                "DMD trainers use training.student.train_type and "
-                "training.fake.train_type; remove training.train_type."
-            )
+            raise ValueError("DMD trainers use training.student.train_type and training.fake.train_type; remove training.train_type.")
         if "lora" in training:
-            raise ValueError(
-                "DMD trainers do not read training.lora. Use "
-                "training.student.lora and training.fake.lora."
-            )
+            raise ValueError("DMD trainers do not read training.lora. Use training.student.lora and training.fake.lora.")
 
         student = training["student"]
         fake = training["fake"]
@@ -77,10 +72,7 @@ class DmdConfig:
         elif configured_negative_prompt is not None:
             negative_prompt = configured_negative_prompt
         else:
-            raise ValueError(
-                "DMD training requires training.teacher.negative_prompt "
-                "for this model."
-            )
+            raise ValueError("DMD training requires training.teacher.negative_prompt for this model.")
 
         random_schedule = dmd.get("random_schedule", {})
         return cls(
@@ -109,24 +101,16 @@ class DmdConfig:
                 dmd.get("cfg_norm", "layer_norm"),
             ),
             image_sizes=dmd.get("image_sizes", []),
-            random_schedule_enabled=bool(
-                random_schedule.get("enabled", False)
-            ),
-            random_schedule_num_steps_min=int(
-                random_schedule.get("num_steps_min", 1)
-            ),
+            random_schedule_enabled=bool(random_schedule.get("enabled", False)),
+            random_schedule_num_steps_min=int(random_schedule.get("num_steps_min", 1)),
             random_schedule_num_steps_max=int(
                 random_schedule.get(
                     "num_steps_max",
                     num_inference_steps,
                 )
             ),
-            random_schedule_sigma_min=float(
-                random_schedule.get("sigma_min", 0.02)
-            ),
-            random_schedule_sigma_max=float(
-                random_schedule.get("sigma_max", 0.98)
-            ),
+            random_schedule_sigma_min=float(random_schedule.get("sigma_min", 0.02)),
+            random_schedule_sigma_max=float(random_schedule.get("sigma_max", 0.98)),
             random_schedule_sampling_method=random_schedule.get(
                 "sampling_method",
                 "stratified",
@@ -167,40 +151,24 @@ class VideoDmdConfig:
                 scheduler_config.get("num_train_timesteps", 1000),
             )
         )
-        default_steps = [
-            int(
-                round(
-                    num_train_timestep
-                    * (1.0 - step_idx / num_inference_steps)
-                )
-            )
-            for step_idx in range(num_inference_steps)
-        ]
-        denoising_steps = list(
-            dmd_config.get("denoising_step_list", default_steps)
-        )
+        default_steps = [int(round(num_train_timestep * (1.0 - step_idx / num_inference_steps))) for step_idx in range(num_inference_steps)]
+        denoising_steps = list(dmd_config.get("denoising_step_list", default_steps))
         time_shift_settings = scheduler_config.get(
             "time_shift_settings",
             {},
         )
         if not isinstance(time_shift_settings, dict):
-            raise ValueError(
-                "scheduler.time_shift_settings must be a mapping."
-            )
+            raise ValueError("scheduler.time_shift_settings must be a mapping.")
 
         checkpoint_path = None
-        checkpoint_strict = bool(
-            student_config.get("checkpoint_strict", True)
-        )
+        checkpoint_strict = bool(student_config.get("checkpoint_strict", True))
         model_student = model_config.get("student")
         if model_student is not None:
             if not isinstance(model_student, dict):
                 raise ValueError("model.student must be a mapping.")
             checkpoint_path = model_student.get("checkpoint_path")
             if "checkpoint_strict" in model_student:
-                checkpoint_strict = bool(
-                    model_student["checkpoint_strict"]
-                )
+                checkpoint_strict = bool(model_student["checkpoint_strict"])
         if checkpoint_path is None:
             checkpoint_path = student_config.get("checkpoint_path")
         if checkpoint_path is None:
@@ -211,17 +179,9 @@ class VideoDmdConfig:
         return cls(
             num_train_timestep=num_train_timestep,
             denoising_step_list=denoising_steps,
-            warp_denoising_step=bool(
-                dmd_config.get("warp_denoising_step", True)
-            ),
-            min_step=int(
-                float(dmd_config.get("min_step_ratio", 0.02))
-                * num_train_timestep
-            ),
-            max_step=int(
-                float(dmd_config.get("max_step_ratio", 0.98))
-                * num_train_timestep
-            ),
+            warp_denoising_step=bool(dmd_config.get("warp_denoising_step", True)),
+            min_step=int(float(dmd_config.get("min_step_ratio", 0.02)) * num_train_timestep),
+            max_step=int(float(dmd_config.get("max_step_ratio", 0.98)) * num_train_timestep),
             score_timestep_shift=float(
                 dmd_config.get(
                     "timestep_shift",
@@ -229,12 +189,8 @@ class VideoDmdConfig:
                 )
             ),
             ts_schedule=bool(dmd_config.get("ts_schedule", False)),
-            ts_schedule_max=bool(
-                dmd_config.get("ts_schedule_max", False)
-            ),
-            min_score_timestep=int(
-                dmd_config.get("min_score_timestep", 0)
-            ),
+            ts_schedule_max=bool(dmd_config.get("ts_schedule_max", False)),
+            min_score_timestep=int(dmd_config.get("min_score_timestep", 0)),
             student_checkpoint_path=checkpoint_path,
             student_checkpoint_strict=checkpoint_strict,
         )

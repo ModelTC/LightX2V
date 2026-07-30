@@ -124,12 +124,7 @@ class FlowMatchingTrainer(BaseTrainer):
                         "train/loss": display_loss,
                         "train/lr": current_lr,
                     }
-                    logged_metrics.update(
-                        {
-                            f"train/{name}": value
-                            for name, value in display_metrics.items()
-                        }
-                    )
+                    logged_metrics.update({f"train/{name}": value for name, value in display_metrics.items()})
                     self.log_metrics(logged_metrics, step=current_iter)
                 running_loss = 0.0
                 running_metrics = {}

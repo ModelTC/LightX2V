@@ -1,5 +1,7 @@
 import torch
+
 from ..dmd.math import expand_sigma
+
 
 def raw_timesteps_to_sigmas(
     raw_timesteps,
@@ -20,16 +22,11 @@ def raw_timesteps_to_sigmas(
             device=device,
             dtype=torch.float32,
         )
-        indices = (
-            denoising_scheduler.num_train_timesteps
-            - raw_timesteps
-        )
+        indices = denoising_scheduler.num_train_timesteps - raw_timesteps
         warped_timesteps = timesteps[indices]
     else:
         warped_timesteps = raw_timesteps.float()
-    return (
-        warped_timesteps / num_train_timestep
-    ).to(dtype=dtype)
+    return (warped_timesteps / num_train_timestep).to(dtype=dtype)
 
 
 def phase_sigma(
@@ -92,10 +89,7 @@ def sample_score_sigma_range(
         dtype=torch.float32,
     )
     if candidate_sigmas.numel() == 0:
-        raise RuntimeError(
-            "No valid score timesteps remain in raw range "
-            f"[{raw_min}, {raw_max})."
-        )
+        raise RuntimeError(f"No valid score timesteps remain in raw range [{raw_min}, {raw_max}).")
     candidate_indices = torch.randint(
         0,
         candidate_sigmas.numel(),
@@ -117,10 +111,7 @@ def phased_coefficients(
     sigma_t = expand_sigma(sigma_t.float(), ndim)
     one_minus_s = (1.0 - sigma_s).clamp_min(eps)
     alpha = (1.0 - sigma_t) / one_minus_s
-    beta_squared = (
-        sigma_t.square()
-        - alpha.square() * sigma_s.square()
-    ).clamp_min(eps)
+    beta_squared = (sigma_t.square() - alpha.square() * sigma_s.square()).clamp_min(eps)
     return (
         sigma_s,
         sigma_t,
@@ -143,9 +134,7 @@ def phased_forward(
         xs.ndim,
         eps,
     )
-    return (
-        alpha * xs.float() + beta * noise.float()
-    ).to(dtype=xs.dtype)
+    return (alpha * xs.float() + beta * noise.float()).to(dtype=xs.dtype)
 
 
 def phased_velocity_target(
@@ -155,22 +144,12 @@ def phased_velocity_target(
     sigma_t,
     eps,
 ):
-    sigma_s, sigma_t, one_minus_s, _, beta = (
-        phased_coefficients(
-            sigma_s,
-            sigma_t,
-            xs.ndim,
-            eps,
-        )
+    sigma_s, sigma_t, one_minus_s, _, beta = phased_coefficients(
+        sigma_s,
+        sigma_t,
+        xs.ndim,
+        eps,
     )
     coefficient_xs = -1.0 / one_minus_s
-    coefficient_noise = (
-        sigma_t
-        + (1.0 - sigma_t)
-        * sigma_s.square()
-        / one_minus_s.square()
-    ) / beta
-    return (
-        coefficient_xs * xs.float()
-        + coefficient_noise * noise.float()
-    ).to(dtype=xs.dtype)
+    coefficient_noise = (sigma_t + (1.0 - sigma_t) * sigma_s.square() / one_minus_s.square()) / beta
+    return (coefficient_xs * xs.float() + coefficient_noise * noise.float()).to(dtype=xs.dtype)

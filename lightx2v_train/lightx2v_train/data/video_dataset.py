@@ -208,15 +208,8 @@ class VideoDataset(torch.utils.data.Dataset):
                     if prompt_path is None or not prompt_path.is_file():
                         if self.skip_missing:
                             continue
-                        raise FileNotFoundError(
-                            "prompt_path points to a missing file: "
-                            f"{prompt_path}"
-                        )
-                    prompt = " ".join(
-                        prompt_path.read_text(
-                            encoding="utf-8"
-                        ).split()
-                    )
+                        raise FileNotFoundError(f"prompt_path points to a missing file: {prompt_path}")
+                    prompt = " ".join(prompt_path.read_text(encoding="utf-8").split())
                     meta["prompt_path"] = str(prompt_path)
 
                 samples.append({"prompt": prompt, "meta": meta})

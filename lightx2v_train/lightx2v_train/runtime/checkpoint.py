@@ -14,13 +14,7 @@ def _is_complete_checkpoint(checkpoint_dir):
 
 
 def _completed_checkpoint_names(output_dir):
-    return [
-        name
-        for name in os.listdir(output_dir)
-        if name.startswith("checkpoint-")
-        and os.path.isdir(os.path.join(output_dir, name))
-        and _is_complete_checkpoint(os.path.join(output_dir, name))
-    ]
+    return [name for name in os.listdir(output_dir) if name.startswith("checkpoint-") and os.path.isdir(os.path.join(output_dir, name)) and _is_complete_checkpoint(os.path.join(output_dir, name))]
 
 
 def prune_checkpoints(output_dir, total_limit):

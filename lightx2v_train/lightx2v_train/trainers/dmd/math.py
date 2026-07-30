@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 
+
 def expand_sigma(sigma, ndim):
     """Expand a batch sigma vector across non-batch tensor dimensions."""
     if sigma.ndim == 0:
@@ -15,9 +16,7 @@ def euler_step(sample, velocity, sigma, sigma_next):
     """Advance a flow sample between two arbitrary sigma values."""
     sigma = expand_sigma(sigma, sample.ndim)
     sigma_next = expand_sigma(sigma_next, sample.ndim)
-    return (
-        sample + (sigma_next - sigma) * velocity
-    ).to(sample.dtype)
+    return (sample + (sigma_next - sigma) * velocity).to(sample.dtype)
 
 
 def velocity_to_x0(sample, velocity, sigma):
@@ -38,18 +37,13 @@ def do_cfg(cond_pred, uncond_pred, cfg_scale, cfg_norm):
     if cfg_norm == "layer_norm":
         cond_norm = torch.norm(cond_pred, dim=-1, keepdim=True)
         pred_norm = torch.norm(pred, dim=-1, keepdim=True)
-        return pred * (
-            cond_norm / torch.clamp(pred_norm, min=1e-12)
-        )
+        return pred * (cond_norm / torch.clamp(pred_norm, min=1e-12))
     if cfg_norm == "scalar":
         cond_norm = torch.norm(cond_pred)
         pred_norm = torch.norm(pred)
         return pred * min(
             1.0,
-            (
-                cond_norm
-                / torch.clamp(pred_norm, min=1e-12)
-            ).item(),
+            (cond_norm / torch.clamp(pred_norm, min=1e-12)).item(),
         )
     raise ValueError(f"Unsupported cfg_norm: {cfg_norm}")
 
@@ -64,13 +58,9 @@ def dmd_loss(
     with torch.no_grad():
         grad = x_pred_fake_flow - x_pred_teacher
         dims = tuple(range(1, latents.ndim))
-        normalizer = torch.abs(
-            latents - x_pred_teacher
-        ).mean(dim=dims, keepdim=True)
+        normalizer = torch.abs(latents - x_pred_teacher).mean(dim=dims, keepdim=True)
         if norm_clip_min is not None:
-            normalizer = normalizer.clamp(
-                min=float(norm_clip_min)
-            )
+            normalizer = normalizer.clamp(min=float(norm_clip_min))
         grad = torch.nan_to_num(grad / normalizer)
     return 0.5 * F.mse_loss(
         latents.float(),

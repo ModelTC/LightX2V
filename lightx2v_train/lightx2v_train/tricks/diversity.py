@@ -62,9 +62,7 @@ class DiversityConfig:
         return cls(
             enabled=bool(config.get("enabled", False)),
             weight=float(config.get("weight", 0.05)),
-            teacher_inference_steps=int(
-                config.get("teacher_inference_steps", 30)
-            ),
+            teacher_inference_steps=int(config.get("teacher_inference_steps", 30)),
             anchor_step=int(config.get("anchor_step", 5)),
         )
 
@@ -122,29 +120,15 @@ class DiversityTrick(
 
     def validate(self) -> None:
         if self.config.weight < 0:
-            raise ValueError(
-                "training.dmd.div_loss.weight must be non-negative."
-            )
+            raise ValueError("training.dmd.div_loss.weight must be non-negative.")
         if self.config.teacher_inference_steps < 1:
-            raise ValueError(
-                "training.dmd.div_loss.teacher_inference_steps must be "
-                "positive."
-            )
-        if not (
-            1
-            <= self.config.anchor_step
-            <= self.config.teacher_inference_steps
-        ):
-            raise ValueError(
-                "training.dmd.div_loss.anchor_step must be in "
-                "[1, teacher_inference_steps]."
-            )
+            raise ValueError("training.dmd.div_loss.teacher_inference_steps must be positive.")
+        if not (1 <= self.config.anchor_step <= self.config.teacher_inference_steps):
+            raise ValueError("training.dmd.div_loss.anchor_step must be in [1, teacher_inference_steps].")
 
     def setup(self, context: DiversitySetupContext) -> None:
         if self.enabled and context.scheduler is None:
-            raise ValueError(
-                "The diversity trick requires a scheduler when enabled."
-            )
+            raise ValueError("The diversity trick requires a scheduler when enabled.")
         self._scheduler = context.scheduler
 
     def validate_trainer(
@@ -155,22 +139,11 @@ class DiversityTrick(
         if not self.enabled:
             return
         if not constraints.supported:
-            raise ValueError(
-                f"{trainer_name} does not support training.dmd.div_loss."
-            )
+            raise ValueError(f"{trainer_name} does not support training.dmd.div_loss.")
         if constraints.rollout_steps < 2:
-            raise ValueError(
-                f"{trainer_name} with div_loss enabled requires at least "
-                "two student denoising steps."
-            )
-        if (
-            constraints.high_step_count is not None
-            and constraints.high_step_count < 2
-        ):
-            raise ValueError(
-                "training.dmd.div_loss requires at least two High "
-                "denoising steps."
-            )
+            raise ValueError(f"{trainer_name} with div_loss enabled requires at least two student denoising steps.")
+        if constraints.high_step_count is not None and constraints.high_step_count < 2:
+            raise ValueError("training.dmd.div_loss requires at least two High denoising steps.")
 
     def prepare_models(
         self,
@@ -262,10 +235,7 @@ class DiversityTrick(
             )
         ).clamp_min(1.0e-8)
         with torch.no_grad():
-            velocity_target = (
-                initial_noise.float()
-                - anchor_latent.float()
-            ) / denominator
+            velocity_target = (initial_noise.float() - anchor_latent.float()) / denominator
         raw_loss = F.mse_loss(
             velocity_first.float(),
             velocity_target.detach(),
@@ -280,8 +250,6 @@ class DiversityTrick(
         return {
             "div_loss_enabled": self.enabled,
             "div_loss_weight": self.config.weight,
-            "div_loss_teacher_inference_steps": (
-                self.config.teacher_inference_steps
-            ),
+            "div_loss_teacher_inference_steps": (self.config.teacher_inference_steps),
             "div_loss_anchor_step": self.config.anchor_step,
         }

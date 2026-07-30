@@ -15,19 +15,13 @@ def setup_logger(config=None):
     config = config or {}
     logging_config = config.get("logging", {})
     rank_zero_only = logging_config.get("rank_zero_only", True)
-    log_format = (
-        "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | "
-        "rank={extra[rank]} | {name}:{function}:{line} - {message}"
-    )
+    log_format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | rank={extra[rank]} | {name}:{function}:{line} - {message}"
     console_format = (
-        "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-        "<level>{level}</level> | rank={extra[rank]} | "
-        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:"
-        "<cyan>{line}</cyan> - <level>{message}</level>"
+        "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level}</level> | rank={extra[rank]} | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
     )
-    rank_filter = (
-        lambda record: (not rank_zero_only) or is_main_process()
-    )
+
+    def rank_filter(record):
+        return (not rank_zero_only) or is_main_process()
 
     logger.remove()
     logger.configure(extra={"rank": get_rank()})
@@ -48,9 +42,7 @@ def setup_logger(config=None):
     file_name = str(logging_config.get("file_name", "train.log"))
     if not rank_zero_only and get_world_size() > 1:
         file_path = Path(file_name)
-        file_name = (
-            f"{file_path.stem}.rank-{get_rank()}{file_path.suffix}"
-        )
+        file_name = f"{file_path.stem}.rank-{get_rank()}{file_path.suffix}"
     log_path = log_dir / file_name
     logger.add(
         str(log_path),

@@ -1,6 +1,7 @@
 import os
 import shutil
 import warnings
+
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
@@ -12,13 +13,16 @@ from torch.distributed.checkpoint.state_dict import (
     set_model_state_dict,
     set_state_dict,
 )
+
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
 from lightx2v_train.runtime.distributed import (
     barrier,
     get_world_size,
     is_main_process,
 )
+
 from ..dmd.checkpoint import DmdCheckpointManager
+
 
 class PhasedCheckpointManager(DmdCheckpointManager):
     """Extend DMD checkpoint I/O for phased role layouts."""
@@ -50,9 +54,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             return
         model_state_path = os.path.join(save_dir, "model_state.pt")
         if not os.path.exists(model_state_path):
-            raise RuntimeError(
-                f"model_state.pt not found in {save_dir}"
-            )
+            raise RuntimeError(f"model_state.pt not found in {save_dir}")
         state_dict = torch.load(
             model_state_path,
             map_location="cpu",
@@ -61,9 +63,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
         model.denoiser_module().load_state_dict(state_dict)
 
     def _role_weights_dir(self, root_dir, role):
-        directory_name = self.role_registry.weight_directory_name(
-            role
-        )
+        directory_name = self.role_registry.weight_directory_name(role)
         if directory_name is None:
             return root_dir
         return os.path.join(root_dir, directory_name)
@@ -90,10 +90,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             del source_state
         else:
             target.load_state_dict(source.state_dict(), strict=True)
-        logger.warning(
-            "Checkpoint has no fake_low_high state; initialized it from "
-            "the restored High Fake weights."
-        )
+        logger.warning("Checkpoint has no fake_low_high state; initialized it from the restored High Fake weights.")
 
     def _fast_forward_fake_low_high_scheduler(self, iteration):
         if self.fake_low_high_lr_scheduler is None:
@@ -105,8 +102,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             warnings.simplefilter("ignore")
             self.fake_low_high_lr_scheduler.step(completed_steps)
         logger.warning(
-            "Checkpoint has no fake_low_high LR scheduler state; "
-            "advanced the fresh scheduler to step {}.",
+            "Checkpoint has no fake_low_high LR scheduler state; advanced the fresh scheduler to step {}.",
             completed_steps,
         )
 
@@ -116,11 +112,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
         iteration,
     ):
         runtime = self.role_registry.runtime(role)
-        region_iterations = (
-            (int(iteration) + 1) // 2
-            if role == "fake_real_high"
-            else int(iteration) // 2
-        )
+        region_iterations = (int(iteration) + 1) // 2 if role == "fake_real_high" else int(iteration) // 2
         completed_steps = region_iterations * self.fake_update_ratio
         if completed_steps <= 0:
             return
@@ -128,9 +120,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             warnings.simplefilter("ignore")
             runtime.scheduler.step(completed_steps)
         logger.warning(
-            "[checkpoint][resume][fallback] role={} "
-            "scheduler=fast_forward step={} "
-            "reason=missing_in_checkpoint",
+            "[checkpoint][resume][fallback] role={} scheduler=fast_forward step={} reason=missing_in_checkpoint",
             role,
             completed_steps,
         )
@@ -152,46 +142,21 @@ class PhasedCheckpointManager(DmdCheckpointManager):
         ):
             key = f"{role}_train_type"
             if state.get(key) != expected:
-                raise RuntimeError(
-                    f"Cannot resume checkpoint with {key}="
-                    f"{state.get(key)!r}, expected {expected!r}: "
-                    f"{state_path}"
-                )
-        checkpoint_version = int(
-            state.get("phased_checkpoint_version", 1)
-        )
-        checkpoint_fake_low_high_enabled = bool(
-            state.get("fake_low_high_enabled", False)
-        )
-        if (
-            checkpoint_fake_low_high_enabled
-            and not self.enable_fake_low_high
-        ):
+                raise RuntimeError(f"Cannot resume checkpoint with {key}={state.get(key)!r}, expected {expected!r}: {state_path}")
+        checkpoint_version = int(state.get("phased_checkpoint_version", 1))
+        checkpoint_fake_low_high_enabled = bool(state.get("fake_low_high_enabled", False))
+        if checkpoint_fake_low_high_enabled and not self.enable_fake_low_high:
             logger.warning(
-                "Checkpoint contains fake_low_high, but it is disabled "
-                "in the current configuration and will be ignored: {}",
+                "Checkpoint contains fake_low_high, but it is disabled in the current configuration and will be ignored: {}",
                 state_path,
             )
-        if (
-            checkpoint_version >= 2
-            and checkpoint_fake_low_high_enabled
-            and self.enable_fake_low_high
-            and state.get("fake_low_high_train_type")
-            != self.fake_low_high_train_type
-        ):
-            raise RuntimeError(
-                "Cannot resume checkpoint with "
-                "fake_low_high_train_type="
-                f"{state.get('fake_low_high_train_type')!r}, expected "
-                f"{self.fake_low_high_train_type!r}: {state_path}"
-            )
+        if checkpoint_version >= 2 and checkpoint_fake_low_high_enabled and self.enable_fake_low_high and state.get("fake_low_high_train_type") != self.fake_low_high_train_type:
+            raise RuntimeError(f"Cannot resume checkpoint with fake_low_high_train_type={state.get('fake_low_high_train_type')!r}, expected {self.fake_low_high_train_type!r}: {state_path}")
         for region, role in (
             ("high", "fake_real_high"),
             ("low", "fake_real_low"),
         ):
-            checkpoint_enabled = bool(
-                state.get(f"{role}_enabled", False)
-            )
+            checkpoint_enabled = bool(state.get(f"{role}_enabled", False))
             config = self.real_data_fake_trick.config.regions[region]
             current_enabled = config.enabled
             train_type_key = f"{role}_train_type"
@@ -199,52 +164,23 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 self,
                 train_type_key,
             )
-            if (
-                checkpoint_enabled
-                and state.get(train_type_key) is not None
-                and state[train_type_key] != expected_train_type
-            ):
-                raise RuntimeError(
-                    f"Cannot resume checkpoint with {train_type_key}="
-                    f"{state[train_type_key]!r}, expected "
-                    f"{expected_train_type!r}: {state_path}"
-                )
+            if checkpoint_enabled and state.get(train_type_key) is not None and state[train_type_key] != expected_train_type:
+                raise RuntimeError(f"Cannot resume checkpoint with {train_type_key}={state[train_type_key]!r}, expected {expected_train_type!r}: {state_path}")
             if checkpoint_enabled and not current_enabled:
-                raise RuntimeError(
-                    f"Cannot resume a {role}-enabled checkpoint with "
-                    f"{role} disabled: {state_path}"
-                )
+                raise RuntimeError(f"Cannot resume a {role}-enabled checkpoint with {role} disabled: {state_path}")
             if current_enabled and not checkpoint_enabled:
                 logger.warning(
-                    "Checkpoint has {} disabled; enabling it from the "
-                    "current configuration: {}",
+                    "Checkpoint has {} disabled; enabling it from the current configuration: {}",
                     role,
                     state_path,
                 )
-            if (
-                checkpoint_enabled
-                and list(
-                    state.get(f"{role}_timestep_list", [])
-                )
-                != list(config.timestep_list)
-            ):
-                raise RuntimeError(
-                    f"Checkpoint {role}_timestep_list does not match "
-                    f"{list(config.timestep_list)!r}: "
-                    f"{state_path}"
-                )
-        if int(state.get("phased_match_timestep", -1)) != (
-            self.match_timestep
-        ):
-            raise RuntimeError(
-                "Checkpoint phased_match_timestep does not match "
-                f"{self.match_timestep}: {state_path}"
-            )
+            if checkpoint_enabled and list(state.get(f"{role}_timestep_list", [])) != list(config.timestep_list):
+                raise RuntimeError(f"Checkpoint {role}_timestep_list does not match {list(config.timestep_list)!r}: {state_path}")
+        if int(state.get("phased_match_timestep", -1)) != (self.match_timestep):
+            raise RuntimeError(f"Checkpoint phased_match_timestep does not match {self.match_timestep}: {state_path}")
 
     def _load_resume_state(self, resume_ckpt_path):
-        models = tuple(
-            model for _, model in self._trainable_role_models()
-        )
+        models = tuple(model for _, model in self._trainable_role_models())
         if any(model.is_fsdp2_wrapped() for model in models):
             self._load_distributed_state(resume_ckpt_path)
             return
@@ -256,17 +192,14 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             "training_state.pt",
         )
         if not os.path.exists(state_path):
-            raise RuntimeError(
-                f"training_state.pt not found in {resume_ckpt_path}"
-            )
+            raise RuntimeError(f"training_state.pt not found in {resume_ckpt_path}")
         state = torch.load(
             state_path,
             map_location="cpu",
             weights_only=False,
         )
         logger.info(
-            "[checkpoint][resume][start] path={} mode=single "
-            "layout=per_role version={} iteration={} roles={}",
+            "[checkpoint][resume][start] path={} mode=single layout=per_role version={} iteration={} roles={}",
             resume_ckpt_path,
             state.get("phased_checkpoint_version", 1),
             state.get("iteration"),
@@ -299,17 +232,13 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 role=role,
             )
             logger.info(
-                "[checkpoint][resume][role] role={} model=restored "
-                "path={}",
+                "[checkpoint][resume][role] role={} model=restored path={}",
                 role,
                 self._role_weights_dir(resume_ckpt_path, role),
             )
         restored_fake_low_high = False
         if self.fake_low_high_model is not None:
-            checkpoint_requires_fake_low_high = (
-                int(state.get("phased_checkpoint_version", 1)) >= 2
-                and bool(state.get("fake_low_high_enabled", False))
-            )
+            checkpoint_requires_fake_low_high = int(state.get("phased_checkpoint_version", 1)) >= 2 and bool(state.get("fake_low_high_enabled", False))
             weights_dir = self._role_weights_dir(
                 resume_ckpt_path,
                 "fake_low_high",
@@ -322,17 +251,10 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 )
                 restored_fake_low_high = True
             elif checkpoint_requires_fake_low_high:
-                raise RuntimeError(
-                    "Checkpoint metadata enables fake_low_high, but its "
-                    f"weights are missing: {weights_dir}"
-                )
+                raise RuntimeError(f"Checkpoint metadata enables fake_low_high, but its weights are missing: {weights_dir}")
             else:
                 self._copy_fake_low_high_from_fake()
-        restored_fake_real = {
-            role: False
-            for role in ("fake_real_high", "fake_real_low")
-            if self.role_registry.runtime(role).model is not None
-        }
+        restored_fake_real = {role: False for role in ("fake_real_high", "fake_real_low") if self.role_registry.runtime(role).model is not None}
         for role, source_role in (
             ("fake_real_high", "fake"),
             ("fake_real_low", "fake_2"),
@@ -345,21 +267,13 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 role,
             )
             restored = os.path.exists(weights_dir)
-            if (
-                not restored
-                and int(state.get("phased_checkpoint_version", 1)) >= 3
-                and bool(state.get(f"{role}_enabled", False))
-            ):
+            if not restored and int(state.get("phased_checkpoint_version", 1)) >= 3 and bool(state.get(f"{role}_enabled", False)):
                 logger.error(
-                    "[checkpoint][resume][error] role={} "
-                    "component=model path={} reason=missing",
+                    "[checkpoint][resume][error] role={} component=model path={} reason=missing",
                     role,
                     weights_dir,
                 )
-                raise RuntimeError(
-                    f"Checkpoint enables {role}, but its weights are "
-                    f"missing: {weights_dir}"
-                )
+                raise RuntimeError(f"Checkpoint enables {role}, but its weights are missing: {weights_dir}")
             if restored:
                 self._load_model_weights(
                     runtime.model,
@@ -385,33 +299,20 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             optimizer_key = "fake_low_high_optimizer"
             scheduler_key = "fake_low_high_lr_scheduler"
             if restored_fake_low_high and optimizer_key in state:
-                self.fake_low_high_optimizer.load_state_dict(
-                    state[optimizer_key]
-                )
+                self.fake_low_high_optimizer.load_state_dict(state[optimizer_key])
             elif restored_fake_low_high:
-                raise RuntimeError(
-                    "Checkpoint has fake_low_high weights but no "
-                    f"{optimizer_key}: {state_path}"
-                )
+                raise RuntimeError(f"Checkpoint has fake_low_high weights but no {optimizer_key}: {state_path}")
             else:
                 logger.warning(
-                    "Using a fresh fake_low_high optimizer while "
-                    "resuming from {}.",
+                    "Using a fresh fake_low_high optimizer while resuming from {}.",
                     resume_ckpt_path,
                 )
             if restored_fake_low_high and scheduler_key in state:
-                self.fake_low_high_lr_scheduler.load_state_dict(
-                    state[scheduler_key]
-                )
+                self.fake_low_high_lr_scheduler.load_state_dict(state[scheduler_key])
             elif restored_fake_low_high:
-                raise RuntimeError(
-                    "Checkpoint has fake_low_high weights but no "
-                    f"{scheduler_key}: {state_path}"
-                )
+                raise RuntimeError(f"Checkpoint has fake_low_high weights but no {scheduler_key}: {state_path}")
             else:
-                self._fast_forward_fake_low_high_scheduler(
-                    state["iteration"]
-                )
+                self._fast_forward_fake_low_high_scheduler(state["iteration"])
         for role, restored in restored_fake_real.items():
             runtime = self.role_registry.runtime(role)
             optimizer_key = f"{role}_optimizer"
@@ -422,8 +323,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             else:
                 optimizer_status = "fresh"
                 logger.warning(
-                    "[checkpoint][resume][fallback] role={} "
-                    "optimizer=fresh reason=missing_in_checkpoint",
+                    "[checkpoint][resume][fallback] role={} optimizer=fresh reason=missing_in_checkpoint",
                     role,
                 )
             if restored and scheduler_key in state:
@@ -436,19 +336,9 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 )
                 scheduler_status = "fast_forward"
             logger.info(
-                "[checkpoint][resume][role] role={} model={} "
-                "optimizer={} scheduler={} path={}",
+                "[checkpoint][resume][role] role={} model={} optimizer={} scheduler={} path={}",
                 role,
-                (
-                    "restored"
-                    if restored
-                    else "copied_from:"
-                    + (
-                        "fake"
-                        if role == "fake_real_high"
-                        else "fake_2"
-                    )
-                ),
+                ("restored" if restored else "copied_from:" + ("fake" if role == "fake_real_high" else "fake_2")),
                 optimizer_status,
                 scheduler_status,
                 self._role_weights_dir(resume_ckpt_path, role),
@@ -473,23 +363,12 @@ class PhasedCheckpointManager(DmdCheckpointManager):
 
     @staticmethod
     def _checkpoint_role_layout(dist_state_path, required_roles):
-        existing_roles = tuple(
-            role
-            for role in required_roles
-            if os.path.isdir(os.path.join(dist_state_path, role))
-        )
+        existing_roles = tuple(role for role in required_roles if os.path.isdir(os.path.join(dist_state_path, role)))
         if not existing_roles:
             return "flat"
-        missing_roles = [
-            role
-            for role in required_roles
-            if role not in existing_roles
-        ]
+        missing_roles = [role for role in required_roles if role not in existing_roles]
         if missing_roles:
-            raise RuntimeError(
-                "Distributed phased DMD checkpoint is missing required "
-                f"role directories {missing_roles}: {dist_state_path}"
-            )
+            raise RuntimeError(f"Distributed phased DMD checkpoint is missing required role directories {missing_roles}: {dist_state_path}")
         return "per_role"
 
     def _load_distributed_state(self, resume_ckpt_path):
@@ -499,13 +378,9 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             "trainer_state.pt",
         )
         if not os.path.exists(dist_state_path):
-            raise RuntimeError(
-                f"dist_state not found in {resume_ckpt_path}"
-            )
+            raise RuntimeError(f"dist_state not found in {resume_ckpt_path}")
         if not os.path.exists(trainer_state_path):
-            raise RuntimeError(
-                f"trainer_state.pt not found in {resume_ckpt_path}"
-            )
+            raise RuntimeError(f"trainer_state.pt not found in {resume_ckpt_path}")
         trainer_state = torch.load(
             trainer_state_path,
             map_location="cpu",
@@ -522,10 +397,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             strict=False,
         )
         role_states = self._trainable_role_states()
-        role_state_by_name = {
-            role: (model, optimizer)
-            for role, model, optimizer in role_states
-        }
+        role_state_by_name = {role: (model, optimizer) for role, model, optimizer in role_states}
         required_roles = (
             "student",
             "fake",
@@ -533,17 +405,13 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             "fake_2",
         )
         checkpoint_group = self._get_checkpoint_process_group()
-        role_checkpoint_dirs = {
-            role: os.path.join(dist_state_path, role)
-            for role, _, _ in role_states
-        }
+        role_checkpoint_dirs = {role: os.path.join(dist_state_path, role) for role, _, _ in role_states}
         checkpoint_layout = self._checkpoint_role_layout(
             dist_state_path,
             required_roles,
         )
         logger.info(
-            "[checkpoint][resume][start] path={} mode=fsdp "
-            "layout={} version={} iteration={} roles={}",
+            "[checkpoint][resume][start] path={} mode=fsdp layout={} version={} iteration={} roles={}",
             resume_ckpt_path,
             checkpoint_layout,
             trainer_state.get("phased_checkpoint_version", 1),
@@ -560,25 +428,13 @@ class PhasedCheckpointManager(DmdCheckpointManager):
         if (
             checkpoint_layout == "flat"
             and self.fake_low_high_model is not None
-            and int(
-                trainer_state.get("phased_checkpoint_version", 1)
-            )
-            >= 2
-            and bool(
-                trainer_state.get("fake_low_high_enabled", False)
-            )
+            and int(trainer_state.get("phased_checkpoint_version", 1)) >= 2
+            and bool(trainer_state.get("fake_low_high_enabled", False))
         ):
-            raise RuntimeError(
-                "Checkpoint metadata enables fake_low_high, but the "
-                "distributed checkpoint uses no per-role state: "
-                f"{dist_state_path}"
-            )
+            raise RuntimeError(f"Checkpoint metadata enables fake_low_high, but the distributed checkpoint uses no per-role state: {dist_state_path}")
         if (
             checkpoint_layout == "flat"
-            and int(
-                trainer_state.get("phased_checkpoint_version", 1)
-            )
-            >= 3
+            and int(trainer_state.get("phased_checkpoint_version", 1)) >= 3
             and any(
                 bool(trainer_state.get(f"{role}_enabled", False))
                 for role in (
@@ -587,26 +443,13 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 )
             )
         ):
-            raise RuntimeError(
-                "Checkpoint metadata enables independent Fake-Real "
-                "roles, but the distributed checkpoint uses no "
-                f"per-role state: {dist_state_path}"
-            )
+            raise RuntimeError(f"Checkpoint metadata enables independent Fake-Real roles, but the distributed checkpoint uses no per-role state: {dist_state_path}")
         restored_fake_low_high = False
-        restored_fake_real = {
-            role: False
-            for role in ("fake_real_high", "fake_real_low")
-            if self.role_registry.runtime(role).model is not None
-        }
+        restored_fake_real = {role: False for role in ("fake_real_high", "fake_real_low") if self.role_registry.runtime(role).model is not None}
         if checkpoint_layout == "per_role":
             roles_to_load = list(required_roles)
-            fake_low_high_dir = role_checkpoint_dirs.get(
-                "fake_low_high"
-            )
-            if (
-                fake_low_high_dir is not None
-                and os.path.isdir(fake_low_high_dir)
-            ):
+            fake_low_high_dir = role_checkpoint_dirs.get("fake_low_high")
+            if fake_low_high_dir is not None and os.path.isdir(fake_low_high_dir):
                 roles_to_load.append("fake_low_high")
                 restored_fake_low_high = True
             elif (
@@ -625,48 +468,32 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                     )
                 )
             ):
-                raise RuntimeError(
-                    "Checkpoint metadata enables fake_low_high, but its "
-                    "distributed role directory is missing: "
-                    f"{fake_low_high_dir}"
-                )
+                raise RuntimeError(f"Checkpoint metadata enables fake_low_high, but its distributed role directory is missing: {fake_low_high_dir}")
             for role in ("fake_real_high", "fake_real_low"):
                 runtime = self.role_registry.runtime(role)
                 if runtime.model is None:
                     continue
                 role_dir = role_checkpoint_dirs.get(role)
-                restored = bool(
-                    role_dir is not None
-                    and os.path.isdir(role_dir)
-                )
+                restored = bool(role_dir is not None and os.path.isdir(role_dir))
                 if restored:
                     roles_to_load.append(role)
-                elif (
-                    int(
-                        trainer_state.get(
-                            "phased_checkpoint_version",
-                            1,
-                        )
+                elif int(
+                    trainer_state.get(
+                        "phased_checkpoint_version",
+                        1,
                     )
-                    >= 3
-                    and bool(
-                        trainer_state.get(
-                            f"{role}_enabled",
-                            False,
-                        )
+                ) >= 3 and bool(
+                    trainer_state.get(
+                        f"{role}_enabled",
+                        False,
                     )
                 ):
                     logger.error(
-                        "[checkpoint][resume][error] role={} "
-                        "component=model path={} reason=missing",
+                        "[checkpoint][resume][error] role={} component=model path={} reason=missing",
                         role,
                         role_dir,
                     )
-                    raise RuntimeError(
-                        f"Checkpoint enables {role}, but its "
-                        "distributed role directory is missing: "
-                        f"{role_dir}"
-                    )
+                    raise RuntimeError(f"Checkpoint enables {role}, but its distributed role directory is missing: {role_dir}")
                 restored_fake_real[role] = restored
             for role in roles_to_load:
                 model, optimizer = role_state_by_name[role]
@@ -696,8 +523,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                     options=options,
                 )
                 logger.info(
-                    "[checkpoint][resume][role] role={} "
-                    "model=restored optimizer=restored path={}",
+                    "[checkpoint][resume][role] role={} model=restored optimizer=restored path={}",
                     role,
                     role_checkpoint_dirs[role],
                 )
@@ -728,26 +554,17 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                     options=options,
                 )
                 logger.info(
-                    "[checkpoint][resume][role] role={} "
-                    "model=restored optimizer=restored "
-                    "path={} layout=flat",
+                    "[checkpoint][resume][role] role={} model=restored optimizer=restored path={} layout=flat",
                     role,
                     dist_state_path,
                 )
             del state
-        if (
-            self.fake_low_high_model is not None
-            and not restored_fake_low_high
-        ):
+        if self.fake_low_high_model is not None and not restored_fake_low_high:
             self._copy_fake_low_high_from_fake()
         for role, restored in restored_fake_real.items():
             if restored:
                 continue
-            source_role = (
-                "fake"
-                if role == "fake_real_high"
-                else "fake_2"
-            )
+            source_role = "fake" if role == "fake_real_high" else "fake_2"
             self._copy_role_model(source_role, role)
         scheduler_targets = [
             ("lr_scheduler", self.lr_scheduler),
@@ -759,41 +576,22 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             target.load_state_dict(trainer_state[key])
         if self.fake_low_high_lr_scheduler is not None:
             scheduler_key = "fake_low_high_lr_scheduler"
-            if (
-                restored_fake_low_high
-                and scheduler_key in trainer_state
-            ):
-                self.fake_low_high_lr_scheduler.load_state_dict(
-                    trainer_state[scheduler_key]
-                )
+            if restored_fake_low_high and scheduler_key in trainer_state:
+                self.fake_low_high_lr_scheduler.load_state_dict(trainer_state[scheduler_key])
             elif restored_fake_low_high:
-                raise RuntimeError(
-                    "Checkpoint has fake_low_high state but no "
-                    f"{scheduler_key}: {trainer_state_path}"
-                )
+                raise RuntimeError(f"Checkpoint has fake_low_high state but no {scheduler_key}: {trainer_state_path}")
             else:
-                self._fast_forward_fake_low_high_scheduler(
-                    trainer_state["iteration"]
-                )
-        if (
-            self.fake_low_high_optimizer is not None
-            and not restored_fake_low_high
-        ):
+                self._fast_forward_fake_low_high_scheduler(trainer_state["iteration"])
+        if self.fake_low_high_optimizer is not None and not restored_fake_low_high:
             logger.warning(
-                "Using a fresh fake_low_high optimizer while resuming "
-                "from {}.",
+                "Using a fresh fake_low_high optimizer while resuming from {}.",
                 resume_ckpt_path,
             )
         for role, restored in restored_fake_real.items():
             runtime = self.role_registry.runtime(role)
             scheduler_key = f"{role}_lr_scheduler"
-            if (
-                restored
-                and trainer_state.get(scheduler_key) is not None
-            ):
-                runtime.scheduler.load_state_dict(
-                    trainer_state[scheduler_key]
-                )
+            if restored and trainer_state.get(scheduler_key) is not None:
+                runtime.scheduler.load_state_dict(trainer_state[scheduler_key])
                 scheduler_status = "restored"
             else:
                 self._fast_forward_fake_real_scheduler(
@@ -802,19 +600,9 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 )
                 scheduler_status = "fast_forward"
             logger.info(
-                "[checkpoint][resume][role] role={} model={} "
-                "optimizer={} scheduler={} path={}",
+                "[checkpoint][resume][role] role={} model={} optimizer={} scheduler={} path={}",
                 role,
-                (
-                    "restored"
-                    if restored
-                    else "copied_from:"
-                    + (
-                        "fake"
-                        if role == "fake_real_high"
-                        else "fake_2"
-                    )
-                ),
+                ("restored" if restored else "copied_from:" + ("fake" if role == "fake_real_high" else "fake_2")),
                 "restored" if restored else "fresh",
                 scheduler_status,
                 role_checkpoint_dirs.get(role),
@@ -890,15 +678,8 @@ class PhasedCheckpointManager(DmdCheckpointManager):
         role_models = self._trainable_role_models()
         for role, model in role_models:
             weights_dir = self._role_weights_dir(save_dir, role)
-            save_weights = (
-                self._role_train_type(role) == "lora"
-                or not model.is_fsdp2_wrapped()
-            )
-            if (
-                save_weights
-                and role != "student"
-                and is_main_process()
-            ):
+            save_weights = self._role_train_type(role) == "lora" or not model.is_fsdp2_wrapped()
+            if save_weights and role != "student" and is_main_process():
                 os.makedirs(weights_dir, exist_ok=True)
             barrier()
             if save_weights:
@@ -909,8 +690,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 )
             barrier()
             logger.info(
-                "[checkpoint][save][role] role={} path={} "
-                "weights={}",
+                "[checkpoint][save][role] role={} path={} weights={}",
                 role,
                 weights_dir,
                 save_weights,
@@ -942,43 +722,27 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             "student_2_train_type": self.student_2_train_type,
             "fake_2_train_type": self.fake_2_train_type,
             "fake_low_high_enabled": self.enable_fake_low_high,
-            "fake_low_high_train_type": (
-                self.fake_low_high_train_type
-            ),
+            "fake_low_high_train_type": (self.fake_low_high_train_type),
             "phased_match_timestep": self.match_timestep,
             "optimizer": self.optimizer.state_dict(),
             "fake_optimizer": self.fake_optimizer.state_dict(),
-            "student_2_optimizer": (
-                self.student_2_optimizer.state_dict()
-            ),
+            "student_2_optimizer": (self.student_2_optimizer.state_dict()),
             "fake_2_optimizer": self.fake_2_optimizer.state_dict(),
             "lr_scheduler": self.lr_scheduler.state_dict(),
             "fake_lr_scheduler": self.fake_lr_scheduler.state_dict(),
-            "student_2_lr_scheduler": (
-                self.student_2_lr_scheduler.state_dict()
-            ),
-            "fake_2_lr_scheduler": (
-                self.fake_2_lr_scheduler.state_dict()
-            ),
+            "student_2_lr_scheduler": (self.student_2_lr_scheduler.state_dict()),
+            "fake_2_lr_scheduler": (self.fake_2_lr_scheduler.state_dict()),
         }
         if self.fake_low_high_optimizer is not None:
-            training_state["fake_low_high_optimizer"] = (
-                self.fake_low_high_optimizer.state_dict()
-            )
-            training_state["fake_low_high_lr_scheduler"] = (
-                self.fake_low_high_lr_scheduler.state_dict()
-            )
+            training_state["fake_low_high_optimizer"] = self.fake_low_high_optimizer.state_dict()
+            training_state["fake_low_high_lr_scheduler"] = self.fake_low_high_lr_scheduler.state_dict()
         for role in ("fake_real_high", "fake_real_low"):
             runtime = self.role_registry.runtime(role)
             if runtime.model is None:
                 continue
             training_state[f"{role}_train_type"] = runtime.train_type
-            training_state[f"{role}_optimizer"] = (
-                runtime.optimizer.state_dict()
-            )
-            training_state[f"{role}_lr_scheduler"] = (
-                runtime.scheduler.state_dict()
-            )
+            training_state[f"{role}_optimizer"] = runtime.optimizer.state_dict()
+            training_state[f"{role}_lr_scheduler"] = runtime.scheduler.state_dict()
         training_state.update(self._trick_checkpoint_metadata())
         if is_main_process():
             torch.save(
@@ -1004,52 +768,20 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                     "phased_checkpoint_version": 3,
                     "student_train_type": self.student_train_type,
                     "fake_train_type": self.fake_train_type,
-                    "student_2_train_type": (
-                        self.student_2_train_type
-                    ),
+                    "student_2_train_type": (self.student_2_train_type),
                     "fake_2_train_type": self.fake_2_train_type,
-                    "fake_low_high_enabled": (
-                        self.enable_fake_low_high
-                    ),
-                    "fake_low_high_train_type": (
-                        self.fake_low_high_train_type
-                    ),
+                    "fake_low_high_enabled": (self.enable_fake_low_high),
+                    "fake_low_high_train_type": (self.fake_low_high_train_type),
                     "phased_match_timestep": self.match_timestep,
                     "lr_scheduler": self.lr_scheduler.state_dict(),
-                    "fake_lr_scheduler": (
-                        self.fake_lr_scheduler.state_dict()
-                    ),
-                    "student_2_lr_scheduler": (
-                        self.student_2_lr_scheduler.state_dict()
-                    ),
-                    "fake_2_lr_scheduler": (
-                        self.fake_2_lr_scheduler.state_dict()
-                    ),
-                    "fake_low_high_lr_scheduler": (
-                        self.fake_low_high_lr_scheduler.state_dict()
-                        if self.fake_low_high_lr_scheduler is not None
-                        else None
-                    ),
-                    "fake_real_high_train_type": (
-                        self.fake_real_high_train_type
-                        if self.fake_real_high_model is not None
-                        else None
-                    ),
-                    "fake_real_low_train_type": (
-                        self.fake_real_low_train_type
-                        if self.fake_real_low_model is not None
-                        else None
-                    ),
-                    "fake_real_high_lr_scheduler": (
-                        self.fake_real_high_lr_scheduler.state_dict()
-                        if self.fake_real_high_lr_scheduler is not None
-                        else None
-                    ),
-                    "fake_real_low_lr_scheduler": (
-                        self.fake_real_low_lr_scheduler.state_dict()
-                        if self.fake_real_low_lr_scheduler is not None
-                        else None
-                    ),
+                    "fake_lr_scheduler": (self.fake_lr_scheduler.state_dict()),
+                    "student_2_lr_scheduler": (self.student_2_lr_scheduler.state_dict()),
+                    "fake_2_lr_scheduler": (self.fake_2_lr_scheduler.state_dict()),
+                    "fake_low_high_lr_scheduler": (self.fake_low_high_lr_scheduler.state_dict() if self.fake_low_high_lr_scheduler is not None else None),
+                    "fake_real_high_train_type": (self.fake_real_high_train_type if self.fake_real_high_model is not None else None),
+                    "fake_real_low_train_type": (self.fake_real_low_train_type if self.fake_real_low_model is not None else None),
+                    "fake_real_high_lr_scheduler": (self.fake_real_high_lr_scheduler.state_dict() if self.fake_real_high_lr_scheduler is not None else None),
+                    "fake_real_low_lr_scheduler": (self.fake_real_low_lr_scheduler.state_dict() if self.fake_real_low_lr_scheduler is not None else None),
                     **self._trick_checkpoint_metadata(),
                 },
                 os.path.join(save_dir, "trainer_state.pt"),
@@ -1094,4 +826,3 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 role,
             )
             del role_state, model_state, optimizer_state
-

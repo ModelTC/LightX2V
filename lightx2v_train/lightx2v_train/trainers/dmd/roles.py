@@ -5,6 +5,7 @@ from typing import (
     Optional,
 )
 
+
 @dataclass(frozen=True)
 class RoleSpec:
     """Describe stable checkpoint and training metadata for one model role."""
@@ -64,10 +65,7 @@ class DmdRoleRegistry:
 
     def __init__(self, owner):
         self.owner = owner
-        self._specs = {
-            spec.name: spec
-            for spec in self.role_specs
-        }
+        self._specs = {spec.name: spec for spec in self.role_specs}
 
     def names(self) -> Iterable[str]:
         return self._specs.keys()
@@ -82,28 +80,17 @@ class DmdRoleRegistry:
         spec = self.spec(name)
         model = getattr(self.owner, spec.model_attribute, None)
         if model is None and not spec.optional:
-            raise RuntimeError(
-                f"DMD role {name!r} has not been initialized."
-            )
+            raise RuntimeError(f"DMD role {name!r} has not been initialized.")
         return RoleRuntime(
             spec=spec,
             model=model,
-            optimizer=self._optional_attribute(
-                spec.optimizer_attribute
-            ),
-            scheduler=self._optional_attribute(
-                spec.scheduler_attribute
-            ),
-            train_type=self._optional_attribute(
-                spec.train_type_attribute
-            ),
+            optimizer=self._optional_attribute(spec.optimizer_attribute),
+            scheduler=self._optional_attribute(spec.scheduler_attribute),
+            train_type=self._optional_attribute(spec.train_type_attribute),
         )
 
     def runtimes(self) -> Dict[str, RoleRuntime]:
-        return {
-            name: self.runtime(name)
-            for name in self.names()
-        }
+        return {name: self.runtime(name) for name in self.names()}
 
     def weight_directory_name(self, name: str) -> Optional[str]:
         runtime = self.runtime(name)

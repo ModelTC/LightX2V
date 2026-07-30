@@ -118,17 +118,11 @@ class CdmTrick(
 
     def validate(self) -> None:
         if self.config.weight < 0:
-            raise ValueError(
-                "training.dmd.cdm.weight must be non-negative."
-            )
+            raise ValueError("training.dmd.cdm.weight must be non-negative.")
         if self.config.warmup_iters < 0:
-            raise ValueError(
-                "training.dmd.cdm.warmup_iters must be non-negative."
-            )
+            raise ValueError("training.dmd.cdm.warmup_iters must be non-negative.")
         if self.config.norm_clip_min <= 0:
-            raise ValueError(
-                "training.dmd.cdm.norm_clip_min must be positive."
-            )
+            raise ValueError("training.dmd.cdm.norm_clip_min must be positive.")
 
     def validate_trainer(
         self,
@@ -138,31 +132,19 @@ class CdmTrick(
         if not self.enabled:
             return
         if not constraints.supported:
-            raise ValueError(
-                f"{trainer_name} does not support training.dmd.cdm."
-            )
+            raise ValueError(f"{trainer_name} does not support training.dmd.cdm.")
         if constraints.model_name not in constraints.supported_model_names:
-            supported = ", ".join(
-                repr(name)
-                for name in sorted(constraints.supported_model_names)
-            )
-            raise ValueError(
-                "training.dmd.cdm is only supported for model.name in "
-                f"{{{supported}}}, got {constraints.model_name!r}."
-            )
+            supported = ", ".join(repr(name) for name in sorted(constraints.supported_model_names))
+            raise ValueError(f"training.dmd.cdm is only supported for model.name in {{{supported}}}, got {constraints.model_name!r}.")
 
     def effective_weight(self, current_iteration: int | None) -> float:
-        if (
-            self.config.warmup_iters <= 0
-            or current_iteration is None
-        ):
+        if self.config.warmup_iters <= 0 or current_iteration is None:
             return self.config.weight
         progress = min(
             1.0,
             max(
                 0.0,
-                float(current_iteration)
-                / float(self.config.warmup_iters),
+                float(current_iteration) / float(self.config.warmup_iters),
             ),
         )
         return progress * self.config.weight
@@ -205,20 +187,13 @@ class CdmTrick(
             student_sigma,
             context.trajectory_velocity.ndim,
         )
-        student_xt = (
-            context.trajectory_latent
-            + (student_sigma_expanded - trajectory_sigma)
-            * context.trajectory_velocity
-        )
+        student_xt = context.trajectory_latent + (student_sigma_expanded - trajectory_sigma) * context.trajectory_velocity
         student_prediction = context.predict_student_velocity(
             student_xt.to(context.dtype),
             student_sigma,
             context.condition,
         )
-        student_x0 = (
-            student_xt
-            - student_sigma_expanded * student_prediction
-        ).to(context.dtype)
+        student_x0 = (student_xt - student_sigma_expanded * student_prediction).to(context.dtype)
 
         teacher_sigma = context.scheduler.sample_renoise_sigma(
             batch_size,
@@ -248,14 +223,8 @@ class CdmTrick(
             teacher_sigma,
             teacher_xt.ndim,
         )
-        x_pred_fake = (
-            teacher_xt
-            - teacher_sigma_expanded * velocity_fake
-        )
-        x_pred_teacher = (
-            teacher_xt
-            - teacher_sigma_expanded * velocity_teacher
-        )
+        x_pred_fake = teacher_xt - teacher_sigma_expanded * velocity_fake
+        x_pred_teacher = teacher_xt - teacher_sigma_expanded * velocity_teacher
 
         raw_loss = context.dmd_loss(
             student_x0,

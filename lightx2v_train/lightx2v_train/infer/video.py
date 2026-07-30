@@ -173,23 +173,16 @@ class WanT2VDualInferencer(WanT2VInferencer):
     def __init__(self, config):
         super().__init__(config)
         self.low_model = None
-        self.boundary_step_index = int(
-            self.infer_config.get("boundary_step_index", 2)
-        )
+        self.boundary_step_index = int(self.infer_config.get("boundary_step_index", 2))
 
     def set_low_model(self, model):
         self.low_model = model
 
     def _denoise_model_for_step(self, step_index, total_steps):
         if self.low_model is None:
-            raise RuntimeError(
-                "wan_t2v_dual_infer requires a Low Student model."
-            )
+            raise RuntimeError("wan_t2v_dual_infer requires a Low Student model.")
         if not 0 < self.boundary_step_index < total_steps:
-            raise ValueError(
-                "inference.boundary_step_index must split the denoising "
-                "steps into non-empty High and Low regions."
-            )
+            raise ValueError("inference.boundary_step_index must split the denoising steps into non-empty High and Low regions.")
         if step_index < self.boundary_step_index:
             return self.model
         return self.low_model
@@ -197,9 +190,7 @@ class WanT2VDualInferencer(WanT2VInferencer):
     @torch.no_grad()
     def infer(self):
         if self.low_model is None:
-            raise RuntimeError(
-                "wan_t2v_dual_infer requires set_low_model before infer."
-            )
+            raise RuntimeError("wan_t2v_dual_infer requires set_low_model before infer.")
         self.low_model.set_denoiser_eval()
         return super().infer()
 

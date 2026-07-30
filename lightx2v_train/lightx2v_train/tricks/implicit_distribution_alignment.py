@@ -76,17 +76,13 @@ class ImplicitDistributionAlignmentTrick(
 
     def validate(self) -> None:
         if not 0.0 < self.config.decay <= 1.0:
-            raise ValueError(
-                "training.dmd.ida.decay must satisfy 0 < decay <= 1."
-            )
+            raise ValueError("training.dmd.ida.decay must satisfy 0 < decay <= 1.")
 
     def setup(self, context: IdaSetupContext) -> None:
         if not self.enabled:
             return
         if not context.model_pairs:
-            raise ValueError(
-                "SenseFlow IDA requires at least one model pair."
-            )
+            raise ValueError("SenseFlow IDA requires at least one model pair.")
         parameter_pairs = {}
         for role, model_pair in context.model_pairs.items():
             parameter_pairs[role] = self._build_parameter_pairs(
@@ -104,49 +100,23 @@ class ImplicitDistributionAlignmentTrick(
         ...,
     ]:
         if model_pair.student is model_pair.fake:
-            raise ValueError(
-                f"SenseFlow IDA role {role!r} requires distinct models."
-            )
+            raise ValueError(f"SenseFlow IDA role {role!r} requires distinct models.")
 
-        student_parameters = {
-            name: parameter
-            for name, parameter in model_pair.student.named_parameters()
-        }
-        fake_parameters = {
-            name: parameter
-            for name, parameter in model_pair.fake.named_parameters()
-        }
-        trainable_student_names = {
-            name
-            for name, parameter in student_parameters.items()
-            if parameter.requires_grad
-        }
+        student_parameters = {name: parameter for name, parameter in model_pair.student.named_parameters()}
+        fake_parameters = {name: parameter for name, parameter in model_pair.fake.named_parameters()}
+        trainable_student_names = {name for name, parameter in student_parameters.items() if parameter.requires_grad}
         if not trainable_student_names:
-            raise ValueError(
-                f"SenseFlow IDA role {role!r} has no trainable student "
-                "parameters."
-            )
+            raise ValueError(f"SenseFlow IDA role {role!r} has no trainable student parameters.")
         if student_parameters.keys() != fake_parameters.keys():
-            student_only = sorted(
-                student_parameters.keys() - fake_parameters.keys()
-            )
-            fake_only = sorted(
-                fake_parameters.keys() - student_parameters.keys()
-            )
-            raise ValueError(
-                f"SenseFlow IDA role {role!r} parameter names do not match: "
-                f"student_only={student_only[:5]}, fake_only={fake_only[:5]}."
-            )
+            student_only = sorted(student_parameters.keys() - fake_parameters.keys())
+            fake_only = sorted(fake_parameters.keys() - student_parameters.keys())
+            raise ValueError(f"SenseFlow IDA role {role!r} parameter names do not match: student_only={student_only[:5]}, fake_only={fake_only[:5]}.")
 
         pairs = []
         for name, student_parameter in student_parameters.items():
             fake_parameter = fake_parameters[name]
             if student_parameter.shape != fake_parameter.shape:
-                raise ValueError(
-                    f"SenseFlow IDA role {role!r} parameter {name!r} has "
-                    f"student shape {tuple(student_parameter.shape)} and "
-                    f"fake shape {tuple(fake_parameter.shape)}."
-                )
+                raise ValueError(f"SenseFlow IDA role {role!r} parameter {name!r} has student shape {tuple(student_parameter.shape)} and fake shape {tuple(fake_parameter.shape)}.")
             if name not in trainable_student_names:
                 continue
             pairs.append(
@@ -165,10 +135,7 @@ class ImplicitDistributionAlignmentTrick(
         parameter_pairs = self._parameter_pairs.get(context.role)
         if parameter_pairs is None:
             available = ", ".join(sorted(self._parameter_pairs))
-            raise ValueError(
-                f"Unknown SenseFlow IDA role {context.role!r}. "
-                f"Available roles: {available}"
-            )
+            raise ValueError(f"Unknown SenseFlow IDA role {context.role!r}. Available roles: {available}")
 
         student_weight = 1.0 - self.config.decay
         for _, student_parameter, fake_parameter in parameter_pairs:

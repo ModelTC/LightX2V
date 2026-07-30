@@ -1,6 +1,7 @@
-import os
 import copy
+import os
 from functools import partial
+
 import torch
 import torch.distributed.checkpoint as dcp
 import torch.nn.functional as F
@@ -10,25 +11,21 @@ from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict,
 )
+
+from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime.distributed import (
     barrier,
     get_world_size,
     is_main_process,
     reduce_mean,
 )
-from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
-from lightx2v_train.schedulers import DMDFlowMatchingScheduler
-from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
-from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime.parallel import (
     apply_parallel,
     set_parallel_gradient_sync,
 )
-from lightx2v_train.utils.constants import (
-    LINGBOT_VIDEO_NEGATIVE_PROMPT,
-    WAN_NEGATIVE_PROMPT,
-)
-from lightx2v_train.utils.registry import TRAINER_REGISTER
+from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
+from lightx2v_train.schedulers import DMDFlowMatchingScheduler
+from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
 from lightx2v_train.tricks import (
     DiversitySetupContext,
     DiversityStepContext,
@@ -38,8 +35,15 @@ from lightx2v_train.tricks import (
     RealDataFakeStepContext,
     RealDataFakeTrick,
 )
+from lightx2v_train.utils.constants import (
+    LINGBOT_VIDEO_NEGATIVE_PROMPT,
+    WAN_NEGATIVE_PROMPT,
+)
+from lightx2v_train.utils.registry import TRAINER_REGISTER
+
 from .config import VideoDmdConfig
 from .trainer import DmdTrainer
+
 
 @TRAINER_REGISTER("video_dmd")
 class VideoDmdTrainer(DmdTrainer):
@@ -83,13 +87,9 @@ class VideoDmdTrainer(DmdTrainer):
         self.ts_schedule_max = parsed.ts_schedule_max
         self.min_score_timestep = parsed.min_score_timestep
         self.student_checkpoint_path = parsed.student_checkpoint_path
-        self.student_checkpoint_strict = (
-            parsed.student_checkpoint_strict
-        )
+        self.student_checkpoint_strict = parsed.student_checkpoint_strict
 
-        self.diversity_trick = DiversityTrick.from_mapping(
-            self.dmd_config.get("div_loss", {})
-        )
+        self.diversity_trick = DiversityTrick.from_mapping(self.dmd_config.get("div_loss", {}))
         self.diversity_trick.validate_trainer(
             DiversityTrainerConstraints(
                 supported=self.supports_diversity_loss,
@@ -105,9 +105,7 @@ class VideoDmdTrainer(DmdTrainer):
             if self.diversity_trick.enabled
             else None
         )
-        self.diversity_trick.setup(
-            DiversitySetupContext(scheduler=diversity_scheduler)
-        )
+        self.diversity_trick.setup(DiversitySetupContext(scheduler=diversity_scheduler))
         self.real_data_fake_trick = RealDataFakeTrick.from_mappings(
             {
                 "main": (
@@ -116,14 +114,8 @@ class VideoDmdTrainer(DmdTrainer):
                 )
             }
         )
-        if (
-            self.real_data_fake_trick.enabled
-            and not self.supports_real_data_fake
-        ):
-            raise ValueError(
-                f"{self.trainer_name} does not support "
-                "training.dmd.fake_real."
-            )
+        if self.real_data_fake_trick.enabled and not self.supports_real_data_fake:
+            raise ValueError(f"{self.trainer_name} does not support training.dmd.fake_real.")
         self.real_data_fake_trick.validate_schedule(
             mode="standard",
             num_train_timestep=self.num_train_timestep,
@@ -134,17 +126,10 @@ class VideoDmdTrainer(DmdTrainer):
                 "latent_dataset",
                 "video_dataset",
             }:
-                raise ValueError(
-                    "Real-data fake training requires data.train.name="
-                    "latent_dataset or video_dataset."
-                )
+                raise ValueError("Real-data fake training requires data.train.name=latent_dataset or video_dataset.")
         self.fake_real_train_type = self.fake_train_type
-        self.fake_real_lora_config = copy.deepcopy(
-            self.fake_lora_config
-        )
-        self.fake_real_optimizer_config = copy.deepcopy(
-            self.fake_optimizer_config
-        )
+        self.fake_real_lora_config = copy.deepcopy(self.fake_lora_config)
+        self.fake_real_optimizer_config = copy.deepcopy(self.fake_optimizer_config)
 
     def _prepare_cached_condition(self, condition):
         if torch.is_tensor(condition):
@@ -219,9 +204,7 @@ class VideoDmdTrainer(DmdTrainer):
         )
         self.denoising_steps = self._build_denoising_steps(self.model.device)
         self.denoising_sigmas = (self.denoising_steps / self.num_train_timestep).to(dtype=torch.float32)
-        self.real_data_fake_trick.setup(
-            self._real_data_fake_setup_context()
-        )
+        self.real_data_fake_trick.setup(self._real_data_fake_setup_context())
         logger.info(
             "[train] {} denoising_steps={} warped={}",
             self.trainer_name,
@@ -249,9 +232,7 @@ class VideoDmdTrainer(DmdTrainer):
         apply_parallel(self.fake_real_model, self.config)
         if self.gradient_checkpointing:
             self.fake_real_model.enable_gradient_checkpointing()
-        self.fake_real_trainable_params = list(
-            self.fake_real_model.trainable_parameters()
-        )
+        self.fake_real_trainable_params = list(self.fake_real_model.trainable_parameters())
         self.fake_real_optimizer = self._build_optimizer(
             self.fake_real_trainable_params,
             self.fake_real_optimizer_config,
@@ -265,8 +246,7 @@ class VideoDmdTrainer(DmdTrainer):
             ),
         )
         logger.info(
-            "[train] {} independent fake_real model={} path={} "
-            "train_type={} trainable_params={}",
+            "[train] {} independent fake_real model={} path={} train_type={} trainable_params={}",
             self.trainer_name,
             model_config["model"]["name"],
             model_config["model"]["pretrained_model_name_or_path"],
@@ -349,20 +329,16 @@ class VideoDmdTrainer(DmdTrainer):
             self.fake_update_ratio,
         )
         logger.info(
-            "[train] {} diversity enabled={} weight={} "
-            "teacher_steps={} anchor_step={}",
+            "[train] {} diversity enabled={} weight={} teacher_steps={} anchor_step={}",
             self.trainer_name,
             self.diversity_trick.enabled,
             self.diversity_trick.config.weight,
             self.diversity_trick.config.teacher_inference_steps,
             self.diversity_trick.config.anchor_step,
         )
-        real_data_config = (
-            self.real_data_fake_trick.config.regions["main"]
-        )
+        real_data_config = self.real_data_fake_trick.config.regions["main"]
         logger.info(
-            "[train] {} real_data_fake enabled={} weight={} "
-            "timesteps={}",
+            "[train] {} real_data_fake enabled={} weight={} timesteps={}",
             self.trainer_name,
             real_data_config.enabled,
             real_data_config.weight,
@@ -406,9 +382,7 @@ class VideoDmdTrainer(DmdTrainer):
             if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
                 dmd_text = "nan" if display_dmd is None else f"{display_dmd:.6f}"
                 logger.info(
-                    "[train] iter={}/{} dmd={} div_loss={:.6f} "
-                    "real_dmd={:.6f} fake={:.6f} fake_real={:.6f} "
-                    "lr={:.8f}",
+                    "[train] iter={}/{} dmd={} div_loss={:.6f} real_dmd={:.6f} fake={:.6f} fake_real={:.6f} lr={:.8f}",
                     current_iter,
                     max_train_iters,
                     dmd_text,
@@ -468,13 +442,7 @@ class VideoDmdTrainer(DmdTrainer):
             conditions = self._encode_conditions(sample)
             latent_shape = self._latent_shape(sample)
             initial_noise = self.sample_initial_latents(latent_shape)
-            set_sync(
-                (
-                    stage == "student"
-                    and use_real_data_fake
-                )
-                or micro_idx == grad_accum_iters - 1
-            )
+            set_sync((stage == "student" and use_real_data_fake) or micro_idx == grad_accum_iters - 1)
             result = self.forward_loss(
                 latent_shape,
                 conditions,
@@ -486,10 +454,7 @@ class VideoDmdTrainer(DmdTrainer):
                 for name, value in result.items():
                     if name == "loss":
                         continue
-                    metric_values[name] = (
-                        metric_values.get(name, 0.0)
-                        + value.item() / grad_accum_iters
-                    )
+                    metric_values[name] = metric_values.get(name, 0.0) + value.item() / grad_accum_iters
                 del result
             else:
                 loss = result
@@ -511,33 +476,19 @@ class VideoDmdTrainer(DmdTrainer):
                         conditions,
                     )
                 )
-                (
-                    real_result.loss / grad_accum_iters
-                ).backward()
-                metric_values["real_dmd"] += (
-                    real_result.metrics["real_dmd"].item()
-                    / grad_accum_iters
-                )
+                (real_result.loss / grad_accum_iters).backward()
+                metric_values["real_dmd"] += real_result.metrics["real_dmd"].item() / grad_accum_iters
                 del real_result
             elif stage == "fake" and use_real_data_fake:
-                self._set_fake_real_gradient_sync(
-                    micro_idx == grad_accum_iters - 1
-                )
-                fake_real_result = (
-                    self.real_data_fake_trick.fake_loss(
-                        self._real_data_fake_context(
-                            sample,
-                            conditions,
-                        )
+                self._set_fake_real_gradient_sync(micro_idx == grad_accum_iters - 1)
+                fake_real_result = self.real_data_fake_trick.fake_loss(
+                    self._real_data_fake_context(
+                        sample,
+                        conditions,
                     )
                 )
-                (
-                    fake_real_result.loss / grad_accum_iters
-                ).backward()
-                metric_values["fake_real"] += (
-                    fake_real_result.metrics["fake_real"].item()
-                    / grad_accum_iters
-                )
+                (fake_real_result.loss / grad_accum_iters).backward()
+                metric_values["fake_real"] += fake_real_result.metrics["fake_real"].item() / grad_accum_iters
                 del fake_real_result
 
         self._sync_sequence_parallel_grads(params)
@@ -548,9 +499,7 @@ class VideoDmdTrainer(DmdTrainer):
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
         if stage == "fake" and use_real_data_fake:
-            self._sync_sequence_parallel_grads(
-                self.fake_real_trainable_params
-            )
+            self._sync_sequence_parallel_grads(self.fake_real_trainable_params)
             torch.nn.utils.clip_grad_norm_(
                 self.fake_real_trainable_params,
                 self.max_grad_norm,
@@ -684,13 +633,9 @@ class VideoDmdTrainer(DmdTrainer):
             self.teacher_model.transformer,
             self.model.transformer,
         )
-        result = self.diversity_trick.student_loss(
-            self._diversity_step_context(initial_noise, conditions)
-        )
+        result = self.diversity_trick.student_loss(self._diversity_step_context(initial_noise, conditions))
         (result.loss / grad_accum_iters).backward()
-        raw_value = (
-            result.metrics["div_loss"].item() / grad_accum_iters
-        )
+        raw_value = result.metrics["div_loss"].item() / grad_accum_iters
         weighted_value = result.loss.detach().item() / grad_accum_iters
         return raw_value, weighted_value
 
@@ -721,9 +666,7 @@ class VideoDmdTrainer(DmdTrainer):
             broadcast_noise=broadcast_sequence_parallel_value,
             predict_student_velocity=self._predict_real_student_velocity,
             predict_fake_velocity=self._predict_velocity,
-            predict_teacher_velocity=(
-                self._predict_real_teacher_velocity
-            ),
+            predict_teacher_velocity=(self._predict_real_teacher_velocity),
             dmd_loss=self._dmd_loss,
         )
 
@@ -881,5 +824,3 @@ class LingBotVideoDmdTrainer(VideoDmdTrainer):
 
     def _prepare_cached_condition(self, condition):
         return self.model.prepare_text_condition(condition)
-
-
