@@ -10,7 +10,6 @@ from lightx2v.models.networks.qwen_image.infer.transformer_infer import QwenImag
 from lightx2v.models.networks.qwen_image.weights.post_weights import QwenImagePostWeights
 from lightx2v.models.networks.qwen_image.weights.pre_weights import QwenImagePreWeights
 from lightx2v.models.networks.qwen_image.weights.transformer_weights import QwenImageTransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 
@@ -92,7 +91,6 @@ class QwenImageTransformerModel(BaseTransformerModel):
         noise_pred = torch.cat(gathered_noise_pred, dim=1)
         return noise_pred
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:

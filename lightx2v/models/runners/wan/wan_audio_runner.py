@@ -742,8 +742,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
             self.va_controller.start()
             self.init_run()
-            if self.config.get("compile", False) and hasattr(self.model, "comple"):
-                self.model.select_graph_for_compile(self.input_info)
             # steam audio input, video segment num is unlimited
             self.video_segment_num = 1000000
             segment_idx = 0
@@ -1406,8 +1404,6 @@ class WanAudioARRunner(WanAudioRunner):
     @ProfilingContext4DebugL2("Run DiT")
     def run_main_with_fixed_audio(self):
         try:
-            if self.config.get("compile", False) and hasattr(self.model, "comple"):
-                self.model.select_graph_for_compile(self.input_info)
             logger.info("start ar audio generation")
             self.check_stop()
             self._encode_audio_for_ar()
@@ -1553,8 +1549,6 @@ class WanAudioARRunner(WanAudioRunner):
                 return self.run_main_with_fixed_audio()
 
             self.va_controller.start()
-            if self.config.get("compile", False) and hasattr(self.model, "comple"):
-                self.model.select_graph_for_compile(self.input_info)
             logger.info("start ar audio generation")
 
             # steam audio input, video segment num is unlimited

@@ -1040,8 +1040,6 @@ class LTX2Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         self.init_run()
-        if self.config.get("compile", False) and hasattr(self.model, "comple"):
-            self.model.select_graph_for_compile(self.input_info)
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext4DebugL1(
@@ -1197,8 +1195,6 @@ class LTX2ARRunner(LTX2Runner):
             raise NotImplementedError("ltx2_ar currently supports task=t2av only.")
         if self.config.get("use_upsampler", False):
             raise NotImplementedError("ltx2_ar does not support the latent upsampler.")
-        if self.config.get("compile", False):
-            raise NotImplementedError("ltx2_ar does not support compile mode.")
         chunk = int(self.config.get("ar_config", {}).get("num_frame_per_chunk", 0))
         if chunk <= 0:
             raise ValueError("ltx2_ar requires ar_config.num_frame_per_chunk > 0.")

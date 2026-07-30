@@ -20,7 +20,6 @@ from lightx2v.models.networks.hunyuan3d.utils.checkpoint import (
 from lightx2v.models.networks.hunyuan3d.weights.post_weights import Hunyuan3DPostWeights
 from lightx2v.models.networks.hunyuan3d.weights.pre_weights import Hunyuan3DPreWeights
 from lightx2v.models.networks.hunyuan3d.weights.transformer_weights import Hunyuan3DTransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -151,7 +150,6 @@ class Hunyuan3DDiTModel(BaseTransformerModel):
             weight_dict = cls._build_weight_dict(ckpt["model"], GET_DTYPE() == GET_SENSITIVE_DTYPE(), {}, config=config)
         return cls(model_dir, config, device, weight_dict=weight_dict)
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs: dict):
         if self.cpu_offload:

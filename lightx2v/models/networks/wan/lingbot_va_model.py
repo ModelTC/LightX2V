@@ -6,7 +6,6 @@ from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.networks.wan.weights.lingbot_va.pre_weights import LingbotVAPreWeights
 from lightx2v.models.networks.wan.weights.lingbot_va.transformer_weights import LingbotVATransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 
 
 class WanLingbotVAModel(WanModel):
@@ -85,7 +84,6 @@ class WanLingbotVAModel(WanModel):
             cache_name=cache_name,
         )
 
-    @compiled_method()
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True, action_mode=False, update_cache=0, cache_name="pos"):
         model_inputs = inputs

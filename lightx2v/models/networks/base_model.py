@@ -21,7 +21,6 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.utils.custom_compiler import CompiledMethodsMixin, compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import load_gguf_sd_ckpt
 from lightx2v.utils.utils import *
@@ -41,7 +40,7 @@ SAFETENSORS_DTYPE_MAP = {
 }
 
 
-class BaseTransformerModel(CompiledMethodsMixin, ABC):
+class BaseTransformerModel(ABC):
     """Base class for all transformer models.
 
     This class provides common functionality that can be shared across
@@ -636,7 +635,6 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
 
         return distributed_weight_dict
 
-    @compiled_method()
     @abstractmethod
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):

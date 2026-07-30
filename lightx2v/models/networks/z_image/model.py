@@ -10,7 +10,6 @@ from lightx2v.models.networks.z_image.infer.transformer_infer import ZImageTrans
 from lightx2v.models.networks.z_image.weights.post_weights import ZImagePostWeights
 from lightx2v.models.networks.z_image.weights.pre_weights import ZImagePreWeights
 from lightx2v.models.networks.z_image.weights.transformer_weights import ZImageTransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 
@@ -96,7 +95,6 @@ class ZImageTransformerModel(BaseTransformerModel):
         dist.all_gather(gathered_hidden_states, image_hidden_states, group=self.seq_p_group)
         return torch.cat(gathered_hidden_states, dim=0)
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:
