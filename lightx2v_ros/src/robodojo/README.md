@@ -25,5 +25,6 @@ Isaac Sim share a 24 GiB GPU.
 
 The integration has completed end-to-end RoboDojo evaluation. Current results
 are close to the upstream FastWAM baseline: layout 0 succeeds, while layout 1
-still fails. This is recorded as a known generalization limitation rather than
-an integration failure.
+still fails. Because the same layout-dependent behavior is suspected to come
+from the released official checkpoint, the current evidence does not attribute
+the layout 1 result to the LightX2V integration.
