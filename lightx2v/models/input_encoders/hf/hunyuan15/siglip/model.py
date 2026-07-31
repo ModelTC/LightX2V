@@ -19,6 +19,7 @@ PRECISION_TO_TYPE = {
 }
 
 VISION_ENCODER_PATH = {}
+FIRST_LAST_FRAME_CONTEXT_TOKEN_NUMBER = 257 * 2
 
 
 def use_default(value, default):

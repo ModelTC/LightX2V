@@ -112,11 +112,6 @@ class WanSFPreInfer(WanPreInfer):
             del out
             _empty_device_cache()
 
-        if self.clean_cuda_cache:
-            if self.config.get("use_image_encoder", True):
-                del context_clip
-            _empty_device_cache()
-
         grid_sizes = GridOutput(tensor=torch.tensor([[grid_sizes_t, grid_sizes_h, grid_sizes_w]], dtype=torch.int32, device=x.device), tuple=(grid_sizes_t, grid_sizes_h, grid_sizes_w))
 
         if self.cos_sin is None or self.grid_sizes != grid_sizes.tuple:

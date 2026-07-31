@@ -559,8 +559,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             del latents
         if generator is not None:
             del generator
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache(collect_garbage=True)
 
         if input_info.return_result_tensor:
             return {"images": images}
