@@ -245,39 +245,27 @@ class Flux2BaseRunner(DefaultRunner):
     def run(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
-        run_error = None
-        try:
-            step_indices = range(total_steps)
-            if step_indices:
-                self.model.prepare_offload_weights()
 
-            for step_index in step_indices:
-                logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+        self.model.prepare_offload_weights()
 
-                with ProfilingContext4DebugL1("step_pre"):
-                    self.model.scheduler.step_pre(step_index=step_index)
+        for step_index in range(total_steps):
+            logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
-                with ProfilingContext4DebugL1("🚀 infer_main"):
-                    self.model.infer(self.inputs)
+            with ProfilingContext4DebugL1("step_pre"):
+                self.model.scheduler.step_pre(step_index=step_index)
 
-                with ProfilingContext4DebugL1("step_post"):
-                    self.model.scheduler.step_post()
+            with ProfilingContext4DebugL1("🚀 infer_main"):
+                self.model.infer(self.inputs)
 
-                if self.progress_callback:
-                    self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+            with ProfilingContext4DebugL1("step_post"):
+                self.model.scheduler.step_post()
 
-            return self.model.scheduler.latents, self.model.scheduler.generator
-        except BaseException as caught_error:
-            run_error = caught_error
-            raise
-        finally:
-            try:
-                self.model.force_cleanup_offload_weights()
-            except BaseException as cleanup_error:
-                if run_error is None:
-                    raise
-                if hasattr(run_error, "add_note"):
-                    run_error.add_note(f"Flux2 offload cleanup also failed: {cleanup_error!r}")
+            if self.progress_callback:
+                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+
+        self.model.force_cleanup_offload_weights()
+
+        return self.model.scheduler.latents, self.model.scheduler.generator
 
     def get_custom_shape(self):
         default_aspect_ratios = {
