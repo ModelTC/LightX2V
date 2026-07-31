@@ -334,8 +334,8 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
             return
         self.force_cleanup_offload_weights()
 
-    def _flush_npu_event_offload_managers(self):
-        if not getattr(self.transformer_infer, "use_npu_event_offload", False):
+    def _flush_event_offload_managers(self):
+        if not getattr(self.transformer_infer, "use_event_offload", False):
             return
         for manager_name in ("offload_manager_double", "offload_manager_single"):
             manager = getattr(self.transformer_infer, manager_name, None)
@@ -343,7 +343,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
                 manager.flush()
 
     def force_cleanup_offload_weights(self):
-        """Release loaded offload weights and reset NPU staging state.
+        """Release loaded offload weights and reset event-slot state.
 
         This method is intentionally idempotent and may be called from a
         runner ``finally`` block after a short run, cancellation, or error.
@@ -351,7 +351,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         if not self.cpu_offload or not (self._offload_weights_loaded or self._offload_weights_preparing):
             return False
 
-        self._flush_npu_event_offload_managers()
+        self._flush_event_offload_managers()
         # Device execution and non-blocking H2D copies are asynchronous.
         self._sync_device()
         if self.offload_granularity == "model":

@@ -17,8 +17,8 @@ def validate_flux2_block_slab_config(config, ai_device):
         requirements.append("AI_DEVICE='npu'")
     if not config.get("cpu_offload", False) or config.get("offload_granularity", "block") != "block":
         requirements.append("block-level cpu_offload")
-    if not config.get("offload_use_npu_events", False):
-        requirements.append("offload_use_npu_events=true")
+    if not config.get("use_event_offload", False):
+        requirements.append("use_event_offload=true")
     if config.get("dit_quantized", False) or config.get("dit_quant_scheme", "Default") != "Default":
         requirements.append("unquantized dit_quant_scheme='Default'")
     if config.get("lora_configs") or config.get("lora_dynamic_apply", False):

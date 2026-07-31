@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.flux2.infer.transformer_infer import Flux2TransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -13,7 +14,7 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
 
     def __init__(self, config):
         super().__init__(config)
-        self.use_npu_event_offload = AI_DEVICE == "npu" and self.config.get("offload_use_npu_events", False)
+        self.use_event_offload = self.config.get("use_event_offload", False)
         resident_blocks_requested = any(
             self.config.get(key, 0) not in (None, 0)
             for key in (
@@ -21,20 +22,23 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
                 "offload_resident_single_blocks",
             )
         )
-        if resident_blocks_requested and not self.use_npu_event_offload:
-            raise ValueError("Flux2 resident block offload currently requires AI_DEVICE='npu' and offload_use_npu_events=true")
+        if resident_blocks_requested and not self.use_event_offload:
+            raise ValueError("Flux2 resident block offload requires use_event_offload=true")
         if self.config.get("cpu_offload", False):
             offload_granularity = self.config.get("offload_granularity", "block")
             if offload_granularity == "block":
-                self.offload_manager_double = WeightAsyncStreamManager(offload_granularity=offload_granularity)
-                if self.use_npu_event_offload:
-                    self.offload_manager_single = WeightAsyncStreamManager(
+                if self.use_event_offload:
+                    self.offload_manager_double = EventSlotWeightAsyncStreamManager(
+                        offload_granularity=offload_granularity,
+                    )
+                    self.offload_manager_single = EventSlotWeightAsyncStreamManager(
                         offload_granularity=offload_granularity,
                         load_stream=self.offload_manager_double.cuda_load_stream,
                         compute_stream=self.offload_manager_double.compute_stream,
                     )
-                    self.infer_func = self.infer_with_npu_event_offload
+                    self.infer_func = self.infer_with_event_offload
                 else:
+                    self.offload_manager_double = WeightAsyncStreamManager(offload_granularity=offload_granularity)
                     self.offload_manager_single = WeightAsyncStreamManager(offload_granularity=offload_granularity)
                     self.infer_func = self.infer_with_blocks_offload
             elif offload_granularity == "model":
@@ -49,14 +53,8 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
         attr_name = f"resident_{block_kind}_block_indices"
         return set(getattr(block_weights, attr_name, ()))
 
-    def _run_npu_block_stage(self, manager, blocks, resident_indices, run_block):
-        """Run one block family with fixed event-protected staging slots.
-
-        Resident blocks use their original weight objects. Non-resident blocks
-        are prefetched into two fixed device slots. Once a staged block has
-        been enqueued on the compute stream, its slot is immediately recycled
-        through a device-side ``free`` event; no host synchronization occurs.
-        """
+    def _run_event_block_stage(self, manager, blocks, resident_indices, run_block):
+        """Stream non-resident blocks through event-protected slots."""
         offloaded_indices = [idx for idx in range(len(blocks)) if idx not in resident_indices]
         if not offloaded_indices:
             for block_idx, block in enumerate(blocks):
@@ -75,7 +73,7 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
             scheduled_slots[block_idx] = slot_idx
             next_offloaded += 1
 
-        for slot_idx in range(min(2, len(offloaded_indices))):
+        for slot_idx in range(min(manager.slot_count, len(offloaded_indices))):
             prefetch_next(slot_idx)
 
         for block_idx, block in enumerate(blocks):
@@ -89,8 +87,12 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
             manager.record_free(slot_idx)
             prefetch_next(slot_idx)
 
-    def infer_with_npu_event_offload(self, block_weights, pre_infer_out):
-        """NPU block offload using device events instead of host barriers."""
+    def infer_with_event_offload(self, block_weights, pre_infer_out):
+        """Pipeline block loading and compute with device events.
+
+        Unlike infer_with_blocks_offload, this path reuses fixed slots without
+        synchronizing the host after every block.
+        """
         hidden_states = pre_infer_out.hidden_states
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         timestep = pre_infer_out.timestep
@@ -103,7 +105,8 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
         double_stream_mod_txt = block_weights.double_stream_modulation_txt_linear.apply(timestep_act)
         single_stream_mod = block_weights.single_stream_modulation_linear.apply(timestep_act)
 
-        current_stream = torch_device_module.current_stream()
+        device_module = self.offload_manager_double.device_module
+        current_stream = device_module.current_stream()
         compute_stream = self.offload_manager_double.compute_stream
         compute_stream.wait_stream(current_stream)
 
@@ -113,7 +116,7 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
         def run_double(block_idx, block):
             nonlocal encoder_hidden_states, hidden_states
             self.block_idx = block_idx
-            with torch_device_module.stream(compute_stream):
+            with device_module.stream(compute_stream):
                 encoder_hidden_states, hidden_states = self.infer_double_stream_block(
                     block,
                     hidden_states,
@@ -124,20 +127,20 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
                     image_rotary_positions,
                 )
 
-        self._run_npu_block_stage(
+        self._run_event_block_stage(
             self.offload_manager_double,
             block_weights.double_blocks,
             resident_double,
             run_double,
         )
 
-        with torch_device_module.stream(compute_stream):
+        with device_module.stream(compute_stream):
             hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=0)
 
         def run_single(block_idx, block):
             nonlocal hidden_states
             self.block_idx = block_idx
-            with torch_device_module.stream(compute_stream):
+            with device_module.stream(compute_stream):
                 hidden_states = self.infer_single_stream_block(
                     block,
                     hidden_states,
@@ -148,14 +151,14 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
                     num_txt_tokens=num_txt_tokens,
                 )
 
-        self._run_npu_block_stage(
+        self._run_event_block_stage(
             self.offload_manager_single,
             block_weights.single_blocks,
             resident_single,
             run_single,
         )
 
-        with torch_device_module.stream(compute_stream):
+        with device_module.stream(compute_stream):
             hidden_states = hidden_states[num_txt_tokens:, ...]
             final_done = compute_stream.record_event()
 
@@ -164,6 +167,7 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
         return hidden_states
 
     def infer_with_blocks_offload(self, block_weights, pre_infer_out):
+        """Use ping-pong buffers with host synchronization after every block."""
         hidden_states = pre_infer_out.hidden_states
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         timestep = pre_infer_out.timestep

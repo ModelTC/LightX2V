@@ -33,3 +33,10 @@ def check_ai_device(platform="cuda"):
         raise RuntimeError(error_msg)
     logger.info(f"AI device for platform '{platform}' is available.")
     return True
+
+
+def supports_event_offload(platform=None):
+    """Return whether a platform supports event-slot weight offload."""
+    platform = global_var.PLATFORM if platform is None else platform
+    platform_device = PLATFORM_DEVICE_REGISTER.get(platform)
+    return bool(platform_device and getattr(platform_device, "supports_event_offload", False))
