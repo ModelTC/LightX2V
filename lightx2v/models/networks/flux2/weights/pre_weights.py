@@ -42,6 +42,7 @@ class Flux2PreWeights(WeightModule):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):
                 if self.mm_type == "Default":
+                    # Default uses plain transpose views; other layouts need the module's own to_cuda().
                     move_flux2_leaf_to_cuda(module, non_blocking=non_blocking)
                 else:
                     module.to_cuda(non_blocking=non_blocking)
