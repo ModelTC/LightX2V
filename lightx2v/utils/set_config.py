@@ -91,10 +91,7 @@ def auto_calc_config(config):
         vit_config_path = os.path.join(config["model_path"], "vit_config.json")
         missing = [path for path in (llm_config_path, vit_config_path) if not os.path.isfile(path)]
         if missing:
-            raise FileNotFoundError(
-                "SenseNova-Vision model_path must contain llm_config.json and "
-                f"vit_config.json; missing: {missing}"
-            )
+            raise FileNotFoundError(f"SenseNova-Vision model_path must contain llm_config.json and vit_config.json; missing: {missing}")
         with open(llm_config_path, "r") as f:
             config["llm_config"] = json.load(f)
         with open(vit_config_path, "r") as f:

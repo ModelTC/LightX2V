@@ -3,7 +3,6 @@
 
 import re
 
-
 MODE_PROFILES = {
     "generate": {
         "cfg_text_scale": 4.0,
@@ -137,23 +136,15 @@ DEPTH_PROMPT = (
     "grayscale image with pixel values ranging from 0-255."
 )
 NORMAL_PROMPT = (
-    "Generate an RGB normal map where R, G, B channels represent X, Y, Z "
-    "surface directions. The output should show continuous color variations "
-    "with no discrete regions, unlike segmentation results."
+    "Generate an RGB normal map where R, G, B channels represent X, Y, Z surface directions. The output should show continuous color variations with no discrete regions, unlike segmentation results."
 )
-GCG_PROMPT = (
-    "Please briefly describe the contents of the image. Please respond with "
-    "interleaved segmentation masks for the corresponding parts of the answer."
-)
+GCG_PROMPT = "Please briefly describe the contents of the image. Please respond with interleaved segmentation masks for the corresponding parts of the answer."
 OCR_PROMPT = (
     "Perform word-level text detection and recognition on the entire image. "
     "Output a structured text list containing every detected word, its bounding "
     "box coordinates with <bbox> format, and the recognized text content."
 )
-RECON3D_PROMPT = (
-    "Reconstruct a scene from multiple input images and output one dense 3D "
-    "coordinate map per view, all aligned to the first camera's perspective."
-)
+RECON3D_PROMPT = "Reconstruct a scene from multiple input images and output one dense 3D coordinate map per view, all aligned to the first camera's perspective."
 CAMERA_POSE_PROMPT = (
     "With the first frame as the reference frame, output the relative pose of"
     " all subsequent frames (excluding the first frame) with respect to the"
@@ -216,7 +207,9 @@ def resolve_prompt(task, prompt):
         return f"Detect all instances of {categories} in the image. Output the results as a structured text list with each detection including category and bounding box coordinates in <bbox> format."
     if task == "point_detection" and "locate" not in prompt.lower():
         categories = _format_categories(prompt)
-        return f"Locate and identify {categories} within the scene. Output detection results as text entries, each containing the object class and pixel coordinates defining the object point location."
+        return (
+            f"Locate and identify {categories} within the scene. Output detection results as text entries, each containing the object class and pixel coordinates defining the object point location."
+        )
     return prompt
 
 

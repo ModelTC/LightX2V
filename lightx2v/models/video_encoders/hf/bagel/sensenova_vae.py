@@ -18,10 +18,7 @@ class SenseNovaVisionVae(BagelVae):
         if image_shapes is None:
             image_shapes = [decode_info["image_shape"]] * len(unpacked_latents)
         if len(image_shapes) != len(unpacked_latents):
-            raise ValueError(
-                f"SenseNova decode received {len(image_shapes)} image shapes for "
-                f"{len(unpacked_latents)} latent sequences."
-            )
+            raise ValueError(f"SenseNova decode received {len(image_shapes)} image shapes for {len(unpacked_latents)} latent sequences.")
 
         outputs = []
         for latent, (height, width) in zip(unpacked_latents, image_shapes):

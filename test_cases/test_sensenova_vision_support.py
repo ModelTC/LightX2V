@@ -20,7 +20,6 @@ from lightx2v.models.video_encoders.hf.bagel.sensenova_vae import SenseNovaVisio
 from lightx2v.utils.input_info import SenseNovaVisionInputInfo, init_empty_input_info
 from lightx2v.utils.set_config import set_config
 
-
 LIGHTX2V_ROOT = Path(__file__).resolve().parents[1]
 SENSENOVA_ROOT = LIGHTX2V_ROOT.parent / "SenseNova-Vision"
 MODEL_PATH = SENSENOVA_ROOT / "models/SenseNova-Vision-7B-MoT"
@@ -46,10 +45,7 @@ def test_sensenova_mode_profiles_match_official_defaults():
 def test_sensenova_task_prompts_and_input_info_are_registered():
     assert "relative depth" in resolve_prompt("depth", "").lower()
     assert "<quat>" in CAMERA_POSE_PROMPT
-    assert resolve_prompt("binary_seg", "cat") == (
-        "Can you segment the image based on the following categories: <p>cat</p>? "
-        "Please output the binary segmentation masks."
-    )
+    assert resolve_prompt("binary_seg", "cat") == ("Can you segment the image based on the following categories: <p>cat</p>? Please output the binary segmentation masks.")
     info = init_empty_input_info("recon3d")
     assert isinstance(info, SenseNovaVisionInputInfo)
     assert info.postprocess_predictions is None
@@ -116,10 +112,7 @@ def test_sensenova_raw_vae_output_detaches_before_numpy_conversion():
 
 
 def test_sensenova_pose_parser_matches_coordinate_token_scaling():
-    text = (
-        "<frame><quat>[0,0,0,1000]</quat><offset>[1000,0,-500]</offset>"
-        "<scale>200</scale></frame>"
-    )
+    text = "<frame><quat>[0,0,0,1000]</quat><offset>[1000,0,-500]</offset><scale>200</scale></frame>"
     pose = resolve_pose_string(text)
     assert pose["rotation"] == [[0.0, 0.0, 0.0, 1.0]]
     assert pose["translation"] == [[2.0, 0.0, -1.0]]
@@ -153,6 +146,22 @@ def test_sensenova_launch_script_exposes_official_example_command():
     assert "examples/sensenova_vision/example_visualize.py" in script
     assert "--model_cls sensenova_vision" in script
     assert '--example "${EXAMPLE_ID:-all}"' in script
+
+
+def test_sensenova_server_launch_script_defaults_to_official_parity():
+    script = (LIGHTX2V_ROOT / "scripts/sensenova_vision/start_sensenova_vision_server.sh").read_text()
+    assert 'LIGHTX2V_CACHE_DIR="${LIGHTX2V_CACHE_DIR:-${lightx2v_path}/save_results/sensenova_vision_server_cache}"' in script
+    assert 'OFFICIAL_PARITY="${SENSENOVA_OFFICIAL_PARITY:-true}"' in script
+    assert 'export PYTHONHASHSEED="0"' in script
+    assert 'export DTYPE="BF16"' in script
+    assert 'export SENSITIVE_LAYER_DTYPE="None"' in script
+    assert "--official-parity)" in script
+    assert "--no-official-parity)" in script
+    assert "--model-path)" in script
+    assert "--source-path)" in script
+    assert "--config-json)" in script
+    assert "--cache-dir)" in script
+    assert "export LIGHTX2V_CACHE_DIR" in script
 
 
 def test_sensenova_split_example_scripts_select_exact_task():

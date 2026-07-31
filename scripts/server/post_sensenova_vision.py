@@ -116,9 +116,7 @@ def save_result(base_url: str, result: dict, output_root: Path, download: bool) 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Submit one task to the resident LightX2V SenseNova-Vision service."
-    )
+    parser = argparse.ArgumentParser(description="Submit one task to the resident LightX2V SenseNova-Vision service.")
     parser.add_argument("--url", default="http://127.0.0.1:8000", help="Server base URL")
     parser.add_argument("--task", required=True, choices=TASKS)
     parser.add_argument(
