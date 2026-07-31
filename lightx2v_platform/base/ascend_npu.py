@@ -7,7 +7,6 @@ from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 @PLATFORM_DEVICE_REGISTER("ascend_npu")
 class NpuDevice:
     name = "ascend_npu"
-    supports_event_offload = True
 
     @staticmethod
     def init_device_env():

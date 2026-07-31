@@ -2,7 +2,6 @@ import torch
 
 from lightx2v.common.offload.block_slab import carve_block_slab, copy_block_slab_
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
-from lightx2v_platform.base import supports_event_offload
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -14,8 +13,6 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
     _EVENT_SLOT_COUNT = 2
 
     def __init__(self, offload_granularity, load_stream=None, compute_stream=None):
-        if not supports_event_offload():
-            raise RuntimeError("Event-slot weight offload is not supported by the current platform")
         if offload_granularity != "block":
             raise ValueError("Event-slot weight offload only supports block granularity")
 
