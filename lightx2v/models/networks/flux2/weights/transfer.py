@@ -7,13 +7,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 def _is_transposed_cpu_view(tensor):
     """Return whether ``tensor`` is a 2-D transpose of contiguous CPU storage."""
 
-    return (
-        isinstance(tensor, torch.Tensor)
-        and tensor.device.type == "cpu"
-        and tensor.dim() == 2
-        and not tensor.is_contiguous()
-        and tensor.t().is_contiguous()
-    )
+    return isinstance(tensor, torch.Tensor) and tensor.device.type == "cpu" and tensor.dim() == 2 and not tensor.is_contiguous() and tensor.t().is_contiguous()
 
 
 def _move_transposed_cpu_tensor_to_device(tensor, device, non_blocking):
@@ -33,11 +27,7 @@ def move_flux2_leaf_to_cuda(module, non_blocking=True):
     """
 
     base_attrs = getattr(module, "base_attrs", ())
-    fast_attrs = {
-        attr_name
-        for _, attr_name, transpose in base_attrs
-        if transpose and _is_transposed_cpu_view(getattr(module, f"pin_{attr_name}", None))
-    }
+    fast_attrs = {attr_name for _, attr_name, transpose in base_attrs if transpose and _is_transposed_cpu_view(getattr(module, f"pin_{attr_name}", None))}
     if AI_DEVICE != "npu" or not fast_attrs:
         module.to_cuda(non_blocking=non_blocking)
         return False

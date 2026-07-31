@@ -1,8 +1,8 @@
 import torch
 import torch.distributed as dist
 
-from lightx2v.common.offload.block_slab import pack_cpu_block_slab
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.block_slab import pack_cpu_block_slab
 from lightx2v.models.networks.flux2.weights.transfer import move_flux2_leaf_to_cuda
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
@@ -379,10 +379,7 @@ class Flux2TransformerWeights(WeightModule):
                     return
                 visited.add(id(module))
 
-                explicit_base_attrs = {
-                    attr_name
-                    for _, attr_name, _ in getattr(module, "base_attrs", ())
-                }
+                explicit_base_attrs = {attr_name for _, attr_name, _ in getattr(module, "base_attrs", ())}
                 source_tensors = {}
                 for attr_name in explicit_base_attrs:
                     pin_tensor = getattr(module, f"pin_{attr_name}", None)
@@ -391,10 +388,7 @@ class Flux2TransformerWeights(WeightModule):
                     if tensor is None:
                         continue
                     if not isinstance(tensor, torch.Tensor) or tensor.device.type != "cpu":
-                        raise ValueError(
-                            "Flux2 block slabs require every populated base attribute "
-                            f"to have a CPU source; block {block_idx} attribute {attr_name!r} does not"
-                        )
+                        raise ValueError(f"Flux2 block slabs require every populated base attribute to have a CPU source; block {block_idx} attribute {attr_name!r} does not")
                     source_tensors[attr_name] = tensor
 
                 # Platform weight templates do not all expose ``base_attrs``.
@@ -402,24 +396,13 @@ class Flux2TransformerWeights(WeightModule):
                 # sources and are also what their state_dict implementations
                 # return.
                 for attr_name, tensor in vars(module).items():
-                    if (
-                        attr_name.startswith("pin_")
-                        and isinstance(tensor, torch.Tensor)
-                        and tensor.device.type == "cpu"
-                    ):
+                    if attr_name.startswith("pin_") and isinstance(tensor, torch.Tensor) and tensor.device.type == "cpu":
                         source_tensors.setdefault(attr_name.removeprefix("pin_"), tensor)
 
                 for attr_name, tensor in source_tensors.items():
-                    matching_names = [
-                        name
-                        for name, state_tensor in full_state_dict.items()
-                        if state_tensor is tensor
-                    ]
+                    matching_names = [name for name, state_tensor in full_state_dict.items() if state_tensor is tensor]
                     if not matching_names:
-                        raise ValueError(
-                            "Flux2 block slab source state is missing CPU base attribute "
-                            f"{attr_name!r} in block {block_idx}"
-                        )
+                        raise ValueError(f"Flux2 block slab source state is missing CPU base attribute {attr_name!r} in block {block_idx}")
                     required_names.update(matching_names)
 
                 for child in getattr(module, "_parameters", {}).values():
@@ -428,21 +411,10 @@ class Flux2TransformerWeights(WeightModule):
                     collect_cpu_base_tensors(child)
 
             collect_cpu_base_tensors(block)
-            state_dict = {
-                name: tensor
-                for name, tensor in full_state_dict.items()
-                if name in required_names
-            }
-            unsupported = [
-                name
-                for name, tensor in state_dict.items()
-                if tensor.dtype != torch.bfloat16
-            ]
+            state_dict = {name: tensor for name, tensor in full_state_dict.items() if name in required_names}
+            unsupported = [name for name, tensor in state_dict.items() if tensor.dtype != torch.bfloat16]
             if unsupported or not state_dict:
-                raise ValueError(
-                    "Flux2 block slabs currently require CPU BF16 tensors; "
-                    f"block {block_idx} has unsupported entries {unsupported or ['<no base tensors>']}"
-                )
+                raise ValueError(f"Flux2 block slabs currently require CPU BF16 tensors; block {block_idx} has unsupported entries {unsupported or ['<no base tensors>']}")
             slabs[block_idx] = pack_cpu_block_slab(
                 state_dict,
                 pin_memory=True,

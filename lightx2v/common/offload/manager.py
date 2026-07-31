@@ -40,12 +40,8 @@ class WeightAsyncStreamManager(object):
             load_stream_priority = 0
             compute_stream_priority = -1
 
-        self.cuda_load_stream = (
-            load_stream if load_stream is not None else torch_device_module.Stream(priority=load_stream_priority)
-        )
-        self.compute_stream = (
-            compute_stream if compute_stream is not None else torch_device_module.Stream(priority=compute_stream_priority)
-        )
+        self.cuda_load_stream = load_stream if load_stream is not None else torch_device_module.Stream(priority=load_stream_priority)
+        self.compute_stream = compute_stream if compute_stream is not None else torch_device_module.Stream(priority=compute_stream_priority)
 
         if AI_DEVICE == "npu":
             self._npu_ready_events = [torch_device_module.Event() for _ in range(self._NPU_SLOT_COUNT)]
@@ -200,20 +196,11 @@ class WeightAsyncStreamManager(object):
         max_nbytes = max(slab.layout.nbytes for slab in block_slabs.values())
         if staging_raw is None:
             staging_raw = torch.empty((max_nbytes,), dtype=torch.uint8, device=AI_DEVICE)
-        elif (
-            not isinstance(staging_raw, torch.Tensor)
-            or staging_raw.dtype != torch.uint8
-            or staging_raw.dim() != 1
-            or not staging_raw.is_contiguous()
-            or staging_raw.numel() < max_nbytes
-        ):
+        elif not isinstance(staging_raw, torch.Tensor) or staging_raw.dtype != torch.uint8 or staging_raw.dim() != 1 or not staging_raw.is_contiguous() or staging_raw.numel() < max_nbytes:
             raise ValueError(f"shared block slab staging buffer must be a contiguous uint8 tensor with at least {max_nbytes} bytes")
 
         self.block_slab_staging_raw = staging_raw
-        self.block_slab_device_views = {
-            block_idx: carve_block_slab(staging_raw, slab.layout)
-            for block_idx, slab in block_slabs.items()
-        }
+        self.block_slab_device_views = {block_idx: carve_block_slab(staging_raw, slab.layout) for block_idx, slab in block_slabs.items()}
         return staging_raw
 
     def _sync(self):
