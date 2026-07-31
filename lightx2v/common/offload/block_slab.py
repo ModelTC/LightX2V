@@ -51,7 +51,6 @@ def _check_buffer(buffer, nbytes, name):
 
 def build_block_slab_layout(
     tensors: Mapping[str, torch.Tensor],
-    *,
     alignment: int = DEFAULT_SLAB_ALIGNMENT,
 ) -> BlockSlabLayout:
     if alignment <= 0:
@@ -111,7 +110,6 @@ def _allocate_cpu_buffer(nbytes, pin_memory, strict_pin):
 
 def pack_cpu_block_slab(
     tensors: Mapping[str, torch.Tensor],
-    *,
     layout: BlockSlabLayout | None = None,
     alignment: int = DEFAULT_SLAB_ALIGNMENT,
     pin_memory: bool = True,
@@ -153,7 +151,6 @@ def pack_cpu_block_slab(
 def allocate_block_slab_slot(
     layout: BlockSlabLayout,
     device: torch.device | str,
-    *,
     slot_nbytes: int | None = None,
 ) -> BlockSlab:
     nbytes = layout.nbytes if slot_nbytes is None else slot_nbytes
@@ -167,7 +164,6 @@ def allocate_block_slab_slot(
 def copy_block_slab_(
     destination_raw: torch.Tensor,
     source_raw: torch.Tensor,
-    *,
     nbytes: int | None = None,
     non_blocking: bool = True,
 ) -> torch.Tensor:
