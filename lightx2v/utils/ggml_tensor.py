@@ -593,7 +593,7 @@ try:
     ggml_quants = GGMLQuants(llama_lib_path)
 
     def dequantize_c(tensor):
-        return torch.from_numpy(ggml_quants.dequantize(s.data.numpy(), s.gguf_type))
+        return torch.from_numpy(ggml_quants.dequantize(tensor.data.numpy(), tensor.gguf_type))
 except ImportError:
     dequantize_c = None
 

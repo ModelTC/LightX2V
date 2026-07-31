@@ -125,7 +125,6 @@ class WanTransformerInferTeaCaching(WanTransformerInferCaching):
                 x = self.infer_using_cache(pre_infer_out.x)
 
         if self.clean_cuda_cache:
-            del grid_sizes, embed, embed0, seq_lens, freqs, context
             torch.cuda.empty_cache()
 
         return x
@@ -335,7 +334,7 @@ class WanTransformerInferAdaCaching(WanTransformerInferCaching):
                         if (index + i) <= self.scheduler.infer_steps - 1:
                             self.scheduler.caching_records[index + i] = False
             else:
-                x = self.infer_using_cache(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+                x = self.infer_using_cache(x)
 
         else:
             index = self.scheduler.step_index
@@ -351,7 +350,7 @@ class WanTransformerInferAdaCaching(WanTransformerInferCaching):
                         if (index + i) <= self.scheduler.infer_steps - 1:
                             self.scheduler.caching_records_2[index + i] = False
             else:
-                x = self.infer_using_cache(xt)
+                x = self.infer_using_cache(x)
 
         return x
 

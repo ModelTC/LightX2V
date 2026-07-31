@@ -247,7 +247,7 @@ class AttentionPool(nn.Module):
         k, v = self.to_kv(x).view(b, s, 2, n, d).unbind(2)
 
         # compute attention
-        x = attention(q=q, k=k, v=v, attention_type="torch_sdpa")
+        x = TorchSDPAWeight().apply(q=q, k=k, v=v)
         x = x.reshape(b, 1, c)
 
         # output

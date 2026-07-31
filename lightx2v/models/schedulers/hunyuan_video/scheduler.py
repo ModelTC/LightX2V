@@ -151,6 +151,7 @@ class HunyuanVideo15SRScheduler(HunyuanVideo15Scheduler):
 
     def prepare(self, seed, latent_shape, lq_latents, upsampler, image_encoder_output=None):
         dtype = lq_latents.dtype
+        device = lq_latents.device
         self.prepare_latents(seed, latent_shape, lq_latents, dtype=dtype)
         self.set_timesteps(self.infer_steps, device=AI_DEVICE, shift=self.sample_shift)
 
