@@ -44,6 +44,7 @@ def _load_transformer_weights_module():
     dependency_names = (
         "lightx2v.common.modules.weight_module",
         "lightx2v.common.offload.block_slab",
+        "lightx2v.models.networks.flux2.weights.transfer",
         "lightx2v.utils.registry_factory",
     )
     previous_modules = {name: sys.modules.get(name) for name in dependency_names}
@@ -53,7 +54,9 @@ def _load_transformer_weights_module():
     weight_module_stub.WeightModuleList = _WeightModuleList
     block_slab_stub = types.ModuleType(dependency_names[1])
     block_slab_stub.pack_cpu_block_slab = lambda *args, **kwargs: object()
-    registry_stub = types.ModuleType(dependency_names[2])
+    transfer_stub = types.ModuleType(dependency_names[2])
+    transfer_stub.move_flux2_leaf_to_cuda = lambda *args, **kwargs: None
+    registry_stub = types.ModuleType(dependency_names[3])
     registry_stub.ATTN_WEIGHT_REGISTER = {}
     registry_stub.LN_WEIGHT_REGISTER = {}
     registry_stub.MM_WEIGHT_REGISTER = {}
@@ -62,7 +65,8 @@ def _load_transformer_weights_module():
 
     sys.modules[dependency_names[0]] = weight_module_stub
     sys.modules[dependency_names[1]] = block_slab_stub
-    sys.modules[dependency_names[2]] = registry_stub
+    sys.modules[dependency_names[2]] = transfer_stub
+    sys.modules[dependency_names[3]] = registry_stub
     try:
         module_path = Path(__file__).resolve().parents[1] / "lightx2v" / "models" / "networks" / "flux2" / "weights" / "transformer_weights.py"
         spec = importlib.util.spec_from_file_location("flux2_transformer_weights_under_test", module_path)

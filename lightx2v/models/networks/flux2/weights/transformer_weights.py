@@ -3,6 +3,7 @@ import torch.distributed as dist
 
 from lightx2v.common.offload.block_slab import pack_cpu_block_slab
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.models.networks.flux2.weights.transfer import move_flux2_leaf_to_cuda
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
@@ -212,7 +213,10 @@ class Flux2DoubleBlockWeights(WeightModule):
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):
-                module.to_cuda(non_blocking=non_blocking)
+                if self.mm_type == "Default":
+                    move_flux2_leaf_to_cuda(module, non_blocking=non_blocking)
+                else:
+                    module.to_cuda(non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=True):
         for module in self._modules.values():
@@ -257,7 +261,10 @@ class Flux2SingleBlockWeights(WeightModule):
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):
-                module.to_cuda(non_blocking=non_blocking)
+                if self.mm_type == "Default":
+                    move_flux2_leaf_to_cuda(module, non_blocking=non_blocking)
+                else:
+                    module.to_cuda(non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=True):
         for module in self._modules.values():
@@ -463,12 +470,17 @@ class Flux2TransformerWeights(WeightModule):
         return double_slabs, single_slabs
 
     def non_block_weights_to_cuda(self, non_blocking=True):
-        preserve_weight_module_cpu_tensors(self.double_stream_modulation_img_linear)
-        preserve_weight_module_cpu_tensors(self.double_stream_modulation_txt_linear)
-        preserve_weight_module_cpu_tensors(self.single_stream_modulation_linear)
-        self.double_stream_modulation_img_linear.to_cuda(non_blocking=non_blocking)
-        self.double_stream_modulation_txt_linear.to_cuda(non_blocking=non_blocking)
-        self.single_stream_modulation_linear.to_cuda(non_blocking=non_blocking)
+        modules = (
+            self.double_stream_modulation_img_linear,
+            self.double_stream_modulation_txt_linear,
+            self.single_stream_modulation_linear,
+        )
+        for module in modules:
+            preserve_weight_module_cpu_tensors(module)
+            if self.mm_type == "Default":
+                move_flux2_leaf_to_cuda(module, non_blocking=non_blocking)
+            else:
+                module.to_cuda(non_blocking=non_blocking)
 
     def non_block_weights_to_cpu(self, non_blocking=True):
         self.double_stream_modulation_img_linear.to_cpu(non_blocking=non_blocking)

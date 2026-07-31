@@ -1,4 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.models.networks.flux2.weights.transfer import move_flux2_leaf_to_cuda
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 
 
@@ -40,7 +41,10 @@ class Flux2PreWeights(WeightModule):
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):
-                module.to_cuda(non_blocking=non_blocking)
+                if self.mm_type == "Default":
+                    move_flux2_leaf_to_cuda(module, non_blocking=non_blocking)
+                else:
+                    module.to_cuda(non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=True):
         for module in self._modules.values():
