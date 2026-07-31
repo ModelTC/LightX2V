@@ -7,32 +7,6 @@ from lightx2v.common.ops.utils import move_transposed_weight_module_to_device
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
-def validate_flux2_block_slab_config(config, ai_device):
-    """Validate the deliberately narrow first rollout of block slabs."""
-    if not config.get("offload_use_block_slab", False):
-        return False
-
-    requirements = []
-    if ai_device != "npu":
-        requirements.append("AI_DEVICE='npu'")
-    if not config.get("cpu_offload", False) or config.get("offload_granularity", "block") != "block":
-        requirements.append("block-level cpu_offload")
-    if not config.get("use_event_offload", False):
-        requirements.append("use_event_offload=true")
-    if config.get("dit_quantized", False) or config.get("dit_quant_scheme", "Default") != "Default":
-        requirements.append("unquantized dit_quant_scheme='Default'")
-    if config.get("lora_configs") or config.get("lora_dynamic_apply", False):
-        requirements.append("LoRA disabled")
-    if config.get("lazy_load", False):
-        requirements.append("lazy_load=false")
-    if config.get("tensor_parallel", False):
-        requirements.append("tensor_parallel=false")
-
-    if requirements:
-        raise ValueError("offload_use_block_slab currently requires " + ", ".join(requirements))
-    return True
-
-
 def _resolve_resident_block_indices(value, num_blocks, policy, config_key):
     """Resolve a resident-block count into deterministic block indices.
 

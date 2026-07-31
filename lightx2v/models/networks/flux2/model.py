@@ -14,7 +14,6 @@ from lightx2v.models.networks.flux2.weights.transformer_weights import (
     Flux2TransformerWeights,
     preserve_weight_module_cpu_tensors,
     release_weight_module_device_tensors,
-    validate_flux2_block_slab_config,
 )
 from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v_platform.base import global_var
@@ -28,10 +27,10 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
 
     def __init__(self, config, model_path, device):
         super().__init__(model_path, config, device)
-        self.use_block_slab_offload = validate_flux2_block_slab_config(
-            self.config,
-            global_var.AI_DEVICE,
-        )
+        # Block-slab packing is platform-agnostic. Enable it only on backends that support
+        # event offload, with block-level CPU offload, BF16 Default weights, and no LoRA,
+        # lazy loading, or tensor parallelism.
+        self.use_block_slab_offload = self.config.get("offload_use_block_slab", False)
         self._offload_weights_loaded = False
         self._offload_weights_preparing = False
         self.in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
