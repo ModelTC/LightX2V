@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner  # noqa: F401
 from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: F401
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
 from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
@@ -123,6 +124,7 @@ def main():
             "ltx2",
             "ltx2_ar",
             "bagel",
+            "sensenova_vision",
             "seedvr2",
             "neopp",
             "motus",
@@ -140,7 +142,10 @@ def main():
     parser.add_argument(
         "--task",
         type=str,
-        choices=["t2v", "i2v", "t2t", "t2i", "ti2t", "ti2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "i2va", "v2av", "ltx2_s2v", "sr", "recon", "i23d"],
+        choices=[
+            "t2v", "i2v", "t2t", "t2i", "ti2t", "ti2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "i2va", "v2av", "ltx2_s2v", "sr", "recon", "i23d",
+            "raw_query", "depth", "normal", "binary_seg", "pan_seg", "gcg_seg", "bbox_detection", "point_detection", "keypoint", "ocr", "recon3d", "camera_pose",
+        ],
         default="t2v",
     )
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
@@ -150,6 +155,31 @@ def main():
     parser.add_argument("--warmup", action="store_true", help="Warm up the model before inference. Disabled by default.")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")
+    parser.add_argument(
+        "--sensenova_mode",
+        type=str,
+        default="",
+        choices=[
+            "", "generate", "think_generate", "caption_generate", "dense_perception",
+            "edit", "think_edit", "understanding", "think_understanding",
+            "dense_detection", "dense_OCR", "recon3d",
+        ],
+        help="Override the default SenseNova-Vision inference mode for raw_query.",
+    )
+    parser.add_argument("--raw_output_path", type=str, default="", help="SenseNova recon3d raw point-map .npy path.")
+    parser.add_argument("--glb_output_path", type=str, default="", help="SenseNova recon3d output .glb path.")
+    parser.add_argument(
+        "--postprocess_predictions",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable SenseNova recon3d Open3D postprocessing.",
+    )
+    parser.add_argument(
+        "--sensenova_source_path",
+        type=str,
+        default=None,
+        help="Official SenseNova-Vision source checkout used for exact 3D GLB postprocessing.",
+    )
 
     parser.add_argument(
         "--image_path",

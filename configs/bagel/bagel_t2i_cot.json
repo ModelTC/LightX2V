@@ -3,14 +3,14 @@
     "rope_type": "torch_real_rope",
     "inference_hyper": {
         "cfg_text_scale": 4.0,
-        "cfg_img_scale": 2.0,
-        "cfg_interval": [0.0, 1.0],
+        "cfg_img_scale": 1.0,
+        "cfg_interval": [0.4, 1.0],
         "timestep_shift": 3.0,
         "num_timesteps": 50,
         "cfg_renorm_min": 0.0,
-        "cfg_renorm_type": "text_channel"
+        "cfg_renorm_type": "global"
     },
-    "think": false,
+    "think": true,
     "understanding_output": false,
     "do_sample": false,
     "text_temperature": 0.3,
@@ -22,7 +22,6 @@
     "connector_act": "gelu_pytorch_tanh",
     "latent_patch_size": 2,
     "max_latent_size_update": 64,
-    "i2i_max_image_size": 1024,
     "llm_config_update": {
         "dtype": "bfloat16",
         "freeze_und": false,

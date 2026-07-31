@@ -9,6 +9,24 @@ from .deps import get_services
 router = APIRouter()
 
 
+def _get_mime_type(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    return {
+        ".mp4": "video/mp4",
+        ".avi": "video/x-msvideo",
+        ".mov": "video/quicktime",
+        ".mkv": "video/x-matroska",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".txt": "text/plain; charset=utf-8",
+        ".json": "application/json",
+        ".npy": "application/octet-stream",
+        ".glb": "model/gltf-binary",
+    }.get(suffix, "application/octet-stream")
+
+
 def _stream_file_response(file_path: Path, filename: str | None = None) -> StreamingResponse:
     services = get_services()
     assert services.file_service is not None, "File service is not initialized"
@@ -16,7 +34,10 @@ def _stream_file_response(file_path: Path, filename: str | None = None) -> Strea
     try:
         resolved_path = file_path.resolve()
 
-        if not str(resolved_path).startswith(str(services.file_service.output_video_dir.resolve())):
+        output_root = services.file_service.output_video_dir.resolve()
+        try:
+            resolved_path.relative_to(output_root)
+        except ValueError:
             raise HTTPException(status_code=403, detail="Access to this file is not allowed")
 
         if not resolved_path.exists() or not resolved_path.is_file():
@@ -25,11 +46,7 @@ def _stream_file_response(file_path: Path, filename: str | None = None) -> Strea
         file_size = resolved_path.stat().st_size
         actual_filename = filename or resolved_path.name
 
-        mime_type = "application/octet-stream"
-        if actual_filename.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
-            mime_type = "video/mp4"
-        elif actual_filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif")):
-            mime_type = "image/jpeg"
+        mime_type = _get_mime_type(actual_filename)
 
         headers = {
             "Content-Disposition": f'attachment; filename="{actual_filename}"',
