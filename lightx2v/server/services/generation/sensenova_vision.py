@@ -9,7 +9,10 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.networks.bagel.sensenova_tasks import TEXT_OUTPUT_MODES, resolve_mode
-from lightx2v.models.runners.bagel.sensenova_postprocess import load_official_visualizers
+from lightx2v.models.runners.bagel.sensenova_postprocess import (
+    load_official_example_constant,
+    load_official_visualizers,
+)
 
 from ...schema import (
     SenseNovaArtifact,
@@ -48,7 +51,7 @@ SENSENOVA_TASK_SPECS = {
     "keypoint": SenseNovaTaskSpec("keypoint", "dense_detection", requires_prompt=True, visualizer="detection"),
     "ocr": SenseNovaTaskSpec("ocr", "dense_OCR", visualizer="detection"),
     "recon3d": SenseNovaTaskSpec("recon3d", "recon3d", max_images=10),
-    "panoptic_segmentation": SenseNovaTaskSpec("pan_seg", "caption_generate", requires_prompt=True, visualizer="panoptic"),
+    "panoptic_segmentation": SenseNovaTaskSpec("pan_seg", "caption_generate", visualizer="panoptic"),
     "interactive_segmentation": SenseNovaTaskSpec(
         "binary_seg",
         "dense_perception",
@@ -72,6 +75,66 @@ SENSENOVA_TASK_ALIASES = {
 }
 
 DEFAULT_UNDERSTANDING_PROMPT = "What are the main objects in this scene and their relationships?"
+VGD_REFERENCE_PATTERN = re.compile(
+    r"<p>\s*(?P<label>[^<>]+?)\s*</p>\s*"
+    r"<bbox>\s*(?P<bbox>\[[^\[\]]+\])\s*</bbox>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+VGD_COLOR_LABEL_PATTERN = re.compile(
+    r"<p>\s*[^<>]+?\s*<color>\s*"
+    r"\(\s*(?P<red>\d+)\s*,\s*(?P<green>\d+)\s*,\s*(?P<blue>\d+)\s*\)"
+    r"\s*</color>\s*</p>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+
+def build_official_vgd_prompt(prompt: str) -> str:
+    """Convert one visual grounding reference into the official task-10 prompt."""
+    match = VGD_REFERENCE_PATTERN.search(str(prompt or "").strip())
+    if match is None:
+        raise ValueError(
+            "SenseNova-Vision task='vgd_segmentation' requires one visual reference in the exact form "
+            "<p>label</p><bbox>[x1, y1, x2, y2]</bbox>."
+        )
+
+    label = " ".join(match.group("label").split())
+    bbox = match.group("bbox")
+    try:
+        coordinates = [float(value.strip()) for value in bbox[1:-1].split(",")]
+    except ValueError as exc:
+        raise ValueError("SenseNova-Vision VGD bbox coordinates must be numeric.") from exc
+    if len(coordinates) != 4:
+        raise ValueError("SenseNova-Vision VGD bbox must contain exactly four coordinates.")
+    if any(value < 0.0 or value > 1.0 for value in coordinates):
+        raise ValueError("SenseNova-Vision VGD bbox coordinates must be normalized to [0, 1].")
+    if coordinates[0] >= coordinates[2] or coordinates[1] >= coordinates[3]:
+        raise ValueError("SenseNova-Vision VGD bbox must satisfy x1 < x2 and y1 < y2.")
+
+    label_tag = f"<p>{label}</p>"
+    reference = f"{label_tag}<bbox>{bbox}</bbox>"
+    colored_label = f"<p>{label}<color>(R,G,B)</color></p>"
+    return (
+        "<image> Identify all objects belonging to the same classes as the visually provided "
+        f"{reference}. Generate an instance segmentation visualization and each identified category "
+        f"{label_tag} is colored different. First, enumerate each visible {label_tag} instance "
+        f"mentioned in the request and assign each {label_tag} a different color. Reformat them in "
+        f"the EXACT format: {colored_label}. Then respond with interleaved instance segmentation "
+        "masks using those instance labels and colors."
+    )
+
+
+def validate_vgd_output_text(text: str) -> None:
+    """Reject VGD outputs that cannot condition or visualize an instance-color mask."""
+    matches = list(VGD_COLOR_LABEL_PATTERN.finditer(str(text or "")))
+    if not matches:
+        raise RuntimeError(
+            "SenseNova-Vision vgd_segmentation AR output did not follow the official colored-instance "
+            "format <p>label<color>(R,G,B)</color></p>; refusing to report an invalid mask as completed."
+        )
+    for match in matches:
+        rgb = tuple(int(match.group(channel)) for channel in ("red", "green", "blue"))
+        if any(value > 255 for value in rgb):
+            raise RuntimeError(f"SenseNova-Vision vgd_segmentation AR output contains invalid RGB color {rgb}.")
 
 
 def normalize_sensenova_task(task: str) -> str:
@@ -257,6 +320,14 @@ class SenseNovaVisionGenerationService(BaseGenerationService):
         prompt = str(message.prompt or "").strip()
         if task == "understanding" and not prompt:
             prompt = DEFAULT_UNDERSTANDING_PROMPT
+        elif task == "panoptic_segmentation" and not prompt:
+            source_path = self.inference_service.worker.runner.config.get(
+                "sensenova_source_path",
+                "/data/nvme0/lhd_codes/SenseNova-Vision",
+            )
+            prompt = load_official_example_constant(source_path, "EXAMPLE_08_PANOPTIC_QUESTION")
+        elif task == "vgd_segmentation":
+            prompt = build_official_vgd_prompt(prompt)
 
         is_recon3d = spec.runner_task == "recon3d"
         is_text_only = mode in TEXT_OUTPUT_MODES
@@ -301,6 +372,8 @@ class SenseNovaVisionGenerationService(BaseGenerationService):
         if not isinstance(pipeline_result, dict):
             raise RuntimeError("SenseNova-Vision runner did not return its structured pipeline result.")
         text = str(pipeline_result.get("text") or "")
+        if task == "vgd_segmentation":
+            validate_vgd_output_text(text)
         artifacts: list[SenseNovaArtifact] = []
         warnings: list[str] = []
 

@@ -1,10 +1,12 @@
 # Copyright 2026 SenseTime Group Inc. and/or its affiliates.
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import importlib
 import importlib.util
 import re
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -42,6 +44,34 @@ def resolve_pose_string(pose_str):
         "rotation": quaternions.tolist(),
         "translation": (offsets * scales[:, None] / 100.0).tolist(),
     }
+
+
+@lru_cache(maxsize=None)
+def load_official_example_constant(source_path, constant_name):
+    """Read one literal prompt constant without importing the official model code."""
+    source_root = Path(source_path).expanduser().resolve()
+    example_path = source_root / "inference" / "example_visualize.py"
+    if not example_path.is_file():
+        raise FileNotFoundError(f"SenseNova-Vision official example is missing: {example_path}")
+
+    tree = ast.parse(example_path.read_text(encoding="utf-8"), filename=str(example_path))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == constant_name
+            for target in node.targets
+        ):
+            continue
+        value = ast.literal_eval(node.value)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                f"SenseNova-Vision official constant {constant_name!r} must be a non-empty string."
+            )
+        return value
+    raise KeyError(
+        f"SenseNova-Vision official constant {constant_name!r} was not found in {example_path}."
+    )
 
 
 def load_official_postprocess(source_path):

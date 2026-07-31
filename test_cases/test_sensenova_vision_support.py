@@ -155,6 +155,22 @@ def test_sensenova_launch_script_exposes_official_example_command():
     assert '--example "${EXAMPLE_ID:-all}"' in script
 
 
+def test_sensenova_server_launch_script_defaults_to_official_parity():
+    script = (LIGHTX2V_ROOT / "scripts/sensenova_vision/start_sensenova_vision_server.sh").read_text()
+    assert 'LIGHTX2V_CACHE_DIR="${LIGHTX2V_CACHE_DIR:-${lightx2v_path}/save_results/sensenova_vision_server_cache}"' in script
+    assert 'OFFICIAL_PARITY="${SENSENOVA_OFFICIAL_PARITY:-true}"' in script
+    assert 'export PYTHONHASHSEED="0"' in script
+    assert 'export DTYPE="BF16"' in script
+    assert 'export SENSITIVE_LAYER_DTYPE="None"' in script
+    assert '--official-parity)' in script
+    assert '--no-official-parity)' in script
+    assert '--model-path)' in script
+    assert '--source-path)' in script
+    assert '--config-json)' in script
+    assert '--cache-dir)' in script
+    assert 'export LIGHTX2V_CACHE_DIR' in script
+
+
 def test_sensenova_split_example_scripts_select_exact_task():
     task_names = {
         "01": "understanding",
