@@ -1,4 +1,3 @@
-import gc
 import os
 import time
 from math import gcd as _gcd
@@ -88,7 +87,7 @@ def _ltx2_resize_video_denoise_mask_for_stage2(mask: torch.Tensor, target_h: int
 
 @RUNNER_REGISTER("ltx2")
 class LTX2Runner(DefaultRunner):
-    _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
+    _WARMUP_RESOLUTIONS = ((480, 480), (512, 768))
     _UPSAMPLER_WARMUP_RESOLUTIONS = ((480, 480), (1024, 1536))
 
     def __init__(self, config):
@@ -98,9 +97,6 @@ class LTX2Runner(DefaultRunner):
     def run_warmup(self):
         if type(self) is not LTX2Runner:
             raise NotImplementedError(f"LTX2 warmup is not supported for {type(self).__name__}")
-        is_ltx2_3 = self.config.get("caption_proj_before_connector", False) and self.config.get("cross_attention_adaln", False) and self.config.get("apply_gated_attention", False)
-        if is_ltx2_3:
-            raise NotImplementedError("Warmup is not supported for LTX2.3")
         task = self.config.get("task")
         if task not in ("t2av", "i2av"):
             raise NotImplementedError(f"LTX2 warmup does not support task: {task}")
@@ -170,7 +166,7 @@ class LTX2Runner(DefaultRunner):
         finally:
             scheduler.infer_steps = stage1_infer_steps
 
-        logger.info("Warmup completed")
+        logger.info("[Warmup] Warmup completed")
 
     def _prepare_warmup_inputs(self, height, width, text_encoder_output=None):
         task = self.config["task"]
@@ -601,8 +597,7 @@ class LTX2Runner(DefaultRunner):
         self._ref_video_latent = (ref_latent, ref_strength, ref_downscale_factor)
         logger.info(f"  ✓ Reference IC-LoRA latent ready (strength={ref_strength}, ref_downscale_factor={ref_downscale_factor})")
 
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
         }
@@ -678,8 +673,7 @@ class LTX2Runner(DefaultRunner):
         else:
             self.video_denoise_mask, self.initial_video_latent = self.run_vae_encoder()
 
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
         }
@@ -865,8 +859,7 @@ class LTX2Runner(DefaultRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.text_encoders[0]
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
 
         return text_encoder_output
 
@@ -899,8 +892,7 @@ class LTX2Runner(DefaultRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.video_vae
             del self.audio_vae
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
 
         return video, audio
 
@@ -922,8 +914,7 @@ class LTX2Runner(DefaultRunner):
         upsampled_v_latent = self.upsampler.upsample(v_latent, self.video_vae.encoder).squeeze(0)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.upsampler
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
 
         self.input_info.target_shape = [self.input_info.target_shape[0] * 2, self.input_info.target_shape[1] * 2]
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
@@ -1049,8 +1040,6 @@ class LTX2Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         self.init_run()
-        if self.config.get("compile", False) and hasattr(self.model, "comple"):
-            self.model.select_graph_for_compile(self.input_info)
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext4DebugL1(
@@ -1206,8 +1195,6 @@ class LTX2ARRunner(LTX2Runner):
             raise NotImplementedError("ltx2_ar currently supports task=t2av only.")
         if self.config.get("use_upsampler", False):
             raise NotImplementedError("ltx2_ar does not support the latent upsampler.")
-        if self.config.get("compile", False):
-            raise NotImplementedError("ltx2_ar does not support compile mode.")
         chunk = int(self.config.get("ar_config", {}).get("num_frame_per_chunk", 0))
         if chunk <= 0:
             raise ValueError("ltx2_ar requires ar_config.num_frame_per_chunk > 0.")

@@ -1,6 +1,7 @@
 import argparse
 
 import torch
+from loguru import logger
 
 from lightx2v_train.data import build_data, prepare_data
 from lightx2v_train.model_zoo import build_model
@@ -37,6 +38,9 @@ def main():
         trainer.set_data(dataloader_train, dataloader_eval)
 
         trainer.train()
+    except Exception:
+        logger.exception("Training failed")
+        raise
     finally:
         cleanup_distributed()
 

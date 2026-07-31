@@ -9,7 +9,6 @@ from lightx2v.models.networks.ernie_image.infer.transformer_infer import ErnieIm
 from lightx2v.models.networks.ernie_image.weights.post_weights import ErnieImagePostWeights
 from lightx2v.models.networks.ernie_image.weights.pre_weights import ErnieImagePreWeights
 from lightx2v.models.networks.ernie_image.weights.transformer_weights import ErnieImageTransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -63,7 +62,6 @@ class ErnieImageTransformerModel(BaseTransformerModel):
     def _seq_parallel_post_process(self, x):
         raise NotImplementedError("ERNIE-Image native DiT does not support seq_parallel yet.")
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         if self.config.get("cfg_parallel", False):

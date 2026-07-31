@@ -209,9 +209,6 @@ class SeedVRRunner(DefaultRunner):
     def _run_sr_single_segment(self):
         cached_input_info = self.input_info
         self.init_run()
-        if self.config.get("compile", False) and hasattr(self.model, "comple"):
-            self.model.select_graph_for_compile(self.input_info)
-
         segment_idx = 0
         self.init_run_segment(segment_idx)
         latents = self.run_segment(segment_idx)

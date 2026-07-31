@@ -77,6 +77,9 @@ training:
     save_every_iters: 100
     save_total_limit: 2
     dmd:
+        ida:
+            enabled: true
+            decay: 0.97
         num_inference_steps: 4
         fake_update_ratio: 5
         height: 480

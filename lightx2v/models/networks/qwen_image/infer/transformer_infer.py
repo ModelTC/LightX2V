@@ -23,6 +23,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         self.config = config
         self.infer_conditional = True
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
+        self.init_compile(config)
 
         self.use_magi_compile = config.get("use_magi_compile", False)
         if self.use_magi_compile and magi_compile is None:
@@ -36,7 +37,8 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
 
         self.attn_type = config.get("attn_type", "flash_attn3")
         self.zero_cond_t = config.get("zero_cond_t", False)
-        if self.config["seq_parallel"]:
+        self.seq_parallel = config["seq_parallel"]
+        if self.seq_parallel:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
             self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
@@ -46,7 +48,8 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             self.seq_p_fp8_comm = False
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
-        if self.config.get("modulate_type", "triton") == "triton":
+        self.use_triton_modulate = config.get("modulate_type", "triton") == "triton"
+        if self.use_triton_modulate:
             self.modulate_func = fuse_scale_shift_kernel
         else:
             self.modulate_func = lambda x, scale, shift: x * (1 + scale) + shift
@@ -74,7 +77,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
             scale_0, scale_1 = scale[:actual_batch], scale[actual_batch:]
             gate_0, gate_1 = gate[:actual_batch], gate[actual_batch:]
 
-            if self.config.get("modulate_type", "triton") == "triton":
+            if self.use_triton_modulate:
                 x, gate_result = fuse_scale_shift_gate_select01_kernel(
                     x,
                     scale0=scale_0,
@@ -185,7 +188,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         img_qkv_len = joint_query.shape[0]
         cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu")
 
-        if self.config["seq_parallel"]:
+        if self.seq_parallel:
             joint_hidden_states = cross_attn_phase.calculate_parallel.apply(
                 q=joint_query,
                 k=joint_key,
@@ -446,16 +449,17 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 trace_path,
             )
 
-        for idx in range(len(blocks)):
-            encoder_hidden_states, hidden_states = self.infer_block(
-                block=blocks[idx],
-                hidden_states=hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                temb_img_silu=temb_img_silu,
-                temb_txt_silu=temb_txt_silu,
-                image_rotary_emb=image_rotary_emb,
-                image_rotary_positions=image_rotary_positions,
-                modulate_index=modulate_index,
+        for block_idx, block in enumerate(blocks):
+            encoder_hidden_states, hidden_states = self.run_block(
+                block_idx,
+                block,
+                hidden_states,
+                encoder_hidden_states,
+                temb_img_silu,
+                temb_txt_silu,
+                image_rotary_emb,
+                image_rotary_positions,
+                modulate_index,
             )
         return hidden_states
 

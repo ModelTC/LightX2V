@@ -15,7 +15,6 @@ from lightx2v.models.networks.flux2.weights.transformer_weights import (
     preserve_weight_module_cpu_tensors,
     release_weight_module_device_tensors,
 )
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v_platform.base import global_var
 
 
@@ -435,7 +434,6 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
         self.pre_infer_class = Flux2PreInfer
         self.post_infer_class = Flux2PostInfer
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         latents = self.scheduler.latents
@@ -543,7 +541,6 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
         self.pre_infer_class = Flux2DevPreInfer
         self.post_infer_class = Flux2PostInfer
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         latents = self.scheduler.latents

@@ -253,9 +253,6 @@ class WanSFMtxg2Runner(WanSFRunner):
             if world_size > 1:
                 dist.barrier()
             self.init_run()
-            if self.config.get("compile", False):
-                self.model.select_graph_for_compile(self.input_info)
-
             stop = ""
             while stop != "n":
                 for segment_idx in range(self.video_segment_num):

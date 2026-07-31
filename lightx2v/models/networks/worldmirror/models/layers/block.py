@@ -7,12 +7,17 @@ from typing import Any, Callable, Dict, List, Tuple
 import torch
 from torch import Tensor, nn
 
-from .attention import Attention, DistAttention
+from .attention import Attention, DistAttention, MemEffAttention
 from .drop_path import DropPath
 from .layer_scale import LayerScale
 from .mlp import Mlp
 
-XFORMERS_AVAILABLE = False
+try:
+    from xformers.ops import fmha, index_select_cat, scaled_index_add
+except ImportError:
+    XFORMERS_AVAILABLE = False
+else:
+    XFORMERS_AVAILABLE = True
 
 
 def modulate(x, shift, scale):

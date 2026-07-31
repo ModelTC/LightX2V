@@ -60,6 +60,7 @@ class FlowMatchingTrainer(BaseTrainer):
         save_total_limit = self.save_total_limit
         grad_accum_counter = 0
         running_loss = 0.0
+        running_metrics = {}
 
         logger.info(
             "[train] start method={} train_type={} iter={}/{} world_size={} grad_accum={} train_log_every_iters={}",
@@ -86,9 +87,18 @@ class FlowMatchingTrainer(BaseTrainer):
                 sync_grad = (grad_accum_counter + 1) % grad_accum_iters == 0
                 self._set_gradient_sync(sync_grad)
 
-                loss = self.compute_loss_on_sample(sample)
+                loss_result = self.compute_loss_on_sample(sample)
+                if isinstance(loss_result, dict):
+                    loss = loss_result["loss"]
+                    sample_metrics = loss_result.get("metrics", {})
+                else:
+                    loss = loss_result
+                    sample_metrics = {}
                 (loss / grad_accum_iters).backward()
                 running_loss += loss.item() / grad_accum_iters
+                for name, value in sample_metrics.items():
+                    scalar = value.detach().item() if torch.is_tensor(value) else float(value)
+                    running_metrics[name] = running_metrics.get(name, 0.0) + scalar / grad_accum_iters
 
                 grad_accum_counter += 1
                 if grad_accum_counter % grad_accum_iters != 0:
@@ -104,15 +114,20 @@ class FlowMatchingTrainer(BaseTrainer):
                 display_loss = reduce_mean(running_loss)
                 current_lr = self.lr_scheduler.get_last_lr()[0]
                 if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
-                    logger.info("[train] iter={}/{} loss={:.6f} lr={:.8f}", current_iter, max_train_iters, display_loss, current_lr)
-                    self.log_metrics(
-                        {
-                            "train/loss": display_loss,
-                            "train/lr": current_lr,
-                        },
-                        step=current_iter,
-                    )
+                    display_metrics = {name: reduce_mean(value) for name, value in running_metrics.items()}
+                    metric_text = " ".join(f"{name}={value:.6f}" for name, value in sorted(display_metrics.items()))
+                    if metric_text:
+                        logger.info("[train] iter={}/{} loss={:.6f} {} lr={:.8f}", current_iter, max_train_iters, display_loss, metric_text, current_lr)
+                    else:
+                        logger.info("[train] iter={}/{} loss={:.6f} lr={:.8f}", current_iter, max_train_iters, display_loss, current_lr)
+                    logged_metrics = {
+                        "train/loss": display_loss,
+                        "train/lr": current_lr,
+                    }
+                    logged_metrics.update({f"train/{name}": value for name, value in display_metrics.items()})
+                    self.log_metrics(logged_metrics, step=current_iter)
                 running_loss = 0.0
+                running_metrics = {}
 
                 if save_every_iters and current_iter % save_every_iters == 0:
                     self.save_checkpoint(current_iter, save_total_limit)

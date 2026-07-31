@@ -31,7 +31,7 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
         Args:
             config: Model configuration dictionary with offloading settings:
                 - cpu_offload: Enable CPU offloading
-                - offload_granularity: "block" or "model" (only "block" supported here)
+                - offload_granularity: "block" or "model"
                 - lazy_load: Enable lazy loading from disk
         """
         super().__init__(config)
@@ -44,7 +44,7 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
                 self.infer_func = self.infer_with_blocks_offload
                 self.offload_manager = WeightAsyncStreamManager(offload_granularity="block")
             elif offload_granularity == "model":
-                # No offloading, keep full model in GPU
+                # Model movement is handled by LTX2Model.
                 self.infer_func = self.infer_without_offload
             else:
                 raise ValueError(f"Unsupported offload_granularity: {offload_granularity}")
@@ -71,6 +71,9 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
         """
         return super().infer(weights, pre_infer_out)
 
+    def get_compile_block_key(self, _block_idx, block):
+        return id(block)
+
     def infer_with_blocks_offload(self, weights, pre_infer_out: LTX2PreInferModuleOutput):
         """
         Inference with block-level CPU offloading.
@@ -87,8 +90,13 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
         Returns:
             Tuple of (video_x, audio_x, video_timestep, audio_timestep)
         """
+        self.reset_infer_states()
+
         vx = pre_infer_out.video_args.x
         ax = pre_infer_out.audio_args.x
+        if self.use_compile:
+            self.v_attn_cu_seqlens_qkv = self._create_cu_seqlens(vx.shape[0])
+            self.a_attn_cu_seqlens_qkv = self._create_cu_seqlens(ax.shape[0])
 
         blocks = weights.blocks
 
@@ -107,7 +115,17 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
             with torch_device_module.stream(self.offload_manager.compute_stream):
                 # Use the block currently in cuda_buffers[0]
                 current_block = self.offload_manager.cuda_buffers[0]
-                vx, ax = self.infer_block(block_idx, current_block, vx, ax, pre_infer_out)
+                vx, ax = self.run_block(
+                    block_idx,
+                    current_block,
+                    vx,
+                    ax,
+                    pre_infer_out,
+                    block_idx in self._mm_skip_video_self_blocks,
+                    block_idx in self._mm_skip_audio_self_blocks,
+                    self._mm_skip_a2v,
+                    self._mm_skip_v2a,
+                )
 
             # Swap buffers: cuda_buffers[1] (prefetched) -> cuda_buffers[0] (current)
             self.offload_manager.swap_blocks()

@@ -1,6 +1,6 @@
 model:
     name: wan_t2v
-    pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
+    pretrained_model_name_or_path: models/Wan2.1-T2V-1.3B/
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -10,10 +10,10 @@ model:
     load_transformer: true
     fake:
         name: wan_t2v
-        pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
+        pretrained_model_name_or_path: models/Wan2.1-T2V-1.3B/
     teacher:
         name: wan_t2v
-        pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
+        pretrained_model_name_or_path: models/Wan2.1-T2V-1.3B/
         transformer_param_dtype: bf16
 
 distributed:
@@ -23,8 +23,8 @@ distributed:
         enabled: false
         size: 1
     fsdp2:
-        enabled: false
-        size: 1
+        enabled: true
+        size: 8
         reshard_after_forward:
             root_reshard: false
             block_reshard: true
@@ -38,8 +38,8 @@ data:
     train:
         name: prompt_dataset
         data_path:
-            - /path/to/prompts/vidprom_filtered_extended.txt
-        batch_size: 1
+            - data/prompts/wan22_train_prompts.txt
+        batch_size: 2
         num_workers: 8
         pin_memory: true
         shuffle: true
@@ -47,7 +47,7 @@ data:
     val:
         name: prompt_dataset
         data_path:
-            - /path/to/prompts/wan_t2v_prompts.txt
+            - data/prompts/wan22_val_prompts.txt
         max_samples: 2
         batch_size: 1
         num_workers: 0
@@ -77,6 +77,14 @@ training:
     save_every_iters: 100
     save_total_limit: 10
     dmd:
+        ida:
+            enabled: true
+            decay: 0.97
+        div_loss:
+            enabled: true
+            weight: 5.0e-2
+            teacher_inference_steps: 40
+            anchor_step: 10
         num_inference_steps: 4
         fake_update_ratio: 5
         height: 480
@@ -139,12 +147,12 @@ inference:
     cfg_guidance_scale: 1.0
     seed: 42
     output_dir: ./output_infer/wan2_1_t2v_1_3b_dmd
-    infer_every_iters: ${training.save_every_iters}
+    infer_every_iters: 10
 
 logging:
     rank_zero_only: true
-    train_log_every_iters: 10
-    infer_log_every_steps: 10
+    train_log_every_iters: 1
+    infer_log_every_steps: 1
 
 resume:
     auto_resume: true

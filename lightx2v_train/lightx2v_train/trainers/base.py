@@ -37,11 +37,11 @@ class BaseTrainer:
         self.gradient_checkpointing = self.training_config.get("gradient_checkpointing", True)
 
         optimizer_config = self._get_optimizer_config()
-        self.optimizer_learning_rate = optimizer_config.get("learning_rate", 1e-4)
-        self.optimizer_adam_beta1 = optimizer_config.get("adam_beta1", 0.9)
-        self.optimizer_adam_beta2 = optimizer_config.get("adam_beta2", 0.999)
-        self.optimizer_weight_decay = optimizer_config.get("weight_decay", 0.01)
-        self.optimizer_adam_epsilon = optimizer_config.get("adam_epsilon", 1e-8)
+        self.optimizer_learning_rate = float(optimizer_config.get("learning_rate", 1e-4))
+        self.optimizer_adam_beta1 = float(optimizer_config.get("adam_beta1", 0.9))
+        self.optimizer_adam_beta2 = float(optimizer_config.get("adam_beta2", 0.999))
+        self.optimizer_weight_decay = float(optimizer_config.get("weight_decay", 0.01))
+        self.optimizer_adam_epsilon = float(optimizer_config.get("adam_epsilon", 1e-8))
 
         self.lr_scheduler_name = self.training_config.get("lr_scheduler", "constant")
         self.lr_warmup_iters = self.training_config["lr_warmup_iters"]
@@ -116,10 +116,10 @@ class BaseTrainer:
             }
         return torch.optim.AdamW(
             params,
-            lr=optimizer_config.get("learning_rate", 1e-4),
-            betas=(optimizer_config.get("adam_beta1", 0.9), optimizer_config.get("adam_beta2", 0.999)),
-            weight_decay=optimizer_config.get("weight_decay", 0.01),
-            eps=optimizer_config.get("adam_epsilon", 1e-8),
+            lr=float(optimizer_config.get("learning_rate", 1e-4)),
+            betas=(float(optimizer_config.get("adam_beta1", 0.9)), float(optimizer_config.get("adam_beta2", 0.999))),
+            weight_decay=float(optimizer_config.get("weight_decay", 0.01)),
+            eps=float(optimizer_config.get("adam_epsilon", 1e-8)),
         )
 
     def _build_lr_scheduler(self, optimizer, num_training_steps=None, num_warmup_steps=None):

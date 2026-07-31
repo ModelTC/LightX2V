@@ -25,7 +25,6 @@ from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import (
     WanTransformerWeights,
 )
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -210,7 +209,6 @@ class WanModel(BaseTransformerModel):
                         return True
         return False
 
-    @compiled_method()
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):
         self.scheduler.infer_condition = infer_condition

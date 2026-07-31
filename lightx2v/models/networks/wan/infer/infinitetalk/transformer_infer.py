@@ -134,7 +134,7 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
                 use_fp8_comm=self.seq_p_fp8_comm,
                 use_fp4_comm=self.seq_p_fp4_comm,
                 use_tensor_fusion=self.seq_p_tensor_fusion,
-                enable_head_parallel=self.enable_head_parallel,
+                enable_head_parallel=self.seq_p_head_parallel,
                 **attn_running_args,
             )
         else:

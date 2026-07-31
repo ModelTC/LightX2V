@@ -24,11 +24,40 @@ except ImportError:
     is_arch_support_pdl = None
 
 try:
+    from flashinfer.norm import rmsnorm as flashinfer_rmsnorm
+except ImportError:
+    flashinfer_rmsnorm = None
+
+try:
     from magi_compiler import magi_register_custom_op
 except ImportError:
     magi_register_custom_op = None
 
 from lightx2v.common.magi_custom_op_mode import use_magi_custom_ops
+
+
+@torch.library.custom_op(
+    "lightx2v::rmsnorm_flashinfer",
+    mutates_args=(),
+    device_types="cuda",
+)
+def rmsnorm_flashinfer(
+    input_tensor: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+    enable_pdl: bool,
+) -> torch.Tensor:
+    return flashinfer_rmsnorm(input_tensor, weight, eps, enable_pdl=enable_pdl)
+
+
+@rmsnorm_flashinfer.register_fake
+def rmsnorm_flashinfer_fake(
+    input_tensor: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+    enable_pdl: bool,
+) -> torch.Tensor:
+    return torch.empty_like(input_tensor)
 
 
 class RMSWeightTemplate(metaclass=ABCMeta):
@@ -295,12 +324,12 @@ class RMSWeightSgl(RMSWeight):
             input_tensor = input_tensor.contiguous()
             orig_shape = input_tensor.shape
             input_tensor = input_tensor.view(-1, orig_shape[-1])
-            input_tensor = sgl_kernel.rmsnorm(
-                input_tensor,
-                self._get_actual_weight(),
-                self.eps,
-                enable_pdl=self.enable_pdl,
-            ).view(orig_shape)
+            weight = self._get_actual_weight()
+            if torch.compiler.is_compiling() and flashinfer_rmsnorm is not None and input_tensor.dtype in (torch.float16, torch.bfloat16):
+                input_tensor = rmsnorm_flashinfer(input_tensor, weight, self.eps, self.enable_pdl)
+            else:
+                input_tensor = sgl_kernel.rmsnorm(input_tensor, weight, self.eps, enable_pdl=self.enable_pdl)
+            input_tensor = input_tensor.view(orig_shape)
         else:
             # sgl_kernel is not available or dtype!=torch.bfloat16/float16, fallback to default implementation
             if self.sensitive_layer_dtype != self.infer_dtype:

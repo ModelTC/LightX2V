@@ -130,9 +130,9 @@ class LTX2ARTransformerInfer(LTX2TransformerInfer):
         self._ar_video_start = int(video_start)
         self._ar_audio_start = int(audio_start)
 
-    def infer_block(self, block_idx, block, vx, ax, pre_infer_out):
+    def run_block(self, block_idx, block, *args):
         self._ar_block_idx = int(block_idx)
-        return super().infer_block(block_idx, block, vx, ax, pre_infer_out)
+        return super().run_block(block_idx, block, *args)
 
     def _cache_for(self, modality: str) -> tuple[RollingKVCachePool, _CacheSpec]:
         if not self._ar_cache_specs:
