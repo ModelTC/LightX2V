@@ -3,7 +3,7 @@ import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.offload.block_slab import pack_cpu_block_slab
-from lightx2v.models.networks.flux2.weights.transfer import move_flux2_leaf_to_cuda
+from lightx2v.common.ops.utils import move_transposed_weight_module_to_device
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
@@ -214,8 +214,8 @@ class Flux2DoubleBlockWeights(WeightModule):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):
                 if self.mm_type == "Default":
-                    # This helper only handles Default's 2-D transpose views; quantized layouts need their own to_cuda().
-                    move_flux2_leaf_to_cuda(module, non_blocking=non_blocking)
+                    # The fast path assumes Default's 2-D transpose views; quantized layouts need their own to_cuda().
+                    move_transposed_weight_module_to_device(module, non_blocking=non_blocking)
                 else:
                     module.to_cuda(non_blocking=non_blocking)
 
@@ -263,7 +263,7 @@ class Flux2SingleBlockWeights(WeightModule):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):
                 if self.mm_type == "Default":
-                    move_flux2_leaf_to_cuda(module, non_blocking=non_blocking)
+                    move_transposed_weight_module_to_device(module, non_blocking=non_blocking)
                 else:
                     module.to_cuda(non_blocking=non_blocking)
 
@@ -451,7 +451,7 @@ class Flux2TransformerWeights(WeightModule):
         for module in modules:
             preserve_weight_module_cpu_tensors(module)
             if self.mm_type == "Default":
-                move_flux2_leaf_to_cuda(module, non_blocking=non_blocking)
+                move_transposed_weight_module_to_device(module, non_blocking=non_blocking)
             else:
                 module.to_cuda(non_blocking=non_blocking)
 

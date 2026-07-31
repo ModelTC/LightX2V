@@ -230,6 +230,40 @@ def move_tensor_to_device(obj, attr_name, target_device, non_blocking=False, use
         setattr(obj, attr_name, getattr(obj, attr_name).to(target_device, non_blocking=non_blocking))
 
 
+def _is_transposed_cpu_view(tensor):
+    return isinstance(tensor, torch.Tensor) and tensor.device.type == "cpu" and tensor.dim() == 2 and not tensor.is_contiguous() and tensor.t().is_contiguous()
+
+
+def _move_transposed_cpu_tensor_to_device(tensor, device, non_blocking):
+    return tensor.t().to(device, non_blocking=non_blocking).t()
+
+
+def move_transposed_weight_module_to_device(module, non_blocking=True):
+    """Move a weight module, optimizing 2-D transposed CPU views on NPU."""
+    base_attrs = getattr(module, "base_attrs", ())
+    transposed_attrs = {attr_name for _, attr_name, transpose in base_attrs if transpose and _is_transposed_cpu_view(getattr(module, f"pin_{attr_name}", None))}
+    if AI_DEVICE != "npu" or not transposed_attrs:
+        module.to_cuda(non_blocking=non_blocking)
+        return False
+
+    for _, attr_name, _ in base_attrs:
+        if attr_name in transposed_attrs:
+            pin_tensor = getattr(module, f"pin_{attr_name}")
+            setattr(
+                module,
+                attr_name,
+                _move_transposed_cpu_tensor_to_device(pin_tensor, AI_DEVICE, non_blocking),
+            )
+        else:
+            move_tensor_to_device(module, attr_name, AI_DEVICE, non_blocking=non_blocking)
+
+    for lora_attr in getattr(module, "lora_attrs", {}):
+        value = getattr(module, lora_attr, None)
+        if isinstance(value, torch.Tensor):
+            setattr(module, lora_attr, value.to(AI_DEVICE, non_blocking=non_blocking))
+    return True
+
+
 def build_lora_and_diff_names(weight_name, lora_prefix):
     """Build the full names of LoRA (down/up/alpha) and weight difference tensors.
 
