@@ -247,7 +247,11 @@ class Flux2BaseRunner(DefaultRunner):
             total_steps = self.model.scheduler.infer_steps
         run_error = None
         try:
-            for step_index in range(total_steps):
+            step_indices = range(total_steps)
+            if step_indices:
+                self.model.prepare_offload_weights()
+
+            for step_index in step_indices:
                 logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
                 with ProfilingContext4DebugL1("step_pre"):
@@ -267,15 +271,13 @@ class Flux2BaseRunner(DefaultRunner):
             run_error = caught_error
             raise
         finally:
-            cleanup = getattr(self.model, "force_cleanup_offload_weights", None)
-            if cleanup is not None:
-                try:
-                    cleanup()
-                except BaseException as cleanup_error:
-                    if run_error is None:
-                        raise
-                    if hasattr(run_error, "add_note"):
-                        run_error.add_note(f"Flux2 offload cleanup also failed: {cleanup_error!r}")
+            try:
+                self.model.force_cleanup_offload_weights()
+            except BaseException as cleanup_error:
+                if run_error is None:
+                    raise
+                if hasattr(run_error, "add_note"):
+                    run_error.add_note(f"Flux2 offload cleanup also failed: {cleanup_error!r}")
 
     def get_custom_shape(self):
         default_aspect_ratios = {

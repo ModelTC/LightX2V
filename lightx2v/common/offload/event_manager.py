@@ -28,13 +28,14 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
         self.device_module = torch_device_module
         self._ready_events = [torch_device_module.Event() for _ in range(self._EVENT_SLOT_COUNT)]
         self._free_events = [torch_device_module.Event() for _ in range(self._EVENT_SLOT_COUNT)]
-        self._reset_slot_state()
+        self.reset_slots()
 
     @property
     def slot_count(self):
         return self._EVENT_SLOT_COUNT
 
-    def _reset_slot_state(self):
+    def reset_slots(self):
+        """Reset slot bookkeeping; synchronize pending device work first."""
         self._slot_pending = [False] * self.slot_count
         self._slot_ready_waited = [False] * self.slot_count
         self._slot_free_recorded = [False] * self.slot_count
@@ -116,13 +117,6 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
         self._slot_pending[slot_idx] = False
         self._slot_ready_waited[slot_idx] = False
         self._slot_free_recorded[slot_idx] = True
-
-    def flush(self):
-        """Drain the offload streams and reset the slot state."""
-        self.cuda_load_stream.synchronize()
-        if self.compute_stream is not self.cuda_load_stream:
-            self.compute_stream.synchronize()
-        self._reset_slot_state()
 
     def init_block_slabs(self, block_slabs, staging_raw=None):
         """Prepare the shared device buffer used for block-slab copies."""

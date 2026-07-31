@@ -31,8 +31,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         # event offload, with block-level CPU offload, BF16 Default weights, and no LoRA,
         # lazy loading, or tensor parallelism.
         self.use_block_slab_offload = self.config.get("offload_use_block_slab", False)
-        self._offload_weights_loaded = False
-        self._offload_weights_preparing = False
+        self._offload_weights_active = False
         self.in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
         self.attention_kwargs = {}
         self._combined_img_ids_cache = None
@@ -298,48 +297,27 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
             if single_slabs:
                 self.transformer_infer.offload_manager_single.init_block_slabs(single_slabs)
 
-    def _prepare_infer_weights(self):
-        if not self.cpu_offload or self._offload_weights_loaded:
+    def prepare_offload_weights(self):
+        """Load weights kept resident for one runner invocation."""
+        if not self.cpu_offload:
             return
-        if self._offload_weights_preparing:
-            raise RuntimeError("Flux2 offload weights are already being prepared")
+        if self._offload_weights_active:
+            raise RuntimeError("Flux2 offload weights are already active")
 
-        self._offload_weights_preparing = True
-        try:
-            if self.offload_granularity == "model":
-                self.to_cuda()
-            else:
-                # These weights are used on every diffusion step, so keep them
-                # resident for the complete denoising loop.
-                preserve_weight_module_cpu_tensors(self.pre_weight)
-                preserve_weight_module_cpu_tensors(self.post_weight)
-                self.pre_weight.to_cuda()
-                self.post_weight.to_cuda()
-                self.transformer_weights.non_block_weights_to_cuda()
-                self.transformer_weights.resident_blocks_to_cuda()
-        except BaseException as prepare_error:
-            try:
-                self.force_cleanup_offload_weights()
-            except BaseException as cleanup_error:
-                if hasattr(prepare_error, "add_note"):
-                    prepare_error.add_note(f"Flux2 offload cleanup also failed: {cleanup_error!r}")
-            raise
+        # Mark the model active before moving weights so runner cleanup also
+        # handles a partially completed preparation.
+        self._offload_weights_active = True
+        if self.offload_granularity == "model":
+            self.to_cuda()
         else:
-            self._offload_weights_loaded = True
-            self._offload_weights_preparing = False
-
-    def _release_infer_weights(self):
-        if not self.cpu_offload or self.scheduler.step_index != self.scheduler.infer_steps - 1:
-            return
-        self.force_cleanup_offload_weights()
-
-    def _flush_event_offload_managers(self):
-        if not getattr(self.transformer_infer, "use_event_offload", False):
-            return
-        for manager_name in ("offload_manager_double", "offload_manager_single"):
-            manager = getattr(self.transformer_infer, manager_name, None)
-            if manager is not None and hasattr(manager, "flush"):
-                manager.flush()
+            # These weights are used on every diffusion step, so keep them
+            # resident for the complete denoising loop.
+            preserve_weight_module_cpu_tensors(self.pre_weight)
+            preserve_weight_module_cpu_tensors(self.post_weight)
+            self.pre_weight.to_cuda()
+            self.post_weight.to_cuda()
+            self.transformer_weights.non_block_weights_to_cuda()
+            self.transformer_weights.resident_blocks_to_cuda()
 
     def force_cleanup_offload_weights(self):
         """Release loaded offload weights and reset event-slot state.
@@ -347,12 +325,15 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         This method is intentionally idempotent and may be called from a
         runner ``finally`` block after a short run, cancellation, or error.
         """
-        if not self.cpu_offload or not (self._offload_weights_loaded or self._offload_weights_preparing):
-            return False
+        if not self.cpu_offload or not self._offload_weights_active:
+            return
 
-        self._flush_event_offload_managers()
         # Device execution and non-blocking H2D copies are asynchronous.
         self._sync_device()
+        if getattr(self.transformer_infer, "use_event_offload", False):
+            self.transformer_infer.offload_manager_double.reset_slots()
+            self.transformer_infer.offload_manager_single.reset_slots()
+
         if self.offload_granularity == "model":
             self.to_cpu()
         else:
@@ -361,9 +342,7 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
             self.transformer_weights.release_non_block_weights()
             self.transformer_weights.release_resident_blocks()
 
-        self._offload_weights_loaded = False
-        self._offload_weights_preparing = False
-        return True
+        self._offload_weights_active = False
 
     def _get_combined_img_ids(self, img_ids, input_image_ids):
         cached = self._combined_img_ids_cache
@@ -459,8 +438,6 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
     @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
-        self._prepare_infer_weights()
-
         latents = self.scheduler.latents
         do_cfg = self.config.get("enable_cfg", True) and self.config.get("sample_guide_scale", 1.0) > 1.0
 
@@ -544,8 +521,6 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
             )
             self.scheduler.noise_pred = noise_pred
 
-        self._release_infer_weights()
-
 
 class Flux2DevTransformerModel(_Flux2TransformerModelBase):
     """Flux2 Dev transformer: single forward pass with embedded guidance (no CFG)."""
@@ -571,8 +546,6 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
     @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
-        self._prepare_infer_weights()
-
         latents = self.scheduler.latents
         txt_ids = inputs["text_encoder_output"].get("text_ids", None)
         img_ids = getattr(self.scheduler, "latent_image_ids", None)
@@ -585,5 +558,3 @@ class Flux2DevTransformerModel(_Flux2TransformerModelBase):
             img_ids=img_ids,
         )
         self.scheduler.noise_pred = noise_pred
-
-        self._release_infer_weights()
