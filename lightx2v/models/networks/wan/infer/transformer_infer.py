@@ -20,6 +20,8 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
         self.task = config["task"]
+        self.seq_parallel = config["seq_parallel"]
+        self.has_image_context = self.task in {"i2v", "flf2v", "animate", "s2v", "rs2v"} and config.get("use_image_encoder", True)
         self.blocks_num = config["num_layers"]
         self.phases_num = 3
         self.has_post_adapter = False
@@ -41,7 +43,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
-        if self.config["seq_parallel"]:
+        if self.seq_parallel:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             parallel_config = self.config["parallel"]
             self.seq_p_attn_type = parallel_config.get("seq_p_attn_type", "ulysses")
@@ -95,11 +97,10 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     def reset_infer_states(self, x, context):
         query_len = x.shape[0]
         context_len = context.shape[0]
-        has_image_context = self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True)
 
         self.self_attn_cu_seqlens_qkv = torch.tensor([0, query_len], dtype=torch.int32)
         self.cross_attn_cu_seqlens_q = torch.tensor([0, query_len], dtype=torch.int32)
-        if has_image_context:
+        if self.has_image_context:
             self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, 257], dtype=torch.int32)
             context_len -= 257
         self.cross_attn_cu_seqlens_kv = torch.tensor([0, context_len], dtype=torch.int32)
@@ -260,7 +261,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             "grid_sizes": grid_sizes,
         }
 
-        if self.config["seq_parallel"]:
+        if self.seq_parallel:
             if self.use_new_seq_p_interface:
                 attn_out, aux_attn_out = phase.self_attn_1_parallel.apply_new(
                     q=q,
@@ -322,7 +323,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             x.add_(y_out * gate_msa.squeeze())
 
         norm3_out = phase.norm3.apply(x)
-        if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
+        if self.has_image_context:
             context_img = context[:257]
             context = context[257:]
         else:
@@ -330,7 +331,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         if self.sensitive_layer_dtype != self.infer_dtype:
             context = context.to(self.infer_dtype)
-            if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True):
+            if self.has_image_context:
                 context_img = context_img.to(self.infer_dtype)
 
         n, d = self.num_heads, self.head_dim
@@ -348,7 +349,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             max_seqlen_kv=k.size(0),
         )
 
-        if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
+        if self.has_image_context and context_img is not None:
             k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
 

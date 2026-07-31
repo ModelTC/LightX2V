@@ -107,6 +107,7 @@ rg -n "self\\.block_idx|self\\.[A-Za-z0-9_]+\\s*=|is_compiling|is_dynamo_compili
 - 少量 guider/branch 状态：在循环中计算成布尔值或小标量，显式传给 `infer_block`。
 - request-specific tensor 在首个 block 内写入 `self`：进入 block 循环前按当前请求创建并刷新。
 - dtype、维度和配置布尔值等稳定 Python 值：在初始化时解析一次，不要在 block 图内反复调用环境/config helper。
+- 服务会用请求字段扩充共享 config；即使读取的是稳定 key，block 图内访问 `self.config` 也可能产生字典长度/键集合 guard。只缓存图真正需要的初始化常量，不要复制或冻结整份 config。
 - 只有专用子类需要层号：只在该子类覆写 `run_block()`。
 
 不要为追求“无状态”大范围重构；只显式化会进入图、影响正确性或导致重编译的状态。

@@ -166,7 +166,7 @@ class LTX2Runner(DefaultRunner):
         finally:
             scheduler.infer_steps = stage1_infer_steps
 
-        logger.info("Warmup completed")
+        logger.info("[Warmup] Warmup completed")
 
     def _prepare_warmup_inputs(self, height, width, text_encoder_output=None):
         task = self.config["task"]

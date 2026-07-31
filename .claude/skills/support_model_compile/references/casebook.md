@@ -18,6 +18,7 @@
 - [12. OOM 或其他进程污染实验](#12-oom-或其他进程污染实验)
 - [13. Step 1 变快但冷启动总耗时更高](#13-step-1-变快但冷启动总耗时更高)
 - [14. 最终输出相近但数值不一致](#14-最终输出相近但数值不一致)
+- [15. warmup 后首请求因共享 config 扩充而重编译](#15-warmup-后首请求因共享-config-扩充而重编译)
 
 ## 1. staging block 重复编译
 
@@ -127,3 +128,11 @@
 - **确认**：先证明 eager 重复运行可复现，再依次比较单 block、首个 denoise step 和最终输出，并核对 dtype、kernel dispatch 与容差。
 - **根因**：BF16/Inductor 运算顺序的微小差异可能被多步扩散放大，也可能是真实分支、kernel 或状态不一致。
 - **处理**：不要只凭最终视觉结果判断正确；先定位首个超出容差的位置。若单步已明显偏离，继续查实现；若仅长期累积，按项目数值契约决定是否接受并明确报告。
+
+## 15. warmup 后首请求因共享 config 扩充而重编译
+
+- **现象**：服务 warmup 已编译成功，首个 HTTP 请求的 Step 1 仍明显变慢；`TORCH_LOGS="recompiles,dynamic"` 显示 `len(self.config)` 或字典键集合 guard 失效。
+- **确认**：检查 worker 是否在正式请求前调用 `runner.set_config(task_data)`，并沿 `infer_block` 的可达方法（含 mixin 和 override）搜索运行时 `self.config` 读取。相同 shape、prompt 或 key 值不能排除该问题。
+- **根因**：runner 与 transformer infer 共享同一个可变 config。首请求加入 `task_id`、输出路径等字段会改变字典结构；Dynamo 即使只读取稳定 key，也可能守卫整个 mapping。
+- **处理**：在 infer 初始化时只缓存图内需要且请求间不应变化的常量（如 `seq_parallel`、算子后端或是否具有图像上下文），编译路径改读这些属性。不要复制/冻结整份 config，也不要阻止合法的请求配置更新；图外初始化和 offload 控制路径可继续读取 config。
+- **验收**：必须走真实服务生命周期 `warmup → 首个 HTTP 请求`，确认请求确实扩充了 config、日志不再出现 config guard 重编译，且 Step 1 回到稳态量级。
