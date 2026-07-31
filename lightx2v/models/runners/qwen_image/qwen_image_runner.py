@@ -116,7 +116,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 self.input_info = None
                 self.__dict__.pop("inputs", None)
 
-        logger.info("Warmup completed")
+        logger.info("[Warmup] Warmup completed")
 
     def _prepare_warmup_inputs(self, height, width, t2i_text_cache=None):
         task = self.config["task"]

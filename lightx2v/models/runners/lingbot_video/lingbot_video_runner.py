@@ -111,7 +111,7 @@ class LingBotVideoRunner(DefaultRunner):
             finally:
                 self.clear_warmup_state()
 
-        logger.info("Warmup completed")
+        logger.info("[Warmup] Warmup completed")
 
     def _prepare_warmup_inputs(self, height, width, text_encoder_output=None):
         input_cls = {"t2i": T2IInputInfo, "t2v": T2VInputInfo, "i2v": I2VInputInfo}[self.config["task"]]

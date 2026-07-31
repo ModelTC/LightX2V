@@ -10,7 +10,7 @@ class BaseTransformerInfer(ABC):
         self.use_compile = config.get("use_compile", False)
         self.compiled_blocks = {}
         if self.use_compile:
-            logger.info(f"Using torch.compile for {type(self).__name__}")
+            logger.info(f"[Compile] Using torch.compile for {type(self).__name__}")
 
     def get_compiled_block(self, block_idx, block):
         key = self.get_compile_block_key(block_idx, block)

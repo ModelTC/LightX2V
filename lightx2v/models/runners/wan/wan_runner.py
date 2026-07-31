@@ -140,7 +140,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         finally:
             scheduler.sample_guide_scale = original_guide_scale
 
-        logger.info("Warmup completed")
+        logger.info("[Warmup] Warmup completed")
 
     def supports_generic_warmup(self):
         # Specialized runners must opt in themselves; inherited support is not enough.

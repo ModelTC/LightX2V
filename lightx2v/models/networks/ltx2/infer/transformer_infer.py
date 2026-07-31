@@ -44,8 +44,9 @@ class LTX2TransformerInfer(BaseTransformerInfer):
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
         self.cross_attention_adaln = config.get("cross_attention_adaln", False)
         self.apply_gated_attention = config.get("apply_gated_attention", False)
+        self.seq_parallel = config.get("seq_parallel", False)
 
-        if config.get("seq_parallel", False):
+        if self.seq_parallel:
             self.seq_p_group = config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = config.get("parallel", {}).get("seq_p_fp8_comm", False)
             self.seq_p_fp4_comm = config.get("parallel", {}).get("seq_p_fp4_comm", False)
@@ -269,7 +270,7 @@ class LTX2TransformerInfer(BaseTransformerInfer):
 
         q = attn_phase.to_q.apply(q_in)
         # For sequence parallel (non-TP), gather context if needed
-        if need_gather_video_context and self.config.get("seq_parallel", False) and not use_tp:
+        if need_gather_video_context and self.seq_parallel and not use_tp:
             context, k_pe = self._gather_cross_attn_context(context, k_pe)
         k = attn_phase.to_k.apply(context)
         v = attn_phase.to_v.apply(context)
@@ -288,7 +289,7 @@ class LTX2TransformerInfer(BaseTransformerInfer):
 
         seq_len = q.size(0)
         # For video self-attention with sequence parallel (non-TP only)
-        if is_self_attn and not is_audio and self.config.get("seq_parallel", False) and not use_tp:
+        if is_self_attn and not is_audio and self.seq_parallel and not use_tp:
             # Cache cu_seqlens_qkv for self-attention (q, k, v have same length)
             if self.v_attn_cu_seqlens_qkv is None:
                 self.v_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0])
