@@ -397,11 +397,12 @@ def set_parallel_config(config):
         tensor_p_size = int(config["parallel"].get("tensor_p_size", 1))
         cfg_p_size = int(config["parallel"].get("cfg_p_size", 1))
         seq_p_size = int(config["parallel"].get("seq_p_size", 1))
+        pp_size = int(config["parallel"].get("pp_size", 1))
         world_size = dist.get_world_size()
-        expected_world_size = tensor_p_size * cfg_p_size * seq_p_size
+        expected_world_size = tensor_p_size * cfg_p_size * seq_p_size * pp_size
         if expected_world_size != world_size:
             raise ValueError(
-                f"Parallel sizes must match the distributed world size: tensor_p_size ({tensor_p_size}) * cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) != world_size ({world_size})."
+                f"Parallel sizes must match the distributed world size: tensor_p_size ({tensor_p_size}) * cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) * pp_size ({pp_size}) != world_size ({world_size})."
             )
 
         if tensor_p_size > 1:
