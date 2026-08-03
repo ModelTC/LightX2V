@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# usage: bash scripts/sensenova_vision/run_sensenova_vision_example.sh all --gpus 7
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ $# -gt 0 && "${1}" != --* ]]; then
@@ -25,7 +27,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -h|--help)
-            echo "Usage: bash ${BASH_SOURCE[0]} [all|01-11] [--gpus GPU_LIST]"
+            echo "Usage: bash ${BASH_SOURCE[0]} [all|01-14] [--gpus GPU_LIST]"
             echo "Example: bash ${BASH_SOURCE[0]} 03 --gpus 2"
             echo "Example: bash ${BASH_SOURCE[0]} 03 --gpus 2,3"
             exit 0

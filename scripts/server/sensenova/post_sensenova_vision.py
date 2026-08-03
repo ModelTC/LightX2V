@@ -126,7 +126,6 @@ def main() -> None:
         help="Input image; repeat for multi-view tasks. Local files are sent as base64.",
     )
     parser.add_argument("--prompt", default="", help="Task query/instruction")
-    parser.add_argument("--mode", default="", help="Advanced SenseNova inference-mode override")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--target-shape", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"))
     parser.add_argument("--no-visualize", action="store_true", help="Skip official-style visualization")
@@ -144,7 +143,6 @@ def main() -> None:
 
     payload = {
         "task": args.task,
-        "mode": args.mode,
         "prompt": args.prompt,
         "images": [image_source_for_request(source) for source in args.image],
         "seed": args.seed,

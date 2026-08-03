@@ -11,8 +11,9 @@ cd /data/nvme0/lhd_codes/LightX2V
 CUDA_VISIBLE_DEVICES=0 bash scripts/sensenova_vision/run_sensenova_vision.sh example
 ```
 
-The model is loaded once and all 11 examples from the upstream
-`example_visualize.py` are executed. Results are written to
+The model is loaded once and all 14 public subtasks are executed. Examples
+01-11 follow upstream `example_visualize.py`; examples 12-14 use the upstream
+point detection, keypoint and OCR validation assets. Results are written to
 `save_results/sensenova_vision_example` by default. Override this with
 `OUTPUT_DIR=/path/to/output`.
 
@@ -32,6 +33,9 @@ the same input, prompt, seed and output filename as the full suite:
 | 09 | Interactive segmentation | `run_sensenova_vision_example_09_interactive_segmentation.sh` |
 | 10 | Visual-grounded segmentation | `run_sensenova_vision_example_10_vgd_segmentation.sh` |
 | 11 | Relative camera pose | `run_sensenova_vision_example_11_camera_pose.sh` |
+| 12 | Point detection | `run_sensenova_vision_example_12_point_detection.sh` |
+| 13 | Human keypoint detection | `run_sensenova_vision_example_13_keypoint.sh` |
+| 14 | Word-level OCR | `run_sensenova_vision_example_14_ocr.sh` |
 
 For example:
 
@@ -69,22 +73,24 @@ CUDA_VISIBLE_DEVICES=0 \
 bash scripts/sensenova_vision/run_sensenova_vision.sh depth
 ```
 
-Supported task names are `raw_query`, `understanding`, `depth`, `normal`,
-`binary_seg`, `pan_seg`, `gcg_seg`, `bbox_detection`, `point_detection`,
-`keypoint`, `ocr`, `camera_pose`, and `recon3d`. Use `PROMPT` when a task
-requires a category, question, or instruction. Multiple input images are
+The script starts LightX2V with `task=omni_vision_task` and passes its first
+argument as `omni_vision_subtask`. Public subtask names are `understanding`,
+`binary_segmentation`, `depth`, `normal`, `gcg_segmentation`,
+`object_detection`, `point_detection`, `keypoint`, `ocr`, `recon3d`,
+`panoptic_segmentation`, `interactive_segmentation`, `vgd_segmentation`, and
+`camera_pose`. Use `PROMPT` when a task requires a category, question, or instruction. Multiple input images are
 passed as a comma-separated `IMAGE_PATH`.
 
-For 3D reconstruction, the raw point map is always saved as NPY. Optional GLB
-postprocessing uses the upstream SenseNova-Vision implementation:
+For direct offline 3D reconstruction, the raw point map is derived from
+`SAVE_PATH` and saved as NPY:
 
 ```bash
 IMAGE_PATH=/path/view1.png,/path/view2.png \
-RAW_OUTPUT_PATH=/path/result.npy \
-GLB_OUTPUT_PATH=/path/result.glb \
-POSTPROCESS_PREDICTIONS=true \
+SAVE_PATH=/path/result.npy \
 bash scripts/sensenova_vision/run_sensenova_vision.sh recon3d
 ```
+
+Use the resident server's `--postprocess-3d` request option or official example 07 when a GLB artifact is required.
 
 The checkpoint and upstream source paths can be overridden through
 `model_path` and `SENSENOVA_SOURCE_PATH`, respectively.
@@ -105,7 +111,7 @@ Useful environment overrides are:
 
 ```bash
 model_path=/path/to/SenseNova-Vision-7B-MoT \
-SENSENOVA_SOURCE_PATH=/path/to/SenseNova-Vision \
+SENSENOVA_SOURCE_PATH=/path/to/sensenova-vision-v2 \
 LIGHTX2V_CACHE_DIR=/path/to/server-cache \
 bash scripts/sensenova_vision/start_sensenova_vision_server.sh --gpus 2
 ```
@@ -126,7 +132,7 @@ visible to the server are also accepted.
 General understanding (text result):
 
 ```bash
-python scripts/server/post_sensenova_vision.py \
+python scripts/server/sensenova/post_sensenova_vision.py \
   --task understanding \
   --image /data/nvme0/lhd_codes/SenseNova-Vision/examples/images/1.jpg \
   --prompt "What are the main objects in this scene and their relationships?"
@@ -135,7 +141,7 @@ python scripts/server/post_sensenova_vision.py \
 Depth (raw prediction image):
 
 ```bash
-python scripts/server/post_sensenova_vision.py \
+python scripts/server/sensenova/post_sensenova_vision.py \
   --task depth \
   --image /data/nvme0/lhd_codes/SenseNova-Vision/examples/images/3.jpg
 ```
@@ -143,7 +149,7 @@ python scripts/server/post_sensenova_vision.py \
 Binary segmentation (raw mask plus official-style visualization):
 
 ```bash
-python scripts/server/post_sensenova_vision.py \
+python scripts/server/sensenova/post_sensenova_vision.py \
   --task binary_segmentation \
   --image /data/nvme0/lhd_codes/SenseNova-Vision/examples/images/2.jpg \
   --prompt "person furthest to the right"
@@ -152,7 +158,7 @@ python scripts/server/post_sensenova_vision.py \
 Multi-view reconstruction (NPY plus optional GLB):
 
 ```bash
-python scripts/server/post_sensenova_vision.py \
+python scripts/server/sensenova/post_sensenova_vision.py \
   --task recon3d \
   --image /path/to/view1.png \
   --image /path/to/view2.png \
@@ -163,7 +169,7 @@ Interactive segmentation uses exactly two images: the source image followed
 by the visual-prompt mask.
 
 ```bash
-python scripts/server/post_sensenova_vision.py \
+python scripts/server/sensenova/post_sensenova_vision.py \
   --task interactive_segmentation \
   --image /path/to/source.jpg \
   --image /path/to/visual_prompt.png \

@@ -93,7 +93,6 @@ class SenseNovaVisionTaskRequest(BaseModel):
 
     task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
     task: str = Field(..., description="Public SenseNova-Vision task name")
-    mode: str = Field("", description="Optional advanced SenseNova inference-mode override")
     prompt: str = Field("", description="Task prompt or question")
     images: list[str] = Field(
         default_factory=list,

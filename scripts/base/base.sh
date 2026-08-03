@@ -10,7 +10,7 @@ if [ -z "${model_path}" ]; then
     exit 1
 fi
 
-export PYTHONPATH=${lightx2v_path}:${PYTHONPATH:-}
+export PYTHONPATH=${lightx2v_path}:$PYTHONPATH
 
 export MOONCAKE_CONFIG_PATH=${lightx2v_path}/configs/mooncake_config.json
 

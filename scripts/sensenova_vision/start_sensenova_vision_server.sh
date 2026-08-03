@@ -109,8 +109,9 @@ else
     recorder_mode="${RECORDER_MODE:-0}"
 fi
 
-export lightx2v_path model_path
+export lightx2v_path model_path SENSENOVA_SOURCE_PATH
 export CUDA_VISIBLE_DEVICES="${GPU_LIST}"
+export PYTHONPATH="${PYTHONPATH:-}"
 source "${lightx2v_path}/scripts/base/base.sh"
 
 # base.sh is shared with benchmark scripts and enables verbose profiling by
@@ -139,10 +140,9 @@ fi
 
 exec python -m lightx2v.server \
     --model_cls sensenova_vision \
-    --task raw_query \
+    --task omni_vision_task \
     --model_path "${model_path}" \
     --config_json "${CONFIG_JSON}" \
-    --sensenova_source_path "${SENSENOVA_SOURCE_PATH}" \
     --host "${HOST}" \
     --port "${PORT}" \
     --metric_port "${METRIC_PORT}" \

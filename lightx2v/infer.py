@@ -6,6 +6,7 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
+from lightx2v.models.networks.bagel.sensenova_tasks import OMNI_VISION_SUBTASK_CHOICES
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
 from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner  # noqa: F401
 from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: F401
@@ -163,63 +164,24 @@ def main():
             "sr",
             "recon",
             "i23d",
-            "raw_query",
-            "depth",
-            "normal",
-            "binary_seg",
-            "pan_seg",
-            "gcg_seg",
-            "bbox_detection",
-            "point_detection",
-            "keypoint",
-            "ocr",
-            "recon3d",
-            "camera_pose",
+            "omni_vision_task",
         ],
         default="t2v",
     )
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
+    parser.add_argument(
+        "--omni_vision_subtask",
+        type=str,
+        choices=OMNI_VISION_SUBTASK_CHOICES,
+        default=None,
+        help="SenseNova-Vision subtask used with --task omni_vision_task.",
+    )
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
     parser.add_argument("--warmup", action="store_true", help="Warm up the model before inference. Disabled by default.")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")
-    parser.add_argument(
-        "--sensenova_mode",
-        type=str,
-        default="",
-        choices=[
-            "",
-            "generate",
-            "think_generate",
-            "caption_generate",
-            "dense_perception",
-            "edit",
-            "think_edit",
-            "understanding",
-            "think_understanding",
-            "dense_detection",
-            "dense_OCR",
-            "recon3d",
-        ],
-        help="Override the default SenseNova-Vision inference mode for raw_query.",
-    )
-    parser.add_argument("--raw_output_path", type=str, default="", help="SenseNova recon3d raw point-map .npy path.")
-    parser.add_argument("--glb_output_path", type=str, default="", help="SenseNova recon3d output .glb path.")
-    parser.add_argument(
-        "--postprocess_predictions",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Enable/disable SenseNova recon3d Open3D postprocessing.",
-    )
-    parser.add_argument(
-        "--sensenova_source_path",
-        type=str,
-        default=None,
-        help="Official SenseNova-Vision source checkout used for exact 3D GLB postprocessing.",
-    )
-
     parser.add_argument(
         "--image_path",
         type=str,
@@ -360,7 +322,16 @@ def main():
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
     args = parser.parse_args()
-    # validate_task_arguments(args)
+    if args.task == "omni_vision_task":
+        if args.model_cls != "sensenova_vision":
+            parser.error("--task omni_vision_task requires --model_cls sensenova_vision")
+        if not args.omni_vision_subtask:
+            parser.error("--omni_vision_subtask is required when --task omni_vision_task")
+    else:
+        if args.model_cls == "sensenova_vision":
+            parser.error("--model_cls sensenova_vision requires --task omni_vision_task")
+        if args.omni_vision_subtask:
+            parser.error("--omni_vision_subtask is only valid with --task omni_vision_task")
 
     seed_all(args.seed)
 

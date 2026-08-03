@@ -24,7 +24,7 @@ def parse_args():
     )
     parser.add_argument(
         "--source_path",
-        default="/data/nvme0/lhd_codes/SenseNova-Vision",
+        default="/data/nvme0/lhd_codes/sensenova-vision-v2",
     )
     parser.add_argument(
         "--output_dir",
@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--example",
-        choices=["all", *(f"{index:02d}" for index in range(1, 12))],
+        choices=["all", *(f"{index:02d}" for index in range(1, 15))],
         default="all",
         help="Run all examples or only the selected example number.",
     )
@@ -69,13 +69,13 @@ def main():
 
     config_args = Namespace(
         model_cls="sensenova_vision",
-        task="raw_query",
+        task="omni_vision_task",
         model_path=args.model_path,
         config_json=str(lightx2v_root / "configs/sensenova_vision/sensenova_vision.json"),
-        sensenova_source_path=str(source_root),
         seed=args.seed,
     )
     config = set_config(config_args)
+    config["sensenova_source_path"] = str(source_root)
     runner = SenseNovaVisionRunner(config)
     runner.init_modules()
     vis_config = VisualizationConfig()
@@ -86,14 +86,13 @@ def main():
     def source_file(relative_path):
         return str(source_root / relative_path)
 
-    def run(task, image_paths, prompt, mode="", save_name="", seed=None, **kwargs):
+    def run(subtask, image_paths, prompt, save_name="", seed=None, **kwargs):
         info = SenseNovaVisionInputInfo(
             seed=args.seed if seed is None else seed,
             prompt=prompt,
             image_path=",".join(source_file(path) for path in image_paths),
             save_result_path=str(output_dir / save_name) if save_name else "",
-            sensenova_mode=mode,
-            sensenova_task=task,
+            omni_vision_subtask=subtask,
             **kwargs,
         )
         return runner.run_pipeline(info)
@@ -101,10 +100,9 @@ def main():
     # 1. General understanding.
     if selected("01"):
         result = run(
-            "raw_query",
+            "understanding",
             ["examples/images/1.jpg"],
             "<image> What are the main objects in this scene and their relationships?",
-            mode="understanding",
             save_name="example_01_understanding.txt",
         )
         print(result["text"])
@@ -114,7 +112,7 @@ def main():
         image_path = "examples/images/2.jpg"
         source = Image.open(source_file(image_path)).convert("RGB")
         result = run(
-            "binary_seg",
+            "binary_segmentation",
             [image_path],
             "<image> Could you return the binary segmentation masks for the specified categories: <p>person furthest to the right</p>?",
             save_name="example_02_binary_segmentation_raw.png",
@@ -143,7 +141,7 @@ def main():
         image_path = "examples/images/4.jpg"
         source = Image.open(source_file(image_path)).convert("RGB")
         result = run(
-            "gcg_seg",
+            "gcg_segmentation",
             [image_path],
             "<image> Please briefly describe the contents of the image. Please respond with interleaved segmentation masks for the corresponding parts of the answer.",
             save_name="example_05_gcg_segmentation_raw.png",
@@ -156,10 +154,9 @@ def main():
         image_path = "examples/images/5.jpg"
         source = Image.open(source_file(image_path)).convert("RGB")
         result = run(
-            "bbox_detection",
+            "object_detection",
             [image_path],
             "<image> Please detect all instances of <p>bird</p>, <p>boat</p>, <p>person</p>, <p>cell phone</p>, <p>backpack</p>, <p>handbag</p> in the image. Output the results as a structured text list with each detection including category and bounding box coordinates in <bbox> format.",
-            mode="understanding",
             save_name="example_06_object_detection.txt",
         )
         pred = visualize_detection(source, result["text"], task_name="common_object_detection", config=vis_config)
@@ -191,7 +188,7 @@ def main():
         image_path = EXAMPLE_08_PANOPTIC_IMAGE
         source = Image.open(source_file(image_path)).convert("RGB")
         result = run(
-            "pan_seg",
+            "panoptic_segmentation",
             [image_path],
             EXAMPLE_08_PANOPTIC_QUESTION,
             save_name="example_08_panoptic_segmentation_raw.png",
@@ -206,7 +203,7 @@ def main():
         source = Image.open(source_file(image_path)).convert("RGB")
         prompt_image = Image.open(source_file(prompt_path)).convert("L")
         result = run(
-            "binary_seg",
+            "interactive_segmentation",
             [image_path, prompt_path],
             EXAMPLE_09_INTERSEG_QUESTION,
             save_name="example_09_interactive_segmentation_raw.png",
@@ -220,7 +217,7 @@ def main():
         image_path = "examples/images/8.jpg"
         source = Image.open(source_file(image_path)).convert("RGB")
         question = "<image> Identify all objects belonging to the same classes as the visually provided <p>object1</p><bbox>[0.616, 0.049, 0.785, 0.224]</bbox>. Generate an instance segmentation visualization and each identified category <p>object1</p> is colored different. First, enumerate each visible <p>object1</p> instance mentioned in the request and assign each <p>object1</p> a different color. Reformat them in the EXACT format: <p>object1<color>(R,G,B)</color></p>. Then respond with interleaved instance segmentation masks using those instance labels and colors."
-        result = run("gcg_seg", [image_path], question, save_name="example_10_vgd_segmentation_raw.png")
+        result = run("vgd_segmentation", [image_path], question, save_name="example_10_vgd_segmentation_raw.png")
         pred = visualize_gcg_segmentation(source, result["images"][0], result["text"], config=vis_config)
         visualize_concat_col(source, pred, concat_col=2).save(output_dir / "example_10_vgd_segmentation.png")
 
@@ -233,6 +230,78 @@ def main():
             save_name="example_11_camera_pose.txt",
         )
         print(pose["text"])
+
+    # 12. Point detection.
+    if selected("12"):
+        image_path = "examples/point/image.jpg"
+        source = Image.open(source_file(image_path)).convert("RGB")
+        question = (
+            "Locate and identify <p>airplane</p> within the scene. Output detection results as text entries, each containing the object class and pixel coordinates defining the object point location."
+        )
+        result = run(
+            "point_detection",
+            [image_path],
+            question,
+            save_name="example_12_point_detection.txt",
+        )
+        pred = visualize_detection(
+            source,
+            result["text"],
+            task_name="point_detection",
+            prompt=question,
+            config=vis_config,
+        )
+        visualize_concat_col(source, pred, concat_col=2).save(output_dir / "example_12_point_detection.png")
+
+    # 13. Human keypoint detection.
+    if selected("13"):
+        image_path = "examples/keypoint/person/image.png"
+        source = Image.open(source_file(image_path)).convert("RGB")
+        question = (
+            "Detect all instances of <p>person</p> in the image. Unlike depth or pose visualization tasks, "
+            "output structured text with each object class, <bbox>, and nose, left eye, right eye, left ear, "
+            "right ear, left shoulder, right shoulder, left elbow, right elbow, left wrist, right wrist, left "
+            "hip, right hip, left knee, right knee, left ankle, right ankle coordinates for further processing."
+        )
+        result = run(
+            "keypoint",
+            [image_path],
+            question,
+            save_name="example_13_keypoint.txt",
+        )
+        pred = visualize_detection(
+            source,
+            result["text"],
+            task_name="keypoint",
+            prompt=question,
+            config=vis_config,
+        )
+        visualize_concat_col(source, pred, concat_col=2).save(output_dir / "example_13_keypoint.png")
+
+    # 14. Word-level OCR.
+    if selected("14"):
+        image_path = "examples/OCR/image.jpg"
+        source = Image.open(source_file(image_path)).convert("RGB")
+        question = (
+            "Perform word-level text detection and recognition on the entire image. Output a structured text "
+            "list containing every detected word, its bounding box coordinates with <bbox> format, and the "
+            "recognized text content."
+        )
+        result = run(
+            "ocr",
+            [image_path],
+            question,
+            save_name="example_14_ocr.txt",
+        )
+        pred = visualize_detection(
+            source,
+            result["text"],
+            task_name="ocr",
+            prompt=question,
+            config=vis_config,
+        )
+        visualize_concat_col(source, pred, concat_col=2).save(output_dir / "example_14_ocr.png")
+
     print(f"LightX2V SenseNova-Vision example {args.example} outputs saved to {output_dir}")
 
 

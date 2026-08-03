@@ -9,6 +9,8 @@ from PIL import Image
 from lightx2v.models.networks.bagel.sensenova_tasks import (
     CAMERA_POSE_PROMPT,
     MODE_PROFILES,
+    get_omni_vision_task_spec,
+    normalize_omni_vision_subtask,
     resolve_mode,
     resolve_prompt,
 )
@@ -21,8 +23,9 @@ from lightx2v.utils.input_info import SenseNovaVisionInputInfo, init_empty_input
 from lightx2v.utils.set_config import set_config
 
 LIGHTX2V_ROOT = Path(__file__).resolve().parents[1]
-SENSENOVA_ROOT = LIGHTX2V_ROOT.parent / "SenseNova-Vision"
-MODEL_PATH = SENSENOVA_ROOT / "models/SenseNova-Vision-7B-MoT"
+SENSENOVA_SOURCE_ROOT = LIGHTX2V_ROOT.parent / "sensenova-vision-v2"
+SENSENOVA_MODEL_ROOT = LIGHTX2V_ROOT.parent / "SenseNova-Vision"
+MODEL_PATH = SENSENOVA_MODEL_ROOT / "models/SenseNova-Vision-7B-MoT"
 
 
 def test_sensenova_mode_profiles_match_official_defaults():
@@ -41,12 +44,18 @@ def test_sensenova_mode_profiles_match_official_defaults():
     assert resolve_mode("camera_pose") == "understanding"
     assert resolve_mode("raw_query", "think_edit") == "think_edit"
 
+    subtask, spec = get_omni_vision_task_spec("binary_seg")
+    assert subtask == "binary_segmentation"
+    assert spec.mode == "dense_perception"
+    assert normalize_omni_vision_subtask("object-detection") == "object_detection"
+
 
 def test_sensenova_task_prompts_and_input_info_are_registered():
     assert "relative depth" in resolve_prompt("depth", "").lower()
     assert "<quat>" in CAMERA_POSE_PROMPT
     assert resolve_prompt("binary_seg", "cat") == ("Can you segment the image based on the following categories: <p>cat</p>? Please output the binary segmentation masks.")
-    info = init_empty_input_info("recon3d")
+    info = init_empty_input_info("omni_vision_task")
+    info.omni_vision_subtask = "recon3d"
     assert isinstance(info, SenseNovaVisionInputInfo)
     assert info.postprocess_predictions is None
 
@@ -119,14 +128,14 @@ def test_sensenova_pose_parser_matches_coordinate_token_scaling():
 
 
 @pytest.mark.skipif(not MODEL_PATH.is_dir(), reason="local SenseNova-Vision checkpoint not available")
-def test_sensenova_config_assembles_bagel_structure_instead_of_root_metadata():
+def test_sensenova_config_assembles_bagel_structure_instead_of_root_metadata(monkeypatch):
+    monkeypatch.setenv("SENSENOVA_SOURCE_PATH", str(SENSENOVA_SOURCE_ROOT))
     config = set_config(
         Namespace(
             model_cls="sensenova_vision",
-            task="depth",
+            task="omni_vision_task",
             model_path=str(MODEL_PATH),
             config_json=str(LIGHTX2V_ROOT / "configs/sensenova_vision/sensenova_vision.json"),
-            sensenova_source_path=str(SENSENOVA_ROOT),
             seed=42,
         )
     )
@@ -139,6 +148,8 @@ def test_sensenova_config_assembles_bagel_structure_instead_of_root_metadata():
     assert config["enable_vision_context"] is True
     assert config["llm_config_update"]["qk_norm"] is True
 
+    assert config["sensenova_source_path"] == str(SENSENOVA_SOURCE_ROOT)
+
 
 def test_sensenova_launch_script_exposes_official_example_command():
     script = (LIGHTX2V_ROOT / "scripts/sensenova_vision/run_sensenova_vision.sh").read_text()
@@ -146,6 +157,14 @@ def test_sensenova_launch_script_exposes_official_example_command():
     assert "examples/sensenova_vision/example_visualize.py" in script
     assert "--model_cls sensenova_vision" in script
     assert '--example "${EXAMPLE_ID:-all}"' in script
+
+    assert "--task omni_vision_task" in script
+    assert "--omni_vision_subtask" in script
+    infer_source = (LIGHTX2V_ROOT / "lightx2v/infer.py").read_text()
+    assert '"omni_vision_task"' in infer_source
+    assert '"raw_query"' not in infer_source
+    for option in ("--sensenova_mode", "--raw_output_path", "--glb_output_path", "--postprocess_predictions", "--sensenova_source_path"):
+        assert option not in infer_source
 
 
 def test_sensenova_server_launch_script_defaults_to_official_parity():
@@ -163,6 +182,9 @@ def test_sensenova_server_launch_script_defaults_to_official_parity():
     assert "--cache-dir)" in script
     assert "export LIGHTX2V_CACHE_DIR" in script
 
+    assert "--task omni_vision_task" in script
+    assert '--sensenova_source_path "${SENSENOVA_SOURCE_PATH}"' not in script
+
 
 def test_sensenova_split_example_scripts_select_exact_task():
     task_names = {
@@ -177,6 +199,9 @@ def test_sensenova_split_example_scripts_select_exact_task():
         "09": "interactive_segmentation",
         "10": "vgd_segmentation",
         "11": "camera_pose",
+        "12": "point_detection",
+        "13": "keypoint",
+        "14": "ocr",
     }
     script_dir = LIGHTX2V_ROOT / "scripts/sensenova_vision"
     for example_id, task_name in task_names.items():

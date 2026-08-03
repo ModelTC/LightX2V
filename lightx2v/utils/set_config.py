@@ -58,7 +58,6 @@ def set_args2config(args):
 
 def auto_calc_config(config):
     cli_num_iterations = config.get("num_iterations", None)
-    cli_sensenova_source_path = config.get("sensenova_source_path", None)
     if config.get("config_json", None) is not None:
         logger.info(f"Loading some config from {config['config_json']}")
         with open(config["config_json"], "r") as f:
@@ -108,8 +107,9 @@ def auto_calc_config(config):
         config["connector_act"] = "gelu_pytorch_tanh"
         config["interpolate_pos"] = False
         config["enable_vision_context"] = True
-        if cli_sensenova_source_path:
-            config["sensenova_source_path"] = cli_sensenova_source_path
+        sensenova_source_path = os.getenv("SENSENOVA_SOURCE_PATH", "").strip()
+        if sensenova_source_path:
+            config["sensenova_source_path"] = sensenova_source_path
     elif config["model_cls"] == "wan2.2_s2v":
         config_path = os.path.join(config["model_path"], "config.json")
         if os.path.exists(config_path):

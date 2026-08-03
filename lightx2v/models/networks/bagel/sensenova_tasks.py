@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+from dataclasses import dataclass
+from typing import Optional
 
 MODE_PROFILES = {
     "generate": {
@@ -114,6 +116,73 @@ TEXT_OUTPUT_MODES = {
     "dense_detection",
     "dense_OCR",
 }
+
+
+@dataclass(frozen=True)
+class OmniVisionTaskSpec:
+    """Public omni-vision subtask mapped to the existing SenseNova runner path."""
+
+    runner_task: str
+    mode: str
+    min_images: int = 1
+    max_images: int = 1
+    requires_prompt: bool = False
+    visualizer: Optional[str] = None
+
+
+# Keep the public task vocabulary independent of the internal runner branches.
+# Both offline inference and the resident server consume this single table.
+OMNI_VISION_TASK_SPECS = {
+    "understanding": OmniVisionTaskSpec("raw_query", "understanding", max_images=10),
+    "binary_segmentation": OmniVisionTaskSpec("binary_seg", "dense_perception", requires_prompt=True, visualizer="binary"),
+    "depth": OmniVisionTaskSpec("depth", "dense_perception"),
+    "normal": OmniVisionTaskSpec("normal", "dense_perception"),
+    "gcg_segmentation": OmniVisionTaskSpec("gcg_seg", "caption_generate", visualizer="gcg"),
+    "object_detection": OmniVisionTaskSpec("bbox_detection", "understanding", requires_prompt=True, visualizer="detection"),
+    "point_detection": OmniVisionTaskSpec("point_detection", "dense_detection", requires_prompt=True, visualizer="detection"),
+    "keypoint": OmniVisionTaskSpec("keypoint", "dense_detection", requires_prompt=True, visualizer="detection"),
+    "ocr": OmniVisionTaskSpec("ocr", "dense_OCR", visualizer="detection"),
+    "recon3d": OmniVisionTaskSpec("recon3d", "recon3d", max_images=10),
+    "panoptic_segmentation": OmniVisionTaskSpec("pan_seg", "caption_generate", visualizer="panoptic"),
+    "interactive_segmentation": OmniVisionTaskSpec(
+        "binary_seg",
+        "dense_perception",
+        min_images=2,
+        max_images=2,
+        requires_prompt=True,
+        visualizer="interactive",
+    ),
+    "vgd_segmentation": OmniVisionTaskSpec("gcg_seg", "caption_generate", requires_prompt=True, visualizer="gcg"),
+    "camera_pose": OmniVisionTaskSpec("camera_pose", "understanding", min_images=2, max_images=10),
+}
+
+OMNI_VISION_SUBTASK_ALIASES = {
+    "raw_query": "understanding",
+    "binary_seg": "binary_segmentation",
+    "gcg_seg": "gcg_segmentation",
+    "bbox_detection": "object_detection",
+    "pan_seg": "panoptic_segmentation",
+    "interactive_seg": "interactive_segmentation",
+    "vgd_seg": "vgd_segmentation",
+}
+
+OMNI_VISION_SUBTASKS = tuple(OMNI_VISION_TASK_SPECS)
+OMNI_VISION_SUBTASK_CHOICES = tuple((*OMNI_VISION_SUBTASKS, *OMNI_VISION_SUBTASK_ALIASES))
+
+
+def normalize_omni_vision_subtask(subtask):
+    normalized = str(subtask or "").strip().lower().replace("-", "_")
+    normalized = OMNI_VISION_SUBTASK_ALIASES.get(normalized, normalized)
+    if normalized not in OMNI_VISION_TASK_SPECS:
+        supported = ", ".join(sorted(OMNI_VISION_TASK_SPECS))
+        raise ValueError(f"Unsupported omni-vision subtask {subtask!r}; supported subtasks: {supported}")
+    return normalized
+
+
+def get_omni_vision_task_spec(subtask):
+    normalized = normalize_omni_vision_subtask(subtask)
+    return normalized, OMNI_VISION_TASK_SPECS[normalized]
+
 
 TASK_TO_MODE = {
     "raw_query": "dense_perception",

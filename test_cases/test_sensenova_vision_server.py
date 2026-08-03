@@ -15,6 +15,7 @@ from lightx2v.server.services.generation.sensenova_vision import (
     validate_sensenova_request,
     validate_vgd_output_text,
 )
+from lightx2v.server.services.inference.worker import TorchrunInferenceWorker
 
 
 class _FakeRunner:
@@ -22,6 +23,7 @@ class _FakeRunner:
         self.config = {
             "model_cls": "sensenova_vision",
             "sensenova_source_path": "/does/not/matter/when/visualization/is/disabled",
+            "task": "omni_vision_task",
         }
 
 
@@ -39,20 +41,56 @@ class _FakeInferenceService:
         self.calls.append(dict(task_data))
         save_path = Path(task_data["save_result_path"])
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        task = task_data["sensenova_task"]
-        if task == "raw_query":
+        task = task_data["omni_vision_subtask"]
+        if task == "understanding":
             text = "A cat is sitting on a chair."
             save_path.write_text(text, encoding="utf-8")
             pipeline_return = {"text": text, "images": []}
         else:
             Image.new("RGB", (8, 8), (10, 20, 30)).save(save_path)
-            text = "<p>object1<color>(10,20,30)</color></p>" if task == "gcg_seg" else ""
+            text = "<p>object1<color>(10,20,30)</color></p>" if task == "vgd_segmentation" else ""
             pipeline_return = {"text": text, "images": []}
         return {
             "status": "success",
             "save_result_path": str(save_path),
             "pipeline_return": pipeline_return,
         }
+
+
+class _ResidentRunner:
+    def __init__(self):
+        self.config = {"model_cls": "sensenova_vision", "task": "omni_vision_task"}
+        self.calls = []
+
+    def set_config(self, task_data):
+        pass
+
+    def run_pipeline(self, input_info):
+        self.calls.append((id(input_info), input_info.omni_vision_subtask))
+        return {"images": [], "text": input_info.omni_vision_subtask}
+
+
+def _worker_task(task_id, subtask):
+    return {
+        "task_id": task_id,
+        "omni_vision_subtask": subtask,
+        "_return_pipeline_result": True,
+    }
+
+
+def test_sensenova_worker_reuses_loaded_runner_across_subtasks():
+    worker = TorchrunInferenceWorker()
+    worker.runner = _ResidentRunner()
+    runner_identity = id(worker.runner)
+
+    depth = asyncio.run(worker.process_request(_worker_task("depth-task", "depth")))
+    understanding = asyncio.run(worker.process_request(_worker_task("understanding-task", "understanding")))
+
+    assert id(worker.runner) == runner_identity
+    assert [subtask for _, subtask in worker.runner.calls] == ["depth", "understanding"]
+    assert worker.runner.calls[0][0] != worker.runner.calls[1][0]
+    assert depth["pipeline_return"]["text"] == "depth"
+    assert understanding["pipeline_return"]["text"] == "understanding"
 
 
 def test_sensenova_server_task_aliases_and_validation():
@@ -114,8 +152,7 @@ def test_sensenova_server_passes_official_vgd_prompt_to_resident_runner(tmp_path
     )
 
     call = inference_service.calls[-1]
-    assert call["sensenova_task"] == "gcg_seg"
-    assert call["sensenova_mode"] == "caption_generate"
+    assert call["omni_vision_subtask"] == "vgd_segmentation"
     assert call["prompt"] == build_official_vgd_prompt("<p>object1</p><bbox>[0.616, 0.049, 0.785, 0.224]</bbox>")
     assert result.result_data["status"] == "completed"
     assert result.result_data["text"] == "<p>object1<color>(10,20,30)</color></p>"
@@ -150,8 +187,7 @@ def test_sensenova_server_loads_default_panoptic_prompt_from_official_source(tmp
     )
 
     call = inference_service.calls[-1]
-    assert call["sensenova_task"] == "pan_seg"
-    assert call["sensenova_mode"] == "caption_generate"
+    assert call["omni_vision_subtask"] == "panoptic_segmentation"
     assert call["prompt"] == "<image> official panoptic prompt"
     assert result.result_data["status"] == "completed"
 
@@ -190,8 +226,7 @@ def test_sensenova_server_reuses_runner_and_returns_heterogeneous_artifacts(tmp_
     )
 
     assert id(inference_service.worker.runner) == runner_identity
-    assert [call["sensenova_task"] for call in inference_service.calls] == ["depth", "raw_query"]
-    assert [call["sensenova_mode"] for call in inference_service.calls] == ["dense_perception", "understanding"]
+    assert [call["omni_vision_subtask"] for call in inference_service.calls] == ["depth", "understanding"]
     assert depth_result.result_data["artifacts"][0]["kind"] == "raw_image"
     assert text_result.result_data["text"] == "A cat is sitting on a chair."
     assert text_result.result_data["artifacts"][0]["kind"] == "text"

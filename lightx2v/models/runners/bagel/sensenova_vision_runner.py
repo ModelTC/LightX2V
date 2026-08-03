@@ -18,7 +18,7 @@ from lightx2v.models.networks.bagel.sensenova_tasks import (
     clean_text_output,
     ensure_image_placeholders,
     get_mode_profile,
-    resolve_mode,
+    get_omni_vision_task_spec,
     resolve_prompt,
 )
 from lightx2v.models.networks.bagel.sensenova_transforms import build_sensenova_transforms
@@ -207,7 +207,7 @@ class SenseNovaVisionRunner(BagelRunner):
         if postprocess:
             source_path = self.config.get(
                 "sensenova_source_path",
-                "/data/nvme0/lhd_codes/SenseNova-Vision",
+                "/data/nvme0/lhd_codes/sensenova-vision-v2",
             )
             postprocess_reconstruction = load_official_postprocess(source_path)
             scene = postprocess_reconstruction(
@@ -229,9 +229,10 @@ class SenseNovaVisionRunner(BagelRunner):
     def run_pipeline(self, input_info):
         self.input_info = input_info
         _set_request_seed(getattr(input_info, "seed", 42))
-        task = getattr(input_info, "sensenova_task", "") or self.config["task"]
-        requested_mode = getattr(input_info, "sensenova_mode", "")
-        mode = resolve_mode(task, requested_mode)
+        subtask, task_spec = get_omni_vision_task_spec(getattr(input_info, "omni_vision_subtask", ""))
+        input_info.omni_vision_subtask = subtask
+        task = task_spec.runner_task
+        mode = task_spec.mode
         self._configure_mode(mode)
 
         image_paths = self._parse_image_paths(
@@ -241,6 +242,9 @@ class SenseNovaVisionRunner(BagelRunner):
         images = self._load_images(image_paths)
         actual_image_count = len(images)
         prompt = resolve_prompt(task, input_info.prompt)
+        if actual_image_count < task_spec.min_images or actual_image_count > task_spec.max_images:
+            expected = str(task_spec.min_images) if task_spec.min_images == task_spec.max_images else f"{task_spec.min_images}-{task_spec.max_images}"
+            raise ValueError(f"SenseNova-Vision subtask={subtask!r} requires {expected} input image(s), got {actual_image_count}.")
         if task == "recon3d":
             if actual_image_count > 10:
                 logger.warning("SenseNova-Vision recon3d accepts at most 10 images; truncating input.")

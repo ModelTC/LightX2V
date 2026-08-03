@@ -1,6 +1,5 @@
 import json
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -8,7 +7,13 @@ from urllib.parse import quote
 from PIL import Image
 from loguru import logger
 
-from lightx2v.models.networks.bagel.sensenova_tasks import TEXT_OUTPUT_MODES, resolve_mode
+from lightx2v.models.networks.bagel.sensenova_tasks import (
+    OMNI_VISION_SUBTASK_ALIASES,
+    OMNI_VISION_TASK_SPECS,
+    TEXT_OUTPUT_MODES,
+    OmniVisionTaskSpec,
+    normalize_omni_vision_subtask,
+)
 from lightx2v.models.runners.bagel.sensenova_postprocess import (
     load_official_example_constant,
     load_official_visualizers,
@@ -24,55 +29,9 @@ from ..file_service import FileService
 from ..inference import DistributedInferenceService
 from .base import BaseGenerationService
 
-
-@dataclass(frozen=True)
-class SenseNovaTaskSpec:
-    runner_task: str
-    mode: str
-    min_images: int = 1
-    max_images: int = 1
-    requires_prompt: bool = False
-    visualizer: Optional[str] = None
-
-
-SENSENOVA_TASK_SPECS = {
-    "understanding": SenseNovaTaskSpec("raw_query", "understanding", max_images=10),
-    "binary_segmentation": SenseNovaTaskSpec("binary_seg", "dense_perception", requires_prompt=True, visualizer="binary"),
-    "depth": SenseNovaTaskSpec("depth", "dense_perception"),
-    "normal": SenseNovaTaskSpec("normal", "dense_perception"),
-    "gcg_segmentation": SenseNovaTaskSpec("gcg_seg", "caption_generate", visualizer="gcg"),
-    "object_detection": SenseNovaTaskSpec("bbox_detection", "understanding", requires_prompt=True, visualizer="detection"),
-    "point_detection": SenseNovaTaskSpec(
-        "point_detection",
-        "dense_detection",
-        requires_prompt=True,
-        visualizer="detection",
-    ),
-    "keypoint": SenseNovaTaskSpec("keypoint", "dense_detection", requires_prompt=True, visualizer="detection"),
-    "ocr": SenseNovaTaskSpec("ocr", "dense_OCR", visualizer="detection"),
-    "recon3d": SenseNovaTaskSpec("recon3d", "recon3d", max_images=10),
-    "panoptic_segmentation": SenseNovaTaskSpec("pan_seg", "caption_generate", visualizer="panoptic"),
-    "interactive_segmentation": SenseNovaTaskSpec(
-        "binary_seg",
-        "dense_perception",
-        min_images=2,
-        max_images=2,
-        requires_prompt=True,
-        visualizer="interactive",
-    ),
-    "vgd_segmentation": SenseNovaTaskSpec("gcg_seg", "caption_generate", requires_prompt=True, visualizer="gcg"),
-    "camera_pose": SenseNovaTaskSpec("camera_pose", "understanding", min_images=2, max_images=10),
-}
-
-SENSENOVA_TASK_ALIASES = {
-    "raw_query": "understanding",
-    "binary_seg": "binary_segmentation",
-    "gcg_seg": "gcg_segmentation",
-    "bbox_detection": "object_detection",
-    "pan_seg": "panoptic_segmentation",
-    "interactive_seg": "interactive_segmentation",
-    "vgd_seg": "vgd_segmentation",
-}
+SenseNovaTaskSpec = OmniVisionTaskSpec
+SENSENOVA_TASK_SPECS = OMNI_VISION_TASK_SPECS
+SENSENOVA_TASK_ALIASES = OMNI_VISION_SUBTASK_ALIASES
 
 DEFAULT_UNDERSTANDING_PROMPT = "What are the main objects in this scene and their relationships?"
 VGD_REFERENCE_PATTERN = re.compile(
@@ -134,12 +93,7 @@ def validate_vgd_output_text(text: str) -> None:
 
 
 def normalize_sensenova_task(task: str) -> str:
-    normalized = str(task or "").strip().lower().replace("-", "_")
-    normalized = SENSENOVA_TASK_ALIASES.get(normalized, normalized)
-    if normalized not in SENSENOVA_TASK_SPECS:
-        supported = ", ".join(sorted(SENSENOVA_TASK_SPECS))
-        raise ValueError(f"Unsupported SenseNova-Vision task {task!r}; supported tasks: {supported}")
-    return normalized
+    return normalize_omni_vision_subtask(task)
 
 
 def validate_sensenova_request(message: SenseNovaVisionTaskRequest) -> tuple[str, SenseNovaTaskSpec, str]:
@@ -156,7 +110,7 @@ def validate_sensenova_request(message: SenseNovaVisionTaskRequest) -> tuple[str
             raise ValueError("SenseNova-Vision target_shape must be [height, width] with two positive integers.")
     if message.postprocess_3d and task != "recon3d":
         raise ValueError("postprocess_3d is only valid for task='recon3d'.")
-    mode = resolve_mode(spec.runner_task, str(message.mode or "").strip() or spec.mode)
+    mode = spec.mode
     return task, spec, mode
 
 
@@ -174,8 +128,12 @@ class SenseNovaVisionGenerationService(BaseGenerationService):
         worker = self.inference_service.worker
         runner = worker.runner if worker else None
         model_cls = runner.config.get("model_cls") if runner is not None else None
+        task = runner.config.get("task") if runner is not None else None
         if model_cls != "sensenova_vision":
             raise RuntimeError("The SenseNova-Vision API requires a server started with --model_cls sensenova_vision.")
+
+        if task != "omni_vision_task":
+            raise RuntimeError("The SenseNova-Vision API requires a server started with --task omni_vision_task.")
 
     async def _resolve_images(self, image_sources: list[str]) -> list[str]:
         resolved = []
@@ -225,7 +183,7 @@ class SenseNovaVisionGenerationService(BaseGenerationService):
 
         source_path = self.inference_service.worker.runner.config.get(
             "sensenova_source_path",
-            "/data/nvme0/lhd_codes/SenseNova-Vision",
+            "/data/nvme0/lhd_codes/sensenova-vision-v2",
         )
         visualizers = load_official_visualizers(source_path)
         config = visualizers.VisualizationConfig()
@@ -316,7 +274,7 @@ class SenseNovaVisionGenerationService(BaseGenerationService):
         elif task == "panoptic_segmentation" and not prompt:
             source_path = self.inference_service.worker.runner.config.get(
                 "sensenova_source_path",
-                "/data/nvme0/lhd_codes/SenseNova-Vision",
+                "/data/nvme0/lhd_codes/sensenova-vision-v2",
             )
             prompt = load_official_example_constant(source_path, "EXAMPLE_08_PANOPTIC_QUESTION")
         elif task == "vgd_segmentation":
@@ -340,8 +298,7 @@ class SenseNovaVisionGenerationService(BaseGenerationService):
             "seed": int(message.seed),
             "target_shape": list(message.target_shape),
             "save_result_path": str(save_result_path),
-            "sensenova_task": spec.runner_task,
-            "sensenova_mode": mode,
+            "omni_vision_subtask": task,
             "raw_output_path": str(raw_output_path) if raw_output_path else "",
             "glb_output_path": str(glb_output_path) if glb_output_path else "",
             "postprocess_predictions": bool(message.postprocess_3d),

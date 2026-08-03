@@ -478,9 +478,7 @@ class SenseNovaVisionInputInfo:
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
     target_shape: list = field(default_factory=list)
-    sensenova_mode: str = field(default_factory=str)
-    # Used by the single-process official-example compatibility runner.
-    sensenova_task: str = field(default_factory=str)
+    omni_vision_subtask: str = field(default_factory=str)
     raw_output_path: str = field(default_factory=str)
     glb_output_path: str = field(default_factory=str)
     postprocess_predictions: Optional[bool] = None
@@ -509,18 +507,7 @@ task_dict = {
     "worldplay_t2v": WorldPlayT2VInputInfo,
     "recon": WorldMirrorReconInputInfo,
     "i23d": Hunyuan3DShapeInputInfo,
-    "raw_query": SenseNovaVisionInputInfo,
-    "depth": SenseNovaVisionInputInfo,
-    "normal": SenseNovaVisionInputInfo,
-    "binary_seg": SenseNovaVisionInputInfo,
-    "pan_seg": SenseNovaVisionInputInfo,
-    "gcg_seg": SenseNovaVisionInputInfo,
-    "bbox_detection": SenseNovaVisionInputInfo,
-    "point_detection": SenseNovaVisionInputInfo,
-    "keypoint": SenseNovaVisionInputInfo,
-    "ocr": SenseNovaVisionInputInfo,
-    "recon3d": SenseNovaVisionInputInfo,
-    "camera_pose": SenseNovaVisionInputInfo,
+    "omni_vision_task": SenseNovaVisionInputInfo,
 }
 
 
