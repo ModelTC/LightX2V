@@ -90,6 +90,8 @@ _MODEL_MODULES = {
 }
 
 _TRAINER_MODULES = {
+    "cm": "lightx2v_train.trainers.consistency.trainer",
+    "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",
     "dopsd": "lightx2v_train.trainers.dopsd",
     "fastwam": "lightx2v_train.trainers.fastwam",

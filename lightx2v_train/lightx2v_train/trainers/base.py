@@ -161,6 +161,7 @@ class BaseTrainer:
     def _load_model_weights(self, model, save_dir):
         if self.train_type == "lora":
             model.load_lora_weights_for_resume(save_dir)
+            model.load_consistency_auxiliary_weights(save_dir)
             return
         model_state_path = os.path.join(save_dir, "model_state.pt")
         if not os.path.exists(model_state_path):

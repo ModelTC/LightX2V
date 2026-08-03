@@ -4,6 +4,7 @@ from lightx2v_train.utils.registry import build_trainer
 
 _LAZY_EXPORTS = {
     "ARDmdTrainer": (".dmd.video_ar_trainer", "VideoArDmdTrainer"),
+    "ConsistencyTrainer": (".consistency.trainer", "ConsistencyTrainer"),
     "DmdTrainer": (".dmd.trainer", "DmdTrainer"),
     "DopsdTrainer": (".dopsd", "DopsdTrainer"),
     "FastWAMTrainer": (".fastwam", "FastWAMTrainer"),
@@ -55,6 +56,7 @@ def __getattr__(name):
 __all__ = [
     "build_trainer",
     "ARDmdTrainer",
+    "ConsistencyTrainer",
     "DmdTrainer",
     "FlowMatchingTrainer",
     "LTX2T2AVArDmdTrainer",
