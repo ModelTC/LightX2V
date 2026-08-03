@@ -322,17 +322,6 @@ def main():
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
     args = parser.parse_args()
-    if args.task == "omni_vision_task":
-        if args.model_cls != "sensenova_vision":
-            parser.error("--task omni_vision_task requires --model_cls sensenova_vision")
-        if not args.omni_vision_subtask:
-            parser.error("--omni_vision_subtask is required when --task omni_vision_task")
-    else:
-        if args.model_cls == "sensenova_vision":
-            parser.error("--model_cls sensenova_vision requires --task omni_vision_task")
-        if args.omni_vision_subtask:
-            parser.error("--omni_vision_subtask is only valid with --task omni_vision_task")
-
     seed_all(args.seed)
 
     # set config

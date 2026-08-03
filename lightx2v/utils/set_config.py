@@ -35,6 +35,28 @@ def get_default_config():
     return default_config
 
 
+def validate_model_task_args(args):
+    """Validate model/task combinations before assembling the runtime config."""
+    task = getattr(args, "task", None)
+    model_cls = getattr(args, "model_cls", None)
+    has_omni_vision_subtask = hasattr(args, "omni_vision_subtask")
+    omni_vision_subtask = getattr(args, "omni_vision_subtask", None)
+
+    if task == "omni_vision_task":
+        if model_cls != "sensenova_vision":
+            raise ValueError("--task omni_vision_task requires --model_cls sensenova_vision")
+        # Offline inference exposes this argument and must select one subtask.
+        # The resident server omits it because each request chooses a subtask
+        # after the complete model has been loaded.
+        if has_omni_vision_subtask and not omni_vision_subtask:
+            raise ValueError("--omni_vision_subtask is required when --task omni_vision_task")
+    else:
+        if model_cls == "sensenova_vision":
+            raise ValueError("--model_cls sensenova_vision requires --task omni_vision_task")
+        if omni_vision_subtask:
+            raise ValueError("--omni_vision_subtask is only valid with --task omni_vision_task")
+
+
 def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS and v is not None})
@@ -411,6 +433,7 @@ def auto_calc_config(config):
 
 
 def set_config(args):
+    validate_model_task_args(args)
     config = set_args2config(args)
     config = auto_calc_config(config)
     return config

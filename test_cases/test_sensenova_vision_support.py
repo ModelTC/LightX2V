@@ -20,7 +20,7 @@ from lightx2v.models.runners.bagel.sensenova_postprocess import resolve_pose_str
 from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner
 from lightx2v.models.video_encoders.hf.bagel.sensenova_vae import SenseNovaVisionVae
 from lightx2v.utils.input_info import SenseNovaVisionInputInfo, init_empty_input_info
-from lightx2v.utils.set_config import set_config
+from lightx2v.utils.set_config import set_config, validate_model_task_args
 
 LIGHTX2V_ROOT = Path(__file__).resolve().parents[1]
 SENSENOVA_SOURCE_ROOT = LIGHTX2V_ROOT.parent / "sensenova-vision-v2"
@@ -58,6 +58,24 @@ def test_sensenova_task_prompts_and_input_info_are_registered():
     info.omni_vision_subtask = "recon3d"
     assert isinstance(info, SenseNovaVisionInputInfo)
     assert info.postprocess_predictions is None
+
+
+def test_sensenova_model_task_validation_lives_in_set_config():
+    validate_model_task_args(Namespace(task="omni_vision_task", model_cls="sensenova_vision"))
+    validate_model_task_args(Namespace(task="omni_vision_task", model_cls="sensenova_vision", omni_vision_subtask="depth"))
+
+    invalid_args = (
+        Namespace(task="omni_vision_task", model_cls="bagel", omni_vision_subtask="depth"),
+        Namespace(task="omni_vision_task", model_cls="sensenova_vision", omni_vision_subtask=None),
+        Namespace(task="t2i", model_cls="sensenova_vision", omni_vision_subtask=None),
+        Namespace(task="t2i", model_cls="bagel", omni_vision_subtask="depth"),
+    )
+    for args in invalid_args:
+        with pytest.raises(ValueError):
+            validate_model_task_args(args)
+
+    infer_source = (LIGHTX2V_ROOT / "lightx2v/infer.py").read_text()
+    assert "--task omni_vision_task requires --model_cls sensenova_vision" not in infer_source
 
 
 def test_sensenova_interleaves_images_at_official_placeholders():
