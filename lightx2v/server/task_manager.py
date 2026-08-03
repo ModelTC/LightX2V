@@ -47,6 +47,7 @@ class TaskInfo:
     save_result_path: Optional[str] = None
     result_png: Optional[bytes] = None
     usage: Optional[dict] = None
+    result_data: Optional[dict] = None
     stop_event: threading.Event = field(default_factory=threading.Event)
     thread: Optional[threading.Thread] = None
 
@@ -105,7 +106,14 @@ class TaskManager:
 
             return task
 
-    def complete_task(self, task_id: str, save_result_path: Optional[str] = None, result_png: Optional[bytes] = None, usage: Optional[dict] = None):
+    def complete_task(
+        self,
+        task_id: str,
+        save_result_path: Optional[str] = None,
+        result_png: Optional[bytes] = None,
+        usage: Optional[dict] = None,
+        result_data: Optional[dict] = None,
+    ):
         with self._lock:
             if task_id not in self._tasks:
                 logger.warning(f"Task {task_id} not found for completion")
@@ -117,6 +125,7 @@ class TaskManager:
             task.save_result_path = save_result_path
             task.result_png = result_png
             task.usage = usage
+            task.result_data = result_data
 
             if result_png is not None:
                 self._evict_old_result_png_unlocked()
@@ -183,6 +192,13 @@ class TaskManager:
             if not task:
                 return None
             return task.usage
+
+    def get_task_result_data(self, task_id: str) -> Optional[dict]:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
+            return task.result_data
 
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         task = self.get_task(task_id)

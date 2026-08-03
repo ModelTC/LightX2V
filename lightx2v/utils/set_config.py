@@ -35,6 +35,28 @@ def get_default_config():
     return default_config
 
 
+def validate_model_task_args(args):
+    """Validate model/task combinations before assembling the runtime config."""
+    task = getattr(args, "task", None)
+    model_cls = getattr(args, "model_cls", None)
+    has_omni_vision_subtask = hasattr(args, "omni_vision_subtask")
+    omni_vision_subtask = getattr(args, "omni_vision_subtask", None)
+
+    if task == "omni_vision_task":
+        if model_cls != "sensenova_vision":
+            raise ValueError("--task omni_vision_task requires --model_cls sensenova_vision")
+        # Offline inference exposes this argument and must select one subtask.
+        # The resident server omits it because each request chooses a subtask
+        # after the complete model has been loaded.
+        if has_omni_vision_subtask and not omni_vision_subtask:
+            raise ValueError("--omni_vision_subtask is required when --task omni_vision_task")
+    else:
+        if model_cls == "sensenova_vision":
+            raise ValueError("--model_cls sensenova_vision requires --task omni_vision_task")
+        if omni_vision_subtask:
+            raise ValueError("--omni_vision_subtask is only valid with --task omni_vision_task")
+
+
 def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS and v is not None})
@@ -85,6 +107,31 @@ def auto_calc_config(config):
         pass
     elif config["model_cls"] == "hidream_o1_image":
         pass
+    elif config["model_cls"] == "sensenova_vision":
+        llm_config_path = os.path.join(config["model_path"], "llm_config.json")
+        vit_config_path = os.path.join(config["model_path"], "vit_config.json")
+        missing = [path for path in (llm_config_path, vit_config_path) if not os.path.isfile(path)]
+        if missing:
+            raise FileNotFoundError(f"SenseNova-Vision model_path must contain llm_config.json and vit_config.json; missing: {missing}")
+        with open(llm_config_path, "r") as f:
+            config["llm_config"] = json.load(f)
+        with open(vit_config_path, "r") as f:
+            config["vit_config"] = json.load(f)
+
+        # SenseNova's root config.json is project metadata, not a Bagel model
+        # config. Assemble the shared Bagel structure explicitly instead.
+        config["vae_config"] = {"z_channels": 16, "downsample": 8}
+        config["visual_gen"] = True
+        config["visual_und"] = True
+        config["latent_patch_size"] = 2
+        config["max_latent_size_update"] = 64
+        config["vit_max_num_patch_per_side"] = 70
+        config["connector_act"] = "gelu_pytorch_tanh"
+        config["interpolate_pos"] = False
+        config["enable_vision_context"] = True
+        sensenova_source_path = os.getenv("SENSENOVA_SOURCE_PATH", "").strip()
+        if sensenova_source_path:
+            config["sensenova_source_path"] = sensenova_source_path
     elif config["model_cls"] == "wan2.2_s2v":
         config_path = os.path.join(config["model_path"], "config.json")
         if os.path.exists(config_path):
@@ -386,6 +433,7 @@ def auto_calc_config(config):
 
 
 def set_config(args):
+    validate_model_task_args(args)
     config = set_args2config(args)
     config = auto_calc_config(config)
     return config

@@ -470,6 +470,20 @@ class WorldPlayT2VInputInfo:
     action: torch.Tensor = field(default_factory=lambda: None)
 
 
+@dataclass
+class SenseNovaVisionInputInfo:
+    seed: int = field(default_factory=lambda: 42)
+    prompt: str = field(default_factory=str)
+    image_path: str = field(default_factory=str)
+    save_result_path: str = field(default_factory=str)
+    return_result_tensor: bool = field(default_factory=lambda: False)
+    target_shape: list = field(default_factory=list)
+    omni_vision_subtask: str = field(default_factory=str)
+    raw_output_path: str = field(default_factory=str)
+    glb_output_path: str = field(default_factory=str)
+    postprocess_predictions: Optional[bool] = None
+
+
 task_dict = {
     "t2v": T2VInputInfo,
     "i2v": I2VInputInfo,
@@ -493,6 +507,7 @@ task_dict = {
     "worldplay_t2v": WorldPlayT2VInputInfo,
     "recon": WorldMirrorReconInputInfo,
     "i23d": Hunyuan3DShapeInputInfo,
+    "omni_vision_task": SenseNovaVisionInputInfo,
 }
 
 

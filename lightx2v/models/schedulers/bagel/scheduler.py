@@ -56,10 +56,9 @@ class BagelScheduler(BaseScheduler):
 
         query_curr = curr = 0
         seed = int(seed if seed is not None else self.config.get("seed", 42))
-        if self.generator is None:
-            self.generator = torch.Generator(device="cpu").manual_seed(seed)
-        else:
-            logger.info(f"Generator is not None, using existing generator for latents")
+        # A CLI/request seed must describe this request, not merely the first
+        # request that happened to initialize the scheduler.
+        self.generator = torch.Generator(device="cpu").manual_seed(seed)
 
         for (H, W), curr_kvlen, curr_position_id in zip(image_sizes, curr_kvlens, curr_rope):
             packed_key_value_indexes.extend(range(curr, curr + curr_kvlen))

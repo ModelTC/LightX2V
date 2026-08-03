@@ -1,5 +1,5 @@
 import random
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -86,6 +86,59 @@ class VideoTaskRequest(BaseTaskRequest):
 class ImageTaskRequest(BaseTaskRequest):
     aspect_ratio: str = Field("16:9", description="Output aspect ratio")
     i2i_denoise_strength: Optional[float] = Field(None, description="Single-image I2I edit denoising strength in [0.0, 1.0]; omit to keep existing behavior")
+
+
+class SenseNovaVisionTaskRequest(BaseModel):
+    """One request for the multi-task SenseNova-Vision service."""
+
+    task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
+    task: str = Field(..., description="Public SenseNova-Vision task name")
+    prompt: str = Field("", description="Task prompt or question")
+    images: list[str] = Field(
+        default_factory=list,
+        description="Input images as base64/data URLs, HTTP(S) URLs, or server-local paths",
+    )
+    seed: int = Field(default_factory=generate_random_seed, description="Random seed")
+    target_shape: list[int] = Field(default_factory=list, description="Optional output [height, width]")
+    visualize: bool = Field(True, description="Generate an official-style visualization when supported")
+    postprocess_3d: bool = Field(False, description="Generate a GLB scene for recon3d")
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+
+class SenseNovaArtifact(BaseModel):
+    kind: str
+    media_type: str
+    filename: str
+    url: str
+    size_bytes: int
+
+
+class SenseNovaVisionTaskSubmission(BaseModel):
+    task_id: str
+    task_status: str
+    task: str
+
+
+class SenseNovaVisionTaskResult(BaseModel):
+    task_id: str
+    status: str
+    task: str
+    runner_task: str
+    mode: str
+    text: Optional[str] = None
+    artifacts: list[SenseNovaArtifact] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SenseNovaVisionGenerationResponse(BaseModel):
+    """Internal response passed from the generation service to TaskManager."""
+
+    task_id: str
+    task_status: str
+    save_result_path: str = ""
+    result_data: dict[str, Any]
 
 
 class TaskRequest(BaseTaskRequest):

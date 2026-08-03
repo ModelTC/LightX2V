@@ -5,7 +5,13 @@ from urllib.parse import urlparse
 import httpx
 from loguru import logger
 
-from ..services import DistributedInferenceService, FileService, ImageGenerationService, VideoGenerationService
+from ..services import (
+    DistributedInferenceService,
+    FileService,
+    ImageGenerationService,
+    SenseNovaVisionGenerationService,
+    VideoGenerationService,
+)
 
 
 class ServiceContainer:
@@ -16,6 +22,7 @@ class ServiceContainer:
         self.inference_service: Optional[DistributedInferenceService] = None
         self.video_service: Optional[VideoGenerationService] = None
         self.image_service: Optional[ImageGenerationService] = None
+        self.sensenova_vision_service: Optional[SenseNovaVisionGenerationService] = None
         self.max_queue_size: int = 10
 
     @classmethod
@@ -29,6 +36,7 @@ class ServiceContainer:
         self.inference_service = inference_service
         self.video_service = VideoGenerationService(self.file_service, inference_service)
         self.image_service = ImageGenerationService(self.file_service, inference_service)
+        self.sensenova_vision_service = SenseNovaVisionGenerationService(self.file_service, inference_service)
         self.max_queue_size = max_queue_size
 
 
