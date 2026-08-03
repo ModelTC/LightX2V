@@ -290,10 +290,7 @@ class PCMConfig:
         consistency = _mapping(config["training"].get("consistency"), "training.consistency")
         mode = str(consistency.get("mode", "cd")).lower()
         if mode != "cd":
-            raise ValueError(
-                "The published PCM algorithm is distillation-only; "
-                "set training.consistency.mode to 'cd'."
-            )
+            raise ValueError("The published PCM algorithm is distillation-only; set training.consistency.mode to 'cd'.")
         return cls(
             mode=mode,
             solver=PCMSolverConfig.from_mapping(consistency.get("solver")),

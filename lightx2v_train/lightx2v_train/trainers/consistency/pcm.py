@@ -68,10 +68,7 @@ class PCMTimeGrid:
             if raw_boundary > 0.0:
                 boundary = scheduler.time_shift(boundary, latent_hw=latent_hw)
         if not boundary.item() < current[0].item():
-            raise ValueError(
-                "PCM boundary time must be smaller than the first solver time; "
-                f"got boundary={boundary.item():.6f}, first={current[0].item():.6f}."
-            )
+            raise ValueError(f"PCM boundary time must be smaller than the first solver time; got boundary={boundary.item():.6f}, first={current[0].item():.6f}.")
         previous = torch.cat([boundary, current[:-1]])
         return current, previous
 
@@ -175,9 +172,7 @@ class PCMObjective(ConsistencyObjective):
         # stop-gradient student target while leaving global RNG unchanged.
         rng_devices = [clean.device] if clean.device.type == "cuda" else []
         with torch.random.fork_rng(devices=rng_devices):
-            prediction_velocity = student.predict(
-                DenoiserRequest(noisy_t, t, batch.condition, prediction_type="velocity")
-            )
+            prediction_velocity = student.predict(DenoiserRequest(noisy_t, t, batch.condition, prediction_type="velocity"))
         prediction = self.path.euler_step(noisy_t, prediction_velocity, t, s)
 
         with torch.no_grad():
@@ -189,9 +184,7 @@ class PCMObjective(ConsistencyObjective):
                 teacher,
             )
             noisy_r = self.path.euler_step(noisy_t, teacher_velocity, t, r)
-            target_velocity = student.predict(
-                DenoiserRequest(noisy_r, r, batch.condition, prediction_type="velocity")
-            )
+            target_velocity = student.predict(DenoiserRequest(noisy_r, r, batch.condition, prediction_type="velocity"))
             target = self.path.euler_step(noisy_r, target_velocity, r, s)
 
         per_sample_loss = self.loss_fn(prediction, target)
@@ -218,17 +211,13 @@ class PCMObjective(ConsistencyObjective):
         negative_condition,
         teacher: ModelDenoiser,
     ) -> Tensor:
-        conditional = teacher.predict(
-            DenoiserRequest(sample, time, condition, prediction_type="velocity")
-        )
+        conditional = teacher.predict(DenoiserRequest(sample, time, condition, prediction_type="velocity"))
         scale = self.config.teacher.guidance_scale
         if scale is None or scale == 1.0:
             return conditional
         if negative_condition is None:
             raise RuntimeError("PCM teacher CFG requires a negative condition.")
-        unconditional = teacher.predict(
-            DenoiserRequest(sample, time, negative_condition, prediction_type="velocity")
-        )
+        unconditional = teacher.predict(DenoiserRequest(sample, time, negative_condition, prediction_type="velocity"))
         return classifier_free_guidance(
             conditional,
             unconditional,
