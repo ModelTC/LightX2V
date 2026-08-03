@@ -500,6 +500,15 @@ class InfiniteTalkRunner(WanRunner):
         self._write_sum_audio(input_data, speech)
         return [self._load_or_encode_audio(speech)]
 
+    def _reuse_key(self):
+        prompt = self.input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else self.input_info.prompt
+        return (
+            prompt,
+            self.input_info.negative_prompt,
+            tuple(self._sorted_person_items(self.input_data["cond_audio"])),
+            self.input_data.get("audio_type", "para"),
+        )
+
     def _close_cond_video_reader(self):
         if self.cond_video_reader is not None:
             del self.cond_video_reader
@@ -673,8 +682,7 @@ class InfiniteTalkRunner(WanRunner):
         logger.info(f"InfiniteTalk ref_target_masks built: human_num={human_num}, mask_shape={tuple(masks.shape)}")
         return masks
 
-    @ProfilingContext4DebugL2("Run Encoders")
-    def _run_input_encoder_local_s2v(self):
+    def _prepare_input_data(self):
         input_data = self._load_input_data()
         if self.input_info.prompt:
             input_data["prompt"] = self.input_info.prompt
@@ -689,7 +697,9 @@ class InfiniteTalkRunner(WanRunner):
         self.src_h, self.src_w, self.target_h, self.target_w = self._select_target_size(first_image)
         self.input_info.target_shape = [self.target_h, self.target_w]
 
-        full_audio_embs = self._prepare_audio_embeddings(input_data)
+    @ProfilingContext4DebugL2("Run Encoders")
+    def _run_input_encoder_local_s2v(self):
+        full_audio_embs = self._prepare_audio_embeddings(self.input_data)
         if any(audio_emb.shape[0] <= 0 for audio_emb in full_audio_embs):
             raise ValueError("InfiniteTalk audio embeddings must be non-empty.")
 
@@ -698,7 +708,6 @@ class InfiniteTalkRunner(WanRunner):
             "text_encoder_output": text_encoder_output,
             "full_audio_embs": full_audio_embs,
             "human_num": len(full_audio_embs),
-            "seed": self.input_info.seed,
         }
 
     def _slice_audio_embeddings(self, full_audio_embs, audio_start_idx, audio_end_idx):
@@ -799,7 +808,7 @@ class InfiniteTalkRunner(WanRunner):
         self.full_audio_embs = list(self.inputs["full_audio_embs"])
         self.human_num = int(self.inputs["human_num"])
         self.expected_frames = self._resolve_expected_frames()
-        self.seed = self.scheduler.seed_everything(self.inputs["seed"])
+        self.seed = self.scheduler.seed_everything(self.input_info.seed)
         logger.info(f"InfiniteTalk seed: {self.seed}")
         logger.info(f"InfiniteTalk expected_frames: {self.expected_frames}, fps: {self.target_fps}, duration: {self.expected_frames / self.target_fps:.3f}s")
 
@@ -1098,7 +1107,18 @@ class InfiniteTalkRunner(WanRunner):
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
         try:
-            self.inputs = self.run_input_encoder()
+            self._prepare_input_data()
+            if self.reuse:
+                self.inputs = self._get_reused_inputs()
+                self._write_sum_audio(self.input_data, self._reuse_cache["video_audio_array"])
+            else:
+                self.inputs = self.run_input_encoder()
+                if self.enable_reuse:
+                    self._reuse_cache = {
+                        "reuse_key": self._reuse_key(),
+                        "inputs": self.inputs,
+                        "video_audio_array": self.video_audio_array,
+                    }
             result = self.run_main()
         finally:
             self.end_run()
