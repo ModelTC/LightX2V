@@ -57,6 +57,7 @@ class BaseTaskRequest(DisaggOverrideRequest):
     presigned_url: str = Field("", description="Optional presigned URL for uploading final sync result")
     infer_steps: int = Field(5, description="Inference steps")
     seed: int = Field(default_factory=generate_random_seed, description="Random seed (auto-generated if not set)")
+    reuse: bool = Field(False, description="Reuse the previous successful request")
     target_shape: list[int] = Field([], description="Return video or image shape")
     lora_name: Optional[str] = Field(None, description="LoRA filename to load from lora_dir, None to disable LoRA")
     lora_strength: float = Field(1.0, description="LoRA strength")

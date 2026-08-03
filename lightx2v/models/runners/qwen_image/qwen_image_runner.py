@@ -334,6 +334,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
+        self.input_info.original_size.clear()
         image_paths_list = self.input_info.image_path.split(",")
         images_list = []
         for image_path in image_paths_list:
@@ -566,8 +567,19 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         elif input_info.save_result_path is not None:
             return {"images": None}
 
+    def _reuse_key(self):
+        reuse_key = (self.input_info.prompt, self.input_info.negative_prompt)
+        if self.config["task"] == "i2i":
+            reuse_key += (tuple(self.input_info.image_path.split(",")),)
+        return reuse_key
+
     def _run_pipeline_local(self, input_info):
-        self.inputs = self.run_input_encoder()
+        if self.reuse:
+            self.inputs = self._get_reused_inputs()
+        else:
+            self.inputs = self.run_input_encoder()
+            if self.enable_reuse:
+                self._reuse_cache = {"reuse_key": self._reuse_key(), "inputs": self.inputs}
         if self.config["task"] == "i2i" and "image_encoder_output" in self.inputs:
             self.input_info.image_encoder_output = self.inputs["image_encoder_output"]
         self.set_target_shape()
