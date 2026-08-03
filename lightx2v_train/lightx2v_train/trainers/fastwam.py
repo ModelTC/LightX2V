@@ -7,9 +7,9 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 from PIL import Image, ImageDraw
-from diffusers.optimization import get_scheduler
 from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import (
@@ -152,6 +152,25 @@ class FastWAMTrainer:
             logger.info("[optimizer] using AdamW without optimizer-state sharding")
         return torch.optim.AdamW(self.trainable_params, **optimizer_kwargs)
 
+    def _build_lr_scheduler(self):
+        warmup_scheduler = LinearLR(
+            self.optimizer,
+            start_factor=1e-8,
+            end_factor=1.0,
+            total_iters=self.lr_warmup_iters,
+        )
+        cosine_scheduler = CosineAnnealingLR(
+            self.optimizer,
+            T_max=self.max_train_iters - self.lr_warmup_iters,
+            eta_min=self.optimizer.param_groups[0]["lr"] * 0.01,
+        )
+        scheduler = SequentialLR(
+            self.optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[self.lr_warmup_iters],
+        )
+        return scheduler
+
     def setup(self, resume_ckpt_path=None):
         self.model.set_dit_only_trainable()
         self.model.log_model_structure()
@@ -160,13 +179,7 @@ class FastWAMTrainer:
             raise RuntimeError("FastWAM has no trainable parameters.")
 
         self.optimizer = self._build_optimizer()
-        self.lr_scheduler = get_scheduler(
-            self.lr_scheduler_name,
-            optimizer=self.optimizer,
-            num_warmup_steps=self.lr_warmup_iters,
-            num_training_steps=self.max_train_iters,
-        )
-
+        self.lr_scheduler = self._build_lr_scheduler()
         self.train_module = self.model.unwrap_module()
         self.ddp_enabled = False
         if is_distributed():
