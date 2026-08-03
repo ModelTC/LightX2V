@@ -245,6 +245,9 @@ class Flux2BaseRunner(DefaultRunner):
     def run(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
+
+        self.model.prepare_offload_weights()
+
         for step_index in range(total_steps):
             logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
@@ -259,6 +262,8 @@ class Flux2BaseRunner(DefaultRunner):
 
             if self.progress_callback:
                 self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+
+        self.model.force_cleanup_offload_weights()
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
