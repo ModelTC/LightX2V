@@ -1334,6 +1334,53 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             del weight_scale_tensor
 
 
+@MM_WEIGHT_REGISTER("nvfp4-split-n-workaround")
+class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
+    """Temporary application-level two-way split-N workaround.
+
+    This path is intentionally separate from the normal ``nvfp4`` weight type.
+    It works around a throughput cliff observed for large Wan FFN GEMMs on
+    NVIDIA Jetson AGX Thor by quantizing the activation once, launching two
+    serial N/2 GEMMs, and concatenating their outputs.
+
+    This is not the desired long-term backend design: it adds another kernel
+    launch, temporary output tensors, and a concatenation. Remove this class,
+    its registry entry, and ``nvfp4_ffn_split_n_workaround`` once
+    ``cutlass_scaled_nvfp4_mm`` can select an architecture/shape-aware tactic
+    (or an internal split-N implementation that writes directly to the final
+    output).
+    """
+
+    split_n_parts = 2
+    split_n_alignment = 128
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+
+        n = self.weight.shape[0]
+        required_alignment = self.split_n_parts * self.split_n_alignment
+        if n % required_alignment != 0:
+            raise ValueError(f"NVFP4 split-N requires each N shard to be aligned to {self.split_n_alignment} rows, but {self.weight_name} has N={n}")
+        if self.weight_scale.shape[0] != n:
+            raise ValueError(f"NVFP4 split-N expects weight and weight_scale to share the output-channel dimension, got {n} and {self.weight_scale.shape[0]} for {self.weight_name}")
+
+        shard_n = n // self.split_n_parts
+        outputs = []
+        for start in range(0, n, shard_n):
+            bias = None if self.bias is None else self.bias.narrow(0, start, shard_n)
+            outputs.append(
+                cutlass_scaled_nvfp4_mm(
+                    input_tensor_quant,
+                    self.weight.narrow(0, start, shard_n),
+                    input_tensor_scale,
+                    self.weight_scale.narrow(0, start, shard_n),
+                    alpha=self.alpha,
+                    bias=bias,
+                )
+            )
+        return torch.cat(outputs, dim=-1)
+
+
 @MM_WEIGHT_REGISTER("CalibMax")
 class MMCalibMax(MMWeight):
     """Max-absmax calibration: record max(|input|) across every forward.
