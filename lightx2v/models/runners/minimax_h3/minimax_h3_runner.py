@@ -1,4 +1,3 @@
-import json
 import os
 from contextlib import suppress
 
@@ -39,8 +38,11 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
+from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.envs import GET_RECORDER_MODE
 from lightx2v.utils.input_info import FL2AVInputInfo, I2AVInputInfo, L2AVInputInfo, Ref2AVInputInfo, T2AVInputInfo
 from lightx2v.utils.ltx2_media_io import encode_video
+from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -51,22 +53,20 @@ torch_device_module = getattr(torch, AI_DEVICE)
 class MiniMaxH3Runner(DefaultRunner):
     """Native MiniMax-H3 audio-video runner.
 
-    The large components are executed sequentially on one accelerator:
-    Qwen3-VL conditioner -> native packed DiT -> native video/audio VAEs.
-    This mirrors the upstream modular pipeline while keeping Diffusers out of
-    the runtime dependency graph.
+    Transformer, text-encoder, and VAE residency are configured independently.
+    ``cpu_offload`` controls only the transformer, while
+    ``text_encoder_cpu_offload`` and ``vae_cpu_offload`` control the native
+    Qwen3-VL conditioner and both native VAEs. This mirrors Wan's component
+    offload behavior while keeping Diffusers out of the runtime dependency
+    graph.
     """
 
     def __init__(self, config):
         if config.get("task") not in {"t2av", "i2av", "l2av", "fl2av", "ref2av"}:
             raise ValueError("MiniMax-H3 supports t2av/i2av/l2av/fl2av/ref2av")
         self.loaded_transformer_partition = "transformer_ref" if config["task"] == "ref2av" else "transformer"
-        if not config.get("cpu_offload", False):
-            raise ValueError("MiniMax-H3 currently requires cpu_offload=true so Qwen, DiT, and both VAEs can run sequentially without residing on one GPU together")
-        if not config.get("text_encoder_cpu_offload", True) or not config.get("vae_cpu_offload", True):
-            raise ValueError("MiniMax-H3 requires text_encoder_cpu_offload=true and vae_cpu_offload=true; the conditioner, DiT, and VAEs are intentionally resident on the accelerator one at a time.")
         if config.get("lazy_load", False) or config.get("unload_modules", False):
-            raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with cpu_offload=true and offload_granularity='model'.")
+            raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
 
     def init_modules(self):
@@ -79,6 +79,7 @@ class MiniMaxH3Runner(DefaultRunner):
     def init_scheduler(self):
         self.scheduler = MiniMaxH3Scheduler(self.config)
 
+    @ProfilingContext4DebugL2("Load models")
     def load_model(self):
         self.model = self.load_transformer()
         self.text_encoders = self.load_text_encoder()
@@ -126,6 +127,12 @@ class MiniMaxH3Runner(DefaultRunner):
         self.request_width = width
         self.request_num_frames = num_frames
 
+    @ProfilingContext4DebugL1(
+        "Run Text Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_text_encode_duration,
+        metrics_labels=["MiniMaxH3Runner"],
+    )
     def run_text_encoder(self, input_info, keyframes=None, references=None):
         negative_prompt = (input_info.negative_prompt or "").strip()
         if negative_prompt:
@@ -168,34 +175,39 @@ class MiniMaxH3Runner(DefaultRunner):
         return images, anchors
 
     @staticmethod
-    def _parse_reference_entry(entry):
-        if isinstance(entry, str):
-            stripped = entry.strip()
-            if stripped.startswith("{"):
-                entry = json.loads(stripped)
-            else:
-                kind, separator, value = stripped.partition("=")
-                if not separator or kind not in {"image", "video", "audio"}:
-                    raise ValueError(f"Invalid ref2av reference {entry!r}; use image=/path, video=/path, or audio=/path")
-                entry = {kind: value}
-        if not isinstance(entry, dict):
-            raise TypeError(f"A ref2av reference must be a string or mapping, got {type(entry).__name__}")
-        media = [kind for kind in ("image", "video", "audio") if entry.get(kind) is not None]
-        if media not in (["image"], ["video"], ["audio"], ["video", "audio"]):
-            raise ValueError(f"A ref2av entry must contain image, video, audio, or video+audio; got {media}")
-        return entry
+    def _split_reference_paths(value):
+        """Normalize the shared media CLI fields into individual references."""
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [path.strip() for path in value.split(",") if path.strip()]
+        if isinstance(value, (list, tuple)):
+            paths = []
+            for path in value:
+                if path is None:
+                    continue
+                if isinstance(path, str):
+                    path = path.strip()
+                    if not path:
+                        continue
+                paths.append(path)
+            return paths
+        return [value]
 
     def _prepare_references(self):
         if not isinstance(self.input_info, Ref2AVInputInfo):
             raise TypeError(f"MiniMax-H3 ref2av expects Ref2AVInputInfo, got {type(self.input_info).__name__}")
-        raw = self.input_info.references
-        if isinstance(raw, (str, dict)):
-            raw = [raw]
-        if not raw:
-            raise ValueError("MiniMax-H3 ref2av requires at least one --reference")
-        if len(raw) > MAX_REFERENCES:
+        entries = []
+        for kind, value in (
+            ("image", self.input_info.image_path),
+            ("video", self.input_info.video_path),
+            ("audio", self.input_info.audio_path),
+        ):
+            entries.extend({kind: path} for path in self._split_reference_paths(value))
+        if not entries:
+            raise ValueError("MiniMax-H3 ref2av requires --image_path, --video_path, or --audio_path")
+        if len(entries) > MAX_REFERENCES:
             raise ValueError(f"MiniMax-H3 ref2av accepts at most {MAX_REFERENCES} references")
-        entries = [self._parse_reference_entry(entry) for entry in raw]
         kinds = ["image" if "image" in entry else "video" if "video" in entry else "audio" for entry in entries]
         if kinds.count("image") > MAX_REFERENCE_IMAGES or kinds.count("video") > MAX_REFERENCE_VIDEOS:
             raise ValueError("MiniMax-H3 ref2av reference image/video count exceeds 9/3")
@@ -226,19 +238,6 @@ class MiniMaxH3Runner(DefaultRunner):
                     frames = np.asarray(video)
                     fps = float(entry.get("fps", 24.0))
                 frames = prepare_reference_frames(resample_reference_frames(frames, float(entry.get("fps", fps))), self.request_num_frames)
-                explicit_audio = entry.get("audio")
-                if explicit_audio is not None:
-                    if isinstance(explicit_audio, (str, os.PathLike)):
-                        waveform, sample_rate = decode_reference_audio(explicit_audio)
-                        soundtrack = Audio(
-                            waveform=waveform,
-                            sampling_rate=int(entry.get("sample_rate", sample_rate)),
-                        )
-                    else:
-                        soundtrack = Audio(
-                            waveform=torch.as_tensor(explicit_audio),
-                            sampling_rate=int(entry.get("sample_rate", self.audio_vae.sampling_rate)),
-                        )
                 reference = MiniMaxH3PreparedReference("video", has_audio=soundtrack is not None, frames=frames)
                 if soundtrack is not None:
                     audio_count += 1
@@ -298,6 +297,7 @@ class MiniMaxH3Runner(DefaultRunner):
                 audio_latents.append(latent)
         return video_latents, audio_latents
 
+    @ProfilingContext4DebugL2("Run Input Encoder")
     def _run_input_encoder_local_h3(self):
         task = self.config["task"]
         requested_partition = "transformer_ref" if task == "ref2av" else "transformer"
@@ -315,13 +315,26 @@ class MiniMaxH3Runner(DefaultRunner):
             self._resolve_request_geometry()
             self.prepared_references = self._prepare_references()
             text_encoder_output = self.run_text_encoder(self.input_info, references=self.prepared_references)
-            self.condition_video_latents, self.condition_audio_latents = self._encode_references(self.prepared_references)
+            with ProfilingContext4DebugL1(
+                "Run VAE Encoder",
+                recorder_mode=GET_RECORDER_MODE(),
+                metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
+                metrics_labels=["MiniMaxH3Runner"],
+            ):
+                self.condition_video_latents, self.condition_audio_latents = self._encode_references(self.prepared_references)
         else:
             keyframes, self.keyframe_anchors = self._prepare_keyframes()
             if task == "t2av":
                 self._resolve_request_geometry()
             text_encoder_output = self.run_text_encoder(self.input_info, keyframes=keyframes)
-            self.condition_video_latents = self._encode_keyframes(keyframes)
+            if keyframes:
+                with ProfilingContext4DebugL1(
+                    "Run VAE Encoder",
+                    recorder_mode=GET_RECORDER_MODE(),
+                    metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
+                    metrics_labels=["MiniMaxH3Runner"],
+                ):
+                    self.condition_video_latents = self._encode_keyframes(keyframes)
         tags = text_encoder_output["text_token_tags"]
         if tags.ndim != 1:
             raise ValueError("MiniMax-H3 conditioner token tags must be one-dimensional")
@@ -333,6 +346,7 @@ class MiniMaxH3Runner(DefaultRunner):
     _run_input_encoder_local_t2av = _run_input_encoder_local_h3
     _run_input_encoder_local_i2av = _run_input_encoder_local_h3
 
+    @ProfilingContext4DebugL2("Prepare DiT")
     def init_run(self):
         prompt_embeds = self.inputs["text_encoder_output"]["prompt_embeds"]
         self.scheduler.prepare(
@@ -351,28 +365,56 @@ class MiniMaxH3Runner(DefaultRunner):
             f"text={prompt_embeds.shape[0]}, audio={self.scheduler.audio_latents.shape[0]}, "
             f"video={self.scheduler.video_latents.shape[0]}, total={self.scheduler.layout.sequence_length}"
         )
-        logger.info("Moving the native MiniMax-H3 transformer to the accelerator")
-        self.model.to_cuda()
+        if not self.config.get("cpu_offload", False):
+            logger.info("MiniMax-H3 transformer is resident on the accelerator")
+        elif self.config.get("offload_granularity", "model") == "model":
+            logger.info("Moving the native MiniMax-H3 transformer to the accelerator")
+            self.model.to_cuda()
+        else:
+            logger.info("MiniMax-H3 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
         torch_device_module.synchronize()
 
     def run_segment(self, segment_idx=0):
         infer_steps = self.scheduler.infer_steps
         for step_index in range(infer_steps):
-            self.check_stop()
-            logger.info(f"==> MiniMax-H3 step: {step_index + 1} / {infer_steps}")
-            self.scheduler.step_pre(step_index)
-            self.model.infer(self.inputs)
-            self.scheduler.step_post()
-            if self.progress_callback:
-                self.progress_callback(((step_index + 1) / infer_steps) * 100, 100)
+            with ProfilingContext4DebugL1(
+                "Run Dit every step",
+                recorder_mode=GET_RECORDER_MODE(),
+                metrics_func=monitor_cli.lightx2v_run_per_step_dit_duration,
+                metrics_labels=[step_index + 1, infer_steps],
+            ):
+                self.check_stop()
+                logger.info(f"==> MiniMax-H3 step: {step_index + 1} / {infer_steps}")
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.scheduler.step_pre(step_index)
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    self.model.infer(self.inputs)
+                with ProfilingContext4DebugL1("step_post"):
+                    self.scheduler.step_post()
+                if self.progress_callback:
+                    self.progress_callback(((step_index + 1) / infer_steps) * 100, 100)
         return self.scheduler.video_latents, self.scheduler.audio_latents
 
+    @ProfilingContext4DebugL2("Offload DiT")
     def _offload_transformer(self):
-        logger.info("Offloading MiniMax-H3 transformer before VAE decode")
-        self.model.to_cpu()
+        if not self.config.get("cpu_offload", False):
+            return
+        if self.config.get("offload_granularity", "model") == "block":
+            logger.info("Offloading MiniMax-H3 pre/post weights; retaining the two block-offload device buffers")
+            self.model.pre_weight.to_cpu()
+            self.model.post_weight.to_cpu()
+        else:
+            logger.info("Offloading MiniMax-H3 transformer before VAE decode")
+            self.model.to_cpu()
         torch_device_module.synchronize()
         self.maybe_empty_cache(force=True, collect_garbage=True)
 
+    @ProfilingContext4DebugL1(
+        "Run VAE Decoder",
+        recorder_mode=GET_RECORDER_MODE(),
+        metrics_func=monitor_cli.lightx2v_run_vae_decode_duration,
+        metrics_labels=["MiniMaxH3Runner"],
+    )
     def run_vae_decoder(self, video_rows, audio_rows):
         video_rows = video_rows[self.scheduler.num_condition_video_rows :]
         audio_rows = audio_rows[self.scheduler.num_condition_audio_rows :]
@@ -385,8 +427,10 @@ class MiniMaxH3Runner(DefaultRunner):
             patch_size=tuple(self.config.get("patch_size", (1, 2, 2))),
         )
         audio_latents = unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)
-        video = self.video_vae.decode(video_latents)
-        audio = self.audio_vae.decode(audio_latents)
+        with ProfilingContext4DebugL1("Run Video VAE Decoder"):
+            video = self.video_vae.decode(video_latents)
+        with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
+            audio = self.audio_vae.decode(audio_latents)
         return video, audio
 
     @staticmethod
@@ -418,25 +462,29 @@ class MiniMaxH3Runner(DefaultRunner):
                 sampling_rate=self.audio_vae.sampling_rate,
             )
             logger.info(f"Saving MiniMax-H3 audio-video output to {output_path}")
-            encode_video(
-                video=frames,
-                fps=int(self.config.get("fps", 24)),
-                audio=audio,
-                output_path=output_path,
-                video_chunks_number=1,
-            )
+            with ProfilingContext4DebugL2("Save Audio-Video Output"):
+                encode_video(
+                    video=frames,
+                    fps=int(self.config.get("fps", 24)),
+                    audio=audio,
+                    output_path=output_path,
+                    video_chunks_number=1,
+                )
             logger.info(f"MiniMax-H3 output saved to {output_path}")
         return {"video": None, "audio": None}
 
+    @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
-        transformer_offloaded = False
+        should_offload_transformer = self.config.get("cpu_offload", False)
+        transformer_offloaded = not should_offload_transformer
         try:
             self.init_run()
             try:
                 video_rows, audio_rows = self.run_segment(0)
             finally:
-                self._offload_transformer()
-                transformer_offloaded = True
+                if should_offload_transformer:
+                    self._offload_transformer()
+                    transformer_offloaded = True
 
             self.gen_video, self.gen_audio = self.run_vae_decoder(video_rows, audio_rows)
             return self.process_images_after_vae_decoder()
@@ -444,7 +492,7 @@ class MiniMaxH3Runner(DefaultRunner):
             # ``init_run`` can fail after a partial device transfer. Preserve
             # the original exception while still making a best-effort return
             # of the large transformer to host memory.
-            if not transformer_offloaded:
+            if should_offload_transformer and not transformer_offloaded:
                 with suppress(Exception):
                     self._offload_transformer()
             try:

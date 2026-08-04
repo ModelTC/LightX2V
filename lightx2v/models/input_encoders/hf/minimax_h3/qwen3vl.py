@@ -797,9 +797,10 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 deepstack.append(one.cpu())
             return vision_mask.cpu(), combined.cpu(), deepstack
         finally:
-            vision_encoder.to("cpu")
-            _empty_device_cache()
-            gc.collect()
+            if self.cpu_offload:
+                vision_encoder.to("cpu")
+                _empty_device_cache()
+                gc.collect()
 
     @torch.inference_mode()
     def infer(self, prompt, image_list=None, references=None):

@@ -193,6 +193,12 @@ def auto_calc_config(config):
             model_config = json.load(f)
         config.update(model_config)
         config["dit_original_ckpt"] = transformer_path
+        if config.get("dit_quantized_ckpt"):
+            config["dit_quantized"] = True
+            config["dit_quant_scheme"] = {
+                "fp8": "fp8-q8f",
+                "int8": "int8-q8f",
+            }.get(config.get("dit_quant_scheme"), config.get("dit_quant_scheme", "Default"))
         config["enable_cfg"] = False
         config["fps"] = 24
         config["target_fps"] = 24

@@ -307,6 +307,10 @@ def get_key_mapping_rules(direction, model_type):
             return [rule["backward"] for rule in unified_rules]
         else:
             raise ValueError(f"Invalid direction: {direction}")
+    elif model_type == "h3":
+        # MiniMax-H3 checkpoints under the Diffusers ``transformer`` or
+        # ``transformer_ref`` directory already use LightX2V's runtime keys.
+        return []
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
 
@@ -321,6 +325,7 @@ def quantize_model(
     ignore_quant_keys=None,
     linear_type="int8",
     non_linear_dtype=torch.float,
+    preserve_non_quant_dtype=False,
     comfyui_mode=False,
     comfyui_keys=[],
 ):
@@ -353,7 +358,7 @@ def quantize_model(
 
             # Skip non-tensors and non-2D tensors
             if not isinstance(tensor, torch.Tensor) or tensor.dim() != 2:
-                if tensor.dtype != non_linear_dtype:
+                if not preserve_non_quant_dtype and tensor.dtype != non_linear_dtype:
                     weights[key] = tensor.to(non_linear_dtype)
                     non_quantized_size += weights[key].numel() * weights[key].element_size()
                 else:
@@ -367,13 +372,13 @@ def quantize_model(
                 pass
             elif len(parts) < key_idx + 1 or parts[key_idx] not in target_keys:
                 if adapter_keys is None:
-                    if tensor.dtype != non_linear_dtype:
+                    if not preserve_non_quant_dtype and tensor.dtype != non_linear_dtype:
                         weights[key] = tensor.to(non_linear_dtype)
                         non_quantized_size += weights[key].numel() * weights[key].element_size()
                     else:
                         non_quantized_size += tensor.numel() * tensor.element_size()
                 elif not any(adapter_key in parts for adapter_key in adapter_keys):
-                    if tensor.dtype != non_linear_dtype:
+                    if not preserve_non_quant_dtype and tensor.dtype != non_linear_dtype:
                         weights[key] = tensor.to(non_linear_dtype)
                         non_quantized_size += weights[key].numel() * weights[key].element_size()
                     else:
@@ -386,7 +391,7 @@ def quantize_model(
             if ignore_quant_keys is not None and any(ig_q in key for ig_q in ignore_quant_keys):
                 original_tensor_size = tensor.numel() * tensor.element_size()
                 original_size += original_tensor_size
-                if tensor.dtype != non_linear_dtype:
+                if not preserve_non_quant_dtype and tensor.dtype != non_linear_dtype:
                     weights[key] = tensor.to(non_linear_dtype)
                     non_quantized_size += weights[key].numel() * weights[key].element_size()
                 else:
@@ -612,6 +617,7 @@ def convert_weights(args):
                 ignore_quant_keys=args.ignore_quant_keys,
                 linear_type=args.linear_type,
                 non_linear_dtype=args.non_linear_dtype,
+                preserve_non_quant_dtype=getattr(args, "preserve_non_quant_dtype", False),
                 comfyui_mode=args.comfyui_mode,
                 comfyui_keys=args.comfyui_keys,
             )
@@ -762,7 +768,7 @@ def main():
     parser.add_argument(
         "-t",
         "--model_type",
-        choices=["wan_dit", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit", "qwen25vl_llm", "z_image_dit", "self_forcing"],
+        choices=["wan_dit", "h3", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit", "qwen25vl_llm", "z_image_dit", "self_forcing"],
         default="wan_dit",
         help="Model type",
     )
@@ -883,6 +889,15 @@ def main():
                 "target_keys": ["self_attn", "cross_attn", "ffn"],
                 "ignore_key": ["ca", "audio"],
             },
+            "h3": {
+                "key_idx": 2,
+                "target_keys": ["attn", "ff", "adaln_proj"],
+                "ignore_key": None,
+                # H3 deliberately mixes BF16 transformer tensors with FP32
+                # input/time/output projections. Preserve that precision for
+                # every tensor outside the quantized block linears.
+                "preserve_non_quant_dtype": True,
+            },
             "self_forcing": {
                 "key_idx": 3,
                 "target_keys": ["self_attn", "cross_attn", "ffn"],
@@ -931,12 +946,14 @@ def main():
             args.key_idx = model_type_keys_map[args.model_type]["key_idx"]
             args.ignore_key = model_type_keys_map[args.model_type]["ignore_key"]
             args.comfyui_keys = model_type_keys_map[args.model_type]["comfyui_keys"] if "comfyui_keys" in model_type_keys_map[args.model_type] else None
+            args.preserve_non_quant_dtype = model_type_keys_map[args.model_type].get("preserve_non_quant_dtype", False)
         else:
             args.target_keys = None
             args.adapter_keys = None
             args.key_idx = None
             args.ignore_key = None
             args.comfyui_keys = None
+            args.preserve_non_quant_dtype = False
 
         # Apply CLI overrides (if provided)
         if args.key_idx_override is not None:

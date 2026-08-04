@@ -181,22 +181,15 @@ def main():
         "--image_path",
         type=str,
         default="",
-        help="The path to input image file(s), including HunyuanImage3 ti2t/ti2i. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
+        help="The path to input image file(s), including HunyuanImage3 ti2t/ti2i and MiniMax-H3 ref2av reference images. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
     parser.add_argument("--state_path", type=str, default="", help="The path to input robot state file for robot i2v/i2va inference.")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument(
-        "--reference",
-        dest="references",
-        action="append",
-        default=[],
-        help="Ordered MiniMax-H3 ref2av input: image=/path, video=/path, audio=/path, or a JSON object. Repeat to preserve order.",
-    )
-    parser.add_argument(
         "--audio_path",
         type=str,
         default="",
-        help="Input audio path: Wan s2v / rs2v, or required for LTX-2 task ltx2_s2v.",
+        help="Input audio path: Wan s2v / rs2v, LTX-2 ltx2_s2v, or MiniMax-H3 ref2av reference audio. H3 accepts comma-separated paths.",
     )
     parser.add_argument("--image_strength", type=str, default="1.0", help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
     parser.add_argument(
@@ -308,7 +301,7 @@ def main():
         "--video_path",
         type=str,
         default=None,
-        help="input video path (for sr / v2v / v2av task). For v2av this is the pre-processed control/reference video (pose / canny / depth / motion-track for motion-transfer, or the degraded source video for ICEdit).",
+        help="Input video path for sr/v2v/v2av, or MiniMax-H3 ref2av reference video. H3 accepts comma-separated paths. For v2av this is the pre-processed control/reference video (pose / canny / depth / motion-track for motion-transfer, or the degraded source video for ICEdit).",
     )
     parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")
     parser.add_argument(

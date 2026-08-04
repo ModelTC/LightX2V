@@ -429,7 +429,6 @@ class LightX2VPipeline:
         image_frame_idx=None,
         last_frame_path=None,
         audio_path=None,
-        references=None,
         src_ref_images=None,
         src_video=None,
         src_mask=None,
@@ -449,7 +448,6 @@ class LightX2VPipeline:
         self.sr_ratio = sr_ratio
         self.last_frame_path = last_frame_path
         self.audio_path = audio_path
-        self.references = references if references is not None else []
         self.src_ref_images = src_ref_images
         self.src_video = src_video
         self.src_mask = src_mask

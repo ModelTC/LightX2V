@@ -7,6 +7,10 @@ def _linear(name, bias=False, force_fp32=False):
     return MM_WEIGHT_REGISTER[kind](f"{name}.weight", f"{name}.bias" if bias else None)
 
 
+def _rms(config, name, eps):
+    return RMS_WEIGHT_REGISTER[config.get("rms_type", "torch_native")](name, eps=eps)
+
+
 class MiniMaxH3RefinerAttentionWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
@@ -15,11 +19,11 @@ class MiniMaxH3RefinerAttentionWeights(WeightModule):
         self.add_module("to_v", _linear(f"{prefix}.to_v"))
         self.add_module(
             "norm_q",
-            RMS_WEIGHT_REGISTER["torch_native"](f"{prefix}.norm_q.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
+            _rms(config, f"{prefix}.norm_q.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
         )
         self.add_module(
             "norm_k",
-            RMS_WEIGHT_REGISTER["torch_native"](f"{prefix}.norm_k.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
+            _rms(config, f"{prefix}.norm_k.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
         )
         self.add_module("calculate", ATTN_WEIGHT_REGISTER[config.get("attn_type", "flash_attn3")]())
         self.add_module("to_out", _linear(f"{prefix}.to_out.0"))
@@ -37,9 +41,9 @@ class MiniMaxH3TokenRefinerBlockWeights(WeightModule):
         super().__init__()
         prefix = f"token_refiner.refiner_blocks.{index}"
         eps = float(config.get("norm_eps", 1e-5))
-        self.add_module("norm1", RMS_WEIGHT_REGISTER["torch_native"](f"{prefix}.norm1.weight", eps=eps))
+        self.add_module("norm1", _rms(config, f"{prefix}.norm1.weight", eps=eps))
         self.add_module("attn", MiniMaxH3RefinerAttentionWeights(f"{prefix}.attn", config))
-        self.add_module("norm2", RMS_WEIGHT_REGISTER["torch_native"](f"{prefix}.norm2.weight", eps=eps))
+        self.add_module("norm2", _rms(config, f"{prefix}.norm2.weight", eps=eps))
         self.add_module("ff", MiniMaxH3FeedForwardWeights(f"{prefix}.ff"))
 
 
@@ -59,5 +63,5 @@ class MiniMaxH3PreWeights(WeightModule):
         )
         self.add_module(
             "refiner_final_norm",
-            RMS_WEIGHT_REGISTER["torch_native"]("token_refiner.final_norm.weight", eps=float(config.get("final_norm_eps", 1e-5))),
+            _rms(config, "token_refiner.final_norm.weight", eps=float(config.get("final_norm_eps", 1e-5))),
         )

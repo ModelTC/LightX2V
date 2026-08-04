@@ -307,8 +307,11 @@ class FL2AVInputInfo(T2AVInputInfo):
 
 @dataclass
 class Ref2AVInputInfo(T2AVInputInfo):
-    # Ordered entries such as ``image=/a.png`` or structured dictionaries.
-    references: Any = field(default_factory=list)
+    # Reuse the repository-wide media CLI. Comma-separated strings and Python
+    # sequences are normalized by MiniMaxH3Runner.
+    image_path: Any = field(default_factory=str)
+    video_path: Any = field(default_factory=str)
+    audio_path: Any = field(default_factory=str)
 
 
 @dataclass

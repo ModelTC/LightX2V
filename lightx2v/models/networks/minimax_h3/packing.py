@@ -103,9 +103,12 @@ def audio_latent_num_frames(num_frames: int) -> int:
 
 
 def validate_t2av_geometry(num_frames: int, height: int, width: int) -> None:
-    duration = num_frames / FPS
-    if not MIN_DURATION <= duration <= MAX_DURATION:
-        raise ValueError(f"MiniMax-H3 supports {MIN_DURATION:g}-{MAX_DURATION:g}s at {FPS} fps; got {num_frames} frames ({duration:.3f}s)")
+    min_aligned_frames = align_num_frames(round(MIN_DURATION * FPS))
+    max_aligned_frames = align_num_frames(round(MAX_DURATION * FPS))
+    if not min_aligned_frames <= num_frames <= max_aligned_frames:
+        raise ValueError(
+            f"MiniMax-H3 supports aligned frame counts from {min_aligned_frames} to {max_aligned_frames} ({MIN_DURATION:g}-{MAX_DURATION:g}s requested at {FPS} fps); got {num_frames} frames"
+        )
     if height % CANVAS_MULTIPLE or width % CANVAS_MULTIPLE:
         raise ValueError(f"MiniMax-H3 height and width must be multiples of {CANVAS_MULTIPLE}, got {height}x{width}")
     video_latent_num_frames(num_frames)
