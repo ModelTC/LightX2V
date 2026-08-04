@@ -738,6 +738,7 @@ class InfiniteTalkRunner(WanRunner):
     def _run_dit_clip(self, dit_inputs):
         infer_steps = self.scheduler.infer_steps
         for step_index in range(infer_steps):
+            self.check_stop()
             logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
             with ProfilingContext4DebugL1("step_pre"):
                 self.scheduler.step_pre(step_index)
@@ -957,8 +958,10 @@ class InfiniteTalkRunner(WanRunner):
         for segment_idx in range(self.video_segment_num):
             logger.info(f"start InfiniteTalk segment {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext4DebugL1(f"segment end2end {segment_idx + 1}/{self.video_segment_num}"):
+                self.check_stop()
                 self.init_run_segment(segment_idx)
                 latents = self.run_segment(segment_idx)
+                self.check_stop()
                 self.end_run_segment(segment_idx, latents)
 
         if self.stream_save_video:
