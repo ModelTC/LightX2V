@@ -18,6 +18,7 @@ from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import Hunyua
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2ARRunner, LTX2Runner  # noqa: F401
+from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
@@ -122,6 +123,7 @@ def main():
             "flux2_dev",
             "ltx2",
             "ltx2_ar",
+            "minimax_h3",
             "bagel",
             "seedvr2",
             "neopp",
@@ -140,7 +142,31 @@ def main():
     parser.add_argument(
         "--task",
         type=str,
-        choices=["t2v", "i2v", "t2t", "t2i", "ti2t", "ti2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "i2va", "v2av", "ltx2_s2v", "sr", "recon", "i23d"],
+        choices=[
+            "t2v",
+            "i2v",
+            "t2t",
+            "t2i",
+            "ti2t",
+            "ti2i",
+            "i2i",
+            "flf2v",
+            "vace",
+            "animate",
+            "s2v",
+            "rs2v",
+            "t2av",
+            "i2av",
+            "l2av",
+            "fl2av",
+            "ref2av",
+            "i2va",
+            "v2av",
+            "ltx2_s2v",
+            "sr",
+            "recon",
+            "i23d",
+        ],
         default="t2v",
     )
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
@@ -159,6 +185,13 @@ def main():
     )
     parser.add_argument("--state_path", type=str, default="", help="The path to input robot state file for robot i2v/i2va inference.")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
+    parser.add_argument(
+        "--reference",
+        dest="references",
+        action="append",
+        default=[],
+        help="Ordered MiniMax-H3 ref2av input: image=/path, video=/path, audio=/path, or a JSON object. Repeat to preserve order.",
+    )
     parser.add_argument(
         "--audio_path",
         type=str,

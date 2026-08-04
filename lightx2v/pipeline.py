@@ -18,6 +18,7 @@ from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import Hunyua
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
+from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
@@ -428,6 +429,7 @@ class LightX2VPipeline:
         image_frame_idx=None,
         last_frame_path=None,
         audio_path=None,
+        references=None,
         src_ref_images=None,
         src_video=None,
         src_mask=None,
@@ -447,6 +449,7 @@ class LightX2VPipeline:
         self.sr_ratio = sr_ratio
         self.last_frame_path = last_frame_path
         self.audio_path = audio_path
+        self.references = references if references is not None else []
         self.src_ref_images = src_ref_images
         self.src_video = src_video
         self.src_mask = src_mask
