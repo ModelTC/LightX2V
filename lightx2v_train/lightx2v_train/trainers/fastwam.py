@@ -9,7 +9,7 @@ import torch
 from PIL import Image, ImageDraw
 from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import ConstantLR, CosineAnnealingLR, LinearLR, SequentialLR
 
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import (
@@ -85,8 +85,9 @@ class FastWAMTrainer:
         self.save_every_iters = int(self.training_config.get("save_every_iters", 0) or 0)
         self.save_total_limit = int(self.training_config.get("save_total_limit", 3))
         self.save_final = bool(self.training_config.get("save_final", True))
-        self.lr_scheduler_name = self.training_config.get("lr_scheduler", "constant")
+        self.lr_scheduler_name = str(self.training_config.get("lr_scheduler", "constant")).strip().lower()
         self.lr_warmup_iters = int(self.training_config.get("lr_warmup_iters", 0))
+        self.lr_eta_min_ratio = float(self.training_config.get("lr_eta_min_ratio", 0.01))
         self.train_log_every_iters = max(1, int(self.logging_config.get("train_log_every_iters", 10)))
 
         zero1_config = self.config.get("distributed", {}).get("zero1", {})
@@ -153,23 +154,43 @@ class FastWAMTrainer:
         return torch.optim.AdamW(self.trainable_params, **optimizer_kwargs)
 
     def _build_lr_scheduler(self):
+        if self.lr_scheduler_name not in {"constant", "cosine"}:
+            raise ValueError(f"Unsupported FastWAM lr_scheduler {self.lr_scheduler_name!r}; expected 'constant' or 'cosine'.")
+        if not 0 < self.lr_warmup_iters < self.max_train_iters:
+            raise ValueError(
+                f"FastWAM requires 0 < lr_warmup_iters < max_train_iters for SequentialLR, got "
+                f"lr_warmup_iters={self.lr_warmup_iters} and max_train_iters={self.max_train_iters}."
+            )
+        if not 0.0 <= self.lr_eta_min_ratio <= 1.0:
+            raise ValueError(f"FastWAM lr_eta_min_ratio must be in [0, 1], got {self.lr_eta_min_ratio}.")
+
+        # LinearLR changes the optimizer's current LR during construction. Capture
+        # the configured base LR first so cosine eta_min is not scaled by warmup.
+        base_lr = float(self.optimizer.param_groups[0]["lr"])
         warmup_scheduler = LinearLR(
             self.optimizer,
-            start_factor=1e-8,
+            start_factor=1.0 / self.lr_warmup_iters,
             end_factor=1.0,
             total_iters=self.lr_warmup_iters,
         )
-        cosine_scheduler = CosineAnnealingLR(
+        remaining_iters = self.max_train_iters - self.lr_warmup_iters
+        if self.lr_scheduler_name == "cosine":
+            main_scheduler = CosineAnnealingLR(
+                self.optimizer,
+                T_max=remaining_iters,
+                eta_min=base_lr * self.lr_eta_min_ratio,
+            )
+        else:
+            main_scheduler = ConstantLR(
+                self.optimizer,
+                factor=1.0,
+                total_iters=remaining_iters,
+            )
+        return SequentialLR(
             self.optimizer,
-            T_max=self.max_train_iters - self.lr_warmup_iters,
-            eta_min=self.optimizer.param_groups[0]["lr"] * 0.01,
-        )
-        scheduler = SequentialLR(
-            self.optimizer,
-            schedulers=[warmup_scheduler, cosine_scheduler],
+            schedulers=[warmup_scheduler, main_scheduler],
             milestones=[self.lr_warmup_iters],
         )
-        return scheduler
 
     def setup(self, resume_ckpt_path=None):
         self.model.set_dit_only_trainable()
