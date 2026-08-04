@@ -351,6 +351,7 @@ def _qkv_pre_fp8_kernel(
     v,
     payload_fp8,
     scale_ptr,
+    total_rows: tl.constexpr,
     local_len: tl.constexpr,
     shard_heads: tl.constexpr,
     hidden_dims: tl.constexpr,
@@ -360,50 +361,50 @@ def _qkv_pre_fp8_kernel(
     payload_elems_per_rank: tl.constexpr,
     scale_base_offset: tl.constexpr,
     scale_elems_per_rank: tl.constexpr,
+    block_m: tl.constexpr,
     block_d: tl.constexpr,
 ):
     # One program handles the q/k/v triplet for one [dst_rank, local_s, shard_head].
     # That keeps the output layout unchanged while cutting launch work from 3 rows to 1.
-    row = tl.program_id(0)
-    offs = tl.arange(0, block_d)
-    mask = offs < hidden_dims
+    rows = tl.program_id(0) * block_m + tl.arange(0, block_m)
+    cols = tl.arange(0, block_d)
+    row_mask = rows < total_rows
+    col_mask = cols < hidden_dims
+    mask = row_mask[:, None] & col_mask[None, :]
 
     rows_per_rank: tl.constexpr = local_len * shard_heads
-    rank = row // rows_per_rank
-    row_in_rank = row - rank * rows_per_rank
+    rank = rows // rows_per_rank
+    row_in_rank = rows - rank * rows_per_rank
     h = row_in_rank % shard_heads
     s = row_in_rank // shard_heads
 
     src_head = head_offset + rank * head_stride + h
-    src_offsets = (s * full_heads + src_head) * hidden_dims + offs
+    src_offsets = (s[:, None] * full_heads + src_head[:, None]) * hidden_dims + cols[None, :]
 
     q_vals = tl.load(q + src_offsets, mask=mask, other=0.0).to(tl.float32)
     k_vals = tl.load(k + src_offsets, mask=mask, other=0.0).to(tl.float32)
     v_vals = tl.load(v + src_offsets, mask=mask, other=0.0).to(tl.float32)
 
-    q_amax = tl.maximum(tl.max(tl.abs(q_vals), axis=0), 0.001953125)
-    k_amax = tl.maximum(tl.max(tl.abs(k_vals), axis=0), 0.001953125)
-    v_amax = tl.maximum(tl.max(tl.abs(v_vals), axis=0), 0.001953125)
-    q_scale = q_amax / 448.0
-    k_scale = k_amax / 448.0
-    v_scale = v_amax / 448.0
+    q_scale = tl.maximum(tl.max(tl.abs(q_vals), axis=1), 0.001953125) / 448.0
+    k_scale = tl.maximum(tl.max(tl.abs(k_vals), axis=1), 0.001953125) / 448.0
+    v_scale = tl.maximum(tl.max(tl.abs(v_vals), axis=1), 0.001953125) / 448.0
 
     q_row = s * 3 * shard_heads + h
     k_row = q_row + shard_heads
     v_row = q_row + 2 * shard_heads
-    q_payload = rank * payload_elems_per_rank + q_row * hidden_dims + offs
-    k_payload = rank * payload_elems_per_rank + k_row * hidden_dims + offs
-    v_payload = rank * payload_elems_per_rank + v_row * hidden_dims + offs
-    tl.store(payload_fp8 + q_payload, (q_vals / q_scale).to(tl.float8e4nv), mask=mask)
-    tl.store(payload_fp8 + k_payload, (k_vals / k_scale).to(tl.float8e4nv), mask=mask)
-    tl.store(payload_fp8 + v_payload, (v_vals / v_scale).to(tl.float8e4nv), mask=mask)
+    q_payload = rank[:, None] * payload_elems_per_rank + q_row[:, None] * hidden_dims + cols[None, :]
+    k_payload = rank[:, None] * payload_elems_per_rank + k_row[:, None] * hidden_dims + cols[None, :]
+    v_payload = rank[:, None] * payload_elems_per_rank + v_row[:, None] * hidden_dims + cols[None, :]
+    tl.store(payload_fp8 + q_payload, (q_vals / q_scale[:, None]).to(tl.float8e4nv), mask=mask)
+    tl.store(payload_fp8 + k_payload, (k_vals / k_scale[:, None]).to(tl.float8e4nv), mask=mask)
+    tl.store(payload_fp8 + v_payload, (v_vals / v_scale[:, None]).to(tl.float8e4nv), mask=mask)
 
     q_scale_offset = rank * scale_elems_per_rank + scale_base_offset + q_row
     k_scale_offset = rank * scale_elems_per_rank + scale_base_offset + k_row
     v_scale_offset = rank * scale_elems_per_rank + scale_base_offset + v_row
-    tl.store(scale_ptr + q_scale_offset, q_scale)
-    tl.store(scale_ptr + k_scale_offset, k_scale)
-    tl.store(scale_ptr + v_scale_offset, v_scale)
+    tl.store(scale_ptr + q_scale_offset, q_scale, mask=row_mask)
+    tl.store(scale_ptr + k_scale_offset, k_scale, mask=row_mask)
+    tl.store(scale_ptr + v_scale_offset, v_scale, mask=row_mask)
 
 
 @triton.jit
@@ -582,37 +583,40 @@ def _attn_pre_fp8_kernel(
     attn,
     payload_fp8,
     scale_ptr,
+    total_rows: tl.constexpr,
     local_len: tl.constexpr,
     shard_heads: tl.constexpr,
     hidden_dims: tl.constexpr,
     payload_elems_per_rank: tl.constexpr,
     scale_base_offset: tl.constexpr,
     scale_elems_per_rank: tl.constexpr,
+    block_m: tl.constexpr,
     block_d: tl.constexpr,
 ):
     # One program handles one [shard_head, local_s] row and writes payload plus scale.
-    row = tl.program_id(0)
-    offs = tl.arange(0, block_d)
-    mask = offs < hidden_dims
+    rows = tl.program_id(0) * block_m + tl.arange(0, block_m)
+    cols = tl.arange(0, block_d)
+    row_mask = rows < total_rows
+    col_mask = cols < hidden_dims
+    mask = row_mask[:, None] & col_mask[None, :]
 
     rows_per_rank: tl.constexpr = shard_heads * local_len
-    rank = row // rows_per_rank
-    row_in_rank = row - rank * rows_per_rank
+    rank = rows // rows_per_rank
+    row_in_rank = rows - rank * rows_per_rank
     s = row_in_rank % local_len
     h = row_in_rank // local_len
 
     src_s = rank * local_len + s
-    src_offsets = src_s * (shard_heads * hidden_dims) + h * hidden_dims + offs
+    src_offsets = src_s[:, None] * (shard_heads * hidden_dims) + h[:, None] * hidden_dims + cols[None, :]
     vals = tl.load(attn + src_offsets, mask=mask, other=0.0).to(tl.float32)
 
-    amax = tl.maximum(tl.max(tl.abs(vals), axis=0), 0.001953125)
-    scale = amax / 448.0
-    quant = (vals / scale).to(tl.float8e4nv)
+    scale = tl.maximum(tl.max(tl.abs(vals), axis=1), 0.001953125) / 448.0
+    quant = (vals / scale[:, None]).to(tl.float8e4nv)
 
-    payload_offsets = rank * payload_elems_per_rank + row_in_rank * hidden_dims + offs
+    payload_offsets = rank[:, None] * payload_elems_per_rank + row_in_rank[:, None] * hidden_dims + cols[None, :]
     tl.store(payload_fp8 + payload_offsets, quant, mask=mask)
     scale_offset = rank * scale_elems_per_rank + scale_base_offset + row_in_rank
-    tl.store(scale_ptr + scale_offset, scale)
+    tl.store(scale_ptr + scale_offset, scale, mask=row_mask)
 
 
 @triton.jit
@@ -864,13 +868,15 @@ def qkv_pre_fp8(q, k, v, world_size, head_index=None):
     payload = torch.empty(payload_shape, device=q.device, dtype=torch.float8_e4m3fn)
     scale = torch.empty(scale_shape, device=q.device, dtype=torch.float32)
     total_rows = world_size * local_len * shard_heads
+    block_m = _resolve_block_m(None, hidden_dims, default=8)
     block_d = _next_power_of_2(hidden_dims)
-    _qkv_pre_fp8_kernel[(total_rows,)](
+    _qkv_pre_fp8_kernel[(triton.cdiv(total_rows, block_m),)](
         q,
         k,
         v,
         payload,
         scale,
+        total_rows,
         local_len,
         shard_heads,
         hidden_dims,
@@ -880,6 +886,7 @@ def qkv_pre_fp8(q, k, v, world_size, head_index=None):
         payload_elems_per_rank,
         0,
         scale_elems_per_rank,
+        block_m,
         block_d,
         num_warps=4,
     )
@@ -1011,17 +1018,20 @@ def attn_pre_fp8(attn, local_len, world_size, shard_heads, hidden_dims):
     payload = torch.empty(payload_shape, device=attn.device, dtype=torch.float8_e4m3fn)
     scale = torch.empty(scale_shape, device=attn.device, dtype=torch.float32)
     total_rows = world_size * shard_heads * local_len
+    block_m = _resolve_block_m(None, hidden_dims, default=8)
     block_d = _next_power_of_2(hidden_dims)
-    _attn_pre_fp8_kernel[(total_rows,)](
+    _attn_pre_fp8_kernel[(triton.cdiv(total_rows, block_m),)](
         attn,
         payload,
         scale,
+        total_rows,
         local_len,
         shard_heads,
         hidden_dims,
         payload_elems_per_rank,
         0,
         scale_elems_per_rank,
+        block_m,
         block_d,
         num_warps=4,
     )
