@@ -48,6 +48,10 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         return int(grid_t * grid_h * grid_w)
 
     def _seq_parallel_gather_tokens(self, x):
+        # Reference attention is evaluated before Ulysses exchanges sequence
+        # shards for head shards. Gather only the token dimension here and
+        # keep every attention head resident on every SP rank.
+        x = x.contiguous()
         gathered = [torch.empty_like(x) for _ in range(dist.get_world_size(self.seq_p_group))]
         dist.all_gather(gathered, x, group=self.seq_p_group)
         return torch.cat(gathered, dim=0)
@@ -115,6 +119,8 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
                 map_k = self._seq_parallel_gather_tokens(k)[:token_count]
             else:
                 map_q, map_k = q, k
+            if map_q.shape[1] != self.num_heads or map_k.shape[1] != self.num_heads:
+                raise RuntimeError(f"InfiniteTalk reference attention requires all heads on every SP rank; expected {self.num_heads}, got q={map_q.shape[1]} and k={map_k.shape[1]}.")
             x_ref_attn_map = self._get_attn_map_with_target(map_q.unsqueeze(0), map_k.unsqueeze(0), pre_infer_out.grid_sizes.tuple, ref_target_masks)
 
         img_qkv_len = q.shape[0]
@@ -151,38 +157,68 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
         y = phase.self_attn_o.apply(attn_out)
         return y, x_ref_attn_map
 
-    def _get_attn_map_with_target(self, visual_q, ref_k, shape, ref_target_masks, split_num=2):
+    def _get_attn_map_with_target(self, visual_q, ref_k, shape, ref_target_masks):
         _, grid_h, grid_w = shape
         ref_seqlen = grid_h * grid_w
-        ref_k = ref_k[:, :ref_seqlen]
+        device = visual_q.device
+        visual_q = visual_q.to(dtype=GET_DTYPE())
+        ref_k = ref_k[:, :ref_seqlen].to(device=device, dtype=GET_DTYPE())
+        ref_target_masks = ref_target_masks.to(device=device, dtype=GET_DTYPE())
         _, seq_lens, heads, head_dim = visual_q.shape
         class_num, _ = ref_target_masks.shape
-        x_ref_attn_maps = torch.zeros(class_num, seq_lens, device=visual_q.device, dtype=visual_q.dtype)
-        split_chunk = max(1, heads // split_num)
-        split_count = 0
-        for start in range(0, heads, split_chunk):
-            end = min(start + split_chunk, heads)
+        x_ref_attn_maps = torch.zeros(class_num, seq_lens, device=device, dtype=GET_DTYPE())
+        # InfiniteTalk's reference implementation always uses two equal head
+        # groups. This is a local, sequential memory split and is unrelated to
+        # the Ulysses SP world size; never shard these heads across SP ranks.
+        split_num = 2
+        if heads % split_num != 0:
+            raise ValueError(f"Reference attention heads ({heads}) must be divisible by the fixed split_num={split_num}.")
+        split_chunk = heads // split_num
+        for split_idx in range(split_num):
+            start = split_idx * split_chunk
+            end = (split_idx + 1) * split_chunk
             maps = self._calculate_x_ref_attn_map(visual_q[:, :, start:end], ref_k[:, :, start:end], ref_target_masks, head_dim)
             x_ref_attn_maps += maps
-            split_count += 1
-        return x_ref_attn_maps / max(1, split_count)
+        return x_ref_attn_maps / split_num
 
     @staticmethod
     def _calculate_x_ref_attn_map(visual_q, ref_k, ref_target_masks, head_dim):
-        ref_k = ref_k.to(visual_q.dtype).to(visual_q.device)
-        visual_q = (visual_q * (head_dim**-0.5)).transpose(1, 2)
-        ref_k = ref_k.transpose(1, 2)
-        attn = visual_q @ ref_k.transpose(-2, -1)
-        attn = attn.softmax(-1)
-        ref_target_masks = ref_target_masks.to(visual_q.dtype).to(visual_q.device)
+        scale = visual_q.new_tensor(head_dim**-0.5)
+        visual_q = (visual_q * scale).transpose(1, 2).contiguous()
+        ref_k = ref_k.transpose(1, 2).contiguous()
 
-        x_ref_attn_maps = []
-        for ref_target_mask in ref_target_masks:
-            mask = ref_target_mask[None, None, None, :]
-            x_ref_attnmap = (attn * mask).sum(-1) / mask.sum().clamp_min(1.0)
-            x_ref_attnmap = x_ref_attnmap.permute(0, 2, 1).mean(-1)
-            x_ref_attn_maps.append(x_ref_attnmap)
-        return torch.concat(x_ref_attn_maps, dim=0)
+        batch_size, heads, ref_seqlen, value_dim = ref_k.shape
+        class_num, mask_seqlen = ref_target_masks.shape
+        if mask_seqlen != ref_seqlen:
+            raise ValueError(f"Reference mask length ({mask_seqlen}) does not match reference K length ({ref_seqlen}).")
+        if class_num > value_dim:
+            raise ValueError(f"Reference mask count ({class_num}) exceeds attention head dimension ({value_dim}).")
+
+        # The required map is softmax(QK^T) @ mask. Use each target mask as
+        # a value channel so fused SDPA can compute it without materializing
+        # the B x H x query_len x ref_len attention matrix. Pad V to the Q/K
+        # head dimension for compatibility with fused CUDA kernels.
+        mask_values = ref_k.new_zeros((batch_size, heads, ref_seqlen, value_dim))
+        mask_values[..., :class_num] = ref_target_masks.transpose(0, 1)[None, None, :, :]
+
+        # Q was scaled above to match InfiniteTalk's operation order, so SDPA
+        # must not apply the default head_dim**-0.5 scale a second time. Keep
+        # the math backend disabled: it may materialize the full attention map.
+        with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True):
+            mask_attn = F.scaled_dot_product_attention(
+                visual_q,
+                ref_k,
+                mask_values,
+                dropout_p=0.0,
+                is_causal=False,
+                scale=1.0,
+            )
+
+        mask_attn = mask_attn[..., :class_num]
+        mask_sums = ref_target_masks.sum(-1).clamp_min(1.0)
+        mask_attn = mask_attn / mask_sums[None, None, None, :]
+        mask_attn = mask_attn.mean(dim=1)  # B, query_len, class_num
+        return mask_attn.permute(2, 0, 1).reshape(class_num * batch_size, -1)
 
     def infer_audio_cross_attn(self, phase, x, pre_infer_out, x_ref_attn_map):
         audio_embedding = pre_infer_out.adapter_args["audio_embedding"].to(device=x.device, dtype=GET_DTYPE())
