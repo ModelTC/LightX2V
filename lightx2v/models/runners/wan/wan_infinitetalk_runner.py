@@ -120,6 +120,7 @@ class InfiniteTalkRunner(WanRunner):
         self.cond_frame_cache = {}
         self.cond_video_fps = None
         self.cond_video_frame_count = None
+        self.stream_saved_video_needs_audio_remux = False
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
@@ -974,6 +975,7 @@ class InfiniteTalkRunner(WanRunner):
     def process_images_after_vae_decoder(self):
         if self.stream_save_video:
             if self.input_info.save_result_path is not None and is_main_process():
+                self.stream_saved_video_needs_audio_remux = True
                 logger.info(f"Video saved to {self.input_info.save_result_path}")
             return {"video": None}
 
@@ -1089,6 +1091,19 @@ class InfiniteTalkRunner(WanRunner):
         if self.va_controller is not None:
             self.va_controller.clear()
             self.va_controller = None
+        if self.stream_saved_video_needs_audio_remux:
+            out_path = self.input_info.save_result_path
+            mux_audio = self._resolve_mux_audio_path()
+            try:
+                if not mux_audio or not os.path.isfile(mux_audio):
+                    audio_input = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
+                    raise FileNotFoundError(f"InfiniteTalk mux audio is unavailable for audio input: {audio_input}")
+                if not os.path.isfile(out_path):
+                    raise FileNotFoundError(f"InfiniteTalk stream video is unavailable for audio mux: {out_path}")
+                logger.info(f"Muxing InfiniteTalk stream audio {mux_audio} into {out_path}")
+                self._mux_audio(out_path, mux_audio)
+            finally:
+                self.stream_saved_video_needs_audio_remux = False
         self._remove_video_audio_path()
         self._clear_cond_frame_source()
         self._remove_cond_video_temp_path()
@@ -1109,6 +1124,7 @@ class InfiniteTalkRunner(WanRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
+        self.stream_saved_video_needs_audio_remux = False
         try:
             self._prepare_input_data()
             if self.reuse:
