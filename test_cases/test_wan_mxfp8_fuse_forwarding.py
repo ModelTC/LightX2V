@@ -58,6 +58,84 @@ def make_linear_phase():
     )
 
 
+class WanNvfp4SplitMForwardingTest(unittest.TestCase):
+    def test_nvfp4_ffn_split_m_stride_matches_unsplit_ffn(self):
+        ensure_lightx2v_pipeline_stub()
+        ensure_local_lightx2v_kernel()
+        transformer_infer = import_module("lightx2v.models.networks.wan.infer.transformer_infer")
+
+        calls = []
+
+        def ffn_0(x):
+            calls.append((x[:, 0].clone(), x.is_contiguous()))
+            return x * 1.5 + 0.25
+
+        def ffn_2(x):
+            return x * 0.75 - 0.5
+
+        phase = SimpleNamespace(
+            norm2=SimpleNamespace(apply=lambda x: x.clone()),
+            ffn_0=SimpleNamespace(apply=ffn_0),
+            ffn_2=SimpleNamespace(apply=ffn_2),
+        )
+        infer = transformer_infer.WanTransformerInfer(
+            make_config(
+                dit_quant_scheme="nvfp4",
+                mxfp8_fuse_enable=False,
+                nvfp4_ffn_split_m_workaround=True,
+                nvfp4_ffn_split_m_stride=3,
+            )
+        )
+        x = torch.arange(40, dtype=torch.float32).reshape(5, 8)
+        zeros = torch.zeros_like(x)
+
+        actual = infer.infer_ffn(phase, x.clone(), zeros, zeros, zeros)
+        expected = ffn_2(torch.nn.functional.gelu(x * 1.5 + 0.25, approximate="tanh"))
+
+        torch.testing.assert_close(actual, expected)
+        self.assertEqual([rows.tolist() for rows, _ in calls], [[0.0, 24.0], [8.0, 32.0], [16.0]])
+        self.assertTrue(all(is_contiguous for _, is_contiguous in calls))
+
+    def test_nvfp4_ffn_split_m_stride_is_opt_in(self):
+        ensure_lightx2v_pipeline_stub()
+        ensure_local_lightx2v_kernel()
+        transformer_infer = import_module("lightx2v.models.networks.wan.infer.transformer_infer")
+
+        calls = []
+
+        def ffn_0(x):
+            calls.append(x.shape)
+            return x
+
+        phase = SimpleNamespace(
+            norm2=SimpleNamespace(apply=lambda x: x.clone()),
+            ffn_0=SimpleNamespace(apply=ffn_0),
+            ffn_2=SimpleNamespace(apply=lambda x: x),
+        )
+        infer = transformer_infer.WanTransformerInfer(make_config(dit_quant_scheme="nvfp4", mxfp8_fuse_enable=False))
+        x = torch.zeros(5, 8)
+
+        infer.infer_ffn(phase, x.clone(), torch.zeros_like(x), torch.zeros_like(x), torch.zeros_like(x))
+
+        self.assertEqual(calls, [torch.Size([5, 8])])
+
+    def test_nvfp4_ffn_split_m_rejects_split_n_combination(self):
+        ensure_lightx2v_pipeline_stub()
+        ensure_local_lightx2v_kernel()
+        transformer_infer = import_module("lightx2v.models.networks.wan.infer.transformer_infer")
+
+        with self.assertRaisesRegex(ValueError, "cannot both be enabled"):
+            transformer_infer.WanTransformerInfer(
+                make_config(
+                    dit_quant_scheme="nvfp4",
+                    nvfp4_ffn_split_m_workaround=True,
+                    nvfp4_ffn_split_m_stride=2,
+                    nvfp4_ffn_split_n_workaround=True,
+                    nvfp4_ffn_split_n_parts=2,
+                )
+            )
+
+
 class WanMxfp8FuseForwardingTest(unittest.TestCase):
     def test_base_infer_ffn_respects_mxfp8_fuse_enable(self):
         ensure_lightx2v_pipeline_stub()
