@@ -26,6 +26,7 @@ from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager
 from lightx2v.common.ops.attn.template import AttnWeightTemplate
 
 # Import the concrete implementations so their registry decorators run even
@@ -48,6 +49,8 @@ from lightx2v.utils.registry_factory import (
     RMS_WEIGHT_REGISTER,
 )
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, torch.device(AI_DEVICE).type)
 
 try:
     from transformers import Qwen2TokenizerFast, Qwen3VLProcessor
@@ -138,11 +141,11 @@ class _MiniMaxH3QwenSDPAWeight(AttnWeightTemplate):
 
 
 class _Qwen3VLMLPWeights(WeightModule):
-    def __init__(self, prefix):
+    def __init__(self, prefix, create_cuda_buffer=False):
         super().__init__()
-        self.add_module("gate_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.gate_proj.weight"))
-        self.add_module("up_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.up_proj.weight"))
-        self.add_module("down_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.down_proj.weight"))
+        self.add_module("gate_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.gate_proj.weight", create_cuda_buffer=create_cuda_buffer))
+        self.add_module("up_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.up_proj.weight", create_cuda_buffer=create_cuda_buffer))
+        self.add_module("down_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.down_proj.weight", create_cuda_buffer=create_cuda_buffer))
 
     def forward(self, hidden_states):
         gate = self.gate_proj.apply(hidden_states)
@@ -151,7 +154,7 @@ class _Qwen3VLMLPWeights(WeightModule):
 
 
 class _Qwen3VLAttentionWeights(WeightModule):
-    def __init__(self, prefix, text_config, attn_type):
+    def __init__(self, prefix, text_config, attn_type, create_cuda_buffer=False):
         super().__init__()
         self.num_heads = int(text_config["num_attention_heads"])
         self.num_key_value_heads = int(text_config["num_key_value_heads"])
@@ -160,17 +163,17 @@ class _Qwen3VLAttentionWeights(WeightModule):
         self.softmax_scale = self.head_dim**-0.5
         eps = float(text_config["rms_norm_eps"])
 
-        self.add_module("q_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.q_proj.weight"))
-        self.add_module("k_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.k_proj.weight"))
-        self.add_module("v_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.v_proj.weight"))
-        self.add_module("o_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.o_proj.weight"))
+        self.add_module("q_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.q_proj.weight", create_cuda_buffer=create_cuda_buffer))
+        self.add_module("k_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.k_proj.weight", create_cuda_buffer=create_cuda_buffer))
+        self.add_module("v_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.v_proj.weight", create_cuda_buffer=create_cuda_buffer))
+        self.add_module("o_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.o_proj.weight", create_cuda_buffer=create_cuda_buffer))
         self.add_module(
             "q_norm",
-            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.q_norm.weight", eps=eps),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.q_norm.weight", create_cuda_buffer=create_cuda_buffer, eps=eps),
         )
         self.add_module(
             "k_norm",
-            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.k_norm.weight", eps=eps),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.k_norm.weight", create_cuda_buffer=create_cuda_buffer, eps=eps),
         )
         self.native_gqa = attn_type == "torch_sdpa"
         if self.native_gqa:
@@ -212,23 +215,38 @@ class _Qwen3VLAttentionWeights(WeightModule):
 
 
 class _Qwen3VLDecoderLayerWeights(WeightModule):
-    def __init__(self, layer_index, text_config, attn_type):
+    def __init__(self, layer_index, text_config, attn_type, create_cuda_buffer=False):
         super().__init__()
         prefix = f"{_CHECKPOINT_PREFIX}.layers.{layer_index}"
         eps = float(text_config["rms_norm_eps"])
         self.add_module(
             "input_layernorm",
-            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.input_layernorm.weight", eps=eps),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.input_layernorm.weight", create_cuda_buffer=create_cuda_buffer, eps=eps),
         )
         self.add_module(
             "post_attention_layernorm",
-            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.post_attention_layernorm.weight", eps=eps),
+            RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.post_attention_layernorm.weight", create_cuda_buffer=create_cuda_buffer, eps=eps),
         )
         self.add_module(
             "self_attn",
-            _Qwen3VLAttentionWeights(f"{prefix}.self_attn", text_config, attn_type),
+            _Qwen3VLAttentionWeights(f"{prefix}.self_attn", text_config, attn_type, create_cuda_buffer=create_cuda_buffer),
         )
-        self.add_module("mlp", _Qwen3VLMLPWeights(f"{prefix}.mlp"))
+        self.add_module("mlp", _Qwen3VLMLPWeights(f"{prefix}.mlp", create_cuda_buffer=create_cuda_buffer))
+
+    def weight_modules(self):
+        return (
+            self.input_layernorm,
+            self.post_attention_layernorm,
+            self.self_attn.q_proj,
+            self.self_attn.k_proj,
+            self.self_attn.v_proj,
+            self.self_attn.o_proj,
+            self.self_attn.q_norm,
+            self.self_attn.k_norm,
+            self.mlp.gate_proj,
+            self.mlp.up_proj,
+            self.mlp.down_proj,
+        )
 
     def forward(self, hidden_states, position_embeddings):
         residual = hidden_states
@@ -243,10 +261,15 @@ class _Qwen3VLDecoderLayerWeights(WeightModule):
 class _Qwen3VLTextBackboneWeights(WeightModule):
     """Unbatched native prefix of Qwen3-VL's language backbone."""
 
-    def __init__(self, text_config, num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER, attn_type="torch_sdpa"):
+    def __init__(self, text_config, num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER, attn_type="torch_sdpa", block_offload=False):
         super().__init__()
         self.text_config = text_config
         self.num_layers = int(num_layers)
+        self.attn_type = attn_type
+        self.block_offload = bool(block_offload)
+        self.offload_manager = None
+        self.offload_cuda_buffers = None
+        self._offload_completion_event = None
         self.hidden_size = int(text_config["hidden_size"])
         self.head_dim = int(text_config["head_dim"])
         self.rope_theta = float(text_config["rope_theta"])
@@ -270,27 +293,66 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
     def _collect_weight_modules(self):
         modules = {self.embed_tokens.weight_name: self.embed_tokens}
         for layer in self.layers:
-            leaves = (
-                layer.input_layernorm,
-                layer.post_attention_layernorm,
-                layer.self_attn.q_proj,
-                layer.self_attn.k_proj,
-                layer.self_attn.v_proj,
-                layer.self_attn.o_proj,
-                layer.self_attn.q_norm,
-                layer.self_attn.k_norm,
-                layer.mlp.gate_proj,
-                layer.mlp.up_proj,
-                layer.mlp.down_proj,
-            )
-            modules.update((leaf.weight_name, leaf) for leaf in leaves)
+            modules.update((leaf.weight_name, leaf) for leaf in layer.weight_modules())
         return modules
+
+    @staticmethod
+    def _allocate_layer_buffer(buffer_layer, source_layer):
+        """Allocate compute-layout device tensors without another checkpoint copy."""
+        allocated_bytes = 0
+        for buffer_weight, source_weight in zip(buffer_layer.weight_modules(), source_layer.weight_modules()):
+            for _, attr_name, _ in buffer_weight.base_attrs:
+                source_tensor = getattr(source_weight, f"pin_{attr_name}", None)
+                if source_tensor is None:
+                    source_tensor = getattr(source_weight, attr_name, None)
+                if source_tensor is None:
+                    raise RuntimeError(f"Cannot allocate Qwen3-VL offload buffer for {source_weight.weight_name}: missing {attr_name}")
+                # Preserve the transposed compute-layout strides used by the
+                # resident path, rather than relying on empty_like's memory-
+                # format heuristics. This keeps GEMM inputs identical after
+                # the H2D copy.
+                device_buffer = torch.empty_strided(
+                    source_tensor.size(),
+                    source_tensor.stride(),
+                    dtype=source_tensor.dtype,
+                    device=AI_DEVICE,
+                )
+                setattr(buffer_weight, f"{attr_name}_cuda_buffer", device_buffer)
+                allocated_bytes += device_buffer.numel() * device_buffer.element_size()
+        return allocated_bytes
+
+    def init_block_offload(self):
+        if not self.block_offload or self.offload_manager is not None:
+            return
+        if self.num_layers < 2:
+            raise ValueError("Qwen3-VL ping-pong block offload requires at least two decoder layers")
+
+        buffers = WeightModuleList(
+            _Qwen3VLDecoderLayerWeights(
+                slot_index,
+                self.text_config,
+                self.attn_type,
+                create_cuda_buffer=True,
+            )
+            for slot_index in range(2)
+        )
+        allocated_bytes = sum(self._allocate_layer_buffer(buffers[slot_index], self.layers[slot_index]) for slot_index in range(2))
+        manager = EventSlotWeightAsyncStreamManager(offload_granularity="block")
+        manager.init_cuda_buffer(blocks_cuda_buffer=buffers)
+        self.offload_cuda_buffers = buffers
+        self.offload_manager = manager
+        logger.info(
+            "MiniMax-H3 Qwen3-VL block offload allocated two ping-pong buffers ({:.2f} GiB total)",
+            allocated_bytes / (1024**3),
+        )
 
     def named_weight_modules(self):
         return self._weight_modules.items()
 
     @property
     def device(self):
+        if self.block_offload:
+            return torch.device(AI_DEVICE)
         return self.embed_tokens.weight.device
 
     @property
@@ -315,21 +377,86 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         embeddings = torch.cat((frequencies, frequencies), dim=-1)
         return embeddings.cos().to(hidden_states.dtype), embeddings.sin().to(hidden_states.dtype)
 
+    def _inject_vision_embeds(self, hidden_states, vision_mask, vision_embeds):
+        if vision_embeds is None:
+            return hidden_states
+        if vision_mask is None or int(vision_mask.sum()) != vision_embeds.shape[0]:
+            raise ValueError("Qwen3-VL vision placeholder count does not match vision embeddings")
+        hidden_states = hidden_states.clone()
+        hidden_states[vision_mask] = vision_embeds.to(hidden_states.device, hidden_states.dtype)
+        return hidden_states
+
+    @staticmethod
+    def _inject_deepstack(hidden_states, layer_index, vision_mask, deepstack_embeds):
+        if deepstack_embeds is None or layer_index >= len(deepstack_embeds):
+            return hidden_states
+        hidden_states = hidden_states.clone()
+        hidden_states[vision_mask] += deepstack_embeds[layer_index].to(hidden_states.device, hidden_states.dtype)
+        return hidden_states
+
+    def _forward_with_block_offload(self, input_ids, position_ids, vision_mask, vision_embeds, deepstack_embeds):
+        if self.offload_manager is None:
+            raise RuntimeError("Qwen3-VL block-offload buffers were not initialized")
+        manager = self.offload_manager
+        caller_stream = torch_device_module.current_stream()
+
+        # A prior request may still be completing asynchronously on the
+        # caller stream. Protect both slots before resetting their metadata.
+        if self._offload_completion_event is not None:
+            manager.cuda_load_stream.wait_event(self._offload_completion_event)
+            caller_stream.wait_event(self._offload_completion_event)
+        manager.reset_slots()
+
+        # Start layer 0 while the large embedding table is copied and applied
+        # on the caller's stream. Only the embedding is temporarily resident.
+        try:
+            manager.prefetch_to_slot(0, 0, self.layers)
+            self.embed_tokens.to_cuda(non_blocking=True)
+            try:
+                hidden_states = self.embed_tokens.apply(input_ids)
+            finally:
+                self.embed_tokens.weight = self.embed_tokens.pin_weight
+            hidden_states = self._inject_vision_embeds(hidden_states, vision_mask, vision_embeds)
+            position_embeddings = self._position_embeddings(hidden_states, position_ids)
+
+            for layer_index in range(self.num_layers):
+                slot_index = layer_index % 2
+                manager.wait_ready(slot_index, caller_stream)
+                if layer_index + 1 < self.num_layers:
+                    manager.prefetch_to_slot((slot_index + 1) % 2, layer_index + 1, self.layers)
+
+                # Keep all Qwen math on the caller's stream for numerical and
+                # allocator parity with the resident/model-offload path. The
+                # independent load stream still overlaps layer i+1 H2D with
+                # layer i compute through the slot events above.
+                hidden_states = manager.cuda_buffers[slot_index].forward(hidden_states, position_embeddings)
+                hidden_states = self._inject_deepstack(hidden_states, layer_index, vision_mask, deepstack_embeds)
+                manager.record_free(slot_index, caller_stream)
+
+            completion_event = torch_device_module.Event()
+            completion_event.record(caller_stream)
+            self._offload_completion_event = completion_event
+            return hidden_states
+        except Exception:
+            # Do not leave an in-flight copy able to overwrite a slot after an
+            # exceptional exit or before a retry.
+            torch_device_module.synchronize()
+            manager.reset_slots()
+            self._offload_completion_event = None
+            raise
+
     def forward(self, input_ids, position_ids=None, vision_mask=None, vision_embeds=None, deepstack_embeds=None):
         if input_ids.ndim != 1:
             raise ValueError(f"MiniMax-H3's native Qwen3-VL backbone expects unbatched token IDs, got {tuple(input_ids.shape)}")
+        if self.block_offload:
+            return self._forward_with_block_offload(input_ids, position_ids, vision_mask, vision_embeds, deepstack_embeds)
+
         hidden_states = self.embed_tokens.apply(input_ids)
-        if vision_embeds is not None:
-            if vision_mask is None or int(vision_mask.sum()) != vision_embeds.shape[0]:
-                raise ValueError("Qwen3-VL vision placeholder count does not match vision embeddings")
-            hidden_states = hidden_states.clone()
-            hidden_states[vision_mask] = vision_embeds.to(hidden_states.device, hidden_states.dtype)
+        hidden_states = self._inject_vision_embeds(hidden_states, vision_mask, vision_embeds)
         position_embeddings = self._position_embeddings(hidden_states, position_ids)
         for layer_index, layer in enumerate(self.layers):
             hidden_states = layer.forward(hidden_states, position_embeddings)
-            if deepstack_embeds is not None and layer_index < len(deepstack_embeds):
-                hidden_states = hidden_states.clone()
-                hidden_states[vision_mask] += deepstack_embeds[layer_index].to(hidden_states.device, hidden_states.dtype)
+            hidden_states = self._inject_deepstack(hidden_states, layer_index, vision_mask, deepstack_embeds)
         return hidden_states
 
     def to_cpu(self, non_blocking=False):
@@ -348,7 +475,11 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
 
 
 class MiniMaxH3Qwen3VLTextEncoder:
-    """Encode one text-only request with the native first 50 Qwen3-VL layers."""
+    """Encode with the native first 50 Qwen3-VL layers.
+
+    ``text_encoder_offload_granularity=block`` keeps the immutable layer
+    weights on CPU and streams them through two preallocated device buffers.
+    """
 
     def __init__(self, config):
         self.config = config
@@ -356,6 +487,12 @@ class MiniMaxH3Qwen3VLTextEncoder:
         if "qwen3vl_cpu_offload" in config and bool(config["qwen3vl_cpu_offload"]) != text_encoder_cpu_offload:
             raise ValueError("qwen3vl_cpu_offload cannot override text_encoder_cpu_offload for MiniMax-H3; the runner schedules the native conditioner through text_encoder_cpu_offload")
         self.cpu_offload = text_encoder_cpu_offload
+        self.offload_granularity = config.get("text_encoder_offload_granularity", "model")
+        if self.offload_granularity not in {"model", "block"}:
+            raise ValueError(f"Unsupported text_encoder_offload_granularity={self.offload_granularity!r}; expected 'model' or 'block'")
+        if self.offload_granularity == "block" and not self.cpu_offload:
+            raise ValueError("text_encoder_offload_granularity='block' requires text_encoder_cpu_offload=true")
+        self.block_offload = self.cpu_offload and self.offload_granularity == "block"
         self.local_files_only = config.get("local_files_only", True)
         self.text_encoder = None
         self.vision_encoder = None
@@ -611,9 +748,12 @@ class MiniMaxH3Qwen3VLTextEncoder:
             text_config,
             num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER,
             attn_type=attn_type,
+            block_offload=self.block_offload,
         )
         self._load_native_weights(text_encoder, text_encoder_path, text_config)
-        if not self.cpu_offload:
+        if self.block_offload:
+            text_encoder.init_block_offload()
+        elif not self.cpu_offload:
             text_encoder.to_cuda()
         self.text_encoder = text_encoder
         return self.text_encoder
@@ -834,7 +974,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
                     video_grid_thw,
                 )
                 vision_mask, vision_embeds, deepstack = self._encode_vision(input_ids, pixel_values, image_grid_thw, pixel_values_videos, video_grid_thw)
-            if self.cpu_offload:
+            if self.cpu_offload and not self.block_offload:
                 self.text_encoder.to_cuda()
             device = self.text_encoder.device
             input_ids = input_ids.to(device)
@@ -855,7 +995,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 "text_token_tags": token_tags.to(prompt_embeds.device),
             }
         finally:
-            if self.cpu_offload and self.text_encoder is not None:
+            if self.cpu_offload and not self.block_offload and self.text_encoder is not None:
                 try:
                     self.text_encoder.to_cpu()
                 except Exception as error:

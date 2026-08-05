@@ -21,19 +21,17 @@ class MiniMaxH3OffloadTransformerInfer(MiniMaxH3TransformerInfer):
 
     def infer_with_blocks_offload(self, blocks, hidden_states, pre_infer_out):
         num_blocks = len(blocks)
+        current_stream = torch_device_module.current_stream()
+        self.offload_manager.compute_stream.wait_stream(current_stream)
+
         for block_index in range(num_blocks):
             if self.offload_manager.need_init_first_buffer:
                 self.offload_manager.init_first_buffer(blocks)
 
             self.offload_manager.prefetch_weights((block_index + 1) % num_blocks, blocks)
             block = self.offload_manager.cuda_buffers[0]
-            if AI_DEVICE == "xpu":
+            with torch_device_module.stream(self.offload_manager.compute_stream):
                 hidden_states = self.run_block(block_index, block, hidden_states, pre_infer_out)
-            else:
-                with torch_device_module.stream(self.offload_manager.compute_stream):
-                    hidden_states = self.run_block(block_index, block, hidden_states, pre_infer_out)
             self.offload_manager.swap_blocks()
 
-        if self.clean_cuda_cache:
-            torch_device_module.empty_cache()
         return hidden_states
