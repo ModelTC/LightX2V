@@ -51,6 +51,7 @@ def _mm_weight(
     lora_prefix="",
     lora_path="",
     mm_type_override=None,
+    mm_kwargs=None,
 ):
     mm_type = mm_type_override
     if mm_type is None:
@@ -74,6 +75,7 @@ def _mm_weight(
             lazy_load_file=lazy_load_file,
             lora_prefix=lora_prefix,
             lora_path=lora_path,
+            mm_kwargs=mm_kwargs,
         )
     return MM_WEIGHT_REGISTER[mm_type](
         weight_name,
@@ -84,6 +86,7 @@ def _mm_weight(
         lazy_load_file,
         lora_prefix=lora_prefix,
         lora_path=lora_path,
+        **(mm_kwargs or {}),
     )
 
 
@@ -797,12 +800,24 @@ class WanFFN(WeightModule):
             LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
-        split_n = config.get("nvfp4_ffn_split_n_workaround", False)
-        if not isinstance(split_n, bool):
+        split_n_enabled = config.get("nvfp4_ffn_split_n_workaround", False)
+        if not isinstance(split_n_enabled, bool):
             raise TypeError("nvfp4_ffn_split_n_workaround must be a boolean")
+
+        split_n_parts = None
+        if split_n_enabled:
+            if "nvfp4_ffn_split_n_parts" not in config:
+                raise ValueError("nvfp4_ffn_split_n_parts must be set when nvfp4_ffn_split_n_workaround is true")
+            split_n_parts = config["nvfp4_ffn_split_n_parts"]
+            if isinstance(split_n_parts, bool) or not isinstance(split_n_parts, int):
+                raise TypeError("nvfp4_ffn_split_n_parts must be an integer")
+            if split_n_parts < 2:
+                raise ValueError("nvfp4_ffn_split_n_parts must be at least 2")
         # Temporary and intentionally scoped to Wan FFN. The checkpoint format
         # remains ``nvfp4``; only the execution implementation changes.
-        ffn_mm_type = "nvfp4-split-n-workaround" if self.mm_type == "nvfp4" and split_n else self.mm_type
+        use_split_n_weight = self.mm_type == "nvfp4" and split_n_enabled
+        ffn_mm_type = "nvfp4-split-n-workaround" if use_split_n_weight else self.mm_type
+        ffn_mm_kwargs = {"split_n_parts": split_n_parts} if use_split_n_weight else None
 
         fp = f"{block_prefix}.{self.block_index}"
         self.add_module(
@@ -816,6 +831,7 @@ class WanFFN(WeightModule):
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=self.lazy_load,
                 lazy_load_file=self.lazy_load_file,
+                mm_kwargs=ffn_mm_kwargs,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
                 mm_type_override=ffn_mm_type,
@@ -832,6 +848,7 @@ class WanFFN(WeightModule):
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=self.lazy_load,
                 lazy_load_file=self.lazy_load_file,
+                mm_kwargs=ffn_mm_kwargs,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
                 mm_type_override=ffn_mm_type,
