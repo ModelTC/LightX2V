@@ -18,6 +18,14 @@ TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
   m.impl("cutlass_scaled_nvfp4_mm_sm120", torch::kCUDA, &cutlass_scaled_nvfp4_mm_sm120);
 
   m.def(
+      "cutlass_scaled_nvfp4_mm_split_n_stride_sm120(Tensor! out, Tensor mat_a, Tensor mat_b, Tensor scales_a, Tensor "
+      "scales_b, Tensor alpha, Tensor? bias, int split_n_parts) -> ()");
+  m.impl(
+      "cutlass_scaled_nvfp4_mm_split_n_stride_sm120",
+      torch::kCUDA,
+      &cutlass_scaled_nvfp4_mm_split_n_stride_sm120);
+
+  m.def(
       "scaled_nvfp4_quant_sm120(Tensor! output, Tensor! input,"
       "                 Tensor! output_scale, Tensor! input_scale) -> ()");
   m.impl("scaled_nvfp4_quant_sm120", torch::kCUDA, &scaled_nvfp4_quant_sm120);

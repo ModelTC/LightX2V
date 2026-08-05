@@ -34,13 +34,14 @@ try:
         cutlass_scaled_mxfp6_mxfp8_mm,
         cutlass_scaled_mxfp8_mm,
         cutlass_scaled_nvfp4_mm,
+        cutlass_scaled_nvfp4_mm_split_n_stride,
         scaled_mxfp4_quant,
         scaled_mxfp6_quant,
         scaled_mxfp8_quant,
         scaled_nvfp4_quant,
     )
 except ImportError:
-    scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm = None, None
+    scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm, cutlass_scaled_nvfp4_mm_split_n_stride = None, None, None
     scaled_mxfp4_quant, cutlass_scaled_mxfp4_mm = None, None
     scaled_mxfp6_quant, cutlass_scaled_mxfp6_mxfp8_mm = None, None
     scaled_mxfp8_quant, cutlass_scaled_mxfp8_mm = None, None
@@ -1343,13 +1344,9 @@ class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
     NVIDIA Jetson AGX Thor by quantizing the activation once, launching
     multiple serial N-shard GEMMs, and concatenating their outputs.
 
-    This is not the desired long-term backend design: it adds extra kernel
-    launches, temporary output tensors, and a concatenation. Remove this class,
-    its registry entry, and the ``nvfp4_ffn_split_n_workaround`` /
-    ``nvfp4_ffn_split_n_parts`` configuration keys once
-    ``cutlass_scaled_nvfp4_mm`` can select an architecture/shape-aware tactic
-    (or an internal split-N implementation that writes directly to the final
-    output).
+    It remains as the explicit narrow-and-concatenate reference path. The
+    ``nvfp4-split-n-stride-workaround`` implementation avoids these temporary
+    tensors and serial GEMM launches by expressing the N shards as batches.
     """
 
     split_n_alignment = 128
@@ -1412,6 +1409,28 @@ class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
                 )
             )
         return torch.cat(outputs, dim=-1)
+
+
+@MM_WEIGHT_REGISTER("nvfp4-split-n-stride-workaround")
+class MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround(MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround):
+    """Represent N shards as batches in one strided CUTLASS GEMM.
+
+    The activation is quantized once and the complete weight and scale tensors
+    are passed to the backend. A and its scales are broadcast across batches;
+    weight, weight scales, bias, and output columns advance by batch stride.
+    """
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        return cutlass_scaled_nvfp4_mm_split_n_stride(
+            input_tensor_quant,
+            self.weight,
+            input_tensor_scale,
+            self.weight_scale,
+            alpha=self.alpha,
+            bias=self.bias,
+            split_n_parts=self.split_n_parts,
+        )
 
 
 @MM_WEIGHT_REGISTER("CalibMax")

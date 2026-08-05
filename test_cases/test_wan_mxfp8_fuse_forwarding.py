@@ -5,6 +5,7 @@ import unittest
 from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
@@ -58,82 +59,106 @@ def make_linear_phase():
     )
 
 
-class WanNvfp4SplitMForwardingTest(unittest.TestCase):
-    def test_nvfp4_ffn_split_m_stride_matches_unsplit_ffn(self):
+class WanNvfp4SplitNStrideTest(unittest.TestCase):
+    @staticmethod
+    def make_ffn(**overrides):
         ensure_lightx2v_pipeline_stub()
         ensure_local_lightx2v_kernel()
-        transformer_infer = import_module("lightx2v.models.networks.wan.infer.transformer_infer")
-
-        calls = []
-
-        def ffn_0(x):
-            calls.append((x[:, 0].clone(), x.is_contiguous()))
-            return x * 1.5 + 0.25
-
-        def ffn_2(x):
-            return x * 0.75 - 0.5
-
-        phase = SimpleNamespace(
-            norm2=SimpleNamespace(apply=lambda x: x.clone()),
-            ffn_0=SimpleNamespace(apply=ffn_0),
-            ffn_2=SimpleNamespace(apply=ffn_2),
+        transformer_weights = import_module("lightx2v.models.networks.wan.weights.transformer_weights")
+        config = {
+            "layer_norm_type": "torch",
+            "tensor_parallel": False,
+        }
+        config.update(overrides)
+        return transformer_weights.WanFFN(
+            block_index=0,
+            block_prefix="blocks",
+            task="i2v",
+            mm_type="nvfp4",
+            config=config,
         )
-        infer = transformer_infer.WanTransformerInfer(
-            make_config(
-                dit_quant_scheme="nvfp4",
-                mxfp8_fuse_enable=False,
-                nvfp4_ffn_split_m_workaround=True,
-                nvfp4_ffn_split_m_stride=3,
-            )
+
+    def test_stride_workaround_selects_full_weight_operator_for_both_ffn_layers(self):
+        ffn = self.make_ffn(
+            nvfp4_ffn_split_n_stride_workaround=True,
+            nvfp4_ffn_split_n_parts=2,
         )
-        x = torch.arange(40, dtype=torch.float32).reshape(5, 8)
-        zeros = torch.zeros_like(x)
+        mm_weight = import_module("lightx2v.common.ops.mm.mm_weight")
 
-        actual = infer.infer_ffn(phase, x.clone(), zeros, zeros, zeros)
-        expected = ffn_2(torch.nn.functional.gelu(x * 1.5 + 0.25, approximate="tanh"))
+        self.assertIsInstance(ffn.ffn_0, mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround)
+        self.assertIsInstance(ffn.ffn_2, mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround)
+        self.assertEqual(ffn.ffn_0.split_n_parts, 2)
+        self.assertEqual(ffn.ffn_2.split_n_parts, 2)
 
-        torch.testing.assert_close(actual, expected)
-        self.assertEqual([rows.tolist() for rows, _ in calls], [[0.0, 24.0], [8.0, 32.0], [16.0]])
-        self.assertTrue(all(is_contiguous for _, is_contiguous in calls))
+    def test_explicit_workaround_still_selects_narrow_and_cat_operator(self):
+        ffn = self.make_ffn(
+            nvfp4_ffn_split_n_workaround=True,
+            nvfp4_ffn_split_n_parts=2,
+        )
+        mm_weight = import_module("lightx2v.common.ops.mm.mm_weight")
 
-    def test_nvfp4_ffn_split_m_stride_is_opt_in(self):
+        self.assertIs(type(ffn.ffn_0), mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround)
+        self.assertIs(type(ffn.ffn_2), mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround)
+
+    def test_stride_operator_passes_complete_weight_and_scale_tensors(self):
         ensure_lightx2v_pipeline_stub()
         ensure_local_lightx2v_kernel()
-        transformer_infer = import_module("lightx2v.models.networks.wan.infer.transformer_infer")
-
-        calls = []
-
-        def ffn_0(x):
-            calls.append(x.shape)
-            return x
-
-        phase = SimpleNamespace(
-            norm2=SimpleNamespace(apply=lambda x: x.clone()),
-            ffn_0=SimpleNamespace(apply=ffn_0),
-            ffn_2=SimpleNamespace(apply=lambda x: x),
+        mm_weight = import_module("lightx2v.common.ops.mm.mm_weight")
+        operator = mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround(
+            "blocks.0.ffn.0.weight",
+            "blocks.0.ffn.0.bias",
+            split_n_parts=2,
         )
-        infer = transformer_infer.WanTransformerInfer(make_config(dit_quant_scheme="nvfp4", mxfp8_fuse_enable=False))
-        x = torch.zeros(5, 8)
+        input_tensor = object()
+        input_quant = object()
+        input_scale = object()
+        weight = object()
+        weight_scale = object()
+        alpha = object()
+        bias = object()
+        output = object()
+        operator.act_quant_func = lambda value: (input_quant, input_scale)
+        operator.weight = weight
+        operator.weight_scale = weight_scale
+        operator.alpha = alpha
+        operator.bias = bias
 
-        infer.infer_ffn(phase, x.clone(), torch.zeros_like(x), torch.zeros_like(x), torch.zeros_like(x))
+        with patch.object(mm_weight, "cutlass_scaled_nvfp4_mm_split_n_stride", return_value=output) as kernel:
+            actual = operator.apply(input_tensor)
 
-        self.assertEqual(calls, [torch.Size([5, 8])])
+        self.assertIs(actual, output)
+        kernel.assert_called_once_with(
+            input_quant,
+            weight,
+            input_scale,
+            weight_scale,
+            alpha=alpha,
+            bias=bias,
+            split_n_parts=2,
+        )
 
-    def test_nvfp4_ffn_split_m_rejects_split_n_combination(self):
-        ensure_lightx2v_pipeline_stub()
-        ensure_local_lightx2v_kernel()
-        transformer_infer = import_module("lightx2v.models.networks.wan.infer.transformer_infer")
-
+    def test_split_n_workarounds_are_mutually_exclusive(self):
         with self.assertRaisesRegex(ValueError, "cannot both be enabled"):
-            transformer_infer.WanTransformerInfer(
-                make_config(
-                    dit_quant_scheme="nvfp4",
-                    nvfp4_ffn_split_m_workaround=True,
-                    nvfp4_ffn_split_m_stride=2,
-                    nvfp4_ffn_split_n_workaround=True,
-                    nvfp4_ffn_split_n_parts=2,
-                )
+            self.make_ffn(
+                nvfp4_ffn_split_n_workaround=True,
+                nvfp4_ffn_split_n_stride_workaround=True,
+                nvfp4_ffn_split_n_parts=2,
             )
+
+    def test_stride_flag_must_be_boolean(self):
+        with self.assertRaisesRegex(TypeError, "nvfp4_ffn_split_n_stride_workaround must be a boolean"):
+            self.make_ffn(nvfp4_ffn_split_n_stride_workaround=1, nvfp4_ffn_split_n_parts=2)
+
+    def test_enabled_workaround_requires_valid_parts(self):
+        invalid_cases = [
+            ({}, ValueError, "nvfp4_ffn_split_n_parts must be set"),
+            ({"nvfp4_ffn_split_n_parts": True}, TypeError, "nvfp4_ffn_split_n_parts must be an integer"),
+            ({"nvfp4_ffn_split_n_parts": 1}, ValueError, "nvfp4_ffn_split_n_parts must be at least 2"),
+        ]
+        for extra_config, error_type, message in invalid_cases:
+            with self.subTest(extra_config=extra_config):
+                with self.assertRaisesRegex(error_type, message):
+                    self.make_ffn(nvfp4_ffn_split_n_stride_workaround=True, **extra_config)
 
 
 class WanMxfp8FuseForwardingTest(unittest.TestCase):
