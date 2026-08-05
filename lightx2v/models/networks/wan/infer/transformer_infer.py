@@ -44,7 +44,6 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             self.modulate_func = modulate
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.mxfp8_fuse_enable = self.config.get("mxfp8_fuse_enable", True)
-        self.nvfp4_ffn_split_m_stride = self._resolve_nvfp4_ffn_split_m_stride(config)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
@@ -102,33 +101,6 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self.init_compile(config)
 
         self._mxfp8_fuse_available = self._probe_mxfp8_fuse_availability() if self.mxfp8_fuse_enable else False
-
-    @staticmethod
-    def _resolve_nvfp4_ffn_split_m_stride(config):
-        enabled = config.get("nvfp4_ffn_split_m_workaround", False)
-        if not isinstance(enabled, bool):
-            raise TypeError("nvfp4_ffn_split_m_workaround must be a boolean")
-        if not enabled:
-            return 1
-
-        split_n_enabled = config.get("nvfp4_ffn_split_n_workaround", False)
-        if not isinstance(split_n_enabled, bool):
-            raise TypeError("nvfp4_ffn_split_n_workaround must be a boolean")
-        if split_n_enabled:
-            raise ValueError("nvfp4_ffn_split_m_workaround and nvfp4_ffn_split_n_workaround cannot both be enabled")
-        if config.get("dit_quant_scheme", "Default") != "nvfp4":
-            raise ValueError("nvfp4_ffn_split_m_workaround requires dit_quant_scheme='nvfp4'")
-        if config.get("do_mm_calib", False):
-            raise ValueError("nvfp4_ffn_split_m_workaround does not support MM calibration")
-        if "nvfp4_ffn_split_m_stride" not in config:
-            raise ValueError("nvfp4_ffn_split_m_stride must be set when nvfp4_ffn_split_m_workaround is true")
-
-        stride = config["nvfp4_ffn_split_m_stride"]
-        if isinstance(stride, bool) or not isinstance(stride, int):
-            raise TypeError("nvfp4_ffn_split_m_stride must be an integer")
-        if stride < 2:
-            raise ValueError("nvfp4_ffn_split_m_stride must be at least 2")
-        return stride
 
     @torch.no_grad()
     def reset_post_adapter_states(self):
@@ -512,12 +484,6 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                 c_shift_msa=mxfp8_modulate_shift,
             )
 
-        if self.nvfp4_ffn_split_m_stride > 1:
-            if self.clean_cuda_cache:
-                del x
-                torch_device_module.empty_cache()
-            return self._infer_ffn_with_split_m_stride(phase, norm2_out)
-
         y = phase.ffn_0.apply(norm2_out)
         if self.clean_cuda_cache:
             del norm2_out, x
@@ -528,25 +494,6 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         y = phase.ffn_2.apply(y)
 
         return y
-
-    def _infer_ffn_with_split_m_stride(self, phase, norm2_out):
-        """Run the unchanged FFN on interleaved token shards and restore M order."""
-        stride = self.nvfp4_ffn_split_m_stride
-        if norm2_out.shape[0] < stride:
-            raise ValueError(f"NVFP4 FFN split-M stride {stride} exceeds the token count {norm2_out.shape[0]}")
-
-        output = torch.empty_like(norm2_out)
-        for offset in range(stride):
-            shard = norm2_out[offset::stride].contiguous()
-            shard = phase.ffn_0.apply(shard)
-            shard = torch.nn.functional.gelu(shard, approximate="tanh")
-            shard = phase.ffn_2.apply(shard)
-            output[offset::stride].copy_(shard)
-
-            if self.clean_cuda_cache:
-                del shard
-                torch_device_module.empty_cache()
-        return output
 
     def post_process(self, x, y, c_gate_msa, pre_infer_out=None):
         if y is None:

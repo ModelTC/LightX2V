@@ -8,6 +8,22 @@ def cutlass_scaled_nvfp4_mm(mat_a, mat_b, scales_a, scales_b, alpha, bias=None):
     return out
 
 
+def cutlass_scaled_nvfp4_mm_split_n_stride(mat_a, mat_b, scales_a, scales_b, alpha, bias=None, split_n_parts=2):
+    m, n = mat_a.shape[0], mat_b.shape[0]
+    out = torch.empty((m, n), dtype=torch.bfloat16, device=mat_a.device)
+    torch.ops.lightx2v_kernel.cutlass_scaled_nvfp4_mm_split_n_stride_sm120.default(
+        out,
+        mat_a,
+        mat_b,
+        scales_a,
+        scales_b,
+        alpha,
+        bias,
+        split_n_parts,
+    )
+    return out
+
+
 def scaled_nvfp4_quant(input: torch.Tensor, input_global_scale: torch.Tensor):
     """
     Quantize input tensor to FP4 and return quantized tensor and scale.
