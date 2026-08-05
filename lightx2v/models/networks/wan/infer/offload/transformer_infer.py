@@ -48,8 +48,8 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             "model_cls": "wan2.2_moe_distill",
             "task": "i2v",
             "feature_caching": "NoCaching",
-            "self_attn_1_type": "sla_attn",
-            "sla_attn_setting": {"sparsity_ratio": 0.8, "operator": "triton"},
+            "self_attn_1_type": "dynamic_sparse_attn",
+            "dynamic_sparse_attn_setting": {"sparsity_ratio": 0.8, "operator": "triton"},
             "dit_quantized": True,
             "dit_quant_scheme": "nvfp4",
         }
