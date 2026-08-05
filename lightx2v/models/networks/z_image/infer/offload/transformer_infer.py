@@ -26,6 +26,7 @@ class ZImageOffloadTransformerInfer(ZImageTransformerInfer):
         main_blocks,
         unified,
         unified_freqs_cis,
+        unified_rope_positions,
         adaln_input,
         image_tokens_len,
     ):
@@ -49,6 +50,7 @@ class ZImageOffloadTransformerInfer(ZImageTransformerInfer):
                     block_weight=self.offload_manager.cuda_buffers[0],
                     hidden_states=unified,
                     freqs_cis=unified_freqs_cis,
+                    rope_positions=unified_rope_positions,
                     adaln_input=adaln_input,
                     image_tokens_len=image_tokens_len,
                 )
@@ -62,18 +64,18 @@ class ZImageOffloadTransformerInfer(ZImageTransformerInfer):
         main_blocks,
         hidden_states,
         encoder_hidden_states,
-        x_freqs_cis,
-        cap_freqs_cis,
+        unified_freqs_cis,
+        unified_rope_positions,
         adaln_input,
         x_len,
         cap_len,
     ):
         unified = torch.cat([hidden_states, encoder_hidden_states], dim=0)
-        unified_freqs_cis = torch.cat([x_freqs_cis[:x_len], cap_freqs_cis[:cap_len]], dim=0)
         unified = self.infer_with_blocks_offload(
             main_blocks=main_blocks,
             unified=unified,
             unified_freqs_cis=unified_freqs_cis,
+            unified_rope_positions=unified_rope_positions,
             adaln_input=adaln_input,
             image_tokens_len=x_len,
         )

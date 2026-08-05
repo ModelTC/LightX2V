@@ -27,7 +27,7 @@ class EnvContract:
     state_dim: int
     # Square render/publish size hint (used by simulators that render on demand).
     image_size: int
-    # Inference assembly profile understood by FastWAMPolicy ("libero"|"robotwin").
+    # Inference assembly profile understood by the policy adapter.
     policy_profile: str
     # Action/state normalization mode ("minmax"|"zscore").
     normalize_mode: str
@@ -115,9 +115,27 @@ ROBOTWIN_CONTRACT = EnvContract(
 )
 
 
+ROBOLAB_CONTRACT = EnvContract(
+    name="robolab",
+    namespace="/robolab",
+    # Cosmos3 uses wrist + two shoulder cameras.  head_camera is also published
+    # for visualization and parity with RoboLab's official Cosmos3 registration.
+    cameras=("over_shoulder_left_camera", "over_shoulder_right_camera", "head_camera", "wrist_cam"),
+    policy_input_cameras=("wrist_cam", "over_shoulder_left_camera", "over_shoulder_right_camera"),
+    action_dim=8,
+    state_dim=8,
+    image_size=640,
+    policy_profile="cosmos3_droid",
+    normalize_mode="none",
+    gripper_postprocess=False,
+    description="RoboLab (IsaacLab) DROID single-arm manipulation for Cosmos3 Policy-DROID.",
+)
+
+
 CONTRACTS: Dict[str, EnvContract] = {
     LIBERO_CONTRACT.name: LIBERO_CONTRACT,
     ROBOTWIN_CONTRACT.name: ROBOTWIN_CONTRACT,
+    ROBOLAB_CONTRACT.name: ROBOLAB_CONTRACT,
 }
 
 

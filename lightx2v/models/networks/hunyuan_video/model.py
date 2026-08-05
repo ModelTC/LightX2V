@@ -11,7 +11,6 @@ from lightx2v.models.networks.hunyuan_video.infer.transformer_infer import Hunyu
 from lightx2v.models.networks.hunyuan_video.weights.post_weights import HunyuanVideo15PostWeights
 from lightx2v.models.networks.hunyuan_video.weights.pre_weights import HunyuanVideo15PreWeights
 from lightx2v.models.networks.hunyuan_video.weights.transformer_weights import HunyuanVideo15TransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 
 
 class HunyuanVideo15Model(BaseTransformerModel):
@@ -42,6 +41,7 @@ class HunyuanVideo15Model(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
+        self.pre_infer.set_rope(self.transformer_weights.double_blocks[0].rope)
         if hasattr(self.transformer_infer, "offload_manager"):
             self._init_offload_manager()
 
@@ -84,7 +84,6 @@ class HunyuanVideo15Model(BaseTransformerModel):
         combined_output = torch.cat(gathered_x, dim=1)
         return combined_output
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:

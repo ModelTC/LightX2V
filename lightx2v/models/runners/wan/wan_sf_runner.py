@@ -130,9 +130,6 @@ class WanSFRunner(WanRunner):
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self, total_steps=None):
         self.init_run()
-        if self.config.get("compile", False):
-            self.model.select_graph_for_compile(self.input_info)
-
         lazy_vae = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
         if lazy_vae:
             self.vae_decoder = self.load_vae_decoder()

@@ -28,8 +28,8 @@ class AttnWeightTemplate(metaclass=ABCMeta):
             destination = {}
         return destination
 
-    def load_state_dict(self, destination, block_index, adapter_block_inde=None):
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
         return {}
 
-    def load_state_dict_from_disk(self, block_index, adapter_block_inde=None):
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
         pass

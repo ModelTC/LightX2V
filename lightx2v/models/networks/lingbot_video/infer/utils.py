@@ -31,13 +31,6 @@ def get_timestep_embedding(
     return emb
 
 
-def apply_rotary_emb(x, freqs_cis):
-    with torch.amp.autocast(x.device.type, enabled=False):
-        x_c = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-        out = torch.view_as_real(x_c * freqs_cis.unsqueeze(1)).flatten(2)
-        return out.type_as(x)
-
-
 def precompute_freqs_cis(dim, end, theta):
     freqs_cis = []
     for d, e in zip(dim, end):

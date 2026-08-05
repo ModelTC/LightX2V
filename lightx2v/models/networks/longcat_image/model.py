@@ -10,7 +10,6 @@ from lightx2v.models.networks.longcat_image.infer.transformer_infer import LongC
 from lightx2v.models.networks.longcat_image.weights.post_weights import LongCatImagePostWeights
 from lightx2v.models.networks.longcat_image.weights.pre_weights import LongCatImagePreWeights
 from lightx2v.models.networks.longcat_image.weights.transformer_weights import LongCatImageTransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 
 
@@ -46,6 +45,7 @@ class LongCatImageTransformerModel(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
+        self.pre_infer.set_rope(self.transformer_weights.double_blocks[0].rope)
         if hasattr(self.transformer_infer, "offload_manager_double") and hasattr(self.transformer_infer, "offload_manager_single"):
             self._init_offload_manager()
 
@@ -106,7 +106,6 @@ class LongCatImageTransformerModel(BaseTransformerModel):
             noise_pred = noise_pred[:, :output_seq_len]
         return noise_pred
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:

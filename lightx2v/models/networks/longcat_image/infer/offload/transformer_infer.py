@@ -34,6 +34,7 @@ class LongCatImageOffloadTransformerInfer(LongCatImageTransformerInfer):
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         temb = pre_infer_out.temb
         image_rotary_emb = pre_infer_out.image_rotary_emb
+        image_rotary_positions = pre_infer_out.image_rotary_positions
 
         # For I2I task: concatenate output latents with input image latents
         output_seq_len = None
@@ -60,6 +61,7 @@ class LongCatImageOffloadTransformerInfer(LongCatImageTransformerInfer):
                     encoder_hidden_states,
                     temb,
                     image_rotary_emb,
+                    image_rotary_positions,
                 )
 
             self.offload_manager_double.swap_blocks()
@@ -82,6 +84,7 @@ class LongCatImageOffloadTransformerInfer(LongCatImageTransformerInfer):
                     encoder_hidden_states,
                     temb,
                     image_rotary_emb,
+                    image_rotary_positions,
                 )
 
             self.offload_manager_single.swap_blocks()

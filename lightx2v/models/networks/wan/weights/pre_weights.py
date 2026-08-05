@@ -100,7 +100,7 @@ class WanPreWeights(WeightModule):
         if config["task"] in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and config.get("use_image_encoder", True):
             self.add_module(
                 "proj_0",
-                LN_WEIGHT_REGISTER["torch"](
+                LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                     "img_emb.proj.0.weight",
                     "img_emb.proj.0.bias",
                     lora_prefix="diffusion_model.img_emb",
@@ -124,7 +124,7 @@ class WanPreWeights(WeightModule):
             )
             self.add_module(
                 "proj_4",
-                LN_WEIGHT_REGISTER["torch"](
+                LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](
                     "img_emb.proj.4.weight",
                     "img_emb.proj.4.bias",
                     lora_prefix="diffusion_model.img_emb",

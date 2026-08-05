@@ -1,4 +1,5 @@
 import argparse
+import copy
 from pathlib import Path
 
 import torch
@@ -17,8 +18,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def _load_full_checkpoint_for_infer(model, config):
-    model_config = config.get("model", {})
+def _load_full_checkpoint_for_infer(model, model_config):
     checkpoint_path = model_config.get("checkpoint_path")
     if not checkpoint_path:
         return
@@ -55,6 +55,37 @@ def _load_full_checkpoint_for_infer(model, config):
         logger.warning("Checkpoint load incompatible keys: {}", incompatible)
 
 
+def _build_low_model_for_dual_infer(config, reference_model):
+    model_config = config.get("model", {})
+    low_override = model_config.get("student_2")
+    if not isinstance(low_override, dict):
+        raise ValueError("wan_t2v_dual_infer requires model.student_2.")
+    role_names = {
+        "student",
+        "fake",
+        "teacher",
+        "student_2",
+        "fake_2",
+        "teacher_2",
+        "checkpoint_path",
+        "checkpoint_strict",
+    }
+    low_config = copy.deepcopy(config)
+    low_config["model"] = {key: copy.deepcopy(value) for key, value in model_config.items() if key not in role_names}
+    low_config["model"].update(copy.deepcopy(low_override))
+    low_model = build_model(low_config)
+    low_model.load_components(
+        transformer_only=True,
+        reference_model=reference_model,
+    )
+    _load_full_checkpoint_for_infer(
+        low_model,
+        low_config["model"],
+    )
+    apply_fsdp2(low_model, config)
+    return low_model
+
+
 def main():
     args = parse_args()
     config = load_config(args.config)
@@ -64,7 +95,10 @@ def main():
     try:
         model = build_model(config)
         model.load_components()
-        _load_full_checkpoint_for_infer(model, config)
+        _load_full_checkpoint_for_infer(
+            model,
+            config.get("model", {}),
+        )
 
         lora_config = config.get("inference", {}).get("lora_config", None)
         lora_path = lora_config.get("path", None) if lora_config else None
@@ -76,6 +110,8 @@ def main():
 
         inferencer = build_inferencer(config)
         inferencer.set_model(model)
+        if hasattr(inferencer, "set_low_model"):
+            inferencer.set_low_model(_build_low_model_for_dual_infer(config, model))
         inferencer.set_data(dataloader_val)
 
         inferencer.infer()

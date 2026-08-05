@@ -3,7 +3,44 @@ from abc import ABCMeta, abstractmethod
 
 import torch
 
+from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+try:
+    from lightx2v_kernel.gemm import (
+        scaled_mxfp4_quant,
+        scaled_mxfp6_quant,
+        scaled_mxfp8_quant,
+        scaled_nvfp4_quant,
+    )
+except ImportError:
+    scaled_mxfp4_quant = None
+    scaled_mxfp6_quant = None
+    scaled_mxfp8_quant = None
+    scaled_nvfp4_quant = None
+
+try:
+    from vllm import _custom_ops as ops
+except ImportError:
+    ops = None
+
+try:
+    import sgl_kernel
+except ImportError:
+    sgl_kernel = None
+
+try:
+    import deep_gemm
+except ImportError:
+    deep_gemm = None
+
+try:
+    from torchao.quantization.utils import quantize_activation_per_token_absmax
+except ImportError:
+    try:
+        from torchao.quantization.utils import _quantize_activation_per_token_absmax as quantize_activation_per_token_absmax
+    except ImportError:
+        quantize_activation_per_token_absmax = None
 
 
 class MMWeightTemplate(metaclass=ABCMeta):

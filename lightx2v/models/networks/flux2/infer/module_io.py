@@ -24,7 +24,8 @@ class Flux2PreInferModuleOutput:
     txt_ids: Optional[torch.Tensor] = None  # [B, text_seq_len, 4]
     img_ids: Optional[torch.Tensor] = None  # [B, image_seq_len, 4]
 
-    image_rotary_emb: Optional[tuple] = None  # (cos, sin) tuple
+    image_rotary_emb: Optional[torch.Tensor | tuple] = None
+    image_rotary_positions: Optional[torch.Tensor] = None
 
     input_image_latents: Optional[torch.Tensor] = None
     output_seq_len: Optional[int] = None

@@ -198,7 +198,7 @@ def run_inference(
         "boundary_step_index": 2,
         "boundary": 0.900,
         "use_image_encoder": False if "wan2.2" in model_cls else True,
-        "rope_type": "torch",
+        "rope_type": "torch_complex_rope",
         "t5_lazy_load": lazy_load,
         "bucket_shape": {
             "0.667": [[480, 832], [544, 960], [720, 960]],

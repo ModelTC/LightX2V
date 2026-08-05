@@ -12,11 +12,12 @@ from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRun
 from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
 from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
+from lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner import HunyuanImage3Runner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
-from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
+from lightx2v.models.runners.ltx2.ltx2_runner import LTX2ARRunner, LTX2Runner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
@@ -24,6 +25,7 @@ from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_dancer_runner import WanDancerRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_dreamzero_runner import WanDreamZeroRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_infinitetalk_runner import InfiniteTalkRunner  # noqa: F401
@@ -55,6 +57,26 @@ def init_runner(config):
     return runner
 
 
+def distributed_barrier():
+    import torch.distributed as dist
+
+    if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() <= 1:
+        return False
+
+    from lightx2v_platform.base.global_var import AI_DEVICE
+
+    if AI_DEVICE == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
+        dist.barrier(device_ids=[torch.cuda.current_device()])
+    else:
+        dist.barrier()
+
+    from loguru import logger
+
+    logger.info(f"[Barrier] synchronized all ranks")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42, help="The seed for random generator")
@@ -66,6 +88,7 @@ def main():
             "wan2.1",
             "wan2.1_distill",
             "wan2.1_mean_flow_distill",
+            "wan_dancer",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
@@ -89,6 +112,7 @@ def main():
             "wan2.2_s2v",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
+            "hunyuan_image3",
             "hunyuan3d",
             "worldplay_distill",
             "worldplay_ar",
@@ -97,6 +121,7 @@ def main():
             "flux2_klein",
             "flux2_dev",
             "ltx2",
+            "ltx2_ar",
             "bagel",
             "seedvr2",
             "neopp",
@@ -113,12 +138,16 @@ def main():
     )
 
     parser.add_argument(
-        "--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "i2va", "v2av", "ltx2_s2v", "sr", "recon", "i23d"], default="t2v"
+        "--task",
+        type=str,
+        choices=["t2v", "i2v", "t2t", "t2i", "ti2t", "ti2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "i2va", "v2av", "ltx2_s2v", "sr", "recon", "i23d"],
+        default="t2v",
     )
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
+    parser.add_argument("--warmup", action="store_true", help="Warm up the model before inference. Disabled by default.")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")
 
@@ -126,7 +155,7 @@ def main():
         "--image_path",
         type=str,
         default="",
-        help="The path to input image file(s) for image-to-video (i2v) or image-to-audio-video (i2av) task. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
+        help="The path to input image file(s), including HunyuanImage3 ti2t/ti2i. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
     parser.add_argument("--state_path", type=str, default="", help="The path to input robot state file for robot i2v/i2va inference.")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
@@ -230,7 +259,6 @@ def main():
     parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
-    parser.add_argument("--target_video_length", type=int, default=81, help="The target video length for each generated clip")
     parser.add_argument("--aspect_ratio", type=str, default="")
     parser.add_argument(
         "--keep_original_aspect",
@@ -269,6 +297,7 @@ def main():
 
     # set config
     config = set_config(args)
+    config["warmup"] = args.warmup
     # init input_info
     input_info = init_empty_input_info(args.task, args.support_tasks)
 

@@ -13,7 +13,7 @@ class WanSFScheduler(WanScheduler):
         ar = config.get("ar_config", {})
         self.num_frame_per_chunk = int(ar.get("num_frame_per_chunk", 3))
         self.num_output_frames = int(config.get("num_output_frames", config.get("target_video_length", 81)))
-        self.context_noise = 0
+        self.context_noise = float(ar.get("context_noise", 0.0))
 
         if "denoising_step_list" in ar:
             self._mode = "denoise"

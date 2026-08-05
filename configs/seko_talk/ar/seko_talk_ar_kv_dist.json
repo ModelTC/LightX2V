@@ -39,6 +39,7 @@
         "step_kv_cache": true,
         "sink_size": 2,
         "local_attn_size": 21,
+        "rope_position_mode": "local",
         "kv_offload": false,
         "async_vae_decode": false
     }

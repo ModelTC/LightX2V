@@ -171,7 +171,7 @@ class LightX2VPipeline:
         boundary_step_index=2,
         denoising_step_list=[1000, 750, 500, 250],
         config_json=None,
-        rope_type="torch",
+        rope_type="torch_complex_rope",
         resize_mode=None,
         audio_fps=24000,
         double_precision_rope=True,
@@ -366,23 +366,6 @@ class LightX2VPipeline:
             self.gemma_cpu_offload = text_encoder_offload
         elif self.model_cls == "z_image":
             self.qwen3_cpu_offload = text_encoder_offload
-
-    def enable_compile(
-        self,
-    ):
-        self.compile = True
-        self.compile_shapes = [
-            [480, 832],
-            [544, 960],
-            [720, 1280],
-            [832, 480],
-            [960, 544],
-            [1280, 720],
-            [480, 480],
-            [576, 576],
-            [704, 704],
-            [960, 960],
-        ]
 
     def enable_lora(self, lora_configs, lora_dynamic_apply=False):
         self.lora_configs = lora_configs

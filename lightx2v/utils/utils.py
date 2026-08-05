@@ -56,7 +56,7 @@ def save_videos_grid(videos: torch.Tensor, path: str, rescale=False, n_rows=1, f
         if rescale:
             x = (x + 1.0) / 2.0  # -1,1 -> 0,1
         x = torch.clamp(x, 0, 1)
-        x = (x * 255).numpy().astype(np.uint8)
+        x = (x * 255).to(torch.uint8).cpu().numpy()
         outputs.append(x)
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -122,6 +122,7 @@ def vae_to_comfyui_image(vae_output: torch.Tensor) -> torch.Tensor:
     Returns:
         ComfyUI Image tensor in range [0, 1]
         Shape: [B, H, W, C] for single frame or [B*T, H, W, C] for video
+        Note: The returned tensor remains on the input device.
     """
     # Handle video tensor (5D) vs image tensor (4D)
     if vae_output.dim() == 5:
@@ -137,7 +138,7 @@ def vae_to_comfyui_image(vae_output: torch.Tensor) -> torch.Tensor:
     images = torch.clamp(images, 0, 1)
 
     # Convert from [B, C, H, W] to [B, H, W, C]
-    images = images.permute(0, 2, 3, 1).cpu()
+    images = images.permute(0, 2, 3, 1)
 
     return images
 
@@ -154,7 +155,7 @@ def vae_to_comfyui_image_inplace(vae_output: torch.Tensor) -> torch.Tensor:
     Returns:
         ComfyUI Image tensor in range [0, 1]
         Shape: [B, H, W, C] for single frame or [B*T, H, W, C] for video
-        Note: The returned tensor is the same object as input (modified in-place)
+        Note: The returned tensor remains on the input device.
     """
     # Handle video tensor (5D) vs image tensor (4D)
     if vae_output.dim() == 5:
@@ -169,8 +170,8 @@ def vae_to_comfyui_image_inplace(vae_output: torch.Tensor) -> torch.Tensor:
     # Clamp values to [0, 1] (inplace)
     vae_output.clamp_(0, 1)
 
-    # Convert from [B, C, H, W] to [B, H, W, C] and move to CPU
-    vae_output = vae_output.permute(0, 2, 3, 1).cpu()
+    # Convert from [B, C, H, W] to [B, H, W, C]
+    vae_output = vae_output.permute(0, 2, 3, 1)
 
     return vae_output
 
@@ -196,10 +197,10 @@ def wan_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
         # Video: [B, C, T, H, W] -> [B, T, H, W, C]
         vae_output = vae_output.permute(0, 2, 3, 4, 1)
         # -> [B*T, H, W, C]
-        return vae_output.cpu().flatten(0, 1)
+        return vae_output.flatten(0, 1)
     else:
         # Image: [B, C, H, W] -> [B, H, W, C]
-        return vae_output.permute(0, 2, 3, 1).cpu()
+        return vae_output.permute(0, 2, 3, 1)
 
 
 def diffusers_vae_to_comfy(vae_output: torch.Tensor) -> torch.Tensor:
@@ -239,13 +240,11 @@ def save_to_video(
 
     if method == "imageio":
         # Convert to uint8
-        # frames = (images * 255).cpu().numpy().astype(np.uint8)
         frames = (images * 255).to(torch.uint8).cpu().numpy()
         imageio.mimsave(output_path, frames, fps=fps)  # type: ignore
 
     elif method == "ffmpeg":
         # Convert to numpy and scale to [0, 255]
-        # frames = (images * 255).cpu().numpy().clip(0, 255).astype(np.uint8)
         frames = (images * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
 
         # Convert RGB to BGR for OpenCV/FFmpeg

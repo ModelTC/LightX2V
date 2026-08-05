@@ -6,13 +6,6 @@ def modulate(x, shift, scale):
     return x * (1 + scale) + shift
 
 
-def rope_apply(x, freqs):
-    seq_len, num_heads, head_dim = x.shape
-    x_complex = torch.view_as_complex(x.to(torch.float64).reshape(seq_len, num_heads, head_dim // 2, 2))
-    x_out = torch.view_as_real(x_complex * freqs).flatten(2)
-    return x_out.to(x.dtype)
-
-
 class FastWAMTransformerInfer:
     def __init__(self, config):
         self.config = config
@@ -46,8 +39,7 @@ class FastWAMTransformerInfer:
         q = self._reshape_heads(self_attn.norm_q.apply(self_attn.q.apply(attn_input)))
         k = self._reshape_heads(self_attn.norm_k.apply(self_attn.k.apply(attn_input)))
         v = self._reshape_heads(self_attn.v.apply(attn_input))
-        q = rope_apply(q, freqs)
-        k = rope_apply(k, freqs)
+        q, k = self_attn.rope.apply(q, k, freqs)
         return q, k, v, x, gate_msa, shift_mlp, scale_mlp, gate_mlp
 
     def _cross_attn(self, block, x, context, context_mask):

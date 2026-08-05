@@ -18,7 +18,9 @@ setup(
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
+            "cosmos3_node = inference.cosmos3_node.main:main",
             "fastwam_node = inference.fastwam_node.main:main",
+            "lingbot_va_node = inference.lingbot_va_node.main:main",
         ],
     },
 )

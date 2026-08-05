@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.ltx2.infer.ar_transformer_infer import LTX2ARTransformerInfer
 from lightx2v.models.networks.ltx2.infer.offload.transformer_infer import (
     LTX2OffloadTransformerInfer,
 )
@@ -20,9 +21,11 @@ from lightx2v.models.networks.ltx2.weights.pre_weights import LTX2PreWeights
 from lightx2v.models.networks.ltx2.weights.transformer_weights import (
     LTX2TransformerWeights,
 )
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def _multimodal_guider_calculate(
@@ -39,9 +42,12 @@ def _multimodal_guider_calculate(
     """与 ltx_core MultiModalGuider.calculate 一致（避免从 scheduler 大模块导入导致循环依赖/旧缓存问题）。"""
     if not math.isclose(cfg_scale, 1.0) and uncond_text is None:
         raise ValueError("mm_guider: cfg_scale != 1 时需要 uncond 前向，但 uncond_text 为 None")
-    ut = uncond_text if not math.isclose(cfg_scale, 1.0) else cond
-    up = uncond_perturbed if not math.isclose(stg_scale, 0.0) else cond
-    um = uncond_modality if not math.isclose(modality_scale, 1.0) else cond
+
+    dtype = cond.dtype
+    cond = cond.float()
+    ut = uncond_text.float() if not math.isclose(cfg_scale, 1.0) else cond
+    up = uncond_perturbed.float() if not math.isclose(stg_scale, 0.0) else cond
+    um = uncond_modality.float() if not math.isclose(modality_scale, 1.0) else cond
 
     pred = cond + (cfg_scale - 1.0) * (cond - ut) + stg_scale * (cond - up) + (modality_scale - 1.0) * (cond - um)
 
@@ -50,7 +56,7 @@ def _multimodal_guider_calculate(
         factor = rescale_scale * factor + (1.0 - rescale_scale)
         pred = pred * factor
 
-    return pred
+    return pred.to(dtype)
 
 
 def _mm_guider_should_skip_step(skip_step: int, step_index: int) -> bool:
@@ -140,14 +146,14 @@ class LTX2Model(BaseTransformerModel):
         """
         Load and distribute weights from rank 0 to all ranks.
 
-        Only supports tensor parallel mode with CUDA device.
+        Supports tensor parallel mode on the configured accelerator platform.
         CPU offload is not supported.
         """
         # CPU offload is not supported
         if self.cpu_offload:
             raise NotImplementedError("_load_weights_from_rank0 does not support CPU offload. Please set cpu_offload=False.")
 
-        logger.info("Loading distributed weights with tensor parallel (CUDA only)")
+        logger.info(f"Loading distributed weights with tensor parallel on {AI_DEVICE}")
         global_src_rank = 0
 
         if is_weight_loader:
@@ -198,11 +204,11 @@ class LTX2Model(BaseTransformerModel):
             dist.broadcast_object_list(obj_list, src=global_src_rank)
             synced_meta_dict = obj_list[0]
 
-        # Allocate tensors on CUDA
+        # Allocate tensors on the accelerator selected by the platform layer.
         distributed_weight_dict = {}
+        device = torch.device(f"{AI_DEVICE}:{torch_device_module.current_device()}")
         for key, meta in synced_meta_dict.items():
             is_tp = meta.get("is_tp", False)
-            device = torch.device(f"cuda:{torch.cuda.current_device()}")
             if is_tp:
                 # TP weight: each rank gets its own slice
                 distributed_weight_dict[key] = torch.empty(meta["shape"], dtype=meta["dtype"], device=device)
@@ -243,9 +249,9 @@ class LTX2Model(BaseTransformerModel):
 
                 dist.broadcast(distributed_weight_dict[key], src=global_src_rank)
 
-        torch.cuda.synchronize()
+        torch_device_module.synchronize()
 
-        logger.info(f"Weights distributed across {dist.get_world_size()} devices on CUDA")
+        logger.info(f"Weights distributed across {dist.get_world_size()} devices on {AI_DEVICE}")
 
         return distributed_weight_dict
 
@@ -337,7 +343,6 @@ class LTX2Model(BaseTransformerModel):
         if hasattr(self.transformer_infer, "offload_manager"):
             self._init_offload_manager()
 
-    @compiled_method()
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True, mm_perturb=None):
         self.transformer_infer.reset_guidance_perturbation()
@@ -377,8 +382,9 @@ class LTX2Model(BaseTransformerModel):
         sch = self.scheduler
         step_i = sch.step_index
         v_p, a_p = sch.mm_guider_video, sch.mm_guider_audio
-        v_skip = _mm_guider_should_skip_step(v_p["skip_step"], step_i)
-        a_skip = _mm_guider_should_skip_step(a_p["skip_step"], step_i)
+        is_rerun = bool(getattr(sch, "is_rerun", False))
+        v_skip = False if is_rerun else _mm_guider_should_skip_step(v_p["skip_step"], step_i)
+        a_skip = False if is_rerun else _mm_guider_should_skip_step(a_p["skip_step"], step_i)
 
         need_neg = (not math.isclose(v_p["cfg_scale"], 1.0)) or (not math.isclose(a_p["cfg_scale"], 1.0))
         need_ptb = (not math.isclose(v_p["stg_scale"], 0.0)) or (not math.isclose(a_p["stg_scale"], 0.0))
@@ -540,12 +546,10 @@ class LTX2Model(BaseTransformerModel):
                     v_cross_ss = F.pad(v_cross_ss, (0, 0, 0, padding_size))
                 pre_infer_out.video_args.cross_scale_shift_timestep = torch.chunk(v_cross_ss, world_size, dim=0)[cur_rank]
 
-            if pre_infer_out.video_args.cross_gate_timestep is not None:
-                v_cross_gate = pre_infer_out.video_args.cross_gate_timestep
-                padding_size = (world_size - (v_cross_gate.shape[0] % world_size)) % world_size
-                if padding_size > 0:
-                    v_cross_gate = F.pad(v_cross_gate, (0, 0, 0, padding_size))
-                pre_infer_out.video_args.cross_gate_timestep = torch.chunk(v_cross_gate, world_size, dim=0)[cur_rank]
+            # cross_gate_timestep is a global [1, hidden_dim] gate derived from
+            # the scheduler sigma, not a per-token tensor. Every sequence-
+            # parallel rank must retain the same gate and broadcast it over its
+            # local video tokens in the transformer block.
 
         # Audio remains global - no splitting needed
         # Audio has fewer tokens, so we keep it on all ranks
@@ -712,3 +716,46 @@ class LTX2Model(BaseTransformerModel):
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
                 self.post_weight.to_cpu()
+
+
+class LTX2ARModel(LTX2Model):
+    """LTX2.3 model variant for chunkwise autoregressive inference."""
+
+    def _init_infer_class(self):
+        if self.cpu_offload:
+            raise NotImplementedError("ltx2_ar does not support cpu_offload yet.")
+        if self.config.get("seq_parallel", False):
+            raise NotImplementedError("ltx2_ar does not support sequence parallel; tensor parallel is supported.")
+        self.pre_infer_class = LTX2PreInfer
+        self.post_infer_class = LTX2PostInfer
+        self.transformer_infer_class = LTX2ARTransformerInfer
+
+    def _load_ckpt(self, unified_dtype, sensitive_layer):
+        weight_dict = super()._load_ckpt(unified_dtype, sensitive_layer)
+        normalized = {}
+        for key, value in weight_dict.items():
+            while key.startswith("module.") or key.startswith("_fsdp_wrapped_module."):
+                key = key.split(".", 1)[1]
+            if not key.startswith("model.diffusion_model."):
+                key = f"model.diffusion_model.{key}"
+            normalized[key] = value
+        return normalized
+
+    def configure_ar_cache(self, **kwargs):
+        self.transformer_infer.configure_ar_cache(**kwargs)
+
+    def set_ar_chunk(self, *, video_start: int, audio_start: int):
+        self.transformer_infer.set_ar_chunk(video_start=video_start, audio_start=audio_start)
+
+    @torch.no_grad()
+    def _infer_cond_uncond(self, inputs, infer_condition=True, mm_perturb=None):
+        if not infer_condition:
+            branch = "negative"
+        elif not mm_perturb:
+            branch = "positive"
+        elif mm_perturb.get("skip_a2v", False) or mm_perturb.get("skip_v2a", False):
+            branch = "modality"
+        else:
+            branch = "perturbed"
+        self.transformer_infer.set_ar_branch(branch)
+        return super()._infer_cond_uncond(inputs, infer_condition=infer_condition, mm_perturb=mm_perturb)

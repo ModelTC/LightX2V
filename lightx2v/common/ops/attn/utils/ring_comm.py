@@ -19,10 +19,9 @@ class RingComm:
             self.send_rank = dist.get_global_rank(self._process_group, self.send_rank)
             self.recv_rank = dist.get_global_rank(self._process_group, self.recv_rank)
 
-    def send_recv(self, to_send: torch.Tensor, recv_tensor: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def enqueue_send_recv(self, to_send: torch.Tensor, recv_tensor: Optional[torch.Tensor] = None) -> torch.Tensor:
         if recv_tensor is None:
             res = torch.empty_like(to_send)
-            # logger.info(f"send_recv: empty_like {to_send.shape}")
         else:
             res = recv_tensor
 

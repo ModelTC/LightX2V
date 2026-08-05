@@ -21,7 +21,14 @@ class Flux2KleinDenoiserInput:
 class Flux2KleinModel(BaseModel):
     pipeline_cls = Flux2KleinPipeline
 
-    def load_components(self):
+    def load_components(self, transformer_only=False, reference_model=None):
+        if transformer_only:
+            if reference_model is not None:
+                self.text_pipeline = reference_model.text_pipeline
+                self.vae = reference_model.vae
+                self.image_processor = reference_model.image_processor
+            self.transformer = self.load_transformer()
+            return
         model_path = self.config["model"]["pretrained_model_name_or_path"]
         self.text_pipeline = Flux2KleinPipeline.from_pretrained(
             model_path,
@@ -77,11 +84,15 @@ class Flux2KleinModel(BaseModel):
         return Flux2KleinPipeline._unpatchify_latents(latents)
 
     def encode_to_latent(self, sample):
-        image = sample["target_image"].to(device=self.device, dtype=self.running_dtype)
+        image = sample["inputs"]["target_image"].to(device=self.device, dtype=self.running_dtype)
         latent = self.vae.encode(image).latent_dist.sample()
         return self._normalize_patch_latents(latent)
 
-    def encode_prompt_text(self, prompt):
+    def encode_condition(self, sample):
+        prompt = sample["conditioning"]["prompt"]
+        return self.encode_prompt_condition(prompt)
+
+    def encode_prompt_condition(self, prompt):
         model_config = self.config["model"]
         prompt_embed, text_ids = self.text_pipeline.encode_prompt(
             prompt=prompt,
@@ -92,8 +103,18 @@ class Flux2KleinModel(BaseModel):
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
 
-    def encode_condition(self, sample):
-        return self.encode_prompt_text(sample["prompt"])
+    def encode_prompt_text(self, prompt):
+        return self.encode_prompt_condition(prompt)
+
+    def dmd_latent_shape(self, batch_size, height, width):
+        latent_h = 2 * (int(height) // (self.vae_scale_factor * 2))
+        latent_w = 2 * (int(width) // (self.vae_scale_factor * 2))
+        return (
+            batch_size,
+            self.transformer.config.in_channels,
+            latent_h // 2,
+            latent_w // 2,
+        )
 
     def prepare_denoiser_input(self, noisy_latent, condition=None):
         h, w = noisy_latent.shape[2], noisy_latent.shape[3]

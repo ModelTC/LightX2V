@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme5/gushiqiao/codes/debug/lingbot-x2v/LightX2V
-model_path=/data/nvme5/gushiqiao/models/lingbot-video-moe-30b-a3b
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/lingbot-video-moe-30b-a3b
 
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
@@ -29,7 +29,7 @@ python -m lightx2v.infer \
 --model_cls lingbot_video \
 --task t2i \
 --model_path ${model_path} \
---config_json ${lightx2v_path}/configs/lingbot_video/lingbot_video_t2i.json \
+--config_json ${lightx2v_path}/configs/lingbot_video/lingbot_video_lora.json \
 --prompt "${prompt}" \
 --negative_prompt "${negative_prompt}" \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_lingbot_video_t2i.png \

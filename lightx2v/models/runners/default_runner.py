@@ -98,6 +98,21 @@ class DefaultRunner(BaseRunner):
         self.set_init_device()
         self.init_scheduler()
 
+    def warmup(self):
+        if not self.config.get("warmup", False):
+            return
+        if self.config.get("disagg_mode"):
+            raise NotImplementedError("Warmup does not support disaggregated inference")
+        if self.config.get("unload_modules", False):
+            raise NotImplementedError("Warmup does not support unload_modules")
+        if self.config.get("feature_caching", "NoCaching") != "NoCaching":
+            raise NotImplementedError("Warmup does not support feature caching")
+
+        self.run_warmup()
+
+    def run_warmup(self):
+        raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
+
     def init_modules(self):
         logger.info("Initializing runner modules...")
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
@@ -125,9 +140,6 @@ class DefaultRunner(BaseRunner):
         elif self.config["task"] == "sr":
             self.run_input_encoder = self._run_input_encoder_local_sr
         self.config.lock()  # lock config to avoid modification
-        if self.config.get("compile", False) and hasattr(self.model, "compile"):
-            logger.info(f"[Compile] Compile all shapes: {self.config.get('compile_shapes', [])}")
-            self.model.compile(self.config.get("compile_shapes", []))
 
     def set_init_device(self):
         if self.config["cpu_offload"]:
@@ -240,7 +252,6 @@ class DefaultRunner(BaseRunner):
 
         if segment_idx is not None and segment_idx == self.video_segment_num - 1:
             del self.inputs
-            torch_device_module.empty_cache()
 
         return self.model.scheduler.latents
 
@@ -253,7 +264,36 @@ class DefaultRunner(BaseRunner):
 
         self.run_main(total_steps=1)
 
+    def maybe_empty_cache(self, *, force: bool = False, collect_garbage: bool = False) -> bool:
+        """Collect Python garbage when requested and release cached device memory under pressure."""
+        gib = 1024**3
+        min_free_bytes = float(self.config.get("empty_cache_min_free_gib", 4)) * gib
+        min_reclaimable_bytes = float(self.config.get("empty_cache_min_reclaimable_gib", 2)) * gib
+
+        free_bytes, _ = torch_device_module.mem_get_info()
+        check_cache = force or free_bytes < min_free_bytes
+        if collect_garbage or check_cache:
+            gc.collect()
+        if not check_cache:
+            return False
+
+        allocated_bytes = torch_device_module.memory_allocated()
+        reserved_bytes = torch_device_module.memory_reserved()
+        reclaimable_bytes = max(reserved_bytes - allocated_bytes, 0)
+
+        if force or reclaimable_bytes >= min_reclaimable_bytes:
+            logger.info(
+                f"[Memory] Emptying device cache: free={free_bytes / gib:.2f} GiB, "
+                f"allocated={allocated_bytes / gib:.2f} GiB, reserved={reserved_bytes / gib:.2f} GiB, "
+                f"reclaimable={reclaimable_bytes / gib:.2f} GiB, force={force}"
+            )
+            torch_device_module.empty_cache()
+            return True
+
+        return False
+
     def end_run(self):
+        release_transformer = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
         if self.model is not None:
             self.model.scheduler.clear()
         elif hasattr(self, "scheduler") and self.scheduler is not None:
@@ -261,26 +301,19 @@ class DefaultRunner(BaseRunner):
         if hasattr(self, "inputs"):
             del self.inputs
         self.input_info = None
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            if hasattr(self.model, "model") and len(self.model.model) == 2:  # MultiModelStruct
-                for model in self.model.model:
-                    if hasattr(model.transformer_infer, "offload_manager"):
-                        del model.transformer_infer.offload_manager
-                        torch_device_module.empty_cache()
-                        gc.collect()
-                    del model
-            else:
-                if hasattr(self.model.transformer_infer, "offload_manager"):
-                    del self.model.transformer_infer.offload_manager
-                    torch_device_module.empty_cache()
-                    gc.collect()
-                del self.model
+        if release_transformer:
+            self.scheduler.transformer_infer = None
+            models = self.model.model if hasattr(self.model, "model") and len(self.model.model) == 2 else (self.model,)
+            for model in filter(None, models):
+                if hasattr(model.transformer_infer, "offload_manager"):
+                    del model.transformer_infer.offload_manager
+            self.model = None
+            models = model = None
         if self.config.get("do_mm_calib", False):
             calib_path = os.path.join(os.getcwd(), "calib.pt")
             torch.save(CALIB, calib_path)
             logger.info(f"[CALIB] Saved calibration data successfully to: {calib_path}")
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache(collect_garbage=release_transformer)
 
     def read_image_input(self, img_path):
         if isinstance(img_path, Image.Image):
@@ -335,16 +368,14 @@ class DefaultRunner(BaseRunner):
         vae_encode_out, latent_shape = self.run_vae_encoder(img_ori if self.vae_encoder_need_img_original else img)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output, img)
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return {
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": None,
@@ -358,8 +389,7 @@ class DefaultRunner(BaseRunner):
         vae_encode_out, latent_shape = self.run_vae_encoder(first_frame, last_frame)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output)
 
     @ProfilingContext4DebugL2("Run Encoders")
@@ -378,15 +408,13 @@ class DefaultRunner(BaseRunner):
         vae_encoder_out, latent_shape = self.run_vae_encoder(src_video, src_ref_images, src_mask)
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(None, vae_encoder_out, text_encoder_output)
 
     @ProfilingContext4DebugL2("Run Text Encoder")
     def _run_input_encoder_local_animate(self):
         text_encoder_output = self.run_text_encoder(self.input_info)
-        torch_device_module.empty_cache()
-        gc.collect()
+        self.maybe_empty_cache()
         return self.get_encoder_output_i2v(None, None, text_encoder_output, None)
 
     def _run_input_encoder_local_s2v(self):
@@ -414,8 +442,6 @@ class DefaultRunner(BaseRunner):
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         self.init_run()
-        if self.config.get("compile", False) and hasattr(self.model, "comple"):
-            self.model.select_graph_for_compile(self.input_info)
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext4DebugL1(
@@ -451,8 +477,7 @@ class DefaultRunner(BaseRunner):
         images = self.vae_decoder.decode(latents.to(GET_DTYPE()))
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
         return images
 
     @ProfilingContext4DebugL1("Run VAE Decoder Stream", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_decode_duration, metrics_labels=["DefaultRunner"])
@@ -465,8 +490,7 @@ class DefaultRunner(BaseRunner):
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae_decoder
-            torch_device_module.empty_cache()
-            gc.collect()
+            self.maybe_empty_cache()
 
     def post_prompt_enhancer(self):
         while True:
@@ -485,7 +509,17 @@ class DefaultRunner(BaseRunner):
                     return enhanced_prompt
 
     def process_images_after_vae_decoder(self):
-        self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
+        return_result_tensor = self.input_info.return_result_tensor
+        save_result = self.input_info.save_result_path is not None
+        main_process = not dist.is_initialized() or dist.get_rank() == 0
+
+        should_process = return_result_tensor or (save_result and main_process)
+        if not should_process:
+            self.gen_video_final = None
+            return {"video": None}
+
+        with ProfilingContext4DebugL2("wan_vae_to_comfy"):
+            self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
 
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
@@ -497,36 +531,38 @@ class DefaultRunner(BaseRunner):
                 target_fps=target_fps,
             )
 
-        if self.input_info.return_result_tensor:
+        if return_result_tensor:
+            self.gen_video_final = self.gen_video_final.cpu()
             return {"video": self.gen_video_final}
-        elif self.input_info.save_result_path is not None:
-            if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
-                fps = self.config["video_frame_interpolation"]["target_fps"]
-            else:
-                fps = self.config.get("fps", 16)
 
-            if not dist.is_initialized() or dist.get_rank() == 0:
-                out_path = self.input_info.save_result_path
-                img_in = (getattr(self.input_info, "image_path", None) or "").strip()
-                vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
-                sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
+        # Reaching here means should_process was true because this is the main
+        # process and a save path was provided.
+        if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
+            fps = self.config["video_frame_interpolation"]["target_fps"]
+        else:
+            fps = self.config.get("fps", 16)
 
-                if sr_from_image_only:
-                    logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
-                    save_to_image(self.gen_video_final, out_path)
-                    logger.info(f"✅ Image saved successfully to: {out_path} ✅")
-                else:
-                    logger.info(f"🎬 Start to save video 🎬")
+        out_path = self.input_info.save_result_path
+        img_in = (getattr(self.input_info, "image_path", None) or "").strip()
+        vid_in = (getattr(self.input_info, "video_path", None) or "").strip()
+        sr_from_image_only = self.config.get("task") == "sr" and bool(img_in) and not bool(vid_in)
 
-                    save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
-                    if self.config.get("task") in ("sr", "animate"):
-                        input_video_path = getattr(self.input_info, "video_path", "")
-                        if input_video_path:
-                            muxed_path = mux_audio_from_video(input_video_path, out_path)
-                            if muxed_path:
-                                logger.info(f"Audio muxed from input video: {input_video_path}")
-                    logger.info(f"✅ Video saved successfully to: {out_path} ✅")
-            return {"video": None}
+        if sr_from_image_only:
+            logger.info("🖼 Start to save SR image (image_path input, no video_path) 🖼")
+            save_to_image(self.gen_video_final, out_path)
+            logger.info(f"✅ Image saved successfully to: {out_path} ✅")
+        else:
+            logger.info(f"🎬 Start to save video 🎬")
+
+            save_to_video(self.gen_video_final, out_path, fps=fps, method="ffmpeg")
+            if self.config.get("task") in ("sr", "animate"):
+                input_video_path = getattr(self.input_info, "video_path", "")
+                if input_video_path:
+                    muxed_path = mux_audio_from_video(input_video_path, out_path)
+                    if muxed_path:
+                        logger.info(f"Audio muxed from input video: {input_video_path}")
+            logger.info(f"✅ Video saved successfully to: {out_path} ✅")
+        return {"video": None}
 
     @ProfilingContext4DebugL1("RUN pipeline", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_worker_request_duration, metrics_labels=["DefaultRunner"])
     def run_pipeline(self, input_info):

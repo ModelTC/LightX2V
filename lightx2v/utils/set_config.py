@@ -183,6 +183,10 @@ def auto_calc_config(config):
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
+            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
+                # LTX uses rope_type for the layout ("split"), while LightX2V
+                # uses it to select a registered RoPE implementation.
+                model_config.pop("rope_type", None)
             config.update(model_config)
         elif os.path.exists(os.path.join(config["model_path"], "low_noise_model", "config.json")):  # 需要一个更优雅的update方法
             with open(os.path.join(config["model_path"], "low_noise_model", "config.json"), "r") as f:
@@ -199,7 +203,11 @@ def auto_calc_config(config):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-            if config["model_cls"] == "z_image":
+            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
+                # Upstream LTX2 uses rope_type for the layout name ("split"),
+                # while LightX2V uses it as the registered RoPE implementation.
+                model_config.pop("rope_type", None)
+            elif config["model_cls"] == "z_image":
                 # https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/blob/main/transformer/config.json
                 z_image_patch_size = model_config.pop("all_patch_size", [2])
                 z_image_f_patch_size = model_config.pop("all_f_patch_size", [1])
@@ -228,7 +236,121 @@ def auto_calc_config(config):
     if "infer_steps" not in config and "num_inference_steps" in config:
         config["infer_steps"] = config["num_inference_steps"]
 
-    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]:
+    if config["model_cls"] == "hunyuan_image3":
+        task = str(config.get("task", "t2i")).strip().lower()
+        supported_tasks = {"t2t", "t2i", "ti2t", "ti2i", "i2i"}
+        if task not in supported_tasks:
+            raise ValueError(f"HunyuanImage3 task must be one of {sorted(supported_tasks)}, got {task!r}.")
+
+        bot_task = str(config.get("bot_task", "image")).strip().lower()
+        supported_bot_tasks = {"image", "auto", "think", "recaption", "think_recaption"}
+        if bot_task not in supported_bot_tasks:
+            raise ValueError(f"HunyuanImage3 bot_task must be one of {sorted(supported_bot_tasks)}, got {bot_task!r}.")
+        config["bot_task"] = bot_task
+
+        if task in {"t2t", "ti2t"}:
+            if config.get("enable_cfg", False):
+                raise ValueError(f"HunyuanImage3 task={task} does not support diffusion CFG; set enable_cfg=false.")
+            if bot_task == "image":
+                raise ValueError(f"HunyuanImage3 task={task} requires a text bot_task such as 'auto' or 'think_recaption'.")
+
+        if "vae_scale_factor" not in config:
+            vae_downsample_factor = config.get("vae_downsample_factor")
+            if isinstance(vae_downsample_factor, list) and vae_downsample_factor:
+                config["vae_scale_factor"] = int(vae_downsample_factor[0])
+        parallel_config = config.get("parallel")
+        if isinstance(parallel_config, dict):
+            parallel_config = dict(parallel_config)
+            tensor_p_size = int(parallel_config.get("tensor_p_size", 1))
+            cfg_p_size = int(parallel_config.get("cfg_p_size", 1))
+            seq_p_size = int(parallel_config.get("seq_p_size", 1))
+
+            nested_pipeline_parallel = parallel_config.get("pipeline_parallel")
+            legacy_pipeline_parallel = config.get("pipeline_parallel")
+            if nested_pipeline_parallel is not None and legacy_pipeline_parallel is not None and nested_pipeline_parallel != legacy_pipeline_parallel:
+                raise ValueError(f"Conflicting HunyuanImage3 pipeline settings: parallel.pipeline_parallel={nested_pipeline_parallel!r}, pipeline_parallel={legacy_pipeline_parallel!r}.")
+            pipeline_parallel = nested_pipeline_parallel if nested_pipeline_parallel is not None else legacy_pipeline_parallel
+            if pipeline_parallel is None:
+                pipeline_parallel = True
+            if not isinstance(pipeline_parallel, bool):
+                raise ValueError(f"HunyuanImage3 parallel.pipeline_parallel must be a boolean, got {pipeline_parallel!r}.")
+
+            nested_cfg_mode = parallel_config.get("cfg_mode")
+            legacy_cfg_mode = config.get("hunyuan_cfg_mode")
+            if nested_cfg_mode is not None and legacy_cfg_mode is not None:
+                if str(nested_cfg_mode).strip().lower() != str(legacy_cfg_mode).strip().lower():
+                    raise ValueError(f"Conflicting HunyuanImage3 CFG modes: parallel.cfg_mode={nested_cfg_mode!r}, hunyuan_cfg_mode={legacy_cfg_mode!r}.")
+            cfg_mode = nested_cfg_mode if nested_cfg_mode is not None else legacy_cfg_mode
+            cfg_mode = str(cfg_mode or "batch").strip().lower()
+            if cfg_mode not in ("batch", "serial", "parallel"):
+                raise ValueError(f"HunyuanImage3 parallel.cfg_mode must be one of batch/serial/parallel, got {cfg_mode!r}.")
+
+            if tensor_p_size < 1:
+                raise ValueError(f"HunyuanImage3 parallel.tensor_p_size must be >= 1, got {tensor_p_size}.")
+            if cfg_p_size not in (1, 2):
+                raise ValueError(f"HunyuanImage3 parallel.cfg_p_size must be 1 or 2, got {cfg_p_size}.")
+            if seq_p_size < 1:
+                raise ValueError(f"HunyuanImage3 parallel.seq_p_size must be >= 1, got {seq_p_size}.")
+            if tensor_p_size > 1:
+                if pipeline_parallel:
+                    raise ValueError("HunyuanImage3 tensor parallel requires parallel.pipeline_parallel=false.")
+                moe_impl = str(config.get("moe_impl", "eager")).strip().lower()
+                if moe_impl not in ("eager", "flashinfer"):
+                    raise ValueError("HunyuanImage3 tensor parallel supports moe_impl='eager' or 'flashinfer'.")
+            if cfg_p_size == 2 and not config.get("enable_cfg", False):
+                raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires enable_cfg=true.")
+            if task in {"t2t", "ti2t"} and cfg_p_size != 1:
+                raise ValueError(f"HunyuanImage3 task={task} requires parallel.cfg_p_size=1.")
+
+            parallel_config["tensor_p_size"] = tensor_p_size
+            parallel_config["cfg_p_size"] = cfg_p_size
+            parallel_config["seq_p_size"] = seq_p_size
+            parallel_config["pipeline_parallel"] = pipeline_parallel
+            parallel_config["cfg_mode"] = cfg_mode
+
+            if seq_p_size > 1:
+                attn_type = parallel_config.get("seq_p_attn_type", "kv_all_gather")
+                attn_type = str(attn_type).strip().lower().replace("-", "_")
+                if attn_type in ("kv_allgather", "kv_gather"):
+                    attn_type = "kv_all_gather"
+                if attn_type not in ("kv_all_gather", "ulysses"):
+                    raise ValueError(f"HunyuanImage3 sequence parallel attention must be 'kv_all_gather' or 'ulysses', got {attn_type!r}.")
+                parallel_config["seq_p_attn_type"] = attn_type
+
+            config["parallel"] = parallel_config
+            # Runtime aliases keep existing model code and legacy callers
+            # compatible while JSON files use the canonical parallel branch.
+            config["pipeline_parallel"] = pipeline_parallel
+            config["hunyuan_cfg_mode"] = cfg_mode
+
+            if cfg_p_size == 2 and cfg_mode != "parallel":
+                raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires parallel.cfg_mode='parallel'.")
+            if cfg_p_size == 1 and seq_p_size > 1 and config.get("enable_cfg", False) and cfg_mode != "serial":
+                raise ValueError("HunyuanImage3 sequence parallel with cfg_p_size=1 requires parallel.cfg_mode='serial'.")
+
+            if seq_p_size > 1 and parallel_config["seq_p_attn_type"] == "ulysses":
+                q_heads = int(config.get("num_attention_heads") or config["num_heads"])
+                kv_heads = int(config.get("num_key_value_heads") or q_heads)
+                combined_head_parallel_size = tensor_p_size * seq_p_size
+                if q_heads % combined_head_parallel_size or kv_heads % combined_head_parallel_size:
+                    raise ValueError(
+                        f"HunyuanImage3 Ulysses requires tensor_p_size * seq_p_size to divide Q and KV heads: Q={q_heads}, KV={kv_heads}, tensor_p_size={tensor_p_size}, seq_p_size={seq_p_size}."
+                    )
+
+    if config["model_cls"] == "lingbot_va" and "target_video_length" not in config:
+        ar_config = config.get("ar_config", {})
+        required_keys = ("num_frame_per_chunk", "num_chunks")
+        missing_keys = [key for key in required_keys if key not in ar_config]
+        if missing_keys:
+            raise ValueError(f"LingBot-VA requires ar_config.{', ar_config.'.join(missing_keys)} to derive target_video_length.")
+        latent_frames = int(ar_config["num_frame_per_chunk"]) * int(ar_config["num_chunks"])
+        temporal_stride = int(config["vae_stride"][0])
+        if latent_frames <= 0 or temporal_stride <= 0:
+            raise ValueError(f"LingBot-VA requires positive latent frame count and VAE temporal stride, got latent_frames={latent_frames}, temporal_stride={temporal_stride}.")
+        config["target_video_length"] = (latent_frames - 1) * temporal_stride + 1
+        logger.info(f"Auto-set LingBot-VA target_video_length={config['target_video_length']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
+
+    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
@@ -271,31 +393,52 @@ def set_config(args):
 
 def set_parallel_config(config):
     if config["parallel"]:
-        tensor_p_size = config["parallel"].get("tensor_p_size", 1)
+        tensor_p_size = int(config["parallel"].get("tensor_p_size", 1))
+        cfg_p_size = int(config["parallel"].get("cfg_p_size", 1))
+        seq_p_size = int(config["parallel"].get("seq_p_size", 1))
+        world_size = dist.get_world_size()
+        expected_world_size = tensor_p_size * cfg_p_size * seq_p_size
+        if expected_world_size != world_size:
+            raise ValueError(
+                f"Parallel sizes must match the distributed world size: tensor_p_size ({tensor_p_size}) * cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) != world_size ({world_size})."
+            )
 
         if tensor_p_size > 1:
-            # Tensor parallel only: 1D mesh
-            assert tensor_p_size == dist.get_world_size(), f"tensor_p_size ({tensor_p_size}) must be equal to world_size ({dist.get_world_size()})"
-            config["device_mesh"] = init_device_mesh(AI_DEVICE, (tensor_p_size,), mesh_dim_names=("tensor_p",))
+            # Tensor parallel is the innermost dimension. Optional CFG and
+            # sequence dimensions are prepended so ranks with the same
+            # non-TP coordinates form contiguous TP groups. For TP+SP+CFG:
+            #   mesh shape/names = [cfg_p, seq_p, tensor_p].
+            mesh_shape = []
+            mesh_dim_names = []
+            if cfg_p_size > 1:
+                mesh_shape.append(cfg_p_size)
+                mesh_dim_names.append("cfg_p")
+            if seq_p_size > 1:
+                mesh_shape.append(seq_p_size)
+                mesh_dim_names.append("seq_p")
+            mesh_shape.append(tensor_p_size)
+            mesh_dim_names.append("tensor_p")
+            config["device_mesh"] = init_device_mesh(
+                AI_DEVICE,
+                tuple(mesh_shape),
+                mesh_dim_names=tuple(mesh_dim_names),
+            )
             config["tensor_parallel"] = True
-            config["seq_parallel"] = False
-            config["cfg_parallel"] = False
+            config["seq_parallel"] = seq_p_size > 1
+            config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
         else:
             # Original 2D mesh for cfg_p and seq_p
-            cfg_p_size = config["parallel"].get("cfg_p_size", 1)
-            seq_p_size = config["parallel"].get("seq_p_size", 1)
-            assert cfg_p_size * seq_p_size == dist.get_world_size(), f"cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) must be equal to world_size ({dist.get_world_size()})"
             config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
             config["tensor_parallel"] = False
-
-            if config["parallel"] and config["parallel"].get("seq_p_size", False) and config["parallel"]["seq_p_size"] > 1:
-                config["seq_parallel"] = True
-
-            if config.get("enable_cfg", False) and config["parallel"] and config["parallel"].get("cfg_p_size", False) and config["parallel"]["cfg_p_size"] > 1:
-                config["cfg_parallel"] = True
+            config["seq_parallel"] = seq_p_size > 1
+            config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
 
         # warmup dist
-        _a = torch.zeros([1]).to(f"{AI_DEVICE}:{dist.get_rank()}")
+        if AI_DEVICE == "cuda":
+            warmup_device = f"{AI_DEVICE}:{torch.cuda.current_device()}"
+        else:
+            warmup_device = AI_DEVICE
+        _a = torch.zeros([1], device=warmup_device)
         dist.all_reduce(_a)
 
 

@@ -10,6 +10,6 @@
     "dit_quant_scheme": "Default",
     "rms_norm_type": "torch",
     "modulate_type": "torch",
-    "rope_type": "torch",
+    "rope_type": "torch_real_rope",
     "layer_norm_type": "torch"
 }

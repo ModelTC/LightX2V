@@ -6,8 +6,10 @@ from lightx2v_platform.registry_factory import PLATFORM_ROPE_REGISTER
 
 @PLATFORM_ROPE_REGISTER("gcu_wan_rope")
 class GcuWanRope(RopeTemplate):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, layout="interleaved", compute_dtype=torch.float32):
+        super().__init__(layout=layout, compute_dtype=compute_dtype)
+        if layout != "interleaved":
+            raise ValueError("GcuWanRope only supports interleaved layout.")
 
     def apply(self, xq: torch.Tensor, xk: torch.Tensor, cos_sin_cache: torch.Tensor):
         """

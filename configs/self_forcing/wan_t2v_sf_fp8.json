@@ -20,5 +20,5 @@
     "dit_quantized": true,
     "dit_quantized_ckpt": "/path/to/self_forcing_fp8.safetensors",
     "dit_quant_scheme": "fp8-vllm",
-    "causal_rope_type": "triton"
+    "causal_rope_type": "wan_causal_rope"
 }

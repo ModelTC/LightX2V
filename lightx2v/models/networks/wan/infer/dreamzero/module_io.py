@@ -10,6 +10,7 @@ class DreamZeroPreInferOutput:
     embed0: torch.Tensor
     context: torch.Tensor | None
     freqs: torch.Tensor
+    rope_positions: torch.Tensor | None
     freqs_action: torch.Tensor
     freqs_state: torch.Tensor
     grid_size: tuple[int, int, int]

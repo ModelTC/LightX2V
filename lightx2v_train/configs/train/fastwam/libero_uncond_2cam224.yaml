@@ -1,0 +1,62 @@
+model:
+  name: wan_fastwam
+  running_dtype: bf16
+  model_path: /path/to/Wan-AI/Wan2.2-TI2V-5B
+
+data:
+  train: &libero_data
+    name: libero_fastwam_dataset
+    dataset_dirs:
+      # https://huggingface.co/datasets/yuanty/LIBERO-fastwam
+      - /path/to/LIBERO-fastwam/libero_spatial_no_noops_lerobot
+      - /path/to/LIBERO-fastwam/libero_object_no_noops_lerobot
+      - /path/to/LIBERO-fastwam/libero_goal_no_noops_lerobot
+      - /path/to/LIBERO-fastwam/libero_10_no_noops_lerobot
+    batch_size: 8
+    num_workers: 8
+  val:
+    <<: *libero_data
+
+training:
+  method: fastwam
+  output_dir: runs/fastwam_libero_full
+  # Equivalent to the official 10-epoch, global-batch-128 LIBERO schedule.
+  max_train_iters: 21700
+  gradient_accumulation_iters: 4
+  max_grad_norm: 1.0
+  save_every_iters: 2000
+  save_total_limit: 2
+  save_final: true
+  lr_scheduler: cosine
+  lr_warmup_iters: 1085
+  optimizer:
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-2
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_epsilon: 1.0e-8
+
+inference:
+  infer_every_iters: 200
+  eval_num_inference_steps: 5
+  num_samples: 1
+  run_inference: true
+  save_video: true
+  save_preview: true
+  fps: 8
+  tiled: false
+  seed: 42
+
+logging:
+  train_log_every_iters: 10
+
+resume:
+  auto_resume: true
+  resume_ckpt_path: null
+
+distributed:
+  backend: nccl
+  zero1:
+    enabled: true
+  sequence_parallel:
+    enabled: false

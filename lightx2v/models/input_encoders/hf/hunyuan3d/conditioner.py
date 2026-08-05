@@ -89,6 +89,16 @@ class ImageEncoder(nn.Module):
                 ),
             ]
         )
+        # torch_mlu 1.29 does not provide the antialiased bilinear resize
+        # kernel.  Keep the whole preprocessing path on MLU with the native
+        # bilinear kernel instead of triggering an implicit CPU fallback.
+        self.mlu_transform = transforms.Compose(
+            [
+                transforms.Resize(image_size, transforms.InterpolationMode.BILINEAR, antialias=False),
+                transforms.CenterCrop(image_size),
+                transforms.Normalize(mean=self.mean, std=self.std),
+            ]
+        )
 
     def forward(self, image, mask=None, value_range=(-1, 1), **kwargs):
         if value_range is not None:
@@ -96,7 +106,8 @@ class ImageEncoder(nn.Module):
             image = (image - low) / (high - low)
 
         image = image.to(self.model.device, dtype=self.model.dtype)
-        inputs = self.transform(image)
+        transform = self.mlu_transform if image.device.type == "mlu" else self.transform
+        inputs = transform(image)
         outputs = self.model(inputs)
 
         last_hidden_state = outputs.last_hidden_state
@@ -247,7 +258,10 @@ class SingleImageEncoder(nn.Module):
         if self.disable_drop:
             return outputs
         else:
-            random_p = torch.rand(len(image), device="cuda")
+            # Keep optional classifier-free dropout on the same backend as the
+            # input instead of hard-coding CUDA (this branch is also used by
+            # MLU fine-tuning/inference variants when disable_drop is false).
+            random_p = torch.rand(len(image), device=image.device)
             remain_bool_tensor = random_p > self.drop_ratio
             outputs["main"] *= remain_bool_tensor.view(-1, 1, 1)
         return outputs

@@ -1,0 +1,30 @@
+{
+    "dancer_stage": "local",
+    "dit_original_ckpt": "/data/nvme1/yongyang/dan/Wan-Dancer/models/Wan-AI/Wan-Dancer-14B/local_model.safetensors",
+    "infer_steps": 4,
+    "target_video_length": 149,
+    "target_height": 1280,
+    "target_width": 720,
+    "fps": 30,
+    "music_inject_layers": [0, 4, 8, 12, 16, 20, 24, 27],
+    "self_attn_1_type": "flash_attn3",
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "rms_norm_type": "torch",
+    "modulate_type": "torch",
+    "sample_guide_scale": 5.0,
+    "sample_shift": 5.0,
+    "denoising_step_list": [1000, 750, 500, 250],
+    "lora_configs": [
+        {
+            "path": "/data/nvme1/models/lightx2v_hf/lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
+            "strength": 1.0
+        }
+    ],
+    "t5_cpu_offload": true,
+    "clip_cpu_offload": true,
+    "vae_cpu_offload": true,
+    "parallel": {
+        "seq_p_size": 4
+    }
+}

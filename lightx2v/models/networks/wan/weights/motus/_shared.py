@@ -249,8 +249,8 @@ class MotusJointExpertBlockWeights(WeightModule):
         super().__init__()
         self.block_idx = block_idx
 
-        self.add_module("norm1", LN_WEIGHT_REGISTER["torch"]())
-        self.add_module("norm2", LN_WEIGHT_REGISTER["torch"]())
+        self.add_module("norm1", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
+        self.add_module("norm2", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
         self.add_module(
             f"{attr_prefix}_qkv",
             PackedQKVWeights(

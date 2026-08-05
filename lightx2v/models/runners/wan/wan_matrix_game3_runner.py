@@ -2095,8 +2095,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
 
     def run_main(self):
         self.init_run()
-        if self.config.get("compile", False) and hasattr(self.model, "comple"):
-            self.model.select_graph_for_compile(self.input_info)
         for segment_idx in range(self.video_segment_num):
             logger.info(f"🔄 start segment {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext4DebugL1(

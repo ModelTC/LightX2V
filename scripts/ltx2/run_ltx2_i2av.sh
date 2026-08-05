@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/path/to/LightX2V
-model_path=Lightricks/LTX-2
+lightx2v_path=
+model_path=
 
 
 export CUDA_VISIBLE_DEVICES=0

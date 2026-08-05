@@ -81,12 +81,12 @@ class Hunyuan3DShapeRunner(DefaultRunner):
             return model
 
     def _build_dit_weight_dict(self):
-        state_dict = self._ckpt["model"]
-        dtype = GET_DTYPE()
-        weight_dict = {}
-        for key, tensor in state_dict.items():
-            weight_dict[key] = tensor.to(dtype=dtype)
-        return weight_dict
+        ckpt = self._ckpt
+        ckpt_path = self.config.get("dit_original_ckpt")
+        if ckpt_path:
+            use_safetensors = bool(self.config.get("use_safetensors", False)) or str(ckpt_path).endswith(".safetensors")
+            ckpt = load_checkpoint_dict(ckpt_path, use_safetensors=use_safetensors)
+        return Hunyuan3DDiTModel._build_weight_dict(ckpt["model"], GET_DTYPE() == GET_SENSITIVE_DTYPE(), {}, config=self.config)
 
     def load_text_encoder(self):
         return []
@@ -154,6 +154,14 @@ class Hunyuan3DShapeRunner(DefaultRunner):
             return cond.to(dtype=dtype)
         return {k: Hunyuan3DShapeRunner._cast_cond_dtype(v, dtype) for k, v in cond.items()}
 
+    def _run_infer_step(self, step_index: int, dit_inputs: dict) -> None:
+        with ProfilingContext4DebugL1("step_pre"):
+            self.scheduler.step_pre(step_index)
+        with ProfilingContext4DebugL1("infer_main"):
+            self.model.infer(dit_inputs)
+        with ProfilingContext4DebugL1("step_post"):
+            self.scheduler.step_post()
+
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         latent_shape = (self.inputs["image_tensor"].shape[0], *self.vae_decoder.vae.latent_shape)
@@ -178,13 +186,19 @@ class Hunyuan3DShapeRunner(DefaultRunner):
 
             iterator = tqdm(iterator, desc="Diffusion Sampling:")
 
-        for step_index in iterator:
-            with ProfilingContext4DebugL1("step_pre"):
-                self.scheduler.step_pre(step_index)
-            with ProfilingContext4DebugL1("infer_main"):
-                self.model.infer(dit_inputs)
-            with ProfilingContext4DebugL1("step_post"):
-                self.scheduler.step_post()
+        at = self.model.transformer_infer.fi_moe_autotune
+        start_step = 0
+        if at.cache_rebuild_needed():
+            logger.info("Hunyuan3D FlashInfer MoE autotune: cache rebuild required; tuning on step 1 only, then cache-only for remaining steps")
+            with at.session(tune_mode=True):
+                self._run_infer_step(0, dit_inputs)
+            start_step = 1
+
+        with at.session(tune_mode=False):
+            for step_index in iterator:
+                if step_index < start_step:
+                    continue
+                self._run_infer_step(step_index, dit_inputs)
 
         mesh = self._export_mesh(self.scheduler.latents)
         save_result_path = self.input_info.save_result_path

@@ -38,22 +38,6 @@ def mm_weight_autocast_nd(linear, x, autocast_dtype=torch.bfloat16):
     return out.view(*shape[:-1], -1)
 
 
-def wan_layer_norm(ln_weight, x, force_float=False):
-    weight = ln_weight._get_actual_weight() if ln_weight.weight is not None else None
-    bias = ln_weight._get_actual_bias() if getattr(ln_weight, "bias", None) is not None else None
-    if weight is not None:
-        weight = weight.float()
-    if bias is not None:
-        bias = bias.float()
-    out = torch.nn.functional.layer_norm(x.float(), (x.shape[-1],), weight, bias, ln_weight.eps)
-    out = out.to(x.dtype)
-    return out.float() if force_float else out
-
-
-def wan_layer_norm_float(ln_weight, x):
-    return wan_layer_norm(ln_weight, x, force_float=True)
-
-
 def wan_rms_norm(rms_weight, x):
     w = rms_weight._get_actual_weight()
     xf = x.float()
@@ -141,7 +125,7 @@ def flash_attention(
     return x.unflatten(0, (b, lq)).type(out_dtype)
 
 
-def s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, num_heads, head_dim, rope_apply_fn):
+def s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, num_heads, head_dim):
     """Mirror of WanS2VSelfAttention.forward (model_s2v.py + model.py)."""
     b, s, n, d = norm_x.size(0), norm_x.size(1), num_heads, head_dim
 
@@ -149,9 +133,10 @@ def s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, num_heads, head_dim, 
     k = wan_rms_norm(phase0.self_attn_norm_k, mm_weight_autocast_nd(phase0.self_attn_k, norm_x)).view(b, s, n, d)
     v = mm_weight_autocast_nd(phase0.self_attn_v, norm_x).view(b, s, n, d)
 
+    q, k = phase0.s2v_rope.apply(q.float(), k.float(), freqs)
     attn = flash_attention(
-        q=rope_apply_fn(q, freqs),
-        k=rope_apply_fn(k, freqs),
+        q=q,
+        k=k,
         v=v,
         k_lens=seq_lens,
     )

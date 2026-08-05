@@ -77,10 +77,6 @@ class WanLingbotTransformerInfer(WanTransformerInfer):
         k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
         v = phase.cross_attn_v.apply(context).view(-1, n, d)
 
-        if self.cross_attn_cu_seqlens_q is None:
-            self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]]).cumsum(0, dtype=torch.int32)
-        if self.cross_attn_cu_seqlens_kv is None:
-            self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]]).cumsum(0, dtype=torch.int32)
         attn_out = phase.cross_attn_1.apply(
             q=q,
             k=k,
@@ -94,9 +90,6 @@ class WanLingbotTransformerInfer(WanTransformerInfer):
         if self.task in ["i2v", "flf2v", "animate", "s2v", "rs2v"] and self.config.get("use_image_encoder", True) and context_img is not None:
             k_img = phase.cross_attn_norm_k_img.apply(phase.cross_attn_k_img.apply(context_img)).view(-1, n, d)
             v_img = phase.cross_attn_v_img.apply(context_img).view(-1, n, d)
-
-            if self.cross_attn_cu_seqlens_kv_img is None:
-                self.cross_attn_cu_seqlens_kv_img = torch.tensor([0, k_img.shape[0]]).cumsum(0, dtype=torch.int32)
 
             img_attn_out = phase.cross_attn_2.apply(
                 q=q,

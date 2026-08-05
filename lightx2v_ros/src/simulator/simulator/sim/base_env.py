@@ -54,6 +54,16 @@ class BaseSimEnv(ABC):
         """Optional per-episode step cap hint (None = let the node decide)."""
         return None
 
+    @property
+    def accepted_action_dims(self):
+        """Action vector sizes accepted by ``step``.
+
+        Most environments expose one action representation.  RoboTwin also
+        accepts LingBot-VA's 16-D relative end-effector representation alongside
+        its normal 14-D qpos representation.
+        """
+        return (self.contract.action_dim,)
+
     # ------------------------------------------------- optional capabilities
     @property
     def supports_task_switch(self) -> bool:

@@ -12,6 +12,8 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 @RUNNER_REGISTER("wan2.1_distill")
 class WanDistillRunner(WanRunner):
+    _SUPPORTS_GENERIC_WARMUP = True
+
     def __init__(self, config):
         super().__init__(config)
 
@@ -33,6 +35,8 @@ class WanDistillRunner(WanRunner):
 
 @RUNNER_REGISTER("wan2.1_mean_flow_distill")
 class Wan21MeanFlowDistillRunner(WanDistillRunner):
+    _SUPPORTS_GENERIC_WARMUP = True
+
     def __init__(self, config):
         super().__init__(config)
 
@@ -52,7 +56,7 @@ class MultiDistillModelStruct(MultiModelStruct):
         self.cur_model_index = -1
         logger.info(f"boundary step index: {self.boundary_step_index}")
 
-    @ProfilingContext4DebugL2("Swtich models in infer_main costs")
+    @ProfilingContext4DebugL2("Switch models in infer_main costs")
     def get_current_model_index(self):
         if self.scheduler.step_index < self.boundary_step_index:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
@@ -119,6 +123,8 @@ class MultiDistillModelStruct(MultiModelStruct):
 
 @RUNNER_REGISTER("wan2.2_moe_distill")
 class Wan22MoeDistillRunner(WanDistillRunner):
+    _SUPPORTS_GENERIC_WARMUP = True
+
     def __init__(self, config):
         super().__init__(config)
         if self.config.get("dit_quantized", False) and self.config.get("high_noise_quantized_ckpt", None):
@@ -138,6 +144,16 @@ class Wan22MoeDistillRunner(WanDistillRunner):
             self.low_noise_model_path = os.path.join(self.config["model_path"], "low_noise_model")
             if not os.path.isdir(self.low_noise_model_path):
                 raise FileNotFoundError(f"Low Noise Model does not find")
+
+    def get_warmup_step_indices(self, scheduler):
+        step_count = len(scheduler.timesteps)
+        if step_count == 0:
+            return ()
+        boundary = scheduler.boundary_step_index
+        return (0, boundary) if 0 < boundary < step_count else (0,)
+
+    def get_warmup_models(self):
+        return tuple(self.model.model)
 
     def load_transformer(self):
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):

@@ -1,18 +1,10 @@
-from functools import partial
-
 import torch
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.wan.infer.triton_ops import fuse_scale_shift_kernel
-from lightx2v.models.networks.wan.infer.utils import (
-    apply_wan_rope_with_chunk,
-    apply_wan_rope_with_flashinfer,
-    apply_wan_rope_with_torch,
-    apply_wan_rope_with_torch_naive,
-)
 from lightx2v.models.networks.wan.weights.motus import apply_mm
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, ROPE_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -38,30 +30,6 @@ class MotusTransformerInfer(BaseTransformerInfer):
         self.head_dim = config["dim"] // config["num_heads"]
         self.modulate_func = fuse_scale_shift_kernel if config.get("modulate_type", "triton") == "triton" else modulate
 
-        rope_funcs = {
-            "flashinfer": apply_wan_rope_with_flashinfer,
-            "torch": apply_wan_rope_with_torch,
-            "torch_naive": apply_wan_rope_with_torch_naive,
-        }
-        rope_type = config.get("rope_type", "flashinfer")
-        if rope_type in ROPE_REGISTER:
-            rope_class = ROPE_REGISTER[rope_type]
-            self.rope_instance = rope_class()
-
-            def rope_wrapper(xq, xk, cos_sin_cache):
-                return self.rope_instance.apply(xq, xk, cos_sin_cache)
-
-            rope_func = rope_wrapper
-        else:
-            rope_func = rope_funcs.get(rope_type, apply_wan_rope_with_torch)
-        if config.get("rope_chunk", False):
-            rope_func = partial(
-                apply_wan_rope_with_chunk,
-                chunk_size=config.get("rope_chunk_size", 100),
-                rope_func=rope_func,
-            )
-        self.apply_rope_func = rope_func
-
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
@@ -77,14 +45,27 @@ class MotusTransformerInfer(BaseTransformerInfer):
 
         self.infer_func = self.infer_without_offload
         self.cos_sin = None
+        self.rope_positions = None
         self.weights = None
-        self.reset_infer_states()
+        self.clear_request_cache()
 
-    def reset_infer_states(self):
-        self.joint_attn_cu_seqlens_q = None
-        self.joint_attn_cu_seqlens_kv = None
-        self.cross_attn_cu_seqlens_q = None
-        self.cross_attn_cu_seqlens_kv = None
+    def clear_request_cache(self):
+        self._cu_seqlens_cache_request_id = None
+        self._cu_seqlens_cache = {
+            "joint_attn_cu_seqlens_q": None,
+            "cross_attn_cu_seqlens_q": None,
+            "cross_attn_cu_seqlens_kv": None,
+        }
+
+    def set_scheduler(self, scheduler):
+        super().set_scheduler(scheduler)
+        self.clear_request_cache()
+
+    def _begin_request(self):
+        request_id = self.scheduler.rope_request_id
+        if request_id != self._cu_seqlens_cache_request_id:
+            self.clear_request_cache()
+            self._cu_seqlens_cache_request_id = request_id
 
     def _maybe_empty_cache(self):
         if self.clean_cuda_cache:
@@ -100,15 +81,17 @@ class MotusTransformerInfer(BaseTransformerInfer):
         return self.weights.und.blocks[layer_idx]
 
     def _get_cu_seqlens(self, cache_name, batch, seq_len, device, attn_type):
-        cu_seqlens = getattr(self, cache_name)
-        expected_total = batch * seq_len
-        if cu_seqlens is None or int(cu_seqlens[-1].item()) != expected_total or cu_seqlens.device != device:
-            tensor = torch.arange(0, expected_total + seq_len, seq_len, dtype=torch.int32)
-            if attn_type in ["flash_attn2", "flash_attn3"]:
-                cu_seqlens = tensor.to(device, non_blocking=True)
-            else:
-                cu_seqlens = tensor
-            setattr(self, cache_name, cu_seqlens)
+        if cache_name not in self._cu_seqlens_cache:
+            raise ValueError(f"Unsupported Motus attention metadata cache: {cache_name}")
+
+        cache_key = (cache_name, batch, seq_len, device.type, device.index, attn_type)
+        cached = self._cu_seqlens_cache[cache_name]
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+
+        tensor = torch.arange(0, (batch + 1) * seq_len, seq_len, dtype=torch.int32)
+        cu_seqlens = tensor.to(device, non_blocking=True) if attn_type in ["flash_attn2", "flash_attn3"] else tensor
+        self._cu_seqlens_cache[cache_name] = (cache_key, cu_seqlens)
         return cu_seqlens
 
     def _normalize_attention_dtype(self, tensor):
@@ -165,18 +148,34 @@ class MotusTransformerInfer(BaseTransformerInfer):
         out = x + y * gate.squeeze(2)
         return out if out.dtype == out_dtype else out.to(out_dtype)
 
-    def _apply_video_rope(self, q, k, cos_sin_cache):
+    def _apply_video_rope(self, q, k, cos_sin_cache, rope_positions):
         if q.dim() != 4:
             raise ValueError("Motus video rope expects q/k with shape [B, L, H, D].")
 
         if q.shape[0] == 1:
-            q_out, k_out = self.apply_rope_func(q.squeeze(0), k.squeeze(0), cos_sin_cache)
+            if rope_positions is None:
+                q_out, k_out = self.weights.rope.apply(q.squeeze(0), k.squeeze(0), cos_sin_cache)
+            else:
+                q_out, k_out = self.weights.rope.apply(
+                    q.squeeze(0),
+                    k.squeeze(0),
+                    cos_sin_cache,
+                    positions=rope_positions,
+                )
             return q_out.unsqueeze(0), k_out.unsqueeze(0)
 
         q_list = []
         k_list = []
         for batch_idx in range(q.shape[0]):
-            q_i, k_i = self.apply_rope_func(q[batch_idx], k[batch_idx], cos_sin_cache)
+            if rope_positions is None:
+                q_i, k_i = self.weights.rope.apply(q[batch_idx], k[batch_idx], cos_sin_cache)
+            else:
+                q_i, k_i = self.weights.rope.apply(
+                    q[batch_idx],
+                    k[batch_idx],
+                    cos_sin_cache,
+                    positions=rope_positions,
+                )
             q_list.append(q_i)
             k_list.append(k_i)
         return torch.stack(q_list, dim=0), torch.stack(k_list, dim=0)
@@ -219,7 +218,12 @@ class MotusTransformerInfer(BaseTransformerInfer):
             self.head_dim,
         )
         video_v = apply_mm(video_self_phase.self_attn_v, norm_video).view(batch, video_len, self.num_heads, self.head_dim)
-        video_q, video_k = self._apply_video_rope(video_q, video_k, pre_infer_out.cos_sin)
+        video_q, video_k = self._apply_video_rope(
+            video_q,
+            video_k,
+            pre_infer_out.cos_sin,
+            pre_infer_out.rope_positions,
+        )
 
         action_q, action_k, action_v = action_block.wan_action_qkv.apply(norm_action)
         action_q = action_block.wan_action_norm_q.apply(action_q.flatten(-2)).view(batch, action_len, self.num_heads, self.head_dim)
@@ -343,7 +347,8 @@ class MotusTransformerInfer(BaseTransformerInfer):
     def infer(self, weights, pre_infer_out):
         self.weights = weights
         self.cos_sin = pre_infer_out.cos_sin
-        self.reset_infer_states()
+        self.rope_positions = pre_infer_out.rope_positions
+        self._begin_request()
 
         processed_t5_context = pre_infer_out.context
         und_tokens = pre_infer_out.und_tokens.clone()

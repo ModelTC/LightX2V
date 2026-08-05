@@ -14,13 +14,14 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.ltx2.infer.module_io import LTX2PreInferModuleOutput
 from lightx2v.models.networks.ltx2.infer.triton_ops import fuse_scale_shift_kernel, fused_rmsnorm_modulate
-from lightx2v.models.networks.ltx2.infer.utils import apply_rotary_emb, modulate_torch_naive, modulate_with_rmsnorm_torch_naive, rmsnorm_torch_naive
+from lightx2v.models.networks.ltx2.infer.utils import modulate_torch_naive, modulate_with_rmsnorm_torch_naive, rmsnorm_torch_naive
 from lightx2v.models.networks.wan.infer.triton_ops import norm_infer
 
 
-class LTX2TransformerInfer:
+class LTX2TransformerInfer(BaseTransformerInfer):
     """
     Transformer inference module for LTX2 transformer.
 
@@ -35,7 +36,6 @@ class LTX2TransformerInfer:
             config: Model configuration dictionary
         """
         self.config = config
-        self.rope_type = config["rope_type"]
         self.blocks_num = config.get("num_layers", 48)
         self.v_num_heads = config.get("num_attention_heads", 32)
         self.v_head_dim = config.get("attention_head_dim", 128)
@@ -44,8 +44,9 @@ class LTX2TransformerInfer:
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
         self.cross_attention_adaln = config.get("cross_attention_adaln", False)
         self.apply_gated_attention = config.get("apply_gated_attention", False)
+        self.seq_parallel = config.get("seq_parallel", False)
 
-        if config.get("seq_parallel", False):
+        if self.seq_parallel:
             self.seq_p_group = config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.seq_p_fp8_comm = config.get("parallel", {}).get("seq_p_fp8_comm", False)
             self.seq_p_fp4_comm = config.get("parallel", {}).get("seq_p_fp4_comm", False)
@@ -72,8 +73,18 @@ class LTX2TransformerInfer:
             self.norm_infer_func = rmsnorm_torch_naive
             self.modulate_func = modulate_torch_naive
             self.modulate_with_rmsnorm_func = modulate_with_rmsnorm_torch_naive
+        self.init_compile(config)
         self.reset_infer_states()
         self.reset_guidance_perturbation()
+
+    def _apply_rope(self, rope, tensor, freqs):
+        cos, _ = freqs
+        if tensor.ndim != 4 and cos.ndim == 4:
+            batch, heads, tokens, _ = cos.shape
+            tensor = tensor.reshape(batch, tokens, heads, -1).swapaxes(1, 2)
+            output = rope.apply_single(tensor, freqs)
+            return output.swapaxes(1, 2).reshape(batch, tokens, -1)
+        return rope.apply_single(tensor, freqs)
 
     def set_scheduler(self, scheduler):
         """Set the scheduler for inference."""
@@ -259,23 +270,26 @@ class LTX2TransformerInfer:
 
         q = attn_phase.to_q.apply(q_in)
         # For sequence parallel (non-TP), gather context if needed
-        if need_gather_video_context and self.config.get("seq_parallel", False) and not use_tp:
+        if need_gather_video_context and self.seq_parallel and not use_tp:
             context, k_pe = self._gather_cross_attn_context(context, k_pe)
         k = attn_phase.to_k.apply(context)
         v = attn_phase.to_v.apply(context)
         q = attn_phase.q_norm.apply(q)
         k = attn_phase.k_norm.apply(k)
         if pe is not None:
-            q = apply_rotary_emb(q, pe, self.rope_type)
-            k = apply_rotary_emb(k, pe if k_pe is None else k_pe, self.rope_type)
+            q = self._apply_rope(attn_phase.rope, q, pe)
+            k = self._apply_rope(attn_phase.rope, k, pe if k_pe is None else k_pe)
 
         q = q.view(-1, num_heads_effective, head_dim)
         k = k.view(-1, num_heads_effective, head_dim)
         v = v.view(-1, num_heads_effective, head_dim)
 
+        if is_self_attn:
+            k, v = self._prepare_self_attention_kv(attn_phase, k, v, is_audio=is_audio)
+
         seq_len = q.size(0)
         # For video self-attention with sequence parallel (non-TP only)
-        if is_self_attn and not is_audio and self.config.get("seq_parallel", False) and not use_tp:
+        if is_self_attn and not is_audio and self.seq_parallel and not use_tp:
             # Cache cu_seqlens_qkv for self-attention (q, k, v have same length)
             if self.v_attn_cu_seqlens_qkv is None:
                 self.v_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0])
@@ -303,7 +317,7 @@ class LTX2TransformerInfer:
                     self.a_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0])
 
                 cu_seqlens_q = self.v_attn_cu_seqlens_qkv if not is_audio else self.a_attn_cu_seqlens_qkv
-                cu_seqlens_kv = cu_seqlens_q  # For self-attn, q and k have same length
+                cu_seqlens_kv = cu_seqlens_q if q.shape[0] == k.shape[0] else self._create_cu_seqlens(k.shape[0])
             else:
                 # For cross-attention, always create cu_seqlens dynamically
                 # because k length varies by context type (text, audio, video)
@@ -328,6 +342,10 @@ class LTX2TransformerInfer:
             out = out.reshape(seq_len, num_heads_effective * head_dim)
         return attn_phase.to_out.apply(out)
 
+    def _prepare_self_attention_kv(self, attn_phase, k: torch.Tensor, v: torch.Tensor, *, is_audio: bool):
+        """Hook for causal inference. The regular LTX2 path keeps current-sequence K/V unchanged."""
+        return k, v
+
     def _infer_ffn(self, ffn_phase, x: torch.Tensor) -> torch.Tensor:
         """
         Unified feed-forward network inference method supporting both TP and non-TP modes.
@@ -344,16 +362,29 @@ class LTX2TransformerInfer:
         return ffn_phase.net_2.apply(x)
 
     @torch.no_grad()
-    def infer_block(self, block_idx: int, block, vx, ax, pre_infer_out: LTX2PreInferModuleOutput):
+    def infer_block(
+        self,
+        block,
+        vx,
+        ax,
+        pre_infer_out: LTX2PreInferModuleOutput,
+        skip_video_self: bool,
+        skip_audio_self: bool,
+        skip_a2v: bool,
+        skip_v2a: bool,
+    ):
         """
         Perform inference for a single transformer block.
 
         Args:
-            block_idx: Block index for STG block lists (0 .. num_layers-1)
             block: Single LTX2TransformerBlock instance
             vx: Video hidden states
             ax: Audio hidden states
             pre_infer_out: LTX2PreInferModuleOutput from pre-inference
+            skip_video_self: Whether to skip video self-attention
+            skip_audio_self: Whether to skip audio self-attention
+            skip_a2v: Whether to skip audio-to-video cross-attention
+            skip_v2a: Whether to skip video-to-audio cross-attention
 
         Returns:
             Tuple of (vx, ax) after processing this block
@@ -366,7 +397,6 @@ class LTX2TransformerInfer:
         )
 
         norm_vx = self.modulate_with_rmsnorm_func(vx, vscale_msa, vshift_msa, weight=None, bias=None, eps=1e-6)
-        bypass_v_self = block_idx in self._mm_skip_video_self_blocks
         # Video self-attention
         vx = (
             vx
@@ -375,7 +405,7 @@ class LTX2TransformerInfer:
                 x=norm_vx,
                 pe=pre_infer_out.video_args.positional_embeddings,
                 is_audio=False,
-                bypass_attention=bypass_v_self,
+                bypass_attention=skip_video_self,
             )
             * vgate_msa
         )
@@ -410,7 +440,6 @@ class LTX2TransformerInfer:
 
         norm_ax = self.modulate_with_rmsnorm_func(ax, ascale_msa, ashift_msa, weight=None, bias=None, eps=1e-6)
 
-        bypass_a_self = block_idx in self._mm_skip_audio_self_blocks
         # Audio self-attention
         ax = (
             ax
@@ -419,7 +448,7 @@ class LTX2TransformerInfer:
                 x=norm_ax,
                 pe=pre_infer_out.audio_args.positional_embeddings,
                 is_audio=True,
-                bypass_attention=bypass_a_self,
+                bypass_attention=skip_audio_self,
             )
             * agate_msa
         )
@@ -482,7 +511,7 @@ class LTX2TransformerInfer:
         ax_scaled = self.modulate_func(ax_norm3, scale_ca_audio_hidden_states_a2v, shift_ca_audio_hidden_states_a2v)
 
         # Audio-to-video cross-attention (ltx: skip when SKIP_A2V_CROSS_ATTN for this block / all blocks)
-        if not self._mm_skip_a2v:
+        if not skip_a2v:
             vx = (
                 vx
                 + self._infer_attn(
@@ -503,7 +532,7 @@ class LTX2TransformerInfer:
         ax_scaled = self.modulate_func(ax_norm3, scale_ca_audio_hidden_states_v2a, shift_ca_audio_hidden_states_v2a)
         vx_scaled = self.modulate_func(vx_norm3, scale_ca_video_hidden_states_v2a, shift_ca_video_hidden_states_v2a)
 
-        if not self._mm_skip_v2a:
+        if not skip_v2a:
             ax = (
                 ax
                 + self._infer_attn(
@@ -571,11 +600,24 @@ class LTX2TransformerInfer:
 
         vx = pre_infer_out.video_args.x
         ax = pre_infer_out.audio_args.x
+        if self.use_compile:
+            self.v_attn_cu_seqlens_qkv = self._create_cu_seqlens(vx.shape[0])
+            self.a_attn_cu_seqlens_qkv = self._create_cu_seqlens(ax.shape[0])
 
         # Process all transformer blocks
         for block_idx in range(self.blocks_num):
             block = weights.blocks[block_idx]
-            vx, ax = self.infer_block(block_idx, block, vx, ax, pre_infer_out)
+            vx, ax = self.run_block(
+                block_idx,
+                block,
+                vx,
+                ax,
+                pre_infer_out,
+                block_idx in self._mm_skip_video_self_blocks,
+                block_idx in self._mm_skip_audio_self_blocks,
+                self._mm_skip_a2v,
+                self._mm_skip_v2a,
+            )
         return vx, ax, pre_infer_out.video_args.embedded_timestep, pre_infer_out.audio_args.embedded_timestep
 
     def _get_ada_values(

@@ -24,7 +24,6 @@ from lightx2v.models.networks.wan.weights.motus import (
     build_motus_expert_configs,
 )
 from lightx2v.models.networks.wan.weights.motus._shared import apply_time_embedding
-from lightx2v.utils.custom_compiler import compiled_method
 from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
 from lightx2v.utils.utils import load_weights
 
@@ -212,8 +211,6 @@ class MotusModel(BaseTransformerModel):
     def __init__(self, config, device):
         config = self._apply_motus_defaults(dict(config))
         model_path = config.get("model_path", config.get("wan_path", ""))
-        # CompiledMethodsMixin discovers attributes during BaseTransformerModel init.
-        # Seed config early so property access is safe before super() assigns it.
         self.config = config
         self._cached_vlm_state = None
         super().__init__(model_path=model_path, config=config, device=device, model_type="motus")
@@ -233,7 +230,6 @@ class MotusModel(BaseTransformerModel):
         logger.info("[Motus] Loading VLM processor")
         self.vlm_processor = AutoProcessor.from_pretrained(self.config["vlm_path"], trust_remote_code=True)
         self._load_normalization_stats()
-        self._rope_cos_sin_cache = {}
         self._patch_qwen3_vl_rope_index(self.vlm_model)
         logger.info("[Motus] Building Motus backbone helpers")
         self.video_backbone = MotusVideoBackbone(self.config, self.pre_weight.video, self.transformer_weights.video)
@@ -296,6 +292,7 @@ class MotusModel(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self, self.config)
         self.transformer_infer = self.transformer_infer_class(self, self.config)
         self.post_infer = self.post_infer_class(self, self.config)
+        self.pre_infer.set_rope(self.transformer_weights.rope)
 
     def _move_weight_tree(self, node, move_to_cuda, non_blocking=False):
         if node is None:
@@ -501,31 +498,6 @@ class MotusModel(BaseTransformerModel):
         restored = flat * self.action_range.unsqueeze(0) + self.action_min.unsqueeze(0)
         return restored.reshape(shape)
 
-    def get_wan_freqs(self):
-        return self.pre_infer.freqs
-
-    def get_wan_rotary_cos_sin(self, grid_size):
-        if grid_size in self._rope_cos_sin_cache:
-            return self._rope_cos_sin_cache[grid_size]
-        freqs = self.get_wan_freqs()
-        head_dim_half = freqs.shape[1]
-        c_f = head_dim_half - 2 * (head_dim_half // 3)
-        c_h = head_dim_half // 3
-        c_w = head_dim_half // 3
-        fpart, hpart, wpart = freqs.split([c_f, c_h, c_w], dim=1)
-        f, h, w = grid_size
-        freq_grid = torch.cat(
-            [
-                fpart[:f].view(f, 1, 1, -1).expand(f, h, w, -1),
-                hpart[:h].view(1, h, 1, -1).expand(f, h, w, -1),
-                wpart[:w].view(1, 1, w, -1).expand(f, h, w, -1),
-            ],
-            dim=-1,
-        ).reshape(f * h * w, -1)
-        cos_sin = (freq_grid.real.contiguous(), freq_grid.imag.contiguous())
-        self._rope_cos_sin_cache[grid_size] = cos_sin
-        return cos_sin
-
     def prepare_frame(self, image_path):
         image = Image.open(image_path).convert("RGB")
         image_np = np.asarray(image).astype(np.float32) / 255.0
@@ -602,7 +574,6 @@ class MotusModel(BaseTransformerModel):
         )
         return inputs
 
-    @compiled_method()
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):
         del infer_condition

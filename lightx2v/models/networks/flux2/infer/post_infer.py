@@ -25,7 +25,7 @@ class Flux2PostInfer:
         temb_out = weights.norm_out_linear.apply(F.silu(temb))
         scale, shift = torch.chunk(temb_out, 2, dim=-1)
 
-        hidden_states = F.layer_norm(hidden_states, (hidden_states.shape[-1],))
+        hidden_states = weights.norm_out.apply(hidden_states)
         hidden_states = hidden_states * (1 + scale) + shift
 
         output = weights.proj_out.apply(hidden_states)

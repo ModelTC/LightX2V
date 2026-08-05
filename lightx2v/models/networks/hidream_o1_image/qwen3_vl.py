@@ -5,13 +5,10 @@ import torch.nn as nn
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
 from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLTextConfig
 
+from lightx2v.common.ops.rope import TorchRealRope
+
 USE_BF16_ROPE = os.environ.get("USE_BF16_ROPE", "0")
-
-
-def rotate_half(x):
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
+_QWEN3_VL_ROPE = TorchRealRope(layout="split_half")
 
 
 class Qwen3VLTextRotaryEmbedding(nn.Module):
@@ -74,8 +71,5 @@ class Qwen3VLTextRotaryEmbedding(nn.Module):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
+    del position_ids
+    return _QWEN3_VL_ROPE.apply(q, k, (cos, sin), unsqueeze_dim=unsqueeze_dim)

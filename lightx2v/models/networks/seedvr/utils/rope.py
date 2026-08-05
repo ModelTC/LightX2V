@@ -1,9 +1,12 @@
 from functools import lru_cache
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 from einops import rearrange
 from torch import nn
+
+from lightx2v.common.ops.rope import RopeTemplate
+from lightx2v.utils.registry_factory import ROPE_REGISTER
 
 from .cache import Cache
 from .rotary_embedding_torch import RotaryEmbedding, apply_rotary_emb
@@ -161,13 +164,35 @@ class NaMMRotaryEmbedding3d(MMRotaryEmbeddingBase):
         return torch.cat(vid_freq_list, dim=0), torch.cat(txt_freq_list, dim=0)
 
 
-def get_na_rope(rope_type: Optional[str], dim: int):
-    if rope_type is None:
-        return None
-    if rope_type == "torch":
-        return None
-    if rope_type == "rope3d":
-        return NaRotaryEmbedding3d(dim=dim)
-    if rope_type == "mmrope3d":
-        return NaMMRotaryEmbedding3d(dim=dim)
-    raise NotImplementedError(f"{rope_type} is not supported.")
+class SeedVRRopeBase(RopeTemplate):
+    multimodal = False
+    implementation_class = None
+
+    def __init__(self, layout="interleaved", compute_dtype=torch.float32):
+        super().__init__(layout=layout, compute_dtype=compute_dtype)
+        if layout != "interleaved":
+            raise ValueError("SeedVR RoPE only supports interleaved layout.")
+        self.implementation = None
+
+    def set_config(self, config=None):
+        super().set_config(config)
+        if config is not None:
+            self.implementation = self.implementation_class(dim=config["rope_dim"])
+
+    def apply(self, q, k, shape, *, cache, txt_q=None, txt_k=None, txt_shape=None, **kwargs):
+        if self.implementation is None:
+            raise RuntimeError("SeedVR RoPE must be configured before apply().")
+        if self.multimodal:
+            return self.implementation(q, k, shape, txt_q, txt_k, txt_shape, cache)
+        return self.implementation(q, k, shape, cache)
+
+
+@ROPE_REGISTER("rope3d")
+class SeedVRRope3D(SeedVRRopeBase):
+    implementation_class = NaRotaryEmbedding3d
+
+
+@ROPE_REGISTER("mmrope3d")
+class SeedVRMMRope3D(SeedVRRopeBase):
+    multimodal = True
+    implementation_class = NaMMRotaryEmbedding3d

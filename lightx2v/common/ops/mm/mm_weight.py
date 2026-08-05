@@ -2431,17 +2431,15 @@ class MMWeightWfp8tensorAfp8tensordynamic(MMWeightQuantTemplate):
         if bias is not None and bias.dtype != mm_dtype:
             bias = bias.to(mm_dtype)
         input_tensor_quant = self.act_quant_func(input_tensor)
-        # weight_scale shape: () / (1,) for per-tensor, (1, N) for
-        # per-output-channel. ``torch._scaled_mm`` wants scale_b shape
-        # (1, 1) for per-tensor or (1, N) for per-channel — and when
-        # *either* scale is 2D (RowWise/ColWise scaling), both must be 2D.
+        # Inductor requires matching scale ranks: (1,) per tensor or
+        # (1, N) per output channel.
         ws = self.weight_scale
         if ws.dim() == 2:
             scale_b = ws
             scale_a = self.input_scale.reshape(1, 1)
         else:
             scale_b = ws.reshape(1)
-            scale_a = self.input_scale
+            scale_a = self.input_scale.reshape(1)
         output_tensor = torch._scaled_mm(
             input_tensor_quant,
             self.weight,
@@ -2489,6 +2487,7 @@ class MMWeightTP(MMWeightTemplate):
         is_post_adapter=False,
         lora_prefix="diffusion_model.blocks",
         lora_path="",
+        reduce_output=True,
     ):
         super().__init__(
             weight_name,
@@ -2505,6 +2504,7 @@ class MMWeightTP(MMWeightTemplate):
         self.tp_rank = tp_rank
         self.tp_size = tp_size
         self.split_dim = split_dim  # "col" for column split, "row" for row split
+        self.reduce_output = reduce_output
         assert split_dim in ["col", "row"], f"split_dim must be 'col' or 'row', got {split_dim}"
 
         self._mm = MM_WEIGHT_REGISTER.get(mm_type, MMWeight)(
@@ -2542,7 +2542,7 @@ class MMWeightTP(MMWeightTemplate):
         output = self._mm.apply(input_tensor)
 
         # For row split, need all-reduce to combine results from all ranks
-        if self.split_dim == "row" and self.tp_size > 1 and self.tp_group is not None:
+        if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
             dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
             # Add bias after all-reduce (bias is not split for row split)
             if self._row_split_bias is not None:

@@ -32,7 +32,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
-def rope_apply_with_indices(x, grid_sizes, freqs, indices):
+def rope_apply_with_indices(rope, x, grid_sizes, freqs, indices):
     """Apply RoPE using explicit frame indices (for memory-aware attention).
 
     Rather than assuming sequential frame positions 0..F-1, this uses the
@@ -85,11 +85,7 @@ def rope_apply_with_indices(x, grid_sizes, freqs, indices):
     else:
         raise ValueError(f"Unexpected freqs shape: {freqs.shape}")
 
-    cos_sin = cos_sin.to(x.device)
-    # Apply RoPE
-    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-    out = torch.view_as_real(x_complex * cos_sin).flatten(-2)
-    return out.type_as(x)
+    return rope.apply_single(x, cos_sin.to(x.device), unsqueeze_dim=0)
 
 
 class WanMtxg3TransformerInfer(WanTransformerInfer):
@@ -169,7 +165,7 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
     def infer(self, weights, pre_infer_out):
         self.cos_sin = pre_infer_out.cos_sin
         self.freqs = pre_infer_out.freqs
-        self.reset_infer_states()
+        self.reset_infer_states(pre_infer_out.x, pre_infer_out.context)
         x = self.infer_main_blocks(weights.blocks, pre_infer_out)
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
@@ -229,11 +225,6 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
         q = cross_phase.cross_attn_norm_q.apply(cross_phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
         k = cross_phase.cross_attn_norm_k.apply(cross_phase.cross_attn_k.apply(pre_infer_out.context)).view(-1, n, d)
         v = cross_phase.cross_attn_v.apply(pre_infer_out.context).view(-1, n, d)
-
-        if self.cross_attn_cu_seqlens_q is None:
-            self.cross_attn_cu_seqlens_q = torch.tensor([0, q.shape[0]], dtype=torch.int32).to(q.device)
-        if self.cross_attn_cu_seqlens_kv is None:
-            self.cross_attn_cu_seqlens_kv = torch.tensor([0, k.shape[0]], dtype=torch.int32).to(k.device)
 
         attn_out = cross_phase.cross_attn_1.apply(
             q=q,
@@ -306,8 +297,8 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
 
             # RoPE with explicit indices
             mem_indices = memory_latent_idx if memory_latent_idx is not None else list(range(memory_length))
-            q_memory = rope_apply_with_indices(q_memory, grid_sizes_mem, self.freqs, mem_indices)
-            k_memory = rope_apply_with_indices(k_memory, grid_sizes_mem, self.freqs, mem_indices)
+            q_memory = rope_apply_with_indices(phase.indexed_rope, q_memory, grid_sizes_mem, self.freqs, mem_indices)
+            k_memory = rope_apply_with_indices(phase.indexed_rope, k_memory, grid_sizes_mem, self.freqs, mem_indices)
 
             if predict_latent_idx is not None:
                 if isinstance(predict_latent_idx, tuple) and len(predict_latent_idx) == 2:
@@ -317,8 +308,8 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             else:
                 pred_indices = list(range(grid_sizes_pred[0, 0].item()))
 
-            q_pred = rope_apply_with_indices(q_pred, grid_sizes_pred, self.freqs, pred_indices)
-            k_pred = rope_apply_with_indices(k_pred, grid_sizes_pred, self.freqs, pred_indices)
+            q_pred = rope_apply_with_indices(phase.indexed_rope, q_pred, grid_sizes_pred, self.freqs, pred_indices)
+            k_pred = rope_apply_with_indices(phase.indexed_rope, k_pred, grid_sizes_pred, self.freqs, pred_indices)
 
             q = torch.cat([q_memory.squeeze(0), q_pred.squeeze(0)], dim=0)
             k = torch.cat([k_memory.squeeze(0), k_pred.squeeze(0)], dim=0)
@@ -338,12 +329,10 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
                     pred_indices = predict_latent_idx
             else:
                 pred_indices = list(range(grid_sizes.tuple[0]))
-            q = rope_apply_with_indices(q_unsq, grid_sizes_t, self.freqs, pred_indices).squeeze(0)
-            k = rope_apply_with_indices(k_unsq, grid_sizes_t, self.freqs, pred_indices).squeeze(0)
+            q = rope_apply_with_indices(phase.indexed_rope, q_unsq, grid_sizes_t, self.freqs, pred_indices).squeeze(0)
+            k = rope_apply_with_indices(phase.indexed_rope, k_unsq, grid_sizes_t, self.freqs, pred_indices).squeeze(0)
 
         img_qkv_len = q.shape[0]
-        if self.self_attn_cu_seqlens_qkv is None:
-            self.self_attn_cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32).to(q.device)
 
         attn_out = phase.self_attn_1.apply(
             q=q,
@@ -443,19 +432,19 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
 
             if memory_length > 0:
                 freqs_memory = self._get_action_rotary_pos_embed(memory_length, mouse_head_dim, self.mouse_qk_dim_list)
-                q_mem, k_mem = apply_rotary_emb(q_m[:, :memory_length], k_m[:, :memory_length], freqs_memory, head_first=False)
+                q_mem, k_mem = apply_rotary_emb(phase.rope, q_m[:, :memory_length], k_m[:, :memory_length], freqs_memory, head_first=False)
                 q_m[:, :memory_length] = q_mem
                 k_m[:, :memory_length] = k_mem
 
                 pred_length = tt - memory_length
                 if pred_length > 0:
                     freqs_pred = self._get_action_rotary_pos_embed(pred_length, mouse_head_dim, self.mouse_qk_dim_list)
-                    q_pred, k_pred = apply_rotary_emb(q_m[:, memory_length:], k_m[:, memory_length:], freqs_pred, head_first=False)
+                    q_pred, k_pred = apply_rotary_emb(phase.rope, q_m[:, memory_length:], k_m[:, memory_length:], freqs_pred, head_first=False)
                     q_m[:, memory_length:] = q_pred
                     k_m[:, memory_length:] = k_pred
             else:
                 freqs = self._get_action_rotary_pos_embed(tt, mouse_head_dim, self.mouse_qk_dim_list)
-                q_m, k_m = apply_rotary_emb(q_m, k_m, freqs, head_first=False)
+                q_m, k_m = apply_rotary_emb(phase.rope, q_m, k_m, freqs, head_first=False)
 
             mouse_attn = self._run_flash_attention(q_m, k_m, v_m, causal=False)
             mouse_attn = rearrange(mouse_attn, "(b s) t h d -> b (t s) (h d)", b=batch_size, s=spatial_tokens)
@@ -519,19 +508,19 @@ class WanMtxg3TransformerInfer(WanTransformerInfer):
             q_k = rearrange(q_k, "b (t s) h d -> (b s) t h d", s=spatial_tokens)
             if memory_length > 0:
                 freqs_memory = self._get_action_rotary_pos_embed(memory_length, keyboard_head_dim, self.mouse_qk_dim_list)
-                q_mem, k_mem = apply_rotary_emb(q_k[:, :memory_length], k_k[:, :memory_length], freqs_memory, head_first=False)
+                q_mem, k_mem = apply_rotary_emb(phase.rope, q_k[:, :memory_length], k_k[:, :memory_length], freqs_memory, head_first=False)
                 q_k[:, :memory_length] = q_mem
                 k_k[:, :memory_length] = k_mem
 
                 pred_length = tt - memory_length
                 if pred_length > 0:
                     freqs_pred = self._get_action_rotary_pos_embed(pred_length, keyboard_head_dim, self.mouse_qk_dim_list)
-                    q_pred, k_pred = apply_rotary_emb(q_k[:, memory_length:], k_k[:, memory_length:], freqs_pred, head_first=False)
+                    q_pred, k_pred = apply_rotary_emb(phase.rope, q_k[:, memory_length:], k_k[:, memory_length:], freqs_pred, head_first=False)
                     q_k[:, memory_length:] = q_pred
                     k_k[:, memory_length:] = k_pred
             else:
                 freqs = self._get_action_rotary_pos_embed(tt, keyboard_head_dim, self.rope_dim_list)
-                q_k, k_k = apply_rotary_emb(q_k, k_k, freqs, head_first=False)
+                q_k, k_k = apply_rotary_emb(phase.rope, q_k, k_k, freqs, head_first=False)
 
             k_k = k_k.repeat(spatial_tokens, 1, 1, 1)
             v_k = v_k.repeat(spatial_tokens, 1, 1, 1)

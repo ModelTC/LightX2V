@@ -32,12 +32,9 @@ def _parallel_world_size_from_config(config: dict[str, Any] | None) -> int:
         return 1
 
     tensor_p_size = int(parallel.get("tensor_p_size", 1) or 1)
-    if tensor_p_size > 1:
-        return tensor_p_size
-
     cfg_p_size = int(parallel.get("cfg_p_size", 1) or 1)
     seq_p_size = int(parallel.get("seq_p_size", 1) or 1)
-    return max(1, cfg_p_size * seq_p_size)
+    return max(1, tensor_p_size * cfg_p_size * seq_p_size)
 
 
 def _load_base_config_json(path: str) -> dict[str, Any]:

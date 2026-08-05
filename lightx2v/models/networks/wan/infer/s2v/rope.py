@@ -56,23 +56,3 @@ def rope_precompute(x, grid_sizes, freqs, start=None):
                 output[i, seq_bucket[-1] : seq_bucket[-1] + seq_len] = freqs_i
         seq_bucket.append(seq_bucket[-1] + seq_len)
     return output
-
-
-@torch.amp.autocast("cuda", enabled=False)
-def rope_apply(x, precomputed_freqs):
-    """Match Wan2.2/wan/modules/s2v/model_s2v.py rope_apply for precomputed freqs."""
-    output = []
-    for i in range(x.size(0)):
-        s = x.size(1)
-        x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(s, x.size(2), -1, 2))
-        freqs_i = precomputed_freqs[i, :s]
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        if s < x.size(1):
-            x_i = torch.cat([x_i, x[i, s:]])
-        output.append(x_i)
-    return torch.stack(output).float()
-
-
-@torch.amp.autocast("cuda", enabled=False)
-def apply_precomputed_rope(x, precomputed_freqs):
-    return rope_apply(x, precomputed_freqs)

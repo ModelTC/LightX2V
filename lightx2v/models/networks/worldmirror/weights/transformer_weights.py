@@ -42,6 +42,7 @@ from lightx2v.utils.registry_factory import (
 )
 
 _DEFAULT_LN_EPS = 1e-6
+_CAMERA_LN_EPS = 1e-5
 # q_norm / k_norm in the ViT blocks operate on head_dim rather than embed_dim
 # and use a slightly larger epsilon in the source impl (``nn.LayerNorm`` default
 # = 1e-5) — keeping them separate avoids a silent numerical drift.
@@ -62,6 +63,7 @@ class VitBlockWeights(WeightModule):
         use_fp32_attn_proj: bool = False,
         use_fp32_attn_qkv: bool = False,
         use_fp32_fc1: bool = False,
+        ln_eps: float = _DEFAULT_LN_EPS,
     ):
         super().__init__()
         self.block_name = block_name
@@ -109,7 +111,7 @@ class VitBlockWeights(WeightModule):
             LN_WEIGHT_REGISTER[ln_type](
                 f"{block_name}.norm1.weight",
                 f"{block_name}.norm1.bias",
-                eps=_DEFAULT_LN_EPS,
+                eps=ln_eps,
             ),
         )
         self.add_module(
@@ -117,7 +119,7 @@ class VitBlockWeights(WeightModule):
             LN_WEIGHT_REGISTER[ln_type](
                 f"{block_name}.norm2.weight",
                 f"{block_name}.norm2.bias",
-                eps=_DEFAULT_LN_EPS,
+                eps=ln_eps,
             ),
         )
         # --- MLP ---
@@ -214,7 +216,8 @@ class WorldMirrorTransformerWeights(WeightModule):
     ----------
     config : dict-like
         Reads ``dit_quant_scheme`` (default ``"Default"``) and
-        ``ln_type`` (default ``"torch"``).
+        ``layer_norm_type`` (default ``"torch"``; legacy
+        ``ln_norm_type`` is still accepted).
     depth : int
         Number of frame / global blocks in ``visual_geometry_transformer``.
     cam_trunk_depth : int
@@ -255,7 +258,7 @@ class WorldMirrorTransformerWeights(WeightModule):
         else:
             mm_type = config.get("dit_quant_scheme", "Default")
         self._mm_type = mm_type
-        ln_type = config.get("ln_norm_type", "torch")
+        ln_type = config.get("layer_norm_type", config.get("ln_norm_type", "torch"))
 
         # Block-level fp32 protection: forcibly keep the first
         # ``fp32_first_n_blocks`` and last ``fp32_last_n_blocks`` of each
@@ -360,6 +363,7 @@ class WorldMirrorTransformerWeights(WeightModule):
                     use_fp32_attn_proj=cam_refine_fp32 or (bool(config.get("use_fp32_attn_proj", False)) if hasattr(config, "get") else False),
                     use_fp32_attn_qkv=cam_refine_fp32 or (bool(config.get("use_fp32_attn_qkv", False)) if hasattr(config, "get") else False),
                     use_fp32_fc1=cam_refine_fp32 or (bool(config.get("use_fp32_fc1", False)) if hasattr(config, "get") else False),
+                    ln_eps=_CAMERA_LN_EPS,
                 )
                 for i in range(cam_trunk_depth)
             ),

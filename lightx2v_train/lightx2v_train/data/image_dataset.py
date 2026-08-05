@@ -1,4 +1,5 @@
 import json
+import math
 import random
 from pathlib import Path
 
@@ -8,9 +9,24 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
-from lightx2v_train.data.utils import resize_to_target_area
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
+
+_BICUBIC = getattr(Image, "Resampling", Image).BICUBIC
+
+
+def _resize_to_target_area(image, target_area):
+    width, height = image.size
+    ratio = width / height
+    target_width = round(math.sqrt(target_area * ratio) / 16) * 16
+    target_height = round(math.sqrt(target_area / ratio) / 16) * 16
+    scale = max(target_width / width, target_height / height)
+    scaled_width = round(width * scale)
+    scaled_height = round(height * scale)
+    image = image.resize((scaled_width, scaled_height), resample=_BICUBIC)
+    left = (scaled_width - target_width) // 2
+    top = (scaled_height - target_height) // 2
+    return image.crop((left, top, left + target_width, top + target_height))
 
 
 class ImageDataset(Dataset):
@@ -33,17 +49,27 @@ class ImageDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, index):
-        sample = self.samples[index]
-        prompt = sample["prompt"]
+        record = self.samples[index]
+        prompt = record["prompt"]
         if random.random() < self.prompt_dropout_rate:
             prompt = " "
 
-        item = {"prompt": prompt}
-        if sample.get("target_image") is not None:
-            item["target_image"] = self.load_image(sample["target_image"])
-        if sample.get("source_images"):
-            item["source_images"] = [self.load_image(p) for p in sample["source_images"]]
-        return item
+        inputs = {}
+        if record.get("target_image") is not None:
+            inputs["target_image"] = self.load_image(record["target_image"])
+        if record.get("source_images"):
+            inputs["source_images"] = [self.load_image(path) for path in record["source_images"]]
+
+        meta = {}
+        if record.get("target_image") is not None:
+            meta["target_image_path"] = str(record["target_image"])
+        if record.get("source_images"):
+            meta["source_image_paths"] = [str(path) for path in record["source_images"]]
+        if record.get("target_height") is not None:
+            meta["target_height"] = int(record["target_height"])
+        if record.get("target_width") is not None:
+            meta["target_width"] = int(record["target_width"])
+        return {"inputs": inputs, "conditioning": {"prompt": prompt}, "meta": meta}
 
     def _load_metadata_samples(self, metadata_path, data_dir):
         if metadata_path.suffix != ".jsonl":
@@ -80,7 +106,7 @@ class ImageDataset(Dataset):
 
     def load_image(self, image_path):
         image = Image.open(image_path).convert("RGB")
-        image = resize_to_target_area(image, self.target_area)
+        image = _resize_to_target_area(image, self.target_area)
         return torch.from_numpy(np.asarray(image).astype(np.float32) / 127.5 - 1.0).permute(2, 0, 1)
 
 

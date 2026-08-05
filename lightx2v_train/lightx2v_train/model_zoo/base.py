@@ -27,6 +27,9 @@ class BaseModel:
     def load_components(self, transformer_only=False, reference_model=None):
         raise NotImplementedError
 
+    def dmd_latent_shape(self, batch_size, height, width):
+        raise NotImplementedError(f"{self.__class__.__name__} must define dmd_latent_shape().")
+
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
 
@@ -248,6 +251,41 @@ class BaseModel:
 
     def load_full_weights_for_resume(self, resume_ckpt_path):
         raise NotImplementedError(f"{self.__class__.__name__} must define load_full_weights_for_resume().")
+
+    def prepare_consolidated_state_dict(self, state_dict):
+        return state_dict
+
+    def consolidated_safetensors_metadata(self):
+        return {"format": "pt"}
+
+    def save_consolidated_weights(self, output_path):
+        denoiser = self.denoiser_module()
+        if is_fsdp2_module(denoiser):
+            options = StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+                ignore_frozen_params=False,
+                strict=False,
+            )
+            logger.info("[checkpoint] gathering consolidated model state dict")
+            state_dict, _ = get_state_dict(denoiser, (), options=options)
+        elif is_main_process():
+            state_dict = denoiser.state_dict()
+        else:
+            state_dict = {}
+
+        if not is_main_process():
+            return
+
+        state_dict = self.prepare_consolidated_state_dict(state_dict)
+        state_dict = {key: value.detach().cpu().contiguous() for key, value in state_dict.items()}
+        output_dir = os.path.dirname(output_path) or "."
+        os.makedirs(output_dir, exist_ok=True)
+        tmp_path = f"{output_path}.tmp"
+        logger.info("[checkpoint] saving consolidated model weights to {}", output_path)
+        save_file(state_dict, tmp_path, metadata=self.consolidated_safetensors_metadata())
+        os.replace(tmp_path, output_path)
+        logger.info("[checkpoint] saved consolidated model weights to {}", output_path)
 
     def save_full_model(self, save_dir):
         denoiser = self.denoiser_module()

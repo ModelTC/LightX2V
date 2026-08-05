@@ -1,5 +1,4 @@
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
@@ -32,44 +31,9 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
         encoder_hidden_states = pre_infer_out.encoder_hidden_states
         timestep = pre_infer_out.timestep
         image_rotary_emb = pre_infer_out.image_rotary_emb
+        image_rotary_positions = pre_infer_out.image_rotary_positions
 
         num_txt_tokens = encoder_hidden_states.shape[0]
-
-        if self.seq_p_group is not None and image_rotary_emb is not None:
-            world_size = dist.get_world_size(self.seq_p_group)
-            cur_rank = dist.get_rank(self.seq_p_group)
-
-            if isinstance(image_rotary_emb, tuple):
-                freqs_cos, freqs_sin = image_rotary_emb
-
-                txt_cos = freqs_cos[:num_txt_tokens]
-                img_cos = freqs_cos[num_txt_tokens:]
-                txt_sin = freqs_sin[:num_txt_tokens]
-                img_sin = freqs_sin[num_txt_tokens:]
-
-                seqlen = img_cos.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    img_cos = F.pad(img_cos, (0, 0, 0, padding_size))
-                    img_sin = F.pad(img_sin, (0, 0, 0, padding_size))
-                img_cos = torch.chunk(img_cos, world_size, dim=0)[cur_rank]
-                img_sin = torch.chunk(img_sin, world_size, dim=0)[cur_rank]
-
-                freqs_cos = torch.cat([txt_cos, img_cos], dim=0)
-                freqs_sin = torch.cat([txt_sin, img_sin], dim=0)
-                image_rotary_emb = (freqs_cos, freqs_sin)
-            else:
-                txt_emb = image_rotary_emb[:num_txt_tokens]
-                img_emb = image_rotary_emb[num_txt_tokens:]
-
-                seqlen = img_emb.shape[0]
-                padding_size = (world_size - (seqlen % world_size)) % world_size
-                if padding_size > 0:
-                    img_emb = F.pad(img_emb, (0, 0, 0, padding_size))
-                img_emb = torch.chunk(img_emb, world_size, dim=0)[cur_rank]
-
-                image_rotary_emb = torch.cat([txt_emb, img_emb], dim=0)
-
         timestep_act = F.silu(timestep)
         double_stream_mod_img = block_weights.double_stream_modulation_img_linear.apply(timestep_act)
         double_stream_mod_txt = block_weights.double_stream_modulation_txt_linear.apply(timestep_act)
@@ -93,6 +57,7 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
                     double_stream_mod_img,
                     double_stream_mod_txt,
                     image_rotary_emb,
+                    image_rotary_positions,
                 )
 
             self.offload_manager_double.swap_blocks()
@@ -115,6 +80,7 @@ class Flux2OffloadTransformerInfer(Flux2TransformerInfer):
                     None,
                     single_stream_mod,
                     image_rotary_emb,
+                    image_rotary_positions,
                     num_txt_tokens=num_txt_tokens,
                 )
 

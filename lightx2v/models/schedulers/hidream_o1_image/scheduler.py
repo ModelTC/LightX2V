@@ -237,7 +237,7 @@ class HidreamO1ImageScheduler(BaseScheduler):
 
     @ProfilingContext4DebugL2("Decode HiDream-O1-Image")
     def decode(self):
-        img = ((self.latents[0].float() + 1.0) * 127.5).clamp_(0, 255).round_().to(torch.uint8)
+        img = (self.latents[0] + 1.0) / 2.0
         img = einops.rearrange(
             img,
             "(H W) (C p1 p2) -> (H p1) (W p2) C",
@@ -246,7 +246,8 @@ class HidreamO1ImageScheduler(BaseScheduler):
             p1=PATCH_SIZE,
             p2=PATCH_SIZE,
         )
-        return img[:, :, [2, 1, 0]].contiguous().cpu().numpy()
+        img = (img.cpu().float() * 255.0).clamp_(0, 255).round_().to(torch.uint8)
+        return img[:, :, [2, 1, 0]].contiguous().numpy()
 
     def clear(self):
         self.latents = None

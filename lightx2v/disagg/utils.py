@@ -36,7 +36,7 @@ def set_config(
     model_cls,
     config_path=None,
     attn_mode="flash_attn2",
-    rope_type="torch",
+    rope_type="torch_complex_rope",
     infer_steps=50,
     target_video_length=81,
     target_height=480,

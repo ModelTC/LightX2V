@@ -7,7 +7,6 @@ from lightx2v.models.networks.lingbot_video.infer.transformer_infer import LingB
 from lightx2v.models.networks.lingbot_video.weights.post_weights import LingBotVideoPostWeights
 from lightx2v.models.networks.lingbot_video.weights.pre_weights import LingBotVideoPreWeights
 from lightx2v.models.networks.lingbot_video.weights.transformer_weights import LingBotVideoTransformerWeights
-from lightx2v.utils.custom_compiler import compiled_method
 
 
 class LingBotVideoTransformerModel(BaseTransformerModel):
@@ -54,6 +53,10 @@ class LingBotVideoTransformerModel(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
 
+    def _load_lora_file(self, file_path):
+        lora_weights = super()._load_lora_file(file_path)
+        return {key.replace(".lora.down.weight", ".lora_down.weight").replace(".lora.up.weight", ".lora_up.weight"): value for key, value in lora_weights.items()}
+
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
         self.scheduler.infer_condition = infer_condition
@@ -76,7 +79,6 @@ class LingBotVideoTransformerModel(BaseTransformerModel):
     def _seq_parallel_post_process(self, noise_pred):
         raise NotImplementedError("LingBot-Video sequence parallel inference is not implemented.")
 
-    @compiled_method()
     @torch.no_grad()
     def infer(self, inputs):
         latents_input = self.scheduler.latents

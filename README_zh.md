@@ -51,6 +51,12 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年7月28日：** 🚀 我们发布了 LingBot-Video 的 4 步蒸馏 LoRA：[LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video)。该 LoRA 支持 T2V、T2I 和 I2V 任务，只需 4 步且无需 CFG 即可完成推理。使用方式请参考 [LingBot-Video 推理脚本](scripts/lingbot_video)。
+
+- **2026年7月23日：** 🎉 我们发布 [LightX2V ROS: Closing the Loop for Action-Generating World Models](https://light-ai.top/LightX2V-BLOG/posts/LightX2V_ROS/) 博客
+
+- **2026年7月19日：** ⚡️ 我们发布 [Wan2.2-NVFP4-Sparse: Extremely Fast Wan 2.2 14B Inference](https://light-ai.top/LightX2V-BLOG/posts/Wan22-NVFP4-Sparse/) 博客
+
 - **2026年6月15日：** 🚀 支持 平头哥 PPU 的部署。
 
 - **2026年5月29日：** 🚀 我们推出了一个极其高效的 Wan 2.2 14B 变体 (T2V and I2V)：[面向 Blackwell 架构的 NVFP4 量化感知步数蒸馏与稀疏注意力模型](https://huggingface.co/lightx2v/Wan2.2-NVFP4-Sparse)。在单张 RTX 5090 显卡上可实现超过 50 倍的加速。
@@ -245,6 +251,7 @@ pipe.generate(
 - ✅ [Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
 
 ### 量化模型和蒸馏模型/Lora (**🚀 推荐：4步推理**)
+- ✅ [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) —— 面向 LingBot-Video T2V、T2I 和 I2V 任务的 4 步蒸馏 LoRA
 - ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
 - ✅ [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
 - ✅ [Wan2.1-Distill-Loras](https://huggingface.co/lightx2v/Wan2.1-Distill-Loras)
@@ -345,9 +352,7 @@ pipe.generate(
 
 - [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=lightx2v) —— 全模态 AI 推理平台，其托管 API 提供 LightX2V 同样支持的 Wan / Seedance / Kling 等模型系列，适合希望使用托管 API 而非自建部署的团队。
 
-## 🌟 Star 历史
-
-[![Star History Chart](https://api.star-history.com/svg?repos=ModelTC/lightx2v&type=Timeline)](https://star-history.com/#ModelTC/lightx2v&Timeline)
+- [Sensecore](https://www.sensecore.cn/about) —— 商汤大装置，建设高效率、低成本、规模化的 AI 云基础设施，打造专业的深度学习平台及算法模型体系，引领AI创新，助力工业界及学术界探索 AI 边界。
 
 ## ✏️ 引用
 
