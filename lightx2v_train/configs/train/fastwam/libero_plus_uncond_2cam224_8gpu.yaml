@@ -31,6 +31,8 @@ training:
   save_final: true
   lr_scheduler: cosine
   lr_warmup_iters: 8742
+  # Cosine floor = optimizer.learning_rate * lr_eta_min_ratio; set to 0 to decay to zero.
+  lr_eta_min_ratio: 0.01
   optimizer:
     learning_rate: 1.0e-4
     weight_decay: 1.0e-2

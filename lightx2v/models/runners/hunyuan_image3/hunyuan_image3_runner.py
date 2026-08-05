@@ -123,10 +123,25 @@ class HunyuanImage3Runner(DefaultRunner):
         except OSError:
             self.hunyuan_generation_config = GenerationConfig()
 
+        tokenizer_kwargs = {}
+        tokenizer_json_path = Path(model_path) / "tokenizer.json"
+        if tokenizer_json_path.is_file():
+            # Transformers 5.x may rebuild this custom fast tokenizer from
+            # partial metadata and silently drop its ByteLevel decoder. Load
+            # the serialized backend explicitly to preserve the checkpoint's
+            # original BPE encoding and decoding behavior.
+            from tokenizers import Tokenizer
+
+            tokenizer_kwargs["tokenizer_object"] = Tokenizer.from_file(str(tokenizer_json_path))
+
         self.hunyuan_tokenizer = modules["HunyuanImage3TokenizerFast"].from_pretrained(
             model_path,
             model_version=self.hunyuan_config.model_version,
+            **tokenizer_kwargs,
         )
+
+        if tokenizer_json_path.is_file() and self.hunyuan_tokenizer.backend_tokenizer.decoder is None:
+            raise RuntimeError(f"Failed to preserve the ByteLevel tokenizer backend from {tokenizer_json_path}. Refusing to continue because prompt encoding and COT decoding would be corrupted.")
         self.hunyuan_image_processor = modules["HunyuanImage3ImageProcessor"](self.hunyuan_config)
         # Newer transformers versions alias Siglip2ImageProcessorFast to the
         # slow processor, whose default output is a Python list. The upstream
