@@ -1,6 +1,7 @@
 import math
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3PreInferOutput
@@ -24,7 +25,13 @@ def timestep_embedding(timesteps: torch.Tensor, embedding_dim: int = 256) -> tor
 class MiniMaxH3PreInfer:
     def __init__(self, config):
         self.config = config
-        self.num_heads = int(config.get("num_attention_heads", 56))
+        global_num_heads = int(config.get("num_attention_heads", 56))
+        if config.get("tensor_parallel", False):
+            tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+            tp_size = dist.get_world_size(tp_group)
+        else:
+            tp_size = 1
+        self.num_heads = global_num_heads // tp_size
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.hidden_size = int(config.get("hidden_size", 5376))
         self.rope_freq_dim = int(config.get("rope_freq_dim", 16))

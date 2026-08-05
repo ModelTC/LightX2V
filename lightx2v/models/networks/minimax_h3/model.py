@@ -1,7 +1,9 @@
+import glob
 import os
 
 import torch
 import torch.distributed as dist
+from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
@@ -43,8 +45,6 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError(
                 "MiniMax-H3 requires DTYPE=BF16. The native loader preserves the released checkpoint's 626 BF16 tensors and 12 FP32 projection/time/head tensors without dtype conversion."
             )
-        if config.get("tensor_parallel", False):
-            raise NotImplementedError("MiniMax-H3 tensor parallel support is not implemented yet")
         if config.get("cfg_parallel", False) or config.get("enable_cfg", False):
             raise ValueError("MiniMax-H3 is guidance-distilled and does not have a CFG/unconditional branch")
         if config.get("dit_quantized", False):
@@ -62,14 +62,19 @@ class MiniMaxH3Model(BaseTransformerModel):
 
         transformer_path = config.get("dit_original_ckpt") or os.path.join(model_path, "transformer")
         super().__init__(transformer_path, config, device)
+        self._validate_tensor_parallel_config()
         if config.get("seq_parallel", False):
             parallel_type = config.get("parallel", {}).get("seq_p_attn_type", "ulysses")
             if parallel_type != "ulysses":
                 raise NotImplementedError(f"MiniMax-H3 sequence parallel currently supports Ulysses, got {parallel_type!r}")
             world_size = dist.get_world_size(self.seq_p_group)
-            num_heads = int(config.get("num_attention_heads", 56))
-            if num_heads % world_size:
-                raise ValueError(f"MiniMax-H3 Ulysses requires num_attention_heads ({num_heads}) to be divisible by seq_p_size ({world_size})")
+            local_heads = int(config.get("num_attention_heads", 56)) // self.tp_size
+            if local_heads % world_size:
+                raise ValueError(
+                    "MiniMax-H3 Ulysses requires TP-local attention heads to be divisible by seq_p_size: "
+                    f"global_heads={config.get('num_attention_heads', 56)}, tp_size={self.tp_size}, "
+                    f"local_heads={local_heads}, seq_p_size={world_size}"
+                )
         self.sensitive_layer = {
             "proj_in",
             "audio_proj_in",
@@ -81,6 +86,145 @@ class MiniMaxH3Model(BaseTransformerModel):
         self._init_weights()
         self._init_infer()
 
+    def _validate_tensor_parallel_config(self):
+        if not self.use_tp:
+            return
+        checks = {
+            "num_attention_heads": int(self.config.get("num_attention_heads", 56)),
+            "ffn_hidden_size": int(self.config.get("ffn_hidden_size", 14336)),
+            "adaln_output_size": 18 * int(self.config.get("hidden_size", 5376)),
+        }
+        invalid = {name: value for name, value in checks.items() if value % self.tp_size}
+        if invalid:
+            details = ", ".join(f"{name}={value}" for name, value in invalid.items())
+            raise ValueError(f"MiniMax-H3 TP size {self.tp_size} must divide {details}")
+
+    @staticmethod
+    def _tp_split_type(key):
+        if ".attn.to_q." in key or ".attn.to_k." in key or ".attn.to_v." in key:
+            return "col"
+        if ".attn.to_out.0." in key:
+            return "row"
+        if ".ff.net.0.proj." in key:
+            return "ff_fused_col"
+        if ".ff.net.2." in key:
+            return "row"
+        if ".adaln_proj.linear." in key:
+            return "col"
+        return None
+
+    def _select_tensor_parallel_shard(self, key, tensor):
+        """Select this rank's checkpoint shard without materializing peers."""
+        if not self.config.get("tensor_parallel", False):
+            return tensor
+        split_type = self._tp_split_type(key)
+        if split_type is None:
+            return tensor
+
+        if split_type == "row":
+            # Per-output-channel quantization scales remain replicated for a
+            # row-parallel weight; only the weight's input dimension is split.
+            if key.endswith(".weight_scale") or tensor.ndim < 2:
+                return tensor
+            split_dim = 1
+            if tensor.shape[split_dim] % self.tp_size:
+                raise ValueError(f"Cannot row-shard {key} shape {tuple(tensor.shape)} across TP size {self.tp_size}")
+            return torch.chunk(tensor, self.tp_size, dim=split_dim)[self.tp_rank].contiguous()
+
+        if split_type == "ff_fused_col":
+            if tensor.shape[0] % 2:
+                raise ValueError(f"Invalid H3 fused SwiGLU tensor {key} with shape {tuple(tensor.shape)}")
+            half = tensor.shape[0] // 2
+            if half % self.tp_size:
+                raise ValueError(f"Cannot fused-column-shard {key} shape {tuple(tensor.shape)} across TP size {self.tp_size}")
+            value, gate = tensor.split(half, dim=0)
+            value = torch.chunk(value, self.tp_size, dim=0)[self.tp_rank]
+            gate = torch.chunk(gate, self.tp_size, dim=0)[self.tp_rank]
+            return torch.cat((value, gate), dim=0).contiguous()
+
+        if tensor.shape[0] % self.tp_size:
+            raise ValueError(f"Cannot column-shard {key} shape {tuple(tensor.shape)} across TP size {self.tp_size}")
+        return torch.chunk(tensor, self.tp_size, dim=0)[self.tp_rank].contiguous()
+
+    def _should_load_weights(self):
+        # Each TP rank reads its own slices.  This is also correct for TP+SP,
+        # where the same TP coordinate is replicated in every SP lane.
+        if self.use_tp:
+            return True
+        return super()._should_load_weights()
+
+    def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
+        if self.use_tp:
+            if not is_weight_loader:
+                raise RuntimeError("MiniMax-H3 TP expects every rank to load its local checkpoint shards")
+            return weight_dict
+        return super()._load_weights_from_rank0(weight_dict, is_weight_loader)
+
+    def _load_dummy_ckpt(self, unified_dtype, sensitive_layer):
+        weight_dict = super()._load_dummy_ckpt(unified_dtype, sensitive_layer)
+        if not self.use_tp:
+            return weight_dict
+        return {key: self._select_tensor_parallel_shard(key, tensor) for key, tensor in weight_dict.items()}
+
+    def _load_ckpt(self, unified_dtype, sensitive_layer):
+        # BaseTransformerModel forces rank-0 TP loading through CPU. H3 shards
+        # locally instead, so retain the runner-selected CPU/GPU target.
+        if not self.use_tp:
+            return super()._load_ckpt(unified_dtype, sensitive_layer)
+        load_device = self._checkpoint_load_device()
+        logger.info(
+            "MiniMax-H3 rank {} (TP rank {}) loading TP checkpoint shards on {}",
+            dist.get_rank() if dist.is_initialized() else 0,
+            self.tp_rank,
+            load_device,
+        )
+        use_tp = self.use_tp
+        self.use_tp = False
+        try:
+            return super()._load_ckpt(unified_dtype, sensitive_layer)
+        finally:
+            self.use_tp = use_tp
+
+    def _load_quant_ckpt(self, unified_dtype, sensitive_layer):
+        if not self.use_tp:
+            return super()._load_quant_ckpt(unified_dtype, sensitive_layer)
+        checkpoint_path = self.config["dit_quantized_ckpt"]
+        files = sorted(glob.glob(os.path.join(checkpoint_path, "*.safetensors"))) if os.path.isdir(checkpoint_path) else [checkpoint_path]
+        remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
+        weight_dict = {}
+        load_device = self._checkpoint_load_device()
+        logger.info(f"MiniMax-H3 rank {dist.get_rank() if dist.is_initialized() else 0} loading TP checkpoint shards on {load_device}")
+        for file_path in files:
+            with safe_open(file_path, framework="pt", device=load_device) as source:
+                for key in source.keys():
+                    if any(remove_key in key for remove_key in remove_keys):
+                        continue
+                    weight_dict[key] = self._select_tensor_parallel_shard(key, source.get_tensor(key))
+        self._validate_checkpoint_devices(weight_dict, load_device)
+        return weight_dict
+
+    def _checkpoint_load_device(self):
+        """Resolve an indexed accelerator device for safetensors."""
+        device = torch.device(self.device)
+        if device.type == "cpu":
+            return "cpu"
+        if device.index is not None:
+            return str(device)
+        device_module = getattr(torch, device.type, None)
+        if device_module is None or not hasattr(device_module, "current_device"):
+            raise RuntimeError(f"Cannot resolve current MiniMax-H3 checkpoint device from {device}")
+        return f"{device.type}:{device_module.current_device()}"
+
+    @staticmethod
+    def _validate_checkpoint_devices(weight_dict, load_device):
+        expected = torch.device(load_device)
+        if expected.type == "cpu":
+            return
+        misplaced = [key for key, tensor in weight_dict.items() if tensor.device != expected]
+        if misplaced:
+            preview = ", ".join(misplaced[:4])
+            raise RuntimeError(f"MiniMax-H3 checkpoint tensors were not loaded on {expected}: {preview}")
+
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         """Load the released mixed-precision tensors without generic dtype coercion."""
         del unified_dtype, sensitive_layer
@@ -88,12 +232,15 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError(f"MiniMax-H3 native loading expects the released safetensors checkpoint; got {file_path}")
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
         preserve_keys = self.preserved_keys if hasattr(self, "preserved_keys") else None
-        with safe_open(file_path, framework="pt", device=str(self.device)) as source:
-            return {
-                key: source.get_tensor(key)
+        load_device = self._checkpoint_load_device()
+        with safe_open(file_path, framework="pt", device=load_device) as source:
+            weight_dict = {
+                key: self._select_tensor_parallel_shard(key, source.get_tensor(key))
                 for key in source.keys()
                 if not any(remove_key in key for remove_key in remove_keys) and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
             }
+        self._validate_checkpoint_devices(weight_dict, load_device)
+        return weight_dict
 
     def _init_infer_class(self):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":

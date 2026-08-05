@@ -1,11 +1,25 @@
 import torch
+import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
+from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import MiniMaxH3TensorParallelLinear
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
-def _linear(config, name, bias=False, create_cuda_buffer=False):
+def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
+    if config.get("tensor_parallel", False) and tp_split is not None:
+        tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+        return MiniMaxH3TensorParallelLinear(
+            weight_name=f"{name}.weight",
+            bias_name=f"{name}.bias" if bias else None,
+            mm_type=config.get("dit_quant_scheme", "Default"),
+            tp_group=tp_group,
+            tp_rank=dist.get_rank(tp_group),
+            tp_size=dist.get_world_size(tp_group),
+            split_dim=tp_split,
+            create_cuda_buffer=create_cuda_buffer,
+        )
     return MM_WEIGHT_REGISTER[config.get("dit_quant_scheme", "Default")](
         f"{name}.weight",
         f"{name}.bias" if bias else None,
@@ -24,9 +38,9 @@ def _rms(config, name, eps, create_cuda_buffer=False):
 class MiniMaxH3AttentionWeights(WeightModule):
     def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
-        self.add_module("to_q", _linear(config, f"{prefix}.to_q", create_cuda_buffer=create_cuda_buffer))
-        self.add_module("to_k", _linear(config, f"{prefix}.to_k", create_cuda_buffer=create_cuda_buffer))
-        self.add_module("to_v", _linear(config, f"{prefix}.to_v", create_cuda_buffer=create_cuda_buffer))
+        self.add_module("to_q", _linear(config, f"{prefix}.to_q", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
+        self.add_module("to_k", _linear(config, f"{prefix}.to_k", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
+        self.add_module("to_v", _linear(config, f"{prefix}.to_v", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         qk_eps = float(config.get("qk_norm_eps", 1e-5))
         self.add_module(
             "norm_q",
@@ -60,14 +74,14 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 "calculate_parallel",
                 ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")](a2a_backend=parallel.get("seq_p_a2a_backend", "torch")),
             )
-        self.add_module("to_out", _linear(config, f"{prefix}.to_out.0", create_cuda_buffer=create_cuda_buffer))
+        self.add_module("to_out", _linear(config, f"{prefix}.to_out.0", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
 
 
 class MiniMaxH3FeedForwardWeights(WeightModule):
     def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
-        self.add_module("in_proj", _linear(config, f"{prefix}.net.0.proj", create_cuda_buffer=create_cuda_buffer))
-        self.add_module("out_proj", _linear(config, f"{prefix}.net.2", create_cuda_buffer=create_cuda_buffer))
+        self.add_module("in_proj", _linear(config, f"{prefix}.net.0.proj", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
+        self.add_module("out_proj", _linear(config, f"{prefix}.net.2", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
 
 
 class MiniMaxH3TransformerBlockWeights(WeightModule):
@@ -95,7 +109,9 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
             ),
         )
         self.add_module("ff", MiniMaxH3FeedForwardWeights(f"{prefix}.ff", config, create_cuda_buffer))
-        self.add_module("adaln", _linear(config, f"{prefix}.adaln_proj.linear", bias=True, create_cuda_buffer=create_cuda_buffer))
+        # AdaLN is the largest per-block projection in H3.  Its output is
+        # column-sharded here and gathered once per block before modulation.
+        self.add_module("adaln", _linear(config, f"{prefix}.adaln_proj.linear", bias=True, create_cuda_buffer=create_cuda_buffer, tp_split="col"))
 
 
 class MiniMaxH3TransformerWeights(WeightModule):

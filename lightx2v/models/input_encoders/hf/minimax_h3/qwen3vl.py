@@ -21,6 +21,7 @@ from contextlib import suppress
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from loguru import logger
 from safetensors import safe_open
@@ -41,6 +42,7 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     build_ref2av_presentation,
     sample_reference_video_frames,
 )
+from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import MiniMaxH3TensorParallelLinear, unwrap_tp_linear
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
@@ -99,6 +101,42 @@ def _repeat_kv(x, num_groups):
     return x[:, :, None, :].expand(tokens, num_kv_heads, num_groups, head_dim).reshape(tokens, num_kv_heads * num_groups, head_dim)
 
 
+class _Qwen3VLVocabParallelEmbedding(_EmbeddingWeight):
+    """Vocabulary-sharded embedding with a TP all-reduce on activations."""
+
+    def __init__(self, weight_name, vocab_size, tp_group, tp_rank, tp_size):
+        super().__init__(weight_name)
+        if vocab_size % tp_size:
+            raise ValueError(f"Qwen3-VL vocab_size ({vocab_size}) must be divisible by text TP size ({tp_size})")
+        self.tp_group = tp_group
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
+        self.vocab_per_rank = vocab_size // tp_size
+        self.vocab_start = tp_rank * self.vocab_per_rank
+        self.vocab_end = self.vocab_start + self.vocab_per_rank
+
+    def apply(self, input_indices):
+        outside = (input_indices < self.vocab_start) | (input_indices >= self.vocab_end)
+        local_indices = (input_indices - self.vocab_start).masked_fill(outside, 0)
+        output = super().apply(local_indices)
+        output = output.masked_fill(outside.unsqueeze(-1), 0)
+        dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
+        return output
+
+
+def _qwen_tp_linear(weight_name, tp_group, tp_rank, tp_size, split_dim, create_cuda_buffer=False):
+    return MiniMaxH3TensorParallelLinear(
+        weight_name=weight_name,
+        bias_name=None,
+        mm_type="Default",
+        tp_group=tp_group,
+        tp_rank=tp_rank,
+        tp_size=tp_size,
+        split_dim=split_dim,
+        create_cuda_buffer=create_cuda_buffer,
+    )
+
+
 class _MiniMaxH3QwenSDPAWeight(AttnWeightTemplate):
     """Qwen SDPA preserving the released model's native grouped-query path."""
 
@@ -141,11 +179,16 @@ class _MiniMaxH3QwenSDPAWeight(AttnWeightTemplate):
 
 
 class _Qwen3VLMLPWeights(WeightModule):
-    def __init__(self, prefix, create_cuda_buffer=False):
+    def __init__(self, prefix, tp_group=None, tp_rank=0, tp_size=1, create_cuda_buffer=False):
         super().__init__()
-        self.add_module("gate_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.gate_proj.weight", create_cuda_buffer=create_cuda_buffer))
-        self.add_module("up_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.up_proj.weight", create_cuda_buffer=create_cuda_buffer))
-        self.add_module("down_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.down_proj.weight", create_cuda_buffer=create_cuda_buffer))
+        if tp_size > 1:
+            self.add_module("gate_proj", _qwen_tp_linear(f"{prefix}.gate_proj.weight", tp_group, tp_rank, tp_size, "col", create_cuda_buffer))
+            self.add_module("up_proj", _qwen_tp_linear(f"{prefix}.up_proj.weight", tp_group, tp_rank, tp_size, "col", create_cuda_buffer))
+            self.add_module("down_proj", _qwen_tp_linear(f"{prefix}.down_proj.weight", tp_group, tp_rank, tp_size, "row", create_cuda_buffer))
+        else:
+            self.add_module("gate_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.gate_proj.weight", create_cuda_buffer=create_cuda_buffer))
+            self.add_module("up_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.up_proj.weight", create_cuda_buffer=create_cuda_buffer))
+            self.add_module("down_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.down_proj.weight", create_cuda_buffer=create_cuda_buffer))
 
     def forward(self, hidden_states):
         gate = self.gate_proj.apply(hidden_states)
@@ -154,19 +197,25 @@ class _Qwen3VLMLPWeights(WeightModule):
 
 
 class _Qwen3VLAttentionWeights(WeightModule):
-    def __init__(self, prefix, text_config, attn_type, create_cuda_buffer=False):
+    def __init__(self, prefix, text_config, attn_type, tp_group=None, tp_rank=0, tp_size=1, create_cuda_buffer=False):
         super().__init__()
-        self.num_heads = int(text_config["num_attention_heads"])
-        self.num_key_value_heads = int(text_config["num_key_value_heads"])
+        self.num_heads = int(text_config["num_attention_heads"]) // tp_size
+        self.num_key_value_heads = int(text_config["num_key_value_heads"]) // tp_size
         self.head_dim = int(text_config["head_dim"])
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.softmax_scale = self.head_dim**-0.5
         eps = float(text_config["rms_norm_eps"])
 
-        self.add_module("q_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.q_proj.weight", create_cuda_buffer=create_cuda_buffer))
-        self.add_module("k_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.k_proj.weight", create_cuda_buffer=create_cuda_buffer))
-        self.add_module("v_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.v_proj.weight", create_cuda_buffer=create_cuda_buffer))
-        self.add_module("o_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.o_proj.weight", create_cuda_buffer=create_cuda_buffer))
+        if tp_size > 1:
+            self.add_module("q_proj", _qwen_tp_linear(f"{prefix}.q_proj.weight", tp_group, tp_rank, tp_size, "col", create_cuda_buffer))
+            self.add_module("k_proj", _qwen_tp_linear(f"{prefix}.k_proj.weight", tp_group, tp_rank, tp_size, "col", create_cuda_buffer))
+            self.add_module("v_proj", _qwen_tp_linear(f"{prefix}.v_proj.weight", tp_group, tp_rank, tp_size, "col", create_cuda_buffer))
+            self.add_module("o_proj", _qwen_tp_linear(f"{prefix}.o_proj.weight", tp_group, tp_rank, tp_size, "row", create_cuda_buffer))
+        else:
+            self.add_module("q_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.q_proj.weight", create_cuda_buffer=create_cuda_buffer))
+            self.add_module("k_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.k_proj.weight", create_cuda_buffer=create_cuda_buffer))
+            self.add_module("v_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.v_proj.weight", create_cuda_buffer=create_cuda_buffer))
+            self.add_module("o_proj", MM_WEIGHT_REGISTER["Default"](f"{prefix}.o_proj.weight", create_cuda_buffer=create_cuda_buffer))
         self.add_module(
             "q_norm",
             RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.q_norm.weight", create_cuda_buffer=create_cuda_buffer, eps=eps),
@@ -215,7 +264,7 @@ class _Qwen3VLAttentionWeights(WeightModule):
 
 
 class _Qwen3VLDecoderLayerWeights(WeightModule):
-    def __init__(self, layer_index, text_config, attn_type, create_cuda_buffer=False):
+    def __init__(self, layer_index, text_config, attn_type, tp_group=None, tp_rank=0, tp_size=1, create_cuda_buffer=False):
         super().__init__()
         prefix = f"{_CHECKPOINT_PREFIX}.layers.{layer_index}"
         eps = float(text_config["rms_norm_eps"])
@@ -229,9 +278,26 @@ class _Qwen3VLDecoderLayerWeights(WeightModule):
         )
         self.add_module(
             "self_attn",
-            _Qwen3VLAttentionWeights(f"{prefix}.self_attn", text_config, attn_type, create_cuda_buffer=create_cuda_buffer),
+            _Qwen3VLAttentionWeights(
+                f"{prefix}.self_attn",
+                text_config,
+                attn_type,
+                tp_group=tp_group,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                create_cuda_buffer=create_cuda_buffer,
+            ),
         )
-        self.add_module("mlp", _Qwen3VLMLPWeights(f"{prefix}.mlp", create_cuda_buffer=create_cuda_buffer))
+        self.add_module(
+            "mlp",
+            _Qwen3VLMLPWeights(
+                f"{prefix}.mlp",
+                tp_group=tp_group,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                create_cuda_buffer=create_cuda_buffer,
+            ),
+        )
 
     def weight_modules(self):
         return (
@@ -261,7 +327,7 @@ class _Qwen3VLDecoderLayerWeights(WeightModule):
 class _Qwen3VLTextBackboneWeights(WeightModule):
     """Unbatched native prefix of Qwen3-VL's language backbone."""
 
-    def __init__(self, text_config, num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER, attn_type="torch_sdpa", block_offload=False):
+    def __init__(self, text_config, num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER, attn_type="torch_sdpa", block_offload=False, tp_group=None):
         super().__init__()
         self.text_config = text_config
         self.num_layers = int(num_layers)
@@ -273,13 +339,33 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         self.hidden_size = int(text_config["hidden_size"])
         self.head_dim = int(text_config["head_dim"])
         self.rope_theta = float(text_config["rope_theta"])
-        self.add_module(
-            "embed_tokens",
-            EMBEDDING_WEIGHT_REGISTER["Default"](f"{_CHECKPOINT_PREFIX}.embed_tokens.weight"),
-        )
+        self.tp_group = tp_group
+        self.tp_size = dist.get_world_size(tp_group) if tp_group is not None else 1
+        self.tp_rank = dist.get_rank(tp_group) if tp_group is not None else 0
+        if self.tp_size > 1:
+            embed_tokens = _Qwen3VLVocabParallelEmbedding(
+                f"{_CHECKPOINT_PREFIX}.embed_tokens.weight",
+                int(text_config["vocab_size"]),
+                tp_group,
+                self.tp_rank,
+                self.tp_size,
+            )
+        else:
+            embed_tokens = EMBEDDING_WEIGHT_REGISTER["Default"](f"{_CHECKPOINT_PREFIX}.embed_tokens.weight")
+        self.add_module("embed_tokens", embed_tokens)
         self.add_module(
             "layers",
-            WeightModuleList(_Qwen3VLDecoderLayerWeights(index, text_config, attn_type) for index in range(self.num_layers)),
+            WeightModuleList(
+                _Qwen3VLDecoderLayerWeights(
+                    index,
+                    text_config,
+                    attn_type,
+                    tp_group=self.tp_group,
+                    tp_rank=self.tp_rank,
+                    tp_size=self.tp_size,
+                )
+                for index in range(self.num_layers)
+            ),
         )
         self._weight_modules = self._collect_weight_modules()
 
@@ -296,15 +382,41 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
             modules.update((leaf.weight_name, leaf) for leaf in layer.weight_modules())
         return modules
 
+    def select_tp_shard(self, name, tensor):
+        if self.tp_size == 1:
+            return tensor
+        if name == self.embed_tokens.weight_name:
+            split_dim = 0
+        elif any(
+            pattern in name
+            for pattern in (
+                ".self_attn.q_proj.weight",
+                ".self_attn.k_proj.weight",
+                ".self_attn.v_proj.weight",
+                ".mlp.gate_proj.weight",
+                ".mlp.up_proj.weight",
+            )
+        ):
+            split_dim = 0
+        elif ".self_attn.o_proj.weight" in name or ".mlp.down_proj.weight" in name:
+            split_dim = 1
+        else:
+            return tensor
+        if tensor.shape[split_dim] % self.tp_size:
+            raise ValueError(f"Cannot shard Qwen3-VL tensor {name} shape {tuple(tensor.shape)} across text TP size {self.tp_size}")
+        return torch.chunk(tensor, self.tp_size, dim=split_dim)[self.tp_rank].contiguous()
+
     @staticmethod
     def _allocate_layer_buffer(buffer_layer, source_layer):
         """Allocate compute-layout device tensors without another checkpoint copy."""
         allocated_bytes = 0
         for buffer_weight, source_weight in zip(buffer_layer.weight_modules(), source_layer.weight_modules()):
-            for _, attr_name, _ in buffer_weight.base_attrs:
-                source_tensor = getattr(source_weight, f"pin_{attr_name}", None)
+            buffer_storage = unwrap_tp_linear(buffer_weight)
+            source_storage = unwrap_tp_linear(source_weight)
+            for _, attr_name, _ in buffer_storage.base_attrs:
+                source_tensor = getattr(source_storage, f"pin_{attr_name}", None)
                 if source_tensor is None:
-                    source_tensor = getattr(source_weight, attr_name, None)
+                    source_tensor = getattr(source_storage, attr_name, None)
                 if source_tensor is None:
                     raise RuntimeError(f"Cannot allocate Qwen3-VL offload buffer for {source_weight.weight_name}: missing {attr_name}")
                 # Preserve the transposed compute-layout strides used by the
@@ -317,7 +429,7 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
                     dtype=source_tensor.dtype,
                     device=AI_DEVICE,
                 )
-                setattr(buffer_weight, f"{attr_name}_cuda_buffer", device_buffer)
+                setattr(buffer_storage, f"{attr_name}_cuda_buffer", device_buffer)
                 allocated_bytes += device_buffer.numel() * device_buffer.element_size()
         return allocated_bytes
 
@@ -332,6 +444,9 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
                 slot_index,
                 self.text_config,
                 self.attn_type,
+                tp_group=self.tp_group,
+                tp_rank=self.tp_rank,
+                tp_size=self.tp_size,
                 create_cuda_buffer=True,
             )
             for slot_index in range(2)
@@ -462,10 +577,11 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
     def to_cpu(self, non_blocking=False):
         """Drop accelerator copies; checkpoint weights are immutable pinned tensors."""
         for _, module in self.named_weight_modules():
-            pin_weight = getattr(module, "pin_weight", None)
+            storage = unwrap_tp_linear(module)
+            pin_weight = getattr(storage, "pin_weight", None)
             if pin_weight is not None:
-                module.weight = pin_weight
-            elif getattr(module, "weight", None) is not None:
+                storage.weight = pin_weight
+            elif getattr(storage, "weight", None) is not None:
                 module.to_cpu(non_blocking=non_blocking)
         return self
 
@@ -479,10 +595,29 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     ``text_encoder_offload_granularity=block`` keeps the immutable layer
     weights on CPU and streams them through two preallocated device buffers.
+    When text TP is enabled, the language backbone uses the distributed world
+    group.  This avoids replicating the conditioner across DiT SP/CFG lanes;
+    set ``text_encoder_tensor_parallel=false`` to opt out.
     """
 
     def __init__(self, config):
         self.config = config
+        self.tensor_parallel = bool(config.get("text_encoder_tensor_parallel", config.get("tensor_parallel", False)))
+        if self.tensor_parallel:
+            if not dist.is_initialized():
+                raise RuntimeError("MiniMax-H3 text encoder TP requires an initialized distributed process group")
+            self.tp_group = dist.group.WORLD
+            self.tp_size = dist.get_world_size(self.tp_group)
+            self.tp_rank = dist.get_rank(self.tp_group)
+            logger.info(
+                "MiniMax-H3 text encoder uses world-size tensor parallel: rank {}/{}",
+                self.tp_rank,
+                self.tp_size,
+            )
+        else:
+            self.tp_group = None
+            self.tp_size = 1
+            self.tp_rank = 0
         text_encoder_cpu_offload = bool(config.get("text_encoder_cpu_offload", config.get("cpu_offload", False)))
         if "qwen3vl_cpu_offload" in config and bool(config["qwen3vl_cpu_offload"]) != text_encoder_cpu_offload:
             raise ValueError("qwen3vl_cpu_offload cannot override text_encoder_cpu_offload for MiniMax-H3; the runner schedules the native conditioner through text_encoder_cpu_offload")
@@ -554,6 +689,20 @@ class MiniMaxH3Qwen3VLTextEncoder:
             raise ValueError(f"Qwen3-VL attention heads ({num_heads}) must be divisible by KV heads ({num_kv_heads})")
         if head_dim % 2:
             raise ValueError(f"Qwen3-VL head_dim must be even for split-half RoPE, got {head_dim}")
+
+    def _validate_text_tp(self, text_config):
+        if self.tp_size == 1:
+            return
+        checks = {
+            "num_attention_heads": int(text_config["num_attention_heads"]),
+            "num_key_value_heads": int(text_config["num_key_value_heads"]),
+            "intermediate_size": int(text_config["intermediate_size"]),
+            "vocab_size": int(text_config["vocab_size"]),
+        }
+        invalid = {name: value for name, value in checks.items() if value % self.tp_size}
+        if invalid:
+            details = ", ".join(f"{name}={value}" for name, value in invalid.items())
+            raise ValueError(f"MiniMax-H3 text TP size {self.tp_size} must divide {details}")
 
     @staticmethod
     def _resolve_attn_type(config):
@@ -686,7 +835,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
             )
             with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
                 for name in by_shard[shard_name]:
-                    one_tensor = {name: checkpoint.get_tensor(name)}
+                    one_tensor = {name: backbone.select_tp_shard(name, checkpoint.get_tensor(name))}
                     module = modules[name]
                     if module is backbone.embed_tokens:
                         # The released embedding table is about 1.55 GiB.
@@ -742,13 +891,21 @@ class MiniMaxH3Qwen3VLTextEncoder:
         text_encoder_path = self._component_path("text_encoder_path", "text_encoder")
         text_config = self._read_text_config(text_encoder_path)
         self._validate_text_config(text_config)
+        self._validate_text_tp(text_config)
         attn_type = self._resolve_attn_type(self.config)
-        logger.info(f"Building native MiniMax-H3 Qwen3-VL prefix from {text_encoder_path} with attention operator {attn_type}")
+        logger.info(
+            "Building native MiniMax-H3 Qwen3-VL prefix from {} with attention operator {} and text TP {}/{}",
+            text_encoder_path,
+            attn_type,
+            self.tp_rank,
+            self.tp_size,
+        )
         text_encoder = _Qwen3VLTextBackboneWeights(
             text_config,
             num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER,
             attn_type=attn_type,
             block_offload=self.block_offload,
+            tp_group=self.tp_group,
         )
         self._load_native_weights(text_encoder, text_encoder_path, text_config)
         if self.block_offload:
