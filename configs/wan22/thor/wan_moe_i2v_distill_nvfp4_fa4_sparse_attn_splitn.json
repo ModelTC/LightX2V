@@ -35,5 +35,5 @@
     "high_noise_original_ckpt": null,
     "low_noise_original_ckpt": null,
     "nvfp4_ffn_split_n_workaround": true,
-    "nvfp4_ffn_split_n_parts": 2
+    "nvfp4_ffn_split_n_parts": 4
 }

@@ -1332,26 +1332,57 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
             self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
             del weight_scale_tensor
-            
+
+
 @MM_WEIGHT_REGISTER("nvfp4-split-n-workaround")
 class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
-    """Temporary application-level two-way split-N workaround.
+    """Temporary application-level configurable split-N workaround.
 
     This path is intentionally separate from the normal ``nvfp4`` weight type.
     It works around a throughput cliff observed for large Wan FFN GEMMs on
-    NVIDIA Jetson AGX Thor by quantizing the activation once, launching two
-    serial N/2 GEMMs, and concatenating their outputs.
+    NVIDIA Jetson AGX Thor by quantizing the activation once, launching
+    multiple serial N-shard GEMMs, and concatenating their outputs.
 
-    This is not the desired long-term backend design: it adds another kernel
-    launch, temporary output tensors, and a concatenation. Remove this class,
-    its registry entry, and ``nvfp4_ffn_split_n_workaround`` once
+    This is not the desired long-term backend design: it adds extra kernel
+    launches, temporary output tensors, and a concatenation. Remove this class,
+    its registry entry, and the ``nvfp4_ffn_split_n_workaround`` /
+    ``nvfp4_ffn_split_n_parts`` configuration keys once
     ``cutlass_scaled_nvfp4_mm`` can select an architecture/shape-aware tactic
     (or an internal split-N implementation that writes directly to the final
     output).
     """
 
-    split_n_parts = 2
     split_n_alignment = 128
+
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+        split_n_parts=2,
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix=lora_prefix,
+            lora_path=lora_path,
+        )
+        if isinstance(split_n_parts, bool) or not isinstance(split_n_parts, int):
+            raise TypeError("split_n_parts must be an integer")
+        if split_n_parts < 2:
+            raise ValueError("split_n_parts must be at least 2 for the split-N weight type")
+        self.split_n_parts = split_n_parts
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
@@ -1359,7 +1390,10 @@ class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
         n = self.weight.shape[0]
         required_alignment = self.split_n_parts * self.split_n_alignment
         if n % required_alignment != 0:
-            raise ValueError(f"NVFP4 split-N requires each N shard to be aligned to {self.split_n_alignment} rows, but {self.weight_name} has N={n}")
+            raise ValueError(
+                f"NVFP4 split-N with {self.split_n_parts} parts requires each N shard to be aligned to "
+                f"{self.split_n_alignment} rows, but {self.weight_name} has N={n}"
+            )
         if self.weight_scale.shape[0] != n:
             raise ValueError(f"NVFP4 split-N expects weight and weight_scale to share the output-channel dimension, got {n} and {self.weight_scale.shape[0]} for {self.weight_name}")
 
@@ -1378,6 +1412,7 @@ class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
                 )
             )
         return torch.cat(outputs, dim=-1)
+
 
 @MM_WEIGHT_REGISTER("CalibMax")
 class MMCalibMax(MMWeight):
@@ -2488,6 +2523,7 @@ class MMWeightTP(MMWeightTemplate):
         lora_prefix="diffusion_model.blocks",
         lora_path="",
         reduce_output=True,
+        mm_kwargs=None,
     ):
         super().__init__(
             weight_name,
@@ -2517,6 +2553,7 @@ class MMWeightTP(MMWeightTemplate):
             is_post_adapter=is_post_adapter,
             lora_prefix=lora_prefix,
             lora_path=lora_path,
+            **(mm_kwargs or {}),
         )
         self._row_split_bias = None
 

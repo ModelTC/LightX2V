@@ -41,7 +41,20 @@ def _build_causal_rope(config):
     )
 
 
-def _mm_weight(config, weight_name, bias_name, split_dim=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, lora_prefix="", lora_path="", ffn_mm_type=None):
+def _mm_weight(
+    config,
+    weight_name,
+    bias_name,
+    split_dim=None,
+    create_cuda_buffer=False,
+    create_cpu_buffer=False,
+    lazy_load=False,
+    lazy_load_file=None,
+    lora_prefix="",
+    lora_path="",
+    ffn_mm_type=None,
+    mm_kwargs=None,
+):
     mm_type = ffn_mm_type if ffn_mm_type is not None else config.get("dit_quant_scheme", "Default")
     if config.get("do_mm_calib", False):
         mm_type = "Calib"
@@ -61,6 +74,7 @@ def _mm_weight(config, weight_name, bias_name, split_dim=None, create_cuda_buffe
             lazy_load_file=lazy_load_file,
             lora_prefix=lora_prefix,
             lora_path=lora_path,
+            mm_kwargs=mm_kwargs,
         )
     return MM_WEIGHT_REGISTER[mm_type](
         weight_name,
@@ -71,6 +85,7 @@ def _mm_weight(config, weight_name, bias_name, split_dim=None, create_cuda_buffe
         lazy_load_file,
         lora_prefix=lora_prefix,
         lora_path=lora_path,
+        **(mm_kwargs or {}),
     )
 
 
@@ -793,13 +808,25 @@ class WanFFN(WeightModule):
             "norm2",
             LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
-        
-        split_n = config.get("nvfp4_ffn_split_n_workaround", False)
-        if not isinstance(split_n, bool):
+
+        split_n_enabled = config.get("nvfp4_ffn_split_n_workaround", False)
+        if not isinstance(split_n_enabled, bool):
             raise TypeError("nvfp4_ffn_split_n_workaround must be a boolean")
+
+        split_n_parts = None
+        if split_n_enabled:
+            if "nvfp4_ffn_split_n_parts" not in config:
+                raise ValueError("nvfp4_ffn_split_n_parts must be set when nvfp4_ffn_split_n_workaround is true")
+            split_n_parts = config["nvfp4_ffn_split_n_parts"]
+            if isinstance(split_n_parts, bool) or not isinstance(split_n_parts, int):
+                raise TypeError("nvfp4_ffn_split_n_parts must be an integer")
+            if split_n_parts < 2:
+                raise ValueError("nvfp4_ffn_split_n_parts must be at least 2")
         # Temporary and intentionally scoped to Wan FFN. The checkpoint format
         # remains ``nvfp4``; only the execution implementation changes.
-        ffn_mm_type = "nvfp4-split-n-workaround" if self.mm_type == "nvfp4" and split_n else self.mm_type
+        use_split_n_weight = self.mm_type == "nvfp4" and split_n_enabled
+        ffn_mm_type = "nvfp4-split-n-workaround" if use_split_n_weight else self.mm_type
+        ffn_mm_kwargs = {"split_n_parts": split_n_parts} if use_split_n_weight else None
 
         fp = f"{block_prefix}.{self.block_index}"
         self.add_module(
@@ -814,6 +841,7 @@ class WanFFN(WeightModule):
                 lazy_load=self.lazy_load,
                 lazy_load_file=self.lazy_load_file,
                 ffn_mm_type=ffn_mm_type,
+                mm_kwargs=ffn_mm_kwargs,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
@@ -830,6 +858,7 @@ class WanFFN(WeightModule):
                 lazy_load=self.lazy_load,
                 lazy_load_file=self.lazy_load_file,
                 ffn_mm_type=ffn_mm_type,
+                mm_kwargs=ffn_mm_kwargs,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
             ),
