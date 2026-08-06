@@ -1,5 +1,6 @@
 {
     "infer_steps": 50,
+    "rope_type": "torch_real_rope",
     "inference_hyper": {
         "cfg_text_scale": 4.0,
         "cfg_img_scale": 1.0,

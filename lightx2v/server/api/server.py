@@ -123,12 +123,17 @@ class ApiServer:
                 task_manager.fail_task(task_id, "Task cancelled")
                 return
 
-            from ..schema import ImageTaskRequest
+            from ..schema import ImageTaskRequest, SenseNovaVisionTaskRequest
 
-            if isinstance(message, ImageTaskRequest):
+            if isinstance(message, SenseNovaVisionTaskRequest):
+                generation_service = services.sensenova_vision_service
+            elif isinstance(message, ImageTaskRequest):
                 generation_service = services.image_service
             else:
                 generation_service = services.video_service
+
+            if generation_service is None:
+                raise RuntimeError(f"Generation service is not initialized for request type {type(message)!r}")
 
             result = await generation_service.generate_with_stop_event(message, task_info.stop_event)
 
@@ -138,6 +143,7 @@ class ApiServer:
                     save_result_path=result.save_result_path or None,
                     result_png=getattr(result, "result_png", None),
                     usage=getattr(result, "usage", None),
+                    result_data=getattr(result, "result_data", None),
                 )
                 logger.info(f"Task {task_id} completed successfully")
             else:

@@ -41,10 +41,24 @@ def _build_causal_rope(config):
     )
 
 
-def _mm_weight(config, weight_name, bias_name, split_dim=None, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, lora_prefix="", lora_path=""):
-    mm_type = config.get("dit_quant_scheme", "Default")
-    if config.get("do_mm_calib", False):
-        mm_type = "Calib"
+def _mm_weight(
+    config,
+    weight_name,
+    bias_name,
+    split_dim=None,
+    create_cuda_buffer=False,
+    create_cpu_buffer=False,
+    lazy_load=False,
+    lazy_load_file=None,
+    lora_prefix="",
+    lora_path="",
+    mm_type_override=None,
+):
+    mm_type = mm_type_override
+    if mm_type is None:
+        mm_type = config.get("dit_quant_scheme", "Default")
+        if config.get("do_mm_calib", False):
+            mm_type = "Calib"
     if config.get("tensor_parallel", False) and split_dim is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
         return MM_WEIGHT_REGISTER["TensorParallel"](
@@ -794,6 +808,13 @@ class WanFFN(WeightModule):
             LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
+        split_n = config.get("nvfp4_ffn_split_n_workaround", False)
+        if not isinstance(split_n, bool):
+            raise TypeError("nvfp4_ffn_split_n_workaround must be a boolean")
+        # Temporary and intentionally scoped to Wan FFN. The checkpoint format
+        # remains ``nvfp4``; only the execution implementation changes.
+        ffn_mm_type = "nvfp4-split-n-workaround" if self.mm_type == "nvfp4" and split_n else self.mm_type
+
         fp = f"{block_prefix}.{self.block_index}"
         self.add_module(
             "ffn_0",
@@ -808,6 +829,7 @@ class WanFFN(WeightModule):
                 lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
+                mm_type_override=ffn_mm_type,
             ),
         )
         self.add_module(
@@ -823,6 +845,7 @@ class WanFFN(WeightModule):
                 lazy_load_file=self.lazy_load_file,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
+                mm_type_override=ffn_mm_type,
             ),
         )
 

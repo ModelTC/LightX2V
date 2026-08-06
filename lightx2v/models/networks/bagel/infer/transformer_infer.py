@@ -51,7 +51,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
         weights,
         packed_query_sequence,
         query_lens,
-        packed_query_position_embeddings,
+        packed_rope,
         packed_query_indexes,
         past_key_values,
         key_values_lens,
@@ -102,8 +102,16 @@ class BagelTransformerInfer(BaseTransformerInfer):
             packed_key_states[packed_text_indexes] = weights.k_norm.apply(packed_key_states[packed_text_indexes])
             packed_key_states[packed_vae_token_indexes] = weights.k_norm_moe_gen.apply(packed_key_states[packed_vae_token_indexes])
 
-        packed_cos, packed_sin = packed_query_position_embeddings
-        packed_query_states, packed_key_states = weights.rope.apply(packed_query_states, packed_key_states, (packed_cos, packed_sin), unsqueeze_dim=1)
+        packed_rope_freqs, packed_rope_positions = packed_rope
+        rope_kwargs = {"rotary_dim": self.head_dim, "unsqueeze_dim": 1}
+        if packed_rope_positions is not None:
+            rope_kwargs["positions"] = packed_rope_positions
+        packed_query_states, packed_key_states = weights.rope.apply(
+            packed_query_states,
+            packed_key_states,
+            packed_rope_freqs,
+            **rope_kwargs,
+        )
 
         packed_query_states = packed_query_states.to(torch.bfloat16)
         packed_key_states = packed_key_states.to(torch.bfloat16)
@@ -173,7 +181,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
         layer_idx,
         packed_query_sequence: torch.Tensor,
         query_lens: torch.Tensor,
-        packed_query_position_embeddings: torch.Tensor,
+        packed_rope,
         packed_query_indexes: torch.Tensor,
         past_key_values: Optional[NaiveCache] = None,
         key_values_lens: Optional[torch.Tensor] = None,
@@ -202,7 +210,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
                 weights=block_weight.self_attn,
                 packed_query_sequence=packed_query_sequence,
                 query_lens=query_lens,
-                packed_query_position_embeddings=packed_query_position_embeddings,
+                packed_rope=packed_rope,
                 packed_query_indexes=packed_query_indexes,
                 past_key_values=past_key_values,
                 key_values_lens=key_values_lens,
@@ -250,7 +258,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
         mode="und",
         packed_vae_token_indexes=None,
         packed_text_indexes=None,
-        packed_query_position_embeddings=None,
+        packed_rope=None,
         enable_taylorseer=False,
     ):
         for layer_idx, block_weight in enumerate(block_weights):
@@ -260,7 +268,7 @@ class BagelTransformerInfer(BaseTransformerInfer):
                 block_weight=block_weight,
                 packed_query_sequence=packed_query_sequence,
                 query_lens=query_lens,
-                packed_query_position_embeddings=packed_query_position_embeddings,
+                packed_rope=packed_rope,
                 packed_query_indexes=packed_query_indexes,
                 past_key_values=past_key_values,
                 key_values_lens=key_values_lens,

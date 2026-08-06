@@ -2,7 +2,7 @@
 
 # Override these environment variables when using a different checkout or model cache.
 export lightx2v_path=${lightx2v_path:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
-export model_path=${model_path:-/data1/lyxu18/models/ByteDance-Seed/BAGEL-7B-MoT}
+export model_path=/data/nvme0/lhd_codes/Bagel/models/BAGEL-7B-MoT
 export aspect_ratio=${aspect_ratio:-1:1}
 
 export CUDA_VISIBLE_DEVICES=0

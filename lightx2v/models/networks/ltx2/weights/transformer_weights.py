@@ -91,6 +91,20 @@ class LTX2TransformerBlock(WeightModule):
         block_prefix = "transformer_blocks"
         model_prefix = "model.diffusion_model"
 
+        # LTX2 block pre-normalization is an affine-free RMSNorm. Register it
+        # with the weight tree (like Qwen Image's affine-free norms) so the
+        # implementation is selected consistently by rms_norm_type.
+        self.add_module(
+            "norm",
+            RMS_WEIGHT_REGISTER[config.get("rms_norm_type", "sgl-kernel")](
+                weight_name=None,
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=self.lazy_load,
+                lazy_load_file=self.lazy_load_file,
+            ),
+        )
+
         # Video scale-shift table
         self.scale_shift_table = TENSOR_REGISTER["Default"](
             tensor_name=f"{model_prefix}.{block_prefix}.{self.block_index}.scale_shift_table",
