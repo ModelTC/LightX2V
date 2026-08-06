@@ -90,16 +90,6 @@ class WanNvfp4SplitNStrideTest(unittest.TestCase):
         self.assertEqual(ffn.ffn_0.split_n_parts, 2)
         self.assertEqual(ffn.ffn_2.split_n_parts, 2)
 
-    def test_explicit_workaround_still_selects_narrow_and_cat_operator(self):
-        ffn = self.make_ffn(
-            nvfp4_ffn_split_n_workaround=True,
-            nvfp4_ffn_split_n_parts=2,
-        )
-        mm_weight = import_module("lightx2v.common.ops.mm.mm_weight")
-
-        self.assertIs(type(ffn.ffn_0), mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround)
-        self.assertIs(type(ffn.ffn_2), mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround)
-
     def test_stride_operator_passes_complete_weight_and_scale_tensors(self):
         ensure_lightx2v_pipeline_stub()
         ensure_local_lightx2v_kernel()
@@ -136,14 +126,6 @@ class WanNvfp4SplitNStrideTest(unittest.TestCase):
             bias=bias,
             split_n_parts=2,
         )
-
-    def test_split_n_workarounds_are_mutually_exclusive(self):
-        with self.assertRaisesRegex(ValueError, "cannot both be enabled"):
-            self.make_ffn(
-                nvfp4_ffn_split_n_workaround=True,
-                nvfp4_ffn_split_n_stride_workaround=True,
-                nvfp4_ffn_split_n_parts=2,
-            )
 
     def test_stride_flag_must_be_boolean(self):
         with self.assertRaisesRegex(TypeError, "nvfp4_ffn_split_n_stride_workaround must be a boolean"):

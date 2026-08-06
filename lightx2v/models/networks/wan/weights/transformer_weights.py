@@ -800,17 +800,12 @@ class WanFFN(WeightModule):
             LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
-        split_n_enabled = config.get("nvfp4_ffn_split_n_workaround", False)
-        if not isinstance(split_n_enabled, bool):
-            raise TypeError("nvfp4_ffn_split_n_workaround must be a boolean")
         split_n_stride_enabled = config.get("nvfp4_ffn_split_n_stride_workaround", False)
         if not isinstance(split_n_stride_enabled, bool):
             raise TypeError("nvfp4_ffn_split_n_stride_workaround must be a boolean")
-        if split_n_enabled and split_n_stride_enabled:
-            raise ValueError("nvfp4_ffn_split_n_workaround and nvfp4_ffn_split_n_stride_workaround cannot both be enabled")
 
         split_n_parts = None
-        if split_n_enabled or split_n_stride_enabled:
+        if split_n_stride_enabled:
             if "nvfp4_ffn_split_n_parts" not in config:
                 raise ValueError("nvfp4_ffn_split_n_parts must be set when an NVFP4 split-N workaround is enabled")
             split_n_parts = config["nvfp4_ffn_split_n_parts"]
@@ -818,15 +813,8 @@ class WanFFN(WeightModule):
                 raise TypeError("nvfp4_ffn_split_n_parts must be an integer")
             if split_n_parts < 2:
                 raise ValueError("nvfp4_ffn_split_n_parts must be at least 2")
-        # Temporary and intentionally scoped to Wan FFN. The checkpoint format
-        # remains ``nvfp4``; only the execution implementation changes.
-        use_split_n_weight = self.mm_type == "nvfp4" and (split_n_enabled or split_n_stride_enabled)
-        if use_split_n_weight and split_n_stride_enabled:
-            ffn_mm_type = "nvfp4-split-n-stride-workaround"
-        elif use_split_n_weight:
-            ffn_mm_type = "nvfp4-split-n-workaround"
-        else:
-            ffn_mm_type = self.mm_type
+        use_split_n_weight = self.mm_type == "nvfp4" and split_n_stride_enabled
+        ffn_mm_type = "nvfp4-split-n-stride-workaround" if use_split_n_weight else self.mm_type
         ffn_mm_kwargs = {"split_n_parts": split_n_parts} if use_split_n_weight else None
 
         fp = f"{block_prefix}.{self.block_index}"
