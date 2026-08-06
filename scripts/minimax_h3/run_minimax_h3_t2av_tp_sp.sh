@@ -7,7 +7,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 source ${lightx2v_path}/scripts/base/base.sh
 export DTYPE=BF16
-export SENSITIVE_LAYER_DTYPE=FP32
+export SENSITIVE_LAYER_DTYPE=BF16
 
 torchrun --standalone --nproc_per_node=4 -m lightx2v.infer \
 --model_cls minimax_h3 \
