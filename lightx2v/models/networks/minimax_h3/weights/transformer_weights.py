@@ -67,7 +67,13 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 compute_dtype=torch.float32,
             ),
         )
-        self.add_module("calculate", ATTN_WEIGHT_REGISTER[config.get("attn_type", "flash_attn3")]())
+        attn_type = config.get("attn_type", "flash_attn3")
+        attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
+        if attn_type == "dynamic_sparse_attn":
+            calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
+        else:
+            calculate = attention_cls()
+        self.add_module("calculate", calculate)
         if config.get("seq_parallel", False):
             parallel = config.get("parallel", {})
             self.add_module(
