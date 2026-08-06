@@ -1335,21 +1335,14 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             del weight_scale_tensor
 
 
-@MM_WEIGHT_REGISTER("nvfp4-split-n-workaround")
-class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
-    """Temporary application-level configurable split-N workaround.
+@MM_WEIGHT_REGISTER("nvfp4-split-n-stride-workaround")
+class MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround(MMWeightWnvfp4Anvfp4dynamic):
+    """Represent N shards as batches in one strided CUTLASS GEMM.
 
-    This path is intentionally separate from the normal ``nvfp4`` weight type.
-    It works around a throughput cliff observed for large Wan FFN GEMMs on
-    NVIDIA Jetson AGX Thor by quantizing the activation once, launching
-    multiple serial N-shard GEMMs, and concatenating their outputs.
-
-    It remains as the explicit narrow-and-concatenate reference path. The
-    ``nvfp4-split-n-stride-workaround`` implementation avoids these temporary
-    tensors and serial GEMM launches by expressing the N shards as batches.
+    The activation is quantized once and the complete weight and scale tensors
+    are passed to the backend. A and its scales are broadcast across batches;
+    weight, weight scales, bias, and output columns advance by batch stride.
     """
-
-    split_n_alignment = 128
 
     def __init__(
         self,
@@ -1380,45 +1373,6 @@ class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
         if split_n_parts < 2:
             raise ValueError("split_n_parts must be at least 2 for the split-N weight type")
         self.split_n_parts = split_n_parts
-
-    def apply(self, input_tensor):
-        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-
-        n = self.weight.shape[0]
-        required_alignment = self.split_n_parts * self.split_n_alignment
-        if n % required_alignment != 0:
-            raise ValueError(
-                f"NVFP4 split-N with {self.split_n_parts} parts requires each N shard to be aligned to "
-                f"{self.split_n_alignment} rows, but {self.weight_name} has N={n}"
-            )
-        if self.weight_scale.shape[0] != n:
-            raise ValueError(f"NVFP4 split-N expects weight and weight_scale to share the output-channel dimension, got {n} and {self.weight_scale.shape[0]} for {self.weight_name}")
-
-        shard_n = n // self.split_n_parts
-        outputs = []
-        for start in range(0, n, shard_n):
-            bias = None if self.bias is None else self.bias.narrow(0, start, shard_n)
-            outputs.append(
-                cutlass_scaled_nvfp4_mm(
-                    input_tensor_quant,
-                    self.weight.narrow(0, start, shard_n),
-                    input_tensor_scale,
-                    self.weight_scale.narrow(0, start, shard_n),
-                    alpha=self.alpha,
-                    bias=bias,
-                )
-            )
-        return torch.cat(outputs, dim=-1)
-
-
-@MM_WEIGHT_REGISTER("nvfp4-split-n-stride-workaround")
-class MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround(MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround):
-    """Represent N shards as batches in one strided CUTLASS GEMM.
-
-    The activation is quantized once and the complete weight and scale tensors
-    are passed to the backend. A and its scales are broadcast across batches;
-    weight, weight scales, bias, and output columns advance by batch stride.
-    """
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)

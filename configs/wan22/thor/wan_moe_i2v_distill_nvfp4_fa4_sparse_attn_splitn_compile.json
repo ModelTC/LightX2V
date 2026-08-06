@@ -34,7 +34,7 @@
     "low_noise_quantized_ckpt": "path to i2v low_nvfp4.safetensors",
     "high_noise_original_ckpt": null,
     "low_noise_original_ckpt": null,
-    "nvfp4_ffn_split_n_workaround": true,
+    "nvfp4_ffn_split_n_stride_workaround": true,
     "nvfp4_ffn_split_n_parts": 2,
     "use_compile": true
 }
