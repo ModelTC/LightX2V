@@ -36,8 +36,14 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
     operator = "triton"
     per_block_mean = False
 
-    def __init__(self):
-        self.config = {}
+    def __init__(self, config=None):
+        self.config = dict(config or {})
+        self.sparsity_ratio = float(self.config.get("sparsity_ratio", type(self).sparsity_ratio))
+        self.operator = self.config.get("operator", type(self).operator)
+        self.per_block_mean = bool(self.config.get("per_block_mean", type(self).per_block_mean))
+
+        if not 0.0 <= self.sparsity_ratio < 1.0:
+            raise ValueError(f"dynamic sparse attention sparsity_ratio must be in [0, 1), got {self.sparsity_ratio}")
 
         self.arch = get_cuda_arch(torch.cuda.current_device())
         self.topk = 1 - self.sparsity_ratio
@@ -65,7 +71,7 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
 
-        logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
+        # logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
 
     def apply(
         self,

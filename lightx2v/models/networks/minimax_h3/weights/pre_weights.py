@@ -39,7 +39,13 @@ class MiniMaxH3RefinerAttentionWeights(WeightModule):
             "norm_k",
             _rms(config, f"{prefix}.norm_k.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
         )
-        self.add_module("calculate", ATTN_WEIGHT_REGISTER[config.get("attn_type", "flash_attn3")]())
+        attn_type = config.get("attn_type", "flash_attn3")
+        attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
+        if attn_type == "dynamic_sparse_attn":
+            calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
+        else:
+            calculate = attention_cls()
+        self.add_module("calculate", calculate)
         self.add_module("to_out", _linear(f"{prefix}.to_out.0", config=config, tp_split="row"))
 
 
