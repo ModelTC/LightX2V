@@ -226,6 +226,34 @@ def auto_calc_config(config):
         config.setdefault("vae_scale_factor_spatial", 8)
         config.setdefault("vae_scale_factor_temporal", 4)
         config.setdefault("vae_scale_factor", 8)
+    elif config["model_cls"] == "minimax_h3":
+        supported_tasks = {"t2av", "i2av", "l2av", "fl2av", "ref2av"}
+        task = config.get("task")
+        if task not in supported_tasks:
+            raise ValueError(f"MiniMax-H3 supports {sorted(supported_tasks)}, got {task!r}")
+        transformer_subfolder = "transformer_ref" if task == "ref2av" else "transformer"
+        transformer_path = os.path.join(config["model_path"], transformer_subfolder)
+        transformer_config_path = os.path.join(transformer_path, "config.json")
+        if not os.path.isfile(transformer_config_path):
+            raise FileNotFoundError(f"MiniMax-H3 transformer config not found: {transformer_config_path}")
+        with open(transformer_config_path, "r") as f:
+            model_config = json.load(f)
+        config.update(model_config)
+        config["dit_original_ckpt"] = transformer_path
+        if config.get("dit_quantized_ckpt"):
+            config["dit_quantized"] = True
+            config["dit_quant_scheme"] = {
+                "fp8": "fp8-q8f",
+                "int8": "int8-q8f",
+            }.get(config.get("dit_quant_scheme"), config.get("dit_quant_scheme", "Default"))
+        config["enable_cfg"] = False
+        config["fps"] = 24
+        config["target_fps"] = 24
+        config["vae_spatial_scale_factor"] = 16
+        config["vae_scale_factor"] = 16
+        config.setdefault("video_flow_shift", 12.0)
+        config.setdefault("audio_flow_shift", 3.0)
+        config.setdefault("audio_sampling_rate", 32000)
     else:
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -397,7 +425,7 @@ def auto_calc_config(config):
         config["target_video_length"] = (latent_frames - 1) * temporal_stride + 1
         logger.info(f"Auto-set LingBot-VA target_video_length={config['target_video_length']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
 
-    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
+    if config["model_cls"] != "minimax_h3" and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
@@ -423,6 +451,11 @@ def auto_calc_config(config):
         config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
         config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
         config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
+    if config["model_cls"] == "minimax_h3":
+        # The generic Diffusers-VAE heuristic above counts six encoder stages
+        # and would incorrectly derive 32. H3 downsamples space by exactly 16.
+        config["vae_spatial_scale_factor"] = 16
+        config["vae_scale_factor"] = 16
     if config["model_cls"] == "cosmos3" and os.path.exists(os.path.join(config["model_path"], "sound_tokenizer", "config.json")):
         with open(os.path.join(config["model_path"], "sound_tokenizer", "config.json"), "r") as f:
             sound_config = json.load(f)
