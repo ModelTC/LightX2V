@@ -51,6 +51,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **August 7, 2026:** 🚀 LightX2V introduces comprehensive inference support for [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3), an omni-modal generative model that produces video with native synchronized stereo audio. The integration covers T2AV, I2AV, L2AV, FL2AV, and Ref2AV workflows, and incorporates model- and block-level offloading, tensor and sequence parallelism, quantized DiT inference, and feature caching. Single- and multi-GPU examples are available in the [MiniMax-H3 inference scripts](scripts/minimax_h3). Alongside this integration, we release the [MiniMax-H3 T2VA Prompt Rewriter LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA), fine-tuned from Qwen3.6-27B to transform concise user prompts into structured, H3-oriented multimodal descriptions spanning visual narrative, soundscape, and non-diegetic music.
+
 - **July 28, 2026:** 🚀 We release the [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) 4-step distilled LoRA for LingBot-Video. It supports T2V, T2I, and I2V generation in only 4 inference steps without CFG. See the [LingBot-Video inference scripts](scripts/lingbot_video) for usage.
 
 - **July 23, 2026:** ⚡️ We release the blog: [LightX2V ROS: Closing the Loop for Action-Generating World Models](https://light-ai.top/LightX2V-BLOG/posts/LightX2V_ROS/)
