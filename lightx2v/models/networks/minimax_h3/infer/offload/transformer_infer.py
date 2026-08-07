@@ -19,6 +19,13 @@ class MiniMaxH3OffloadTransformerInfer(MiniMaxH3TransformerInfer):
         elif offload_granularity != "model":
             raise NotImplementedError(f"MiniMax-H3 does not support offload_granularity={offload_granularity!r}")
 
+    def get_compile_block_key(self, block_idx, block):
+        # block offload
+        if hasattr(self, "offload_manager"):
+            return id(block)
+        # model offload
+        return super().get_compile_block_key(block_idx, block)
+
     def infer_with_blocks_offload(self, blocks, hidden_states, pre_infer_out):
         num_blocks = len(blocks)
         current_stream = torch_device_module.current_stream()

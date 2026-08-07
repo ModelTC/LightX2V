@@ -21,6 +21,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             self.tp_rank = 0
         self.num_heads = self.global_num_heads // self.tp_size
         self.head_dim = int(config.get("attention_head_dim", 128))
+        self.infer_dtype = GET_DTYPE()
         if config.get("seq_parallel", False):
             self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
             parallel = config.get("parallel", {})
@@ -90,7 +91,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
             if aux_out is not None:
                 out = torch.cat((aux_out, out), dim=0)
-        return weights.to_out.apply(out.to(GET_DTYPE()))
+        return weights.to_out.apply(out.to(self.infer_dtype))
 
     @staticmethod
     def _ff(weights, hidden_states):
@@ -100,7 +101,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
     def infer_block(self, weights, hidden_states, pre_infer_out):
         # Activation is evaluated in fp32, then cast to the inference dtype
         # immediately before the (possibly quantized) AdaLN projection.
-        modulation = weights.adaln.apply(F.silu(pre_infer_out.temb).to(GET_DTYPE()))
+        modulation = weights.adaln.apply(F.silu(pre_infer_out.temb).to(self.infer_dtype))
         modulation = self._gather_tp_last_dim(modulation)
         modulation = modulation.view(-1, 6 * self.hidden_size)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = modulation.chunk(6, dim=-1)
