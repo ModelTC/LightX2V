@@ -1,3 +1,4 @@
+import gc
 import json
 import os
 from collections import deque
@@ -158,6 +159,7 @@ class FastWAMPolicy:
             config=self.config,
             device=self.device,
         )
+        self.model.prepare_video_phase()
 
     @classmethod
     def from_config(cls, config):
@@ -198,25 +200,25 @@ class FastWAMPolicy:
         )
 
     def _load_text_encoder(self):
-        t5_path = self._find_model_file("models_t5_umt5-xxl-enc-bf16.pth")
-        tokenizer_path = self._find_model_dir("google/umt5-xxl")
+        t5_path = self._resolve_optional_file("t5_model_path", "models_t5_umt5-xxl-enc-bf16.pth")
+        tokenizer_path = self._resolve_optional_dir("tokenizer_path", "google/umt5-xxl")
         return T5EncoderModel(
             text_len=128,
             dtype=GET_DTYPE(),
             device=self.device,
             checkpoint_path=t5_path,
             tokenizer_path=str(tokenizer_path),
-            cpu_offload=False,
+            cpu_offload=bool(self.config.get("cpu_offload", False)),
         )
 
     def _load_vae(self):
-        vae_path = self._find_model_file("Wan2.2_VAE.pth")
+        vae_path = self._resolve_optional_file("vae_model_path", "Wan2.2_VAE.pth")
         return Wan2_2_VAE(
             vae_path=vae_path,
             device=self.device,
             dtype=GET_DTYPE(),
             vae_type="wan2.2",
-            cpu_offload=False,
+            cpu_offload=bool(self.config.get("cpu_offload", False)),
         )
 
     def _find_model_file(self, filename):
@@ -231,6 +233,28 @@ class FastWAMPolicy:
             return path
         raise FileNotFoundError(f"Cannot find {dirname} under {self.model_path}")
 
+    def _resolve_optional_file(self, config_key, default_filename):
+        value = self.config.get(config_key)
+        if not value:
+            return self._find_model_file(default_filename)
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            raise ValueError(f"FastWAM requires absolute `{config_key}`, got: {path}")
+        if not path.is_file():
+            raise FileNotFoundError(str(path))
+        return str(path.resolve())
+
+    def _resolve_optional_dir(self, config_key, default_dirname):
+        value = self.config.get(config_key)
+        if not value:
+            return self._find_model_dir(default_dirname)
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            raise ValueError(f"FastWAM requires absolute `{config_key}`, got: {path}")
+        if not path.is_dir():
+            raise FileNotFoundError(str(path))
+        return path.resolve()
+
     def reset(self):
         self.pending_actions.clear()
 
@@ -244,6 +268,7 @@ class FastWAMPolicy:
         return self.pending_actions.popleft()
 
     def predict_action_chunk(self, images, state, task_description, seed=None):
+        self.model.prepare_video_phase()
         image = self.build_image_tensor(images)
         first_frame_latents = self.encode_image_latents(image)
         context, context_mask = self.encode_prompt(self.default_prompt.format(task_prompt=task_description))
@@ -262,6 +287,12 @@ class FastWAMPolicy:
             seed=self.seed if seed is None else seed,
         )
         action = self.action_normalizer.backward(action).numpy()
+        if bool(self.config.get("sequential_aux_offload", False)):
+            # The result is on CPU; release per-plan CUDA tensors before the
+            # next replan when RoboDojo and inference share a small GPU.
+            del image, inputs, first_frame_latents, context, context_mask, robot_state
+            gc.collect()
+            torch.cuda.empty_cache()
         if self.gripper_postprocess:
             # LIBERO single-gripper channel: map [0,1] -> [-1,1], flip sign, optional binarize.
             action[..., -1] = action[..., -1] * 2 - 1
