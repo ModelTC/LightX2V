@@ -51,6 +51,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年8月7日：** 🚀 LightX2V 正式推出对 [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) 的完整推理支持。MiniMax-H3 是一款可生成原生同步立体声音频与视频的全模态生成模型；当前集成覆盖 T2AV、I2AV、L2AV、FL2AV 和 Ref2AV 工作流，并提供模型级与 Block 级 Offload、张量并行与序列并行、DiT 量化推理及特征缓存等优化能力。单卡与多卡示例请参阅 [MiniMax-H3 推理脚本](scripts/minimax_h3)。与此同时，我们发布了基于 Qwen3.6-27B 微调的 [MiniMax-H3 T2VA Prompt Rewriter LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA)，可将简洁的用户提示词转换为面向 H3 的结构化多模态描述，涵盖视觉叙事、整体音景与非叙事音乐。
+
 - **2026年7月28日：** 🚀 我们发布了 LingBot-Video 的 4 步蒸馏 LoRA：[LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video)。该 LoRA 支持 T2V、T2I 和 I2V 任务，只需 4 步且无需 CFG 即可完成推理。使用方式请参考 [LingBot-Video 推理脚本](scripts/lingbot_video)。
 
 - **2026年7月23日：** 🎉 我们发布 [LightX2V ROS: Closing the Loop for Action-Generating World Models](https://light-ai.top/LightX2V-BLOG/posts/LightX2V_ROS/) 博客
