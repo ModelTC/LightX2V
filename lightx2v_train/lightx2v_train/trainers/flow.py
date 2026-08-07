@@ -48,6 +48,9 @@ class FlowMatchingTrainer(BaseTrainer):
 
     def train(self):
         resume_ckpt_path, current_iter = self._resolve_resume()
+        # Objectives with a curriculum (for example CM's shrinking time
+        # interval) need the optimizer-step index, including after resume.
+        self.current_train_iteration = current_iter
         self.setup(resume_ckpt_path=resume_ckpt_path)
         if is_main_process():
             os.makedirs(self.output_train_dir, exist_ok=True)
@@ -111,6 +114,7 @@ class FlowMatchingTrainer(BaseTrainer):
                 self.optimizer.zero_grad()
 
                 current_iter += 1
+                self.current_train_iteration = current_iter
                 display_loss = reduce_mean(running_loss)
                 current_lr = self.lr_scheduler.get_last_lr()[0]
                 if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:

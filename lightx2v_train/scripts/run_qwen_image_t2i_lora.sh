@@ -1,6 +1,7 @@
 #!/bin/bash
 
 export CUDA_VISIBLE_DEVICES=7
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 torchrun \
 --standalone \

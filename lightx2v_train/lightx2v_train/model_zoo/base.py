@@ -33,6 +33,22 @@ class BaseModel:
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
 
+    def configure_consistency_model(self, capabilities):
+        """Install optional architecture pieces required by an objective."""
+        capabilities = frozenset(capabilities)
+        if capabilities:
+            names = ", ".join(sorted(capabilities))
+            raise NotImplementedError(f"{self.__class__.__name__} does not support consistency capabilities: {names}.")
+
+    def set_consistency_modules_trainable(self):
+        """Re-enable objective-specific modules after LoRA freezes the backbone."""
+
+    def consistency_auxiliary_parameter_names(self):
+        return ()
+
+    def predict_consistency_log_variance(self, time):
+        raise NotImplementedError(f"{self.__class__.__name__} does not implement a consistency log-variance head.")
+
     def add_lora(self, rank, alpha, target_modules):
         lora_config = LoraConfig(
             r=rank,
@@ -163,6 +179,34 @@ class BaseModel:
     def postprocess_denoiser_output(self, prediction, denoiser_input):
         raise NotImplementedError
 
+    def denoiser_prediction_type(self):
+        """Return the quantity predicted by the denoiser.
+
+        LightX2V's current diffusion backbones are trained as rectified-flow
+        velocity predictors.  Keeping this declaration on the model avoids
+        baking that assumption into distillation objectives and leaves room
+        for models that predict x0, noise, or another parameterization.
+        """
+        return "velocity"
+
+    def predict_denoiser_output(self, noisy_latent, timestep_or_sigma, condition, **denoiser_kwargs):
+        """Run the model-specific denoiser path and return latent-shaped output.
+
+        Consistency objectives operate on latent tensors, while individual
+        models may pack those tensors before the transformer forward.  This
+        method is the common boundary between the two layers.  Extra keyword
+        arguments are intentionally forwarded for algorithms such as
+        MeanFlow, whose denoisers can require an additional endpoint time.
+        """
+        denoiser_input = self.prepare_denoiser_input(noisy_latent, condition=condition)
+        prediction = self.denoise(
+            denoiser_input,
+            timestep_or_sigma,
+            condition,
+            **denoiser_kwargs,
+        )
+        return self.postprocess_denoiser_output(prediction, denoiser_input)
+
     def prepare_infer_latents(self, height, width, generator=None):
         raise NotImplementedError
 
@@ -205,7 +249,7 @@ class BaseModel:
             self._infer_lora_adapter_name = None
 
     def save_lora_weights(self, save_dir, adapter_name=None, weights_subdir=None):
-        peft_state_dict = self._get_lora_state_dict_for_save(adapter_name=adapter_name)
+        peft_state_dict, auxiliary_state_dict = self._get_lora_and_auxiliary_state_dict_for_save(adapter_name=adapter_name)
         if not is_main_process():
             return
 
@@ -216,23 +260,38 @@ class BaseModel:
             self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True)
         else:
             save_file(lora_state_dict, os.path.join(output_dir, "pytorch_lora_weights.safetensors"))
+        if auxiliary_state_dict:
+            save_file(
+                auxiliary_state_dict,
+                os.path.join(output_dir, "consistency_auxiliary.safetensors"),
+            )
 
     def _get_lora_state_dict_for_save(self, adapter_name=None):
+        return self._get_lora_and_auxiliary_state_dict_for_save(adapter_name=adapter_name)[0]
+
+    def _get_lora_and_auxiliary_state_dict_for_save(self, adapter_name=None):
         denoiser = self.denoiser_module()
         peft_kwargs = {} if adapter_name is None else {"adapter_name": adapter_name}
         if not is_fsdp2_module(denoiser):
-            return get_peft_model_state_dict(denoiser, **peft_kwargs)
+            state_dict = denoiser.state_dict()
+        else:
+            options = StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+                ignore_frozen_params=False,
+                strict=False,
+            )
+            state_dict, _ = get_state_dict(denoiser, (), options=options)
+            if not is_main_process():
+                return {}, {}
 
-        options = StateDictOptions(
-            full_state_dict=True,
-            cpu_offload=True,
-            ignore_frozen_params=False,
-            strict=False,
-        )
-        state_dict, _ = get_state_dict(denoiser, (), options=options)
-        if not is_main_process():
-            return {}
-        return get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
+        peft_state_dict = get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
+        auxiliary_names = set(self.consistency_auxiliary_parameter_names())
+        missing = auxiliary_names - state_dict.keys()
+        if missing:
+            raise RuntimeError(f"Consistency auxiliary parameters are missing from the model state: {sorted(missing)}")
+        auxiliary_state_dict = {name: state_dict[name].detach().cpu().contiguous() for name in auxiliary_names}
+        return peft_state_dict, auxiliary_state_dict
 
     def load_lora_weights_for_resume(self, lora_path, adapter_name=None, weights_subdir=None):
         weights_dir = os.path.join(lora_path, weights_subdir) if weights_subdir else lora_path
@@ -248,6 +307,45 @@ class BaseModel:
         incompatible = set_peft_model_state_dict(self.denoiser_module(), peft_state_dict, **load_kwargs)
         if incompatible and incompatible.unexpected_keys:
             logger.warning("Unexpected keys when resuming LoRA: {}", incompatible.unexpected_keys)
+
+    def save_consistency_auxiliary_weights(self, save_dir):
+        names = set(self.consistency_auxiliary_parameter_names())
+        if not names:
+            return
+        denoiser = self.denoiser_module()
+        if is_fsdp2_module(denoiser):
+            options = StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+                ignore_frozen_params=False,
+                strict=False,
+            )
+            state_dict, _ = get_state_dict(denoiser, (), options=options)
+        else:
+            state_dict = denoiser.state_dict()
+        if not is_main_process():
+            return
+        missing = names - state_dict.keys()
+        if missing:
+            raise RuntimeError(f"Consistency auxiliary parameters are missing from the model state: {sorted(missing)}")
+        auxiliary = {name: state_dict[name].detach().cpu().contiguous() for name in names if name in state_dict}
+        if auxiliary:
+            save_file(auxiliary, os.path.join(save_dir, "consistency_auxiliary.safetensors"))
+
+    def load_consistency_auxiliary_weights(self, checkpoint_dir):
+        names = set(self.consistency_auxiliary_parameter_names())
+        if not names:
+            return
+        path = os.path.join(checkpoint_dir, "consistency_auxiliary.safetensors")
+        if not os.path.exists(path):
+            raise RuntimeError(f"Consistency auxiliary weights were not found at {path}.")
+        incompatible = self.denoiser_module().load_state_dict(load_file(path), strict=False)
+        missing = [name for name in incompatible.missing_keys if name in names]
+        unexpected = [name for name in incompatible.unexpected_keys if name in names]
+        if missing:
+            raise RuntimeError(f"Missing consistency auxiliary keys in {path}: {missing}")
+        if unexpected:
+            logger.warning("Unexpected consistency auxiliary keys: {}", unexpected)
 
     def load_full_weights_for_resume(self, resume_ckpt_path):
         raise NotImplementedError(f"{self.__class__.__name__} must define load_full_weights_for_resume().")
