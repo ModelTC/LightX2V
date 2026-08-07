@@ -1,0 +1,27 @@
+{
+    "infer_steps": 50,
+    "text_len": 512,
+    "target_video_length": 120,
+    "target_height": 704,
+    "target_width": 1280,
+    "cpu_offload": false,
+    "offload_granularity": "block",
+    "t5_cpu_offload": true,
+    "vae_cpu_offload": true,
+    "num_channels_latents": 48,
+    "vae_stride": [4, 16, 16],
+    "self_attn_1_type": "torch_sdpa",
+    "cross_attn_1_type": "torch_sdpa",
+    "cross_attn_2_type": "torch_sdpa",
+    "sample_guide_scale": 5.0,
+    "sample_shift": 5.0,
+    "enable_cfg": true,
+    "fps": 24,
+    "rope_type": "torch_real_rope",
+    "parallel": {
+        "seq_p_size": 1,
+        "tensor_p_size": 2,
+        "tp_load_mode": "local",
+        "cfg_p_size": 1
+    }
+}

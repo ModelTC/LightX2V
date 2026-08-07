@@ -104,9 +104,41 @@ class WanModel(BaseTransformerModel):
             raise ValueError(f"Cannot split {key} shape {tuple(weight.shape)} across tensor parallel size {tp_size} on dimension {split_dim}")
         return list(torch.chunk(weight, tp_size, dim=split_dim))
 
+    def _should_load_weights(self):
+        if self.use_tp and self._use_local_tp_load():
+            return True
+        return super()._should_load_weights()
+
+    def _use_local_tp_load(self):
+        mode = self.config.get("parallel", {}).get("tp_load_mode", "broadcast")
+        if mode not in ("broadcast", "local"):
+            raise ValueError(f"Unsupported Wan TP load mode: {mode!r}; expected 'broadcast' or 'local'.")
+        return mode == "local"
+
+    def _shard_weights_locally(self, weight_dict):
+        local_weights = {}
+        processed_bias = set()
+        storage_device = self.device
+        for key, tensor in weight_dict.items():
+            split_type = self._get_split_type(key)
+            if key.endswith(".weight") and split_type is not None:
+                local_weights[key] = self._split_weight_for_tp(key, tensor, self.tp_size)[self.tp_rank].contiguous().to(storage_device)
+                bias_key = key.replace(".weight", ".bias")
+                if bias_key in weight_dict and split_type == "col":
+                    local_weights[bias_key] = self._split_bias_for_tp(weight_dict[bias_key], split_type, self.tp_size)[self.tp_rank].contiguous().to(storage_device)
+                    processed_bias.add(bias_key)
+            elif key not in processed_bias:
+                local_weights[key] = tensor.to(storage_device)
+        return local_weights
+
     def _load_weights_from_rank0(self, weight_dict, is_weight_loader):
         if not self.use_tp:
             return super()._load_weights_from_rank0(weight_dict, is_weight_loader)
+
+        if self._use_local_tp_load():
+            if not is_weight_loader or weight_dict is None:
+                raise RuntimeError("Wan TP local loading requires every rank to load the shared checkpoint")
+            return self._shard_weights_locally(weight_dict)
 
         src_rank = 0
         target_device = self._rank_device()
