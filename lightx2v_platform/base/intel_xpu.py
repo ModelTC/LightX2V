@@ -8,10 +8,12 @@ This module handles Intel-specific configurations including:
 """
 
 import os
+import platform
 
 import torch
 import torch.distributed as dist
 from loguru import logger
+from packaging.version import Version
 
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
@@ -54,6 +56,16 @@ class IntelXpuDevice:
     @staticmethod
     def init_parallel_env():
         """Initialize a single-node distributed environment for Intel XPU."""
+        if (
+            platform.system() != "Linux"
+            and Version(torch.__version__) < Version("2.10.0+xpu")
+        ):
+            raise RuntimeError(
+                "Intel XPU distributed initialization on non-Linux systems requires "
+                "PyTorch >= 2.10.0+xpu. "
+                f"Found PyTorch {torch.__version__}."
+            )
+
         local_rank = int(os.environ["LOCAL_RANK"])
         torch.xpu.set_device(local_rank)
         dist.init_process_group(backend="xccl")
