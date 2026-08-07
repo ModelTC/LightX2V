@@ -61,6 +61,9 @@ class MiniMaxH3Runner(DefaultRunner):
     graph.
     """
 
+    _WARMUP_RESOLUTIONS = ((480, 480), (544, 960))
+    _WARMUP_TASKS = ("t2av", "fl2av", "i2av", "l2av", "ref2av")
+
     def __init__(self, config):
         if config.get("task") not in {"t2av", "i2av", "l2av", "fl2av", "ref2av"}:
             raise ValueError("MiniMax-H3 supports t2av/i2av/l2av/fl2av/ref2av")
@@ -73,8 +76,71 @@ class MiniMaxH3Runner(DefaultRunner):
         super().init_modules()
         self.run_input_encoder = self._run_input_encoder_local_h3
 
+    @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
-        raise NotImplementedError("MiniMax-H3 warmup is not implemented")
+        task = self.config["task"]
+        if task not in self._WARMUP_TASKS:
+            raise NotImplementedError(f"MiniMax-H3 warmup does not support task: {task}")
+
+        for height, width in self._WARMUP_RESOLUTIONS:
+            logger.info(f"Warmup: {height}x{width}")
+            transformer_offloaded = not self.config.get("cpu_offload", False)
+            try:
+                self.scheduler.generator = None
+                self._prepare_warmup_inputs(height, width)
+                self.inputs = self._run_input_encoder_local_h3()
+                self.init_run()
+
+                self.scheduler.step_pre(0)
+                self.model.infer(self.inputs)
+                self.scheduler.step_post()
+                video_rows = self.scheduler.video_latents
+                audio_rows = self.scheduler.audio_latents
+
+                if self.config.get("cpu_offload", False):
+                    self._offload_transformer()
+                    transformer_offloaded = True
+
+                self.run_vae_decoder(video_rows, audio_rows)
+                torch_device_module.synchronize()
+            finally:
+                if self.config.get("cpu_offload", False) and not transformer_offloaded:
+                    with suppress(Exception):
+                        self._offload_transformer()
+                self.clear_warmup_state()
+
+        logger.info("[Warmup] Warmup completed")
+        self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, height, width):
+        task = self.config["task"]
+        common = {
+            "seed": 0,
+            "prompt": "warmup" if (height, width) == self._WARMUP_RESOLUTIONS[0] else "A cinematic fox walking through a snowy forest.",
+            "target_shape": [height, width],
+            "target_video_length": int(self.config.get("target_video_length", 124)),
+            "return_result_tensor": True,
+        }
+        image = Image.new("RGB", (width, height), color=0)
+        if task == "t2av":
+            self.input_info = T2AVInputInfo(**common)
+        elif task == "i2av":
+            self.input_info = I2AVInputInfo(**common, image_path=image)
+        elif task == "l2av":
+            self.input_info = L2AVInputInfo(**common, last_frame_path=image)
+        elif task == "fl2av":
+            self.input_info = FL2AVInputInfo(**common, image_path=image, last_frame_path=image.copy())
+        else:
+            self.input_info = Ref2AVInputInfo(**common, image_path=image)
+
+    def clear_warmup_state(self):
+        self.scheduler.clear()
+        self.condition_video_latents = []
+        self.condition_audio_latents = []
+        self.keyframe_anchors = ()
+        self.prepared_references = None
+        self.input_info = None
+        self.__dict__.pop("inputs", None)
 
     def init_scheduler(self):
         self.scheduler = MiniMaxH3Scheduler(self.config)
