@@ -3,8 +3,8 @@
 The names intentionally mirror the two Ulysses communications:
 - ``qkv_pre`` / ``qkv_post`` wrap the all-to-all before attention.
 - ``attn_pre`` / ``attn_post`` wrap the all-to-all after attention.
-- ``*_fp8`` variants keep the same layout contract, but return separate
-  FP8 payload and FP32 scale tensors. Keeping these as separate collectives
+- ``*_fp8`` and ``*_int8`` variants keep the same layout contract, but return separate
+  quantized payload and FP32 scale tensors. Keeping these as separate collectives
   matches the faster NCCL message shape used by the legacy implementation.
 
 The public pre/post wrappers each launch one Triton kernel on the hot path.
@@ -13,6 +13,7 @@ The public pre/post wrappers each launch one Triton kernel on the hot path.
 import torch
 import triton
 import triton.language as tl
+from triton.language.extra import libdevice
 
 # Validation and launch-shape helpers
 
@@ -71,8 +72,8 @@ def _numel_from_shape(shape):
     return numel
 
 
-def _fp8_split_layout(payload_shape, scale_shape, name="fp8 split"):
-    """Return per-rank split metadata for separate FP8 payload/scale tensors."""
+def _quantized_split_layout(payload_shape, scale_shape, name="quantized split"):
+    """Return per-rank split metadata for separate quantized payload/scale tensors."""
     if int(payload_shape[0]) != int(scale_shape[0]):
         raise ValueError(f"{name}: payload and scale must share the all-to-all split dimension.")
     payload_elems_per_rank = _numel_from_shape(payload_shape[1:])
@@ -80,18 +81,18 @@ def _fp8_split_layout(payload_shape, scale_shape, name="fp8 split"):
     return payload_elems_per_rank, scale_elems_per_rank
 
 
-def _check_fp8_split(payload, scale, payload_shape, scale_shape, scale_dtype=torch.float32, name="fp8 split"):
-    """Validate separate FP8 payload and FP32 scale tensors used by post kernels."""
+def _check_quantized_split(payload, scale, payload_shape, scale_shape, payload_dtype, scale_dtype=torch.float32, name="quantized split"):
+    """Validate separate quantized payload and FP32 scale tensors."""
     _check_cuda_contiguous(payload, scale)
-    if payload.dtype != torch.float8_e4m3fn:
-        raise ValueError(f"{name}: payload dtype must be torch.float8_e4m3fn, got {payload.dtype}.")
+    if payload.dtype != payload_dtype:
+        raise ValueError(f"{name}: payload dtype must be {payload_dtype}, got {payload.dtype}.")
     if scale.dtype != scale_dtype:
         raise ValueError(f"{name}: scale dtype must be {scale_dtype}, got {scale.dtype}.")
     if tuple(payload.shape) != tuple(payload_shape):
         raise ValueError(f"{name}: payload shape {tuple(payload.shape)} does not match expected {tuple(payload_shape)}.")
     if tuple(scale.shape) != tuple(scale_shape):
         raise ValueError(f"{name}: scale shape {tuple(scale.shape)} does not match expected {tuple(scale_shape)}.")
-    return _fp8_split_layout(payload_shape, scale_shape, name)
+    return _quantized_split_layout(payload_shape, scale_shape, name)
 
 
 # BF16/FP16 layout kernels
@@ -341,15 +342,15 @@ def _attn_post_kernel(
     tl.store(out + out_offsets, tl.load(attn + input_offsets, mask=mask), mask=mask)
 
 
-# FP8 quantized layout kernels
+# Quantized layout kernels
 
 
 @triton.jit
-def _qkv_pre_fp8_kernel(
+def _qkv_pre_quant_kernel(
     q,
     k,
     v,
-    payload_fp8,
+    payload,
     scale_ptr,
     local_len: tl.constexpr,
     shard_heads: tl.constexpr,
@@ -360,6 +361,7 @@ def _qkv_pre_fp8_kernel(
     payload_elems_per_rank: tl.constexpr,
     scale_base_offset: tl.constexpr,
     scale_elems_per_rank: tl.constexpr,
+    int8_quant: tl.constexpr,
     block_d: tl.constexpr,
 ):
     # One program handles the q/k/v triplet for one [dst_rank, local_s, shard_head].
@@ -381,12 +383,29 @@ def _qkv_pre_fp8_kernel(
     k_vals = tl.load(k + src_offsets, mask=mask, other=0.0).to(tl.float32)
     v_vals = tl.load(v + src_offsets, mask=mask, other=0.0).to(tl.float32)
 
-    q_amax = tl.maximum(tl.max(tl.abs(q_vals), axis=0), 0.001953125)
-    k_amax = tl.maximum(tl.max(tl.abs(k_vals), axis=0), 0.001953125)
-    v_amax = tl.maximum(tl.max(tl.abs(v_vals), axis=0), 0.001953125)
-    q_scale = q_amax / 448.0
-    k_scale = k_amax / 448.0
-    v_scale = v_amax / 448.0
+    q_amax = tl.max(tl.abs(q_vals), axis=0)
+    k_amax = tl.max(tl.abs(k_vals), axis=0)
+    v_amax = tl.max(tl.abs(v_vals), axis=0)
+    if int8_quant:
+        q_scale = tl.where(q_amax > 0.0, q_amax / 127.0, 1.0)
+        k_scale = tl.where(k_amax > 0.0, k_amax / 127.0, 1.0)
+        v_scale = tl.where(v_amax > 0.0, v_amax / 127.0, 1.0)
+        q_quant = libdevice.rint(q_vals / q_scale)
+        k_quant = libdevice.rint(k_vals / k_scale)
+        v_quant = libdevice.rint(v_vals / v_scale)
+        q_quant = tl.minimum(tl.maximum(q_quant, -127.0), 127.0).to(tl.int8)
+        k_quant = tl.minimum(tl.maximum(k_quant, -127.0), 127.0).to(tl.int8)
+        v_quant = tl.minimum(tl.maximum(v_quant, -127.0), 127.0).to(tl.int8)
+    else:
+        q_amax = tl.maximum(q_amax, 0.001953125)
+        k_amax = tl.maximum(k_amax, 0.001953125)
+        v_amax = tl.maximum(v_amax, 0.001953125)
+        q_scale = q_amax / 448.0
+        k_scale = k_amax / 448.0
+        v_scale = v_amax / 448.0
+        q_quant = (q_vals / q_scale).to(tl.float8e4nv)
+        k_quant = (k_vals / k_scale).to(tl.float8e4nv)
+        v_quant = (v_vals / v_scale).to(tl.float8e4nv)
 
     q_row = s * 3 * shard_heads + h
     k_row = q_row + shard_heads
@@ -394,9 +413,9 @@ def _qkv_pre_fp8_kernel(
     q_payload = rank * payload_elems_per_rank + q_row * hidden_dims + offs
     k_payload = rank * payload_elems_per_rank + k_row * hidden_dims + offs
     v_payload = rank * payload_elems_per_rank + v_row * hidden_dims + offs
-    tl.store(payload_fp8 + q_payload, (q_vals / q_scale).to(tl.float8e4nv), mask=mask)
-    tl.store(payload_fp8 + k_payload, (k_vals / k_scale).to(tl.float8e4nv), mask=mask)
-    tl.store(payload_fp8 + v_payload, (v_vals / v_scale).to(tl.float8e4nv), mask=mask)
+    tl.store(payload + q_payload, q_quant, mask=mask)
+    tl.store(payload + k_payload, k_quant, mask=mask)
+    tl.store(payload + v_payload, v_quant, mask=mask)
 
     q_scale_offset = rank * scale_elems_per_rank + scale_base_offset + q_row
     k_scale_offset = rank * scale_elems_per_rank + scale_base_offset + k_row
@@ -407,7 +426,7 @@ def _qkv_pre_fp8_kernel(
 
 
 @triton.jit
-def _qkv_post_fp8_kernel(
+def _qkv_post_quant_kernel(
     payload_fp8,
     scale_ptr,
     q_source,
@@ -491,7 +510,7 @@ def _qkv_post_fp8_kernel(
 
 
 @triton.jit
-def _qonly_qkv_post_fp8_kernel(
+def _qonly_qkv_post_quant_kernel(
     payload_fp8,
     scale_ptr,
     k_source,
@@ -578,9 +597,9 @@ def _qonly_qkv_post_fp8_kernel(
 
 
 @triton.jit
-def _attn_pre_fp8_kernel(
+def _attn_pre_quant_kernel(
     attn,
-    payload_fp8,
+    payload,
     scale_ptr,
     local_len: tl.constexpr,
     shard_heads: tl.constexpr,
@@ -588,6 +607,7 @@ def _attn_pre_fp8_kernel(
     payload_elems_per_rank: tl.constexpr,
     scale_base_offset: tl.constexpr,
     scale_elems_per_rank: tl.constexpr,
+    int8_quant: tl.constexpr,
     block_d: tl.constexpr,
 ):
     # One program handles one [shard_head, local_s] row and writes payload plus scale.
@@ -605,18 +625,24 @@ def _attn_pre_fp8_kernel(
     src_offsets = src_s * (shard_heads * hidden_dims) + h * hidden_dims + offs
     vals = tl.load(attn + src_offsets, mask=mask, other=0.0).to(tl.float32)
 
-    amax = tl.maximum(tl.max(tl.abs(vals), axis=0), 0.001953125)
-    scale = amax / 448.0
-    quant = (vals / scale).to(tl.float8e4nv)
+    amax = tl.max(tl.abs(vals), axis=0)
+    if int8_quant:
+        scale = tl.where(amax > 0.0, amax / 127.0, 1.0)
+        quant = libdevice.rint(vals / scale)
+        quant = tl.minimum(tl.maximum(quant, -127.0), 127.0).to(tl.int8)
+    else:
+        amax = tl.maximum(amax, 0.001953125)
+        scale = amax / 448.0
+        quant = (vals / scale).to(tl.float8e4nv)
 
     payload_offsets = rank * payload_elems_per_rank + row_in_rank * hidden_dims + offs
-    tl.store(payload_fp8 + payload_offsets, quant, mask=mask)
+    tl.store(payload + payload_offsets, quant, mask=mask)
     scale_offset = rank * scale_elems_per_rank + scale_base_offset + row_in_rank
     tl.store(scale_ptr + scale_offset, scale)
 
 
 @triton.jit
-def _attn_post_fp8_kernel(
+def _attn_post_quant_kernel(
     payload_fp8,
     scale_ptr,
     out,
@@ -859,13 +885,13 @@ def qkv_pre_fp8(q, k, v, world_size, head_index=None):
     shard_heads, head_offset, head_stride = _resolve_qkv_head_layout(heads, world_size, head_index)
     payload_shape = (world_size, local_len, 3, shard_heads, hidden_dims)
     scale_shape = (*payload_shape[:-1], 1)
-    payload_elems_per_rank, scale_elems_per_rank = _fp8_split_layout(payload_shape, scale_shape, name="fused QKV fp8 split path")
+    payload_elems_per_rank, scale_elems_per_rank = _quantized_split_layout(payload_shape, scale_shape, name="fused QKV fp8 split path")
 
     payload = torch.empty(payload_shape, device=q.device, dtype=torch.float8_e4m3fn)
     scale = torch.empty(scale_shape, device=q.device, dtype=torch.float32)
     total_rows = world_size * local_len * shard_heads
     block_d = _next_power_of_2(hidden_dims)
-    _qkv_pre_fp8_kernel[(total_rows,)](
+    _qkv_pre_quant_kernel[(total_rows,)](
         q,
         k,
         v,
@@ -880,6 +906,46 @@ def qkv_pre_fp8(q, k, v, world_size, head_index=None):
         payload_elems_per_rank,
         0,
         scale_elems_per_rank,
+        False,
+        block_d,
+        num_warps=4,
+    )
+    return payload, scale, payload_shape, scale_shape
+
+
+def qkv_pre_int8(q, k, v, world_size, head_index=None):
+    """INT8 version of ``qkv_pre`` with fused layout+quantization."""
+    _check_cuda_contiguous(q, k, v)
+    if q.shape != k.shape or q.shape != v.shape:
+        raise ValueError(f"q/k/v must have the same shape for qkv fusion, got q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}.")
+    local_len, heads, hidden_dims = q.shape
+    _check_hidden_dims(hidden_dims, "fused QKV int8 pre path")
+
+    shard_heads, head_offset, head_stride = _resolve_qkv_head_layout(heads, world_size, head_index)
+    payload_shape = (world_size, local_len, 3, shard_heads, hidden_dims)
+    scale_shape = (*payload_shape[:-1], 1)
+    payload_elems_per_rank, scale_elems_per_rank = _quantized_split_layout(payload_shape, scale_shape, name="fused QKV int8 split path")
+
+    payload = torch.empty(payload_shape, device=q.device, dtype=torch.int8)
+    scale = torch.empty(scale_shape, device=q.device, dtype=torch.float32)
+    total_rows = world_size * local_len * shard_heads
+    block_d = _next_power_of_2(hidden_dims)
+    _qkv_pre_quant_kernel[(total_rows,)](
+        q,
+        k,
+        v,
+        payload,
+        scale,
+        local_len,
+        shard_heads,
+        hidden_dims,
+        heads,
+        head_offset,
+        head_stride,
+        payload_elems_per_rank,
+        0,
+        scale_elems_per_rank,
+        True,
         block_d,
         num_warps=4,
     )
@@ -900,6 +966,8 @@ def qkv_post_fp8(
     q_only=False,
     block_size=None,
     head_index=None,
+    _payload_dtype=torch.float8_e4m3fn,
+    _quant_name="fp8",
 ):
     """FP8 version of ``qkv_post`` for separate payload/scale tensors."""
     _check_cuda_contiguous(payload, scale, q_source, k_source, v_source)
@@ -920,8 +988,8 @@ def qkv_post_fp8(
     if shard_heads != expected_shard_heads:
         raise ValueError(f"qkv shard_heads must be {expected_shard_heads}, got {shard_heads}.")
 
-    _check_hidden_dims(hidden_dims, "fused QKV fp8 post path")
-    payload_elems_per_rank, scale_elems_per_rank = _check_fp8_split(payload, scale, payload_shape, scale_shape, torch.float32, name="split QKV fp8 input")
+    _check_hidden_dims(hidden_dims, f"fused QKV {_quant_name} post path")
+    payload_elems_per_rank, scale_elems_per_rank = _check_quantized_split(payload, scale, payload_shape, scale_shape, _payload_dtype, torch.float32, name=f"split QKV {_quant_name} input")
 
     block_m = _resolve_block_m(block_size, hidden_dims, default=16)
     block_d = _next_power_of_2(hidden_dims)
@@ -936,7 +1004,7 @@ def qkv_post_fp8(
         q_rows = q_shape[0] * shard_heads
         total_rows = max(q_rows, kv_shape[0] * shard_heads)
         grid = (triton.cdiv(total_rows, block_m),)
-        _qonly_qkv_post_fp8_kernel[grid](
+        _qonly_qkv_post_quant_kernel[grid](
             payload,
             scale,
             k_source,
@@ -970,7 +1038,7 @@ def qkv_post_fp8(
     out_v = torch.empty_like(out_q)
     total_rows = shape[0] * shard_heads
     grid = (triton.cdiv(total_rows, block_m),)
-    _qkv_post_fp8_kernel[grid](
+    _qkv_post_quant_kernel[grid](
         payload,
         scale,
         q_source,
@@ -999,6 +1067,11 @@ def qkv_post_fp8(
     return out_q, out_k, out_v
 
 
+def qkv_post_int8(*args, **kwargs):
+    """INT8 version of ``qkv_post`` for separate payload/scale tensors."""
+    return qkv_post_fp8(*args, **kwargs, _payload_dtype=torch.int8, _quant_name="int8")
+
+
 def attn_pre_fp8(attn, local_len, world_size, shard_heads, hidden_dims):
     """FP8 version of ``attn_pre`` with fused layout+quantization."""
     _check_cuda_contiguous(attn)
@@ -1006,13 +1079,13 @@ def attn_pre_fp8(attn, local_len, world_size, shard_heads, hidden_dims):
 
     payload_shape = (world_size, shard_heads, local_len, hidden_dims)
     scale_shape = (*payload_shape[:-1], 1)
-    payload_elems_per_rank, scale_elems_per_rank = _fp8_split_layout(payload_shape, scale_shape, name="fused attn fp8 split path")
+    payload_elems_per_rank, scale_elems_per_rank = _quantized_split_layout(payload_shape, scale_shape, name="fused attn fp8 split path")
 
     payload = torch.empty(payload_shape, device=attn.device, dtype=torch.float8_e4m3fn)
     scale = torch.empty(scale_shape, device=attn.device, dtype=torch.float32)
     total_rows = world_size * shard_heads * local_len
     block_d = _next_power_of_2(hidden_dims)
-    _attn_pre_fp8_kernel[(total_rows,)](
+    _attn_pre_quant_kernel[(total_rows,)](
         attn,
         payload,
         scale,
@@ -1022,28 +1095,68 @@ def attn_pre_fp8(attn, local_len, world_size, shard_heads, hidden_dims):
         payload_elems_per_rank,
         0,
         scale_elems_per_rank,
+        False,
         block_d,
         num_warps=4,
     )
     return payload, scale, payload_shape, scale_shape
 
 
-def attn_post_fp8(payload, scale, payload_shape, scale_shape, output_dtype, block_size=None):
+def attn_pre_int8(attn, local_len, world_size, shard_heads, hidden_dims):
+    """INT8 version of ``attn_pre`` with fused layout+quantization."""
+    _check_cuda_contiguous(attn)
+    _check_hidden_dims(hidden_dims, "fused attn int8 pre path")
+
+    payload_shape = (world_size, shard_heads, local_len, hidden_dims)
+    scale_shape = (*payload_shape[:-1], 1)
+    payload_elems_per_rank, scale_elems_per_rank = _quantized_split_layout(payload_shape, scale_shape, name="fused attn int8 split path")
+
+    payload = torch.empty(payload_shape, device=attn.device, dtype=torch.int8)
+    scale = torch.empty(scale_shape, device=attn.device, dtype=torch.float32)
+    total_rows = world_size * shard_heads * local_len
+    block_d = _next_power_of_2(hidden_dims)
+    _attn_pre_quant_kernel[(total_rows,)](
+        attn,
+        payload,
+        scale,
+        local_len,
+        shard_heads,
+        hidden_dims,
+        payload_elems_per_rank,
+        0,
+        scale_elems_per_rank,
+        True,
+        block_d,
+        num_warps=4,
+    )
+    return payload, scale, payload_shape, scale_shape
+
+
+def attn_post_fp8(
+    payload,
+    scale,
+    payload_shape,
+    scale_shape,
+    output_dtype,
+    block_size=None,
+    _payload_dtype=torch.float8_e4m3fn,
+    _quant_name="fp8",
+):
     """FP8 version of ``attn_post`` for separate payload/scale tensors."""
     _check_cuda_contiguous(payload, scale)
     world_size, shard_heads, local_len, hidden_dims = payload_shape
     if tuple(scale_shape) != (world_size, shard_heads, local_len, 1):
         raise ValueError("attn scale shape does not match payload shape.")
 
-    _check_hidden_dims(hidden_dims, "fused attn fp8 post path")
-    payload_elems_per_rank, scale_elems_per_rank = _check_fp8_split(payload, scale, payload_shape, scale_shape, torch.float32, name="split attn fp8 input")
+    _check_hidden_dims(hidden_dims, f"fused attn {_quant_name} post path")
+    payload_elems_per_rank, scale_elems_per_rank = _check_quantized_split(payload, scale, payload_shape, scale_shape, _payload_dtype, torch.float32, name=f"split attn {_quant_name} input")
 
     out = torch.empty((local_len, world_size * shard_heads * hidden_dims), device=payload.device, dtype=output_dtype)
     total_rows = local_len * world_size * shard_heads
     block_m = _resolve_block_m(block_size, hidden_dims, default=16)
     block_d = _next_power_of_2(hidden_dims)
     grid = (triton.cdiv(total_rows, block_m),)
-    _attn_post_fp8_kernel[grid](
+    _attn_post_quant_kernel[grid](
         payload,
         scale,
         out,
@@ -1059,3 +1172,8 @@ def attn_post_fp8(payload, scale, payload_shape, scale_shape, output_dtype, bloc
         num_warps=4,
     )
     return out
+
+
+def attn_post_int8(*args, **kwargs):
+    """INT8 version of ``attn_post`` for separate payload/scale tensors."""
+    return attn_post_fp8(*args, **kwargs, _payload_dtype=torch.int8, _quant_name="int8")

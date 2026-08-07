@@ -3,12 +3,16 @@ import torch
 from .kernels.ulysses_layout import (
     attn_post,
     attn_post_fp8,
+    attn_post_int8,
     attn_pre,
     attn_pre_fp8,
+    attn_pre_int8,
     qkv_post,
     qkv_post_fp8,
+    qkv_post_int8,
     qkv_pre,
     qkv_pre_fp8,
+    qkv_pre_int8,
 )
 from .utils.seq_p import pack_seq_p_tensor, unpack_seq_p_tensor, validate_quant_scheme
 
@@ -126,7 +130,7 @@ class TorchUlyssesPrePost:
 
 
 class TritonUlyssesPrePost:
-    """Fused Triton layout and FP8 communication-quantization backend."""
+    """Fused Triton layout and FP8/INT8 communication-quantization backend."""
 
     @staticmethod
     def _validate(q, k, v, quant_scheme):
@@ -141,6 +145,9 @@ class TritonUlyssesPrePost:
         cls._validate(q, k, v, quant_scheme)
         if quant_scheme == "fp8":
             payload, scale, _, _ = qkv_pre_fp8(q, k, v, world_size, head_index=head_index)
+            return ((payload, scale),)
+        if quant_scheme == "int8":
+            payload, scale, _, _ = qkv_pre_int8(q, k, v, world_size, head_index=head_index)
             return ((payload, scale),)
         return ((qkv_pre(q, k, v, world_size, head_index=head_index), None),)
 
@@ -168,7 +175,13 @@ class TritonUlyssesPrePost:
 
         if scale is None:
             return qkv_post(payload, q_source, k_source, v_source, rank, aux_len, qkv_first, q_only=q_only, head_index=head_index)
-        return qkv_post_fp8(
+        if payload.dtype == torch.float8_e4m3fn:
+            post_fn = qkv_post_fp8
+        elif payload.dtype == torch.int8:
+            post_fn = qkv_post_int8
+        else:
+            raise ValueError(f"Unsupported quantized QKV payload dtype: {payload.dtype}.")
+        return post_fn(
             payload,
             scale,
             payload.shape,
@@ -185,10 +198,14 @@ class TritonUlyssesPrePost:
 
     @staticmethod
     def pack_attn(output, local_len, world_size, shard_heads, hidden_dims, quant_scheme=None):
+        validate_quant_scheme(quant_scheme)
         if quant_scheme == "fp4":
             raise ValueError("prepost_backend='triton' does not support FP4 communication.")
         if quant_scheme == "fp8":
             payload, scale, _, _ = attn_pre_fp8(output, local_len, world_size, shard_heads, hidden_dims)
+            return ((payload, scale),)
+        if quant_scheme == "int8":
+            payload, scale, _, _ = attn_pre_int8(output, local_len, world_size, shard_heads, hidden_dims)
             return ((payload, scale),)
         return ((attn_pre(output, local_len, world_size, shard_heads, hidden_dims), None),)
 
@@ -197,7 +214,11 @@ class TritonUlyssesPrePost:
         payload, scale = packed[0]
         if scale is None:
             return attn_post(payload)
-        return attn_post_fp8(payload, scale, payload.shape, scale.shape, output_dtype)
+        if payload.dtype == torch.float8_e4m3fn:
+            return attn_post_fp8(payload, scale, payload.shape, scale.shape, output_dtype)
+        if payload.dtype == torch.int8:
+            return attn_post_int8(payload, scale, payload.shape, scale.shape, output_dtype)
+        raise ValueError(f"Unsupported quantized attention payload dtype: {payload.dtype}.")
 
 
 def create_ulysses_prepost_backend(name):
