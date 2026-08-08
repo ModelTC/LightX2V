@@ -15,6 +15,47 @@ HEAD_DIM = 128
 _VALID_KV_SPLITS = (1, 2, 4)
 _FALLBACK_WARNINGS = set()
 _KERNEL_LOGS = set()
+_DENSE_GUARD_LOGS = set()
+_DENSE_BACKEND_WARNINGS = set()
+
+
+def _parse_dense_layers(value):
+    """Parse layer indices from JSON lists or Sol-Engine-style ranges."""
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return frozenset()
+    if isinstance(value, (int, str)):
+        value = [value]
+
+    layers = set()
+    try:
+        items = list(value)
+    except TypeError as exc:
+        raise ValueError("sol_attn_setting.dense_layers must be a list of indices or a range string.") from exc
+
+    for item in items:
+        if isinstance(item, str):
+            for part in item.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if "-" in part:
+                    start_text, end_text = part.split("-", 1)
+                    start, end = int(start_text), int(end_text)
+                    if start < 0 or end < start:
+                        raise ValueError(f"Invalid dense layer range: {part!r}.")
+                    layers.update(range(start, end + 1))
+                else:
+                    layer = int(part)
+                    if layer < 0:
+                        raise ValueError("Dense layer indices must be non-negative.")
+                    layers.add(layer)
+        else:
+            layer = int(item)
+            if layer < 0:
+                raise ValueError("Dense layer indices must be non-negative.")
+            layers.add(layer)
+    return frozenset(layers)
 
 
 @functools.lru_cache(maxsize=1)
@@ -104,7 +145,10 @@ class SolAttnWeight(AttnWeightTemplate):
     """LightX2V adapter for the public Sol-Attn BTHD forward API."""
 
     def __init__(self):
+        from .flash_attn import FlashAttn3Weight
+
         self.config = {}
+        self.dense_backend = FlashAttn3Weight()
         self.set_config({})
 
     def set_config(self, config=None):
@@ -116,6 +160,8 @@ class SolAttnWeight(AttnWeightTemplate):
         self.sink_start = self.config.get("sink_start")
         self.reorder = str(self.config.get("reorder", "none")).lower()
         self.strict = bool(self.config.get("strict", False))
+        self.dense_steps = int(self.config.get("dense_steps", 0))
+        self.dense_layers = _parse_dense_layers(self.config.get("dense_layers", ()))
 
         if not math.isfinite(self.tau) or self.tau < 0:
             raise ValueError("sol_attn_setting.tau must be a finite non-negative number.")
@@ -133,9 +179,103 @@ class SolAttnWeight(AttnWeightTemplate):
                 raise ValueError("sol_attn_setting.sink_start must be non-negative or null.")
         if self.reorder not in ("none", "morton3d"):
             raise ValueError("sol_attn_setting.reorder must be 'none' or 'morton3d'.")
+        if self.dense_steps < 0:
+            raise ValueError("sol_attn_setting.dense_steps must be non-negative.")
 
     def _strict_enabled(self):
         return self.strict or os.environ.get("SOL_ATTN_STRICT", "0") == "1"
+
+    def _dense_guard(self, kwargs):
+        """Keep quality-sensitive denoising steps and layers on dense attention."""
+
+        if self.dense_steps:
+            scheduler = kwargs.get("scheduler")
+            step_index = getattr(scheduler, "step_index", None)
+            if step_index is None:
+                return True, "scheduler.step_index is unavailable"
+            if int(step_index) < self.dense_steps:
+                return True, "warmup_step"
+
+        if self.dense_layers:
+            block_idx = kwargs.get("block_idx")
+            if block_idx is None:
+                return True, "block_idx is unavailable"
+            if int(block_idx) in self.dense_layers:
+                return True, "dense_layer"
+
+        return False, None
+
+    def _log_dense_guard(self, reason):
+        key = (reason, self.dense_steps, self.dense_layers)
+        if key in _DENSE_GUARD_LOGS:
+            return
+        if reason in ("warmup_step", "dense_layer"):
+            logger.info(
+                "Sol-Attn dense guard active: dense_steps={}, dense_layers={}, backend=flash_attn3.",
+                self.dense_steps,
+                sorted(self.dense_layers),
+            )
+        else:
+            logger.warning(
+                "Sol-Attn dense guard metadata missing ({}); using dense attention for safety.",
+                reason,
+            )
+        _DENSE_GUARD_LOGS.add(key)
+
+    def _dense_guard_attention(
+        self,
+        q,
+        k,
+        v,
+        *,
+        drop_rate,
+        attn_mask,
+        causal,
+        scale,
+        cu_seqlens_q,
+        cu_seqlens_kv,
+        max_seqlen_q,
+        max_seqlen_kv,
+    ):
+        """Run quality-guarded calls through the same FA3 backend as dense Wan."""
+
+        dense_kwargs = {
+            "drop_rate": drop_rate,
+            "attn_mask": attn_mask,
+            "causal": causal,
+            "scale": scale,
+        }
+        if float(drop_rate) != 0.0 or attn_mask is not None:
+            return _dense_attention(q, k, v, **dense_kwargs)
+
+        query_len = q.shape[0] if q.ndim == 3 else q.shape[1]
+        key_len = k.shape[0] if k.ndim == 3 else k.shape[1]
+        try:
+            out = self.dense_backend.apply(
+                q=q,
+                k=k,
+                v=v,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_kv,
+                max_seqlen_q=max_seqlen_q or query_len,
+                max_seqlen_kv=max_seqlen_kv or key_len,
+                causal=causal,
+                softmax_scale=scale,
+            )
+            if q.ndim == 4:
+                return out.reshape(q.shape[0], q.shape[1], -1)
+            return out
+        except Exception as exc:
+            warning_key = (type(exc).__name__, str(exc))
+            if warning_key not in _DENSE_BACKEND_WARNINGS:
+                logger.warning(
+                    "Sol-Attn dense guard could not use FlashAttention 3 ({}: {}); "
+                    "falling back to torch SDPA.",
+                    type(exc).__name__,
+                    exc,
+                )
+                _DENSE_BACKEND_WARNINGS.add(warning_key)
+            return _dense_attention(q, k, v, **dense_kwargs)
 
     @staticmethod
     def _ineligibility_reason(q, k, v, *, drop_rate, attn_mask, causal, cu_seqlens_q, cu_seqlens_kv):
@@ -210,6 +350,23 @@ class SolAttnWeight(AttnWeightTemplate):
             "causal": causal,
             "scale": scale,
         }
+        use_dense, guard_reason = self._dense_guard(kwargs)
+        if use_dense:
+            self._log_dense_guard(guard_reason)
+            return self._dense_guard_attention(
+                q,
+                k,
+                v,
+                drop_rate=drop_rate,
+                attn_mask=attn_mask,
+                causal=causal,
+                scale=scale,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_kv=cu_seqlens_kv,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_kv=max_seqlen_kv,
+            )
+
         reason = self._ineligibility_reason(
             q,
             k,
@@ -229,7 +386,8 @@ class SolAttnWeight(AttnWeightTemplate):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
 
         inverse = None
-        if self.reorder == "morton3d":
+        globally_reordered = bool(kwargs.get("sol_morton_preordered", False))
+        if self.reorder == "morton3d" and not globally_reordered:
             grid = kwargs.get("grid_sizes")
             if grid is None or math.prod(int(value) for value in grid) != q.shape[1]:
                 reason = f"morton3d reorder requires grid_sizes whose product equals T={q.shape[1]}, got {grid}"
@@ -265,7 +423,8 @@ class SolAttnWeight(AttnWeightTemplate):
         if inverse is not None:
             out = out.index_select(1, inverse)
         arch = torch.cuda.get_device_capability(q.device)
-        kernel_log_key = (arch, self.tau, self.thresh_type, self._resolve_kv_splits(q, self.kv_splits), self.reorder)
+        reorder_mode = "morton3d_global" if globally_reordered else self.reorder
+        kernel_log_key = (arch, self.tau, self.thresh_type, self._resolve_kv_splits(q, self.kv_splits), reorder_mode)
         if kernel_log_key not in _KERNEL_LOGS:
             logger.info(
                 "Sol-Attn active: SM{}{}, tau={}, thresh_type={}, kv_splits={}, reorder={}.",
@@ -274,7 +433,7 @@ class SolAttnWeight(AttnWeightTemplate):
                 self.tau,
                 self.thresh_type,
                 self._resolve_kv_splits(q, self.kv_splits),
-                self.reorder,
+                reorder_mode,
             )
             _KERNEL_LOGS.add(kernel_log_key)
         out = out.reshape(out.shape[0], out.shape[1], -1)
