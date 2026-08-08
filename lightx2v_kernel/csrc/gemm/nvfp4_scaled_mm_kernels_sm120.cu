@@ -334,6 +334,7 @@ void cutlass_scaled_nvfp4_mm_sm120(
 
 // Keep split-N stride argument construction and execution isolated from the
 // regular NVFP4 operator so changes here cannot alter its behavior.
+// prepare the calculation parameters for the gemm
 typename Fp4GemmSm120::Gemm::Arguments args_from_options_nvfp4_nvfp4_split_n_stride(
     at::Tensor& D,
     at::Tensor const& A,
@@ -398,7 +399,9 @@ typename Fp4GemmSm120::Gemm::Arguments args_from_options_nvfp4_nvfp4_split_n_str
     cute::get<2>(stride_bias) = shard_n;
     fusion_args.dBias = stride_bias;
     return arguments;
-  } else {
+  }
+  else
+  {
     typename Fp4GemmSm120::Gemm::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kBatched,
       problem_shape,
@@ -423,7 +426,7 @@ typename Fp4GemmSm120::Gemm::Arguments args_from_options_nvfp4_nvfp4_split_n_str
   }
 }
 
-
+// implement the gemm for nvfp4splitnstride
 void runGemmNvfp4SplitNStrideSm120(
     at::Tensor& D,
     at::Tensor const& A,
@@ -455,7 +458,7 @@ void runGemmNvfp4SplitNStrideSm120(
   CUTLASS_CHECK(gemm.run(arguments, workspace.data_ptr(), stream));
 }
 
-
+// check the inputs and run the NVFP4 split-N stride GEMM kernel
 void cutlass_scaled_nvfp4_mm_split_n_stride_sm120(
     torch::Tensor& D,
     torch::Tensor const& A,
