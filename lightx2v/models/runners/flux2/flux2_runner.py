@@ -50,21 +50,18 @@ class Flux2BaseRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
-        if self._rank0_text_encoder_broadcast_enabled() and dist.get_rank() != 0:
+        if self.config.get("text_encoder_mode", False) == "rank0_broadcast" and dist.get_rank() != 0:
             self.text_encoders = None
         else:
             self.text_encoders = self.load_text_encoder()
         self.vae = self.load_vae()
-        if self._rank0_text_encoder_broadcast_enabled():
+        if self.config.get("text_encoder_mode", False) == "rank0_broadcast":
             torch_device_module.synchronize()
             if AI_DEVICE == "cuda":
                 dist.barrier(device_ids=[torch.cuda.current_device()])
             else:
                 dist.barrier()
         self.model = self.load_transformer()
-
-    def _rank0_text_encoder_broadcast_enabled(self):
-        return False
 
     def load_vae(self):
         return Flux2VAE(self.config)
@@ -478,10 +475,6 @@ class Flux2KleinRunner(Flux2BaseRunner):
 
 @RUNNER_REGISTER("flux2_dev")
 class Flux2DevRunner(Flux2BaseRunner):
-    def _rank0_text_encoder_broadcast_enabled(self):
-        # rank0_broadcast is used only by initialized multi-rank runs.
-        return self.config.get("text_encoder_mode") == "rank0_broadcast"
-
     def load_transformer(self):
         model_kwargs = {
             "model_path": os.path.join(self.config["model_path"], "transformer"),
@@ -505,7 +498,7 @@ class Flux2DevRunner(Flux2BaseRunner):
 
     @ProfilingContext4DebugL1("Run Text Encoder")
     def run_text_encoder(self, text, image_list=None, neg_prompt=None):
-        if self._rank0_text_encoder_broadcast_enabled():
+        if self.config.get("text_encoder_mode", False) == "rank0_broadcast":
             return self._run_text_encoder_rank0_broadcast(text)
         prompt_embeds = self._encode_prompt(text)
         text_ids = self._prepare_text_ids(prompt_embeds).to(AI_DEVICE)
