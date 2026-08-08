@@ -24,6 +24,13 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
+_TEXT_EMBED_DTYPE_TO_CODE = {
+    torch.float16: 0,
+    torch.bfloat16: 1,
+    torch.float32: 2,
+}
+_TEXT_EMBED_CODE_TO_DTYPE = {code: dtype for dtype, code in _TEXT_EMBED_DTYPE_TO_CODE.items()}
+
 
 def calculate_dimensions(target_area, ratio):
     width = math.sqrt(target_area * ratio)
@@ -100,16 +107,22 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         for height, width in self._WARMUP_RESOLUTIONS:
             logger.info(f"Warmup: {height}x{width}")
+            warmup_succeeded = False
             try:
                 t2i_text_cache = self._prepare_warmup_inputs(height, width, t2i_text_cache)
                 scheduler.generator = None
                 scheduler.prepare(self.input_info)
                 scheduler.step_pre(step_index=0)
+                self.model.prepare_offload_weights()
                 self.model.infer(self.inputs)
                 scheduler.step_post()
+                self.model.finish_offload_weights()
                 self.run_vae_decoder(scheduler.latents)
                 torch_device_module.synchronize()
+                warmup_succeeded = True
             finally:
+                if not warmup_succeeded:
+                    self.model.force_cleanup_offload_weights()
                 if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
                     self.model.to_cpu()
                 self.clear_warmup_state()
@@ -203,6 +216,59 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             self.image_encoder = self.load_image_encoder()
             self.vae = self.load_vae()
             self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
+            self._prepare_resident_text_encoder()
+            self._prepare_rank_aware_model_offload()
+
+    def _resident_text_encoder_enabled(self):
+        return self.config.get("qwen_image_resident_text_encoder", False)
+
+    def _prepare_rank_aware_model_offload(self):
+        if not self.config.get("qwen_image_rank_aware_model_offload", False):
+            return
+        if not self.config.get("cpu_offload", False) or self.config.get("offload_granularity") != "model":
+            raise ValueError("qwen_image_rank_aware_model_offload requires cpu_offload=true and offload_granularity='model'")
+        if self._resident_text_encoder_enabled():
+            raise ValueError("qwen_image_rank_aware_model_offload requires qwen_image_resident_text_encoder=false")
+        if not self.config.get("qwen_image_single_rank_text_encoder", False):
+            raise ValueError("qwen_image_rank_aware_model_offload requires qwen_image_single_rank_text_encoder=true")
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            raise ValueError("qwen_image_rank_aware_model_offload does not support lazy_load or unload_modules")
+        if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() <= 1:
+            raise ValueError("qwen_image_rank_aware_model_offload requires distributed execution")
+
+        rank = dist.get_rank()
+        if rank != 0:
+            logger.info(f"[QwenImage] Rank {rank}: preloading full DiT model during initialization")
+            self.model.prepare_offload_weights()
+        torch_device_module.synchronize()
+        if AI_DEVICE == "cuda" and torch.cuda.is_available():
+            dist.barrier(device_ids=[torch.cuda.current_device()])
+        else:
+            dist.barrier()
+        logger.info(f"[QwenImage] Rank {rank}: rank-aware model-offload initialization synchronized")
+
+    def _prepare_resident_text_encoder(self):
+        if not self._resident_text_encoder_enabled():
+            return
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            raise ValueError("qwen_image_resident_text_encoder does not support lazy_load or unload_modules")
+        if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+            if not self.config.get("qwen_image_single_rank_text_encoder", False):
+                raise ValueError("Distributed resident Qwen-Image Text Encoder requires qwen_image_single_rank_text_encoder=true")
+            if dist.get_rank() != 0:
+                return
+
+        text_encoder = self.text_encoders[0]
+        if not hasattr(text_encoder, "load_to_device"):
+            raise ValueError("qwen_image_resident_text_encoder requires a local Text Encoder with load_to_device()")
+        logger.info("[QwenImage] Keeping Text Encoder resident on global rank 0")
+        text_encoder.load_to_device()
+        if hasattr(torch_device_module, "mem_get_info"):
+            free_bytes, total_bytes = torch_device_module.mem_get_info()
+            logger.info(
+                f"[QwenImage] Resident Text Encoder loaded; device free={free_bytes / 2**30:.2f} GiB, "
+                f"total={total_bytes / 2**30:.2f} GiB"
+            )
 
     def load_transformer(self):
         qwen_image_model_kwargs = {
@@ -365,24 +431,145 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     def run_text_encoder(self, text, image_list=None, neg_prompt=None):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_prompt_len.observe(len(text))
+
+        if self._single_rank_text_encoder_enabled():
+            return self._run_text_encoder_single_rank(text, image_list=image_list, neg_prompt=neg_prompt)
+        return self._run_text_encoder_local(text, image_list=image_list, neg_prompt=neg_prompt)
+
+    def _single_rank_text_encoder_enabled(self):
+        return (
+            self.config.get("qwen_image_single_rank_text_encoder", False)
+            and dist.is_available()
+            and dist.is_initialized()
+            and dist.get_world_size() > 1
+        )
+
+    def _broadcast_text_encoder_tensors(self, prompt_embeds, negative_prompt_embeds, src=0):
+        rank = dist.get_rank()
+        metadata_device = torch.device(AI_DEVICE)
+
+        if rank == src:
+            if prompt_embeds is None:
+                raise ValueError("Qwen-Image prompt embedding cannot be None")
+            if prompt_embeds.ndim != 3:
+                raise ValueError(f"Qwen-Image prompt embedding must be 3D, got shape {tuple(prompt_embeds.shape)}")
+            if prompt_embeds.dtype not in _TEXT_EMBED_DTYPE_TO_CODE:
+                raise ValueError(f"Unsupported Qwen-Image text embedding dtype: {prompt_embeds.dtype}")
+
+            has_negative = negative_prompt_embeds is not None
+            negative_shape = (0, 0, 0)
+            tensors = [prompt_embeds.contiguous().view(-1)]
+            if has_negative:
+                if negative_prompt_embeds.ndim != 3:
+                    raise ValueError(f"Qwen-Image negative prompt embedding must be 3D, got shape {tuple(negative_prompt_embeds.shape)}")
+                if negative_prompt_embeds.dtype != prompt_embeds.dtype:
+                    raise ValueError(
+                        f"Qwen-Image prompt embedding dtypes must match, got {prompt_embeds.dtype} and {negative_prompt_embeds.dtype}"
+                    )
+                negative_shape = tuple(negative_prompt_embeds.shape)
+                tensors.append(negative_prompt_embeds.contiguous().view(-1))
+
+            metadata = torch.tensor(
+                [*prompt_embeds.shape, int(has_negative), *negative_shape, _TEXT_EMBED_DTYPE_TO_CODE[prompt_embeds.dtype]],
+                dtype=torch.long,
+                device=metadata_device,
+            )
+            packed_embeds = torch.cat(tensors)
+        else:
+            metadata = torch.empty(8, dtype=torch.long, device=metadata_device)
+
+        dist.broadcast(metadata, src=src)
+        prompt_batch, prompt_seq_len, prompt_hidden_size, has_negative, negative_batch, negative_seq_len, negative_hidden_size, dtype_code = metadata.tolist()
+
+        dtype = _TEXT_EMBED_CODE_TO_DTYPE.get(dtype_code)
+        if dtype is None:
+            raise ValueError(f"Unsupported broadcast Qwen-Image text embedding dtype code: {dtype_code}")
+        if rank != src:
+            prompt_numel = prompt_batch * prompt_seq_len * prompt_hidden_size
+            negative_numel = negative_batch * negative_seq_len * negative_hidden_size if has_negative else 0
+            packed_embeds = torch.empty(prompt_numel + negative_numel, dtype=dtype, device=metadata_device)
+
+        dist.broadcast(packed_embeds, src=src)
+        if rank == src:
+            return prompt_embeds, negative_prompt_embeds
+
+        prompt_numel = prompt_batch * prompt_seq_len * prompt_hidden_size
+        prompt_embeds = packed_embeds[:prompt_numel].view(prompt_batch, prompt_seq_len, prompt_hidden_size)
+        if has_negative:
+            negative_prompt_embeds = packed_embeds[prompt_numel:].view(negative_batch, negative_seq_len, negative_hidden_size)
+        else:
+            negative_prompt_embeds = None
+        return prompt_embeds, negative_prompt_embeds
+
+    def _run_text_encoder_single_rank(self, text, image_list=None, neg_prompt=None):
+        rank = dist.get_rank()
+        if rank == 0:
+            logger.info("[QwenImage] Running Text Encoder on global rank 0 and broadcasting embeddings")
+            text_encoder_output = self._run_text_encoder_local(text, image_list=image_list, neg_prompt=neg_prompt)
+        else:
+            text_encoder_output = {}
+            if image_list is not None:
+                text_encoder_output["image_info"] = self._prepare_local_image_info(image_list)
+
+        prompt_embeds, negative_prompt_embeds = self._broadcast_text_encoder_tensors(
+            text_encoder_output.get("prompt_embeds"),
+            text_encoder_output.get("negative_prompt_embeds"),
+        )
+
+        self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
+        output = {"prompt_embeds": prompt_embeds}
+        if negative_prompt_embeds is not None:
+            self.input_info.txt_seq_lens.append(negative_prompt_embeds.shape[1])
+            output["negative_prompt_embeds"] = negative_prompt_embeds
+        if "image_info" in text_encoder_output:
+            output["image_info"] = text_encoder_output["image_info"]
+        return output
+
+    def _prepare_local_image_info(self, image_list):
+        text_encoder = self.text_encoders[0]
+        vae_image_list = []
+        vae_image_info_list = []
+        for image in image_list:
+            _, vae_image, _, vae_image_info = text_encoder.preprocess_image(image)
+            vae_image_list.append(vae_image)
+            vae_image_info_list.append(vae_image_info)
+        return {
+            "vae_image_list": vae_image_list,
+            "vae_image_info_list": vae_image_info_list,
+        }
+
+    def _run_text_encoder_local(self, text, image_list=None, neg_prompt=None):
         text_encoder_output = {}
-        if self.config["task"] == "t2i":
-            prompt_embeds, _, _ = self.text_encoders[0].infer([text])
-            self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
-            text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["enable_cfg"] and neg_prompt is not None:
-                neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt])
-                self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
-                text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
-        elif self.config["task"] == "i2i":
-            prompt_embeds, _, image_info = self.text_encoders[0].infer([text], image_list)
-            self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
-            text_encoder_output["prompt_embeds"] = prompt_embeds
-            text_encoder_output["image_info"] = image_info
-            if self.config["enable_cfg"] and neg_prompt is not None:
-                neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt], image_list)
-                self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
-                text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
+        text_encoder = self.text_encoders[0]
+        manage_offload_externally = hasattr(text_encoder, "load_to_device") and hasattr(
+            text_encoder, "offload_to_cpu"
+        )
+        keep_resident = self._resident_text_encoder_enabled()
+        infer_kwargs = {"manage_cpu_offload": False} if manage_offload_externally else {}
+
+        if manage_offload_externally:
+            text_encoder.load_to_device()
+        try:
+            if self.config["task"] == "t2i":
+                prompt_embeds, _, _ = text_encoder.infer([text], **infer_kwargs)
+                self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
+                text_encoder_output["prompt_embeds"] = prompt_embeds
+                if self.config["enable_cfg"] and neg_prompt is not None:
+                    neg_prompt_embeds, _, _ = text_encoder.infer([neg_prompt], **infer_kwargs)
+                    self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
+                    text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
+            elif self.config["task"] == "i2i":
+                prompt_embeds, _, image_info = text_encoder.infer([text], image_list, **infer_kwargs)
+                self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
+                text_encoder_output["prompt_embeds"] = prompt_embeds
+                text_encoder_output["image_info"] = image_info
+                if self.config["enable_cfg"] and neg_prompt is not None:
+                    neg_prompt_embeds, _, _ = text_encoder.infer([neg_prompt], image_list, **infer_kwargs)
+                    self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
+                    text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
+        finally:
+            if manage_offload_externally and not keep_resident:
+                text_encoder.offload_to_cpu()
         return text_encoder_output
 
     @ProfilingContext4DebugL1("Run VAE Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration, metrics_labels=["QwenImageRunner"])
@@ -413,23 +600,30 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     def run(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
-        for step_index in range(total_steps):
-            logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+        try:
+            self.model.prepare_offload_weights()
+            for step_index in range(total_steps):
+                logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
 
-            with ProfilingContext4DebugL1("step_pre"):
-                self.model.scheduler.step_pre(step_index=step_index)
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.model.scheduler.step_pre(step_index=step_index)
 
-            with ProfilingContext4DebugL1("🚀 infer_main"):
-                # Example of torch trace profile:
-                # with TorchTraceProfileContext() as profile:
-                #    profile.run(self.model.infer, self.inputs)
-                self.model.infer(self.inputs)
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    # Example of torch trace profile:
+                    # with TorchTraceProfileContext() as profile:
+                    #    profile.run(self.model.infer, self.inputs)
+                    self.model.infer(self.inputs)
 
-            with ProfilingContext4DebugL1("step_post"):
-                self.model.scheduler.step_post()
+                with ProfilingContext4DebugL1("step_post"):
+                    self.model.scheduler.step_post()
 
-            if self.progress_callback:
-                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+                if self.progress_callback:
+                    self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+        except Exception:
+            self.model.force_cleanup_offload_weights()
+            raise
+        else:
+            self.model.finish_offload_weights()
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 

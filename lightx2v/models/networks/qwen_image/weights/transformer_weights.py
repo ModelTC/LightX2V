@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.utils.registry_factory import (
@@ -8,6 +9,46 @@ from lightx2v.utils.registry_factory import (
     RMS_WEIGHT_REGISTER,
     ROPE_REGISTER,
 )
+
+
+def _resolve_resident_block_indices(value, num_blocks, policy="interleaved"):
+    if value is None:
+        value = 0
+    if isinstance(value, str):
+        if value.lower() != "all":
+            raise ValueError(f"offload_resident_blocks must be an integer or 'all', got {value!r}")
+        count = num_blocks
+    elif isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"offload_resident_blocks must be an integer or 'all', got {value!r}")
+    else:
+        count = value
+
+    if not 0 <= count <= num_blocks:
+        raise ValueError(f"offload_resident_blocks must be between 0 and {num_blocks}, got {count}")
+    if count == 0:
+        return frozenset()
+    if count == num_blocks:
+        return frozenset(range(num_blocks))
+    if policy == "prefix":
+        return frozenset(range(count))
+    if policy == "interleaved":
+        return frozenset((idx * num_blocks) // count for idx in range(count))
+    raise ValueError(f"offload_resident_policy must be 'prefix' or 'interleaved', got {policy!r}")
+
+
+def release_weight_module_device_tensors(module):
+    """Drop immutable device weights and retain their pinned CPU masters."""
+    for child in getattr(module, "_modules", {}).values():
+        if child is not None:
+            release_weight_module_device_tensors(child)
+
+    for _, attr_name, _ in getattr(module, "base_attrs", ()):
+        value = getattr(module, attr_name, None)
+        pin_value = getattr(module, f"pin_{attr_name}", None)
+        if pin_value is not None:
+            setattr(module, attr_name, None)
+        elif isinstance(value, torch.Tensor) and value.device.type != "cpu":
+            setattr(module, attr_name, value.to("cpu"))
 
 
 class QwenImageTransformerWeights(WeightModule):
@@ -22,6 +63,7 @@ class QwenImageTransformerWeights(WeightModule):
         if self.mm_type != "Default":
             assert config.get("dit_quantized") is True
         self.lazy_load = self.config.get("lazy_load", False)
+        self._configure_resident_blocks(config)
         blocks = WeightModuleList(
             QwenImageTransformerAttentionBlock(
                 i,
@@ -42,24 +84,25 @@ class QwenImageTransformerWeights(WeightModule):
     def register_offload_buffers(self, config, lazy_load_path, lora_path):
         if config["cpu_offload"]:
             if config["offload_granularity"] == "block":
-                self.offload_blocks_num = 2
-                self.offload_block_cuda_buffers = WeightModuleList(
-                    [
-                        QwenImageTransformerAttentionBlock(
-                            i,
-                            self.task,
-                            self.mm_type,
-                            self.config,
-                            True,
-                            False,
-                            "transformer_blocks",
-                            lazy_load=self.lazy_load,
-                            lazy_load_path=lazy_load_path,
-                        )
-                        for i in range(self.offload_blocks_num)
-                    ]
-                )
-                self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
+                if len(self.resident_block_indices) < self.blocks_num:
+                    self.offload_blocks_num = 2
+                    self.offload_block_cuda_buffers = WeightModuleList(
+                        [
+                            QwenImageTransformerAttentionBlock(
+                                i,
+                                self.task,
+                                self.mm_type,
+                                self.config,
+                                True,
+                                False,
+                                "transformer_blocks",
+                                lazy_load=self.lazy_load,
+                                lazy_load_path=lazy_load_path,
+                            )
+                            for i in range(self.offload_blocks_num)
+                        ]
+                    )
+                    self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
                 self.offload_phase_cuda_buffers = None
                 if self.lazy_load:
                     self.offload_blocks_num = 2
@@ -108,6 +151,30 @@ class QwenImageTransformerWeights(WeightModule):
                     )
                     self.add_module("offload_phase_cpu_buffers", self.offload_phase_cpu_buffers)
                     self.offload_block_cpu_buffers = None
+
+    def _configure_resident_blocks(self, config):
+        block_offload_enabled = config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block"
+        resident_setting = config.get("offload_resident_blocks", 0) if block_offload_enabled else 0
+        if block_offload_enabled and dist.is_available() and dist.is_initialized() and dist.get_rank() == 0:
+            resident_setting = config.get("offload_resident_blocks_rank0", resident_setting)
+        if resident_setting not in (None, 0):
+            if config.get("dit_quantized", False):
+                raise NotImplementedError("Qwen-Image resident block offload currently supports unquantized weights only")
+            if config.get("lora_configs"):
+                raise NotImplementedError("Qwen-Image resident block offload currently does not support LoRA weights")
+        self.resident_block_indices = _resolve_resident_block_indices(
+            resident_setting,
+            self.blocks_num,
+            config.get("offload_resident_policy", "interleaved"),
+        )
+
+    def resident_blocks_to_cuda(self, non_blocking=True):
+        for block_idx in sorted(self.resident_block_indices):
+            self.blocks[block_idx].to_cuda(non_blocking=non_blocking)
+
+    def release_resident_blocks(self):
+        for block_idx in sorted(self.resident_block_indices):
+            release_weight_module_device_tensors(self.blocks[block_idx])
 
 
 class QwenImageTransformerAttentionBlock(WeightModule):
