@@ -50,7 +50,10 @@ class Flux2BaseRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
-        self.text_encoders = self._load_text_encoder_on_this_rank()
+        if self._rank0_text_encoder_broadcast_enabled() and dist.get_rank() != 0:
+            self.text_encoders = None
+        else:
+            self.text_encoders = self.load_text_encoder()
         self.vae = self.load_vae()
         if self._rank0_text_encoder_broadcast_enabled():
             torch_device_module.synchronize()
@@ -62,11 +65,6 @@ class Flux2BaseRunner(DefaultRunner):
 
     def _rank0_text_encoder_broadcast_enabled(self):
         return False
-
-    def _load_text_encoder_on_this_rank(self):
-        if self._rank0_text_encoder_broadcast_enabled() and dist.get_rank() != 0:
-            return None
-        return self.load_text_encoder()
 
     def load_vae(self):
         return Flux2VAE(self.config)
@@ -91,9 +89,9 @@ class Flux2BaseRunner(DefaultRunner):
     def _run_input_encoder_local_t2i(self):
         prompt = self.input_info.prompt
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.text_encoders = self._load_text_encoder_on_this_rank()
+            self.text_encoders = self.load_text_encoder()
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
-        if (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)) and self.text_encoders is not None:
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.text_encoders[0]
         torch_device_module.empty_cache()
         gc.collect()
@@ -106,9 +104,9 @@ class Flux2BaseRunner(DefaultRunner):
     def _run_input_encoder_local_i2i(self):
         prompt = self.input_info.prompt
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.text_encoders = self._load_text_encoder_on_this_rank()
+            self.text_encoders = self.load_text_encoder()
         text_encoder_output = self.run_text_encoder(prompt, neg_prompt=self.input_info.negative_prompt)
-        if (self.config.get("lazy_load", False) or self.config.get("unload_modules", False)) and self.text_encoders is not None:
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.text_encoders[0]
 
         image_path = self.input_info.image_path
@@ -354,7 +352,8 @@ class Flux2BaseRunner(DefaultRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae = self.load_vae()
 
-        decode_rank = self._distributed_vae_decode_rank()
+        # vae_decode_rank is used only by distributed configs.
+        decode_rank = self.config.get("vae_decode_rank")
         if decode_rank is None:
             images = self._decode_latents_with_vae(latents)
         else:
@@ -366,11 +365,6 @@ class Flux2BaseRunner(DefaultRunner):
             gc.collect()
 
         return images
-
-    def _distributed_vae_decode_rank(self):
-        if not dist.is_initialized() or dist.get_world_size() == 1:
-            return None
-        return self.config.get("vae_decode_rank")
 
     def _decode_vae_on_rank(self, latents, decode_rank):
         torch_device_module.synchronize()
@@ -384,10 +378,10 @@ class Flux2BaseRunner(DefaultRunner):
         else:
             image_shape = torch.empty(4, dtype=torch.long, device=latents.device)
 
-        dist.broadcast(image_shape, src=decode_rank, group=dist.group.WORLD)
+        dist.broadcast(image_shape, src=decode_rank)
         if rank != decode_rank:
             raw_images = torch.empty(tuple(image_shape.tolist()), dtype=GET_DTYPE(), device=latents.device)
-        dist.broadcast(raw_images, src=decode_rank, group=dist.group.WORLD)
+        dist.broadcast(raw_images, src=decode_rank)
 
         if self.input_info.return_result_tensor:
             return self.vae.image_processor.postprocess(raw_images, output_type="pt")
@@ -485,7 +479,8 @@ class Flux2KleinRunner(Flux2BaseRunner):
 @RUNNER_REGISTER("flux2_dev")
 class Flux2DevRunner(Flux2BaseRunner):
     def _rank0_text_encoder_broadcast_enabled(self):
-        return self.config.get("text_encoder_mode") == "rank0_broadcast" and dist.is_initialized() and dist.get_world_size() > 1
+        # rank0_broadcast is used only by initialized multi-rank runs.
+        return self.config.get("text_encoder_mode") == "rank0_broadcast"
 
     def load_transformer(self):
         model_kwargs = {
@@ -512,17 +507,14 @@ class Flux2DevRunner(Flux2BaseRunner):
     def run_text_encoder(self, text, image_list=None, neg_prompt=None):
         if self._rank0_text_encoder_broadcast_enabled():
             return self._run_text_encoder_rank0_broadcast(text)
-        return self._run_text_encoder_local(text)
-
-    def _encode_prompt(self, text):
-        prompt_embeds_list, _ = self.text_encoders[0].infer([text])
-        return prompt_embeds_list[0].unsqueeze(0)
-
-    def _run_text_encoder_local(self, text):
         prompt_embeds = self._encode_prompt(text)
         text_ids = self._prepare_text_ids(prompt_embeds).to(AI_DEVICE)
 
         return {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
+
+    def _encode_prompt(self, text):
+        prompt_embeds_list, _ = self.text_encoders[0].infer([text])
+        return prompt_embeds_list[0].unsqueeze(0)
 
     def _run_text_encoder_rank0_broadcast(self, text):
         rank = dist.get_rank()
@@ -533,10 +525,10 @@ class Flux2DevRunner(Flux2BaseRunner):
         else:
             prompt_shape = torch.empty(3, dtype=torch.long, device=AI_DEVICE)
 
-        dist.broadcast(prompt_shape, src=0, group=dist.group.WORLD)
+        dist.broadcast(prompt_shape, src=0)
         if rank != 0:
             prompt_embeds = torch.empty(tuple(prompt_shape.tolist()), dtype=GET_DTYPE(), device=AI_DEVICE)
-        dist.broadcast(prompt_embeds, src=0, group=dist.group.WORLD)
+        dist.broadcast(prompt_embeds, src=0)
 
         text_ids = self._prepare_text_ids(prompt_embeds).to(AI_DEVICE)
         return {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
