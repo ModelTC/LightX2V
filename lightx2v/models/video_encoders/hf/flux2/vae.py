@@ -53,12 +53,13 @@ class Flux2VAE:
         return encoded
 
     @torch.no_grad()
-    def decode(self, latents, input_info=None):
+    def decode(self, latents, input_info=None, output_type=None):
         if self.cpu_offload:
             self.vae.to(AI_DEVICE)
 
         image = self.vae.decode(latents.to(AI_DEVICE, dtype=GET_DTYPE()))[0]
-        output_type = "pt" if input_info is not None and getattr(input_info, "return_result_tensor", False) else "pil"
+        if output_type is None:
+            output_type = "pt" if input_info is not None and getattr(input_info, "return_result_tensor", False) else "pil"
         image = self.image_processor.postprocess(image, output_type=output_type)
 
         if self.cpu_offload:
