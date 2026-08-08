@@ -212,11 +212,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             self.image_encoder = self.load_image_encoder()
             self.vae = self.load_vae()
             self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
-            self._prepare_resident_text_encoder()
             self._prepare_rank_aware_model_offload()
-
-    def _resident_text_encoder_enabled(self):
-        return self.config.get("qwen_image_resident_text_encoder", False)
 
     def _prepare_rank_aware_model_offload(self):
         if not self.config.get("qwen_image_rank_aware_model_offload", False):
@@ -233,21 +229,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         else:
             dist.barrier()
         logger.info(f"[QwenImage] Rank {rank}: rank-aware model-offload initialization synchronized")
-
-    def _prepare_resident_text_encoder(self):
-        if not self._resident_text_encoder_enabled():
-            return
-
-        # Resident mode uses the local Text Encoder and rank-0 broadcast in distributed runs.
-        if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
-            if dist.get_rank() != 0:
-                return
-
-        text_encoder = self.text_encoders[0]
-        logger.info("[QwenImage] Keeping Text Encoder resident on global rank 0")
-        text_encoder.load_to_device()
-        free_bytes, total_bytes = torch_device_module.mem_get_info()
-        logger.info(f"[QwenImage] Resident Text Encoder loaded; device free={free_bytes / 2**30:.2f} GiB, total={total_bytes / 2**30:.2f} GiB")
 
     def load_transformer(self):
         qwen_image_model_kwargs = {
@@ -272,6 +253,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         """
         encoder_config = dict(self.config)
         encoder_config.update(self.config.get("lightllm_config", {}))
+        if self._rank0_text_encoder_broadcast_enabled() and dist.get_rank() != 0:
+            encoder_config["qwen25vl_cpu_offload"] = True
 
         if self.text_encoder_type == "lightllm_service":
             from lightx2v.models.input_encoders.lightllm import LightLLMServiceTextEncoder
@@ -285,7 +268,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             text_encoder = LightLLMKernelTextEncoder(encoder_config)
         else:  # baseline or default
             logger.info("Loading HuggingFace baseline text encoder")
-            text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(self.config)
+            text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(encoder_config)
 
         text_encoders = [text_encoder]
         return text_encoders
@@ -502,7 +485,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         text_encoder_output = {}
         text_encoder = self.text_encoders[0]
         manage_offload_externally = hasattr(text_encoder, "load_to_device") and hasattr(text_encoder, "offload_to_cpu")
-        keep_resident = self._resident_text_encoder_enabled()
         infer_kwargs = {"manage_cpu_offload": False} if manage_offload_externally else {}
 
         if manage_offload_externally:
@@ -526,7 +508,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                     self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                     text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
         finally:
-            if manage_offload_externally and not keep_resident:
+            if manage_offload_externally:
                 text_encoder.offload_to_cpu()
         return text_encoder_output
 
