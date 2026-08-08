@@ -12,116 +12,52 @@ from types import ModuleType
 from typing import Any, Callable, Iterator
 
 import torch
-import torch.distributed as dist
 from loguru import logger
 from torchvision_fix import apply_fix
-
-from lightx2v.utils.envs import CHECK_PROFILING_DEBUG_LEVEL
 
 _POSTPROCESS_DIR = os.path.dirname(os.path.abspath(__file__))
 _HY3DPAINT_LINK = os.path.join(_POSTPROCESS_DIR, "hy3dpaint")
 _HF_PAINT_REPO_ID = "tencent/Hunyuan3D-2.1"
+_PAINT_MODEL_LABELS = {
+    "multiview_model": "Hunyuan3D Paint multiview diffusion model",
+    "super_model": "Hunyuan3D Paint super-resolution model",
+}
 
 
-class _PaintModelProfiler:
-    """Measure only paint model calls, excluding render/bake/export work."""
+@contextmanager
+def _profile_paint_models(pipeline: Any, device: str) -> Iterator[None]:
+    """Profile model calls without including render, bake, or export work."""
+    if int(os.getenv("PROFILING_DEBUG_LEVEL", "0")) < 1:
+        yield
+        return
 
-    _MODEL_LABELS = {
-        "multiview_model": "Hunyuan3D Paint multiview diffusion model",
-        "super_model": "Hunyuan3D Paint super-resolution model",
-    }
+    synchronize = getattr(torch, device.split(":", 1)[0]).synchronize
+    elapsed = {model_key: 0.0 for model_key in _PAINT_MODEL_LABELS}
+    models = pipeline.models
+    original_models = {model_key: models[model_key] for model_key in _PAINT_MODEL_LABELS}
 
-    def __init__(self, device: str, enabled: bool | None = None):
-        self.device = str(device)
-        self.enabled = CHECK_PROFILING_DEBUG_LEVEL(1) if enabled is None else enabled
-        self.elapsed_by_name: dict[str, float] = {}
-        self.calls_by_name: dict[str, int] = {}
+    def timed_model(model_key: str) -> Callable:
+        model = original_models[model_key]
 
-    def _device_synchronize(self) -> None:
-        device_type = self.device.split(":", 1)[0].lower()
-        device_module = getattr(torch, device_type, None)
-        synchronize = getattr(device_module, "synchronize", None)
-        if synchronize is None:
-            return
-        try:
-            synchronize(self.device)
-        except TypeError:
-            synchronize()
-
-    def _synchronized_boundary(self) -> None:
-        # Finish device work before entering a collective. The second sync also
-        # covers device-side work used by NCCL-style barriers.
-        self._device_synchronize()
-        if dist.is_available() and dist.is_initialized():
-            dist.barrier()
-        self._device_synchronize()
-
-    @contextmanager
-    def measure(self, name: str) -> Iterator[None]:
-        if not self.enabled:
-            yield
-            return
-
-        self._synchronized_boundary()
-        start_time = time.perf_counter()
-        try:
-            yield
-        finally:
-            self._synchronized_boundary()
-            elapsed = time.perf_counter() - start_time
-            self.elapsed_by_name[name] = self.elapsed_by_name.get(name, 0.0) + elapsed
-            self.calls_by_name[name] = self.calls_by_name.get(name, 0) + 1
-
-    def _profiled_callable(self, name: str, model: Callable) -> Callable:
         def call(*args, **kwargs):
-            with self.measure(name):
-                return model(*args, **kwargs)
+            synchronize()
+            start_time = time.perf_counter()
+            result = model(*args, **kwargs)
+            synchronize()
+            elapsed[model_key] += time.perf_counter() - start_time
+            return result
 
         return call
 
-    @contextmanager
-    def instrument(self, pipeline: Any) -> Iterator[None]:
-        if not self.enabled:
-            yield
-            return
+    models.update({model_key: timed_model(model_key) for model_key in original_models})
+    try:
+        yield
+    finally:
+        models.update(original_models)
 
-        originals: dict[str, Callable] = {}
-        for model_key, profile_name in self._MODEL_LABELS.items():
-            model = pipeline.models.get(model_key)
-            if model is None:
-                continue
-            originals[model_key] = model
-            pipeline.models[model_key] = self._profiled_callable(profile_name, model)
-
-        try:
-            yield
-        finally:
-            pipeline.models.update(originals)
-
-    def log_summary(self) -> None:
-        if not self.enabled:
-            return
-
-        if dist.is_available() and dist.is_initialized():
-            rank_info = f"Rank {dist.get_rank()}"
-            barrier_info = "distributed barrier enabled"
-        else:
-            rank_info = "Single GPU"
-            barrier_info = "distributed barrier not initialized"
-
-        total_elapsed = 0.0
-        total_calls = 0
-        for name in self._MODEL_LABELS.values():
-            calls = self.calls_by_name.get(name, 0)
-            if calls == 0:
-                continue
-            elapsed = self.elapsed_by_name[name]
-            total_elapsed += elapsed
-            total_calls += calls
-            logger.info(f"[Profile] {rank_info} - Level1_Log {name} cost {elapsed:.6f} seconds ({calls} synchronized calls; {barrier_info})")
-
-        if total_calls:
-            logger.info(f"[Profile] {rank_info} - Level1_Log Hunyuan3D Paint model total cost {total_elapsed:.6f} seconds ({total_calls} synchronized calls summed; {barrier_info})")
+    for model_key, label in _PAINT_MODEL_LABELS.items():
+        logger.info(f"[Profile] Single GPU - Level1_Log {label} cost {elapsed[model_key]:.6f} seconds")
+    logger.info(f"[Profile] Single GPU - Level1_Log Hunyuan3D Paint model total cost {sum(elapsed.values()):.6f} seconds")
 
 
 def _bootstrap_torch_backend(device: str) -> None:
@@ -363,8 +299,7 @@ class PaintPipeline:
         os.makedirs(os.path.dirname(os.path.abspath(glb_path)), exist_ok=True)
 
         logger.info(f"Running Hunyuan3D paint: mesh={mesh_path}, image={image_path}")
-        model_profiler = _PaintModelProfiler(self.config["device"])
-        with model_profiler.instrument(self._pipeline):
+        with _profile_paint_models(self._pipeline, self.config["device"]):
             self._pipeline(
                 mesh_path=mesh_path,
                 image_path=image_path,
@@ -372,7 +307,6 @@ class PaintPipeline:
                 use_remesh=use_remesh,
                 save_glb=save_glb,
             )
-        model_profiler.log_summary()
 
         if save_glb and os.path.isfile(glb_path):
             result_path = glb_path
