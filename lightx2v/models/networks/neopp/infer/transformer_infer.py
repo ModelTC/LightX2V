@@ -22,9 +22,11 @@ except ImportError:
     magi_compile = None
 
 from lightx2v.common.magi_custom_op_mode import configure_dynamo_for_magi_compile
+from lightx2v.common.ops.moe import TorchMoeRouted  # noqa: F401
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
 from lightx2v.utils.profiler import *
+from lightx2v.utils.registry_factory import MOE_ROUTED_REGISTER
 
 _GROUPED_MM_ALIGN = 8
 
@@ -128,6 +130,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             self.norm_topk_prob = llm_config.get("norm_topk_prob", True)
             moe_backend = config.get("moe_backend", "flashinfer")
             logger.info(f"NeoPP MoE backend: {moe_backend}")
+            self.moe_routed = MOE_ROUTED_REGISTER["torch"]()
             self._mlp_forward = self._sparse_moe
             if moe_backend == "flashinfer" and self.fi_moe_autotune.enabled:
                 if flashinfer_autotune is None or flashinfer_cutlass_fused_moe is None:
@@ -391,39 +394,29 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             routing_weights, selected_experts = torch.topk(routing_weights, self.num_experts_per_tok, dim=-1)
         return selected_experts, routing_weights
 
-    def _sparse_moe_pytorch(self, moe_w, hidden_states, selected_experts, routing_weights):
-        hidden_dim = hidden_states.shape[-1]
-        flat_topk_idx = selected_experts.reshape(-1)
-        flat_topk_weight = routing_weights.reshape(-1, 1)
-
-        idxs = flat_topk_idx.argsort()
-        token_idxs = idxs // self.num_experts_per_tok
-        counts = flat_topk_idx.bincount(minlength=moe_w.num_experts)
-
-        x_perm = hidden_states[token_idxs]
+    def _run_grouped_moe_experts(self, moe_w, x_perm, counts):
         x_padded, offsets, _padded_counts, dst_idx = _pad_tokens_for_grouped_mm(x_perm, counts)
         gate_out = torch._grouped_mm(x_padded, moe_w._pt_gate_weight, offs=offsets)
         up_out = torch._grouped_mm(x_padded, moe_w._pt_up_weight, offs=offsets)
         hidden = F.silu(gate_out) * up_out
         out_padded = torch._grouped_mm(hidden, moe_w._pt_down_weight, offs=offsets)
-        expert_out = _strip_padding_from_grouped_mm_output(out_padded, dst_idx)
-        expert_out.mul_(flat_topk_weight[idxs])
+        return _strip_padding_from_grouped_mm_output(out_padded, dst_idx)
 
-        expert_cache = torch.zeros_like(hidden_states)
-        expert_cache = expert_cache.to(expert_out.dtype)
-        expert_cache.scatter_reduce_(
-            0,
-            token_idxs.view(-1, 1).expand(-1, hidden_dim),
-            expert_out,
-            reduce="sum",
+    def _sparse_moe_torch(self, moe_w, hidden_states, selected_experts, routing_weights):
+        return self.moe_routed.apply(
+            hidden_states,
+            selected_experts,
+            routing_weights,
+            num_experts=moe_w.num_experts,
+            expert_context=moe_w,
+            grouped_expert_fn=self._run_grouped_moe_experts,
         )
-        return expert_cache
 
     # @ProfilingContext4DebugL1("Sparse MoE")
     def _sparse_moe(self, moe_w, hidden_states):
         selected_experts, routing_weights = self._moe_route(moe_w, hidden_states)
-        if moe_w.moe_backend == "pytorch":
-            return self._sparse_moe_pytorch(moe_w, hidden_states, selected_experts, routing_weights)
+        if moe_w.moe_backend in ("pytorch", "torch"):
+            return self._sparse_moe_torch(moe_w, hidden_states, selected_experts, routing_weights)
 
         if flashinfer_cutlass_fused_moe is None:
             raise RuntimeError("moe_backend=flashinfer but flashinfer.fused_moe is not available")

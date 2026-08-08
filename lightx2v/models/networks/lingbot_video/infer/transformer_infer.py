@@ -1,8 +1,10 @@
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.ops.moe import TorchMoeRouted  # noqa: F401
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.registry_factory import MOE_ROUTED_REGISTER
 
 
 def _round_up_to_multiple(value, multiple):
@@ -23,6 +25,7 @@ class LingBotVideoTransformerInfer(BaseTransformerInfer):
         self.n_group = config.get("n_group", 4)
         self.topk_group = config.get("topk_group", 2)
         self.route_scale = float(config.get("routed_scaling_factor", 2.5))
+        self.moe_routed = MOE_ROUTED_REGISTER["torch"]()
         self.init_compile(config)
 
     def _attention(self, weights, hidden_states, rotary_emb):
@@ -81,25 +84,6 @@ class LingBotVideoTransformerInfer(BaseTransformerInfer):
             top_scores = top_scores / (top_scores.sum(dim=-1, keepdim=True) + 1e-20)
         top_scores = top_scores * self.route_scale
         return top_indices, top_scores.to(tokens.dtype)
-
-    @staticmethod
-    def _reorder_tokens(tokens, top_scores, top_indices, num_experts):
-        num_tokens = tokens.shape[0]
-        top_k = top_indices.shape[1]
-        flat_scores = top_scores.reshape(-1)
-        flat_indices = top_indices.reshape(-1)
-        active_positions = torch.where(flat_scores != 0)[0]
-        active_experts = flat_indices[active_positions]
-
-        counts = torch.zeros(num_experts, device=tokens.device, dtype=torch.int64)
-        counts.scatter_add_(0, active_experts, torch.ones_like(active_experts, dtype=torch.int64))
-
-        sort_order = torch.argsort(active_experts, stable=True)
-        sorted_positions = active_positions[sort_order]
-        sorted_scores = flat_scores[sorted_positions]
-        original_token_idx = sorted_positions // top_k
-        permuted_tokens = tokens[original_token_idx]
-        return permuted_tokens, counts, sorted_positions, sorted_scores, num_tokens, top_k
 
     @staticmethod
     def _pad_grouped_tokens(tokens, counts, align=8):
@@ -172,28 +156,19 @@ class LingBotVideoTransformerInfer(BaseTransformerInfer):
         ).type_as(padded_tokens)
         return self._unpad_grouped_tokens(out, input_shape, permuted_indices)
 
-    @staticmethod
-    def _restore_tokens(expert_output, sorted_positions, sorted_scores, num_tokens, top_k):
-        dim = expert_output.shape[-1]
-        unsorted = torch.zeros((num_tokens * top_k, dim), dtype=expert_output.dtype, device=expert_output.device)
-        unsorted[sorted_positions] = expert_output
-        unsorted = unsorted.reshape(num_tokens, top_k, dim)
-
-        scores_unsorted = torch.zeros(num_tokens * top_k, dtype=sorted_scores.dtype, device=sorted_scores.device)
-        scores_unsorted[sorted_positions] = sorted_scores
-        scores_unsorted = scores_unsorted.reshape(num_tokens, top_k, 1)
-        return (unsorted.float() * scores_unsorted).sum(dim=1).to(expert_output.dtype)
-
     def _moe(self, weights, hidden_states):
         top_indices, top_scores = self._route(weights, hidden_states)
-        permuted_tokens, counts, sorted_positions, sorted_scores, num_tokens, top_k = self._reorder_tokens(
+        output = self.moe_routed.apply(
             hidden_states,
-            top_scores,
             top_indices,
-            self.num_experts,
+            top_scores,
+            num_experts=self.num_experts,
+            expert_context=weights,
+            grouped_expert_fn=self._run_grouped_experts,
+            accumulate_dtype=torch.float32,
+            drop_zero_routes=True,
+            combine_mode="slot_sum",
         )
-        expert_output = self._run_grouped_experts(weights, permuted_tokens, counts)
-        output = self._restore_tokens(expert_output, sorted_positions, sorted_scores, num_tokens, top_k)
         if getattr(weights, "shared_experts", None) is not None:
             output = output + self._dense_mlp(weights.shared_experts, hidden_states)
         return output

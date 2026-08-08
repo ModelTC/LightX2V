@@ -8,5 +8,6 @@
     "num_chunks": 8000,
     "octree_resolution": 384,
     "attn_type": "npu_flash_attn",
-    "rms_norm_type": "npu_rms_norm"
+    "rms_norm_type": "npu_rms_norm",
+    "moe_backend": "npu"
 }

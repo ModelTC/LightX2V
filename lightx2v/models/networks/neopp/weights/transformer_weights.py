@@ -71,8 +71,8 @@ class NeoppDecoderLayerWeights(WeightModule):
         if config["version"] == "moe":
             gen_num_experts = int(config["llm_config"]["gen_num_experts"])
             moe_backend = config.get("moe_backend", "flashinfer")
-            if moe_backend not in ("pytorch", "flashinfer"):
-                raise ValueError(f"Invalid moe_backend={moe_backend!r}, expected 'pytorch' or 'flashinfer'")
+            if moe_backend not in ("pytorch", "torch", "flashinfer"):
+                raise ValueError(f"Invalid moe_backend={moe_backend!r}, expected 'torch' or 'flashinfer'")
             fi_cfg = config.get("moe_flashinfer_setting") or {}
             if fi_cfg.get("autotune") and moe_backend != "flashinfer":
                 raise ValueError("moe_flashinfer_setting.autotune=true requires moe_backend='flashinfer'")
@@ -154,10 +154,10 @@ class NeoppSparseMoeWeights(WeightModule):
         super().load(weight_dict)
         if self.moe_backend == "flashinfer":
             self._build_flashinfer_weights()
-        elif self.moe_backend == "pytorch":
+        elif self.moe_backend in ("pytorch", "torch"):
             self._build_pytorch_grouped_mm_weights()
         else:
-            raise ValueError(f"Invalid moe_backend={self.moe_backend!r}, expected 'pytorch' or 'flashinfer'")
+            raise ValueError(f"Invalid moe_backend={self.moe_backend!r}, expected 'torch' or 'flashinfer'")
 
     def _build_pytorch_grouped_mm_weights(self):
         gate_list, up_list, down_list = [], [], []

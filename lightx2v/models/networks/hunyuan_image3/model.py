@@ -209,8 +209,8 @@ class HunyuanImage3Model(BaseTransformerModel):
         if self.lora_path is not None:
             raise NotImplementedError("HunyuanImage3 tensor parallel does not support LoRA weight loading yet.")
         moe_impl = str(self.config.get("moe_impl", "eager")).strip().lower()
-        if moe_impl not in ("eager", "flashinfer"):
-            raise NotImplementedError("HunyuanImage3 tensor parallel supports moe_impl='eager' or 'flashinfer'.")
+        if moe_impl not in ("eager", "torch", "flashinfer"):
+            raise NotImplementedError("HunyuanImage3 tensor parallel supports moe_impl='torch' or 'flashinfer'.")
 
         divisibility_checks = {
             "num_attention_heads": [int(self.config.get("num_attention_heads") or self.config["num_heads"])],

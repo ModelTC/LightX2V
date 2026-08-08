@@ -5,9 +5,10 @@ from loguru import logger
 
 from lightx2v.common.ops.attn import *  # noqa: F403,F401 - registers LightX2V attention kernels
 from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
+from lightx2v.common.ops.moe import TorchMoeRouted  # noqa: F401
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.hunyuan_image3.infer.utils import apply_linear, apply_mlp, apply_rotary_pos_emb, first_weight_device, repeat_kv, to_device
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MOE_ROUTED_REGISTER
 
 try:
     from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
@@ -53,6 +54,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         self.num_key_value_heads = self.global_num_key_value_heads // self.tp_size
         self.hidden_act = config.get("hidden_act", "silu")
         self.flashinfer_tune_max_num_tokens = int(config.get("flashinfer_tune_max_num_tokens", 8192))
+        self.moe_routed = MOE_ROUTED_REGISTER["torch"]()
         self.attn_impl = self._normalize_attention_impl(config.get("attn_impl", "torch_sdpa"))
         self.attn_kernel = None if self.attn_impl == "torch_sdpa" else self._build_attention_kernel(self.attn_impl)
         self._attn_cu_seqlens_cache = {}
@@ -585,13 +587,13 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             return apply_mlp(phase.gate_and_up_proj, phase.down_proj, hidden_states, self.hidden_act)
 
         moe = phase.moe
-        moe_impl = getattr(moe, "moe_impl", self.config.get("moe_impl", "eager"))
+        moe_impl = str(getattr(moe, "moe_impl", self.config.get("moe_impl", "eager"))).strip().lower()
         if moe_impl == "flashinfer":
             output = self._infer_mlp_flashinfer(moe, hidden_states)
-        elif moe_impl == "eager":
+        elif moe_impl in ("eager", "torch"):
             output = self._infer_mlp_eager(moe, hidden_states)
         else:
-            raise ValueError(f"Unsupported HunyuanImage3 moe_impl={moe_impl!r}. Expected 'eager' or 'flashinfer'.")
+            raise ValueError(f"Unsupported HunyuanImage3 moe_impl={moe_impl!r}. Expected 'torch' or 'flashinfer'.")
 
         if self.tp_size > 1:
             dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
@@ -606,21 +608,24 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
 
     def _infer_mlp_eager(self, moe, hidden_states):
         flat, topk_weight, topk_idx = self._moe_easy_topk(moe, hidden_states)
-        repeated = flat.repeat_interleave(moe.moe_topk, dim=0)
-        expert_outputs = torch.zeros_like(repeated)
-        flat_topk_idx = topk_idx.reshape(-1)
-        for expert_idx, expert in enumerate(moe.experts):
-            mask = flat_topk_idx == expert_idx
-            if not torch.any(mask):
-                continue
-            expert_out = apply_mlp(expert.gate_and_up_proj, expert.down_proj, repeated[mask], self.hidden_act)
-            expert_outputs[mask] = expert_out.to(expert_outputs.dtype)
-        combined = (expert_outputs.reshape(flat.shape[0], moe.moe_topk, -1) * topk_weight.to(expert_outputs.dtype).unsqueeze(-1)).sum(dim=1)
-        output = combined.reshape_as(hidden_states)
+        output = self.moe_routed.apply(
+            hidden_states,
+            topk_idx,
+            topk_weight,
+            num_experts=moe.num_experts,
+            expert_context=moe,
+            expert_fn=self._run_moe_expert,
+            combine_mode="slot_sum",
+        )
         if getattr(moe, "shared_mlp", None) is not None:
             shared_out = apply_mlp(moe.shared_mlp.gate_and_up_proj, moe.shared_mlp.down_proj, hidden_states, self.hidden_act)
             output = output + shared_out.to(output.dtype)
         return output
+
+    def _run_moe_expert(self, moe, expert_idx, hidden_states):
+        expert = moe.experts[expert_idx]
+        output = apply_mlp(expert.gate_and_up_proj, expert.down_proj, hidden_states, self.hidden_act)
+        return output.to(hidden_states.dtype)
 
     def _infer_mlp_flashinfer(self, moe, hidden_states):
         if flashinfer_cutlass_fused_moe is None:

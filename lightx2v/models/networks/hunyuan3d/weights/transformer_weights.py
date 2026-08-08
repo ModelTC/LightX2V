@@ -1,7 +1,8 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.common.ops.moe import FlashInferMoeRouted, NpuMoeRouted, TorchMoeRouted  # noqa: F401
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, MOE_ROUTED_REGISTER, RMS_WEIGHT_REGISTER
 
 
 class Hunyuan3DFeedForwardWeights(WeightModule):
@@ -49,12 +50,18 @@ class Hunyuan3DMoEWeights(WeightModule):
         super().__init__()
         prefix = f"blocks.{block_idx}.moe"
         num_experts = config.get("num_experts", 8)
-        moe_mm_type = "Default" if str(mm_type).startswith("fp8") else mm_type
         self.num_experts = num_experts
         self.moe_top_k = config.get("moe_top_k", 2)
         self.moe_backend = str(config.get("moe_backend", "pytorch")).strip().lower()
-        if self.moe_backend not in ("pytorch", "flashinfer"):
-            raise ValueError(f"Invalid Hunyuan3D moe_backend={self.moe_backend!r}, expected 'pytorch' or 'flashinfer'")
+        if self.moe_backend not in ("pytorch", "torch", "flashinfer", "npu"):
+            raise ValueError(f"Invalid Hunyuan3D moe_backend={self.moe_backend!r}, expected 'torch', 'flashinfer', or 'npu'")
+        self.moe_routed_backend = "torch" if self.moe_backend == "pytorch" else self.moe_backend
+        mm_type_name = str(mm_type)
+        if self.moe_backend == "npu" and mm_type_name != "Default" and not mm_type_name.lower().startswith("fp8"):
+            raise ValueError(f"Hunyuan3D moe_backend='npu' requires floating-point routed experts; mm_type={mm_type_name!r} is not supported")
+        # FP8 checkpoints keep Hunyuan3D's MoE weights in the inference dtype.
+        # Native NPU grouped matmul likewise consumes floating-point packed weights.
+        moe_mm_type = "Default" if mm_type_name.lower().startswith("fp8") else mm_type
         fi_cfg = config.get("moe_flashinfer_setting") or {}
         if fi_cfg.get("autotune") and self.moe_backend != "flashinfer":
             raise ValueError("moe_flashinfer_setting.autotune=true requires moe_backend='flashinfer'")
@@ -72,12 +79,41 @@ class Hunyuan3DMoEWeights(WeightModule):
         )
         experts = WeightModuleList(Hunyuan3DFeedForwardWeights(f"{prefix}.experts.{expert_idx}", moe_mm_type) for expert_idx in range(num_experts))
         self.add_module("experts", experts)
+        self.add_module("routed", MOE_ROUTED_REGISTER[self.moe_routed_backend]())
+        self._npu_cache_ready = False
 
     def load(self, weight_dict):
+        self._clear_packed_weights()
         super().load(weight_dict)
         self._validate_no_fp8_moe_weights()
         if self.moe_backend == "flashinfer" and self.experts[0].fc1._get_actual_weight() is not None:
             self._build_flashinfer_weights()
+        elif self.moe_backend == "npu" and self.experts[0].fc1._get_actual_weight() is not None:
+            self._ensure_npu_weights()
+
+    def register_diff(self, weight_dict):
+        self._clear_packed_weights()
+        super().register_diff(weight_dict)
+
+    def register_lora(self, weight_dict, strength):
+        self._clear_packed_weights()
+        super().register_lora(weight_dict, strength)
+
+    def update_lora(self, weight_dict, strength):
+        self._clear_packed_weights()
+        super().update_lora(weight_dict, strength)
+
+    def remove_lora(self):
+        self._clear_packed_weights()
+        super().remove_lora()
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        self._clear_packed_weights()
+        return super().load_state_dict(destination, block_index, adapter_block_index)
+
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        self._clear_packed_weights()
+        return super().load_state_dict_from_disk(block_index, adapter_block_index)
 
     @staticmethod
     def _is_fp8_tensor(tensor):
@@ -101,24 +137,52 @@ class Hunyuan3DMoEWeights(WeightModule):
         super().to_cuda(non_blocking=non_blocking)
         if self.moe_backend == "flashinfer":
             self._build_flashinfer_weights()
+        elif self.moe_backend == "npu":
+            self._ensure_npu_weights()
 
     def to_cpu(self, non_blocking=False):
         super().to_cpu(non_blocking=non_blocking)
-        for attr in ("_fi_fc1_weight", "_fi_fc2_weight", "_fi_fc1_bias", "_fi_fc2_bias"):
+        self._clear_packed_weights()
+
+    def to_cuda_async(self, non_blocking=True):
+        super().to_cuda_async(non_blocking=non_blocking)
+        if self.moe_backend == "flashinfer":
+            self._build_flashinfer_weights()
+        elif self.moe_backend == "npu":
+            self._ensure_npu_weights()
+
+    def to_cpu_async(self, non_blocking=True):
+        super().to_cpu_async(non_blocking=non_blocking)
+        self._clear_packed_weights()
+
+    def _clear_packed_weights(self):
+        for attr in (
+            "_fi_fc1_weight",
+            "_fi_fc2_weight",
+            "_fi_fc1_bias",
+            "_fi_fc2_bias",
+            "_npu_fc1_weight",
+            "_npu_fc2_weight",
+            "_npu_fc1_bias",
+            "_npu_fc2_bias",
+        ):
             if hasattr(self, attr):
                 delattr(self, attr)
+        self._npu_cache_ready = False
 
     @staticmethod
-    def _stack_optional_biases(biases):
+    def _stack_optional_biases(biases, backend_name):
         if all(bias is None for bias in biases):
             return None
         if any(bias is None for bias in biases):
-            raise ValueError("FlashInfer Hunyuan3D MoE requires either all expert biases or no expert biases")
+            raise ValueError(f"{backend_name} Hunyuan3D MoE requires either all expert biases or no expert biases")
         return torch.stack([bias.contiguous() for bias in biases], dim=0)
 
     def _build_flashinfer_weights(self):
         if self.experts[0].fc1._get_actual_weight() is None:
             return
+        if any(expert.fc1.has_lora_branch or expert.fc2.has_lora_branch for expert in self.experts):
+            raise NotImplementedError("Hunyuan3D moe_backend='flashinfer' does not support routed-expert LoRA weights")
         fc1_list, fc2_list = [], []
         fc1_biases, fc2_biases = [], []
         for expert_w in self.experts:
@@ -128,8 +192,68 @@ class Hunyuan3DMoEWeights(WeightModule):
             fc2_biases.append(expert_w.fc2._get_actual_bias())
         self._fi_fc1_weight = torch.stack(fc1_list, dim=0)
         self._fi_fc2_weight = torch.stack(fc2_list, dim=0)
-        self._fi_fc1_bias = self._stack_optional_biases(fc1_biases)
-        self._fi_fc2_bias = self._stack_optional_biases(fc2_biases)
+        self._fi_fc1_bias = self._stack_optional_biases(fc1_biases, "FlashInfer")
+        self._fi_fc2_bias = self._stack_optional_biases(fc2_biases, "FlashInfer")
+
+    def _ensure_npu_weights(self):
+        if self._npu_cache_ready:
+            return
+
+        if any(expert.fc1.has_lora_branch or expert.fc2.has_lora_branch for expert in self.experts):
+            raise NotImplementedError("Hunyuan3D moe_backend='npu' does not support routed-expert LoRA weights")
+
+        fc1_weights, fc2_weights = [], []
+        fc1_biases, fc2_biases = [], []
+        for expert_w in self.experts:
+            fc1_weight = expert_w.fc1._get_actual_weight()
+            fc2_weight = expert_w.fc2._get_actual_weight()
+            if fc1_weight is None or fc2_weight is None:
+                raise RuntimeError("Cannot build Hunyuan3D NPU MoE cache before expert weights are moved to the NPU")
+            fc1_weights.append(fc1_weight)
+            fc2_weights.append(fc2_weight)
+            fc1_biases.append(expert_w.fc1._get_actual_bias())
+            fc2_biases.append(expert_w.fc2._get_actual_bias())
+
+        first_fc1 = fc1_weights[0]
+        first_fc2 = fc2_weights[0]
+        if first_fc1.device.type != "npu" or first_fc2.device.type != "npu":
+            raise RuntimeError(f"Hunyuan3D moe_backend='npu' requires NPU expert weights, got {first_fc1.device} and {first_fc2.device}")
+        if first_fc1.dtype != first_fc2.dtype:
+            raise ValueError(f"Hunyuan3D NPU MoE fc1/fc2 dtype mismatch: {first_fc1.dtype} vs {first_fc2.dtype}")
+        if first_fc1.shape[0] != first_fc2.shape[1] or first_fc1.shape[1] != first_fc2.shape[0]:
+            raise ValueError(f"Invalid Hunyuan3D NPU MoE expert shapes: fc1={tuple(first_fc1.shape)}, fc2={tuple(first_fc2.shape)}")
+
+        for expert_idx, (fc1_weight, fc2_weight) in enumerate(zip(fc1_weights, fc2_weights)):
+            if fc1_weight.shape != first_fc1.shape or fc2_weight.shape != first_fc2.shape:
+                raise ValueError(
+                    f"Hunyuan3D NPU MoE expert {expert_idx} shape mismatch: "
+                    f"fc1={tuple(fc1_weight.shape)}, fc2={tuple(fc2_weight.shape)}, "
+                    f"expected fc1={tuple(first_fc1.shape)}, fc2={tuple(first_fc2.shape)}"
+                )
+            if fc1_weight.dtype != first_fc1.dtype or fc2_weight.dtype != first_fc2.dtype:
+                raise ValueError(f"Hunyuan3D NPU MoE expert {expert_idx} dtype mismatch")
+            if fc1_weight.device != first_fc1.device or fc2_weight.device != first_fc2.device:
+                raise ValueError(f"Hunyuan3D NPU MoE expert {expert_idx} device mismatch")
+
+        # LightX2V's Default MM loader already stores linear weights as [in, out].
+        # NPU grouped matmul expects [experts, in, out], so no extra transpose is needed.
+        packed_fc1_weight = torch.stack(fc1_weights, dim=0).contiguous()
+        packed_fc2_weight = torch.stack(fc2_weights, dim=0).contiguous()
+        packed_fc1_bias = self._stack_optional_biases(fc1_biases, "NPU")
+        packed_fc2_bias = self._stack_optional_biases(fc2_biases, "NPU")
+
+        # aclnnGroupedMatmul requires FP16 bias for FP16 weights and FP32 bias for BF16 weights.
+        bias_dtype = torch.float32 if packed_fc1_weight.dtype == torch.bfloat16 else packed_fc1_weight.dtype
+        if packed_fc1_bias is not None:
+            packed_fc1_bias = packed_fc1_bias.to(dtype=bias_dtype).contiguous()
+        if packed_fc2_bias is not None:
+            packed_fc2_bias = packed_fc2_bias.to(dtype=bias_dtype).contiguous()
+
+        self._npu_fc1_weight = packed_fc1_weight
+        self._npu_fc2_weight = packed_fc2_weight
+        self._npu_fc1_bias = packed_fc1_bias
+        self._npu_fc2_bias = packed_fc2_bias
+        self._npu_cache_ready = True
 
 
 class Hunyuan3DSelfAttentionWeights(WeightModule):
