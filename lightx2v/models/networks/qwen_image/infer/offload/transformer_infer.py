@@ -23,8 +23,6 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                     self.infer_func = self.infer_with_event_offload
                     self.offload_manager = EventSlotWeightAsyncStreamManager(offload_granularity=offload_granularity)
                 else:
-                    if self.config.get("offload_resident_blocks", 0) not in (None, 0):
-                        raise ValueError("Qwen-Image resident block offload requires use_event_offload=true")
                     self.infer_func = self.infer_with_blocks_offload
                     self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
             elif offload_granularity == "phase":
@@ -33,9 +31,8 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                 self.compiled_phases = {}
 
             self.lazy_load = self.config.get("lazy_load", False)
+            # Event block offload does not support lazy_load.
             if self.lazy_load:
-                if isinstance(self.offload_manager, EventSlotWeightAsyncStreamManager):
-                    raise NotImplementedError("Qwen-Image event block offload does not support lazy_load")
                 self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 4))
 
     def get_compile_block_key(self, _block_idx, block):

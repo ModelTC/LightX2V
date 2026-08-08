@@ -12,16 +12,8 @@ from lightx2v.utils.registry_factory import (
 
 
 def _resolve_resident_block_indices(value, num_blocks, policy="interleaved"):
-    if value is None:
-        value = 0
-    if isinstance(value, str):
-        if value.lower() != "all":
-            raise ValueError(f"offload_resident_blocks must be an integer or 'all', got {value!r}")
-        count = num_blocks
-    elif isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"offload_resident_blocks must be an integer or 'all', got {value!r}")
-    else:
-        count = value
+    # offload_resident_blocks is an integer or "all".
+    count = num_blocks if value == "all" else value
 
     if not 0 <= count <= num_blocks:
         raise ValueError(f"offload_resident_blocks must be between 0 and {num_blocks}, got {count}")
@@ -157,11 +149,6 @@ class QwenImageTransformerWeights(WeightModule):
         resident_setting = config.get("offload_resident_blocks", 0) if block_offload_enabled else 0
         if block_offload_enabled and dist.is_available() and dist.is_initialized() and dist.get_rank() == 0:
             resident_setting = config.get("offload_resident_blocks_rank0", resident_setting)
-        if resident_setting not in (None, 0):
-            if config.get("dit_quantized", False):
-                raise NotImplementedError("Qwen-Image resident block offload currently supports unquantized weights only")
-            if config.get("lora_configs"):
-                raise NotImplementedError("Qwen-Image resident block offload currently does not support LoRA weights")
         self.resident_block_indices = _resolve_resident_block_indices(
             resident_setting,
             self.blocks_num,

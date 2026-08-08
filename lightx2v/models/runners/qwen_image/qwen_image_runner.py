@@ -24,13 +24,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
 
-_TEXT_EMBED_DTYPE_TO_CODE = {
-    torch.float16: 0,
-    torch.bfloat16: 1,
-    torch.float32: 2,
-}
-_TEXT_EMBED_CODE_TO_DTYPE = {code: dtype for dtype, code in _TEXT_EMBED_DTYPE_TO_CODE.items()}
-
 
 def calculate_dimensions(target_area, ratio):
     width = math.sqrt(target_area * ratio)
@@ -228,17 +221,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     def _prepare_rank_aware_model_offload(self):
         if not self.config.get("qwen_image_rank_aware_model_offload", False):
             return
-        if not self.config.get("cpu_offload", False) or self.config.get("offload_granularity") != "model":
-            raise ValueError("qwen_image_rank_aware_model_offload requires cpu_offload=true and offload_granularity='model'")
-        if self._resident_text_encoder_enabled():
-            raise ValueError("qwen_image_rank_aware_model_offload requires qwen_image_resident_text_encoder=false")
-        if not self.config.get("qwen_image_single_rank_text_encoder", False):
-            raise ValueError("qwen_image_rank_aware_model_offload requires qwen_image_single_rank_text_encoder=true")
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            raise ValueError("qwen_image_rank_aware_model_offload does not support lazy_load or unload_modules")
-        if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() <= 1:
-            raise ValueError("qwen_image_rank_aware_model_offload requires distributed execution")
 
+        # Rank-aware mode uses distributed model offload, rank-0 TE broadcast, and eager modules.
         rank = dist.get_rank()
         if rank != 0:
             logger.info(f"[QwenImage] Rank {rank}: preloading full DiT model during initialization")
@@ -253,25 +237,17 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     def _prepare_resident_text_encoder(self):
         if not self._resident_text_encoder_enabled():
             return
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            raise ValueError("qwen_image_resident_text_encoder does not support lazy_load or unload_modules")
+
+        # Resident mode uses the local Text Encoder and rank-0 broadcast in distributed runs.
         if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
-            if not self.config.get("qwen_image_single_rank_text_encoder", False):
-                raise ValueError("Distributed resident Qwen-Image Text Encoder requires qwen_image_single_rank_text_encoder=true")
             if dist.get_rank() != 0:
                 return
 
         text_encoder = self.text_encoders[0]
-        if not hasattr(text_encoder, "load_to_device"):
-            raise ValueError("qwen_image_resident_text_encoder requires a local Text Encoder with load_to_device()")
         logger.info("[QwenImage] Keeping Text Encoder resident on global rank 0")
         text_encoder.load_to_device()
-        if hasattr(torch_device_module, "mem_get_info"):
-            free_bytes, total_bytes = torch_device_module.mem_get_info()
-            logger.info(
-                f"[QwenImage] Resident Text Encoder loaded; device free={free_bytes / 2**30:.2f} GiB, "
-                f"total={total_bytes / 2**30:.2f} GiB"
-            )
+        free_bytes, total_bytes = torch_device_module.mem_get_info()
+        logger.info(f"[QwenImage] Resident Text Encoder loaded; device free={free_bytes / 2**30:.2f} GiB, total={total_bytes / 2**30:.2f} GiB")
 
     def load_transformer(self):
         qwen_image_model_kwargs = {
@@ -435,65 +411,46 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_prompt_len.observe(len(text))
 
-        if self._single_rank_text_encoder_enabled():
-            return self._run_text_encoder_single_rank(text, image_list=image_list, neg_prompt=neg_prompt)
+        if self._rank0_text_encoder_broadcast_enabled():
+            return self._run_text_encoder_rank0_broadcast(text, image_list=image_list, neg_prompt=neg_prompt)
         return self._run_text_encoder_local(text, image_list=image_list, neg_prompt=neg_prompt)
 
-    def _single_rank_text_encoder_enabled(self):
-        return (
-            self.config.get("qwen_image_single_rank_text_encoder", False)
-            and dist.is_available()
-            and dist.is_initialized()
-            and dist.get_world_size() > 1
-        )
+    def _rank0_text_encoder_broadcast_enabled(self):
+        # rank0_broadcast is configured only for initialized multi-rank runs.
+        return self.config.get("text_encoder_mode") == "rank0_broadcast"
 
-    def _broadcast_text_encoder_tensors(self, prompt_embeds, negative_prompt_embeds, src=0):
+    def _broadcast_text_encoder_tensors(self, prompt_embeds, negative_prompt_embeds):
+        # Text Encoder outputs are BF16 tensors shaped [batch, sequence, hidden].
         rank = dist.get_rank()
         metadata_device = torch.device(AI_DEVICE)
 
-        if rank == src:
-            if prompt_embeds is None:
-                raise ValueError("Qwen-Image prompt embedding cannot be None")
-            if prompt_embeds.ndim != 3:
-                raise ValueError(f"Qwen-Image prompt embedding must be 3D, got shape {tuple(prompt_embeds.shape)}")
-            if prompt_embeds.dtype not in _TEXT_EMBED_DTYPE_TO_CODE:
-                raise ValueError(f"Unsupported Qwen-Image text embedding dtype: {prompt_embeds.dtype}")
-
+        if rank == 0:
             has_negative = negative_prompt_embeds is not None
             negative_shape = (0, 0, 0)
             tensors = [prompt_embeds.contiguous().view(-1)]
             if has_negative:
-                if negative_prompt_embeds.ndim != 3:
-                    raise ValueError(f"Qwen-Image negative prompt embedding must be 3D, got shape {tuple(negative_prompt_embeds.shape)}")
-                if negative_prompt_embeds.dtype != prompt_embeds.dtype:
-                    raise ValueError(
-                        f"Qwen-Image prompt embedding dtypes must match, got {prompt_embeds.dtype} and {negative_prompt_embeds.dtype}"
-                    )
                 negative_shape = tuple(negative_prompt_embeds.shape)
                 tensors.append(negative_prompt_embeds.contiguous().view(-1))
 
             metadata = torch.tensor(
-                [*prompt_embeds.shape, int(has_negative), *negative_shape, _TEXT_EMBED_DTYPE_TO_CODE[prompt_embeds.dtype]],
+                [*prompt_embeds.shape, int(has_negative), *negative_shape],
                 dtype=torch.long,
                 device=metadata_device,
             )
             packed_embeds = torch.cat(tensors)
         else:
-            metadata = torch.empty(8, dtype=torch.long, device=metadata_device)
+            metadata = torch.empty(7, dtype=torch.long, device=metadata_device)
 
-        dist.broadcast(metadata, src=src)
-        prompt_batch, prompt_seq_len, prompt_hidden_size, has_negative, negative_batch, negative_seq_len, negative_hidden_size, dtype_code = metadata.tolist()
+        dist.broadcast(metadata, src=0)
+        prompt_batch, prompt_seq_len, prompt_hidden_size, has_negative, negative_batch, negative_seq_len, negative_hidden_size = metadata.tolist()
 
-        dtype = _TEXT_EMBED_CODE_TO_DTYPE.get(dtype_code)
-        if dtype is None:
-            raise ValueError(f"Unsupported broadcast Qwen-Image text embedding dtype code: {dtype_code}")
-        if rank != src:
+        if rank != 0:
             prompt_numel = prompt_batch * prompt_seq_len * prompt_hidden_size
             negative_numel = negative_batch * negative_seq_len * negative_hidden_size if has_negative else 0
-            packed_embeds = torch.empty(prompt_numel + negative_numel, dtype=dtype, device=metadata_device)
+            packed_embeds = torch.empty(prompt_numel + negative_numel, dtype=torch.bfloat16, device=metadata_device)
 
-        dist.broadcast(packed_embeds, src=src)
-        if rank == src:
+        dist.broadcast(packed_embeds, src=0)
+        if rank == 0:
             return prompt_embeds, negative_prompt_embeds
 
         prompt_numel = prompt_batch * prompt_seq_len * prompt_hidden_size
@@ -504,7 +461,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             negative_prompt_embeds = None
         return prompt_embeds, negative_prompt_embeds
 
-    def _run_text_encoder_single_rank(self, text, image_list=None, neg_prompt=None):
+    def _run_text_encoder_rank0_broadcast(self, text, image_list=None, neg_prompt=None):
         rank = dist.get_rank()
         if rank == 0:
             logger.info("[QwenImage] Running Text Encoder on global rank 0 and broadcasting embeddings")
@@ -544,9 +501,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     def _run_text_encoder_local(self, text, image_list=None, neg_prompt=None):
         text_encoder_output = {}
         text_encoder = self.text_encoders[0]
-        manage_offload_externally = hasattr(text_encoder, "load_to_device") and hasattr(
-            text_encoder, "offload_to_cpu"
-        )
+        manage_offload_externally = hasattr(text_encoder, "load_to_device") and hasattr(text_encoder, "offload_to_cpu")
         keep_resident = self._resident_text_encoder_enabled()
         infer_kwargs = {"manage_cpu_offload": False} if manage_offload_externally else {}
 
