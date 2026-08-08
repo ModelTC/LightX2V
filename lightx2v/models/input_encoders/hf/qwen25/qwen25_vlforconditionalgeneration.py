@@ -73,6 +73,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         self.cpu_offload = config.get("qwen25vl_cpu_offload", config.get("cpu_offload", False))
         self.dtype = torch.bfloat16
         self.load()
+        self._is_on_device = not self.cpu_offload
 
     def load(self):
         if self.config.get("qwen25vl_quantized", False):
@@ -152,11 +153,24 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         output_text = self.vl_processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         return output_text.strip()
 
-    @torch.no_grad()
-    def infer(self, text, image_list=None):
+    def load_to_device(self):
         if self.cpu_offload:
-            if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
+            if (not hasattr(self, "device_map") or self.device_map == AI_DEVICE) and not self._is_on_device:
                 self.text_encoder.to(AI_DEVICE)
+                self._is_on_device = True
+
+    def offload_to_cpu(self):
+        if self.cpu_offload:
+            if (not hasattr(self, "device_map") or self.device_map == AI_DEVICE) and self._is_on_device:
+                self.text_encoder.to(torch.device("cpu"))
+                self._is_on_device = False
+            torch_device_module.empty_cache()
+            gc.collect()
+
+    @torch.no_grad()
+    def infer(self, text, image_list=None, manage_cpu_offload=True):
+        if manage_cpu_offload:
+            self.load_to_device()
 
         if self.is_layered:
             text = [self.get_image_caption(image_list[0])]
@@ -248,10 +262,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         prompt_embeds_mask = prompt_embeds_mask.repeat(1, 1, 1)
         prompt_embeds_mask = prompt_embeds_mask.view(1 * 1, seq_len)
 
-        if self.cpu_offload:
-            if not hasattr(self, "device_map") or self.device_map == AI_DEVICE:
-                self.text_encoder.to(torch.device("cpu"))
-            torch_device_module.empty_cache()
-            gc.collect()
+        if manage_cpu_offload:
+            self.offload_to_cpu()
 
         return prompt_embeds, prompt_embeds_mask, image_info

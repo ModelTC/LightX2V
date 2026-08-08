@@ -1,5 +1,8 @@
+import time
+
 import torch
 import torch.distributed as dist
+from loguru import logger
 from torch.nn import functional as F
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
@@ -9,9 +12,15 @@ from lightx2v.models.networks.qwen_image.infer.pre_infer import QwenImagePreInfe
 from lightx2v.models.networks.qwen_image.infer.transformer_infer import QwenImageTransformerInfer
 from lightx2v.models.networks.qwen_image.weights.post_weights import QwenImagePostWeights
 from lightx2v.models.networks.qwen_image.weights.pre_weights import QwenImagePreWeights
-from lightx2v.models.networks.qwen_image.weights.transformer_weights import QwenImageTransformerWeights
+from lightx2v.models.networks.qwen_image.weights.transformer_weights import (
+    QwenImageTransformerWeights,
+    release_weight_module_device_tensors,
+)
 from lightx2v.utils.envs import *
 from lightx2v.utils.utils import *
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class QwenImageTransformerModel(BaseTransformerModel):
@@ -21,6 +30,7 @@ class QwenImageTransformerModel(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, None, lora_path, lora_strength)
+        self._offload_weights_active = False
         self.in_channels = self.config["in_channels"]
         self.attention_kwargs = {}
         if self.lazy_load:
@@ -48,6 +58,103 @@ class QwenImageTransformerModel(BaseTransformerModel):
         )
         if hasattr(self.transformer_infer, "offload_manager"):
             self._init_offload_manager()
+
+    def _init_offload_manager(self):
+        if hasattr(self.transformer_weights, "offload_block_cuda_buffers"):
+            self.transformer_infer.offload_manager.init_cuda_buffer(
+                blocks_cuda_buffer=self.transformer_weights.offload_block_cuda_buffers,
+            )
+        if self.lazy_load and hasattr(self.transformer_weights, "offload_block_cpu_buffers"):
+            self.transformer_infer.offload_manager.init_cpu_buffer(
+                blocks_cpu_buffer=self.transformer_weights.offload_block_cpu_buffers,
+            )
+
+    def prepare_offload_weights(self):
+        """Keep the largest configured set of weights resident for the DiT loop."""
+        if not self.cpu_offload:
+            return
+        if self._offload_weights_active:
+            if (self.offload_granularity == "block" and self.config.get("offload_persistent_resident_blocks", False)) or self._keep_model_weights_resident_on_this_rank():
+                return
+            raise RuntimeError("Qwen-Image offload weights are already active")
+
+        self._offload_weights_active = True
+        if self.offload_granularity == "model":
+            transfer_start = time.perf_counter()
+            self.to_cuda()
+            if self.config.get("qwen_image_rank_aware_model_offload", False):
+                torch_device_module.synchronize()
+                rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+                free_bytes, total_bytes = torch_device_module.mem_get_info()
+                logger.info(
+                    f"[QwenImage] Rank {rank}: full DiT model H2D completed in "
+                    f"{time.perf_counter() - transfer_start:.3f}s; device free={free_bytes / 2**30:.2f} GiB, "
+                    f"total={total_bytes / 2**30:.2f} GiB"
+                )
+        else:
+            self.pre_weight.to_cuda()
+            self.post_weight.to_cuda()
+            self.transformer_weights.resident_blocks_to_cuda()
+            rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+            resident_count = len(self.transformer_weights.resident_block_indices)
+            if hasattr(torch_device_module, "mem_get_info"):
+                free_bytes, total_bytes = torch_device_module.mem_get_info()
+                logger.info(
+                    f"[QwenImage] Rank {rank}: prepared {resident_count}/{self.config['num_layers']} resident DiT blocks; "
+                    f"device free={free_bytes / 2**30:.2f} GiB, total={total_bytes / 2**30:.2f} GiB"
+                )
+
+    def finish_offload_weights(self):
+        """Finish one DiT pass while optionally retaining immutable weights."""
+        if not self.cpu_offload or not self._offload_weights_active:
+            return
+        if self._keep_model_weights_resident_on_this_rank():
+            torch_device_module.synchronize()
+            return
+        if self.offload_granularity == "block" and self.config.get("offload_persistent_resident_blocks", False):
+            torch_device_module.synchronize()
+            if hasattr(self.transformer_infer.offload_manager, "reset_slots"):
+                self.transformer_infer.offload_manager.reset_slots()
+            return
+        self.force_cleanup_offload_weights()
+
+    def force_cleanup_offload_weights(self):
+        """Release DiT-resident weights without copying immutable weights back to CPU."""
+        if not self.cpu_offload or not self._offload_weights_active:
+            return
+
+        torch_device_module.synchronize()
+        if self.offload_granularity == "model":
+            if self.config.get("qwen_image_model_offload_release_only", False):
+                release_start = time.perf_counter()
+                release_weight_module_device_tensors(self.pre_weight)
+                release_weight_module_device_tensors(self.transformer_weights)
+                release_weight_module_device_tensors(self.post_weight)
+                torch_device_module.empty_cache()
+                rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+                logger.info(
+                    f"[QwenImage] Rank {rank}: released full DiT device replica without D2H in "
+                    f"{time.perf_counter() - release_start:.3f}s"
+                )
+            else:
+                self.to_cpu()
+        else:
+            if hasattr(self.transformer_infer.offload_manager, "reset_slots"):
+                self.transformer_infer.offload_manager.reset_slots()
+            release_weight_module_device_tensors(self.pre_weight)
+            release_weight_module_device_tensors(self.post_weight)
+            self.transformer_weights.release_resident_blocks()
+        self._offload_weights_active = False
+
+    def _keep_model_weights_resident_on_this_rank(self):
+        return (
+            self.offload_granularity == "model"
+            and self.config.get("qwen_image_rank_aware_model_offload", False)
+            and dist.is_available()
+            and dist.is_initialized()
+            and dist.get_world_size() > 1
+            and dist.get_rank() != 0
+        )
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
@@ -94,7 +201,9 @@ class QwenImageTransformerModel(BaseTransformerModel):
     @torch.no_grad()
     def infer(self, inputs):
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0:
+            if self._offload_weights_active:
+                pass
+            elif self.offload_granularity == "model" and self.scheduler.step_index == 0:
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
@@ -148,7 +257,9 @@ class QwenImageTransformerModel(BaseTransformerModel):
             self.scheduler.noise_pred = noise_pred
 
         if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+            if self._offload_weights_active:
+                pass
+            elif self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
                 self.to_cpu()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cpu()
