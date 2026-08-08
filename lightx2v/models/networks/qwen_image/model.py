@@ -100,8 +100,7 @@ class QwenImageTransformerModel(BaseTransformerModel):
             if hasattr(torch_device_module, "mem_get_info"):
                 free_bytes, total_bytes = torch_device_module.mem_get_info()
                 logger.info(
-                    f"[QwenImage] Rank {rank}: prepared {resident_count}/{self.config['num_layers']} resident DiT blocks; "
-                    f"device free={free_bytes / 2**30:.2f} GiB, total={total_bytes / 2**30:.2f} GiB"
+                    f"[QwenImage] Rank {rank}: prepared {resident_count}/{self.config['num_layers']} resident DiT blocks; device free={free_bytes / 2**30:.2f} GiB, total={total_bytes / 2**30:.2f} GiB"
                 )
 
     def finish_offload_weights(self):
@@ -132,10 +131,7 @@ class QwenImageTransformerModel(BaseTransformerModel):
                 release_weight_module_device_tensors(self.post_weight)
                 torch_device_module.empty_cache()
                 rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
-                logger.info(
-                    f"[QwenImage] Rank {rank}: released full DiT device replica without D2H in "
-                    f"{time.perf_counter() - release_start:.3f}s"
-                )
+                logger.info(f"[QwenImage] Rank {rank}: released full DiT device replica without D2H in {time.perf_counter() - release_start:.3f}s")
             else:
                 self.to_cpu()
         else:
