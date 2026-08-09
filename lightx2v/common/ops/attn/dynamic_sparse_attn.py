@@ -12,9 +12,11 @@ from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordin
 
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
+    from flash_attn.cute.block_sparsity import BlockSparseTensorsTorch
 except ImportError:
     logger.info("flash_attn.cute not found, please install flashattention4 first")
     flash_attn_func_v4 = None
+    BlockSparseTensorsTorch = None
 
 try:
     from sageattn3_sparse import sage3_block_sparse_attn
@@ -34,8 +36,14 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
     operator = "triton"
     per_block_mean = False
 
-    def __init__(self):
-        self.config = {}
+    def __init__(self, config=None):
+        self.config = dict(config or {})
+        self.sparsity_ratio = float(self.config.get("sparsity_ratio", type(self).sparsity_ratio))
+        self.operator = self.config.get("operator", type(self).operator)
+        self.per_block_mean = bool(self.config.get("per_block_mean", type(self).per_block_mean))
+
+        if not 0.0 <= self.sparsity_ratio < 1.0:
+            raise ValueError(f"dynamic sparse attention sparsity_ratio must be in [0, 1), got {self.sparsity_ratio}")
 
         self.arch = get_cuda_arch(torch.cuda.current_device())
         self.topk = 1 - self.sparsity_ratio
@@ -63,7 +71,7 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
 
-        logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
+        # logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
 
     def apply(
         self,
@@ -198,16 +206,19 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         full_block_idx, full_block_cnt = block_map_ordinal_lut_triton(sparse_map)
         mask_block_cnt = torch.zeros_like(full_block_cnt)
         mask_block_idx = torch.zeros_like(full_block_idx)
-
-        out, _ = flash_attn_func_v4(
-            q=q,
-            k=k,
-            v=v,
+        block_sparse_tensors = BlockSparseTensorsTorch(
             mask_block_cnt=mask_block_cnt,
             mask_block_idx=mask_block_idx,
             full_block_cnt=full_block_cnt,
             full_block_idx=full_block_idx,
             block_size=(self.BLKQ, self.BLKK),
+        )
+
+        out, _ = flash_attn_func_v4(
+            q=q,
+            k=k,
+            v=v,
+            block_sparse_tensors=block_sparse_tensors,
         )
         out = out.reshape(max_seqlen_q, -1)
         return out

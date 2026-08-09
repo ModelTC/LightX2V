@@ -1,4 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.common.ops.utils import move_transposed_weight_module_to_device
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 
 
@@ -40,7 +41,11 @@ class Flux2PreWeights(WeightModule):
     def to_cuda(self, non_blocking=True):
         for module in self._modules.values():
             if module is not None and hasattr(module, "to_cuda"):
-                module.to_cuda(non_blocking=non_blocking)
+                if self.mm_type == "Default":
+                    # The fast path assumes Default's 2-D transpose views; quantized layouts need their own to_cuda().
+                    move_transposed_weight_module_to_device(module, non_blocking=non_blocking)
+                else:
+                    module.to_cuda(non_blocking=non_blocking)
 
     def to_cpu(self, non_blocking=True):
         for module in self._modules.values():

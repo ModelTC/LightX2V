@@ -84,6 +84,21 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
 
+    def set_reuse(self, reuse):
+        if reuse and self.config["model_cls"] not in (
+            "wan2.1",
+            "wan2.1_distill",
+            "wan2.1_mean_flow_distill",
+            "wan2.2",
+            "wan2.2_moe",
+            "wan2.2_moe_distill",
+            "infinitetalk",
+        ):
+            raise NotImplementedError("Wan reuse currently supports Wan2.1, Wan2.2, and InfiniteTalk only")
+        if reuse and self.config["model_cls"] != "infinitetalk" and self.config["task"] not in ("t2v", "i2v"):
+            raise NotImplementedError(f"Wan reuse does not support task: {self.config['task']}")
+        super().set_reuse(reuse)
+
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
         if not self.supports_generic_warmup():
@@ -464,10 +479,32 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.end_run()
         return gen_video_final
 
+    def _reuse_key(self):
+        prompt = self.input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else self.input_info.prompt
+        reuse_key = (
+            prompt,
+            self.input_info.negative_prompt,
+            self.config["target_video_length"],
+        )
+        if self.config["task"] == "i2v":
+            reuse_key += (self.config.get("resize_mode"), tuple(self.input_info.image_path.split(",")))
+        else:
+            reuse_key += (tuple(self.input_info.target_shape),)
+        return reuse_key
+
     def _run_pipeline_local(self):
         if self.config["use_prompt_enhancer"]:
             self.input_info.prompt_enhanced = self.post_prompt_enhancer()
-        self.inputs = self.run_input_encoder()
+        if self.reuse:
+            self.inputs = self._get_reused_inputs()
+        else:
+            self.inputs = self.run_input_encoder()
+            if self.enable_reuse:
+                self._reuse_cache = {"reuse_key": self._reuse_key(), "inputs": self.inputs}
+        if self.enable_reuse and self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
+            # wan2.2 dense init_run clears this request's VAE output after scheduler.prepare; keep the cached container intact.
+            self.inputs = self.inputs.copy()
+            self.inputs["image_encoder_output"] = self.inputs["image_encoder_output"].copy()
         return self.run_main()
 
     def _run_pipeline_disagg_encoder(self):

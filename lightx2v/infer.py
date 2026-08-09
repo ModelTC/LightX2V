@@ -6,7 +6,9 @@ import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
+from lightx2v.models.networks.bagel.sensenova_tasks import OMNI_VISION_SUBTASK_CHOICES
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
+from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner  # noqa: F401
 from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: F401
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
 from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
@@ -18,6 +20,7 @@ from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import Hunyua
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2ARRunner, LTX2Runner  # noqa: F401
+from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
@@ -122,7 +125,9 @@ def main():
             "flux2_dev",
             "ltx2",
             "ltx2_ar",
+            "minimax_h3",
             "bagel",
+            "sensenova_vision",
             "seedvr2",
             "neopp",
             "motus",
@@ -140,22 +145,53 @@ def main():
     parser.add_argument(
         "--task",
         type=str,
-        choices=["t2v", "i2v", "t2t", "t2i", "ti2t", "ti2i", "i2i", "flf2v", "vace", "animate", "s2v", "rs2v", "t2av", "i2av", "i2va", "v2av", "ltx2_s2v", "sr", "recon", "i23d"],
+        choices=[
+            "t2v",
+            "i2v",
+            "t2t",
+            "t2i",
+            "ti2t",
+            "ti2i",
+            "i2i",
+            "flf2v",
+            "vace",
+            "animate",
+            "s2v",
+            "rs2v",
+            "t2av",
+            "i2av",
+            "l2av",
+            "fl2av",
+            "ref2av",
+            "i2va",
+            "v2av",
+            "ltx2_s2v",
+            "sr",
+            "recon",
+            "i23d",
+            "omni_vision_task",
+        ],
         default="t2v",
     )
     parser.add_argument("--support_tasks", type=str, nargs="+", default=[], help="Set supported tasks for the model")
+    parser.add_argument(
+        "--omni_vision_subtask",
+        type=str,
+        choices=OMNI_VISION_SUBTASK_CHOICES,
+        default=None,
+        help="SenseNova-Vision subtask used with --task omni_vision_task.",
+    )
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
     parser.add_argument("--warmup", action="store_true", help="Warm up the model before inference. Disabled by default.")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")
-
     parser.add_argument(
         "--image_path",
         type=str,
         default="",
-        help="The path to input image file(s), including HunyuanImage3 ti2t/ti2i. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
+        help="The path to input image file(s), including HunyuanImage3 ti2t/ti2i and MiniMax-H3 ref2av reference images. Multiple paths should be comma-separated. Example: 'path1.jpg,path2.jpg'",
     )
     parser.add_argument("--state_path", type=str, default="", help="The path to input robot state file for robot i2v/i2va inference.")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
@@ -163,7 +199,7 @@ def main():
         "--audio_path",
         type=str,
         default="",
-        help="Input audio path: Wan s2v / rs2v, or required for LTX-2 task ltx2_s2v.",
+        help="Input audio path: Wan s2v / rs2v, LTX-2 ltx2_s2v, or MiniMax-H3 ref2av reference audio. H3 accepts comma-separated paths.",
     )
     parser.add_argument("--image_strength", type=str, default="1.0", help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
     parser.add_argument(
@@ -275,7 +311,7 @@ def main():
         "--video_path",
         type=str,
         default=None,
-        help="input video path (for sr / v2v / v2av task). For v2av this is the pre-processed control/reference video (pose / canny / depth / motion-track for motion-transfer, or the degraded source video for ICEdit).",
+        help="Input video path for sr/v2v/v2av, or MiniMax-H3 ref2av reference video. H3 accepts comma-separated paths. For v2av this is the pre-processed control/reference video (pose / canny / depth / motion-track for motion-transfer, or the degraded source video for ICEdit).",
     )
     parser.add_argument("--sr_ratio", type=float, default=2.0, help="super resolution ratio for sr task")
     parser.add_argument(
@@ -291,8 +327,6 @@ def main():
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
     args = parser.parse_args()
-    # validate_task_arguments(args)
-
     seed_all(args.seed)
 
     # set config

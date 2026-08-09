@@ -16,25 +16,75 @@ from .template import RopeTemplate, broadcast_freqs
 @ROPE_REGISTER("torch_complex_rope")
 class TorchComplexRope(RopeTemplate):
     def __init__(self, layout="interleaved", compute_dtype: torch.dtype = torch.float32):
-        if layout != "interleaved":
-            raise ValueError("TorchComplexRope only supports interleaved layout.")
         super().__init__(layout=layout, compute_dtype=compute_dtype)
 
+    def prepare_freqs(self, freqs, rotary_dim: int | None = None):
+        if torch.is_tensor(freqs):
+            if torch.is_complex(freqs):
+                return freqs
+            if rotary_dim is None:
+                raise ValueError("rotary_dim is required for real RoPE frequencies.")
+            if freqs.shape[-1] != rotary_dim:
+                raise ValueError(f"Concatenated cos-sin cache must have last dim {rotary_dim}, got {freqs.shape[-1]}.")
+            cos, sin = freqs.chunk(2, dim=-1)
+        elif isinstance(freqs, tuple):
+            if len(freqs) != 2:
+                raise ValueError(f"Expected a (cos, sin) tuple, got {len(freqs)} entries.")
+            if rotary_dim is None:
+                raise ValueError("rotary_dim is required for tuple RoPE frequencies.")
+            cos, sin = freqs
+            if cos.shape != sin.shape:
+                raise ValueError(f"RoPE cos/sin shapes must match, got cos={cos.shape}, sin={sin.shape}.")
+            if cos.shape[-1] == rotary_dim:
+                if self.layout == "interleaved":
+                    cos, sin = cos[..., 0::2], sin[..., 0::2]
+                else:
+                    cos, sin = cos[..., : rotary_dim // 2], sin[..., : rotary_dim // 2]
+            elif cos.shape[-1] != rotary_dim // 2:
+                raise ValueError(f"RoPE frequency width must be {rotary_dim // 2} or {rotary_dim}, got {cos.shape[-1]}.")
+        else:
+            raise TypeError(f"Unsupported RoPE frequency type: {type(freqs)!r}")
+        return torch.complex(cos.to(self.compute_dtype), sin.to(self.compute_dtype)).contiguous()
+
     def apply(self, q: torch.Tensor, k: torch.Tensor, freqs, **kwargs):
-        if q.ndim == 3 and k.ndim == 3 and self.compute_dtype == torch.float32 and torch.is_complex(freqs) and use_magi_custom_ops() and magi_register_custom_op is not None and not kwargs:
+        rotary_dim = kwargs.get("rotary_dim", q.shape[-1])
+        freqs = self.prepare_freqs(freqs, rotary_dim=rotary_dim)
+        if (
+            q.ndim == 3
+            and k.ndim == 3
+            and self.compute_dtype == torch.float32
+            and self.layout == "interleaved"
+            and torch.is_tensor(freqs)
+            and torch.is_complex(freqs)
+            and use_magi_custom_ops()
+            and magi_register_custom_op is not None
+            and not kwargs
+        ):
             return torch.ops.lightx2v.rope_torch_complex(q, k, freqs)
         return super().apply(q, k, freqs, **kwargs)
 
-    def apply_single(self, x: torch.Tensor, freqs: torch.Tensor, rotary_dim: int | None = None, unsqueeze_dim: int = -2, **kwargs):
-        if not torch.is_complex(freqs):
-            raise TypeError("TorchComplexRope expects a complex frequency tensor.")
-        rotary_dim = rotary_dim or x.shape[-1]
+    def apply_single(self, x: torch.Tensor, freqs, rotary_dim: int | None = None, unsqueeze_dim: int = -2, **kwargs):
+        rotary_dim = x.shape[-1] if rotary_dim is None else rotary_dim
         if rotary_dim % 2:
             raise ValueError(f"rotary_dim must be even, got {rotary_dim}.")
+        freqs = self.prepare_freqs(freqs, rotary_dim=rotary_dim)
+        if not torch.is_tensor(freqs) or not torch.is_complex(freqs):
+            raise TypeError("TorchComplexRope expects a complex frequency tensor.")
         x_rot, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
-        x_complex = torch.view_as_complex(x_rot.to(self.compute_dtype).reshape(*x_rot.shape[:-1], -1, 2).contiguous())
+        x_float = x_rot.to(self.compute_dtype)
+        if self.layout == "interleaved":
+            x_pairs = x_float.reshape(*x_rot.shape[:-1], -1, 2)
+        else:
+            first, second = x_float.chunk(2, dim=-1)
+            x_pairs = torch.stack((first, second), dim=-1)
+        x_complex = torch.view_as_complex(x_pairs.contiguous())
         freqs = broadcast_freqs(freqs, x_complex, unsqueeze_dim)
-        output = torch.view_as_real(x_complex * freqs).flatten(-2).to(x.dtype)
+        output_pairs = torch.view_as_real(x_complex * freqs)
+        if self.layout == "interleaved":
+            output = output_pairs.flatten(-2)
+        else:
+            output = torch.cat((output_pairs[..., 0], output_pairs[..., 1]), dim=-1)
+        output = output.to(x.dtype)
         return torch.cat((output, x_pass), dim=-1) if x_pass.shape[-1] else output
 
 

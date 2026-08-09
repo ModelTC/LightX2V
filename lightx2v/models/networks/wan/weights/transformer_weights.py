@@ -842,6 +842,7 @@ class WanFFN(WeightModule):
                 mm_kwargs=ffn_mm_kwargs,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
+                mm_type_override=ffn_mm_type,
             ),
         )
         self.add_module(
@@ -859,6 +860,7 @@ class WanFFN(WeightModule):
                 mm_kwargs=ffn_mm_kwargs,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
+                mm_type_override=ffn_mm_type,
             ),
         )
 

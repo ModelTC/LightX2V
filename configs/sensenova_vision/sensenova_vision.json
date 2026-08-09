@@ -1,0 +1,27 @@
+{
+    "infer_steps": 50,
+    "timestep_shift": 4.0,
+    "rope_type": "torch_real_rope",
+    "inference_hyper": {
+        "cfg_text_scale": 4.0,
+        "cfg_img_scale": 1.0,
+        "cfg_interval": [0.0, 1.0],
+        "timestep_shift": 4.0,
+        "num_timesteps": 50,
+        "cfg_renorm_min": 1.0,
+        "cfg_renorm_type": "text_channel"
+    },
+    "text_temperature": 0.3,
+    "enable_vision_context": true,
+    "sensenova_source_path": "/data/nvme0/lhd_codes/sensenova-vision-v2",
+    "llm_config_update": {
+        "dtype": "bfloat16",
+        "freeze_und": false,
+        "is_causal": true,
+        "qk_norm": true,
+        "tie_word_embeddings": false,
+        "layer_module": "Qwen2MoTDecoderLayer",
+        "rope_scaling": null,
+        "sliding_window": null
+    }
+}

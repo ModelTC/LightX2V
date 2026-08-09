@@ -120,6 +120,7 @@ class InfiniteTalkRunner(WanRunner):
         self.cond_frame_cache = {}
         self.cond_video_fps = None
         self.cond_video_frame_count = None
+        self.stream_saved_video_needs_audio_remux = False
 
     def init_scheduler(self):
         self.scheduler = InfiniteTalkScheduler(self.config)
@@ -500,6 +501,15 @@ class InfiniteTalkRunner(WanRunner):
         self._write_sum_audio(input_data, speech)
         return [self._load_or_encode_audio(speech)]
 
+    def _reuse_key(self):
+        prompt = self.input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else self.input_info.prompt
+        return (
+            prompt,
+            self.input_info.negative_prompt,
+            tuple(self._sorted_person_items(self.input_data["cond_audio"])),
+            self.input_data.get("audio_type", "para"),
+        )
+
     def _close_cond_video_reader(self):
         if self.cond_video_reader is not None:
             del self.cond_video_reader
@@ -673,8 +683,7 @@ class InfiniteTalkRunner(WanRunner):
         logger.info(f"InfiniteTalk ref_target_masks built: human_num={human_num}, mask_shape={tuple(masks.shape)}")
         return masks
 
-    @ProfilingContext4DebugL2("Run Encoders")
-    def _run_input_encoder_local_s2v(self):
+    def _prepare_input_data(self):
         input_data = self._load_input_data()
         if self.input_info.prompt:
             input_data["prompt"] = self.input_info.prompt
@@ -689,7 +698,9 @@ class InfiniteTalkRunner(WanRunner):
         self.src_h, self.src_w, self.target_h, self.target_w = self._select_target_size(first_image)
         self.input_info.target_shape = [self.target_h, self.target_w]
 
-        full_audio_embs = self._prepare_audio_embeddings(input_data)
+    @ProfilingContext4DebugL2("Run Encoders")
+    def _run_input_encoder_local_s2v(self):
+        full_audio_embs = self._prepare_audio_embeddings(self.input_data)
         if any(audio_emb.shape[0] <= 0 for audio_emb in full_audio_embs):
             raise ValueError("InfiniteTalk audio embeddings must be non-empty.")
 
@@ -698,7 +709,6 @@ class InfiniteTalkRunner(WanRunner):
             "text_encoder_output": text_encoder_output,
             "full_audio_embs": full_audio_embs,
             "human_num": len(full_audio_embs),
-            "seed": self.input_info.seed,
         }
 
     def _slice_audio_embeddings(self, full_audio_embs, audio_start_idx, audio_end_idx):
@@ -729,6 +739,7 @@ class InfiniteTalkRunner(WanRunner):
     def _run_dit_clip(self, dit_inputs):
         infer_steps = self.scheduler.infer_steps
         for step_index in range(infer_steps):
+            self.check_stop()
             logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
             with ProfilingContext4DebugL1("step_pre"):
                 self.scheduler.step_pre(step_index)
@@ -799,7 +810,7 @@ class InfiniteTalkRunner(WanRunner):
         self.full_audio_embs = list(self.inputs["full_audio_embs"])
         self.human_num = int(self.inputs["human_num"])
         self.expected_frames = self._resolve_expected_frames()
-        self.seed = self.scheduler.seed_everything(self.inputs["seed"])
+        self.seed = self.scheduler.seed_everything(self.input_info.seed)
         logger.info(f"InfiniteTalk seed: {self.seed}")
         logger.info(f"InfiniteTalk expected_frames: {self.expected_frames}, fps: {self.target_fps}, duration: {self.expected_frames / self.target_fps:.3f}s")
 
@@ -948,8 +959,10 @@ class InfiniteTalkRunner(WanRunner):
         for segment_idx in range(self.video_segment_num):
             logger.info(f"start InfiniteTalk segment {segment_idx + 1}/{self.video_segment_num}")
             with ProfilingContext4DebugL1(f"segment end2end {segment_idx + 1}/{self.video_segment_num}"):
+                self.check_stop()
                 self.init_run_segment(segment_idx)
                 latents = self.run_segment(segment_idx)
+                self.check_stop()
                 self.end_run_segment(segment_idx, latents)
 
         if self.stream_save_video:
@@ -962,6 +975,7 @@ class InfiniteTalkRunner(WanRunner):
     def process_images_after_vae_decoder(self):
         if self.stream_save_video:
             if self.input_info.save_result_path is not None and is_main_process():
+                self.stream_saved_video_needs_audio_remux = True
                 logger.info(f"Video saved to {self.input_info.save_result_path}")
             return {"video": None}
 
@@ -1077,6 +1091,19 @@ class InfiniteTalkRunner(WanRunner):
         if self.va_controller is not None:
             self.va_controller.clear()
             self.va_controller = None
+        if self.stream_saved_video_needs_audio_remux:
+            out_path = self.input_info.save_result_path
+            mux_audio = self._resolve_mux_audio_path()
+            try:
+                if not mux_audio or not os.path.isfile(mux_audio):
+                    audio_input = getattr(self.input_info, "audio_path", None) or self.config.get("audio_path", "")
+                    raise FileNotFoundError(f"InfiniteTalk mux audio is unavailable for audio input: {audio_input}")
+                if not os.path.isfile(out_path):
+                    raise FileNotFoundError(f"InfiniteTalk stream video is unavailable for audio mux: {out_path}")
+                logger.info(f"Muxing InfiniteTalk stream audio {mux_audio} into {out_path}")
+                self._mux_audio(out_path, mux_audio)
+            finally:
+                self.stream_saved_video_needs_audio_remux = False
         self._remove_video_audio_path()
         self._clear_cond_frame_source()
         self._remove_cond_video_temp_path()
@@ -1097,8 +1124,20 @@ class InfiniteTalkRunner(WanRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
+        self.stream_saved_video_needs_audio_remux = False
         try:
-            self.inputs = self.run_input_encoder()
+            self._prepare_input_data()
+            if self.reuse:
+                self.inputs = self._get_reused_inputs()
+                self._write_sum_audio(self.input_data, self._reuse_cache["video_audio_array"])
+            else:
+                self.inputs = self.run_input_encoder()
+                if self.enable_reuse:
+                    self._reuse_cache = {
+                        "reuse_key": self._reuse_key(),
+                        "inputs": self.inputs,
+                        "video_audio_array": self.video_audio_array,
+                    }
             result = self.run_main()
         finally:
             self.end_run()

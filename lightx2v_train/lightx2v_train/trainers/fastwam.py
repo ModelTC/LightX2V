@@ -7,9 +7,9 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 from PIL import Image, ImageDraw
-from diffusers.optimization import get_scheduler
 from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
+from torch.optim.lr_scheduler import ConstantLR, CosineAnnealingLR, LinearLR, SequentialLR
 
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import (
@@ -87,6 +87,7 @@ class FastWAMTrainer:
         self.save_final = bool(self.training_config.get("save_final", True))
         self.lr_scheduler_name = self.training_config.get("lr_scheduler", "constant")
         self.lr_warmup_iters = int(self.training_config.get("lr_warmup_iters", 0))
+        self.lr_eta_min_ratio = float(self.training_config.get("lr_eta_min_ratio", 0.01))
         self.train_log_every_iters = max(1, int(self.logging_config.get("train_log_every_iters", 10)))
 
         zero1_config = self.config.get("distributed", {}).get("zero1", {})
@@ -152,6 +153,39 @@ class FastWAMTrainer:
             logger.info("[optimizer] using AdamW without optimizer-state sharding")
         return torch.optim.AdamW(self.trainable_params, **optimizer_kwargs)
 
+    def _build_lr_scheduler(self):
+        # LinearLR changes the optimizer's current LR during construction. Capture
+        # the configured base LR first so cosine eta_min is not scaled by warmup.
+        base_lr = float(self.optimizer.param_groups[0]["lr"])
+        remaining_iters = self.max_train_iters - self.lr_warmup_iters
+        if self.lr_scheduler_name == "cosine":
+            main_scheduler = CosineAnnealingLR(
+                self.optimizer,
+                T_max=remaining_iters,
+                eta_min=base_lr * self.lr_eta_min_ratio,
+            )
+        else:
+            main_scheduler = ConstantLR(
+                self.optimizer,
+                factor=1.0,
+                total_iters=remaining_iters,
+            )
+
+        if self.lr_warmup_iters == 0:
+            return main_scheduler
+
+        warmup_scheduler = LinearLR(
+            self.optimizer,
+            start_factor=1.0 / self.lr_warmup_iters,
+            end_factor=1.0,
+            total_iters=self.lr_warmup_iters,
+        )
+        return SequentialLR(
+            self.optimizer,
+            schedulers=[warmup_scheduler, main_scheduler],
+            milestones=[self.lr_warmup_iters],
+        )
+
     def setup(self, resume_ckpt_path=None):
         self.model.set_dit_only_trainable()
         self.model.log_model_structure()
@@ -160,13 +194,7 @@ class FastWAMTrainer:
             raise RuntimeError("FastWAM has no trainable parameters.")
 
         self.optimizer = self._build_optimizer()
-        self.lr_scheduler = get_scheduler(
-            self.lr_scheduler_name,
-            optimizer=self.optimizer,
-            num_warmup_steps=self.lr_warmup_iters,
-            num_training_steps=self.max_train_iters,
-        )
-
+        self.lr_scheduler = self._build_lr_scheduler()
         self.train_module = self.model.unwrap_module()
         self.ddp_enabled = False
         if is_distributed():

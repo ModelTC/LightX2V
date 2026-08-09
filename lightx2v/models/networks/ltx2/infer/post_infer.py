@@ -9,9 +9,6 @@ This module handles output processing including:
 
 import torch
 
-from lightx2v.models.networks.ltx2.infer.triton_ops import fused_rmsnorm_modulate
-from lightx2v.models.networks.ltx2.infer.utils import modulate_with_rmsnorm_torch_naive
-
 
 def to_denoised(
     sample: torch.Tensor,
@@ -45,10 +42,6 @@ class LTX2PostInfer:
         """
         self.config = config
         self.clean_cuda_cache = config.get("clean_cuda_cache", False)
-        if config.get("modulate_with_rmsnorm", "triton") == "triton":
-            self.modulate_with_rmsnorm_func = fused_rmsnorm_modulate
-        else:
-            self.modulate_with_rmsnorm_func = modulate_with_rmsnorm_torch_naive
 
     def set_scheduler(self, scheduler):
         """Set the scheduler for inference."""
@@ -76,6 +69,7 @@ class LTX2PostInfer:
         """
         vx = self._process_output(
             weights.scale_shift_table.tensor,
+            weights.norm_out,
             weights.proj_out,
             vx,
             video_embedded_timestep,
@@ -83,6 +77,7 @@ class LTX2PostInfer:
 
         ax = self._process_output(
             weights.audio_scale_shift_table.tensor,
+            weights.audio_norm_out,
             weights.audio_proj_out,
             ax,
             audio_embedded_timestep,
@@ -103,6 +98,7 @@ class LTX2PostInfer:
     def _process_output(
         self,
         scale_shift_table: torch.Tensor,
+        norm_out,
         proj_out,
         x: torch.Tensor,
         embedded_timestep: torch.Tensor,
@@ -112,6 +108,7 @@ class LTX2PostInfer:
 
         Args:
             scale_shift_table: Scale-shift table, shape [2, hidden_dim]
+            norm_out: Registered output LayerNorm module
             proj_out: Output projection layer
             x: Input tensor, shape [seq_len, hidden_dim]
             embedded_timestep: Embedded timestep, shape [seq_len, hidden_dim]
@@ -125,7 +122,7 @@ class LTX2PostInfer:
         # Result shape: [seq_len, 2, hidden_dim]
         scale_shift_values = scale_shift_table[None, :, :].to(device=x.device, dtype=x.dtype) + embedded_timestep[:, None, :]
         shift, scale = scale_shift_values[:, 0], scale_shift_values[:, 1]
-        x = torch.nn.functional.layer_norm(x, (x.shape[-1],), eps=1e-6)
+        x = norm_out.apply(x)
         x = x * (1 + scale) + shift
         x = proj_out.apply(x)
 

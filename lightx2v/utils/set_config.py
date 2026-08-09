@@ -35,6 +35,28 @@ def get_default_config():
     return default_config
 
 
+def validate_model_task_args(args):
+    """Validate model/task combinations before assembling the runtime config."""
+    task = getattr(args, "task", None)
+    model_cls = getattr(args, "model_cls", None)
+    has_omni_vision_subtask = hasattr(args, "omni_vision_subtask")
+    omni_vision_subtask = getattr(args, "omni_vision_subtask", None)
+
+    if task == "omni_vision_task":
+        if model_cls != "sensenova_vision":
+            raise ValueError("--task omni_vision_task requires --model_cls sensenova_vision")
+        # Offline inference exposes this argument and must select one subtask.
+        # The resident server omits it because each request chooses a subtask
+        # after the complete model has been loaded.
+        if has_omni_vision_subtask and not omni_vision_subtask:
+            raise ValueError("--omni_vision_subtask is required when --task omni_vision_task")
+    else:
+        if model_cls == "sensenova_vision":
+            raise ValueError("--model_cls sensenova_vision requires --task omni_vision_task")
+        if omni_vision_subtask:
+            raise ValueError("--omni_vision_subtask is only valid with --task omni_vision_task")
+
+
 def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS and v is not None})
@@ -85,6 +107,31 @@ def auto_calc_config(config):
         pass
     elif config["model_cls"] == "hidream_o1_image":
         pass
+    elif config["model_cls"] == "sensenova_vision":
+        llm_config_path = os.path.join(config["model_path"], "llm_config.json")
+        vit_config_path = os.path.join(config["model_path"], "vit_config.json")
+        missing = [path for path in (llm_config_path, vit_config_path) if not os.path.isfile(path)]
+        if missing:
+            raise FileNotFoundError(f"SenseNova-Vision model_path must contain llm_config.json and vit_config.json; missing: {missing}")
+        with open(llm_config_path, "r") as f:
+            config["llm_config"] = json.load(f)
+        with open(vit_config_path, "r") as f:
+            config["vit_config"] = json.load(f)
+
+        # SenseNova's root config.json is project metadata, not a Bagel model
+        # config. Assemble the shared Bagel structure explicitly instead.
+        config["vae_config"] = {"z_channels": 16, "downsample": 8}
+        config["visual_gen"] = True
+        config["visual_und"] = True
+        config["latent_patch_size"] = 2
+        config["max_latent_size_update"] = 64
+        config["vit_max_num_patch_per_side"] = 70
+        config["connector_act"] = "gelu_pytorch_tanh"
+        config["interpolate_pos"] = False
+        config["enable_vision_context"] = True
+        sensenova_source_path = os.getenv("SENSENOVA_SOURCE_PATH", "").strip()
+        if sensenova_source_path:
+            config["sensenova_source_path"] = sensenova_source_path
     elif config["model_cls"] == "wan2.2_s2v":
         config_path = os.path.join(config["model_path"], "config.json")
         if os.path.exists(config_path):
@@ -179,6 +226,34 @@ def auto_calc_config(config):
         config.setdefault("vae_scale_factor_spatial", 8)
         config.setdefault("vae_scale_factor_temporal", 4)
         config.setdefault("vae_scale_factor", 8)
+    elif config["model_cls"] == "minimax_h3":
+        supported_tasks = {"t2av", "i2av", "l2av", "fl2av", "ref2av"}
+        task = config.get("task")
+        if task not in supported_tasks:
+            raise ValueError(f"MiniMax-H3 supports {sorted(supported_tasks)}, got {task!r}")
+        transformer_subfolder = "transformer_ref" if task == "ref2av" else "transformer"
+        transformer_path = os.path.join(config["model_path"], transformer_subfolder)
+        transformer_config_path = os.path.join(transformer_path, "config.json")
+        if not os.path.isfile(transformer_config_path):
+            raise FileNotFoundError(f"MiniMax-H3 transformer config not found: {transformer_config_path}")
+        with open(transformer_config_path, "r") as f:
+            model_config = json.load(f)
+        config.update(model_config)
+        config["dit_original_ckpt"] = transformer_path
+        if config.get("dit_quantized_ckpt"):
+            config["dit_quantized"] = True
+            config["dit_quant_scheme"] = {
+                "fp8": "fp8-q8f",
+                "int8": "int8-q8f",
+            }.get(config.get("dit_quant_scheme"), config.get("dit_quant_scheme", "Default"))
+        config["enable_cfg"] = False
+        config["fps"] = 24
+        config["target_fps"] = 24
+        config["vae_spatial_scale_factor"] = 16
+        config["vae_scale_factor"] = 16
+        config.setdefault("video_flow_shift", 12.0)
+        config.setdefault("audio_flow_shift", 3.0)
+        config.setdefault("audio_sampling_rate", 32000)
     else:
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
@@ -350,7 +425,7 @@ def auto_calc_config(config):
         config["target_video_length"] = (latent_frames - 1) * temporal_stride + 1
         logger.info(f"Auto-set LingBot-VA target_video_length={config['target_video_length']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
 
-    if config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
+    if config["model_cls"] != "minimax_h3" and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and "target_video_length" in config and "vae_stride" in config:
         if config["target_video_length"] % config["vae_stride"][0] != 1:
             logger.warning(f"`num_frames - 1` has to be divisible by {config['vae_stride'][0]}. Rounding to the nearest number.")
             config["target_video_length"] = config["target_video_length"] // config["vae_stride"][0] * config["vae_stride"][0] + 1
@@ -376,6 +451,11 @@ def auto_calc_config(config):
         config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
         config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
         config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
+    if config["model_cls"] == "minimax_h3":
+        # The generic Diffusers-VAE heuristic above counts six encoder stages
+        # and would incorrectly derive 32. H3 downsamples space by exactly 16.
+        config["vae_spatial_scale_factor"] = 16
+        config["vae_scale_factor"] = 16
     if config["model_cls"] == "cosmos3" and os.path.exists(os.path.join(config["model_path"], "sound_tokenizer", "config.json")):
         with open(os.path.join(config["model_path"], "sound_tokenizer", "config.json"), "r") as f:
             sound_config = json.load(f)
@@ -386,6 +466,7 @@ def auto_calc_config(config):
 
 
 def set_config(args):
+    validate_model_task_args(args)
     config = set_args2config(args)
     config = auto_calc_config(config)
     return config

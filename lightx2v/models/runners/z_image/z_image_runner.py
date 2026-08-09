@@ -160,6 +160,7 @@ class ZImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
+        self.input_info.original_size.clear()
         image_paths_list = [image_path.strip() for image_path in self.input_info.image_path.split(",") if image_path.strip()]
         if len(image_paths_list) != 1:
             raise ValueError(f"z-image i2i currently supports exactly one input image, got {len(image_paths_list)}.")

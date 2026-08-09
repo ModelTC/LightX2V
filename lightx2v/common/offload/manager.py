@@ -18,6 +18,7 @@ class WeightAsyncStreamManager(object):
         self.need_init_first_buffer = True
         self.lazy_load = False
         torch_version = parse(torch.__version__.split("+")[0])
+        # Legacy name: this is the active device backend's weight-loading stream, not a CUDA-only stream.
         if AI_DEVICE == "cuda" and torch_version >= parse("2.7"):
             self.cuda_load_stream = torch_device_module.Stream(priority=1)
             self.compute_stream = torch_device_module.Stream(priority=1)

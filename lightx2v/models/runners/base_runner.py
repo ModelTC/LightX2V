@@ -20,6 +20,9 @@ class BaseRunner(ABC):
         self.config = config
         self.vae_encoder_need_img_original = False
         self.input_info = None
+        self.enable_reuse = config.get("enable_reuse", False)
+        self.reuse = False
+        self._reuse_cache = None
         self._gc_frozen = False  # one-shot guard for _maybe_freeze_gc()
         self._init_modules_depth = 0
         self._warmup_done = False
@@ -64,6 +67,25 @@ class BaseRunner(ABC):
         """Reject explicit warmup when a runner has no implementation."""
         if self.config.get("warmup", False):
             raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
+
+    def set_reuse(self, reuse):
+        if reuse and not self.enable_reuse:
+            raise ValueError(f"This {type(self).__name__} service does not enable reuse")
+        if reuse and self.config.get("disagg_mode"):
+            raise NotImplementedError(f"{type(self).__name__} reuse does not support disaggregated inference")
+        self.reuse = reuse
+
+    def _reuse_key(self):
+        raise NotImplementedError
+
+    def _get_reused_inputs(self):
+        reuse_cache = self._reuse_cache
+        if reuse_cache is None:
+            raise RuntimeError("No previous successful request is available for reuse")
+        if self._reuse_key() != reuse_cache["reuse_key"]:
+            raise ValueError("Reuse inputs must match the previous successful request")
+        logger.info("[Reuse] Reusing the previous request's input encoder output")
+        return reuse_cache["inputs"]
 
     def _maybe_freeze_gc(self):
         """Move the steady-state object graph into the GC's permanent generation once."""
