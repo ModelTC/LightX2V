@@ -82,15 +82,6 @@ class WeightAsyncStreamManager(object):
             else:
                 self.cuda_buffers[1].load_state_dict(blocks[block_idx].state_dict(), block_idx, adapter_block_idx)
 
-    def get_block_state_dict(self, block_idx, blocks):
-        if hasattr(self, "cpu_buffers"):
-            raise RuntimeError("CUDA Graph block offload does not support lazy-loaded CPU buffers")
-        return blocks[block_idx].state_dict()
-
-    def load_block_to_buffer(self, buffer_idx, block_idx, blocks, adapter_block_idx=None):
-        destination = self.get_block_state_dict(block_idx, blocks)
-        self.cuda_buffers[buffer_idx].load_state_dict(destination, block_idx, adapter_block_idx)
-
     def prefetch_phase(self, block_idx, phase_idx, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.cuda_load_stream):
             if hasattr(self, "cpu_buffers"):
