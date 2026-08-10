@@ -9,6 +9,7 @@ from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
 from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
     TEXT_TAG,
@@ -47,6 +48,20 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
+
+
+def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
+    """Build H3 and merge LoRA using the same lifecycle as Wan."""
+    if config.get("lora_dynamic_apply", False):
+        raise ValueError("MiniMax-H3 currently supports load-time LoRA merging; set lora_dynamic_apply=false")
+    if config.get("dit_quantized", False):
+        raise ValueError("MiniMax-H3 merged LoRA inference requires original, non-quantized DiT weights")
+    if config.get("lazy_load", False):
+        raise ValueError("MiniMax-H3 lazy loading does not support LoRA merging")
+
+    model = MiniMaxH3Model(**model_kwargs)
+    MiniMaxH3LoraAdapter(model).apply_lora(lora_configs)
+    return model
 
 
 @RUNNER_REGISTER("minimax_h3")
@@ -152,11 +167,19 @@ class MiniMaxH3Runner(DefaultRunner):
         self.video_vae, self.audio_vae = self.load_vae()
 
     def load_transformer(self):
-        return MiniMaxH3Model(
-            model_path=self.config["model_path"],
-            config=self.config,
-            device=self.init_device,
-        )
+        model_kwargs = {
+            "model_path": self.config["model_path"],
+            "config": self.config,
+            "device": self.init_device,
+        }
+        lora_configs = self.config.get("lora_configs")
+        if lora_configs:
+            return build_minimax_h3_model_with_lora(
+                self.config,
+                model_kwargs,
+                lora_configs,
+            )
+        return MiniMaxH3Model(**model_kwargs)
 
     def load_text_encoder(self):
         return [MiniMaxH3Qwen3VLTextEncoder(self.config)]

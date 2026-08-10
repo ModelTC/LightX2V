@@ -55,8 +55,8 @@ class MiniMaxH3Model(BaseTransformerModel):
                 raise ValueError("MiniMax-H3 quantized inference requires dit_quantized_ckpt")
         elif config.get("dit_quant_scheme", "Default") != "Default":
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")
-        if config.get("lora_configs"):
-            raise NotImplementedError("MiniMax-H3 LoRA loading is not implemented yet")
+        if config.get("lora_dynamic_apply", False):
+            raise NotImplementedError("MiniMax-H3 currently supports load-time LoRA merging; set lora_dynamic_apply=false")
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("MiniMax-H3 supports model and block CPU offload")
 
