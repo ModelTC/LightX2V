@@ -2522,6 +2522,14 @@ class MMWeightTP(MMWeightTemplate):
         )
         self._row_split_bias = None
 
+    def _extract_row_split_bias(self, clone=False):
+        if self.split_dim != "row":
+            return
+        bias = getattr(self._mm, "bias", None)
+        if bias is not None:
+            self._row_split_bias = bias.clone() if clone else bias
+            self._mm.bias = None
+
     def load(self, weight_dict):
         """Load weights using internal MMWeight's load method.
 
@@ -2534,8 +2542,34 @@ class MMWeightTP(MMWeightTemplate):
         """
         self._mm.load(weight_dict)
         if self.split_dim == "row" and self.bias_name is not None and self.bias_name in weight_dict:
-            self._row_split_bias = self._mm.bias.clone()
-            self._mm.bias = None
+            # Preserve the original resident-weight behavior. Buffer-only
+            # modules do not have a materialized bias yet and are handled when
+            # load_state_dict fills the buffer.
+            self._extract_row_split_bias(clone=True)
+
+    def state_dict(self, destination=None):
+        return self._mm.state_dict(destination)
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        result = self._mm.load_state_dict(destination, block_index, adapter_block_index)
+        self._extract_row_split_bias()
+        return result
+
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        result = self._mm.load_state_dict_from_disk(block_index, adapter_block_index)
+        self._extract_row_split_bias()
+        return result
+
+    def to_cuda(self, non_blocking=False):
+        result = self._mm.to_cuda(non_blocking)
+        self._extract_row_split_bias()
+        return result
+
+    def to_cpu(self, non_blocking=False):
+        if self._row_split_bias is not None:
+            self._mm.bias = self._row_split_bias
+            self._row_split_bias = None
+        return self._mm.to_cpu(non_blocking)
 
     def apply(self, input_tensor):
         """Apply matrix multiplication with tensor parallel support."""
