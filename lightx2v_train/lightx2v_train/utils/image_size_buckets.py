@@ -39,23 +39,14 @@ def parse_image_size_buckets(
     for index, entry in enumerate(entries):
         entry_path = f"{config_path}[{index}]"
         if not isinstance(entry, Mapping):
-            raise TypeError(
-                f"{entry_path} must be {{'value': [...]}} or "
-                "{'value': [...], 'ratio': number}; legacy bare lists are not supported."
-            )
+            raise TypeError(f"{entry_path} must be {{'value': [...]}} or {{'value': [...], 'ratio': number}}; legacy bare lists are not supported.")
         keys = set(entry)
         if keys not in ({"value"}, {"value", "ratio"}):
-            raise ValueError(
-                f"{entry_path} must contain exactly 'value' or 'value' and 'ratio', "
-                f"got keys {sorted(keys)}."
-            )
+            raise ValueError(f"{entry_path} must contain exactly 'value' or 'value' and 'ratio', got keys {sorted(keys)}.")
 
         value = entry["value"]
         if not isinstance(value, list) or len(value) not in {2, 3}:
-            raise ValueError(
-                f"{entry_path}.value must be [height, width] or "
-                f"[prefix, height, width], got {value!r}."
-            )
+            raise ValueError(f"{entry_path}.value must be [height, width] or [prefix, height, width], got {value!r}.")
         if any(not isinstance(item, Integral) or isinstance(item, bool) for item in value):
             raise TypeError(f"{entry_path}.value must contain integers, got {value!r}.")
         normalized_value = tuple(int(item) for item in value)
@@ -76,15 +67,10 @@ def parse_image_size_buckets(
         bucket = ImageSizeBucket(value=normalized_value, ratio=ratio)
         if bucket.spatial_size in spatial_sizes:
             height, width = bucket.spatial_size
-            raise ValueError(
-                f"{config_path} contains duplicate spatial bucket {height}x{width}."
-            )
+            raise ValueError(f"{config_path} contains duplicate spatial bucket {height}x{width}.")
         spatial_sizes.add(bucket.spatial_size)
         buckets.append(bucket)
 
     if len(ratio_modes) > 1:
-        raise ValueError(
-            f"{config_path} cannot mix entries with and without ratio; "
-            "use one schema consistently."
-        )
+        raise ValueError(f"{config_path} cannot mix entries with and without ratio; use one schema consistently.")
     return buckets

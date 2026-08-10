@@ -433,8 +433,6 @@ class LTXDistillationCapability(GenericDistillationCapability):
             return (1, *shape)
         if len(shape) == expected:
             if shape[0] != 1:
-                raise ValueError(
-                    f"training.dmd.{name} must begin with singleton dimension 1, got {shape}."
-                )
+                raise ValueError(f"training.dmd.{name} must begin with singleton dimension 1, got {shape}.")
             return shape
         raise ValueError(f"training.dmd.{name} has unsupported shape {shape}.")

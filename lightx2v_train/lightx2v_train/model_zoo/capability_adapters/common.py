@@ -30,10 +30,7 @@ def _require_single_prompt(prompt):
         return True
     prompts = list(prompt)
     if len(prompts) != 1:
-        raise ValueError(
-            "Training requires exactly one prompt per rank; "
-            f"physical batch sizes greater than 1 are not supported, got {len(prompts)} prompts."
-        )
+        raise ValueError(f"Training requires exactly one prompt per rank; physical batch sizes greater than 1 are not supported, got {len(prompts)} prompts.")
     return False
 
 
@@ -50,10 +47,7 @@ def _negative_prompt(conditioning, fallback, scalar=False):
     elif len(prompts) == 1:
         prompt = prompts[0]
     else:
-        raise ValueError(
-            "Training requires exactly one negative prompt per rank; "
-            f"got {len(prompts)} negative prompts."
-        )
+        raise ValueError(f"Training requires exactly one negative prompt per rank; got {len(prompts)} negative prompts.")
     prompt = prompt if isinstance(prompt, str) and prompt.strip() else fallback
     return prompt if scalar else [prompt]
 
@@ -61,10 +55,7 @@ def _negative_prompt(conditioning, fallback, scalar=False):
 def _require_singleton_tensor(value, name):
     if not torch.is_tensor(value) or value.ndim == 0 or value.shape[0] != 1:
         shape = tuple(value.shape) if torch.is_tensor(value) else type(value).__name__
-        raise ValueError(
-            f"{name} must have leading dimension 1; physical batch sizes greater "
-            f"than 1 are not supported, got {shape}."
-        )
+        raise ValueError(f"{name} must have leading dimension 1; physical batch sizes greater than 1 are not supported, got {shape}.")
     return value
 
 
@@ -269,38 +260,21 @@ class GenericDistillationCapability(BoundCapability, DistillationCapability):
         width = int(broadcast(width))
 
         if image_sizes:
-            configured_buckets = {
-                bucket.spatial_size
-                for bucket in parse_image_size_buckets(image_sizes)
-            }
+            configured_buckets = {bucket.spatial_size for bucket in parse_image_size_buckets(image_sizes)}
             if (height, width) not in configured_buckets:
-                configured = ", ".join(
-                    f"{bucket_height}x{bucket_width}"
-                    for bucket_height, bucket_width in sorted(configured_buckets)
-                )
-                raise ValueError(
-                    "Image DMD sample size "
-                    f"{height}x{width} is not in training.dmd.image_sizes: "
-                    f"[{configured}]."
-                )
+                configured = ", ".join(f"{bucket_height}x{bucket_width}" for bucket_height, bucket_width in sorted(configured_buckets))
+                raise ValueError(f"Image DMD sample size {height}x{width} is not in training.dmd.image_sizes: [{configured}].")
 
         spatial_scale = int(self.model.vae_scale_factor)
         size_multiple = spatial_scale * 2
         if height % size_multiple or width % size_multiple:
-            raise ValueError(
-                "Image DMD target_height and target_width must be divisible by "
-                f"the model image size multiple {size_multiple}, got "
-                f"{height}x{width}."
-            )
+            raise ValueError(f"Image DMD target_height and target_width must be divisible by the model image size multiple {size_multiple}, got {height}x{width}.")
         return self.model.dmd_latent_shape(height, width)
 
     @staticmethod
     def _target_dimension(meta, key):
         if key not in meta:
-            raise KeyError(
-                "Image DMD prompt-only samples require meta.target_height and "
-                f"meta.target_width; missing {key}. target_image is not used."
-            )
+            raise KeyError(f"Image DMD prompt-only samples require meta.target_height and meta.target_width; missing {key}. target_image is not used.")
         value = meta[key]
         if torch.is_tensor(value):
             values = value.detach().reshape(-1).tolist()
@@ -310,9 +284,7 @@ class GenericDistillationCapability(BoundCapability, DistillationCapability):
             values = [value]
         values = [int(item) for item in values]
         if len(values) != 1:
-            raise ValueError(
-                f"Image DMD requires exactly one {key} value per rank, got {values}."
-            )
+            raise ValueError(f"Image DMD requires exactly one {key} value per rank, got {values}.")
         if any(item <= 0 for item in values):
             raise ValueError(f"Image DMD {key} must be positive, got {values}.")
         return values[0]

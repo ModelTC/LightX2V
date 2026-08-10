@@ -11,8 +11,8 @@ from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import ConstantLR, CosineAnnealingLR, LinearLR, SequentialLR
 
-from lightx2v_train.model_capabilities import WorldActionTrainingCapability
 from lightx2v_train.data.utils import require_singleton_dataloader
+from lightx2v_train.model_capabilities import WorldActionTrainingCapability
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import (
     barrier,
@@ -124,9 +124,7 @@ class WorldActionTrainer:
     def set_model(self, model):
         self.model = model
         registry = model.ensure_capabilities()
-        self.world_action = registry.require(
-            WorldActionTrainingCapability
-        )
+        self.world_action = registry.require(WorldActionTrainingCapability)
 
     def set_data(self, dataloader_train, dataloader_eval=None):
         require_singleton_dataloader(dataloader_train, "Training dataloader")

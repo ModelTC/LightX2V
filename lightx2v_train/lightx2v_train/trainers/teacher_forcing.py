@@ -25,23 +25,14 @@ class TeacherForcingTrainer(FlowMatchingTrainer):
     def __init__(self, config):
         super().__init__(config)
         if self.train_type != "full":
-            raise ValueError(
-                "Teacher forcing only supports training.train_type='full'."
-            )
+            raise ValueError("Teacher forcing only supports training.train_type='full'.")
 
         teacher_forcing = self.training_config.get("teacher_forcing", {})
         mode = teacher_forcing.get("mode", "chunkwise")
         if mode != "chunkwise":
-            raise ValueError(
-                f"Unsupported teacher_forcing.mode={mode!r}; expected "
-                "'chunkwise'."
-            )
-        self.num_frame_per_chunk = int(
-            teacher_forcing["num_frame_per_chunk"]
-        )
-        self.noise_augmentation_max_timestep = int(
-            teacher_forcing.get("noise_augmentation_max_timestep", 0)
-        )
+            raise ValueError(f"Unsupported teacher_forcing.mode={mode!r}; expected 'chunkwise'.")
+        self.num_frame_per_chunk = int(teacher_forcing["num_frame_per_chunk"])
+        self.noise_augmentation_max_timestep = int(teacher_forcing.get("noise_augmentation_max_timestep", 0))
         scheduler_config = self.config["scheduler"]
         self.teacher_forcing_scheduler = CausalForcingFlowMatchScheduler(
             num_train_timesteps=scheduler_config.get(
@@ -56,9 +47,7 @@ class TeacherForcingTrainer(FlowMatchingTrainer):
 
     def set_model(self, model):
         BaseTrainer.set_model(self, model)
-        self.teacher_forcing = model.capabilities.require(
-            TeacherForcingCapability
-        )
+        self.teacher_forcing = model.capabilities.require(TeacherForcingCapability)
 
     def compute_loss_on_sample(self, sample):
         return self.teacher_forcing.compute_loss(
@@ -67,9 +56,7 @@ class TeacherForcingTrainer(FlowMatchingTrainer):
                 scheduler=self.teacher_forcing_scheduler,
                 running_dtype=self.running_dtype,
                 num_frame_per_chunk=self.num_frame_per_chunk,
-                noise_augmentation_max_timestep=(
-                    self.noise_augmentation_max_timestep
-                ),
+                noise_augmentation_max_timestep=(self.noise_augmentation_max_timestep),
                 broadcast=broadcast_sequence_parallel_value,
             ),
         )

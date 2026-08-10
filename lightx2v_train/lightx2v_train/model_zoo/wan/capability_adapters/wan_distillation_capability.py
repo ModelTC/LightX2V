@@ -39,10 +39,7 @@ class WanDistillationCapability(GenericDistillationCapability):
         if configured is not None:
             shape = tuple(int(dimension) for dimension in configured)
             if len(shape) != 5 or shape[0] != 1:
-                raise ValueError(
-                    "training.dmd.image_or_video_shape must be a five-dimensional "
-                    f"singleton shape beginning with 1, got {shape}."
-                )
+                raise ValueError(f"training.dmd.image_or_video_shape must be a five-dimensional singleton shape beginning with 1, got {shape}.")
             return shape
         missing = [key for key in ("height", "width", "num_frames") if key not in shape_config]
         if missing:

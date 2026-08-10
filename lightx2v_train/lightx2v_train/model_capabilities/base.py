@@ -26,14 +26,9 @@ class CapabilityRegistry:
         implementation: CapabilityT,
     ) -> None:
         if not isinstance(implementation, interface):
-            raise TypeError(
-                f"{type(implementation).__name__} does not implement "
-                f"{interface.__name__}."
-            )
+            raise TypeError(f"{type(implementation).__name__} does not implement {interface.__name__}.")
         if interface in self._capabilities:
-            raise RuntimeError(
-                f"Capability already registered: {interface.__name__}."
-            )
+            raise RuntimeError(f"Capability already registered: {interface.__name__}.")
         self._capabilities[interface] = implementation
 
     def supports(self, interface: type[ModelCapability]) -> bool:
@@ -42,20 +37,14 @@ class CapabilityRegistry:
     def require(self, interface: type[CapabilityT]) -> CapabilityT:
         implementation = self._capabilities.get(interface)
         if implementation is None:
-            raise CapabilityNotSupportedError(
-                f"Missing capability: {interface.__name__}."
-            )
+            raise CapabilityNotSupportedError(f"Missing capability: {interface.__name__}.")
         return cast(CapabilityT, implementation)
 
     def missing(
         self,
         interfaces: tuple[type[ModelCapability], ...],
     ) -> tuple[type[ModelCapability], ...]:
-        return tuple(
-            interface
-            for interface in interfaces
-            if not self.supports(interface)
-        )
+        return tuple(interface for interface in interfaces if not self.supports(interface))
 
 
 class CapabilityProvider:
