@@ -207,10 +207,7 @@ class FlashAttn4Weight(AttnWeightTemplate):
         **kwargs,
     ):
         if flash_attn_varlen_func_v4 is None:
-            raise RuntimeError(
-                "flash_attn4 is not available: could not import "
-                "flash_attn.cute.flash_attn_varlen_func. Install FlashAttention-4 first."
-            )
+            raise RuntimeError("flash_attn4 is not available: could not import flash_attn.cute.flash_attn_varlen_func. Install FlashAttention-4 first.")
         if cu_seqlens_q is None or cu_seqlens_kv is None:
             raise ValueError("flash_attn4 requires cu_seqlens_q and cu_seqlens_kv")
 
@@ -265,10 +262,7 @@ class SparseFlashAttn4Weight(AttnWeightTemplate):
         **kwargs,
     ):
         if flash_attn_func_v4 is None:
-            raise RuntimeError(
-                "spas_flash_attn4 is not available: could not import "
-                "flash_attn.cute.flash_attn_func. Install FlashAttention-4 first."
-            )
+            raise RuntimeError("spas_flash_attn4 is not available: could not import flash_attn.cute.flash_attn_func. Install FlashAttention-4 first.")
         if len(q.shape) == 3:
             bs = 1
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
