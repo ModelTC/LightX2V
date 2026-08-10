@@ -26,6 +26,7 @@ from lightx2v.models.runners.cosmos3.policy_runtime import (
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.cosmos3.scheduler import Cosmos3Scheduler
 from lightx2v.models.video_encoders.hf.cosmos3.vae import Cosmos3WanVAE
+from lightx2v.utils.audio_mux import MP4_AAC_BITRATE
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -795,7 +796,7 @@ class Cosmos3Runner(DefaultRunner):
                 "-c:a",
                 "aac",
                 "-b:a",
-                "192k",
+                MP4_AAC_BITRATE,
                 "-shortest",
                 "-f",
                 "mp4",
