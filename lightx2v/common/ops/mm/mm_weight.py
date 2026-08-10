@@ -2,7 +2,6 @@ import re
 from abc import ABCMeta, abstractmethod
 
 import torch
-import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
