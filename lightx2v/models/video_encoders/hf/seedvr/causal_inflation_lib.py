@@ -11,6 +11,7 @@ from torch import Tensor, nn
 from torch.nn import Conv3d
 
 from .common.distributed.advanced import (
+    get_sequence_parallel_global_ranks,
     get_sequence_parallel_group,
     get_sequence_parallel_rank,
     get_sequence_parallel_world_size,
@@ -56,12 +57,16 @@ class InflatedCausalConv3d(Conv3d):
         self.memory_device = memory_device
         self.padding = (0, *self.padding[1:])  # Remove temporal pad to keep causal.
         self.memory_limit = float("inf")
+        self.sp_cache_owner_index = 0
 
     def set_memory_limit(self, value: float):
         self.memory_limit = value
 
     def set_memory_device(self, memory_device: _memory_device_t):
         self.memory_device = memory_device
+
+    def set_sp_cache_owner(self, owner_index: int):
+        self.sp_cache_owner_index = owner_index
 
     def memory_limit_conv(
         self,
@@ -183,7 +188,6 @@ class InflatedCausalConv3d(Conv3d):
             squeeze_out = True
 
         cache_size = self.kernel_size[0] - self.stride[0]
-        cache = cache_send_recv(input, cache_size=cache_size, memory=self.memory, times=self.temporal_padding * 2)
 
         # For slice=4 and sp=2, and 17 frames in total
         #                  sp0                  sp1
@@ -192,13 +196,39 @@ class InflatedCausalConv3d(Conv3d):
         sp_rank = get_sequence_parallel_rank()
         sp_size = get_sequence_parallel_world_size()
         sp_group = get_sequence_parallel_group()
-        send_dst = 0
-        recv_src = 0
+        sp_global_ranks = get_sequence_parallel_global_ranks()
+        first_global_rank = sp_global_ranks[0]
+        last_rank = sp_size - 1
+        last_global_rank = sp_global_ranks[last_rank]
+        cache_owner = self.sp_cache_owner_index % sp_size
+        cache_owner_global_rank = sp_global_ranks[cache_owner]
+
+        # The previous outer slice's boundary is sharded across ranks by layer.
+        # Move only this layer's cache to rank 0 before propagating it through
+        # the temporal sequence-parallel chain.
+        boundary_memory = self.memory if sp_group is None else None
+        if memory_state == MemoryState.ACTIVE and sp_group is not None and cache_size != 0:
+            if cache_owner == 0 and sp_rank == 0:
+                assert self.memory is not None
+                boundary_memory = self.memory.to(input[0])
+                self.memory = None
+            elif cache_owner != 0:
+                if sp_rank == cache_owner:
+                    assert self.memory is not None
+                    owner_memory = self.memory.to(input[0])
+                    dist.send(owner_memory, first_global_rank, group=sp_group)
+                    self.memory = None
+                elif sp_rank == 0:
+                    shape = list(input[0].size())
+                    shape[2] = cache_size
+                    boundary_memory = torch.empty(*shape, device=input[0].device, dtype=input[0].dtype).contiguous()
+                    dist.recv(boundary_memory, cache_owner_global_rank, group=sp_group)
+
+        cache = cache_send_recv(input, cache_size=cache_size, memory=boundary_memory, times=self.temporal_padding * 2)
         if (
             memory_state in [MemoryState.INITIALIZING, MemoryState.ACTIVE]  # use_slicing
             and not self.training
             and (self.memory_device is not None)
-            and sp_rank in [0, sp_size - 1]
             and cache_size != 0
         ):
             if cache_size > input[-1].size(2) and cache is not None and len(input) == 1:
@@ -208,17 +238,17 @@ class InflatedCausalConv3d(Conv3d):
             if sp_size == 1:
                 self.memory = input[-1][:, :, -cache_size:].detach().contiguous()
             else:
-                if sp_rank == sp_size - 1:
-                    dist.send(
-                        input[-1][:, :, -cache_size:].detach().contiguous(),
-                        send_dst,
-                        group=sp_group,
-                    )
-                if sp_rank == 0:
+                if sp_rank == last_rank:
+                    next_memory = input[-1][:, :, -cache_size:].detach().contiguous()
+                    if cache_owner == last_rank:
+                        self.memory = next_memory
+                    else:
+                        dist.send(next_memory, cache_owner_global_rank, group=sp_group)
+                elif sp_rank == cache_owner:
                     shape = list(input[0].size())
                     shape[2] = cache_size
                     self.memory = torch.empty(*shape, device=input[0].device, dtype=input[0].dtype).contiguous()
-                    dist.recv(self.memory, recv_src, group=sp_group)
+                    dist.recv(self.memory, last_global_rank, group=sp_group)
             if self.memory_device == "cpu" and self.memory is not None:
                 self.memory = self.memory.to("cpu")
 

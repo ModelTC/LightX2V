@@ -90,7 +90,7 @@ class SeqAllToAll(torch.autograd.Function):
             ctx.prev_scatter_dim = prev_scatter_dim
             return output, comm
 
-        return _all_to_all(local_input, scatter_dim, gather_dim, group)
+        return single_all_to_all(local_input, scatter_dim, gather_dim, group, async_op=False)
 
     @staticmethod
     def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor, None, None]:
@@ -102,7 +102,7 @@ class SeqAllToAll(torch.autograd.Function):
             input_t = grad_output[0]
         return (
             None,
-            _all_to_all(input_t, ctx.gather_dim, ctx.scatter_dim, ctx.group),
+            single_all_to_all(input_t, ctx.gather_dim, ctx.scatter_dim, ctx.group, async_op=False),
             None,
             None,
             None,

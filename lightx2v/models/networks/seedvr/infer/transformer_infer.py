@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.nn.modules.utils import _triple
 
+from lightx2v.common.ops.norm.rms_norm_weight import apply_qk_rms_norm
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.seedvr.utils import na
 from lightx2v.models.networks.seedvr.utils.attention import FlashAttentionVarlen
@@ -22,6 +23,7 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
         self.qk_norm_type = config.get("qk_norm", "fusedrms")
         self.norm_eps = config.get("norm_eps", 1.0e-5)
         self.mlp_type = config.get("mlp_type", "swiglu")
+        self.use_fused_qk_rms_norm = config.get("fused_qk_rms_norm", True)
 
         self.attn = FlashAttentionVarlen()
 
@@ -32,6 +34,19 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
         if block_weight.shared_weights:
             return getattr(block_weight, f"{name}_all")
         return getattr(block_weight, f"{name}_{branch}")
+
+    def _apply_qk_norm(self, block_weight, query, key, branch):
+        norm_q = self._get_branch(block_weight, "attn_norm_q", branch)
+        norm_k = self._get_branch(block_weight, "attn_norm_k", branch)
+        use_triton = self.use_fused_qk_rms_norm and norm_q.sensitive_layer_dtype == norm_q.infer_dtype and norm_k.sensitive_layer_dtype == norm_k.infer_dtype
+        return apply_qk_rms_norm(query, key, norm_q, norm_k, use_triton=use_triton)
+
+    def _apply_swiglu(self, block_weight, hidden_states, branch):
+        gate = self._get_branch(block_weight, "mlp_proj_in_gate", branch).apply(hidden_states)
+        up = self._get_branch(block_weight, "mlp_proj_in", branch).apply(hidden_states)
+        F.silu(gate, inplace=True)
+        gate.mul_(up)
+        return self._get_branch(block_weight, "mlp_proj_out", branch).apply(gate)
 
     def _attn_forward(self, block_weight, vid, txt, vid_shape, txt_shape, cache):
         qkv_vid = self._get_branch(block_weight, "attn_qkv", "vid").apply(vid)
@@ -46,15 +61,8 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
         vid_q, vid_k, vid_v = qkv_vid.unbind(1)
         txt_q, txt_k, txt_v = qkv_txt.unbind(1)
 
-        norm_q_vid = self._get_branch(block_weight, "attn_norm_q", "vid")
-        norm_q_txt = self._get_branch(block_weight, "attn_norm_q", "txt")
-        norm_k_vid = self._get_branch(block_weight, "attn_norm_k", "vid")
-        norm_k_txt = self._get_branch(block_weight, "attn_norm_k", "txt")
-
-        vid_q = norm_q_vid.apply(vid_q)
-        txt_q = norm_q_txt.apply(txt_q)
-        vid_k = norm_k_vid.apply(vid_k)
-        txt_k = norm_k_txt.apply(txt_k)
+        vid_q, vid_k = self._apply_qk_norm(block_weight, vid_q, vid_k, "vid")
+        txt_q, txt_k = self._apply_qk_norm(block_weight, txt_q, txt_k, "txt")
 
         if block_weight.rope.multimodal:
             vid_q, vid_k, txt_q, txt_k = block_weight.rope.apply(vid_q, vid_k, vid_shape, txt_q=txt_q, txt_k=txt_k, txt_shape=txt_shape, cache=cache)
@@ -117,15 +125,8 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
         vid_q, vid_k, vid_v = qkv_vid_win.unbind(1)
         txt_q, txt_k, txt_v = qkv_txt.unbind(1)
 
-        norm_q_vid = self._get_branch(block_weight, "attn_norm_q", "vid")
-        norm_q_txt = self._get_branch(block_weight, "attn_norm_q", "txt")
-        norm_k_vid = self._get_branch(block_weight, "attn_norm_k", "vid")
-        norm_k_txt = self._get_branch(block_weight, "attn_norm_k", "txt")
-
-        vid_q = norm_q_vid.apply(vid_q)
-        txt_q = norm_q_txt.apply(txt_q)
-        vid_k = norm_k_vid.apply(vid_k)
-        txt_k = norm_k_txt.apply(txt_k)
+        vid_q, vid_k = self._apply_qk_norm(block_weight, vid_q, vid_k, "vid")
+        txt_q, txt_k = self._apply_qk_norm(block_weight, txt_q, txt_k, "txt")
 
         txt_len = cache("txt_len", lambda: txt_shape.prod(-1))
 
@@ -209,6 +210,7 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
             shift=self._get_branch(block_weight, "ada_attn_shift", "vid").tensor,
             scale=self._get_branch(block_weight, "ada_attn_scale", "vid").tensor,
             gate=self._get_branch(block_weight, "ada_attn_gate", "vid").tensor,
+            inplace=self.norm_type is not None,
         )
         txt_attn = apply_adaln_single(
             txt_attn,
@@ -222,6 +224,7 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
             shift=self._get_branch(block_weight, "ada_attn_shift", "txt").tensor,
             scale=self._get_branch(block_weight, "ada_attn_scale", "txt").tensor,
             gate=self._get_branch(block_weight, "ada_attn_gate", "txt").tensor,
+            inplace=self.norm_type is not None,
         )
 
         # Attention
@@ -243,6 +246,7 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
             shift=self._get_branch(block_weight, "ada_attn_shift", "vid").tensor,
             scale=self._get_branch(block_weight, "ada_attn_scale", "vid").tensor,
             gate=self._get_branch(block_weight, "ada_attn_gate", "vid").tensor,
+            inplace=True,
         )
         txt_attn = apply_adaln_single(
             txt_attn,
@@ -256,10 +260,11 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
             shift=self._get_branch(block_weight, "ada_attn_shift", "txt").tensor,
             scale=self._get_branch(block_weight, "ada_attn_scale", "txt").tensor,
             gate=self._get_branch(block_weight, "ada_attn_gate", "txt").tensor,
+            inplace=True,
         )
 
-        vid_attn = vid_attn + vid
-        txt_attn = txt_attn + txt
+        vid_attn.add_(vid)
+        txt_attn.add_(txt)
 
         # MLP norm (no affine)
         vid_mlp = norm_no_weight(vid_attn, self.norm_type, self.norm_eps)
@@ -281,6 +286,7 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
             shift=self._get_branch(block_weight, "ada_mlp_shift", "vid").tensor,
             scale=self._get_branch(block_weight, "ada_mlp_scale", "vid").tensor,
             gate=self._get_branch(block_weight, "ada_mlp_gate", "vid").tensor,
+            inplace=self.norm_type is not None,
         )
         if not block_weight.vid_only:
             txt_mlp = apply_adaln_single(
@@ -295,17 +301,14 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
                 shift=self._get_branch(block_weight, "ada_mlp_shift", "txt").tensor,
                 scale=self._get_branch(block_weight, "ada_mlp_scale", "txt").tensor,
                 gate=self._get_branch(block_weight, "ada_mlp_gate", "txt").tensor,
+                inplace=self.norm_type is not None,
             )
 
         # MLP
         if self.mlp_type == "swiglu":
-            vid_mlp = self._get_branch(block_weight, "mlp_proj_out", "vid").apply(
-                F.silu(self._get_branch(block_weight, "mlp_proj_in_gate", "vid").apply(vid_mlp)) * self._get_branch(block_weight, "mlp_proj_in", "vid").apply(vid_mlp)
-            )
+            vid_mlp = self._apply_swiglu(block_weight, vid_mlp, "vid")
             if not block_weight.vid_only:
-                txt_mlp = self._get_branch(block_weight, "mlp_proj_out", "txt").apply(
-                    F.silu(self._get_branch(block_weight, "mlp_proj_in_gate", "txt").apply(txt_mlp)) * self._get_branch(block_weight, "mlp_proj_in", "txt").apply(txt_mlp)
-                )
+                txt_mlp = self._apply_swiglu(block_weight, txt_mlp, "txt")
         else:
             vid_mlp = self._get_branch(block_weight, "mlp_proj_out", "vid").apply(F.gelu(self._get_branch(block_weight, "mlp_proj_in", "vid").apply(vid_mlp), approximate="tanh"))
             if not block_weight.vid_only:
@@ -324,6 +327,7 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
             shift=self._get_branch(block_weight, "ada_mlp_shift", "vid").tensor,
             scale=self._get_branch(block_weight, "ada_mlp_scale", "vid").tensor,
             gate=self._get_branch(block_weight, "ada_mlp_gate", "vid").tensor,
+            inplace=True,
         )
         if not block_weight.vid_only:
             txt_mlp = apply_adaln_single(
@@ -338,11 +342,12 @@ class SeedVRTransformerInfer(BaseTransformerInfer):
                 shift=self._get_branch(block_weight, "ada_mlp_shift", "txt").tensor,
                 scale=self._get_branch(block_weight, "ada_mlp_scale", "txt").tensor,
                 gate=self._get_branch(block_weight, "ada_mlp_gate", "txt").tensor,
+                inplace=True,
             )
 
-        vid_mlp = vid_mlp + vid_attn
+        vid_mlp.add_(vid_attn)
         if not block_weight.vid_only:
-            txt_mlp = txt_mlp + txt_attn
+            txt_mlp.add_(txt_attn)
         else:
             txt_mlp = txt_attn
 
