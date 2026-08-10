@@ -27,6 +27,7 @@ from lightx2v.models.schedulers.seedvr.scheduler import SeedVRScheduler
 from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
 from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstruction
 from lightx2v.models.video_encoders.hf.seedvr.common.distributed.advanced import set_sequence_parallel_group
+from lightx2v.models.video_encoders.hf.seedvr.common.distributed.ops import set_sequence_parallel_a2a_backend
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.profiler import *
@@ -34,6 +35,55 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import mux_audio_from_video, save_to_video, wan_vae_to_comfy
 from lightx2v.utils.video_recorder import VideoRecorder
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+class SeedVRVideoRecorder(VideoRecorder):
+    """High-quality local-file recorder for SeedVR super-resolution output."""
+
+    def start_ffmpeg_process_local(self):
+        crf = str(self.config_crf) if hasattr(self, "config_crf") else "16"
+        preset = str(self.config_preset) if hasattr(self, "config_preset") else "medium"
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-color_range",
+            "pc",
+            "-colorspace",
+            "rgb",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "iec61966-2-1",
+            "-r",
+            str(self.fps),
+            "-s",
+            f"{self.width}x{self.height}",
+            "-i",
+            f"tcp://127.0.0.1:{self.video_port}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            preset,
+            "-crf",
+            crf,
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            self.livestream_url,
+            "-y",
+            "-loglevel",
+            self.ffmpeg_log_level,
+        ]
+        try:
+            self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
+            logger.info(f"SeedVR FFmpeg file encoder started with PID: {self.ffmpeg_process.pid}, preset={preset}, crf={crf}")
+            logger.info(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
+        except Exception as e:
+            logger.error(f"Failed to start SeedVR FFmpeg file encoder: {e}")
 
 
 def _get_read_video():
@@ -105,8 +155,9 @@ class SeedVRRunner(DefaultRunner):
                 raise ValueError("SeedVR sequence parallel requires a parallel configuration dictionary")
             if int(parallel.get("tensor_p_size", 1)) != 1 or int(parallel.get("cfg_p_size", 1)) != 1:
                 raise ValueError("SeedVR sequence parallel currently requires tensor_p_size=1 and cfg_p_size=1")
-            if parallel.get("seq_p_attn_type", "ulysses") != "ulysses":
-                raise ValueError("SeedVR sequence parallel currently supports seq_p_attn_type=ulysses only")
+            seq_p_attn_type = parallel.get("seq_p_attn_type", "ulysses")
+            if seq_p_attn_type not in ("ulysses", "ulysses-4090"):
+                raise ValueError("SeedVR sequence parallel supports seq_p_attn_type=ulysses or ulysses-4090 only")
             if not parallel.get("vae_parallel", True):
                 raise ValueError("SeedVR sequence parallel requires parallel.vae_parallel=true")
 
@@ -118,12 +169,14 @@ class SeedVRRunner(DefaultRunner):
                 raise ValueError(f"SeedVR attention heads ({heads}) must be divisible by seq_p_size ({self._seedvr_sp_size})")
             self.config.setdefault("load_from_rank0", True)
             set_sequence_parallel_group(self._seedvr_sp_group)
+            set_sequence_parallel_a2a_backend("round_robin" if seq_p_attn_type == "ulysses-4090" else "torch")
             logger.info(
                 f"[SeedVRRunner] sequence parallel enabled: rank={self._seedvr_sp_rank}/{self._seedvr_sp_size}, "
-                f"DiT=Ulysses, VAE=causal temporal, spatial_tiling={self.config.get('use_tiling_vae', False)}"
+                f"DiT={seq_p_attn_type}, VAE=causal temporal, spatial_tiling={self.config.get('use_tiling_vae', False)}"
             )
         else:
             set_sequence_parallel_group(None)
+            set_sequence_parallel_a2a_backend("torch")
 
         model_path_base = config.get("model_path", "ByteDance-Seed/SeedVR2-3B")
         if self.config.get("dit_quantized_ckpt", None):
@@ -789,10 +842,12 @@ class SeedVRRunner(DefaultRunner):
                 output_dir = os.path.dirname(original_save_path) or "."
                 os.makedirs(output_dir, exist_ok=True)
                 if stream_file_output:
-                    video_recorder = VideoRecorder(
+                    video_recorder = SeedVRVideoRecorder(
                         livestream_url=original_save_path,
                         fps=float(self.config.get("fps", 16)),
                     )
+                    video_recorder.config_crf = int(self.config.get("video_crf", 16))
+                    video_recorder.config_preset = str(self.config.get("video_preset", "medium"))
                     logger.info(f"[SeedVRRunner] segment stream writer initialized: {original_save_path}")
                 else:
                     tmp_dir = tempfile.mkdtemp(prefix=f".{os.path.basename(original_save_path)}.segments.", dir=output_dir)
