@@ -12,23 +12,46 @@ from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
 from safetensors.torch import load_file, save_file
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 
+from lightx2v_train.model_capabilities import (
+    CapabilityProvider,
+    CheckpointCapability,
+    ParallelCapability,
+    TrainableModelCapability,
+)
+from lightx2v_train.model_zoo.capability_adapters.common import (
+    CommonCheckpointCapability,
+    CommonParallelCapability,
+    CommonTrainableCapability,
+)
 from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import is_fsdp2_module
 from lightx2v_train.utils.utils import get_running_dtype
 
 
-class BaseModel:
+class BaseModel(CapabilityProvider):
     def __init__(self, config):
+        super().__init__()
         self.config = config
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
         self.device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
         self.vae = None
 
+    def register_capabilities(self):
+        self.capabilities.register(
+            TrainableModelCapability,
+            CommonTrainableCapability(self),
+        )
+        self.capabilities.register(
+            ParallelCapability,
+            CommonParallelCapability(self),
+        )
+        self.capabilities.register(
+            CheckpointCapability,
+            CommonCheckpointCapability(self),
+        )
+
     def load_components(self, transformer_only=False, reference_model=None):
         raise NotImplementedError
-
-    def dmd_latent_shape(self, batch_size, height, width):
-        raise NotImplementedError(f"{self.__class__.__name__} must define dmd_latent_shape().")
 
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
@@ -210,7 +233,7 @@ class BaseModel:
     def prepare_infer_latents(self, height, width, generator=None):
         raise NotImplementedError
 
-    def dmd_latent_shape(self, batch_size, height, width):
+    def dmd_latent_shape(self, height, width):
         raise NotImplementedError(f"{self.__class__.__name__} must define dmd_latent_shape().")
 
     def cfg_on_denoiser_output(self):

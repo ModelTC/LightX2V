@@ -32,6 +32,11 @@ def expand_time(time: Tensor, ndim: int) -> Tensor:
     return time.reshape(time.shape[0], *([1] * (ndim - 1)))
 
 
+def require_singleton_clean(clean: Tensor) -> None:
+    if clean.ndim == 0 or clean.shape[0] != 1:
+        raise ValueError("Consistency training only supports physical batch size 1.")
+
+
 class RectifiedFlowPath:
     """Conversions for the straight path x_t=(1-t)x_0+t*noise."""
 
@@ -87,34 +92,19 @@ class DenoiserRequest:
     model_kwargs: Mapping[str, Any] = field(default_factory=dict)
 
 
-class ModelDenoiser:
-    """Adapt a LightX2V model to the consistency objective interface."""
+class CapabilityDenoiser:
+    """Adapt a consistency capability to the objective interface."""
 
-    def __init__(self, model, path: RectifiedFlowPath):
-        self.model = model
+    def __init__(self, capability, path: RectifiedFlowPath):
+        self.capability = capability
         self.path = path
 
     def predict(self, request: DenoiserRequest) -> Tensor:
-        raw_prediction = self.model.predict_denoiser_output(
-            request.sample,
-            request.time,
-            request.condition,
-            **request.model_kwargs,
-        )
-        return self.path.convert_prediction(
-            request.sample,
-            raw_prediction,
-            request.time,
-            source_type=self.model.denoiser_prediction_type(),
-            target_type=request.prediction_type,
-        )
+        return self.capability.predict(request, self.path)
 
     def predict_log_variance(self, time: Tensor) -> Tensor:
         """Return the model-owned scalar log-variance head used by sCM."""
-        predictor = getattr(self.model, "predict_consistency_log_variance", None)
-        if predictor is None:
-            raise NotImplementedError(f"{self.model.__class__.__name__} does not provide a consistency log-variance head.")
-        return predictor(time)
+        return self.capability.predict_log_variance(time)
 
 
 @dataclass(frozen=True)
@@ -181,8 +171,8 @@ class ConsistencyObjective(ABC):
         self,
         batch: ConsistencyBatch,
         training_state: Mapping[str, Tensor],
-        student: ModelDenoiser,
-        teacher: Optional[ModelDenoiser] = None,
-        references: Optional[Mapping[str, ModelDenoiser]] = None,
+        student: CapabilityDenoiser,
+        teacher: Optional[CapabilityDenoiser] = None,
+        references: Optional[Mapping[str, CapabilityDenoiser]] = None,
     ) -> ObjectiveOutput:
         """Compute a differentiable scalar loss and detached metrics."""

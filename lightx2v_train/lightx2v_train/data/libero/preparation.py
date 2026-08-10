@@ -218,10 +218,10 @@ def precompute_text_embeddings(model_path, cache_dir, context_len, prompts):
             tokenizer_path=str(tokenizer_path),
         )
         encoder.model.eval()
-        batch_size = 16
+        encoding_chunk_size = 16
         with torch.no_grad():
-            for start in range(0, len(missing_prompts), batch_size):
-                batch_prompts = missing_prompts[start : start + batch_size]
+            for start in range(0, len(missing_prompts), encoding_chunk_size):
+                batch_prompts = missing_prompts[start : start + encoding_chunk_size]
                 input_ids, mask = encoder.tokenizer(batch_prompts, return_mask=True, add_special_tokens=True)
                 input_ids = input_ids.to(device)
                 mask = mask.to(device=device, dtype=torch.bool)

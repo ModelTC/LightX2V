@@ -4,9 +4,14 @@ import torch
 from diffusers import AutoencoderKLFlux2, Flux2KleinPipeline, Flux2Transformer2DModel
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
+from lightx2v_train.model_capabilities import DistillationCapability, DopsdCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.flux2.capability_adapters.flux2_dopsd_capability import (
+    Flux2DopsdCapability,
+)
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
-from .base import BaseModel
+from ..base import BaseModel
 
 
 @dataclass
@@ -20,6 +25,21 @@ class Flux2KleinDenoiserInput:
 @MODEL_REGISTER("flux2_klein")
 class Flux2KleinModel(BaseModel):
     pipeline_cls = Flux2KleinPipeline
+
+    def register_capabilities(self):
+        super().register_capabilities()
+        self.capabilities.register(
+            FlowMatchingSFTCapability,
+            GenericFlowMatchingCapability(self),
+        )
+        self.capabilities.register(
+            DistillationCapability,
+            GenericDistillationCapability(self),
+        )
+        self.capabilities.register(
+            DopsdCapability,
+            Flux2DopsdCapability(self),
+        )
 
     def load_components(self, transformer_only=False, reference_model=None):
         if transformer_only:
@@ -106,11 +126,11 @@ class Flux2KleinModel(BaseModel):
     def encode_prompt_text(self, prompt):
         return self.encode_prompt_condition(prompt)
 
-    def dmd_latent_shape(self, batch_size, height, width):
+    def dmd_latent_shape(self, height, width):
         latent_h = 2 * (int(height) // (self.vae_scale_factor * 2))
         latent_w = 2 * (int(width) // (self.vae_scale_factor * 2))
         return (
-            batch_size,
+            1,
             self.transformer.config.in_channels,
             latent_h // 2,
             latent_w // 2,
@@ -195,11 +215,11 @@ class Flux2KleinModel(BaseModel):
         image_latents = pipeline._pack_latents(encoded_image_latents).to(device=self.device, dtype=self.running_dtype)
         return image_latents, image_latent_ids
 
-    def prepare_dopsd_initial_latents(self, height, width, batch_size, generator=None):
+    def prepare_dopsd_initial_latents(self, height, width, generator=None):
         pipeline = self.assemble_pipeline()
         num_latents_channels = self.transformer.config.in_channels // 4
         return pipeline.prepare_latents(
-            batch_size=batch_size,
+            batch_size=1,
             num_latents_channels=num_latents_channels,
             height=height,
             width=width,

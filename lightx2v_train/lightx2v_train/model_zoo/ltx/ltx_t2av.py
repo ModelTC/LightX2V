@@ -9,6 +9,18 @@ from peft.utils import set_peft_model_state_dict
 from safetensors import safe_open
 from safetensors.torch import load_file
 
+from lightx2v_train.model_capabilities import (
+    AutoregressiveDistillationCapability,
+    DistillationCapability,
+    FlowMatchingSFTCapability,
+    TeacherForcingCapability,
+)
+from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_autoregressive_distillation_capability import (
+    LTXAutoregressiveDistillationCapability,
+)
+from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_distillation_capability import LTXDistillationCapability
+from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_flow_matching_capability import LTXFlowMatchingCapability
+from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_teacher_forcing_capability import LTXTeacherForcingCapability
 from lightx2v_train.model_zoo.native.ltx2 import (
     EMBEDDINGS_PROCESSOR_KEY_OPS,
     GEMMA_LLM_KEY_OPS,
@@ -25,13 +37,33 @@ from lightx2v_train.model_zoo.native.ltx2 import (
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
-from .base import BaseModel
+from ..base import BaseModel
 
 
 @MODEL_REGISTER("ltx_t2av_ar")
 @MODEL_REGISTER("ltx_t2av")
 class LTX2T2AVModel(BaseModel):
     pipeline_cls = None
+
+    def register_capabilities(self):
+        super().register_capabilities()
+        self.capabilities.register(
+            FlowMatchingSFTCapability,
+            LTXFlowMatchingCapability(self),
+        )
+        self.capabilities.register(
+            DistillationCapability,
+            LTXDistillationCapability(self),
+        )
+        if self.config["model"]["name"] == "ltx_t2av_ar":
+            self.capabilities.register(
+                AutoregressiveDistillationCapability,
+                LTXAutoregressiveDistillationCapability(self),
+            )
+        self.capabilities.register(
+            TeacherForcingCapability,
+            LTXTeacherForcingCapability(self),
+        )
 
     def load_components(self, transformer_only=False, reference_model=None):
         model_config = self.config["model"]
@@ -346,6 +378,8 @@ class LTX2T2AVModel(BaseModel):
             raise RuntimeError("LTX2 embeddings processor feature_extractor is required for prompt-based training.")
 
         prompts = [prompt] if isinstance(prompt, str) else list(prompt)
+        if len(prompts) != 1:
+            raise ValueError(f"LTX2 training requires exactly one prompt, got {len(prompts)}.")
         with torch.no_grad():
             encoded = self.text_encoder.encode(prompts, padding_side="left")
 

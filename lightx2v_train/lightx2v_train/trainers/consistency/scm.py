@@ -6,14 +6,15 @@ import torch
 from torch import Tensor
 
 from .base import (
+    CapabilityDenoiser,
     ConsistencyBatch,
     ConsistencyObjective,
     ConsistencyStepContext,
     DenoiserRequest,
-    ModelDenoiser,
     ObjectiveOutput,
     RectifiedFlowPath,
     expand_time,
+    require_singleton_clean,
 )
 from .cm import classifier_free_guidance
 from .config import SCMConfig
@@ -25,7 +26,7 @@ from .objective_factory import CONSISTENCY_OBJECTIVE_REGISTER
 class SCMObjective(ConsistencyObjective):
     """Continuous-time simplified Consistency Model (sCM) objective.
 
-    The public model still predicts Qwen's rectified-flow velocity.  This
+    The public model still predicts rectified-flow velocity. This
     objective performs FastGen's SNR-matched TrigFlow preconditioning at the
     model boundary, keeping the backbone and its checkpoints interoperable.
     """
@@ -47,8 +48,9 @@ class SCMObjective(ConsistencyObjective):
         scheduler,
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
+        require_singleton_clean(clean)
         latent_hw = (clean.shape[-2], clean.shape[-1])
-        t = scheduler.sample_timestep_or_sigma(clean.shape[0], latent_hw=latent_hw).to(clean.device).float()
+        t = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device).float()
         return {
             "noise": torch.randn_like(clean) * self.config.sigma_data,
             "t": t,
@@ -59,9 +61,9 @@ class SCMObjective(ConsistencyObjective):
         self,
         batch: ConsistencyBatch,
         training_state: Mapping[str, Tensor],
-        student: ModelDenoiser,
-        teacher: Optional[ModelDenoiser] = None,
-        references: Optional[Mapping[str, ModelDenoiser]] = None,
+        student: CapabilityDenoiser,
+        teacher: Optional[CapabilityDenoiser] = None,
+        references: Optional[Mapping[str, CapabilityDenoiser]] = None,
     ) -> ObjectiveOutput:
         del references
         clean = batch.clean
@@ -130,7 +132,7 @@ class SCMObjective(ConsistencyObjective):
             },
         )
 
-    def _predict_trig_flow(self, denoiser: ModelDenoiser, x_hat: Tensor, t_hat: Tensor, condition):
+    def _predict_trig_flow(self, denoiser: CapabilityDenoiser, x_hat: Tensor, t_hat: Tensor, condition):
         sigma_data = self.config.sigma_data
         tangent = sigma_data * torch.tan(t_hat.double())
         original_t = (tangent / (1.0 + tangent)).to(t_hat.dtype)
@@ -157,7 +159,7 @@ class SCMObjective(ConsistencyObjective):
         t_hat: Tensor,
         dxt_dt: Tensor,
         condition,
-        student: ModelDenoiser,
+        student: CapabilityDenoiser,
     ) -> Tensor:
         def model_fn(sample, time):
             return self._predict_trig_flow(student, sample, time, condition)[0]

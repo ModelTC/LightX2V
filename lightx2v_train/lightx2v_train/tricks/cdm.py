@@ -14,7 +14,6 @@ class CdmScheduler(Protocol):
     def sigma_at(
         self,
         step_index: int,
-        batch_size: int,
         *,
         device: torch.device,
         dtype: torch.dtype,
@@ -22,7 +21,6 @@ class CdmScheduler(Protocol):
 
     def sample_renoise_sigma(
         self,
-        batch_size: int,
         *,
         device: torch.device,
         dtype: torch.dtype,
@@ -71,8 +69,6 @@ class CdmConfig:
 @dataclass(frozen=True)
 class CdmTrainerConstraints:
     supported: bool
-    model_name: str
-    supported_model_names: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -133,9 +129,6 @@ class CdmTrick(
             return
         if not constraints.supported:
             raise ValueError(f"{trainer_name} does not support training.dmd.cdm.")
-        if constraints.model_name not in constraints.supported_model_names:
-            supported = ", ".join(repr(name) for name in sorted(constraints.supported_model_names))
-            raise ValueError(f"training.dmd.cdm is only supported for model.name in {{{supported}}}, got {constraints.model_name!r}.")
 
     def effective_weight(self, current_iteration: int | None) -> float:
         if self.config.warmup_iters <= 0 or current_iteration is None:
@@ -167,15 +160,12 @@ class CdmTrick(
                 },
             )
 
-        batch_size = context.trajectory_latent.shape[0]
         trajectory_sigma = context.scheduler.sigma_at(
             context.end_step_index,
-            batch_size,
             device=context.device,
             dtype=torch.float32,
         )
         student_sigma = context.scheduler.sample_renoise_sigma(
-            batch_size,
             device=context.device,
             dtype=torch.float32,
         )
@@ -196,7 +186,6 @@ class CdmTrick(
         student_x0 = (student_xt - student_sigma_expanded * student_prediction).to(context.dtype)
 
         teacher_sigma = context.scheduler.sample_renoise_sigma(
-            batch_size,
             device=context.device,
             dtype=context.dtype,
         )

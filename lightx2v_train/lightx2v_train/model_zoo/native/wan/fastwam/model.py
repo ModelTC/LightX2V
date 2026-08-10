@@ -296,7 +296,9 @@ class FastWAM(torch.nn.Module):
         if video.shape[1] != 3:
             raise ValueError(f"`sample['video']` channel dimension must be 3, got shape {tuple(video.shape)}")
 
-        batch_size, _, num_frames, height, width = video.shape
+        _, _, num_frames, height, width = video.shape
+        if video.shape[0] != 1:
+            raise ValueError("FastWAM training only supports physical batch size 1.")
         if height % 16 != 0 or width % 16 != 0:
             raise ValueError(f"Video spatial dims must be multiples of 16, got H={height}, W={width}")
         if num_frames % 4 != 1:
@@ -318,15 +320,15 @@ class FastWAM(torch.nn.Module):
         if action_is_pad is not None:
             if action_is_pad.ndim != 2:
                 raise ValueError(f"`sample['action_is_pad']` must be 2D [B, T], got shape {tuple(action_is_pad.shape)}")
-            if action_is_pad.shape[0] != batch_size or action_is_pad.shape[1] != action_horizon:
-                raise ValueError(f"`sample['action_is_pad']` shape mismatch: got {tuple(action_is_pad.shape)} vs expected ({batch_size}, {action_horizon})")
+            if action_is_pad.shape[0] != 1 or action_is_pad.shape[1] != action_horizon:
+                raise ValueError(f"`sample['action_is_pad']` shape mismatch: got {tuple(action_is_pad.shape)} vs expected (1, {action_horizon})")
 
         image_is_pad = sample.get("image_is_pad", None)
         if image_is_pad is not None:
             if image_is_pad.ndim != 2:
                 raise ValueError(f"`sample['image_is_pad']` must be 2D [B, T], got shape {tuple(image_is_pad.shape)}")
-            if image_is_pad.shape[0] != batch_size or image_is_pad.shape[1] != num_frames:
-                raise ValueError(f"`sample['image_is_pad']` shape mismatch: got {tuple(image_is_pad.shape)} vs expected ({batch_size}, {num_frames})")
+            if image_is_pad.shape[0] != 1 or image_is_pad.shape[1] != num_frames:
+                raise ValueError(f"`sample['image_is_pad']` shape mismatch: got {tuple(image_is_pad.shape)} vs expected (1, {num_frames})")
 
         input_video = video.to(device=self.device, dtype=self.torch_dtype, non_blocking=True)
         input_latents = self._encode_video_latents(input_video, tiled=tiled)
@@ -432,7 +434,8 @@ class FastWAM(torch.nn.Module):
     def training_loss(self, sample, tiled: bool = False):
         inputs = self.build_inputs(sample, tiled=tiled)
         input_latents = inputs["input_latents"]
-        batch_size = input_latents.shape[0]
+        if input_latents.shape[0] != 1:
+            raise ValueError("FastWAM training only supports physical batch size 1.")
         context = inputs["context"]
         context_mask = inputs["context_mask"]
         action = inputs["action"]
@@ -441,7 +444,6 @@ class FastWAM(torch.nn.Module):
 
         noise_video = torch.randn_like(input_latents)
         timestep_video = self.train_video_scheduler.sample_training_t(
-            batch_size=batch_size,
             device=self.device,
             dtype=input_latents.dtype,
         )
@@ -453,7 +455,6 @@ class FastWAM(torch.nn.Module):
 
         noise_action = torch.randn_like(action)
         timestep_action = self.train_action_scheduler.sample_training_t(
-            batch_size=batch_size,
             device=self.device,
             dtype=action.dtype,
         )

@@ -30,7 +30,6 @@ def raw_timesteps_to_sigmas(
 
 
 def phase_sigma(
-    batch_size,
     *,
     match_timestep,
     device,
@@ -40,7 +39,7 @@ def phase_sigma(
     num_train_timestep,
 ):
     raw_timestep = torch.full(
-        (int(batch_size),),
+        (1,),
         match_timestep,
         device=device,
         dtype=torch.long,
@@ -56,7 +55,6 @@ def phase_sigma(
 
 
 def sample_score_sigma_range(
-    batch_size,
     raw_min,
     raw_max,
     *,
@@ -93,7 +91,7 @@ def sample_score_sigma_range(
     candidate_indices = torch.randint(
         0,
         candidate_sigmas.numel(),
-        (int(batch_size),),
+        (1,),
         device=device,
         dtype=torch.long,
     )

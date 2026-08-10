@@ -44,7 +44,6 @@ data:
         name: latent_dataset
         data_path: /path/to/datasets/cache_data/wan2_2_ti2v_5b_tf_96f
         dataset_repeat: 1
-        batch_size: 1
         num_workers: 8
         pin_memory: true
         shuffle: true
@@ -54,7 +53,6 @@ data:
         data_path:
             - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 1
-        batch_size: 1
         num_workers: 0
         shuffle: false
 

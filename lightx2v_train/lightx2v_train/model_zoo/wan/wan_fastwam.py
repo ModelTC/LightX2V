@@ -4,7 +4,14 @@ from contextlib import nullcontext
 import torch
 from loguru import logger
 
+from lightx2v_train.model_capabilities import (
+    CapabilityProvider,
+    WorldActionTrainingCapability,
+)
 from lightx2v_train.model_zoo.native.wan.fastwam import FastWAM
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_world_action_capability import (
+    WanWorldActionCapability,
+)
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
@@ -21,13 +28,20 @@ def _resolve_local_path(path, name, directory=False):
 
 
 @MODEL_REGISTER("wan_fastwam")
-class WanFastWAMModel:
+class WanFastWAMModel(CapabilityProvider):
     def __init__(self, config):
+        super().__init__()
         self.config = config
         self.model_config = config["model"]
         self.running_dtype = get_running_dtype(self.model_config.get("running_dtype", "bf16"))
         self.device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
         self.module = None
+
+    def register_capabilities(self):
+        self.capabilities.register(
+            WorldActionTrainingCapability,
+            WanWorldActionCapability(self),
+        )
 
     def load_components(self, transformer_only=False, reference_model=None):
         if transformer_only:

@@ -6,6 +6,8 @@ from typing import (
     Optional,
 )
 
+from lightx2v_train.utils.image_size_buckets import parse_image_size_buckets
+
 
 def _lora_config(
     role_config: Dict[str, Any],
@@ -35,7 +37,7 @@ class DmdConfig:
     num_inference_steps: int
     fake_update_ratio: int
     guidance_scale: float
-    negative_prompt: str
+    negative_prompt: Optional[str]
     cfg_norm: str
     image_sizes: list
     random_schedule_enabled: bool
@@ -67,14 +69,11 @@ class DmdConfig:
             "negative_prompt",
             dmd.get("negative_prompt"),
         )
-        if default_negative_prompt is not None:
-            negative_prompt = default_negative_prompt
-        elif configured_negative_prompt is not None:
-            negative_prompt = configured_negative_prompt
-        else:
-            raise ValueError("DMD training requires training.teacher.negative_prompt for this model.")
+        negative_prompt = default_negative_prompt if default_negative_prompt is not None else configured_negative_prompt
 
         random_schedule = dmd.get("random_schedule", {})
+        image_sizes = dmd.get("image_sizes", [])
+        parse_image_size_buckets(image_sizes)
         return cls(
             student=student,
             fake=fake,
@@ -100,7 +99,7 @@ class DmdConfig:
                 "cfg_norm",
                 dmd.get("cfg_norm", "layer_norm"),
             ),
-            image_sizes=dmd.get("image_sizes", []),
+            image_sizes=image_sizes,
             random_schedule_enabled=bool(random_schedule.get("enabled", False)),
             random_schedule_num_steps_min=int(random_schedule.get("num_steps_min", 1)),
             random_schedule_num_steps_max=int(
@@ -119,8 +118,8 @@ class DmdConfig:
 
 
 @dataclass(frozen=True)
-class VideoDmdConfig:
-    """Parsed video schedule and student checkpoint configuration."""
+class DmdScheduleConfig:
+    """Rollout schedule and optional student checkpoint configuration."""
 
     num_train_timestep: int
     denoising_step_list: list

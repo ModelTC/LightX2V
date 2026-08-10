@@ -39,7 +39,6 @@ data:
         name: prompt_dataset
         data_path:
             - /path/to/prompts/vidprom_filtered_extended.txt
-        batch_size: 1
         num_workers: 8
         pin_memory: true
         shuffle: true
@@ -49,7 +48,6 @@ data:
         data_path:
             - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 1
-        batch_size: 1
         num_workers: 0
         shuffle: false
 
@@ -67,7 +65,7 @@ scheduler:
         extra_one_step: true
 
 training:
-    method: video_dmd
+    method: dmd
     max_train_iters: 5000
     gradient_accumulation_iters: 4
     gradient_checkpointing: true

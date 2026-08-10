@@ -17,7 +17,7 @@ from lightx2v_train.tricks import (
 )
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
-from ..dmd import VideoDmdTrainer
+from ..dmd import DmdTrainer
 from ..dmd.math import euler_step
 from .checkpoint import PhasedCheckpointManager
 from .config import (
@@ -36,11 +36,11 @@ from .roles import PhasedRoleRegistry
 from .rollout import PhasedRolloutEngine
 
 
-@TRAINER_REGISTER("video_phased_dmd")
-class VideoPhasedDmdTrainer(VideoDmdTrainer):
+@TRAINER_REGISTER("phased_dmd")
+class PhasedDmdTrainer(DmdTrainer):
     """Dual-student phased DMD with x0-space distribution matching."""
 
-    trainer_name = "video_phased_dmd"
+    trainer_name = "phased_dmd"
     defer_ida_setup = True
 
     def __init__(self, config):
@@ -50,11 +50,11 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
         self.rollout_engine = PhasedRolloutEngine(self)
         parsed = PhasedDmdConfig.from_mapping(
             config,
-            base_config=self.parsed_video_dmd_config,
+            base_config=self.parsed_dmd_schedule_config,
             dmd_config=self.dmd_config,
             infer_config=self.infer_config,
             max_train_iters=self.max_train_iters,
-            default_lora_target_modules=(self.default_lora_target_modules),
+            default_lora_target_modules=None,
         )
         self.parsed_phased_dmd_config = parsed
         self._checkpoint_process_group = None
@@ -165,7 +165,7 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
         return self.role_registry.setup_resources(
             resume_ckpt_path=resume_ckpt_path,
             base_setup=super(
-                VideoPhasedDmdTrainer,
+                PhasedDmdTrainer,
                 self,
             ).setup,
         )
@@ -188,11 +188,10 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
         low_iteration = current_iter // 2
         return "high" if low_iteration % 2 == 0 else "low"
 
-    def _phase_sigma(self, batch_size, dtype):
+    def _phase_sigma(self, dtype):
         return phase_sigma(
-            batch_size,
             match_timestep=self.match_timestep,
-            device=self.model.device,
+            device=self.student.device,
             dtype=dtype,
             warp_denoising_step=self.warp_denoising_step,
             denoising_scheduler=self.denoising_scheduler,
@@ -202,7 +201,7 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
     def _raw_timesteps_to_sigmas(self, raw_timesteps, dtype):
         return raw_timesteps_to_sigmas(
             raw_timesteps,
-            device=self.model.device,
+            device=self.student.device,
             dtype=dtype,
             warp_denoising_step=self.warp_denoising_step,
             denoising_scheduler=self.denoising_scheduler,
@@ -211,14 +210,12 @@ class VideoPhasedDmdTrainer(VideoDmdTrainer):
 
     def _sample_score_sigma_range(
         self,
-        batch_size,
         raw_min,
         raw_max,
         device,
         dtype,
     ):
         return sample_score_sigma_range(
-            batch_size,
             raw_min,
             raw_max,
             device=device,

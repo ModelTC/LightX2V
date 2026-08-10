@@ -6,14 +6,15 @@ import torch
 from torch import Tensor
 
 from .base import (
+    CapabilityDenoiser,
     ConsistencyBatch,
     ConsistencyObjective,
     ConsistencyStepContext,
     DenoiserRequest,
-    ModelDenoiser,
     ObjectiveOutput,
     RectifiedFlowPath,
     expand_time,
+    require_singleton_clean,
 )
 from .config import MeanFlowConfig
 from .jvp import math_attention_for_forward_ad
@@ -57,12 +58,13 @@ class MeanFlowObjective(ConsistencyObjective):
         scheduler,
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
+        require_singleton_clean(clean)
         latent_hw = (clean.shape[-2], clean.shape[-1])
-        first = scheduler.sample_timestep_or_sigma(clean.shape[0], latent_hw=latent_hw).to(clean.device).float()
-        second = scheduler.sample_timestep_or_sigma(clean.shape[0], latent_hw=latent_hw).to(clean.device).float()
+        first = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device).float()
+        second = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device).float()
         t = torch.maximum(first, second)
         random_r = torch.minimum(first, second)
-        use_random_r = torch.rand(clean.shape[0], device=clean.device) < self.config.random_endpoint_probability
+        use_random_r = torch.rand(1, device=clean.device) < self.config.random_endpoint_probability
         r = torch.where(use_random_r, random_r, t)
         return {
             "noise": torch.randn_like(clean),
@@ -76,9 +78,9 @@ class MeanFlowObjective(ConsistencyObjective):
         self,
         batch: ConsistencyBatch,
         training_state: Mapping[str, Tensor],
-        student: ModelDenoiser,
-        teacher: Optional[ModelDenoiser] = None,
-        references: Optional[Mapping[str, ModelDenoiser]] = None,
+        student: CapabilityDenoiser,
+        teacher: Optional[CapabilityDenoiser] = None,
+        references: Optional[Mapping[str, CapabilityDenoiser]] = None,
     ) -> ObjectiveOutput:
         del references
         clean = batch.clean
@@ -129,8 +131,8 @@ class MeanFlowObjective(ConsistencyObjective):
         x_t: Tensor,
         noise: Tensor,
         t: Tensor,
-        student: ModelDenoiser,
-        teacher: Optional[ModelDenoiser],
+        student: CapabilityDenoiser,
+        teacher: Optional[CapabilityDenoiser],
     ):
         if self.config.mode == "cd":
             if teacher is None:
@@ -196,7 +198,7 @@ class MeanFlowObjective(ConsistencyObjective):
         r: Tensor,
         dxt_dt: Tensor,
         condition,
-        student: ModelDenoiser,
+        student: CapabilityDenoiser,
     ) -> Tensor:
         def model_fn(sample, time, endpoint):
             return student.predict(

@@ -11,6 +11,8 @@ from loguru import logger
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim.lr_scheduler import ConstantLR, CosineAnnealingLR, LinearLR, SequentialLR
 
+from lightx2v_train.model_capabilities import WorldActionTrainingCapability
+from lightx2v_train.data.utils import require_singleton_dataloader
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import (
     barrier,
@@ -62,8 +64,10 @@ def _unwrap_dataset(dataset):
     return dataset
 
 
-@TRAINER_REGISTER("fastwam")
-class FastWAMTrainer:
+@TRAINER_REGISTER("world_action")
+class WorldActionTrainer:
+    required_capabilities = (WorldActionTrainingCapability,)
+
     def __init__(self, config):
         self.config = config
         self.model_config = config["model"]
@@ -119,8 +123,15 @@ class FastWAMTrainer:
 
     def set_model(self, model):
         self.model = model
+        registry = model.ensure_capabilities()
+        self.world_action = registry.require(
+            WorldActionTrainingCapability
+        )
 
     def set_data(self, dataloader_train, dataloader_eval=None):
+        require_singleton_dataloader(dataloader_train, "Training dataloader")
+        if dataloader_eval is not None:
+            require_singleton_dataloader(dataloader_eval, "Evaluation dataloader")
         self.dataloader_train = dataloader_train
         self.dataloader_eval = dataloader_eval
 
@@ -187,15 +198,14 @@ class FastWAMTrainer:
         )
 
     def setup(self, resume_ckpt_path=None):
-        self.model.set_dit_only_trainable()
-        self.model.log_model_structure()
-        self.trainable_params = list(self.model.trainable_parameters())
+        self.world_action.configure()
+        self.trainable_params = list(self.world_action.parameters())
         if not self.trainable_params:
             raise RuntimeError("FastWAM has no trainable parameters.")
 
         self.optimizer = self._build_optimizer()
         self.lr_scheduler = self._build_lr_scheduler()
-        self.train_module = self.model.unwrap_module()
+        self.train_module = self.world_action.module()
         self.ddp_enabled = False
         if is_distributed():
             self.train_module = DistributedDataParallel(
@@ -228,7 +238,7 @@ class FastWAMTrainer:
             raise RuntimeError(f"fastwam.pt not found in {resume_ckpt_path}")
         if not os.path.exists(state_path):
             raise RuntimeError(f"training_state.pt not found in {resume_ckpt_path}")
-        self.model.load_checkpoint(weights_path)
+        self.world_action.load_checkpoint(weights_path)
         state = torch.load(state_path, map_location="cpu", weights_only=False)
         if state.get("world_size") != get_world_size():
             raise RuntimeError(f"Cannot resume world_size={state.get('world_size')} checkpoint with world_size={get_world_size()}.")
@@ -304,7 +314,10 @@ class FastWAMTrainer:
             weights_path = os.path.join(save_dir, "fastwam.pt")
             temporary_weights_path = _temporary_path(weights_path)
             try:
-                self.model.save_checkpoint(temporary_weights_path, step=iteration)
+                self.world_action.save_checkpoint(
+                    temporary_weights_path,
+                    step=iteration,
+                )
                 os.replace(temporary_weights_path, weights_path)
             finally:
                 if os.path.exists(temporary_weights_path):
@@ -334,9 +347,11 @@ class FastWAMTrainer:
         )
 
     def _forward_loss(self, sample):
-        with self.model.autocast_context():
-            loss, loss_dict = self.train_module(sample)
-        return loss, loss_dict
+        result = self.world_action.compute_loss(
+            sample,
+            module=self.train_module,
+        )
+        return result.loss, result.metrics
 
     def _ddp_sync_context(self, sync_grad):
         if self.ddp_enabled and not sync_grad:
@@ -358,7 +373,7 @@ class FastWAMTrainer:
         start_time = time.perf_counter()
 
         logger.info(
-            "[train] start method=fastwam iter={}/{} world_size={} grad_accum={} log_every={}",
+            "[train] start method=world_action iter={}/{} world_size={} grad_accum={} log_every={}",
             current_iter,
             self.max_train_iters,
             get_world_size(),
@@ -437,7 +452,7 @@ class FastWAMTrainer:
         if len(eval_dataset) == 0:
             return
 
-        model = self.model.unwrap_module()
+        model = self.world_action.module()
         model.eval()
         step_dir = os.path.join(self.eval_output_dir, f"step_{current_iter:09d}")
         os.makedirs(step_dir, exist_ok=True)
@@ -492,7 +507,7 @@ class FastWAMTrainer:
             )
 
         barrier()
-        self.model.set_dit_only_trainable()
+        self.world_action.configure()
 
     def _to_batched_eval_sample(self, sample):
         result = {}
@@ -521,8 +536,9 @@ class FastWAMTrainer:
         rng_devices = [torch.cuda.current_device()] if torch.cuda.is_available() else []
         with torch.random.fork_rng(devices=rng_devices):
             torch.manual_seed(sample_seed)
-            with self.model.autocast_context():
-                val_loss, val_loss_dict = model.training_loss(sample)
+            evaluation = self.world_action.evaluation_loss(sample)
+            val_loss = evaluation.loss
+            val_loss_dict = evaluation.metrics
         result = {
             "sample_number": int(sample_number),
             "dataset_index": int(eval_index),

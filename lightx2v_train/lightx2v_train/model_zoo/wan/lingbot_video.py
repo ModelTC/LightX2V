@@ -9,10 +9,15 @@ from peft import LoraConfig, inject_adapter_in_model
 from peft.utils import set_peft_model_state_dict
 from safetensors.torch import load_file
 
+from lightx2v_train.model_capabilities import DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_zoo.capability_adapters.common import GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_distillation_capability import (
+    LingBotDistillationCapability,
+)
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
-from .base import BaseModel
+from ..base import BaseModel
 
 TOKEN_LENGTH = 37698
 HIDDEN_STATE_SKIP_LAYER = 0
@@ -39,6 +44,18 @@ class LingBotVideoDenoiserInput:
 @MODEL_REGISTER("lingbot_video")
 class LingBotVideoModel(BaseModel):
     pipeline_cls = None
+
+    def register_capabilities(self):
+        super().register_capabilities()
+        self.capabilities.register(
+            FlowMatchingSFTCapability,
+            GenericFlowMatchingCapability(self),
+        )
+        self.capabilities.register(
+            DistillationCapability,
+            LingBotDistillationCapability(self),
+        )
+
     vae_scale_factor_temporal = 4
     vae_scale_factor_spatial = 8
 
@@ -77,7 +94,7 @@ class LingBotVideoModel(BaseModel):
 
     def _load_transformer(self):
         try:
-            from .native.lingbot_video import LingBotVideoTransformer3DModel
+            from ..native.lingbot_video import LingBotVideoTransformer3DModel
         except ImportError as exc:
             raise ImportError("LingBot-Video training requires the diffusers APIs used by LingBotVideoTransformer3DModel.") from exc
 
@@ -251,6 +268,8 @@ class LingBotVideoModel(BaseModel):
         if self.text_encoder is None or self.processor is None:
             raise RuntimeError("LingBot-Video text encoder is not loaded. Use cached conditions or set model.load_text_encoder=true.")
         prompts = [prompt] if isinstance(prompt, (str, dict)) else list(prompt)
+        if len(prompts) != 1:
+            raise ValueError(f"LingBot-Video training requires exactly one prompt, got {len(prompts)}.")
         prompts = [self._normalize_prompt(text) for text in prompts]
         texts = [self.prompt_template.format(text) for text in prompts]
         inputs = self.processor(
@@ -320,6 +339,8 @@ class LingBotVideoModel(BaseModel):
             prompt_embed = prompt_embed.unsqueeze(0)
         if prompt_mask.ndim == 1:
             prompt_mask = prompt_mask.unsqueeze(0)
+        if prompt_embed.shape[0] != 1 or prompt_mask.shape[0] != 1:
+            raise ValueError("LingBot-Video cached conditions must have leading dimension 1.")
         return {"prompt_embed": prompt_embed, "prompt_attention_mask": prompt_mask}
 
     def encode_condition(self, sample):
@@ -336,11 +357,13 @@ class LingBotVideoModel(BaseModel):
         hidden_states = denoiser_input.hidden_states.to(device=self.device, dtype=self.running_dtype)
         if hidden_states.ndim == 4:
             hidden_states = hidden_states.unsqueeze(0)
+        if hidden_states.shape[0] != 1:
+            raise ValueError("LingBot-Video training only supports physical batch size 1.")
         sigma = timestep_or_sigma.to(device=self.device, dtype=torch.float32)
         if sigma.ndim == 0:
-            sigma = sigma.expand(hidden_states.shape[0])
-        elif sigma.shape[0] == 1 and hidden_states.shape[0] > 1:
-            sigma = sigma.expand(hidden_states.shape[0])
+            sigma = sigma.reshape(1)
+        elif sigma.numel() != 1:
+            raise ValueError("LingBot-Video training requires exactly one sigma value.")
         timestep = sigma * 1000.0
         prompt_embed = condition["prompt_embed"].to(device=self.device, dtype=self.running_dtype)
         prompt_mask = condition["prompt_attention_mask"].to(device=self.device)
@@ -362,14 +385,14 @@ class LingBotVideoModel(BaseModel):
     def _latent_channels(self):
         return int(self.transformer.config.in_channels)
 
-    def dmd_latent_shape(self, batch_size, height, width):
+    def dmd_latent_shape(self, height, width):
         num_frames = int(self.config.get("inference", {}).get("num_frames", 9))
         if num_frames != 1 and (num_frames - 1) % self.vae_scale_factor_temporal != 0:
             raise ValueError(f"LingBot-Video num_frames must be 1 or 4n+1, got {num_frames}.")
         if int(height) % 16 != 0 or int(width) % 16 != 0:
             raise ValueError(f"LingBot-Video height and width must be multiples of 16, got {height}x{width}.")
         return (
-            int(batch_size),
+            1,
             self._latent_channels(),
             (num_frames - 1) // self.vae_scale_factor_temporal + 1,
             int(height) // self.vae_scale_factor_spatial,
@@ -377,7 +400,7 @@ class LingBotVideoModel(BaseModel):
         )
 
     def prepare_infer_latents(self, height, width, generator=None):
-        shape = self.dmd_latent_shape(1, height, width)
+        shape = self.dmd_latent_shape(height, width)
         return torch.randn(shape, generator=generator, device=self.device, dtype=torch.float32)
 
     def _vae_latent_to_dit(self, latents):

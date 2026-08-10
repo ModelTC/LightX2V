@@ -43,27 +43,27 @@ class RectifiedFlowMatchingScheduler:
         self.infer_timesteps = None
         self.num_inference_steps = None
 
-    def sample_timestep_or_sigma(self, num_samples, latent_hw=None, seq_len=None):
+    def sample_timestep_or_sigma(self, latent_hw=None, seq_len=None):
         if self.timestep_distribution == "logitnormal":
-            timestep_or_sigma = torch.randn((num_samples,), device=self.device, dtype=torch.float32) * self.logitnormal_std + self.logitnormal_mean
+            timestep_or_sigma = torch.randn((1,), device=self.device, dtype=torch.float32) * self.logitnormal_std + self.logitnormal_mean
             timestep_or_sigma = torch.sigmoid(timestep_or_sigma)
             timestep_or_sigma = timestep_or_sigma * (self.max_t - self.min_t) + self.min_t  # [0, 1] -> [min_t, max_t]
         elif self.timestep_distribution == "uniform":
-            timestep_or_sigma = torch.rand((num_samples,), device=self.device)
+            timestep_or_sigma = torch.rand((1,), device=self.device)
             timestep_or_sigma = timestep_or_sigma * (self.max_t - self.min_t) + self.min_t  # [0, 1] -> [min_t, max_t]
         elif self.timestep_distribution in {"shifted_logit_normal", "shifted_logitnormal"}:
             if seq_len is None:
                 raise ValueError("scheduler.timestep_distribution='shifted_logit_normal' requires seq_len.")
-            timestep_or_sigma = self._sample_shifted_logit_normal(num_samples, seq_len)
+            timestep_or_sigma = self._sample_shifted_logit_normal(seq_len)
         else:
             raise ValueError(f"Unsupported timestep distribution: {self.timestep_distribution}")
         if self.do_time_shift:
             timestep_or_sigma = self.time_shift(timestep_or_sigma, latent_hw=latent_hw)
         return timestep_or_sigma.to(self.running_dtype)
 
-    def _sample_shifted_logit_normal(self, num_samples, seq_len):
+    def _sample_shifted_logit_normal(self, seq_len):
         mu = self._get_shift_for_sequence_length(seq_len)
-        normal = torch.randn((num_samples,), device=self.device, dtype=torch.float32) * self.logitnormal_std + mu
+        normal = torch.randn((1,), device=self.device, dtype=torch.float32) * self.logitnormal_std + mu
         samples = torch.sigmoid(normal)
 
         upper = torch.sigmoid(torch.tensor(mu + 3.0902 * self.logitnormal_std, device=self.device, dtype=torch.float32))
@@ -72,8 +72,8 @@ class RectifiedFlowMatchingScheduler:
         stretched = torch.where(stretched >= self.logitnormal_eps, stretched, 2 * self.logitnormal_eps - stretched)
         stretched = torch.clamp(stretched, 0, 1)
 
-        uniform = (1 - self.logitnormal_eps) * torch.rand((num_samples,), device=self.device, dtype=torch.float32) + self.logitnormal_eps
-        choose_shifted = torch.rand((num_samples,), device=self.device) > self.logitnormal_uniform_prob
+        uniform = (1 - self.logitnormal_eps) * torch.rand((1,), device=self.device, dtype=torch.float32) + self.logitnormal_eps
+        choose_shifted = torch.rand((1,), device=self.device) > self.logitnormal_uniform_prob
         return torch.where(choose_shifted, stretched, uniform)
 
     @staticmethod
@@ -175,33 +175,33 @@ class CausalForcingFlowMatchScheduler:
             y_shifted = y - y.min()
             self.linear_timesteps_weights = y_shifted * (num_inference_steps / y_shifted.sum())
 
-    def sample_chunkwise(self, batch_size, num_frames, num_frame_per_chunk, device, dtype):
+    def sample_chunkwise(self, num_frames, num_frame_per_chunk, device, dtype):
         index = torch.randint(
             0,
             self.num_train_timesteps,
-            (batch_size, num_frames),
+            (1, num_frames),
             device=device,
             dtype=torch.long,
         )
-        index = index.reshape(batch_size, -1, num_frame_per_chunk)
+        index = index.reshape(1, -1, num_frame_per_chunk)
         index[:, :, 1:] = index[:, :, 0:1]
-        index = index.reshape(batch_size, num_frames)
+        index = index.reshape(1, num_frames)
 
         sigmas = self.sigmas.to(device=device, dtype=dtype)[index]
         weights = self.linear_timesteps_weights.to(device=device, dtype=torch.float32)[index]
         return sigmas, weights
 
-    def sample_clean_augmentation(self, batch_size, num_frames, num_frame_per_chunk, max_timestep, device, dtype):
+    def sample_clean_augmentation(self, num_frames, num_frame_per_chunk, max_timestep, device, dtype):
         index = torch.randint(
             int(max_timestep),
             self.num_train_timesteps,
-            (batch_size, num_frames),
+            (1, num_frames),
             device=device,
             dtype=torch.long,
         )
-        index = index.reshape(batch_size, -1, num_frame_per_chunk)
+        index = index.reshape(1, -1, num_frame_per_chunk)
         index[:, :, 1:] = index[:, :, 0:1]
-        index = index.reshape(batch_size, num_frames)
+        index = index.reshape(1, num_frames)
         return self.sigmas.to(device=device, dtype=dtype)[index]
 
     def add_noise(self, latent, noise, sigmas):
@@ -234,8 +234,8 @@ class WanContinuousFlowMatchScheduler:
         minimum = float(weights.min().item())
         return minimum, float((weights - minimum).mean().item())
 
-    def sample_training_t(self, batch_size, device, dtype):
-        value = torch.rand((batch_size,), device=device, dtype=torch.float32)
+    def sample_training_t(self, device, dtype):
+        value = torch.rand((1,), device=device, dtype=torch.float32)
         return (self._phi(value, self.shift) * self.num_train_timesteps).to(dtype=dtype)
 
     def training_weight(self, timestep):

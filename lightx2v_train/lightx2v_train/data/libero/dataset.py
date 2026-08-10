@@ -213,7 +213,7 @@ def build_libero_fastwam_dataset(data_config, train_or_val="train"):
         shuffle = False
     return DataLoader(
         dataset,
-        batch_size=int(data_config.get("batch_size", 1)),
+        batch_size=1,
         shuffle=shuffle,
         sampler=sampler,
         num_workers=int(data_config.get("num_workers", 4)),

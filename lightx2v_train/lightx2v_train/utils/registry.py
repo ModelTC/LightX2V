@@ -72,40 +72,33 @@ DATA_REGISTER = Register()
 
 
 _MODEL_MODULES = {
-    "flux2_dev": "lightx2v_train.model_zoo.flux2_dev",
-    "flux2_klein": "lightx2v_train.model_zoo.flux2_klein",
-    "lingbot_video": "lightx2v_train.model_zoo.lingbot_video",
-    "longcat_image": "lightx2v_train.model_zoo.longcat_image",
-    "ltx_t2av": "lightx2v_train.model_zoo.ltx_t2av",
-    "ltx_t2av_ar": "lightx2v_train.model_zoo.ltx_t2av",
-    "qwen_image": "lightx2v_train.model_zoo.qwen_image",
-    "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image_edit",
-    "wan_t2v": "lightx2v_train.model_zoo.wan_t2v",
-    "wan_t2v_ar": "lightx2v_train.model_zoo.wan_t2v",
-    "wan_t2v_14b": "lightx2v_train.model_zoo.wan_t2v",
-    "wan_t2v_14b_ar": "lightx2v_train.model_zoo.wan_t2v",
-    "wan_fastwam": "lightx2v_train.model_zoo.wan_fastwam",
-    "wan_ti2v_5b": "lightx2v_train.model_zoo.wan_ti2v_5b",
-    "wan_ti2v_5b_ar": "lightx2v_train.model_zoo.wan_ti2v_5b",
+    "flux2_dev": "lightx2v_train.model_zoo.flux2.flux2_dev",
+    "flux2_klein": "lightx2v_train.model_zoo.flux2.flux2_klein",
+    "lingbot_video": "lightx2v_train.model_zoo.wan.lingbot_video",
+    "longcat_image": "lightx2v_train.model_zoo.longcat_image.longcat_image",
+    "ltx_t2av": "lightx2v_train.model_zoo.ltx.ltx_t2av",
+    "ltx_t2av_ar": "lightx2v_train.model_zoo.ltx.ltx_t2av",
+    "qwen_image": "lightx2v_train.model_zoo.qwen_image.qwen_image",
+    "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.qwen_image_edit",
+    "wan_t2v": "lightx2v_train.model_zoo.wan.wan_t2v",
+    "wan_t2v_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
+    "wan_t2v_14b": "lightx2v_train.model_zoo.wan.wan_t2v",
+    "wan_t2v_14b_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
+    "wan_fastwam": "lightx2v_train.model_zoo.wan.wan_fastwam",
+    "wan_ti2v_5b": "lightx2v_train.model_zoo.wan.wan_ti2v_5b",
+    "wan_ti2v_5b_ar": "lightx2v_train.model_zoo.wan.wan_ti2v_5b",
 }
 
 _TRAINER_MODULES = {
-    "cm": "lightx2v_train.trainers.consistency.trainer",
+    "autoregressive_dmd": "lightx2v_train.trainers.dmd.autoregressive_dmd",
     "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",
     "dopsd": "lightx2v_train.trainers.dopsd",
-    "fastwam": "lightx2v_train.trainers.fastwam",
-    "flow": "lightx2v_train.trainers.flow",
-    "lingbot_video_dmd": "lightx2v_train.trainers.dmd.video_trainer",
-    "ltx_t2av_ar_dmd": "lightx2v_train.trainers.dmd.ltx_trainer",
-    "ltx_t2av_dmd": "lightx2v_train.trainers.dmd.ltx_trainer",
-    "ltx_t2av_flow": "lightx2v_train.trainers.flow",
-    "ltx_t2av_teacher_forcing": "lightx2v_train.trainers.tf",
-    "teacher_forcing": "lightx2v_train.trainers.tf",
-    "video_ar_dmd": "lightx2v_train.trainers.dmd.video_ar_trainer",
-    "video_dmd": "lightx2v_train.trainers.dmd.video_trainer",
-    "video_phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
-    "video_sgmd": "lightx2v_train.trainers.sgmd",
+    "flow_matching": "lightx2v_train.trainers.flow_matching",
+    "phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
+    "sgmd": "lightx2v_train.trainers.sgmd",
+    "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",
+    "world_action": "lightx2v_train.trainers.world_action",
 }
 
 _INFERENCER_MODULES = {
@@ -173,8 +166,12 @@ def build_data(config, train_or_val):
     if train_or_val not in data_config:
         available_splits = ", ".join(repr(k) for k in sorted(data_config.keys()))
         raise ValueError(f"config['data'] has no key {train_or_val!r}. Available keys: {available_splits}")
-    data_config_split = data_config[train_or_val]
+    data_config_split = dict(data_config[train_or_val])
     data_name = data_config_split.get("name", "image_dataset")
+    if train_or_val == "train" and data_name == "prompt_dataset":
+        image_sizes = config.get("training", {}).get("dmd", {}).get("image_sizes")
+        if image_sizes is not None:
+            data_config_split["image_sizes"] = image_sizes
     _ensure_data_registered(data_name)
     if data_name not in DATA_REGISTER:
         available_names = ", ".join(sorted(DATA_REGISTER.keys()))

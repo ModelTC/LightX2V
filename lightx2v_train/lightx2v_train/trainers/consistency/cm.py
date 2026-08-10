@@ -7,14 +7,15 @@ import torch
 from torch import Tensor
 
 from .base import (
+    CapabilityDenoiser,
     ConsistencyBatch,
     ConsistencyObjective,
     ConsistencyStepContext,
     DenoiserRequest,
-    ModelDenoiser,
     ObjectiveOutput,
     RectifiedFlowPath,
     expand_time,
+    require_singleton_clean,
 )
 from .config import CMConfig, CMLossConfig, CMTimePairConfig
 from .objective_factory import CONSISTENCY_OBJECTIVE_REGISTER
@@ -160,9 +161,9 @@ class CMObjective(ConsistencyObjective):
         scheduler,
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
-        batch_size = clean.shape[0]
+        require_singleton_clean(clean)
         latent_hw = (clean.shape[-2], clean.shape[-1])
-        sampled_t = scheduler.sample_timestep_or_sigma(batch_size, latent_hw=latent_hw).to(clean.device)
+        sampled_t = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device)
         pair = self.time_pair_sampler.sample(sampled_t, context)
         return {
             "noise": torch.randn_like(clean),
@@ -176,9 +177,9 @@ class CMObjective(ConsistencyObjective):
         self,
         batch: ConsistencyBatch,
         training_state: Mapping[str, Tensor],
-        student: ModelDenoiser,
-        teacher: Optional[ModelDenoiser] = None,
-        references: Optional[Mapping[str, ModelDenoiser]] = None,
+        student: CapabilityDenoiser,
+        teacher: Optional[CapabilityDenoiser] = None,
+        references: Optional[Mapping[str, CapabilityDenoiser]] = None,
     ) -> ObjectiveOutput:
         del references
         terms = self.compute_loss_terms(batch, training_state, student, teacher)
@@ -201,8 +202,8 @@ class CMObjective(ConsistencyObjective):
         self,
         batch: ConsistencyBatch,
         training_state: Mapping[str, Tensor],
-        student: ModelDenoiser,
-        teacher: Optional[ModelDenoiser] = None,
+        student: CapabilityDenoiser,
+        teacher: Optional[CapabilityDenoiser] = None,
     ) -> CMLossTerms:
         clean = batch.clean
         noise = training_state["noise"]
@@ -269,7 +270,7 @@ class CMObjective(ConsistencyObjective):
         r: Tensor,
         condition,
         negative_condition,
-        teacher: ModelDenoiser,
+        teacher: CapabilityDenoiser,
     ) -> Tensor:
         conditional_velocity = teacher.predict(
             DenoiserRequest(

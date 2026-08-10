@@ -7,13 +7,14 @@ import torch
 from torch import Tensor
 
 from .base import (
+    CapabilityDenoiser,
     ConsistencyBatch,
     ConsistencyObjective,
     ConsistencyStepContext,
     DenoiserRequest,
-    ModelDenoiser,
     ObjectiveOutput,
     RectifiedFlowPath,
+    require_singleton_clean,
 )
 from .cm import classifier_free_guidance
 from .config import PCMConfig, PCMLossConfig, PCMSolverConfig
@@ -41,9 +42,9 @@ class PCMTimeGrid:
     def __init__(self, config: PCMSolverConfig):
         self.config = config
 
-    def sample(self, batch_size: int, scheduler, *, latent_hw, device) -> PCMTimeState:
+    def sample(self, scheduler, *, latent_hw, device) -> PCMTimeState:
         current, previous = self.build_grid(scheduler, latent_hw=latent_hw, device=device)
-        solver_index = torch.randint(0, self.config.num_solver_steps, (batch_size,), device=device)
+        solver_index = torch.randint(0, self.config.num_solver_steps, (1,), device=device)
         phase_starts = self.phase_start_indices(device)
         phase_index = torch.bucketize(solver_index, phase_starts, right=True) - 1
         phase_start_index = phase_starts[phase_index]
@@ -133,9 +134,9 @@ class PCMObjective(ConsistencyObjective):
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
         del context
+        require_singleton_clean(clean)
         latent_hw = (clean.shape[-2], clean.shape[-1])
         time = self.time_grid.sample(
-            clean.shape[0],
             scheduler,
             latent_hw=latent_hw,
             device=clean.device,
@@ -154,9 +155,9 @@ class PCMObjective(ConsistencyObjective):
         self,
         batch: ConsistencyBatch,
         training_state: Mapping[str, Tensor],
-        student: ModelDenoiser,
-        teacher: Optional[ModelDenoiser] = None,
-        references: Optional[Mapping[str, ModelDenoiser]] = None,
+        student: CapabilityDenoiser,
+        teacher: Optional[CapabilityDenoiser] = None,
+        references: Optional[Mapping[str, CapabilityDenoiser]] = None,
     ) -> ObjectiveOutput:
         del references
         if teacher is None:
@@ -209,7 +210,7 @@ class PCMObjective(ConsistencyObjective):
         time: Tensor,
         condition,
         negative_condition,
-        teacher: ModelDenoiser,
+        teacher: CapabilityDenoiser,
     ) -> Tensor:
         conditional = teacher.predict(DenoiserRequest(sample, time, condition, prediction_type="velocity"))
         scale = self.config.teacher.guidance_scale

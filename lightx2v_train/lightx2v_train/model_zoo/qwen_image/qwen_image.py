@@ -6,9 +6,11 @@ from diffusers import AutoencoderKLQwenImage, QwenImagePipeline, QwenImageTransf
 from diffusers.image_processor import VaeImageProcessor
 from torch import nn
 
+from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_zoo.capability_adapters.common import GenericConsistencyCapability, GenericDistillationCapability, GenericFlowMatchingCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
-from .base import BaseModel
+from ..base import BaseModel
 
 
 @dataclass
@@ -27,6 +29,21 @@ class QwenImageModel(BaseModel):
     """
 
     pipeline_cls = QwenImagePipeline
+
+    def register_capabilities(self):
+        super().register_capabilities()
+        self.capabilities.register(
+            FlowMatchingSFTCapability,
+            GenericFlowMatchingCapability(self),
+        )
+        self.capabilities.register(
+            DistillationCapability,
+            GenericDistillationCapability(self),
+        )
+        self.capabilities.register(
+            ConsistencyCapability,
+            GenericConsistencyCapability(self),
+        )
 
     def load_components(self, transformer_only=False, reference_model=None):
         if transformer_only:
@@ -197,9 +214,9 @@ class QwenImageModel(BaseModel):
         shape = (1, self.vae.config.z_dim, 1, latent_h, latent_w)
         return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
 
-    def dmd_latent_shape(self, batch_size, height, width):
+    def dmd_latent_shape(self, height, width):
         return (
-            int(batch_size),
+            1,
             int(self.vae.config.z_dim),
             1,
             int(height) // self.vae_scale_factor,

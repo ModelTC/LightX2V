@@ -45,7 +45,6 @@ data:
         random_start: false
         skip_missing: true
         decode_retries: 3
-        batch_size: 1
         num_workers: 4
         pin_memory: true
         shuffle: true
@@ -54,7 +53,6 @@ data:
         data_path:
             - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 5
-        batch_size: 1
         num_workers: 0
         shuffle: false
 
@@ -78,7 +76,7 @@ scheduler:
         max_resolution: [720, 1280]
 
 training:
-    method: flow
+    method: flow_matching
     train_type: lora
     max_train_iters: 3000
     gradient_accumulation_iters: 1

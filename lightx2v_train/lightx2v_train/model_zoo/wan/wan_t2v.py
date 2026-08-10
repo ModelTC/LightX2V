@@ -11,15 +11,31 @@ from peft import LoraConfig, inject_adapter_in_model
 from peft.utils import set_peft_model_state_dict
 from safetensors.torch import load_file
 
+from lightx2v_train.model_capabilities import (
+    AutoregressiveDistillationCapability,
+    DistillationCapability,
+    FlowMatchingSFTCapability,
+    TeacherForcingCapability,
+)
+from lightx2v_train.model_zoo.capability_adapters.common import GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_autoregressive_distillation_capability import (
+    WanAutoregressiveDistillationCapability,
+)
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_distillation_capability import (
+    WanDistillationCapability,
+)
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_teacher_forcing_capability import (
+    WanTeacherForcingCapability,
+)
 from lightx2v_train.runtime.distributed import get_sequence_parallel_world_size
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
-from .base import BaseModel
-from .native.wan.modules.causal_model import CausalWanModel
-from .native.wan.modules.model import WanModel
-from .native.wan.modules.t5 import T5EncoderModel
-from .native.wan.modules.vae import WanVAE
+from ..base import BaseModel
+from ..native.wan.modules.causal_model import CausalWanModel
+from ..native.wan.modules.model import WanModel
+from ..native.wan.modules.t5 import T5EncoderModel
+from ..native.wan.modules.vae import WanVAE
 
 
 @dataclass
@@ -33,6 +49,26 @@ class WanT2VDenoiserInput:
 @MODEL_REGISTER("wan_t2v")
 class WanT2VModel(BaseModel):
     pipeline_cls = None
+
+    def register_capabilities(self):
+        super().register_capabilities()
+        self.capabilities.register(
+            FlowMatchingSFTCapability,
+            GenericFlowMatchingCapability(self),
+        )
+        self.capabilities.register(
+            DistillationCapability,
+            WanDistillationCapability(self),
+        )
+        if self.use_causal_transformer:
+            self.capabilities.register(
+                AutoregressiveDistillationCapability,
+                WanAutoregressiveDistillationCapability(self),
+            )
+            self.capabilities.register(
+                TeacherForcingCapability,
+                WanTeacherForcingCapability(self),
+            )
 
     def load_components(self, transformer_only=False, reference_model=None):
         model_config = self.config["model"]
@@ -249,6 +285,8 @@ class WanT2VModel(BaseModel):
             latent = latent.to(device=self.device, dtype=self.running_dtype)
             if latent.ndim == 4:
                 latent = latent.unsqueeze(0)
+            if latent.shape[0] != 1:
+                raise ValueError("Wan training only supports physical batch size 1.")
             return latent
 
         if self.vae is None:
@@ -258,6 +296,8 @@ class WanT2VModel(BaseModel):
         if video is None:
             raise KeyError("Wan encode_to_latent expects inputs.video or inputs.latents.")
         video = video.to(device=self.device, dtype=self.vae_dtype)
+        if video.shape[0] != 1:
+            raise ValueError("Wan training only supports physical batch size 1.")
         latent = torch.stack(self.vae.encode(self._batch_to_list(video)), dim=0)
         return latent.to(dtype=self.running_dtype)
 
@@ -274,6 +314,8 @@ class WanT2VModel(BaseModel):
             prompt_embed = prompt_embed.to(device=self.device, dtype=self.running_dtype)
             if prompt_embed.ndim == 2:
                 prompt_embed = prompt_embed.unsqueeze(0)
+            if prompt_embed.shape[0] != 1:
+                raise ValueError("Wan cached conditions must have leading dimension 1.")
             return {"prompt_embed": prompt_embed}
 
         if self.text_encoder is None:
@@ -281,6 +323,8 @@ class WanT2VModel(BaseModel):
 
         prompt = conditioning.get("prompt", "")
         prompts = [prompt] if isinstance(prompt, str) else list(prompt)
+        if len(prompts) != 1:
+            raise ValueError(f"Wan training requires exactly one prompt, got {len(prompts)}.")
         text_device = torch.device("cpu") if self.t5_cpu else self.device
         contexts = self.text_encoder(prompts, text_device)
         prompt_embed = self._pad_contexts(contexts, device=self.device, dtype=self.running_dtype)
@@ -301,6 +345,8 @@ class WanT2VModel(BaseModel):
         hidden_states = denoiser_input.hidden_states.to(device=self.device, dtype=self.running_dtype)
         if hidden_states.ndim == 4:
             hidden_states = hidden_states.unsqueeze(0)
+        if hidden_states.shape[0] != 1:
+            raise ValueError("Wan denoising only supports physical batch size 1 during training.")
         seq_len = self._sequence_length(hidden_states)
 
         if isinstance(self.transformer, CausalWanModel):
@@ -352,6 +398,8 @@ class WanT2VModel(BaseModel):
             noisy_latent = noisy_latent.unsqueeze(0)
         if clean_latent.ndim == 4:
             clean_latent = clean_latent.unsqueeze(0)
+        if noisy_latent.shape[0] != 1 or clean_latent.shape[0] != 1:
+            raise ValueError("Wan teacher forcing only supports physical batch size 1.")
         timestep = self._causal_timestep(timestep, noisy_latent)
         if aug_t is not None:
             aug_t = self._causal_timestep(aug_t, noisy_latent)

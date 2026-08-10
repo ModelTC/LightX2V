@@ -6,23 +6,28 @@ import os
 import torch
 from loguru import logger
 
-from lightx2v_train.model_zoo import build_model
+from lightx2v_train.model_capabilities import (
+    ConsistencyCapability,
+    LossResult,
+    ParallelCapability,
+    TrainableModelCapability,
+)
+from lightx2v_train.model_zoo import build_loaded_model
 from lightx2v_train.runtime.distributed import get_data_parallel_world_size
-from lightx2v_train.runtime.parallel import apply_parallel
 from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
-from ..flow import FlowMatchingTrainer
+from ..base import BaseTrainer
+from ..flow_matching import FlowMatchingTrainer
 from .base import (
+    CapabilityDenoiser,
     ConsistencyBatch,
     ConsistencyStepContext,
-    ModelDenoiser,
     RectifiedFlowPath,
 )
 from .objective_factory import build_consistency_objective
 
 
-@TRAINER_REGISTER("cm")
 @TRAINER_REGISTER("consistency")
 class ConsistencyTrainer(FlowMatchingTrainer):
     """Shared trainer shell for consistency-model objectives.
@@ -33,6 +38,10 @@ class ConsistencyTrainer(FlowMatchingTrainer):
     """
 
     trainer_name = "consistency"
+    required_capabilities = (
+        *BaseTrainer.required_capabilities,
+        ConsistencyCapability,
+    )
 
     def __init__(self, config):
         super().__init__(config)
@@ -44,19 +53,32 @@ class ConsistencyTrainer(FlowMatchingTrainer):
         self.reference_denoisers = {}
         self._setup_resume_checkpoint = None
 
+    def set_model(self, model):
+        BaseTrainer.set_model(self, model)
+        self.consistency = model.capabilities.require(ConsistencyCapability)
+
     def setup(self, resume_ckpt_path=None):
         self._setup_resume_checkpoint = resume_ckpt_path
         super().setup(resume_ckpt_path=resume_ckpt_path)
-        self.student_denoiser = ModelDenoiser(self.model, self.path)
+        self.student_denoiser = CapabilityDenoiser(
+            self.consistency,
+            self.path,
+        )
 
         if self.objective.requires_teacher:
             self.teacher_model = self._build_frozen_teacher()
-            self.teacher_denoiser = ModelDenoiser(self.teacher_model, self.path)
+            self.teacher_denoiser = CapabilityDenoiser(
+                self.teacher_consistency,
+                self.path,
+            )
 
         for spec in self.objective.reference_model_specs:
             reference_model = self._build_frozen_reference(spec)
             self.reference_models[spec.role] = reference_model
-            self.reference_denoisers[spec.role] = ModelDenoiser(reference_model, self.path)
+            self.reference_denoisers[spec.role] = CapabilityDenoiser(
+                self.reference_capabilities[spec.role],
+                self.path,
+            )
 
         logger.info(
             "[train] consistency algorithm={} mode={} teacher={}",
@@ -66,20 +88,21 @@ class ConsistencyTrainer(FlowMatchingTrainer):
         )
 
     def _setup_trainable_model(self, model):
-        model.configure_consistency_model(self.objective.model_capabilities)
+        capability = model.ensure_capabilities().require(ConsistencyCapability)
+        capability.configure(self.objective.model_capabilities)
         super()._setup_trainable_model(model)
-        model.set_consistency_modules_trainable()
+        capability.restore_trainable_auxiliary()
 
         initialization = self.objective.student_initialization_checkpoint
         if initialization is not None and self._setup_resume_checkpoint is None:
             self._load_initial_model_weights(model, initialization)
             # Loading weights does not change requires_grad, but keeping this
             # call here makes that lifecycle guarantee explicit for new models.
-            model.set_consistency_modules_trainable()
+            capability.restore_trainable_auxiliary()
 
     def _restore_trainable_model(self, model):
         super()._restore_trainable_model(model)
-        model.set_consistency_modules_trainable()
+        model.ensure_capabilities().require(ConsistencyCapability).restore_trainable_auxiliary()
 
     def _load_initial_model_weights(self, model, checkpoint, *, role="student"):
         if not os.path.isdir(checkpoint):
@@ -109,12 +132,15 @@ class ConsistencyTrainer(FlowMatchingTrainer):
         teacher_config = copy.deepcopy(self.config)
         teacher_config["model"] = base_model_config
         teacher_config["model"].update(copy.deepcopy(teacher_override))
-        teacher_model = build_model(teacher_config)
-        teacher_model.load_components(transformer_only=True, reference_model=self.model)
-        teacher_model.denoiser_module().requires_grad_(False)
-        teacher_model.set_denoiser_eval()
-        apply_parallel(teacher_model, self.config)
-        teacher_model.set_denoiser_eval()
+        teacher_model = build_loaded_model(
+            teacher_config,
+            transformer_only=True,
+            reference_model=self.model,
+        )
+        self.teacher_consistency = teacher_model.capabilities.require(ConsistencyCapability)
+        self.teacher_consistency.set_frozen()
+        teacher_model.capabilities.require(ParallelCapability).apply(self.config)
+        self.teacher_consistency.set_frozen()
         logger.info(
             "[train] consistency teacher model={} path={}",
             teacher_config["model"]["name"],
@@ -144,21 +170,28 @@ class ConsistencyTrainer(FlowMatchingTrainer):
 
         reference_config = copy.deepcopy(self.config)
         reference_config["model"] = model_config
-        reference_model = build_model(reference_config)
-        reference_model.load_components(transformer_only=True, reference_model=self.model)
+        reference_model = build_loaded_model(
+            reference_config,
+            transformer_only=True,
+            reference_model=self.model,
+        )
+        capability = reference_model.capabilities.require(ConsistencyCapability)
         if self.train_type == "lora":
-            reference_model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
+            reference_model.capabilities.require(TrainableModelCapability).configure(
+                "lora",
+                {
+                    "rank": self.lora_rank,
+                    "alpha": self.lora_alpha,
+                    "target_modules": self.lora_target_modules,
+                },
+            )
         self._load_initial_model_weights(reference_model, spec.checkpoint, role=spec.role)
-        reference_model.denoiser_module().requires_grad_(False)
-        if spec.training_mode:
-            reference_model.denoiser_module().train()
-        else:
-            reference_model.set_denoiser_eval()
-        apply_parallel(reference_model, self.config)
-        if spec.training_mode:
-            reference_model.denoiser_module().train()
-        else:
-            reference_model.set_denoiser_eval()
+        capability.set_frozen(training=spec.training_mode)
+        reference_model.capabilities.require(ParallelCapability).apply(self.config)
+        capability.set_frozen(training=spec.training_mode)
+        if not hasattr(self, "reference_capabilities"):
+            self.reference_capabilities = {}
+        self.reference_capabilities[spec.role] = capability
         logger.info(
             "[train] consistency reference role={} model={} checkpoint={}",
             spec.role,
@@ -169,14 +202,14 @@ class ConsistencyTrainer(FlowMatchingTrainer):
 
     def compute_loss_on_sample(self, sample):
         with torch.no_grad():
-            clean = self.model.encode_to_latent(sample)
+            clean = self.consistency.encode_latent(sample)
             clean = broadcast_sequence_parallel_value(clean)
-            condition = self.model.encode_condition(sample)
+            condition = self.consistency.encode_condition(sample)
             condition = broadcast_sequence_parallel_value(condition)
 
             negative_condition = None
             if self.objective.requires_negative_condition:
-                negative_condition = self._encode_negative_condition(sample, clean.shape[0])
+                negative_condition = self._encode_negative_condition(sample)
                 negative_condition = broadcast_sequence_parallel_value(negative_condition)
 
             context = ConsistencyStepContext(
@@ -201,29 +234,27 @@ class ConsistencyTrainer(FlowMatchingTrainer):
             self.teacher_denoiser,
             self.reference_denoisers,
         )
-        return {"loss": output.loss, "metrics": output.metrics}
+        return LossResult(loss=output.loss, metrics=output.metrics)
 
-    def _encode_negative_condition(self, sample, batch_size):
+    def _encode_negative_condition(self, sample):
         conditioning = sample.get("conditioning", {})
         prompt = conditioning.get("prompt", "")
         negative_prompt = conditioning.get("negative_prompt")
 
         if negative_prompt is None:
-            values = [self.objective.negative_prompt] * batch_size
+            values = [self.objective.negative_prompt]
         elif isinstance(negative_prompt, str):
-            values = [negative_prompt] * batch_size
+            values = [negative_prompt]
         else:
             values = list(negative_prompt)
-            if len(values) == 1 and batch_size > 1:
-                values *= batch_size
-            elif len(values) != batch_size:
-                raise ValueError(f"Expected {batch_size} negative prompts, got {len(values)}.")
+            if len(values) != 1:
+                raise ValueError(f"Expected exactly one negative prompt, got {len(values)}.")
 
         fallback = self.objective.negative_prompt or " "
         values = [value if isinstance(value, str) and value.strip() else fallback for value in values]
-        encoded_prompt = values[0] if isinstance(prompt, str) and batch_size == 1 else values
+        encoded_prompt = values[0] if isinstance(prompt, str) else values
 
         negative_sample = dict(sample)
         negative_sample["conditioning"] = dict(conditioning)
         negative_sample["conditioning"]["prompt"] = encoded_prompt
-        return self.model.encode_condition(negative_sample)
+        return self.consistency.encode_condition(negative_sample)

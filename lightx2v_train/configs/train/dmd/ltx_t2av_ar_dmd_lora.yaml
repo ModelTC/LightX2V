@@ -49,7 +49,6 @@ data:
     train:
         name: latent_dataset
         data_path: /data/nvme5/gushiqiao/datatets/x2v_online/lightx2v_ltx_t2av/prompt_cache/metadata.jsonl
-        batch_size: 1
         num_workers: 4
         pin_memory: true
         shuffle: true
@@ -69,7 +68,7 @@ scheduler:
         extra_one_step: true
 
 training:
-    method: ltx_t2av_ar_dmd
+    method: autoregressive_dmd
     max_train_iters: 1000
     gradient_accumulation_iters: 4
     gradient_checkpointing: true

@@ -71,15 +71,15 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
         self.timesteps = self.infer_timesteps
         self.num_inference_steps = int(sigmas.numel() - 1)
 
-    def sigma_at(self, step_idx, batch_size, device=None, dtype=None):
-        sigma = self.sigmas[int(step_idx)].expand(int(batch_size))
+    def sigma_at(self, step_idx, device=None, dtype=None):
+        sigma = self.sigmas[int(step_idx)].reshape(1)
         if device is not None or dtype is not None:
             sigma = sigma.to(device=device, dtype=dtype)
         return sigma
 
-    def sample_renoise_sigma(self, batch_size, device=None, dtype=None):
+    def sample_renoise_sigma(self, device=None, dtype=None):
         device = device or self.device
-        raw = torch.rand((int(batch_size),), device=device, dtype=torch.float32)
+        raw = torch.rand((1,), device=device, dtype=torch.float32)
         if self.renoise_discrete_samples > 0:
             raw = torch.ceil(raw * self.renoise_discrete_samples) / self.renoise_discrete_samples
         raw = torch.clamp(raw, 1e-7, 1 - 1e-7)
@@ -89,13 +89,17 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
         return sigma
 
     def add_noise(self, latent, noise, sigmas):
+        if latent.shape[0] != 1 or noise.shape[0] != 1:
+            raise ValueError("DMD scheduler only supports physical batch size 1.")
         sigmas = sigmas.to(device=latent.device)
         sigmas = self._expand_to_ndim(sigmas, latent.ndim)
         return ((1.0 - sigmas) * latent + sigmas * noise).to(dtype=latent.dtype)
 
     def step_by_index(self, velocity, step_idx, sample):
-        sigma = self.sigma_at(step_idx, sample.shape[0], device=sample.device)
-        sigma_next = self.sigma_at(int(step_idx) + 1, sample.shape[0], device=sample.device)
+        if sample.shape[0] != 1:
+            raise ValueError("DMD scheduler only supports physical batch size 1.")
+        sigma = self.sigma_at(step_idx, device=sample.device)
+        sigma_next = self.sigma_at(int(step_idx) + 1, device=sample.device)
         sigma = self._expand_to_ndim(sigma, sample.ndim)
         sigma_next = self._expand_to_ndim(sigma_next, sample.ndim)
         next_sample = sample + (sigma_next - sigma) * velocity

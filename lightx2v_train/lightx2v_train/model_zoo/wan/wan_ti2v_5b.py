@@ -6,10 +6,10 @@ from lightx2v_train.runtime.distributed import get_sequence_parallel_world_size
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
 
-from .native.wan.modules.causal_model import CausalWanModel
-from .native.wan.modules.model2_2 import WanModel as Wan2_2Model
-from .native.wan.modules.t5 import T5EncoderModel
-from .native.wan.modules.vae2_2 import Wan2_2_VAE
+from ..native.wan.modules.causal_model import CausalWanModel
+from ..native.wan.modules.model2_2 import WanModel as Wan2_2Model
+from ..native.wan.modules.t5 import T5EncoderModel
+from ..native.wan.modules.vae2_2 import Wan2_2_VAE
 from .wan_t2v import WanT2VModel
 
 
@@ -130,8 +130,8 @@ class WanTI2V5BModel(WanT2VModel):
         hidden_states = denoiser_input.hidden_states.to(device=self.device, dtype=self.running_dtype)
         if hidden_states.ndim == 4:
             hidden_states = hidden_states.unsqueeze(0)
-        if timestep.ndim == 1 and timestep.shape[0] == 1 and hidden_states.shape[0] > 1:
-            timestep = timestep.expand(hidden_states.shape[0])
+        if hidden_states.shape[0] != 1:
+            raise ValueError("Wan TI2V training only supports physical batch size 1.")
 
         if isinstance(self.transformer, CausalWanModel):
             timestep = self._causal_timestep(timestep, hidden_states)

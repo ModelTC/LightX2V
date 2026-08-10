@@ -7,14 +7,15 @@ import torch.distributed as dist
 from torch import Tensor
 
 from .base import (
+    CapabilityDenoiser,
     ConsistencyBatch,
     ConsistencyStepContext,
     DenoiserRequest,
-    ModelDenoiser,
     ObjectiveOutput,
     RectifiedFlowPath,
     ReferenceModelSpec,
     expand_time,
+    require_singleton_clean,
 )
 from .cm import CMObjective
 from .config import TCMConfig
@@ -34,7 +35,7 @@ def _distributed_mask_summary(mask: Tensor) -> tuple[bool, bool]:
 class TwoStageDenoiser:
     """Route low times through frozen stage 1 and high times through stage 2."""
 
-    def __init__(self, stage1: ModelDenoiser, stage2: ModelDenoiser, transition_time: float):
+    def __init__(self, stage1: CapabilityDenoiser, stage2: CapabilityDenoiser, transition_time: float):
         self.stage1 = stage1
         self.stage2 = stage2
         self.transition_time = transition_time
@@ -88,18 +89,12 @@ class TCMObjective(CMObjective):
         scheduler,
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
-        batch_size = clean.shape[0]
+        require_singleton_clean(clean)
         latent_hw = (clean.shape[-2], clean.shape[-1])
-        t = scheduler.sample_timestep_or_sigma(batch_size, latent_hw=latent_hw).to(clean.device).float()
+        t = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device).float()
         t = t.clamp_min(self.tcm_config.transition_time + self.config.time_pair.safety_epsilon)
 
-        boundary_count = int(batch_size * self.tcm_config.boundary_probability)
-        if boundary_count:
-            permutation = torch.randperm(batch_size, device=clean.device)
-            boundary_mask = torch.zeros(batch_size, device=clean.device, dtype=torch.bool)
-            boundary_mask[permutation[:boundary_count]] = True
-        else:
-            boundary_mask = torch.rand(batch_size, device=clean.device) < self.tcm_config.boundary_probability
+        boundary_mask = torch.rand(1, device=clean.device) < self.tcm_config.boundary_probability
         t = torch.where(
             boundary_mask,
             torch.full_like(t, self.tcm_config.transition_time + self.config.time_pair.safety_epsilon),
@@ -120,9 +115,9 @@ class TCMObjective(CMObjective):
         self,
         batch: ConsistencyBatch,
         training_state: Mapping[str, Tensor],
-        student: ModelDenoiser,
-        teacher: Optional[ModelDenoiser] = None,
-        references: Optional[Mapping[str, ModelDenoiser]] = None,
+        student: CapabilityDenoiser,
+        teacher: Optional[CapabilityDenoiser] = None,
+        references: Optional[Mapping[str, CapabilityDenoiser]] = None,
     ) -> ObjectiveOutput:
         if references is None or "stage1" not in references:
             raise RuntimeError("TCM requires the frozen 'stage1' consistency model.")
