@@ -46,6 +46,9 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.num_grid_points = int(config["infer_steps"])
         self.video_shift = float(config.get("video_flow_shift", 12.0))
         self.audio_shift = float(config.get("audio_flow_shift", 3.0))
+        self.step_update = config.get("h3_step_update", "reference_blend")
+        if self.step_update not in {"reference_blend", "training_euler"}:
+            raise ValueError(f"MiniMax-H3 h3_step_update must be 'reference_blend' or 'training_euler', got {self.step_update!r}")
         if self.video_shift <= 0 or self.audio_shift <= 0:
             raise ValueError("MiniMax-H3 flow shifts must be positive")
         self.video_sigmas, self.video_timesteps = _make_schedule(self.num_grid_points, self.video_shift, AI_DEVICE)
@@ -147,13 +150,16 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.timestep_indices = inverse.to(AI_DEVICE)
 
     @staticmethod
-    def _step(sample, model_output, timestep, sigmas, step_index):
+    def _step(sample, model_output, timestep, sigmas, step_index, step_update):
         # H3 predicts a data-ward velocity.  Keep the round trip through
         # timestep separate from the stored sigma grid to match the reference.
         sigma_from_timestep = 1.0 - timestep.to(device=sample.device, dtype=sample.dtype)
         denoised = sample + sigma_from_timestep * model_output
         sigma = sigmas[step_index].to(device=sample.device, dtype=torch.float32)
         sigma_next = sigmas[step_index + 1].to(device=sample.device, dtype=torch.float32)
+        if step_update == "training_euler":
+            # Match MiniMaxH3T2AVDmdTrainer.run_back_simulation exactly.
+            return sample.float() + (sigma - sigma_next) * model_output.float()
         ratio = sigma_next / sigma
         return ratio * sample.float() + (1.0 - ratio) * denoised.float()
 
@@ -168,6 +174,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
             self.video_timesteps[self.step_index],
             self.video_sigmas,
             self.step_index,
+            self.step_update,
         )
         self.audio_latents[condition_audio_rows:] = self._step(
             self.audio_latents[condition_audio_rows:],
@@ -175,6 +182,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
             self.audio_timesteps[self.step_index],
             self.audio_sigmas,
             self.step_index,
+            self.step_update,
         )
 
     def clear(self):

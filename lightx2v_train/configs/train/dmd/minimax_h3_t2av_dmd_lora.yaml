@@ -1,0 +1,126 @@
+model:
+    name: minimax_h3_t2av
+    pretrained_model_name_or_path: /data/nvme6/gushiqiao/models/MiniMax-H3
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    local_files_only: true
+    patch_size: [1, 2, 2]
+    video_latent_channels: 24
+    audio_latent_channels: 32
+    vae_spatial_scale_factor: 16
+    # Full SDPA is impractical at H3 sequence lengths; this matches run_h3.py.
+    attention_backend: _flash_3_hub
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        # H3's checkpoint intentionally mixes fp32 projections with bf16 blocks.
+        mixed_precision:
+            param_dtype: null
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: latent_dataset
+        data_path: /data/nvme6/gushiqiao/datasets/minimax_h3_prompt_cache
+        batch_size: 1
+        num_workers: 2
+        pin_memory: true
+        shuffle: true
+        drop_last: true
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
+
+training:
+    method: minimax_h3_t2av_dmd
+    max_train_iters: 1000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 0
+    save_every_iters: 100
+    save_total_limit: 5
+    minimax_h3:
+        video_flow_shift: 6.0
+        audio_flow_shift: 3.0
+        video_loss_weight: 1.0
+        audio_loss_weight: 1.0
+        latent_dtype: fp32
+    dmd:
+        # Four student model evaluations; the terminal zero sigma is added internally.
+        num_inference_steps: 4
+        fake_update_ratio: 5
+        height: 768
+        width: 1344
+        # 124 = 17*7+5, about 5.17 seconds at H3's fixed 24 fps.
+        num_frames: 124
+        renoise_sigma_min: 0.02
+        renoise_sigma_max: 0.98
+        warp_denoising_step: false
+    student:
+        train_type: lora
+        lora:
+            rank: 128
+            alpha: 128
+            target_modules:
+                - to_q
+                - to_k
+                - to_v
+                - to_out.0
+                - ff.net.0.proj
+                - ff.net.2
+        optimizer:
+            learning_rate: 0.0001
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    fake:
+        train_type: lora
+        lora:
+            rank: 128
+            alpha: 128
+            target_modules:
+                - to_q
+                - to_k
+                - to_v
+                - to_out.0
+                - ff.net.0.proj
+                - ff.net.2
+        optimizer:
+            learning_rate: 0.00002
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.01
+            adam_epsilon: 0.00000001
+    teacher:
+        guidance_scale: 1.0
+        cfg_norm: none
+    output_dir: /data/nvme6/gushiqiao/codes/latest/LightX2V/lightx2v_train/output_train/minimax_h3_t2av_dmd_lora1
+
+inference:
+    method: none
+    infer_every_iters: null
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+
+resume:
+    auto_resume: true

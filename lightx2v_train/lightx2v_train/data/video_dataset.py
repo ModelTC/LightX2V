@@ -27,6 +27,7 @@ CONDITION_KEYS = (
     "video_prompt_embeds",
     "audio_prompt_embeds",
     "prompt_embeds",
+    "text_token_tags",
     "prompt_attention_mask",
     "video_context",
     "audio_context",
