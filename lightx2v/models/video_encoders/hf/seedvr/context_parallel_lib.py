@@ -1,10 +1,13 @@
-from typing import List
+from typing import List, Optional
 
 import torch
 import torch.distributed as dist
 from torch import Tensor
 
 from .common.distributed.advanced import (
+    get_next_sequence_parallel_rank,
+    get_prev_sequence_parallel_rank,
+    get_sequence_parallel_global_ranks,
     get_sequence_parallel_group,
     get_sequence_parallel_rank,
     get_sequence_parallel_world_size,
@@ -44,7 +47,7 @@ def causal_conv_slice_inputs(x, split_size, memory_state):
     return x.split(split_sizes, dim=2)[sp_rank]
 
 
-def causal_conv_gather_outputs(x):
+def causal_conv_gather_outputs(x, *, rank0_cpu: bool = False) -> Optional[Tensor]:
     sp_group = get_sequence_parallel_group()
     sp_size = get_sequence_parallel_world_size()
     if sp_group is None:
@@ -56,8 +59,32 @@ def causal_conv_gather_outputs(x):
     torch.distributed.all_gather_into_tensor(unpad_lens, local_unpad_len, group=sp_group)
 
     # Padding to max_len for gather.
-    max_len = unpad_lens.max()
+    max_len = int(unpad_lens.max().item())
     x_pad = safe_pad_operation(x, (0, 0, 0, 0, 0, max_len - x.size(2))).contiguous()
+
+    if rank0_cpu:
+        sp_rank = get_sequence_parallel_rank()
+        sp_global_ranks = get_sequence_parallel_global_ranks()
+        dst = sp_global_ranks[0]
+        unpad_lens_cpu = unpad_lens.cpu().tolist()
+        if sp_rank == 0:
+            output_shape = list(x_pad.shape)
+            output_shape[2] = sum(unpad_lens_cpu)
+            output_cpu = torch.empty(output_shape, device="cpu", dtype=x_pad.dtype)
+            offset = 0
+            local_len = unpad_lens_cpu[0]
+            output_cpu[:, :, offset : offset + local_len].copy_(x_pad[:, :, :local_len])
+            offset += local_len
+            for peer_rank, unpad_len in zip(sp_global_ranks[1:], unpad_lens_cpu[1:]):
+                recv_buffer = torch.empty_like(x_pad)
+                dist.recv(recv_buffer, src=peer_rank, group=sp_group)
+                output_cpu[:, :, offset : offset + unpad_len].copy_(recv_buffer[:, :, :unpad_len])
+                offset += unpad_len
+                del recv_buffer
+            return output_cpu
+
+        dist.send(x_pad, dst=dst, group=sp_group)
+        return None
 
     # Gather outputs.
     x_pad = Gather.apply(sp_group, x_pad, 2, True)
@@ -65,7 +92,7 @@ def causal_conv_gather_outputs(x):
     # Remove padding.
     x_pad_lists = list(x_pad.chunk(sp_size, dim=2))
     for i, (x_pad, unpad_len) in enumerate(zip(x_pad_lists, unpad_lens)):
-        x_pad_lists[i] = x_pad[:, :, :unpad_len]
+        x_pad_lists[i] = x_pad[:, :, : int(unpad_len.item())]
 
     return torch.cat(x_pad_lists, dim=2)
 
@@ -91,10 +118,11 @@ def cache_send_recv(tensor: List[Tensor], cache_size, times, memory=None):
     sp_group = get_sequence_parallel_group()
     sp_rank = get_sequence_parallel_rank()
     sp_size = get_sequence_parallel_world_size()
-    send_dst = 0
-    recv_src = 0
+    send_dst = get_next_sequence_parallel_rank()
+    recv_src = get_prev_sequence_parallel_rank()
     recv_buffer = None
     recv_req = None
+    send_req = None
 
     logger.debug(f"[sp{sp_rank}] cur_tensors:{[(t.size(), t.dtype) for t in tensor]}, times: {times}")
     if sp_rank == 0 or sp_group is None:
@@ -119,9 +147,11 @@ def cache_send_recv(tensor: List[Tensor], cache_size, times, memory=None):
                 tensor[0] = torch.cat([recv_buffer, tensor[0]], dim=2)
                 recv_buffer = None
             assert cache_size <= tensor[-1].size(2), f"Not enough value to cache, got {tensor[-1].size()}, cache_size={cache_size}"
-            dist.isend(tensor[-1][:, :, -cache_size:].detach().contiguous(), send_dst, group=sp_group)
+            send_req = dist.isend(tensor[-1][:, :, -cache_size:].detach().contiguous(), send_dst, group=sp_group)
         if recv_req is not None:
             recv_req.wait()
+        if send_req is not None:
+            send_req.wait()
 
     logger.debug(f"[sp{sp_rank}] recv_src:{recv_src}, recv_buffer:{recv_buffer.size() if recv_buffer is not None else None}")
     return recv_buffer

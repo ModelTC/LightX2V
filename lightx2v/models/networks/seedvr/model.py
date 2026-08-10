@@ -1,8 +1,10 @@
 import os
 
 import torch
+import torch.distributed as dist
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.seedvr.infer.offload.transformer_infer import SeedVROffloadTransformerInfer
 from lightx2v.models.networks.seedvr.infer.post_infer import SeedVRPostInfer
 from lightx2v.models.networks.seedvr.infer.pre_infer import SeedVRPreInfer
 from lightx2v.models.networks.seedvr.infer.transformer_infer import SeedVRTransformerInfer
@@ -92,13 +94,20 @@ class SeedVRNaDiTModel(BaseTransformerModel):
 
     def _init_infer_class(self):
         self.pre_infer_class = SeedVRPreInfer
-        self.transformer_infer_class = SeedVRTransformerInfer
+        if self.cpu_offload and self.offload_granularity == "block":
+            self.transformer_infer_class = SeedVROffloadTransformerInfer
+        elif not self.cpu_offload or self.offload_granularity == "model":
+            self.transformer_infer_class = SeedVRTransformerInfer
+        else:
+            raise ValueError(f"Unsupported SeedVR offload_granularity: {self.offload_granularity}")
         self.post_infer_class = SeedVRPostInfer
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
+        if hasattr(self.transformer_infer, "offload_manager"):
+            self._init_offload_manager()
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         # SeedVR weights are typically in .pth/.pt format, not safetensors.
@@ -107,8 +116,22 @@ class SeedVRNaDiTModel(BaseTransformerModel):
             ckpt_lower = str(ckpt_path).lower()
             if not ckpt_lower.endswith(".safetensors"):
                 try:
-                    map_location = "cpu" if self.device.type == "cpu" else AI_DEVICE
-                    state = torch.load(ckpt_path, map_location=map_location)
+                    distributed_rank0_load = dist.is_initialized() and self.config.get("load_from_rank0", False)
+                    map_location = "cpu" if self.device.type == "cpu" or distributed_rank0_load else AI_DEVICE
+                    load_kwargs = {"map_location": map_location}
+                    if map_location == "cpu":
+                        load_kwargs.update({"mmap": True, "weights_only": True})
+                    try:
+                        state = torch.load(ckpt_path, **load_kwargs)
+                    except Exception:
+                        # Older torch versions and checkpoints with custom globals may
+                        # not support the low-peak weights-only mmap path.
+                        load_kwargs.pop("weights_only", None)
+                        try:
+                            state = torch.load(ckpt_path, **load_kwargs)
+                        except TypeError:
+                            load_kwargs.pop("mmap", None)
+                            state = torch.load(ckpt_path, **load_kwargs)
                     if isinstance(state, dict) and "state_dict" in state:
                         state = state["state_dict"]
                     remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
@@ -173,8 +196,17 @@ class SeedVRNaDiTModel(BaseTransformerModel):
         texts_pos = inputs["text_encoder_output"]["texts_pos"]
         texts_neg = inputs["text_encoder_output"]["texts_neg"]
 
+        if self.cpu_offload and self.offload_granularity == "block":
+            # Each request/segment must begin with block 0 even if a previous
+            # inference was interrupted before the final buffer swap.
+            self.transformer_infer.offload_manager.need_init_first_buffer = True
+
         if self.cpu_offload:
-            self.to_cuda()
+            if self.offload_granularity == "model":
+                self.to_cuda()
+            else:
+                self.pre_weight.to_cuda()
+                self.post_weight.to_cuda()
             texts_pos[0] = texts_pos[0].to(AI_DEVICE)
             texts_neg[0] = texts_neg[0].to(AI_DEVICE)
 
@@ -213,5 +245,9 @@ class SeedVRNaDiTModel(BaseTransformerModel):
         latents_list = na_utils.unflatten(latents, latents_shapes)
         self.scheduler.latents = latents_list
         if self.cpu_offload:
-            self.to_cpu()
+            if self.offload_granularity == "model":
+                self.to_cpu()
+            else:
+                self.pre_weight.to_cpu()
+                self.post_weight.to_cpu()
         return
