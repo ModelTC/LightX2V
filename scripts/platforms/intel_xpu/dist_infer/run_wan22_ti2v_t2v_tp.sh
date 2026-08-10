@@ -9,7 +9,7 @@ model_path=${MODEL_PATH:-/llm/models/Wan2.2-TI2V-5B}
 config_json=${CONFIG_JSON:-${lightx2v_path}/configs/platforms/intel_xpu/dist_infer/wan22_ti2v_t2v_tp.json}
 output_path=${OUTPUT_PATH:-${lightx2v_path}/save_results/output_wan22_ti2v_t2v_tp.mp4}
 
-export LIGHTX2V_XPU_DEVICE_MAP=${LIGHTX2V_XPU_DEVICE_MAP:-0,1}
+export ZE_AFFINITY_MASK=${ZE_AFFINITY_MASK:-0,1}
 export PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-1}
 export PYTHONPATH=${PYTHONPATH:-}
 
