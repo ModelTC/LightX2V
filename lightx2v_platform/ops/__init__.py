@@ -2,6 +2,8 @@ import os
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 
+from .distributed import tensor_parallel_reduce
+
 PLATFORM = os.getenv("PLATFORM")
 if PLATFORM == "cambricon_mlu":
     from .attn.cambricon_mlu import *
@@ -25,6 +27,7 @@ elif PLATFORM == "enflame_gcu":
     from .rope.enflame_gcu import *
 elif PLATFORM == "intel_xpu":
     from .attn.intel_xpu import *
+    from .distributed.intel_xpu import tensor_parallel_reduce
     from .mm.intel_xpu import *
 elif PLATFORM == "iluvatar_cuda":
     from .attn.iluvatar_cuda import *

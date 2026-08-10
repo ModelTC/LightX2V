@@ -2,7 +2,6 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.mm.mm_weight import MMWeightTP
 from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightTP
 from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
 from lightx2v.utils.registry_factory import (
@@ -13,6 +12,7 @@ from lightx2v.utils.registry_factory import (
     ROPE_REGISTER,
     TENSOR_REGISTER,
 )
+from lightx2v_platform.ops import tensor_parallel_reduce
 
 _CAUSAL_ROPE_COMPUTE_DTYPES = {
     "float32": torch.float32,
@@ -42,34 +42,6 @@ def _build_causal_rope(config):
     )
 
 
-def _tp_sum(tensor, tp_group, tp_size, use_all_gather_reduce):
-    """Sum TP partials without interleaving oneCCL all-reduce with SP A2A."""
-    if use_all_gather_reduce and tensor.device.type == "xpu":
-        partials = [torch.empty_like(tensor) for _ in range(tp_size)]
-        dist.all_gather(partials, tensor.contiguous(), group=tp_group)
-        tensor.copy_(partials[0])
-        for partial in partials[1:]:
-            tensor.add_(partial)
-    else:
-        dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=tp_group)
-
-
-class WanTensorParallelLinear(MMWeightTP):
-    """Wan TP linear with an XPU-safe reduction path for combined TP+SP."""
-
-    def __init__(self, *args, use_all_gather_reduce=False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.use_all_gather_reduce = use_all_gather_reduce
-
-    def apply(self, input_tensor):
-        output = self._mm.apply(input_tensor)
-        if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
-            _tp_sum(output, self.tp_group, self.tp_size, self.use_all_gather_reduce)
-            if self._row_split_bias is not None:
-                output = output + self._row_split_bias
-        return output
-
-
 def _mm_weight(
     config,
     weight_name,
@@ -90,7 +62,7 @@ def _mm_weight(
             mm_type = "Calib"
     if config.get("tensor_parallel", False) and split_dim is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        return WanTensorParallelLinear(
+        return MM_WEIGHT_REGISTER["TensorParallel"](
             weight_name=weight_name,
             bias_name=bias_name,
             mm_type=mm_type,
@@ -104,7 +76,7 @@ def _mm_weight(
             lazy_load_file=lazy_load_file,
             lora_prefix=lora_prefix,
             lora_path=lora_path,
-            use_all_gather_reduce=config.get("seq_parallel", False),
+            prefer_all_gather=config.get("seq_parallel", False),
         )
     return MM_WEIGHT_REGISTER[mm_type](
         weight_name,
@@ -121,15 +93,20 @@ def _mm_weight(
 class WanTensorParallelRMSWeight(RMSWeightTP):
     """RMSNorm over the full Q/K hidden dimension sharded by Wan TP."""
 
-    def __init__(self, *args, use_all_gather_reduce=False, **kwargs):
+    def __init__(self, *args, prefer_all_gather=False, **kwargs):
         super().__init__(*args, **kwargs)
-        self.use_all_gather_reduce = use_all_gather_reduce
+        self.prefer_all_gather = prefer_all_gather
 
     def apply(self, input_tensor):
         input_fp32 = input_tensor.float()
         local_sum = input_fp32.square().sum(dim=-1, keepdim=True)
         if self.tp_size > 1 and self.tp_group is not None:
-            _tp_sum(local_sum, self.tp_group, self.tp_size, self.use_all_gather_reduce)
+            tensor_parallel_reduce(
+                local_sum,
+                self.tp_group,
+                self.tp_size,
+                prefer_all_gather=self.prefer_all_gather,
+            )
 
         global_hidden_dim = input_tensor.shape[-1] * self.tp_size
         normalized = input_fp32 * torch.rsqrt(local_sum / global_hidden_dim + self.eps)
@@ -151,7 +128,7 @@ def _rms_weight(config, weight_name, create_cuda_buffer=False, create_cpu_buffer
                 lazy_load_file=lazy_load_file,
                 lora_prefix=lora_prefix,
                 lora_path=lora_path,
-                use_all_gather_reduce=True,
+                prefer_all_gather=True,
             )
         tp_rms_norm_type = config.get("tp_rms_norm_type", "TensorParallelFP32")
         return RMS_WEIGHT_REGISTER[tp_rms_norm_type](
