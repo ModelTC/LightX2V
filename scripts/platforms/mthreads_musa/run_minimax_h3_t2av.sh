@@ -26,4 +26,3 @@ python -m lightx2v.infer \
     --prompt "$prompt" \
     --save_result_path ${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av10.mp4 \
     --seed 0
-
