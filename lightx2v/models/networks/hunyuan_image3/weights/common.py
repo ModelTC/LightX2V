@@ -1,11 +1,18 @@
 import math
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 
 import lightx2v.common.ops  # noqa: F401
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.models.networks.hunyuan_image3.weights.hybrid_tp import (
+    FUSED_GATE_UP_LAYOUT,
+    GROUPED_QKV_LAYOUT,
+    PLAIN_LAYOUT,
+    HunyuanImage3HybridTensorParallelLinear,
+    resolve_micro_shard_count,
+    resolve_storage_tp,
+)
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -41,6 +48,7 @@ def hunyuan_image3_mm_weight(
     weight_name,
     bias_name=None,
     split_dim=None,
+    weight_layout=PLAIN_LAYOUT,
     reduce_output=True,
     create_cuda_buffer=False,
     create_cpu_buffer=False,
@@ -50,14 +58,45 @@ def hunyuan_image3_mm_weight(
     lora_path=None,
 ):
     if config.get("tensor_parallel", False) and split_dim is not None:
-        tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+        parallel_context, tp_group, tp_rank, tp_size = resolve_storage_tp(config)
+        if parallel_context is not None:
+            micro_shard_count = resolve_micro_shard_count(config, tp_size)
+            qkv_group_width = None
+            if weight_layout == GROUPED_QKV_LAYOUT:
+                heads = int(config.get("num_attention_heads") or config["num_heads"])
+                kv_heads = int(config.get("num_key_value_heads") or heads)
+                head_dim = int(config.get("attention_head_dim", config["hidden_size"] // heads))
+                if heads % kv_heads:
+                    raise ValueError(f"HunyuanImage3 Q heads ({heads}) must be divisible by KV heads ({kv_heads}).")
+                qkv_group_width = (heads // kv_heads + 2) * head_dim
+            return HunyuanImage3HybridTensorParallelLinear(
+                weight_name=weight_name,
+                bias_name=bias_name,
+                mm_type=mm_type,
+                tp_group=tp_group,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                split_dim=split_dim,
+                parallel_context=parallel_context,
+                micro_shard_count=micro_shard_count,
+                weight_layout=weight_layout,
+                qkv_group_width=qkv_group_width,
+                hidden_act=config.get("hidden_act", "silu"),
+                create_cuda_buffer=create_cuda_buffer,
+                create_cpu_buffer=create_cpu_buffer,
+                lazy_load=lazy_load,
+                lazy_load_file=lazy_load_file,
+                lora_prefix=lora_prefix,
+                lora_path=lora_path,
+                reduce_output=reduce_output,
+            )
         return MM_WEIGHT_REGISTER["TensorParallel"](
             weight_name=weight_name,
             bias_name=bias_name,
             mm_type=mm_type,
             tp_group=tp_group,
-            tp_rank=dist.get_rank(tp_group),
-            tp_size=dist.get_world_size(tp_group),
+            tp_rank=tp_rank,
+            tp_size=tp_size,
             split_dim=split_dim,
             create_cuda_buffer=create_cuda_buffer,
             create_cpu_buffer=create_cpu_buffer,
@@ -311,6 +350,7 @@ class HunyuanImage3DenseMLPWeights(WeightModule):
                 f"{prefix}.gate_and_up_proj.weight",
                 gate_and_up_bias,
                 split_dim="col",
+                weight_layout=FUSED_GATE_UP_LAYOUT,
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=lazy_load,
@@ -355,6 +395,9 @@ class HunyuanImage3MoEWeights(WeightModule):
         self.num_experts = int(_moe_value(config, "num_experts", block_index, 1))
         self.moe_topk = int(_moe_value(config, "moe_topk", block_index, 1))
         self.moe_impl = config.get("moe_impl", "eager")
+        self.parallel_context, _, self.storage_tp_rank, self.storage_tp_size = resolve_storage_tp(config)
+        self.micro_shard_count = resolve_micro_shard_count(config, self.storage_tp_size) if self.parallel_context is not None else 1
+        self.flashinfer_logical_tp_size = self.storage_tp_size * self.micro_shard_count
         self.moe_weight = None
         self.moe_weight_2 = None
         self._flashinfer_weights_initialized = False
@@ -446,7 +489,10 @@ class HunyuanImage3MoEWeights(WeightModule):
             raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' expects bias-free expert MLP weights.")
 
         # LightX2V MM weights are stored as [in, out] for torch.mm(input, weight).
-        # FlashInfer follows torch.nn.Linear/checkpoint layout [out, in].
+        # FlashInfer follows torch.nn.Linear/checkpoint layout [out, in].  For
+        # the default loader the transpose is already a contiguous view of the
+        # checkpoint tensor, so this does not allocate unless device/dtype
+        # conversion is genuinely required during one-time initialization.
         return weight.t().to(device=device, dtype=dtype).contiguous()
 
     @classmethod
@@ -458,30 +504,80 @@ class HunyuanImage3MoEWeights(WeightModule):
                 setattr(linear, attr, empty)
 
     def ensure_flashinfer_weights(self, device, dtype):
+        """Build the single phase-neutral ``[micro, expert, ...]`` pack.
+
+        AR selects one leading-axis view.  Denoising selects both views and
+        sums their partial outputs before its storage-TP all-reduce.  The pack
+        is never rebuilt or converted when the active phase changes.
+        """
+
         device = torch.device(device)
         if dtype not in (torch.float16, torch.bfloat16):
             dtype = torch.bfloat16
 
         if self._flashinfer_weights_initialized:
-            if self.moe_weight.device != device:
-                self.moe_weight = self.moe_weight.to(device=device)
-                self.moe_weight_2 = self.moe_weight_2.to(device=device)
-            if self.moe_weight.dtype != dtype:
-                self.moe_weight = self.moe_weight.to(dtype=dtype)
-                self.moe_weight_2 = self.moe_weight_2.to(dtype=dtype)
-            self._flashinfer_weight_device = self.moe_weight.device
-            self._flashinfer_weight_dtype = self.moe_weight.dtype
+            if self.moe_weight.device != device or self.moe_weight.dtype != dtype:
+                raise RuntimeError(
+                    "HunyuanImage3 phase-neutral FlashInfer weights cannot be converted after initialization: "
+                    f"resident=({self.moe_weight.device}, {self.moe_weight.dtype}), requested=({device}, {dtype})."
+                )
+            if self.parallel_context is None:
+                return self.moe_weight[0], self.moe_weight_2[0]
             return self.moe_weight, self.moe_weight_2
 
-        expert_weights_gate_up = []
-        expert_weights_down = []
-        for expert in self.experts:
-            expert_weights_gate_up.append(self._linear_weight_for_flashinfer(expert.gate_and_up_proj, device, dtype))
-            expert_weights_down.append(self._linear_weight_for_flashinfer(expert.down_proj, device, dtype))
+        first_gate_up = self._linear_weight_for_flashinfer(self.experts[0].gate_and_up_proj, device, dtype)
+        first_down = self._linear_weight_for_flashinfer(self.experts[0].down_proj, device, dtype)
+        if first_gate_up.ndim != 2 or first_gate_up.shape[0] % (2 * self.micro_shard_count):
+            raise RuntimeError(f"Invalid HunyuanImage3 FlashInfer gate/up resident shape {tuple(first_gate_up.shape)} for {self.micro_shard_count} micro shards.")
+        micro_intermediate = first_gate_up.shape[0] // (2 * self.micro_shard_count)
+        hidden_size = first_gate_up.shape[1]
+        if first_down.shape != (hidden_size, self.micro_shard_count * micro_intermediate):
+            raise RuntimeError(f"HunyuanImage3 FlashInfer down weight does not match gate/up micro shards: gate_up={tuple(first_gate_up.shape)}, down={tuple(first_down.shape)}.")
 
-        self.moe_weight = torch.stack(expert_weights_gate_up, dim=0).contiguous()
-        self.moe_weight_2 = torch.stack(expert_weights_down, dim=0).contiguous()
+        # Allocate the final resident pack once and copy experts into it
+        # directly. This avoids retaining a second list of expert tensors;
+        # sources are released together after the full pack is validated.
+        self.moe_weight = torch.empty(
+            self.micro_shard_count,
+            self.num_experts,
+            2 * micro_intermediate,
+            hidden_size,
+            device=device,
+            dtype=dtype,
+        )
+        self.moe_weight_2 = torch.empty(
+            self.micro_shard_count,
+            self.num_experts,
+            hidden_size,
+            micro_intermediate,
+            device=device,
+            dtype=dtype,
+        )
 
+        for expert_index, expert in enumerate(self.experts):
+            if expert_index == 0:
+                gate_up = first_gate_up
+                down = first_down
+            else:
+                gate_up = self._linear_weight_for_flashinfer(expert.gate_and_up_proj, device, dtype)
+                down = self._linear_weight_for_flashinfer(expert.down_proj, device, dtype)
+            if gate_up.shape != first_gate_up.shape or down.shape != first_down.shape:
+                raise RuntimeError(f"HunyuanImage3 expert {expert_index} shape differs while building the universal FlashInfer pack: gate_up={tuple(gate_up.shape)}, down={tuple(down.shape)}.")
+
+            # gate_up was organized by the checkpoint loader as
+            # [g_micro0,u_micro0,g_micro1,u_micro1,...].  Down remains
+            # [hidden, intermediate_micro0, intermediate_micro1,...].
+            gate_up_micro = gate_up.reshape(self.micro_shard_count, 2 * micro_intermediate, hidden_size)
+            down_micro = down.reshape(hidden_size, self.micro_shard_count, micro_intermediate).permute(1, 0, 2)
+            self.moe_weight[:, expert_index].copy_(gate_up_micro)
+            self.moe_weight_2[:, expert_index].copy_(down_micro)
+
+        if not all(self.moe_weight[index].is_contiguous() and self.moe_weight_2[index].is_contiguous() for index in range(self.micro_shard_count)):
+            raise RuntimeError("HunyuanImage3 FlashInfer micro-shard views must be contiguous.")
+
+        # Release source tensors only after every expert has been validated and
+        # copied. A malformed checkpoint therefore cannot leave a half-built,
+        # non-retryable pack behind.
         for expert in self.experts:
             self._release_linear_weight(expert.gate_and_up_proj, self.moe_weight.device, self.moe_weight.dtype)
             self._release_linear_weight(expert.down_proj, self.moe_weight_2.device, self.moe_weight_2.dtype)
@@ -489,6 +585,60 @@ class HunyuanImage3MoEWeights(WeightModule):
         self._flashinfer_weights_initialized = True
         self._flashinfer_weight_device = self.moe_weight.device
         self._flashinfer_weight_dtype = self.moe_weight.dtype
+        if self.parallel_context is None:
+            return self.moe_weight[0], self.moe_weight_2[0]
+        return self.moe_weight, self.moe_weight_2
+
+    def _active_flashinfer_micro_shard_ids(self):
+        if self.parallel_context is None or self.micro_shard_count == 1:
+            return (0,)
+        active_tp_size = int(getattr(self.parallel_context, "active_tp_size", getattr(self.parallel_context, "tp_size", self.storage_tp_size)))
+        if active_tp_size == self.storage_tp_size:
+            return tuple(range(self.micro_shard_count))
+        if active_tp_size == self.flashinfer_logical_tp_size:
+            micro_id = int(getattr(self.parallel_context, "local_micro_shard_id"))
+            if not 0 <= micro_id < self.micro_shard_count:
+                raise RuntimeError(f"Invalid HunyuanImage3 local FlashInfer micro shard id {micro_id}.")
+            return (micro_id,)
+        raise RuntimeError(f"HunyuanImage3 FlashInfer active TP size must be {self.storage_tp_size} or {self.flashinfer_logical_tp_size}; got {active_tp_size}.")
+
+    def canonical_flashinfer_tp_rank(self, micro_shard_id):
+        micro_shard_id = int(micro_shard_id)
+        if not 0 <= micro_shard_id < self.micro_shard_count:
+            raise ValueError(f"Invalid HunyuanImage3 FlashInfer micro shard id {micro_shard_id}.")
+        return self.storage_tp_rank * self.micro_shard_count + micro_shard_id
+
+    def active_flashinfer_weight_shards(self, device, dtype):
+        """Return active zero-copy FI views as ``(micro, tp_rank, w1, w2)``."""
+
+        self.ensure_flashinfer_weights(device, dtype)
+        return tuple(
+            (
+                micro_id,
+                self.canonical_flashinfer_tp_rank(micro_id),
+                self.moe_weight[micro_id],
+                self.moe_weight_2[micro_id],
+            )
+            for micro_id in self._active_flashinfer_micro_shard_ids()
+        )
+
+    def active_flashinfer_multi_micro_weights(self, device, dtype):
+        """Return the resident multi-micro packs without copying or reordering.
+
+        The multi-micro MoE path is valid only when every resident micro shard
+        is active (the denoising TP2 phase in the phase-aware topology).  AR
+        continues to select one zero-copy leading-axis view through
+        :meth:`active_flashinfer_weight_shards` and uses the official
+        FlashInfer operator.
+        """
+
+        if self.micro_shard_count != 2:
+            raise RuntimeError(f"HunyuanImage3 multi-micro MoE requires exactly two resident micro shards; got {self.micro_shard_count}.")
+        self.ensure_flashinfer_weights(device, dtype)
+        active_micro_ids = self._active_flashinfer_micro_shard_ids()
+        expected_micro_ids = tuple(range(self.micro_shard_count))
+        if active_micro_ids != expected_micro_ids:
+            raise RuntimeError(f"HunyuanImage3 multi-micro FlashInfer weights require all resident micro shards to be active: active={active_micro_ids}, resident={expected_micro_ids}.")
         return self.moe_weight, self.moe_weight_2
 
 
@@ -527,6 +677,7 @@ class HunyuanImage3AttentionWeights(WeightModule):
                 f"{prefix}.self_attn.qkv_proj.weight",
                 attn_bias and f"{prefix}.self_attn.qkv_proj{attn_bias}",
                 split_dim="col",
+                weight_layout=GROUPED_QKV_LAYOUT,
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=lazy_load,
