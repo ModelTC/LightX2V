@@ -295,6 +295,26 @@ class I2AVInputInfo:
 
 
 @dataclass
+class L2AVInputInfo(T2AVInputInfo):
+    last_frame_path: str = field(default_factory=str)
+
+
+@dataclass
+class FL2AVInputInfo(T2AVInputInfo):
+    image_path: str = field(default_factory=str)
+    last_frame_path: str = field(default_factory=str)
+
+
+@dataclass
+class Ref2AVInputInfo(T2AVInputInfo):
+    # Reuse the repository-wide media CLI. Comma-separated strings and Python
+    # sequences are normalized by MiniMaxH3Runner.
+    image_path: Any = field(default_factory=str)
+    video_path: Any = field(default_factory=str)
+    audio_path: Any = field(default_factory=str)
+
+
+@dataclass
 class I2VAInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
@@ -500,6 +520,9 @@ task_dict = {
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,
+    "l2av": L2AVInputInfo,
+    "fl2av": FL2AVInputInfo,
+    "ref2av": Ref2AVInputInfo,
     "i2va": I2VAInputInfo,
     "v2av": V2AVInputInfo,
     "ltx2_s2v": LTX2S2VInputInfo,

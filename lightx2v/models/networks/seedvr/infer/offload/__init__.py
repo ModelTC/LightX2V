@@ -1,0 +1,1 @@
+from lightx2v.models.networks.seedvr.infer.offload.transformer_infer import SeedVROffloadTransformerInfer

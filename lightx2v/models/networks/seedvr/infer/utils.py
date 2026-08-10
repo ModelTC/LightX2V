@@ -1,19 +1,22 @@
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 
 from lightx2v.models.networks.seedvr.utils.ops import slice_inputs
 
 
 def rms_norm_no_weight(x: torch.Tensor, eps: float) -> torch.Tensor:
-    # Keep computation in input dtype to avoid a full fp32 copy
+    if hasattr(F, "rms_norm"):
+        return F.rms_norm(x, (x.shape[-1],), weight=None, eps=eps)
+
+    # PyTorch < 2.4 compatibility. Keep computation in input dtype to avoid a
+    # full fp32 copy when the native fused op is unavailable.
     var = x.pow(2).mean(dim=-1, keepdim=True)
     return x * torch.rsqrt(var + eps)
 
 
 def layer_norm_no_weight(x: torch.Tensor, eps: float) -> torch.Tensor:
-    mean = x.mean(dim=-1, keepdim=True)
-    var = (x - mean).pow(2).mean(dim=-1, keepdim=True)
-    return (x - mean) * torch.rsqrt(var + eps)
+    return F.layer_norm(x, (x.shape[-1],), weight=None, bias=None, eps=eps)
 
 
 def norm_no_weight(x: torch.Tensor, norm_type: str, eps: float) -> torch.Tensor:
@@ -38,6 +41,7 @@ def apply_adaln_single(
     shift: torch.Tensor,
     scale: torch.Tensor,
     gate: torch.Tensor,
+    inplace: bool = False,
 ) -> torch.Tensor:
     emb = rearrange(emb, "b (d l g) -> b d l g", l=num_layers, g=3)[..., layer_idx, :]
     target_dim = shift.shape[-1] if shift is not None else emb.shape[1]
@@ -59,8 +63,12 @@ def apply_adaln_single(
     shift_a, scale_a, gate_a = emb.unbind(-1)
 
     if mode == "in":
+        if inplace:
+            return hid.mul_(scale_a + scale).add_(shift_a + shift)
         return hid.mul(scale_a + scale).add_(shift_a + shift)
     if mode == "out":
+        if inplace:
+            return hid.mul_(gate_a + gate)
         return hid.mul(gate_a + gate)
 
     raise NotImplementedError(f"Unsupported AdaLN mode: {mode}")

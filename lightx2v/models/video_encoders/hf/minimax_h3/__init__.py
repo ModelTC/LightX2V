@@ -1,0 +1,1 @@
+from .video_vae import AutoencoderKLMiniMaxH3Native, MiniMaxH3VideoVAE

@@ -3,6 +3,7 @@ Distributed ops for supporting sequence parallel.
 """
 
 from collections import defaultdict
+from functools import cache
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -22,6 +23,61 @@ _SEQ_DATA_META_SHAPES = defaultdict()
 _SEQ_DATA_META_DTYPES = defaultdict()
 _SEQ_DATA_ASYNC_COMMS = defaultdict(list)
 _SYNC_BUFFER = defaultdict(dict)
+_SEQUENCE_PARALLEL_A2A_BACKEND = "torch"
+
+
+def set_sequence_parallel_a2a_backend(backend: str) -> None:
+    """Select the A2A transport used by SeedVR's Ulysses collectives."""
+    if backend not in ("torch", "round_robin"):
+        raise ValueError(f"Unsupported SeedVR A2A backend: {backend!r}")
+    global _SEQUENCE_PARALLEL_A2A_BACKEND
+    _SEQUENCE_PARALLEL_A2A_BACKEND = backend
+
+
+@cache
+def _get_round_robin_schedule(world_size: int, rank: int):
+    if world_size % 2 != 0:
+        raise ValueError(f"round_robin Ulysses A2A requires an even world_size, got {world_size}.")
+
+    teams = list(range(world_size))
+    schedule = []
+    for _ in range(world_size - 1):
+        for index in range(world_size // 2):
+            left = teams[index]
+            right = teams[world_size - 1 - index]
+            if rank == left:
+                peer = right
+                break
+            if rank == right:
+                peer = left
+                break
+        schedule.append((peer, rank < peer))
+        teams = [teams[0], teams[-1], *teams[1:-1]]
+    return tuple(schedule)
+
+
+def _round_robin_all_to_all(input_tensor: Tensor, group: dist.ProcessGroup) -> Tensor:
+    """All-to-all via pairwise P2P, avoiding NCCL alltoall_base on 4090 hosts."""
+    world_size = dist.get_world_size(group)
+    rank = dist.get_rank(group)
+    if input_tensor.shape[0] != world_size:
+        raise ValueError(f"round_robin Ulysses A2A expects dim 0 == world_size ({world_size}), got shape={tuple(input_tensor.shape)}.")
+
+    output_tensor = torch.empty_like(input_tensor)
+    output_tensor[rank].copy_(input_tensor[rank])
+    for peer, send_first in _get_round_robin_schedule(world_size, rank):
+        peer_global_rank = dist.get_global_rank(group, peer)
+        if send_first:
+            send_work = dist.isend(input_tensor[peer], dst=peer_global_rank, group=group)
+            recv_work = dist.irecv(output_tensor[peer], src=peer_global_rank, group=group)
+            send_work.wait()
+            recv_work.wait()
+        else:
+            recv_work = dist.irecv(output_tensor[peer], src=peer_global_rank, group=group)
+            send_work = dist.isend(input_tensor[peer], dst=peer_global_rank, group=group)
+            recv_work.wait()
+            send_work.wait()
+    return output_tensor
 
 
 def single_all_to_all(
@@ -45,8 +101,14 @@ def single_all_to_all(
     inp_shape = list(local_input.shape)
     inp_shape[scatter_dim] = inp_shape[scatter_dim] // seq_world_size
     input_t = local_input.reshape([seq_world_size, inp_shape[scatter_dim]] + inp_shape[scatter_dim + 1 :]).contiguous()
-    output = torch.empty_like(input_t)
-    comm = dist.all_to_all_single(output, input_t, group=group, async_op=async_op)
+    if _SEQUENCE_PARALLEL_A2A_BACKEND == "round_robin":
+        if async_op:
+            raise ValueError("round_robin Ulysses A2A does not support asynchronous exchange.")
+        output = _round_robin_all_to_all(input_t, group)
+        comm = None
+    else:
+        output = torch.empty_like(input_t)
+        comm = dist.all_to_all_single(output, input_t, group=group, async_op=async_op)
     if async_op:
         # let user's code transpose & reshape
         return output, comm, prev_scatter_dim
@@ -90,7 +152,7 @@ class SeqAllToAll(torch.autograd.Function):
             ctx.prev_scatter_dim = prev_scatter_dim
             return output, comm
 
-        return _all_to_all(local_input, scatter_dim, gather_dim, group)
+        return single_all_to_all(local_input, scatter_dim, gather_dim, group, async_op=False)
 
     @staticmethod
     def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor, None, None]:
@@ -102,7 +164,7 @@ class SeqAllToAll(torch.autograd.Function):
             input_t = grad_output[0]
         return (
             None,
-            _all_to_all(input_t, ctx.gather_dim, ctx.scatter_dim, ctx.group),
+            single_all_to_all(input_t, ctx.gather_dim, ctx.scatter_dim, ctx.group, async_op=False),
             None,
             None,
             None,

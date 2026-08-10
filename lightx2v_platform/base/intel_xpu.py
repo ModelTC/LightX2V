@@ -7,8 +7,13 @@ This module handles Intel-specific configurations including:
 - Distributed training with Intel oneCCL backend
 """
 
+import os
+import platform
+
 import torch
+import torch.distributed as dist
 from loguru import logger
+from packaging.version import Version
 
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
@@ -48,15 +53,15 @@ class IntelXpuDevice:
         """Get the device type string. Returns 'xpu' for Intel XPU."""
         return "xpu"
 
-    # @staticmethod
-    # def init_parallel_env():
-    #     """
-    #     Initialize distributed parallel environment for Intel XPU.
+    @staticmethod
+    def init_parallel_env():
+        """Initialize a single-node distributed environment for Intel XPU."""
+        if platform.system() != "Linux" and Version(torch.__version__) < Version("2.10.0+xpu"):
+            raise RuntimeError(f"Intel XPU distributed initialization on non-Linux systems requires PyTorch >= 2.10.0+xpu. Found PyTorch {torch.__version__}.")
 
-    #     Uses Intel oneCCL backend for distributed training.
-    #     """
-    #     dist.init_process_group(backend="ccl")
-    #     torch.xpu.set_device(dist.get_rank())
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.xpu.set_device(local_rank)
+        dist.init_process_group(backend="xccl")
 
 
 # Register alias "xpu" for backward compatibility
