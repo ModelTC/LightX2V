@@ -1,0 +1,25 @@
+{
+    "infer_steps": 1,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 720,
+    "target_width": 1280,
+    "self_attn_1_type": "flash_attn4",
+    "cross_attn_1_type": "flash_attn4",
+    "cross_attn_2_type": "flash_attn4",
+    "sample_guide_scale": [
+        3.5,
+        3.5
+    ],
+    "sample_shift": 5.0,
+    "enable_cfg": true,
+    "cpu_offload": false,
+    "offload_granularity": "model",
+    "boundary": 0.900,
+    "use_image_encoder": false,
+    "parallel": {
+        "seq_p_size": 1,
+        "seq_p_attn_type": "ulysses",
+        "cfg_p_size": 1
+    }
+}

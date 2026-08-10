@@ -54,7 +54,11 @@ struct Fp4GemmSm120 {
     static constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
     // Kernel functional config
     using ElementAccumulator  = float;                                          // Element type for internal accumulation
-    using ArchTag             = cutlass::arch::Sm120;                           // Tag indicating the minimum SM that supports the intended feature
+#if defined(LIGHTX2V_THOR_NVFP4_ONLY)
+    using ArchTag             = cutlass::arch::Sm100;
+#else
+    using ArchTag             = cutlass::arch::Sm120;
+#endif
     using OperatorClass       = cutlass::arch::OpClassBlockScaledTensorOp;      // Operator class tag
 
     // Kernel Perf config
@@ -325,4 +329,265 @@ void cutlass_scaled_nvfp4_mm_sm120(
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream(A.get_device());
 
   runGemmNvfp4Sm120(D, A, B, A_sf, B_sf, alpha, bias, m, n, k, stream);
+}
+
+
+// Keep split-N stride argument construction and execution isolated from the
+// regular NVFP4 operator so changes here cannot alter its behavior.
+// prepare the calculation parameters for the gemm
+typename Fp4GemmSm120::Gemm::Arguments args_from_options_nvfp4_nvfp4_split_n_stride(
+    at::Tensor& D,
+    at::Tensor const& A,
+    at::Tensor const& B,
+    at::Tensor const& A_sf,
+    at::Tensor const& B_sf,
+    at::Tensor const& alpha,
+    c10::optional<torch::Tensor> const& bias,
+    int64_t M,
+    int64_t N,
+    int64_t K,
+    int64_t split_n_parts) {
+  using Sm1xxBlkScaledConfig = typename Fp4GemmSm120::Gemm::GemmKernel::CollectiveMainloop::Sm1xxBlkScaledConfig;
+
+  int m = static_cast<int>(M);
+  int n = static_cast<int>(N);
+  int k = static_cast<int>(K);
+  int batch_count = static_cast<int>(split_n_parts);
+  int shard_n = n / batch_count;
+
+  auto stride_A = cutlass::make_cute_packed_stride(Fp4GemmSm120::StrideA{}, {m, k, batch_count});
+  auto stride_B = cutlass::make_cute_packed_stride(Fp4GemmSm120::StrideB{}, {shard_n, k, batch_count});
+  auto stride_D = cutlass::make_cute_packed_stride(Fp4GemmSm120::StrideD{}, {m, shard_n, batch_count});
+
+  // Broadcast A across batches. B batches are consecutive N shards.
+  cute::get<2>(stride_A) = 0;
+  // D is one [M, N] tensor: batch l starts at column l * shard_n.
+  cute::get<0>(stride_D) = n;
+  cute::get<2>(stride_D) = shard_n;
+
+  auto problem_shape = cute::make_shape(m, shard_n, k, batch_count);
+  auto layout_SFA = Sm1xxBlkScaledConfig::tile_atom_to_shape_SFA(problem_shape);
+  auto layout_SFB = Sm1xxBlkScaledConfig::tile_atom_to_shape_SFB(problem_shape);
+  // SFB remains packed by batch. Broadcast only SFA's nested batch mode.
+  cute::get<2, 1>(cute::stride(layout_SFA)) = 0;
+
+  if (bias) {
+    using StrideBias = Stride<cutlass::_0, cutlass::_1, int64_t>;
+
+    typename Fp4GemmSm120::Gemm::Arguments arguments{
+      cutlass::gemm::GemmUniversalMode::kBatched,
+      problem_shape,
+      {// Mainloop arguments
+       static_cast<Fp4GemmSm120::Gemm::ElementA const*>(A.data_ptr()),
+       stride_A,
+       static_cast<Fp4GemmSm120::Gemm::ElementB const*>(B.data_ptr()),
+       stride_B,
+       static_cast<cutlass::float_ue4m3_t const*>(A_sf.data_ptr()),
+       layout_SFA,
+       static_cast<cutlass::float_ue4m3_t const*>(B_sf.data_ptr()),
+       layout_SFB},
+      {     // Epilogue arguments
+       {},  // epilogue.thread
+       static_cast<Fp4GemmSm120::Gemm::ElementC const*>(D.data_ptr()),
+       stride_D,
+       static_cast<Fp4GemmSm120::Gemm::ElementD*>(D.data_ptr()),
+       stride_D}};
+    auto& fusion_args = arguments.epilogue.thread;
+    fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
+    fusion_args.bias_ptr = static_cast<Fp4GemmSm120::Gemm::ElementC const*>(bias->data_ptr());
+    auto stride_bias = StrideBias{};
+    cute::get<2>(stride_bias) = shard_n;
+    fusion_args.dBias = stride_bias;
+    return arguments;
+  }
+  else
+  {
+    typename Fp4GemmSm120::Gemm::Arguments arguments{
+      cutlass::gemm::GemmUniversalMode::kBatched,
+      problem_shape,
+      {// Mainloop arguments
+       static_cast<Fp4GemmSm120::Gemm::ElementA const*>(A.data_ptr()),
+       stride_A,
+       static_cast<Fp4GemmSm120::Gemm::ElementB const*>(B.data_ptr()),
+       stride_B,
+       static_cast<cutlass::float_ue4m3_t const*>(A_sf.data_ptr()),
+       layout_SFA,
+       static_cast<cutlass::float_ue4m3_t const*>(B_sf.data_ptr()),
+       layout_SFB},
+      {     // Epilogue arguments
+       {},  // epilogue.thread
+       static_cast<Fp4GemmSm120::Gemm::ElementC const*>(D.data_ptr()),
+       stride_D,
+       static_cast<Fp4GemmSm120::Gemm::ElementD*>(D.data_ptr()),
+       stride_D}};
+    auto& fusion_args = arguments.epilogue.thread;
+    fusion_args.alpha_ptr = static_cast<float const*>(alpha.data_ptr());
+    return arguments;
+  }
+}
+
+// implement the gemm for nvfp4splitnstride
+void runGemmNvfp4SplitNStrideSm120(
+    at::Tensor& D,
+    at::Tensor const& A,
+    at::Tensor const& B,
+    at::Tensor const& A_sf,
+    at::Tensor const& B_sf,
+    at::Tensor const& alpha,
+    c10::optional<torch::Tensor> const& bias,
+    int64_t m,
+    int64_t n,
+    int64_t k,
+    int64_t split_n_parts,
+    cudaStream_t stream) {
+  typename Fp4GemmSm120::Gemm gemm;
+
+  auto arguments = args_from_options_nvfp4_nvfp4_split_n_stride(
+      D, A, B, A_sf, B_sf, alpha, bias, m, n, k, split_n_parts);
+  auto beta_dev = torch::zeros({1}, torch::TensorOptions()
+                                .dtype(torch::kFloat32)
+                                .device(A.device()));
+  arguments.epilogue.thread.beta_ptr =
+      static_cast<float const*>(beta_dev.data_ptr());
+  size_t workspace_size = Fp4GemmSm120::Gemm::get_workspace_size(arguments);
+  auto const workspace_options = torch::TensorOptions().dtype(torch::kUInt8).device(A.device());
+  auto workspace = torch::empty(workspace_size, workspace_options);
+
+  CUTLASS_CHECK(gemm.can_implement(arguments));
+  CUTLASS_CHECK(gemm.initialize(arguments, workspace.data_ptr(), stream));
+  CUTLASS_CHECK(gemm.run(arguments, workspace.data_ptr(), stream));
+}
+
+// check the inputs and run the NVFP4 split-N stride GEMM kernel
+void cutlass_scaled_nvfp4_mm_split_n_stride_sm120(
+    torch::Tensor& D,
+    torch::Tensor const& A,
+    torch::Tensor const& B,
+    torch::Tensor const& A_sf,
+    torch::Tensor const& B_sf,
+    torch::Tensor const& alpha,
+    c10::optional<torch::Tensor> const& bias,
+    int64_t split_n_parts) {
+  CHECK_INPUT(D, at::ScalarType::BFloat16, "out");
+  CHECK_INPUT(A, FLOAT4_E2M1X2, "a");
+  CHECK_INPUT(B, FLOAT4_E2M1X2, "b");
+  CHECK_INPUT(A_sf, SF_DTYPE, "scale_a");
+  CHECK_INPUT(B_sf, SF_DTYPE, "scale_b");
+  CHECK_INPUT(alpha, at::ScalarType::Float, "alpha");
+
+  TORCH_CHECK(D.dim() == 2, "out must be a matrix");
+  TORCH_CHECK(A.dim() == 2, "a must be a matrix");
+  TORCH_CHECK(B.dim() == 2, "b must be a matrix");
+  TORCH_CHECK(
+      A.sizes()[1] == B.sizes()[1],
+      "a and b shapes cannot be multiplied (",
+      A.sizes()[0],
+      "x",
+      A.sizes()[1],
+      " and ",
+      B.sizes()[0],
+      "x",
+      B.sizes()[1],
+      ")");
+
+  auto const m = A.sizes()[0];
+  auto const n = B.sizes()[0];
+  auto const k = A.sizes()[1] * 2;
+
+  TORCH_CHECK(
+      D.sizes()[0] == m && D.sizes()[1] == n,
+      "out must have shape (",
+      m,
+      "x",
+      n,
+      "), but got (",
+      D.sizes()[0],
+      "x",
+      D.sizes()[1],
+      ")");
+  if (bias) {
+    auto const& bias_tensor = bias.value();
+    CHECK_INPUT(bias_tensor, at::ScalarType::BFloat16, "bias");
+    TORCH_CHECK(bias_tensor.numel() == n, "bias must contain ", n, " elements, but got ", bias_tensor.numel());
+  }
+
+  constexpr int alignment = 32;
+  TORCH_CHECK(
+      k % alignment == 0,
+      "Expected k to be divisible by ",
+      alignment,
+      ", but got a shape: (",
+      A.sizes()[0],
+      "x",
+      A.sizes()[1],
+      "), k: ",
+      k,
+      ".");
+  TORCH_CHECK(
+      n % alignment == 0,
+      "Expected n to be divisible by ",
+      alignment,
+      ", but got b shape: (",
+      B.sizes()[0],
+      "x",
+      B.sizes()[1],
+      ").");
+
+  auto round_up = [](int x, int y) { return (x + y - 1) / y * y; };
+  int rounded_m = round_up(m, 128);
+  int rounded_n = round_up(n, 128);
+  int rounded_k = round_up(k / 16, 4);
+
+  TORCH_CHECK(A_sf.dim() == 2, "scale_a must be a matrix");
+  TORCH_CHECK(B_sf.dim() == 2, "scale_b must be a matrix");
+  TORCH_CHECK(
+      A_sf.sizes()[1] == B_sf.sizes()[1],
+      "scale_a and scale_b shapes cannot be multiplied (",
+      A_sf.sizes()[0],
+      "x",
+      A_sf.sizes()[1],
+      " and ",
+      B_sf.sizes()[0],
+      "x",
+      B_sf.sizes()[1],
+      ")");
+  TORCH_CHECK(
+      A_sf.sizes()[0] == rounded_m && A_sf.sizes()[1] == rounded_k,
+      "scale_a must be padded and swizzled to a shape (",
+      rounded_m,
+      "x",
+      rounded_k,
+      "), but got a shape (",
+      A_sf.sizes()[0],
+      "x",
+      A_sf.sizes()[1],
+      ")");
+  TORCH_CHECK(
+      B_sf.sizes()[0] == rounded_n && B_sf.sizes()[1] == rounded_k,
+      "scale_b must be padded and swizzled to a shape (",
+      rounded_n,
+      "x",
+      rounded_k,
+      "), but got a shape (",
+      B_sf.sizes()[0],
+      "x",
+      B_sf.sizes()[1],
+      ")");
+
+  TORCH_CHECK(split_n_parts >= 2, "split_n_parts must be at least 2, but got ", split_n_parts);
+  TORCH_CHECK(
+      n % split_n_parts == 0,
+      "Expected n to be divisible by split_n_parts, but got n=",
+      n,
+      " and split_n_parts=",
+      split_n_parts);
+  TORCH_CHECK(
+      (n / split_n_parts) % 128 == 0,
+      "Each NVFP4 split-N shard must be divisible by 128 for the swizzled scale layout, but got shard n=",
+      n / split_n_parts);
+
+  at::cuda::CUDAGuard device_guard{(char)A.get_device()};
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream(A.get_device());
+
+  runGemmNvfp4SplitNStrideSm120(D, A, B, A_sf, B_sf, alpha, bias, m, n, k, split_n_parts, stream);
 }

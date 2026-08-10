@@ -5,6 +5,7 @@ import unittest
 from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
@@ -56,6 +57,90 @@ def make_linear_phase():
         ffn_0=SimpleNamespace(apply=lambda x: x + 1),
         ffn_2=SimpleNamespace(apply=lambda x: x + 2),
     )
+
+
+class WanNvfp4SplitNStrideTest(unittest.TestCase):
+    @staticmethod
+    def make_ffn(**overrides):
+        ensure_lightx2v_pipeline_stub()
+        ensure_local_lightx2v_kernel()
+        transformer_weights = import_module("lightx2v.models.networks.wan.weights.transformer_weights")
+        config = {
+            "layer_norm_type": "torch",
+            "tensor_parallel": False,
+        }
+        config.update(overrides)
+        return transformer_weights.WanFFN(
+            block_index=0,
+            block_prefix="blocks",
+            task="i2v",
+            mm_type="nvfp4",
+            config=config,
+        )
+
+    def test_stride_workaround_selects_full_weight_operator_for_both_ffn_layers(self):
+        ffn = self.make_ffn(
+            nvfp4_ffn_split_n_stride_workaround=True,
+            nvfp4_ffn_split_n_parts=2,
+        )
+        mm_weight = import_module("lightx2v.common.ops.mm.mm_weight")
+
+        self.assertIsInstance(ffn.ffn_0, mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround)
+        self.assertIsInstance(ffn.ffn_2, mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround)
+        self.assertEqual(ffn.ffn_0.split_n_parts, 2)
+        self.assertEqual(ffn.ffn_2.split_n_parts, 2)
+
+    def test_stride_operator_passes_complete_weight_and_scale_tensors(self):
+        ensure_lightx2v_pipeline_stub()
+        ensure_local_lightx2v_kernel()
+        mm_weight = import_module("lightx2v.common.ops.mm.mm_weight")
+        operator = mm_weight.MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround(
+            "blocks.0.ffn.0.weight",
+            "blocks.0.ffn.0.bias",
+            split_n_parts=2,
+        )
+        input_tensor = object()
+        input_quant = object()
+        input_scale = object()
+        weight = object()
+        weight_scale = object()
+        alpha = object()
+        bias = object()
+        output = object()
+        operator.act_quant_func = lambda value: (input_quant, input_scale)
+        operator.weight = weight
+        operator.weight_scale = weight_scale
+        operator.alpha = alpha
+        operator.bias = bias
+
+        with patch.object(mm_weight, "cutlass_scaled_nvfp4_mm_split_n_stride", return_value=output) as kernel:
+            actual = operator.apply(input_tensor)
+
+        self.assertIs(actual, output)
+        kernel.assert_called_once_with(
+            input_quant,
+            weight,
+            input_scale,
+            weight_scale,
+            alpha=alpha,
+            bias=bias,
+            split_n_parts=2,
+        )
+
+    def test_stride_flag_must_be_boolean(self):
+        with self.assertRaisesRegex(TypeError, "nvfp4_ffn_split_n_stride_workaround must be a boolean"):
+            self.make_ffn(nvfp4_ffn_split_n_stride_workaround=1, nvfp4_ffn_split_n_parts=2)
+
+    def test_enabled_workaround_requires_valid_parts(self):
+        invalid_cases = [
+            ({}, ValueError, "nvfp4_ffn_split_n_parts must be set"),
+            ({"nvfp4_ffn_split_n_parts": True}, TypeError, "nvfp4_ffn_split_n_parts must be an integer"),
+            ({"nvfp4_ffn_split_n_parts": 1}, ValueError, "nvfp4_ffn_split_n_parts must be at least 2"),
+        ]
+        for extra_config, error_type, message in invalid_cases:
+            with self.subTest(extra_config=extra_config):
+                with self.assertRaisesRegex(error_type, message):
+                    self.make_ffn(nvfp4_ffn_split_n_stride_workaround=True, **extra_config)
 
 
 class WanMxfp8FuseForwardingTest(unittest.TestCase):

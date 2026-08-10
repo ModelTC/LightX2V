@@ -34,13 +34,14 @@ try:
         cutlass_scaled_mxfp6_mxfp8_mm,
         cutlass_scaled_mxfp8_mm,
         cutlass_scaled_nvfp4_mm,
+        cutlass_scaled_nvfp4_mm_split_n_stride,
         scaled_mxfp4_quant,
         scaled_mxfp6_quant,
         scaled_mxfp8_quant,
         scaled_nvfp4_quant,
     )
 except ImportError:
-    scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm = None, None
+    scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm, cutlass_scaled_nvfp4_mm_split_n_stride = None, None, None
     scaled_mxfp4_quant, cutlass_scaled_mxfp4_mm = None, None
     scaled_mxfp6_quant, cutlass_scaled_mxfp6_mxfp8_mm = None, None
     scaled_mxfp8_quant, cutlass_scaled_mxfp8_mm = None, None
@@ -1334,51 +1335,56 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             del weight_scale_tensor
 
 
-@MM_WEIGHT_REGISTER("nvfp4-split-n-workaround")
-class MMWeightWnvfp4Anvfp4dynamicSplitNWorkaround(MMWeightWnvfp4Anvfp4dynamic):
-    """Temporary application-level two-way split-N workaround.
+@MM_WEIGHT_REGISTER("nvfp4-split-n-stride-workaround")
+class MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround(MMWeightWnvfp4Anvfp4dynamic):
+    """Represent N shards as batches in one strided CUTLASS GEMM.
 
-    This path is intentionally separate from the normal ``nvfp4`` weight type.
-    It works around a throughput cliff observed for large Wan FFN GEMMs on
-    NVIDIA Jetson AGX Thor by quantizing the activation once, launching two
-    serial N/2 GEMMs, and concatenating their outputs.
-
-    This is not the desired long-term backend design: it adds another kernel
-    launch, temporary output tensors, and a concatenation. Remove this class,
-    its registry entry, and ``nvfp4_ffn_split_n_workaround`` once
-    ``cutlass_scaled_nvfp4_mm`` can select an architecture/shape-aware tactic
-    (or an internal split-N implementation that writes directly to the final
-    output).
+    The activation is quantized once and the complete weight and scale tensors
+    are passed to the backend. A and its scales are broadcast across batches;
+    weight, weight scales, bias, and output columns advance by batch stride.
     """
 
-    split_n_parts = 2
-    split_n_alignment = 128
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+        split_n_parts=2,
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix=lora_prefix,
+            lora_path=lora_path,
+        )
+        if isinstance(split_n_parts, bool) or not isinstance(split_n_parts, int):
+            raise TypeError("split_n_parts must be an integer")
+        if split_n_parts < 2:
+            raise ValueError("split_n_parts must be at least 2 for the split-N weight type")
+        self.split_n_parts = split_n_parts
 
     def apply(self, input_tensor):
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-
-        n = self.weight.shape[0]
-        required_alignment = self.split_n_parts * self.split_n_alignment
-        if n % required_alignment != 0:
-            raise ValueError(f"NVFP4 split-N requires each N shard to be aligned to {self.split_n_alignment} rows, but {self.weight_name} has N={n}")
-        if self.weight_scale.shape[0] != n:
-            raise ValueError(f"NVFP4 split-N expects weight and weight_scale to share the output-channel dimension, got {n} and {self.weight_scale.shape[0]} for {self.weight_name}")
-
-        shard_n = n // self.split_n_parts
-        outputs = []
-        for start in range(0, n, shard_n):
-            bias = None if self.bias is None else self.bias.narrow(0, start, shard_n)
-            outputs.append(
-                cutlass_scaled_nvfp4_mm(
-                    input_tensor_quant,
-                    self.weight.narrow(0, start, shard_n),
-                    input_tensor_scale,
-                    self.weight_scale.narrow(0, start, shard_n),
-                    alpha=self.alpha,
-                    bias=bias,
-                )
-            )
-        return torch.cat(outputs, dim=-1)
+        return cutlass_scaled_nvfp4_mm_split_n_stride(
+            input_tensor_quant,
+            self.weight,
+            input_tensor_scale,
+            self.weight_scale,
+            alpha=self.alpha,
+            bias=self.bias,
+            split_n_parts=self.split_n_parts,
+        )
 
 
 @MM_WEIGHT_REGISTER("CalibMax")
@@ -2490,6 +2496,7 @@ class MMWeightTP(MMWeightTemplate):
         lora_prefix="diffusion_model.blocks",
         lora_path="",
         reduce_output=True,
+        mm_kwargs=None,
     ):
         super().__init__(
             weight_name,
@@ -2519,6 +2526,7 @@ class MMWeightTP(MMWeightTemplate):
             is_post_adapter=is_post_adapter,
             lora_prefix=lora_prefix,
             lora_path=lora_path,
+            **(mm_kwargs or {}),
         )
         self._row_split_bias = None
 
