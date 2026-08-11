@@ -210,6 +210,15 @@ class MiniMaxH3Runner(DefaultRunner):
             quant_scheme=video_vae_quant_scheme,
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
         )
+        if self.config.get("vae_decode_parallel", False):
+            world_size = dist.get_world_size() if dist.is_initialized() else 1
+            if world_size > 1:
+                if self.config.get("tensor_parallel", False) or self.config.get("cfg_parallel", False):
+                    raise NotImplementedError("MiniMax-H3 vae_decode_parallel currently supports pure sequence parallel only")
+                video_vae.enable_decode_parallel()
+                logger.info(f"MiniMax-H3 spatial-tile VAE decode parallel enabled over {world_size} ranks")
+            else:
+                logger.info("MiniMax-H3 spatial-tile VAE decode parallel disabled for single-rank inference")
         audio_vae = MiniMaxH3AudioVAE.from_pretrained(self.config["model_path"], device=AI_DEVICE, cpu_offload=cpu_offload)
         configured_sample_rate = int(self.config.get("audio_sampling_rate", audio_vae.sampling_rate))
         if configured_sample_rate != audio_vae.sampling_rate:
@@ -541,8 +550,10 @@ class MiniMaxH3Runner(DefaultRunner):
         audio_latents = unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)
         with ProfilingContext4DebugL1("Run Video VAE Decoder"):
             video = self.video_vae.decode(video_latents)
-        with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
-            audio = self.audio_vae.decode(audio_latents)
+        audio = None
+        if not self.video_vae.decode_parallel or dist.get_rank() == 0:
+            with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
+                audio = self.audio_vae.decode(audio_latents)
         return video, audio
 
     @staticmethod
@@ -552,6 +563,8 @@ class MiniMaxH3Runner(DefaultRunner):
         return (video[0].permute(1, 2, 3, 0).float() * 255.0).round().to(torch.uint8).cpu()
 
     def process_images_after_vae_decoder(self):
+        if self.video_vae.decode_parallel and dist.get_rank() != 0:
+            return {"video": None, "audio": None}
         if self.input_info.return_result_tensor:
             return {
                 # Match the public tensor layout of the reference pipeline:
