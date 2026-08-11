@@ -51,6 +51,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **August 11, 2026:** 🚀 We release and support the [MiniMax-H3 Turbo 4-step v1.0 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors). The released DMD configs under `configs/minimax_h3/dmd` run H3 at 1344x768 with `video_flow_shift=6`, `audio_flow_shift=3`, LoRA alpha 128, and 4-step guidance-free inference.
+
 - **August 7, 2026:** 🚀 LightX2V introduces comprehensive inference support for [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3), an omni-modal generative model that produces video with native synchronized stereo audio. The integration covers T2AV, I2AV, L2AV, FL2AV, and Ref2AV workflows, and incorporates model- and block-level offloading, tensor and sequence parallelism, quantized DiT inference, and feature caching. Single- and multi-GPU examples are available in the [MiniMax-H3 inference scripts](scripts/minimax_h3). Alongside this integration, we release the [MiniMax-H3 T2VA Prompt Rewriter LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA), fine-tuned from Qwen3.6-27B to transform concise user prompts into structured, H3-oriented multimodal descriptions spanning visual narrative, soundscape, and non-diegetic music.
 
 - **July 28, 2026:** 🚀 We release the [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) 4-step distilled LoRA for LingBot-Video. It supports T2V, T2I, and I2V generation in only 4 inference steps without CFG. See the [LingBot-Video inference scripts](scripts/lingbot_video) for usage.
@@ -173,61 +175,35 @@ For attention operators installation, please refer to our documentation: **[Engl
 ### Usage Example
 
 ```python
-# examples/wan/wan_i2v.py
+# examples/minimax_h3/minimax_h3_t2av_dmd.py
 """
-Wan2.2 image-to-video generation example.
-This example demonstrates how to use LightX2V with Wan2.2 model for I2V generation.
+MiniMax-H3 T2AV generation with the 4-step 768p distilled LoRA.
 """
 
 from lightx2v import LightX2VPipeline
 
-# Initialize pipeline for Wan2.2 I2V task
-# For wan2.1, use model_cls="wan2.1"
+# Initialize the MiniMax-H3 T2AV pipeline.
 pipe = LightX2VPipeline(
-    model_path="/path/to/Wan2.2-I2V-A14B",
-    model_cls="wan2.2_moe",
-    task="i2v",
+    model_path="/path/to/MiniMax-H3",
+    model_cls="minimax_h3",
+    task="t2av",
 )
 
-# Alternative: create generator from config JSON file
-# pipe.create_generator(
-#     config_json="configs/wan22/wan_moe_i2v.json"
-# )
-
-# Enable offloading to significantly reduce VRAM usage with minimal speed impact
-# Suitable for RTX 30/40/50 consumer GPUs
-pipe.enable_offload(
-    cpu_offload=True,
-    offload_granularity="block",  # For Wan models, supports both "block" and "phase"
-    text_encoder_offload=True,
-    image_encoder_offload=False,
-    vae_offload=False,
-)
-
-# Create generator manually with specified parameters
+# The DMD config uses the released 768p LoRA, 4 inference steps,
+# video_flow_shift=6, audio_flow_shift=3, and lora alpha=128.
 pipe.create_generator(
-    attn_mode="sage_attn2",
-    infer_steps=40,
-    height=480,  # Can be set to 720 for higher resolution
-    width=832,  # Can be set to 1280 for higher resolution
-    num_frames=81,
-    guidance_scale=[3.5, 3.5],  # For wan2.1, guidance_scale is a scalar (e.g., 5.0)
-    sample_shift=5.0,
+    config_json="configs/minimax_h3/dmd/minimax_h3_fp8_4step.json"
 )
 
 # Generation parameters
 seed = 42
-prompt = "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
-image_path="/path/to/img_0.jpg"
-save_result_path = "/path/to/save_results/output.mp4"
+prompt = "A cinematic fox walks through a snowy forest while soft wind and distant birds create an immersive winter soundscape."
+save_result_path = "outputs/minimax_h3_t2av_768p.mp4"
 
-# Generate video
+# Generate video with synchronized audio.
 pipe.generate(
     seed=seed,
-    image_path=image_path,
     prompt=prompt,
-    negative_prompt=negative_prompt,
     save_result_path=save_result_path,
 )
 ```
@@ -254,6 +230,7 @@ pipe.generate(
 - ✅ [Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
 
 ### Quantized and Distilled Models/LoRAs (**🚀 Recommended: 4-step inference**)
+- ✅ [MiniMax-H3 Turbo](https://huggingface.co/lightx2v/Minimax-h3-Turbo) — 4-step 768p distilled LoRA for MiniMax-H3 T2AV/FL2AV
 - ✅ [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) — 4-step distilled LoRA for LingBot-Video T2V, T2I, and I2V
 - ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
 - ✅ [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)
