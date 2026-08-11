@@ -41,8 +41,10 @@ class SafetensorsSubsetReport:
 
 def _component_files(component_dir: str | Path) -> tuple[Path, ...]:
     component_dir = Path(component_dir)
+    if component_dir.is_file():
+        return (component_dir,)
     if not component_dir.is_dir():
-        raise FileNotFoundError(f"MiniMax-H3 component directory does not exist: {component_dir}")
+        raise FileNotFoundError(f"MiniMax-H3 checkpoint does not exist: {component_dir}")
     files = tuple(sorted(component_dir.glob("*.safetensors")))
     if not files:
         raise FileNotFoundError(f"No safetensors weights found in MiniMax-H3 component directory: {component_dir}")
@@ -79,6 +81,7 @@ _SAFETENSORS_DTYPES = {
     torch.int16: "I16",
     torch.int8: "I8",
     torch.uint8: "U8",
+    torch.float8_e4m3fn: "F8_E4M3",
     torch.bool: "BOOL",
 }
 
