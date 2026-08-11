@@ -18,7 +18,7 @@ export SENSITIVE_LAYER_DTYPE=FP32
 
 PYTHONPATH="${lightx2v_path}" "${python_bin}" -m lightx2v.infer \
   --model_cls minimax_h3 \
-  --task t2av \
+  --task fl2av \
   --model_path "${model_path}" \
   --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3_t2av_dmd_lora_4step.json" \
   --prompt "integrated_multimodal_description: Shot 1 Live-action sports documentary style, a handheld ringside close shot frames two female boxers wearing headguards and gloves during controlled sparring in a small neighborhood gym. The camera tracks left at fast speed as the boxer in blue slips a jab, answers with a rapid body-head combination against the pads, and pivots away while sweat droplets catch the overhead light in brief slow motion. Her coach with a firm, energetic voice S1 calls: English Move, breathe, reset! overall_soundscape: Gloves thud against padded targets, shoes squeak on canvas, the round timer beeps once, and both athletes breathe sharply. A jump rope and muffled training activity continue in the background. non_diegetic_music: A tight electronic beat at a fast tempo with clipped bass pulses, fading under the final breath." \

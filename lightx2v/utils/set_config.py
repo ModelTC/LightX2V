@@ -260,7 +260,7 @@ def auto_calc_config(config):
         config.setdefault("vae_scale_factor_temporal", 4)
         config.setdefault("vae_scale_factor", 8)
     elif config["model_cls"] == "minimax_h3":
-        supported_tasks = {"t2av", "i2av", "l2av", "fl2av", "ref2av"}
+        supported_tasks = {"fl2av", "ref2av"}
         task = config.get("task")
         if task not in supported_tasks:
             raise ValueError(f"MiniMax-H3 supports {sorted(supported_tasks)}, got {task!r}")

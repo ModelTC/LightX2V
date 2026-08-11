@@ -41,7 +41,7 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
-from lightx2v.utils.input_info import FL2AVInputInfo, I2AVInputInfo, L2AVInputInfo, Ref2AVInputInfo, T2AVInputInfo
+from lightx2v.utils.input_info import FL2AVInputInfo, Ref2AVInputInfo
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -93,11 +93,11 @@ class MiniMaxH3Runner(DefaultRunner):
         (544, 960, 124),
     )
     _WARMUP_STEP_COUNT = 2
-    _WARMUP_TASKS = ("t2av", "fl2av", "i2av", "l2av", "ref2av")
+    _WARMUP_TASKS = ("fl2av", "ref2av")
 
     def __init__(self, config):
-        if config.get("task") not in {"t2av", "i2av", "l2av", "fl2av", "ref2av"}:
-            raise ValueError("MiniMax-H3 supports t2av/i2av/l2av/fl2av/ref2av")
+        if config.get("task") not in {"fl2av", "ref2av"}:
+            raise ValueError("MiniMax-H3 supports fl2av/ref2av")
         self.loaded_transformer_partition = "transformer_ref" if config["task"] == "ref2av" else "transformer"
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
@@ -163,16 +163,10 @@ class MiniMaxH3Runner(DefaultRunner):
             "return_result_tensor": True,
         }
         image = Image.new("RGB", (width, height), color=0)
-        if task == "t2av":
-            self.input_info = T2AVInputInfo(**common)
-        elif task == "i2av":
-            self.input_info = I2AVInputInfo(**common, image_path=image)
-        elif task == "l2av":
-            self.input_info = L2AVInputInfo(**common, last_frame_path=image)
-        elif task == "fl2av":
-            self.input_info = FL2AVInputInfo(**common, image_path=image, last_frame_path=image.copy())
-        else:
+        if task == "ref2av":
             self.input_info = Ref2AVInputInfo(**common, image_path=image)
+        else:
+            self.input_info = FL2AVInputInfo(**common, image_path=image, last_frame_path=image.copy())
 
     def clear_warmup_state(self):
         self.scheduler.clear()
@@ -326,27 +320,20 @@ class MiniMaxH3Runner(DefaultRunner):
         return ImageOps.exif_transpose(image).convert("RGB")
 
     def _prepare_keyframes(self):
-        task = self.config["task"]
-        if task == "t2av":
-            if not isinstance(self.input_info, T2AVInputInfo):
-                raise TypeError(f"MiniMax-H3 t2av expects T2AVInputInfo, got {type(self.input_info).__name__}")
-            return [], ()
-        if task == "i2av":
-            if not isinstance(self.input_info, I2AVInputInfo) or not self.input_info.image_path:
-                raise ValueError("MiniMax-H3 i2av requires exactly one --image_path")
-            values, anchors = [self.input_info.image_path], ("first",)
-        elif task == "l2av":
-            if not isinstance(self.input_info, L2AVInputInfo) or not self.input_info.last_frame_path:
-                raise ValueError("MiniMax-H3 l2av requires --last_frame_path")
-            values, anchors = [self.input_info.last_frame_path], ("last",)
-        elif task == "fl2av":
-            if not isinstance(self.input_info, FL2AVInputInfo) or not self.input_info.image_path or not self.input_info.last_frame_path:
-                raise ValueError("MiniMax-H3 fl2av requires --image_path and --last_frame_path")
+        if not isinstance(self.input_info, FL2AVInputInfo):
+            raise TypeError(f"MiniMax-H3 fl2av expects FL2AVInputInfo, got {type(self.input_info).__name__}")
+        has_first = bool(self.input_info.image_path)
+        has_last = bool(self.input_info.last_frame_path)
+        if has_first and has_last:
             values, anchors = [self.input_info.image_path, self.input_info.last_frame_path], ("first", "last")
+        elif has_first:
+            values, anchors = [self.input_info.image_path], ("first",)
+        elif has_last:
+            values, anchors = [self.input_info.last_frame_path], ("last",)
         else:
             return [], ()
         if any(isinstance(value, str) and "," in value for value in values):
-            raise ValueError(f"MiniMax-H3 {task} accepts one file per frame argument, not comma-separated lists")
+            raise ValueError("MiniMax-H3 fl2av accepts one file per frame argument, not comma-separated lists")
         images = [self._load_rgb_image(value) for value in values]
         self._resolve_request_geometry(images[0])
         images = [prepare_keyframe_image(image, self.request_height, self.request_width, stretch=index == 0) for index, image in enumerate(images)]
@@ -500,9 +487,11 @@ class MiniMaxH3Runner(DefaultRunner):
                 metrics_labels=["MiniMaxH3Runner"],
             ):
                 self.condition_video_latents, self.condition_audio_latents = self._encode_references(self.prepared_references)
+            text_only = False
         else:
             keyframes, self.keyframe_anchors = self._prepare_keyframes()
-            if task == "t2av":
+            text_only = not keyframes
+            if text_only:
                 self._resolve_request_geometry()
             text_encoder_output = self.run_text_encoder(self.input_info, keyframes=keyframes)
             if keyframes:
@@ -516,13 +505,12 @@ class MiniMaxH3Runner(DefaultRunner):
         tags = text_encoder_output["text_token_tags"]
         if tags.ndim != 1:
             raise ValueError("MiniMax-H3 conditioner token tags must be one-dimensional")
-        if task == "t2av" and not bool((tags == TEXT_TAG).all()):
-            raise ValueError("MiniMax-H3 t2av conditioner returned non-text modality rows")
-        self.maybe_empty_cache()
+        if text_only and not bool((tags == TEXT_TAG).all()):
+            raise ValueError("MiniMax-H3 text-only conditioner returned non-text modality rows")
+        self.maybe_empty_cache(force=True, collect_garbage=True)
         return {"text_encoder_output": text_encoder_output}
 
-    _run_input_encoder_local_t2av = _run_input_encoder_local_h3
-    _run_input_encoder_local_i2av = _run_input_encoder_local_h3
+    _run_input_encoder_local_fl2av = _run_input_encoder_local_h3
 
     @ProfilingContext4DebugL2("Prepare DiT")
     def init_run(self):

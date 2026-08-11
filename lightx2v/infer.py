@@ -167,7 +167,6 @@ def main():
             "rs2v",
             "t2av",
             "i2av",
-            "l2av",
             "fl2av",
             "ref2av",
             "i2va",
