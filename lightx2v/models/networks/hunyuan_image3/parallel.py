@@ -361,6 +361,17 @@ def build_hunyuan_image3_parallel_context(config) -> HunyuanImage3ParallelContex
     )
 
 
+def initialize_hunyuan_image3_parallel_runtime(config) -> HunyuanImage3ParallelContext:
+    context = build_hunyuan_image3_parallel_context(config)
+    config["parallel_context"] = context
+    config["hunyuan_image3_parallel_context"] = context
+    config["device_mesh"] = context.denoise_device_mesh
+    config["tensor_parallel"] = context.storage_tp_size > 1
+    config["seq_parallel"] = context.denoise_seq_size > 1
+    config["cfg_parallel"] = False
+    return context
+
+
 def build_hunyuan_image3_parallel_topology(config) -> HunyuanImage3ParallelContext:
     return build_hunyuan_image3_parallel_context(config)
 
