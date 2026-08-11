@@ -11,6 +11,7 @@ source ${lightx2v_path}/scripts/base/base.sh
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 
+# fl2av first-last: both --image_path and --last_frame_path.
 python -m lightx2v.infer \
 --model_cls minimax_h3 \
 --task fl2av \

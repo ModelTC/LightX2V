@@ -295,12 +295,9 @@ class I2AVInputInfo:
 
 
 @dataclass
-class L2AVInputInfo(T2AVInputInfo):
-    last_frame_path: str = field(default_factory=str)
-
-
-@dataclass
 class FL2AVInputInfo(T2AVInputInfo):
+    """MiniMax-H3 unified text/image-to-AV: optional first and/or last frame."""
+
     image_path: str = field(default_factory=str)
     last_frame_path: str = field(default_factory=str)
 
@@ -520,7 +517,6 @@ task_dict = {
     "i2i": I2IInputInfo,
     "t2av": T2AVInputInfo,
     "i2av": I2AVInputInfo,
-    "l2av": L2AVInputInfo,
     "fl2av": FL2AVInputInfo,
     "ref2av": Ref2AVInputInfo,
     "i2va": I2VAInputInfo,
