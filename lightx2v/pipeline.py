@@ -486,7 +486,10 @@ class LightX2VPipeline:
             self.task = task
             self.modify_config({"task": self.task})
 
-        input_info = init_empty_input_info(self.task, self.support_tasks)
+        # MiniMax-H3 validates the task-specific input dataclass in its runner.
+        # Do not merge its T2AV/I2AV/L2AV/FL2AV/Ref2AV schemas here.
+        input_support_tasks = [] if self.model_cls == "minimax_h3" else self.support_tasks
+        input_info = init_empty_input_info(self.task, input_support_tasks)
         if self.seed is not None:
             seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
