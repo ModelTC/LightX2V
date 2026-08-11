@@ -192,7 +192,7 @@ pipe = LightX2VPipeline(
 # The DMD config uses the released 768p LoRA, 4 inference steps,
 # video_flow_shift=6, audio_flow_shift=3, and lora alpha=128.
 pipe.create_generator(
-    config_json="configs/minimax_h3/dmd/minimax_h3_fp8_4step.json"
+    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step_single_gpu_offload.json"
 )
 
 # Generation parameters
