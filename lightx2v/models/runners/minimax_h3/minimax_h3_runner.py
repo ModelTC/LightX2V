@@ -51,9 +51,23 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
-    """Build H3 and merge LoRA using the same lifecycle as Wan."""
+    """Build H3 with either a dynamic LoRA branch or load-time merging."""
     if config.get("lora_dynamic_apply", False):
-        raise ValueError("MiniMax-H3 currently supports load-time LoRA merging; set lora_dynamic_apply=false")
+        if len(lora_configs) != 1:
+            raise ValueError("MiniMax-H3 dynamic LoRA currently accepts exactly one lora_configs entry")
+        lora_config = lora_configs[0]
+        if not lora_config.get("path"):
+            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].path")
+        if not os.path.isfile(lora_config["path"]):
+            raise FileNotFoundError(f"MiniMax-H3 dynamic LoRA file not found: {lora_config['path']}")
+        if lora_config.get("alpha") is None:
+            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].alpha (use 8 for the MiniMax-H3 Turbo LoRA)")
+        model_kwargs.update(
+            lora_path=lora_config["path"],
+            lora_strength=lora_config.get("strength", 1.0),
+            lora_alpha=lora_config["alpha"],
+        )
+        return MiniMaxH3Model(**model_kwargs)
     if config.get("dit_quantized", False):
         raise ValueError("MiniMax-H3 merged LoRA inference requires original, non-quantized DiT weights")
     if config.get("lazy_load", False):
