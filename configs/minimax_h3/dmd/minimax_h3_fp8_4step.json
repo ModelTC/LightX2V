@@ -31,7 +31,7 @@
   "lora_dynamic_apply": true,
   "lora_configs": [
     {
-      "path": "/data/nvme0/gushiqiao/models/Minimax-h3-Turbo/pytorch_lora_weights.safetensors",
+      "path": "lightx2v/Minimax-h3-Turbo/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
       "strength": 1.0,
       "alpha": 128
     }

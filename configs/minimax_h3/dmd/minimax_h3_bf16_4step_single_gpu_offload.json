@@ -13,15 +13,11 @@
   "vae_cpu_offload": true,
   "lazy_load": false,
   "unload_modules": false,
-  "attn_type": "dynamic_sparse_attn",
-  "dynamic_sparse_attn_setting": {
-      "sparsity_ratio": 0.9,
-      "operator": "sage2"
-  },
-  "rms_type": "sgl-kernel",
-  "rope_type": "minimax_h3_triton_rope",
+  "attn_type": "flash_attn3",
+  "rms_type": "torch_native",
+  "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
-  "use_compile": true,
+  "use_compile": false,
   "video_flow_shift": 6.0,
   "audio_flow_shift": 3.0,
   "h3_step_update": "training_euler",
@@ -30,23 +26,12 @@
   "audio_latents_per_second": 40,
   "audio_channels": 2,
   "keep_latents_dtype_in_scheduler": true,
-  "dit_quantized": true,
-  "dit_quant_scheme": "fp8-sgl",
-  "dit_quantized_ckpt": "/path/to/models/minimax_h3/h3_quantized/fp8/minimax_h3_fp8.safetensors",
   "lora_dynamic_apply": true,
   "lora_configs": [
     {
-      "path": "lightx2v/Minimax-h3-Turbo/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
+      "path": "/data/nvme6/gushiqiao/codes/LightX2V/lightx2v_train/output_train/minimax_h3_t2av_dmd_lora1/checkpoint-000000200/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
       "strength": 1.0,
       "alpha": 128
     }
-  ],
-  "parallel": {
-    "seq_p_size": 8,
-    "seq_p_attn_type": "ulysses",
-    "seq_p_prepost_backend": "triton",
-    "seq_p_tensor_fusion": true,
-    "seq_p_head_parallel": true,
-    "seq_p_fp8_comm": true
-  }
+  ]
 }

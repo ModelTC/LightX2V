@@ -31,6 +31,37 @@ class MiniMaxH3LoraAdapter(LoraAdapter):
             return torch.device(AI_DEVICE, device_module.current_device())
         return parameter.device
 
+    @staticmethod
+    def _normalize_lora_key(key: str) -> str | None:
+        """Map supported H3 LoRA layouts to native down/up tensor names."""
+        for prefix in (
+            "base_model.model.",
+            "model.diffusion_model.",
+            "diffusion_model.",
+            "transformer.",
+            "model.",
+        ):
+            if key.startswith(prefix):
+                key = key[len(prefix) :]
+                break
+
+        suffixes = {
+            ".lora_A.default.weight": ".lora_down.weight",
+            ".lora_B.default.weight": ".lora_up.weight",
+            ".lora_A.weight": ".lora_down.weight",
+            ".lora_B.weight": ".lora_up.weight",
+            ".lora.down.weight": ".lora_down.weight",
+            ".lora.up.weight": ".lora_up.weight",
+            ".lora_down.weight": ".lora_down.weight",
+            ".lora_up.weight": ".lora_up.weight",
+        }
+        for suffix, replacement in suffixes.items():
+            if key.endswith(suffix):
+                return key[: -len(suffix)] + replacement
+        if key.endswith(".alpha"):
+            return key
+        return None
+
     def _shard_factors(self, model_key, lora_up, lora_down):
         if not self.model.use_tp:
             return lora_up, lora_down
@@ -63,24 +94,51 @@ class MiniMaxH3LoraAdapter(LoraAdapter):
     @torch.no_grad()
     def _merge_file(self, path, strength=1.0, alpha=None):
         with safe_open(path, framework="pt", device="cpu") as source:
-            keys = list(source.keys())
-            # LoRALoader only needs values for optional scalar alpha tensors;
-            # using None for matrices keeps the 1.38 GB H3 adapter streaming.
-            key_index = {key: source.get_tensor(key) if key.endswith(".alpha") else None for key in keys}
-            pairs = self.lora_loader.extract_lora_pairs(key_index)
+            normalized_sources = {}
+            unsupported = []
+            for source_key in source.keys():
+                normalized_key = self._normalize_lora_key(source_key)
+                if normalized_key is None:
+                    unsupported.append(source_key)
+                    continue
+                if normalized_key in normalized_sources:
+                    raise ValueError(f"MiniMax-H3 LoRA keys collide after normalization: {source_key} and {normalized_sources[normalized_key]}")
+                normalized_sources[normalized_key] = source_key
+
+            if unsupported:
+                preview = ", ".join(unsupported[:4])
+                raise ValueError(f"MiniMax-H3 LoRA contains {len(unsupported)} unsupported tensors: {preview}")
+
+            down_names = {key for key in normalized_sources if key.endswith(".lora_down.weight")}
+            up_names = {key for key in normalized_sources if key.endswith(".lora_up.weight")}
+            expected_up_names = {key[: -len(".lora_down.weight")] + ".lora_up.weight" for key in down_names}
+            if not down_names or up_names != expected_up_names:
+                missing_up = sorted(expected_up_names - up_names)
+                orphan_up = sorted(up_names - expected_up_names)
+                raise ValueError(f"MiniMax-H3 LoRA has incomplete pairs: missing_up={missing_up[:3]}, orphan_up={orphan_up[:3]}")
+
+            expected_alpha_names = {key[: -len(".lora_down.weight")] + ".alpha" for key in down_names}
+            alpha_names = {key for key in normalized_sources if key.endswith(".alpha")}
+            orphan_alpha = sorted(alpha_names - expected_alpha_names)
+            if orphan_alpha:
+                raise ValueError(f"MiniMax-H3 LoRA contains alpha tensors without matching pairs: {orphan_alpha[:3]}")
+            if alpha is None and expected_alpha_names - alpha_names:
+                raise ValueError("MiniMax-H3 merged LoRA requires lora_configs[].alpha when the checkpoint has no per-layer alpha tensors")
+
+            pairs = {}
+            for down_name in sorted(down_names):
+                base_name = down_name[: -len(".lora_down.weight")]
+                model_key = base_name + ".weight"
+                if model_key not in self.model.original_weight_dict:
+                    raise KeyError(f"MiniMax-H3 LoRA target does not exist in the loaded transformer: {model_key}")
+                pairs[model_key] = {
+                    "down_key": normalized_sources[down_name],
+                    "up_key": normalized_sources[base_name + ".lora_up.weight"],
+                    "alpha_key": normalized_sources.get(base_name + ".alpha"),
+                }
+
             if not pairs:
                 raise ValueError(f"No supported LoRA pairs found in {path}")
-
-            paired_keys = {tensor_key for pair in pairs.values() for tensor_key in (pair["up_key"], pair["down_key"], pair["mid_key"]) if tensor_key is not None}
-            unused = [key for key in keys if not key.endswith(".alpha") and key not in paired_keys]
-            if unused:
-                preview = ", ".join(unused[:4])
-                raise ValueError(f"MiniMax-H3 LoRA contains {len(unused)} unsupported tensors: {preview}")
-
-            missing = [model_key for model_key in pairs if model_key not in self.model.original_weight_dict]
-            if missing:
-                preview = ", ".join(missing[:4])
-                raise KeyError(f"MiniMax-H3 LoRA contains {len(missing)} tensors that do not match the loaded transformer: {preview}")
 
             for index, (model_key, pair) in enumerate(pairs.items(), start=1):
                 parameter = self.model.original_weight_dict[model_key]
@@ -91,7 +149,7 @@ class MiniMaxH3LoraAdapter(LoraAdapter):
                 lora_up = lora_up.to(device=merge_device, dtype=parameter.dtype)
                 lora_down = lora_down.to(device=merge_device, dtype=parameter.dtype)
 
-                pair_alpha = pair["alpha"]
+                pair_alpha = source.get_tensor(pair["alpha_key"]).item() if pair["alpha_key"] is not None else None
                 effective_alpha = pair_alpha if pair_alpha is not None else alpha
                 scale = float(effective_alpha) / lora_down.shape[0] if effective_alpha is not None else 1.0
                 delta = torch.mm(lora_up, lora_down)

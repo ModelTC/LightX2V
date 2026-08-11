@@ -51,6 +51,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年8月11日：** 🚀 我们发布并支持 [MiniMax-H3 Turbo 4-step v1.0 768p 蒸馏 LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors)。`configs/minimax_h3/dmd` 下的推理配置默认以 1344x768 分辨率运行 H3，使用 `video_flow_shift=6`、`audio_flow_shift=3`、LoRA alpha 128，并支持 4 步无 CFG 推理。
+
 - **2026年8月7日：** 🚀 LightX2V 正式推出对 [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) 的完整推理支持。MiniMax-H3 是一款可生成原生同步立体声音频与视频的全模态生成模型；当前集成覆盖 T2AV、I2AV、L2AV、FL2AV 和 Ref2AV 工作流，并提供模型级与 Block 级 Offload、张量并行与序列并行、DiT 量化推理及特征缓存等优化能力。单卡与多卡示例请参阅 [MiniMax-H3 推理脚本](scripts/minimax_h3)。与此同时，我们发布了基于 Qwen3.6-27B 微调的 [MiniMax-H3 T2VA Prompt Rewriter LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA)，可将简洁的用户提示词转换为面向 H3 的结构化多模态描述，涵盖视觉叙事、整体音景与非叙事音乐。
 
 - **2026年7月28日：** 🚀 我们发布了 LingBot-Video 的 4 步蒸馏 LoRA：[LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video)。该 LoRA 支持 T2V、T2I 和 I2V 任务，只需 4 步且无需 CFG 即可完成推理。使用方式请参考 [LingBot-Video 推理脚本](scripts/lingbot_video)。
@@ -173,61 +175,35 @@ uv pip install -v . # pip install -v .
 
 ### 使用示例
 ```python
-# examples/wan/wan_i2v.py
+# examples/minimax_h3/minimax_h3_t2av_dmd.py
 """
-Wan2.2 image-to-video generation example.
-This example demonstrates how to use LightX2V with Wan2.2 model for I2V generation.
+使用 4 步 768p 蒸馏 LoRA 进行 MiniMax-H3 T2AV 生成。
 """
 
 from lightx2v import LightX2VPipeline
 
-# Initialize pipeline for Wan2.2 I2V task
-# For wan2.1, use model_cls="wan2.1"
+# 初始化 MiniMax-H3 T2AV pipeline。
 pipe = LightX2VPipeline(
-    model_path="/path/to/Wan2.2-I2V-A14B",
-    model_cls="wan2.2_moe",
-    task="i2v",
+    model_path="/path/to/MiniMax-H3",
+    model_cls="minimax_h3",
+    task="t2av",
 )
 
-# Alternative: create generator from config JSON file
-# pipe.create_generator(
-#     config_json="configs/wan22/wan_moe_i2v.json"
-# )
-
-# Enable offloading to significantly reduce VRAM usage with minimal speed impact
-# Suitable for RTX 30/40/50 consumer GPUs
-pipe.enable_offload(
-    cpu_offload=True,
-    offload_granularity="block",  # For Wan models, supports both "block" and "phase"
-    text_encoder_offload=True,
-    image_encoder_offload=False,
-    vae_offload=False,
-)
-
-# Create generator manually with specified parameters
+# DMD 配置使用已发布的 768p LoRA、4 步推理、
+# video_flow_shift=6、audio_flow_shift=3 和 LoRA alpha=128。
 pipe.create_generator(
-    attn_mode="sage_attn2",
-    infer_steps=40,
-    height=480,  # Can be set to 720 for higher resolution
-    width=832,  # Can be set to 1280 for higher resolution
-    num_frames=81,
-    guidance_scale=[3.5, 3.5],  # For wan2.1, guidance_scale is a scalar (e.g., 5.0)
-    sample_shift=5.0,
+    config_json="configs/minimax_h3/dmd/minimax_h3_fp8_4step.json"
 )
 
-# Generation parameters
+# 生成参数
 seed = 42
-prompt = "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
-negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
-image_path="/path/to/img_0.jpg"
-save_result_path = "/path/to/save_results/output.mp4"
+prompt = "一只电影感狐狸穿过下雪的森林，轻柔的风声和远处鸟鸣构成沉浸式冬季音景。"
+save_result_path = "outputs/minimax_h3_t2av_768p.mp4"
 
-# Generate video
+# 生成带同步音频的视频
 pipe.generate(
     seed=seed,
-    image_path=image_path,
     prompt=prompt,
-    negative_prompt=negative_prompt,
     save_result_path=save_result_path,
 )
 
@@ -253,6 +229,7 @@ pipe.generate(
 - ✅ [Qwen-Image-Edit-2511](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
 
 ### 量化模型和蒸馏模型/Lora (**🚀 推荐：4步推理**)
+- ✅ [MiniMax-H3 Turbo](https://huggingface.co/lightx2v/Minimax-h3-Turbo) —— 面向 MiniMax-H3 T2AV/FL2AV 的 4 步 768p 蒸馏 LoRA
 - ✅ [LightLingBot-Video](https://huggingface.co/lightx2v/LightLingBot-Video) —— 面向 LingBot-Video T2V、T2I 和 I2V 任务的 4 步蒸馏 LoRA
 - ✅ [Wan2.1-Distill-Models](https://huggingface.co/lightx2v/Wan2.1-Distill-Models)
 - ✅ [Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models)

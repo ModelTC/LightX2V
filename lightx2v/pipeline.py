@@ -126,6 +126,15 @@ class LightX2VPipeline:
         elif self.model_cls in ["cosmos3"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 48
+        elif self.model_cls in ["minimax_h3", "minimax-h3", "minimaxh3"]:
+            self.model_cls = "minimax_h3"
+            self.support_tasks = self.support_tasks or ["t2av", "i2av", "l2av", "fl2av", "ref2av"]
+            self.vae_spatial_scale_factor = 16
+            self.vae_scale_factor = 16
+            self.fps = 24
+            self.target_fps = 24
+            self.audio_sampling_rate = 32000
+            self.audio_flow_shift = 3.0
         elif self.model_cls in ["lingbot_video", "lingbot-video"]:
             self.model_cls = "lingbot_video"
             self.vae_stride = (4, 8, 8)
@@ -263,8 +272,16 @@ class LightX2VPipeline:
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image", "lingbot_video"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image", "lingbot_video", "minimax_h3"]:
             self.attn_type = attn_mode
+            if self.model_cls == "minimax_h3":
+                self.video_flow_shift = sample_shift
+                self.target_fps = fps
+                self.fps = fps
+                self.audio_sampling_rate = 32000
+                self.audio_flow_shift = getattr(self, "audio_flow_shift", 3.0)
+                self.vae_spatial_scale_factor = 16
+                self.vae_scale_factor = 16
         self.norm_modulate_backend = norm_modulate_backend
 
     def set_infer_config_json(self, config_json):
@@ -325,6 +342,10 @@ class LightX2VPipeline:
             self.qwen3_quantized = text_encoder_quantized
             self.qwen3_quantized_ckpt = text_encoder_quantized_ckpt
             self.qwen3_quant_scheme = text_encoder_quant_scheme
+        elif self.model_cls == "minimax_h3":
+            self.dit_quantized = dit_quantized
+            self.dit_quantized_ckpt = dit_quantized_ckpt
+            self.dit_quant_scheme = quant_scheme
 
     def enable_offload(
         self,
@@ -367,6 +388,8 @@ class LightX2VPipeline:
             self.gemma_cpu_offload = text_encoder_offload
         elif self.model_cls == "z_image":
             self.qwen3_cpu_offload = text_encoder_offload
+        elif self.model_cls == "minimax_h3":
+            self.text_encoder_cpu_offload = text_encoder_offload
 
     def enable_lora(self, lora_configs, lora_dynamic_apply=False):
         self.lora_configs = lora_configs
@@ -463,7 +486,10 @@ class LightX2VPipeline:
             self.task = task
             self.modify_config({"task": self.task})
 
-        input_info = init_empty_input_info(self.task, self.support_tasks)
+        # MiniMax-H3 validates the task-specific input dataclass in its runner.
+        # Do not merge its T2AV/I2AV/L2AV/FL2AV/Ref2AV schemas here.
+        input_support_tasks = [] if self.model_cls == "minimax_h3" else self.support_tasks
+        input_info = init_empty_input_info(self.task, input_support_tasks)
         if self.seed is not None:
             seed_all(self.seed)
         update_input_info_from_dict(input_info, self)

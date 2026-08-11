@@ -58,8 +58,6 @@ def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
         lora_config = lora_configs[0]
         if not lora_config.get("path"):
             raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].path")
-        if not os.path.isfile(lora_config["path"]):
-            raise FileNotFoundError(f"MiniMax-H3 dynamic LoRA file not found: {lora_config['path']}")
         if lora_config.get("alpha") is None:
             raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].alpha (use 8 for the MiniMax-H3 Turbo LoRA)")
         model_kwargs.update(
