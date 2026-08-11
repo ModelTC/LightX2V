@@ -2,7 +2,6 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightTP
 from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
@@ -88,24 +87,11 @@ def _mm_weight(
     )
 
 
-class WanTensorParallelRMSWeight(RMSWeightTP):
-    """RMSNorm over the full Q/K hidden dimension sharded by Wan TP."""
-
-    def apply(self, input_tensor):
-        input_fp32 = input_tensor.float()
-        local_sum = input_fp32.square().sum(dim=-1, keepdim=True)
-        if self.tp_size > 1 and self.tp_group is not None:
-            dist.all_reduce(local_sum, op=dist.ReduceOp.SUM, group=self.tp_group)
-
-        global_hidden_dim = input_tensor.shape[-1] * self.tp_size
-        normalized = input_fp32 * torch.rsqrt(local_sum / global_hidden_dim + self.eps)
-        return (normalized * self._get_actual_weight().float()).to(input_tensor.dtype)
-
-
 def _rms_weight(config, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, lora_prefix="", lora_path=""):
     if config.get("tensor_parallel", False):
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        return WanTensorParallelRMSWeight(
+        tp_rms_norm_type = config.get("tp_rms_norm_type", "TensorParallelFP32")
+        return RMS_WEIGHT_REGISTER[tp_rms_norm_type](
             weight_name=weight_name,
             tp_group=tp_group,
             tp_rank=dist.get_rank(tp_group),

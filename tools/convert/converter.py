@@ -2,6 +2,7 @@ import argparse
 import gc
 import glob
 import json
+import math
 import multiprocessing
 import os
 import re
@@ -447,7 +448,55 @@ def quantize_model(
     return weights
 
 
-def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None, strength=1.0):
+def _validate_lora_merge(lora_path, weight_dict, lora_weights, lora_pairs, lora_diffs, alpha, require_alpha):
+    """Validate a LoRA completely before modifying any base-model tensors."""
+    if not lora_pairs and not lora_diffs:
+        raise ValueError(f"No supported LoRA weights found in: {lora_path}")
+
+    consumed_keys = set()
+    for pair_info in lora_pairs.values():
+        consumed_keys.update((pair_info["up_key"], pair_info["down_key"]))
+        if pair_info["mid_key"] is not None:
+            consumed_keys.add(pair_info["mid_key"])
+    consumed_keys.update(diff_info["diff_key"] for diff_info in lora_diffs.values())
+
+    tensor_keys = {key for key in lora_weights if not key.endswith(".alpha")}
+    unsupported_keys = sorted(tensor_keys - consumed_keys)
+    missing_model_keys = sorted((set(lora_pairs) | set(lora_diffs)) - set(weight_dict))
+    missing_alpha_keys = sorted(model_key for model_key, pair_info in lora_pairs.items() if pair_info["alpha"] is None)
+
+    shape_mismatches = []
+    for model_key, pair_info in lora_pairs.items():
+        if model_key not in weight_dict:
+            continue
+        param = weight_dict[model_key]
+        lora_up = lora_weights[pair_info["up_key"]]
+        lora_down = lora_weights[pair_info["down_key"]]
+        if lora_up.dim() != 2 or lora_down.dim() != 2:
+            shape_mismatches.append(f"{model_key}: up={tuple(lora_up.shape)}, down={tuple(lora_down.shape)}")
+            continue
+        expected_shape = (lora_up.shape[0], lora_down.shape[1])
+        if lora_up.shape[1] != lora_down.shape[0] or tuple(param.shape) != expected_shape:
+            shape_mismatches.append(f"{model_key}: base={tuple(param.shape)}, up={tuple(lora_up.shape)}, down={tuple(lora_down.shape)}")
+
+    for model_key, diff_info in lora_diffs.items():
+        if model_key in weight_dict and tuple(weight_dict[model_key].shape) != tuple(lora_weights[diff_info["diff_key"]].shape):
+            shape_mismatches.append(f"{model_key}: base={tuple(weight_dict[model_key].shape)}, diff={tuple(lora_weights[diff_info['diff_key']].shape)}")
+
+    problems = []
+    if unsupported_keys:
+        problems.append(f"unsupported tensors ({len(unsupported_keys)}): {unsupported_keys[:3]}")
+    if missing_model_keys:
+        problems.append(f"missing base-model keys ({len(missing_model_keys)}): {missing_model_keys[:3]}")
+    if shape_mismatches:
+        problems.append(f"shape mismatches ({len(shape_mismatches)}): {shape_mismatches[:3]}")
+    if require_alpha and alpha is None and missing_alpha_keys:
+        problems.append(f"alpha is missing for {len(missing_alpha_keys)} LoRA pairs; pass --lora_alpha with the training alpha (8 for the MiniMax-H3 Turbo LoRA)")
+    if problems:
+        raise ValueError(f"LoRA validation failed for {lora_path}: " + "; ".join(problems))
+
+
+def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None, strength=1.0, strict=False, require_alpha=False):
     """
     Load and apply LoRA weights to model weights using the LoRALoader class.
 
@@ -457,7 +506,16 @@ def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None, strength=1
         alpha: Global alpha scaling factor
         key_mapping_rules: Optional list of (pattern, replacement) regex rules for key mapping
         strength: Additional strength factor for LoRA deltas
+        strict: Fail instead of producing a partially merged checkpoint
+        require_alpha: Require a global or per-layer alpha for every LoRA pair
+
+    Returns:
+        Number of LoRA weight adjustments applied
     """
+    if alpha is not None and not math.isfinite(alpha):
+        raise ValueError(f"LoRA alpha must be finite, got {alpha}")
+    if strength is not None and not math.isfinite(strength):
+        raise ValueError(f"LoRA strength must be finite, got {strength}")
     logger.info(f"Loading LoRA from: {lora_path} with alpha={alpha}, strength={strength}")
 
     # Load LoRA weights from safetensors file
@@ -467,22 +525,41 @@ def load_loras(lora_path, weight_dict, alpha, key_mapping_rules=None, strength=1
     # Create LoRA loader with key mapping rules
     lora_loader = LoRALoader(key_mapping_rules=key_mapping_rules)
 
+    lora_pairs = lora_loader.extract_lora_pairs(lora_weights)
+    lora_diffs = lora_loader.extract_lora_diffs(lora_weights)
+    if strict:
+        _validate_lora_merge(
+            lora_path=lora_path,
+            weight_dict=weight_dict,
+            lora_weights=lora_weights,
+            lora_pairs=lora_pairs,
+            lora_diffs=lora_diffs,
+            alpha=alpha,
+            require_alpha=require_alpha,
+        )
+
     # Apply LoRA weights to model
-    lora_loader.apply_lora(
+    applied_count = lora_loader.apply_lora(
         weight_dict=weight_dict,
         lora_weights=lora_weights,
         alpha=alpha,
         strength=strength,
     )
+    expected_count = len(lora_pairs) + len(lora_diffs)
+    if strict and applied_count != expected_count:
+        raise RuntimeError(f"LoRA merge was incomplete for {lora_path}: applied {applied_count} of {expected_count} adjustments")
+    return applied_count
 
 
 def convert_weights(args):
     if os.path.isdir(args.source):
-        src_files = glob.glob(os.path.join(args.source, "*.safetensors"), recursive=True)
+        src_files = sorted(glob.glob(os.path.join(args.source, "*.safetensors"), recursive=True))
     elif args.source.endswith((".pth", ".safetensors", "pt")):
         src_files = [args.source]
     else:
         raise ValueError("Invalid input path")
+    if not src_files:
+        raise FileNotFoundError(f"No model weight files found under: {args.source}")
 
     merged_weights = {}
     logger.info(f"Processing source files: {src_files}")
@@ -598,7 +675,16 @@ def convert_weights(args):
             # Pass key mapping rules to handle converted keys properly
             strength = args.lora_strength[idx] if args.lora_strength is not None else 1.0
             alpha = args.lora_alpha[idx] if args.lora_alpha is not None else None
-            load_loras(path, converted_weights, alpha, key_mapping_rules, strength=strength)
+            strict_lora = args.model_type == "h3"
+            load_loras(
+                path,
+                converted_weights,
+                alpha,
+                key_mapping_rules,
+                strength=strength,
+                strict=strict_lora,
+                require_alpha=strict_lora,
+            )
 
     if args.quantized:
         if args.full_quantized and args.comfyui_mode:
@@ -824,18 +910,18 @@ def main():
         choices=["torch.bfloat16", "torch.float16"],
         help="Data type for non-linear",
     )
-    parser.add_argument("--lora_path", type=str, nargs="*", help="Path(s) to LoRA file(s). Can specify multiple paths separated by spaces.")
+    parser.add_argument("--lora_path", type=str, nargs="+", help="Path(s) to LoRA file(s). Can specify multiple paths separated by spaces.")
     parser.add_argument(
         "--lora_alpha",
         type=float,
-        nargs="*",
+        nargs="+",
         default=None,
-        help="Alpha for LoRA weight scaling, Default non scaling. ",
+        help="Alpha used for LoRA scaling (alpha/rank). Required for MiniMax-H3.",
     )
     parser.add_argument(
         "--lora_strength",
         type=float,
-        nargs="*",
+        nargs="+",
         help="Additional strength factor(s) for LoRA deltas; default 1.0",
     )
     parser.add_argument("--copy_no_weight_files", action="store_true")
@@ -856,6 +942,12 @@ def main():
 
     if args.single_file and args.chunk_size > 0 and args.chunk_size != 100:
         logger.warning("--chunk_size is ignored when using --single_file option.")
+
+    if args.quantized and args.linear_type is None:
+        parser.error("--linear_type is required when --quantized is enabled (use --linear_type fp8 for MiniMax-H3 FP8)")
+
+    if args.model_type == "h3" and args.lora_path and args.lora_alpha is None:
+        parser.error("MiniMax-H3 LoRA merging requires --lora_alpha; use --lora_alpha 8 for the MiniMax-H3 Turbo LoRA")
 
     def _parse_csv_override(v: str | None) -> list[str] | None:
         if v is None:

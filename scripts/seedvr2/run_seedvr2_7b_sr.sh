@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=/path/to/LightX2V
+lightx2v_path=/data/nvme0/gushiqiao/codes/LightX2V
 
 # Use the 3B model repo because the official 7B repo is missing pos_emb.pt and neg_emb.pt (e.g. https://huggingface.co/ByteDance-Seed/SeedVR2-3B/blob/main/pos_emb.pt); specify the 7B DiT checkpoint via dit_original_ckpt in configs/seedvr/seedvr2_7b.json.
-model_path=/path/to/ByteDance-Seed/SeedVR2-3B
+model_path=/data/nvme0/gushiqiao/models/SeedVR2-3B
 
-video_path=/path/to/test.mp4
+video_path=/data/nvme0/gushiqiao/examples/output_lightx2v_minimax_h3_ours_2.mp4
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=7
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

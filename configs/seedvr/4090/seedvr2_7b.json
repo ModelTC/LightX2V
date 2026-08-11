@@ -1,17 +1,28 @@
 {
     "target_video_length": 81,
-    "target_height": 1080,
-    "target_width": 1920,
+    "target_height": 1440,
+    "target_width": 2560,
     "infer_steps": 1,
     "fps": 16,
-    "use_tiling_vae": true,
-    "cpu_offload": true,
-    "offload_granularity": "model",
     "model_size": "7b",
-    "sr_segment_length": 41,
+    "dit_original_ckpt": "/models/SeedVR2-7B/seedvr2_ema_7b.pth",
+    "use_tiling_vae": true,
+    "vae_tile_size": 512,
+    "vae_tile_overlap": 64,
+    "vae_causal_slice_size": 4,
+    "vae_memory_limit_gb": 0.5,
+    "vae_sp_color_chunk_size": 4,
+    "stream_save_video": true,
+    "cpu_offload": true,
+    "resize_mode": "adaptive",
+    "color_fix": "gpu",
+    "load_from_rank0": true,
     "dit_quantized_ckpt": "/path/to/seedvr2_ema_7b_fp8.safetensors",
     "dit_quant_scheme": "fp8-q8f",
     "dit_quantized": true,
-    "resize_mode": "adaptive",
-    "color_fix": "gpu"
+    "parallel": {
+      "seq_p_size": 8,
+      "seq_p_attn_type": "ulysses-4090",
+      "vae_parallel": true
+    }
 }

@@ -267,18 +267,14 @@ class SglQuantLinearFp8(nn.Module):
             self.register_buffer("bias", None)
 
     def act_quant_func(self, x):
-        m, k = x.shape
-        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device="cuda", requires_grad=False)
-        input_tensor_scale = torch.empty((m, 1), dtype=torch.float32, device="cuda", requires_grad=False)
+        input_tensor_quant = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+        input_tensor_scale = torch.empty((x.shape[0], 1), dtype=torch.float32, device=x.device)
         sgl_kernel.sgl_per_token_quant_fp8(x, input_tensor_quant, input_tensor_scale)
         return input_tensor_quant, input_tensor_scale
 
     def forward(self, input_tensor):
         input_tensor = input_tensor.squeeze(0)
-        shape = (input_tensor.shape[0], self.weight.shape[0])
         dtype = input_tensor.dtype
-        device = input_tensor.device
-        output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
         output_tensor = sgl_kernel.fp8_scaled_mm(
             input_tensor_quant,
@@ -291,14 +287,20 @@ class SglQuantLinearFp8(nn.Module):
 
         return output_tensor.unsqueeze(0)
 
-    def _apply(self, fn):
-        for module in self.children():
-            module._apply(fn)
+    def _apply(self, fn, recurse=True):
+        if recurse:
+            for module in self.children():
+                module._apply(fn)
 
         def maybe_cast(t):
-            if t is not None and t.device != fn(t).device:
-                return fn(t)
-            return t
+            if t is None:
+                return None
+            transformed = fn(t)
+            if transformed.dtype == t.dtype:
+                return transformed
+            if transformed.device == t.device:
+                return t
+            return t.to(transformed.device)
 
         self.weight = maybe_cast(self.weight)
         self.weight_scale = maybe_cast(self.weight_scale)

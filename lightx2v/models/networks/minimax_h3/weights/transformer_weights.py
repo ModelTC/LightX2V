@@ -8,6 +8,7 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGI
 
 
 def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
+    lora_prefix = "transformer_blocks"
     if config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
         return MiniMaxH3TensorParallelLinear(
@@ -19,11 +20,13 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
             tp_size=dist.get_world_size(tp_group),
             split_dim=tp_split,
             create_cuda_buffer=create_cuda_buffer,
+            lora_prefix=lora_prefix,
         )
     return MM_WEIGHT_REGISTER[config.get("dit_quant_scheme", "Default")](
         f"{name}.weight",
         f"{name}.bias" if bias else None,
         create_cuda_buffer=create_cuda_buffer,
+        lora_prefix=lora_prefix,
     )
 
 

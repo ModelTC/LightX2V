@@ -355,7 +355,7 @@ class LightX2VPipeline:
             "wan2.2_s2v",
         ]:
             self.t5_cpu_offload = text_encoder_offload
-            self.clip_encoder_offload = image_encoder_offload
+            self.clip_cpu_offload = image_encoder_offload
 
         elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.qwen25vl_cpu_offload = text_encoder_offload

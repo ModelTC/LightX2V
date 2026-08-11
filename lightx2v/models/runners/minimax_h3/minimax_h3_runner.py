@@ -9,6 +9,7 @@ from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
 from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
     TEXT_TAG,
@@ -39,7 +40,7 @@ from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.envs import GET_RECORDER_MODE
+from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
 from lightx2v.utils.input_info import FL2AVInputInfo, I2AVInputInfo, L2AVInputInfo, Ref2AVInputInfo, T2AVInputInfo
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -47,6 +48,34 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
+
+
+def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
+    """Build H3 with either a dynamic LoRA branch or load-time merging."""
+    if config.get("lora_dynamic_apply", False):
+        if len(lora_configs) != 1:
+            raise ValueError("MiniMax-H3 dynamic LoRA currently accepts exactly one lora_configs entry")
+        lora_config = lora_configs[0]
+        if not lora_config.get("path"):
+            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].path")
+        if not os.path.isfile(lora_config["path"]):
+            raise FileNotFoundError(f"MiniMax-H3 dynamic LoRA file not found: {lora_config['path']}")
+        if lora_config.get("alpha") is None:
+            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].alpha (use 8 for the MiniMax-H3 Turbo LoRA)")
+        model_kwargs.update(
+            lora_path=lora_config["path"],
+            lora_strength=lora_config.get("strength", 1.0),
+            lora_alpha=lora_config["alpha"],
+        )
+        return MiniMaxH3Model(**model_kwargs)
+    if config.get("dit_quantized", False):
+        raise ValueError("MiniMax-H3 merged LoRA inference requires original, non-quantized DiT weights")
+    if config.get("lazy_load", False):
+        raise ValueError("MiniMax-H3 lazy loading does not support LoRA merging")
+
+    model = MiniMaxH3Model(**model_kwargs)
+    MiniMaxH3LoraAdapter(model).apply_lora(lora_configs)
+    return model
 
 
 @RUNNER_REGISTER("minimax_h3")
@@ -152,18 +181,37 @@ class MiniMaxH3Runner(DefaultRunner):
         self.video_vae, self.audio_vae = self.load_vae()
 
     def load_transformer(self):
-        return MiniMaxH3Model(
-            model_path=self.config["model_path"],
-            config=self.config,
-            device=self.init_device,
-        )
+        model_kwargs = {
+            "model_path": self.config["model_path"],
+            "config": self.config,
+            "device": self.init_device,
+        }
+        lora_configs = self.config.get("lora_configs")
+        if lora_configs:
+            return build_minimax_h3_model_with_lora(
+                self.config,
+                model_kwargs,
+                lora_configs,
+            )
+        return MiniMaxH3Model(**model_kwargs)
 
     def load_text_encoder(self):
         return [MiniMaxH3Qwen3VLTextEncoder(self.config)]
 
     def load_vae(self):
         cpu_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
-        video_vae = MiniMaxH3VideoVAE.from_pretrained(self.config["model_path"], device=AI_DEVICE, cpu_offload=cpu_offload)
+        video_vae_quantized = self.config.get("video_vae_quantized", False)
+        video_vae_quant_scheme = self.config["video_vae_quant_scheme"] if video_vae_quantized else None
+        video_vae_quantized_ckpt = self.config["video_vae_quantized_ckpt"] if video_vae_quantized else None
+        vae_sensitive_layer_dtype = DTYPE_MAP[self.config.get("vae_sensitive_layer_dtype", "fp32")]
+        video_vae = MiniMaxH3VideoVAE.from_pretrained(
+            self.config["model_path"],
+            device=AI_DEVICE,
+            cpu_offload=cpu_offload,
+            checkpoint_path=video_vae_quantized_ckpt,
+            quant_scheme=video_vae_quant_scheme,
+            sensitive_layer_dtype=vae_sensitive_layer_dtype,
+        )
         audio_vae = MiniMaxH3AudioVAE.from_pretrained(self.config["model_path"], device=AI_DEVICE, cpu_offload=cpu_offload)
         configured_sample_rate = int(self.config.get("audio_sampling_rate", audio_vae.sampling_rate))
         if configured_sample_rate != audio_vae.sampling_rate:

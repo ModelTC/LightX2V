@@ -7,6 +7,7 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGI
 
 def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
     kind = "Default-ForceFp32" if force_fp32 else "Default"
+    lora_kwargs = {"lora_prefix": "token_refiner"} if name.startswith("token_refiner.") else {}
     if config is not None and config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
         return MiniMaxH3TensorParallelLinear(
@@ -17,8 +18,9 @@ def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
             tp_rank=dist.get_rank(tp_group),
             tp_size=dist.get_world_size(tp_group),
             split_dim=tp_split,
+            **lora_kwargs,
         )
-    return MM_WEIGHT_REGISTER[kind](f"{name}.weight", f"{name}.bias" if bias else None)
+    return MM_WEIGHT_REGISTER[kind](f"{name}.weight", f"{name}.bias" if bias else None, **lora_kwargs)
 
 
 def _rms(config, name, eps):

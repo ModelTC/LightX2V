@@ -74,7 +74,7 @@ class VideoRecorder:
                         t0 = time.time()
                         frame = (data[i] * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
                         try:
-                            self.video_conn.send(frame.tobytes())
+                            self.video_conn.sendall(frame.tobytes())
                         except (BrokenPipeError, OSError, ConnectionResetError) as e:
                             logger.info(f"Video connection closed, stopping worker: {type(e).__name__}")
                             return

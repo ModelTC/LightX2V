@@ -25,8 +25,8 @@ There are two explicit decode boundaries:
 * :meth:`decode_raw` consumes already denormalized VAE latents and returns
   ImageNet-normalized RGB, matching the low-level autoencoder output.
 * :meth:`decode` consumes diffusion-space latents, applies the released
-  per-channel mean/std, runs the FP16-autocast decode with FP32 weights, and
-  returns RGB in ``[0, 1]`` with shape ``[batch, 3, frames, height, width]``.
+  per-channel mean/std, runs the mixed FP16/FP32 decoder, and returns RGB in
+  ``[0, 1]`` with shape ``[batch, 3, frames, height, width]``.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ from __future__ import annotations
 import gc
 import json
 import math
-from contextlib import nullcontext
 from pathlib import Path
 
 import torch
@@ -116,9 +115,15 @@ class MiniMaxH3VideoCausalConv3d(nn.Conv3d):
 
 class MiniMaxH3VideoGroupNorm(nn.GroupNorm):
     def forward(self, hidden_states):
+        output_dtype = hidden_states.dtype
+        norm_dtype = self.weight.dtype
         batch, channels, frames, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 1, 3, 4).contiguous().view(batch * frames, channels, 1, height, width)
+        if output_dtype != norm_dtype:
+            hidden_states = hidden_states.to(norm_dtype)
         hidden_states = super().forward(hidden_states)
+        if output_dtype != norm_dtype:
+            hidden_states = hidden_states.to(output_dtype)
         return hidden_states.view(batch, frames, channels, height, width).permute(0, 2, 1, 3, 4).contiguous()
 
 
@@ -182,8 +187,12 @@ class MiniMaxH3VideoEncoder3d(nn.Module):
         norm_num_groups=32,
         norm_eps=1e-6,
         spatial_padding_mode="reflect",
+        infer_dtype: torch.dtype = torch.float16,
+        sensitive_layer_dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
+        self.infer_dtype = infer_dtype
+        self.sensitive_layer_dtype = sensitive_layer_dtype
         self.conv_in = MiniMaxH3VideoCausalConv3d(
             in_channels,
             block_out_channels[0],
@@ -213,8 +222,12 @@ class MiniMaxH3VideoEncoder3d(nn.Module):
 
     def forward(self, hidden_states):
         hidden_states = self.conv_in(hidden_states)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            hidden_states = hidden_states.to(self.infer_dtype)
         for block in self.down_blocks:
             hidden_states = block(hidden_states)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            hidden_states = hidden_states.to(self.sensitive_layer_dtype)
         return self.conv_out(F.silu(self.norm_out(hidden_states)))
 
 
@@ -243,10 +256,19 @@ class MiniMaxH3VideoRotaryPosEmbed(nn.Module):
 
 
 class MiniMaxH3VideoAttention(nn.Module):
-    def __init__(self, dim: int, heads: int, dim_head: int, eps: float = 1e-5, bias: bool = True) -> None:
+    def __init__(
+        self,
+        dim: int,
+        heads: int,
+        dim_head: int,
+        eps: float = 1e-5,
+        bias: bool = True,
+        sensitive_layer_dtype: torch.dtype = torch.float32,
+    ) -> None:
         super().__init__()
         self.heads = heads
         self.dim_head = dim_head
+        self.sensitive_layer_dtype = sensitive_layer_dtype
         inner_dim = heads * dim_head
 
         self.norm_q = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=False)
@@ -277,9 +299,15 @@ class MiniMaxH3VideoAttention(nn.Module):
         key = self.to_k(hidden_states).unflatten(2, (self.heads, self.dim_head))
         value = self.to_v(hidden_states).unflatten(2, (self.heads, self.dim_head))
 
-        # The released implementation always normalizes Q/K in float32.
-        query = self.norm_q(query.float()).to(query.dtype)
-        key = self.norm_k(key.float()).to(key.dtype)
+        infer_dtype = query.dtype
+        if self.sensitive_layer_dtype != infer_dtype:
+            query = query.to(self.sensitive_layer_dtype)
+            key = key.to(self.sensitive_layer_dtype)
+        query = self.norm_q(query)
+        key = self.norm_k(key)
+        if self.sensitive_layer_dtype != infer_dtype:
+            query = query.to(infer_dtype)
+            key = key.to(infer_dtype)
 
         if rotary_emb is not None:
             cos, sin = (value.to(query.dtype) for value in rotary_emb)
@@ -307,10 +335,21 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
         ffn_mult: int = 4,
         eps: float = 1e-5,
         bias: bool = True,
+        infer_dtype: torch.dtype = torch.float16,
+        sensitive_layer_dtype: torch.dtype = torch.float32,
     ) -> None:
         super().__init__()
+        self.infer_dtype = infer_dtype
+        self.sensitive_layer_dtype = sensitive_layer_dtype
         self.norm1 = nn.RMSNorm(dim, eps=eps, elementwise_affine=True)
-        self.attn = MiniMaxH3VideoAttention(dim=dim, heads=heads, dim_head=dim_head, eps=eps, bias=bias)
+        self.attn = MiniMaxH3VideoAttention(
+            dim=dim,
+            heads=heads,
+            dim_head=dim_head,
+            eps=eps,
+            bias=bias,
+            sensitive_layer_dtype=sensitive_layer_dtype,
+        )
         self.scale1 = nn.Parameter(torch.zeros(dim))
         self.norm2 = nn.RMSNorm(dim, eps=eps, elementwise_affine=True)
         self.ff = _FeedForward(dim, mult=ffn_mult, bias=bias)
@@ -321,10 +360,21 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
         hidden_states: torch.Tensor,
         rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
-        norm_hidden_states = self.norm1(hidden_states.float()).to(hidden_states.dtype)
-        hidden_states = hidden_states + self.attn(norm_hidden_states, rotary_emb) * self.scale1
-        norm_hidden_states = self.norm2(hidden_states.float()).to(hidden_states.dtype)
-        return hidden_states + self.ff(norm_hidden_states) * self.scale2
+        norm_hidden_states = self.norm1(hidden_states)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            norm_hidden_states = norm_hidden_states.to(self.infer_dtype)
+        attention_output = self.attn(norm_hidden_states, rotary_emb)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            attention_output = attention_output.to(self.sensitive_layer_dtype)
+        hidden_states = hidden_states + attention_output * self.scale1
+
+        norm_hidden_states = self.norm2(hidden_states)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            norm_hidden_states = norm_hidden_states.to(self.infer_dtype)
+        feed_forward_output = self.ff(norm_hidden_states)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            feed_forward_output = feed_forward_output.to(self.sensitive_layer_dtype)
+        return hidden_states + feed_forward_output * self.scale2
 
 
 class MiniMaxH3VideoViTDecoder3d(nn.Module):
@@ -344,9 +394,13 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         rope_theta: float = 100.0,
         rope_dim_ratio: float = 0.75,
         norm_eps: float = 1e-5,
+        infer_dtype: torch.dtype = torch.float16,
+        sensitive_layer_dtype: torch.dtype = torch.float32,
     ) -> None:
         super().__init__()
         dim = num_attention_heads * attention_head_dim
+        self.infer_dtype = infer_dtype
+        self.sensitive_layer_dtype = sensitive_layer_dtype
         self.patch_size = patch_size
         self.patch_size_t = patch_size_t
         self.out_channels = out_channels
@@ -363,6 +417,8 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
                     dim_head=attention_head_dim,
                     ffn_mult=ffn_mult,
                     eps=norm_eps,
+                    infer_dtype=infer_dtype,
+                    sensitive_layer_dtype=sensitive_layer_dtype,
                 )
                 for _ in range(num_layers)
             ]
@@ -375,6 +431,8 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         hidden_states = hidden_states.permute(0, 2, 3, 4, 1).reshape(batch_size, num_frames * height * width, num_channels)
         hidden_states = self.proj_in(hidden_states)
         num_patches = hidden_states.shape[1]
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            hidden_states = hidden_states.to(self.sensitive_layer_dtype)
 
         register_tokens = self.register_tokens.expand(batch_size, -1, -1)
         cls_token = torch.zeros_like(hidden_states[:, :1, :])
@@ -389,7 +447,10 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         for block in self.transformer_blocks:
             hidden_states = block(hidden_states, rotary_emb)
 
-        hidden_states = self.proj_out(self.norm_out(hidden_states))[:, :num_patches, :]
+        hidden_states = self.norm_out(hidden_states)
+        if self.sensitive_layer_dtype != self.infer_dtype:
+            hidden_states = hidden_states.to(self.infer_dtype)
+        hidden_states = self.proj_out(hidden_states)[:, :num_patches, :]
         patch_size, patch_size_t = self.patch_size, self.patch_size_t
         hidden_states = hidden_states.view(
             batch_size,
@@ -412,7 +473,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
 
 
 class MiniMaxH3VideoVAE(nn.Module):
-    """H3 video VAE that loads encoder and decoder from the original shards."""
+    """H3 video VAE with original or quantized checkpoint loading."""
 
     def __init__(
         self,
@@ -420,11 +481,17 @@ class MiniMaxH3VideoVAE(nn.Module):
         *,
         device: str | torch.device | None = None,
         cpu_offload: bool = False,
+        quant_scheme: str | None = None,
+        sensitive_layer_dtype: torch.dtype = torch.float32,
     ) -> None:
         super().__init__()
+        if quant_scheme not in {None, "fp8-sgl"}:
+            raise NotImplementedError(f"Unsupported MiniMax-H3 video VAE quantization scheme: {quant_scheme!r}")
         self.config = dict(config)
         self.execution_device = torch.device(device or AI_DEVICE)
         self.cpu_offload = cpu_offload
+        self.infer_dtype = torch.float16
+        self.sensitive_layer_dtype = sensitive_layer_dtype
 
         latent_channels = int(config.get("latent_channels", 24))
         out_channels = int(config.get("out_channels", 3))
@@ -443,6 +510,8 @@ class MiniMaxH3VideoVAE(nn.Module):
             norm_num_groups=int(config.get("norm_num_groups", 32)),
             norm_eps=float(config.get("norm_eps", 1e-6)),
             spatial_padding_mode=config.get("spatial_padding_mode", "reflect"),
+            infer_dtype=self.infer_dtype,
+            sensitive_layer_dtype=self.sensitive_layer_dtype,
         )
         self.quant_conv = nn.Conv3d(2 * latent_channels, 2 * latent_channels, kernel_size=1)
 
@@ -460,7 +529,12 @@ class MiniMaxH3VideoVAE(nn.Module):
             rope_theta=float(config.get("decoder_rope_theta", 100.0)),
             rope_dim_ratio=float(config.get("decoder_rope_dim_ratio", 0.75)),
             norm_eps=float(config.get("decoder_norm_eps", 1e-5)),
+            infer_dtype=self.infer_dtype,
+            sensitive_layer_dtype=self.sensitive_layer_dtype,
         )
+        if quant_scheme == "fp8-sgl":
+            self._replace_decoder_linears_with_fp8(self.decoder.transformer_blocks)
+            self.decoder.proj_out = self._make_fp8_linear(self.decoder.proj_out)
 
         self.clip_length = int(config.get("clip_length", 17))
         self.token_drop = int(config.get("token_drop", 3))
@@ -486,16 +560,46 @@ class MiniMaxH3VideoVAE(nn.Module):
         self._reset_runtime_buffers()
         self.load_report: SafetensorsSubsetReport | None = None
 
+    @classmethod
+    def _replace_decoder_linears_with_fp8(cls, module: nn.Module) -> None:
+        for name, child in module.named_children():
+            if isinstance(child, nn.Linear):
+                setattr(module, name, cls._make_fp8_linear(child))
+            else:
+                cls._replace_decoder_linears_with_fp8(child)
+
+    @staticmethod
+    def _make_fp8_linear(linear: nn.Linear) -> nn.Module:
+        from lightx2v.models.input_encoders.hf.q_linear import SglQuantLinearFp8
+
+        return SglQuantLinearFp8(
+            linear.in_features,
+            linear.out_features,
+            bias=linear.bias is not None,
+            dtype=torch.float16,
+        )
+
     def _reset_runtime_buffers(self) -> None:
         latent_channels = self.post_quant_conv.in_channels
         mean = self.config.get("latents_mean", [0.0] * latent_channels)
         std = self.config.get("latents_std", [1.0] * latent_channels)
         if len(mean) != latent_channels or len(std) != latent_channels:
             raise ValueError(f"Video latent statistics must contain {latent_channels} values, got mean={len(mean)}, std={len(std)}")
-        self._buffers["latents_mean"] = torch.tensor(mean, dtype=torch.float32)
-        self._buffers["latents_std"] = torch.tensor(std, dtype=torch.float32)
-        self._buffers["pixel_mean"] = torch.tensor(MINIMAX_H3_PIXEL_MEAN, dtype=torch.float32)
-        self._buffers["pixel_std"] = torch.tensor(MINIMAX_H3_PIXEL_STD, dtype=torch.float32)
+        self._buffers["latents_mean"] = torch.tensor(mean, dtype=self.sensitive_layer_dtype)
+        self._buffers["latents_std"] = torch.tensor(std, dtype=self.sensitive_layer_dtype)
+        self._buffers["pixel_mean"] = torch.tensor(MINIMAX_H3_PIXEL_MEAN, dtype=self.sensitive_layer_dtype)
+        self._buffers["pixel_std"] = torch.tensor(MINIMAX_H3_PIXEL_STD, dtype=self.sensitive_layer_dtype)
+
+    def _prepare_inference_dtypes(self) -> None:
+        # Keep normalization, residuals, and encoder boundaries in the
+        # sensitive dtype; bulk convolution and matrix multiplication use FP16.
+        for module in self.encoder.down_blocks.modules():
+            if isinstance(module, nn.Conv3d):
+                module.to(dtype=self.infer_dtype)
+        self.post_quant_conv.to(dtype=self.infer_dtype)
+        for module in self.decoder.modules():
+            if isinstance(module, nn.Linear):
+                module.to(dtype=self.infer_dtype)
 
     @classmethod
     def from_pretrained(
@@ -504,17 +608,30 @@ class MiniMaxH3VideoVAE(nn.Module):
         *,
         device: str | torch.device | None = None,
         cpu_offload: bool = False,
+        checkpoint_path: str | Path | None = None,
+        quant_scheme: str | None = None,
+        sensitive_layer_dtype: torch.dtype = torch.float32,
     ) -> "MiniMaxH3VideoVAE":
         vae_dir = _component_dir(model_path, "vae")
+        if (checkpoint_path is None) != (quant_scheme is None):
+            raise ValueError("MiniMax-H3 video VAE checkpoint_path and quant_scheme must be configured together")
+        weight_path = checkpoint_path if checkpoint_path is not None else vae_dir
         with (vae_dir / "config.json").open("r", encoding="utf-8") as handle:
             config = json.load(handle)
 
         # The released decoder is several GiB.  Constructing it on meta avoids
         # allocating and then immediately overwriting random initialized weights.
         with torch.device("meta"):
-            model = cls(config, device=device, cpu_offload=cpu_offload)
+            model = cls(
+                config,
+                device=device,
+                cpu_offload=cpu_offload,
+                quant_scheme=quant_scheme,
+                sensitive_layer_dtype=sensitive_layer_dtype,
+            )
         model._reset_runtime_buffers()
-        model.load_report = load_safetensors_subset(model, vae_dir)
+        model.load_report = load_safetensors_subset(model, weight_path)
+        model._prepare_inference_dtypes()
         model.eval().requires_grad_(False)
         if not cpu_offload:
             model.to(model.execution_device)
@@ -668,12 +785,12 @@ class MiniMaxH3VideoVAE(nn.Module):
     def normalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
         mean = self.latents_mean.to(latents.device).view(1, -1, 1, 1, 1)
         std = self.latents_std.to(latents.device).view(1, -1, 1, 1, 1)
-        return (latents.float() - mean) / std
+        return (latents.to(self.sensitive_layer_dtype) - mean) / std
 
     def preprocess(self, pixels: torch.Tensor) -> torch.Tensor:
         mean = self.pixel_mean.to(pixels.device).view(1, -1, 1, 1, 1)
         std = self.pixel_std.to(pixels.device).view(1, -1, 1, 1, 1)
-        return (pixels.float() - mean) / std
+        return (pixels.to(self.sensitive_layer_dtype) - mean) / std
 
     def encode_condition(self, pixels: torch.Tensor, *, video: bool = False, return_cpu: bool = True) -> torch.Tensor:
         """Encode an RGB ``[1,3,F,H,W]`` reference with the released seed-42 posterior."""
@@ -681,12 +798,14 @@ class MiniMaxH3VideoVAE(nn.Module):
             if pixels.ndim != 5 or pixels.shape[0] != 1 or pixels.shape[1] != 3:
                 raise ValueError(f"reference pixels must be [1,3,F,H,W], got {tuple(pixels.shape)}")
             device = self._activate()
-            pixels = self.preprocess(pixels.to(device=device, dtype=torch.float32))
+            pixels = self.preprocess(pixels.to(device=device, dtype=self.sensitive_layer_dtype))
             with torch.no_grad():
                 moments = self._encode(pixels) if video else self._encode_clip(pixels)
                 generator = torch.Generator(device="cpu").manual_seed(42)
                 latents = self._sample_posterior(moments, generator)
-                latents = latents.to(torch.float16).float()
+                latents = latents.to(self.infer_dtype)
+                if self.sensitive_layer_dtype != self.infer_dtype:
+                    latents = latents.to(self.sensitive_layer_dtype)
                 latents = self.normalize_latents(latents)
             return latents.cpu() if return_cpu else latents
         finally:
@@ -738,12 +857,12 @@ class MiniMaxH3VideoVAE(nn.Module):
     def denormalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
         mean = self.latents_mean.to(device=latents.device).view(1, -1, 1, 1, 1)
         std = self.latents_std.to(device=latents.device).view(1, -1, 1, 1, 1)
-        return latents.float() * std + mean
+        return latents.to(self.sensitive_layer_dtype) * std + mean
 
     def postprocess(self, video: torch.Tensor) -> torch.Tensor:
         mean = self.pixel_mean.to(device=video.device).view(1, -1, 1, 1, 1)
         std = self.pixel_std.to(device=video.device).view(1, -1, 1, 1, 1)
-        return (video.float() * std + mean).clamp_(0, 1)
+        return (video.to(self.sensitive_layer_dtype) * std + mean).clamp_(0, 1)
 
     def _activate(self) -> torch.device:
         if self.cpu_offload:
@@ -767,17 +886,18 @@ class MiniMaxH3VideoVAE(nn.Module):
             if latents.ndim != 5 or latents.shape[1] != self.post_quant_conv.in_channels:
                 raise ValueError(f"video latents must have shape [batch, {self.post_quant_conv.in_channels}, frames, height, width], got {tuple(latents.shape)}")
             device = self._activate()
-            latents = latents.to(device=device, dtype=torch.float32)
+            latents = latents.to(device=device, dtype=self.sensitive_layer_dtype)
             if denormalize:
-                # Denormalization happens in FP32, before the released
-                # FP16-autocast decoder recipe.
                 latents = self.denormalize_latents(latents)
-            autocast_context = torch.autocast(device_type="cuda", dtype=torch.float16) if device.type == "cuda" else nullcontext()
-            with torch.no_grad(), autocast_context:
+            if self.sensitive_layer_dtype != self.infer_dtype:
+                latents = latents.to(self.infer_dtype)
+            with torch.no_grad():
                 video = self._decode(latents)
-            video = video.float()
+            if self.sensitive_layer_dtype != self.infer_dtype:
+                video = video.to(self.sensitive_layer_dtype)
             if postprocess:
                 video = self.postprocess(video)
+            video = video.float()
 
             if return_cpu is None:
                 return_cpu = self.cpu_offload
