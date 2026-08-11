@@ -40,7 +40,7 @@ from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.envs import GET_RECORDER_MODE
+from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
 from lightx2v.utils.input_info import FL2AVInputInfo, I2AVInputInfo, L2AVInputInfo, Ref2AVInputInfo, T2AVInputInfo
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -200,7 +200,18 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def load_vae(self):
         cpu_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
-        video_vae = MiniMaxH3VideoVAE.from_pretrained(self.config["model_path"], device=AI_DEVICE, cpu_offload=cpu_offload)
+        video_vae_quantized = self.config.get("video_vae_quantized", False)
+        video_vae_quant_scheme = self.config["video_vae_quant_scheme"] if video_vae_quantized else None
+        video_vae_quantized_ckpt = self.config["video_vae_quantized_ckpt"] if video_vae_quantized else None
+        vae_sensitive_layer_dtype = DTYPE_MAP[self.config.get("vae_sensitive_layer_dtype", "fp32")]
+        video_vae = MiniMaxH3VideoVAE.from_pretrained(
+            self.config["model_path"],
+            device=AI_DEVICE,
+            cpu_offload=cpu_offload,
+            checkpoint_path=video_vae_quantized_ckpt,
+            quant_scheme=video_vae_quant_scheme,
+            sensitive_layer_dtype=vae_sensitive_layer_dtype,
+        )
         audio_vae = MiniMaxH3AudioVAE.from_pretrained(self.config["model_path"], device=AI_DEVICE, cpu_offload=cpu_offload)
         configured_sample_rate = int(self.config.get("audio_sampling_rate", audio_vae.sampling_rate))
         if configured_sample_rate != audio_vae.sampling_rate:
