@@ -1,0 +1,56 @@
+{
+  "infer_steps": 5,
+  "target_video_length": 362,
+  "target_height": 768,
+  "target_width": 1344,
+  "fps": 24,
+  "target_fps": 24,
+  "enable_cfg": false,
+  "cpu_offload": true,
+  "offload_granularity": "block",
+  "text_encoder_cpu_offload": true,
+  "text_encoder_offload_granularity": "block",
+  "vae_cpu_offload": false,
+  "vae_sensitive_layer_dtype": "fp32",
+  "lazy_load": false,
+  "unload_modules": false,
+  "attn_type": "dynamic_sparse_attn",
+  "dynamic_sparse_attn_setting": {
+      "sparsity_ratio": 0.9,
+      "operator": "sage2"
+  },
+  "rms_type": "sgl-kernel",
+  "rope_type": "torch_real_rope",
+  "feature_caching": "NoCaching",
+  "use_compile": true,
+  "video_flow_shift": 6.0,
+  "audio_flow_shift": 3.0,
+  "h3_step_update": "training_euler",
+  "vae_spatial_scale_factor": 16,
+  "audio_sampling_rate": 32000,
+  "audio_latents_per_second": 40,
+  "audio_channels": 2,
+  "keep_latents_dtype_in_scheduler": true,
+  "dit_quantized": true,
+  "dit_quant_scheme": "fp8-sgl",
+  "dit_quantized_ckpt": "/path/to/models/minimax_h3/h3_quantized/fp8/minimax_h3_fp8.safetensors",
+  "video_vae_quantized": true,
+  "video_vae_quant_scheme": "fp8-sgl",
+  "video_vae_quantized_ckpt": "/path/to/models/minimax_h3/h3_quantized/fp8/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors",
+  "lora_dynamic_apply": true,
+  "lora_configs": [
+    {
+      "path": "/path/to/models/minimax_h3/h3_loras/pytorch_lora_weights.safetensors",
+      "strength": 1.0,
+      "alpha": 128
+    }
+  ],
+  "parallel": {
+    "seq_p_size": 8,
+    "seq_p_attn_type": "ulysses",
+    "seq_p_prepost_backend": "triton",
+    "seq_p_tensor_fusion": true,
+    "seq_p_head_parallel": true,
+    "seq_p_fp8_comm": true
+  }
+}
