@@ -8,12 +8,45 @@ from lightx2v.models.networks.hunyuan_image3.infer.utils import apply_linear, ap
 class HunyuanImage3PostInfer:
     def __init__(self, config):
         self.config = config
+        self.parallel_context = config.get("parallel_context")
         if config.get("tensor_parallel", False):
             self.tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
             self.tp_size = dist.get_world_size(self.tp_group)
         else:
             self.tp_group = None
             self.tp_size = 1
+
+    @staticmethod
+    def _parallel_context_value(context, *names, default=None):
+        if context is None:
+            return default
+        for name in names:
+            if not hasattr(context, name):
+                continue
+            value = getattr(context, name)
+            if callable(value):
+                value = value()
+            if value is not None:
+                return value
+        return default
+
+    def _active_tp_state(self):
+        group = self._parallel_context_value(self.parallel_context, "active_tp_group", "tp_group", default=self.tp_group)
+        size = self._parallel_context_value(self.parallel_context, "active_tp_size", "tp_size")
+        if size is None:
+            size = dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else self.tp_size
+        return group, int(size)
+
+    def _logical_gather_order(self, tp_size):
+        order = self._parallel_context_value(self.parallel_context, "logical_gather_order")
+        if order is None:
+            return tuple(range(tp_size))
+        if torch.is_tensor(order):
+            order = order.detach().cpu().tolist()
+        order = tuple(int(rank) for rank in order)
+        if len(order) != tp_size or sorted(order) != list(range(tp_size)):
+            raise ValueError(f"HunyuanImage3 logical_gather_order must be a permutation of [0, {tp_size}), got {order}.")
+        return order
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -62,12 +95,16 @@ class HunyuanImage3PostInfer:
         # Autoregressive generation only consumes the last position. Limiting
         # the TP vocabulary projection to that token avoids materializing and
         # gathering prompt-length logits on every rank.
-        logits_hidden_states = hidden_states[:, -1:, :] if self.tp_size > 1 else hidden_states
+        tp_group, tp_size = self._active_tp_state()
+        logits_hidden_states = hidden_states[:, -1:, :] if tp_size > 1 else hidden_states
         normed = weights.final_norm.apply(logits_hidden_states)
         logits = apply_linear(weights.lm_head, normed.reshape(-1, normed.shape[-1])).reshape(*normed.shape[:-1], -1)
-        if self.tp_size > 1:
+        if tp_size > 1:
+            if tp_group is None:
+                raise RuntimeError("HunyuanImage3 active tensor parallelism requires an active TP process group for LM logits.")
             local_logits = logits.contiguous()
-            gathered_logits = [torch.empty_like(local_logits) for _ in range(self.tp_size)]
-            dist.all_gather(gathered_logits, local_logits, group=self.tp_group)
-            logits = torch.cat(gathered_logits, dim=-1)
+            gathered_logits = [torch.empty_like(local_logits) for _ in range(tp_size)]
+            dist.all_gather(gathered_logits, local_logits, group=tp_group)
+            gather_order = self._logical_gather_order(tp_size)
+            logits = torch.cat([gathered_logits[rank] for rank in gather_order], dim=-1)
         return {"logits": logits}
