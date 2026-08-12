@@ -15,6 +15,7 @@
   "unload_modules": false,
   "attn_type": "torch_sdpa",
   "rms_type": "sgl-kernel",
+  "tp_mm_type": "IntelTensorParallel",
   "rope_type": "minimax_h3_triton_rope",
   "feature_caching": "NoCaching",
   "use_compile": false,

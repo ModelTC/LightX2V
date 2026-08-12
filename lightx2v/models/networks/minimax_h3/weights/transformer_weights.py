@@ -3,7 +3,7 @@ import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
-from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import MiniMaxH3TensorParallelLinear
+from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import build_minimax_h3_tp_linear
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
@@ -11,7 +11,8 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
     lora_prefix = "transformer_blocks"
     if config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        return MiniMaxH3TensorParallelLinear(
+        return build_minimax_h3_tp_linear(
+            tp_mm_type=config.get("tp_mm_type", "TensorParallel"),
             weight_name=f"{name}.weight",
             bias_name=f"{name}.bias" if bias else None,
             mm_type=config.get("dit_quant_scheme", "Default"),
@@ -31,6 +32,8 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
 
 
 def _rms(config, name, eps, create_cuda_buffer=False):
+    # H3 shards complete attention heads, not the dimension normalized by
+    # RMSNorm. Unlike Wan, these norms must therefore remain rank-local.
     return RMS_WEIGHT_REGISTER[config.get("rms_type", "torch_native")](
         name,
         create_cuda_buffer=create_cuda_buffer,

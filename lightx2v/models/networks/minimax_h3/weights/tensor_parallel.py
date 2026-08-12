@@ -8,6 +8,7 @@ lifecycle must be delegated to that concrete implementation.
 import torch
 
 from lightx2v.common.ops.mm.mm_weight import MMWeightTP
+from lightx2v_platform.ops.mm.intel_xpu import IntelTensorParallelMixin
 
 
 class MiniMaxH3TensorParallelLinear(MMWeightTP):
@@ -79,9 +80,32 @@ class MiniMaxH3TensorParallelLinear(MMWeightTP):
         return self._mm.to_cpu(non_blocking=non_blocking)
 
 
+class IntelMiniMaxH3TensorParallelLinear(IntelTensorParallelMixin, MiniMaxH3TensorParallelLinear):
+    """MiniMax-H3 TP linear using oneCCL-safe output reduction."""
+
+
+_TP_LINEAR_TYPES = {
+    "TensorParallel": MiniMaxH3TensorParallelLinear,
+    "IntelTensorParallel": IntelMiniMaxH3TensorParallelLinear,
+}
+
+
+def build_minimax_h3_tp_linear(tp_mm_type="TensorParallel", **kwargs):
+    try:
+        linear_cls = _TP_LINEAR_TYPES[tp_mm_type]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported MiniMax-H3 tp_mm_type: {tp_mm_type!r}") from exc
+    return linear_cls(**kwargs)
+
+
 def unwrap_tp_linear(module):
     """Return the concrete tensor-owning MM implementation."""
     return module._mm if isinstance(module, MiniMaxH3TensorParallelLinear) else module
 
 
-__all__ = ["MiniMaxH3TensorParallelLinear", "unwrap_tp_linear"]
+__all__ = [
+    "MiniMaxH3TensorParallelLinear",
+    "IntelMiniMaxH3TensorParallelLinear",
+    "build_minimax_h3_tp_linear",
+    "unwrap_tp_linear",
+]

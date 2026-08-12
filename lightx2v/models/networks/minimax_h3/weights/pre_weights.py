@@ -1,7 +1,7 @@
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import MiniMaxH3TensorParallelLinear
+from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import build_minimax_h3_tp_linear
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
@@ -10,7 +10,8 @@ def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
     lora_kwargs = {"lora_prefix": "token_refiner"} if name.startswith("token_refiner.") else {}
     if config is not None and config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        return MiniMaxH3TensorParallelLinear(
+        return build_minimax_h3_tp_linear(
+            tp_mm_type=config.get("tp_mm_type", "TensorParallel"),
             weight_name=f"{name}.weight",
             bias_name=f"{name}.bias" if bias else None,
             mm_type=kind,
