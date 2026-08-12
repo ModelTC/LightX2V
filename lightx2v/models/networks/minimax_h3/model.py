@@ -382,11 +382,11 @@ class MiniMaxH3Model(BaseTransformerModel):
         load_device = self._checkpoint_load_device()
         logger.info(f"MiniMax-H3 rank {dist.get_rank() if dist.is_initialized() else 0} loading TP checkpoint shards on {load_device}")
         for file_path in files:
-            with safe_open(file_path, framework="pt", device=load_device) as source:
+            with safe_open(file_path, framework="pt", device="cpu") as source:
                 for key in source.keys():
                     if any(remove_key in key for remove_key in remove_keys):
                         continue
-                    weight_dict[key] = self._select_tensor_parallel_shard(key, source.get_tensor(key))
+                    weight_dict[key] = self._load_local_tensor(source, key, load_device)
         self._validate_checkpoint_devices(weight_dict, load_device)
         return weight_dict
 
@@ -412,6 +412,13 @@ class MiniMaxH3Model(BaseTransformerModel):
             preview = ", ".join(misplaced[:4])
             raise RuntimeError(f"MiniMax-H3 checkpoint tensors were not loaded on {expected}: {preview}")
 
+    def _load_local_tensor(self, source, key, load_device):
+        """Shard on CPU before copying only this TP rank's tensor to the accelerator."""
+        tensor = self._select_tensor_parallel_shard(key, source.get_tensor(key))
+        if torch.device(load_device).type != "cpu":
+            tensor = tensor.to(load_device)
+        return tensor
+
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         """Load the released mixed-precision tensors without generic dtype coercion."""
         del unified_dtype, sensitive_layer
@@ -420,9 +427,12 @@ class MiniMaxH3Model(BaseTransformerModel):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
         preserve_keys = self.preserved_keys if hasattr(self, "preserved_keys") else None
         load_device = self._checkpoint_load_device()
-        with safe_open(file_path, framework="pt", device=load_device) as source:
+        # Reading a full tensor directly on the accelerator and then slicing it
+        # can retain the full safetensors storage behind a small TP view.  Shard
+        # on CPU first so accelerator memory contains only this rank's weights.
+        with safe_open(file_path, framework="pt", device="cpu") as source:
             weight_dict = {
-                key: self._select_tensor_parallel_shard(key, source.get_tensor(key))
+                key: self._load_local_tensor(source, key, load_device)
                 for key in source.keys()
                 if not any(remove_key in key for remove_key in remove_keys) and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
             }
