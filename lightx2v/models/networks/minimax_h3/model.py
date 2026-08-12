@@ -59,6 +59,13 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise NotImplementedError("MiniMax-H3 LoRA loading is not implemented yet")
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("MiniMax-H3 supports model and block CPU offload")
+        if config.get("attn_type") == "sol_attn":
+            reorder = str(config.get("sol_attn_setting", {}).get("reorder", "none")).lower()
+            if reorder != "none":
+                raise ValueError(
+                    "MiniMax-H3 Sol-Attn requires sol_attn_setting.reorder='none': "
+                    "H3 packs text, audio, and video into one sequence, so Wan's pure-video Morton3D reorder is not valid."
+                )
 
         transformer_path = config.get("dit_original_ckpt") or os.path.join(model_path, "transformer")
         super().__init__(transformer_path, config, device)

@@ -13,6 +13,7 @@ from .template import AttnWeightTemplate
 
 HEAD_DIM = 128
 _VALID_KV_SPLITS = (1, 2, 4)
+_VALID_DENSE_BACKENDS = ("flash_attn3", "sage_attn2", "torch_sdpa")
 _FALLBACK_WARNINGS = set()
 _KERNEL_LOGS = set()
 _DENSE_GUARD_LOGS = set()
@@ -145,11 +146,26 @@ class SolAttnWeight(AttnWeightTemplate):
     """LightX2V adapter for the public Sol-Attn BTHD forward API."""
 
     def __init__(self):
-        from .flash_attn import FlashAttn3Weight
-
         self.config = {}
-        self.dense_backend = FlashAttn3Weight()
+        self.dense_backend = None
+        self.dense_backend_name = None
         self.set_config({})
+
+    @staticmethod
+    def _create_dense_backend(name):
+        if name == "flash_attn3":
+            from .flash_attn import FlashAttn3Weight
+
+            return FlashAttn3Weight()
+        if name == "sage_attn2":
+            from .sage_attn import SageAttn2Weight
+
+            return SageAttn2Weight()
+        if name == "torch_sdpa":
+            from .torch_sdpa import TorchSDPAWeight
+
+            return TorchSDPAWeight()
+        raise ValueError(f"sol_attn_setting.dense_backend must be one of {_VALID_DENSE_BACKENDS}, got {name!r}.")
 
     def set_config(self, config=None):
         self.config = dict(config or {})
@@ -162,6 +178,12 @@ class SolAttnWeight(AttnWeightTemplate):
         self.strict = bool(self.config.get("strict", False))
         self.dense_steps = int(self.config.get("dense_steps", 0))
         self.dense_layers = _parse_dense_layers(self.config.get("dense_layers", ()))
+        dense_backend_name = str(self.config.get("dense_backend", "flash_attn3")).lower()
+        if dense_backend_name not in _VALID_DENSE_BACKENDS:
+            raise ValueError(f"sol_attn_setting.dense_backend must be one of {_VALID_DENSE_BACKENDS}, got {dense_backend_name!r}.")
+        if dense_backend_name != self.dense_backend_name:
+            self.dense_backend = self._create_dense_backend(dense_backend_name)
+            self.dense_backend_name = dense_backend_name
 
         if not math.isfinite(self.tau) or self.tau < 0:
             raise ValueError("sol_attn_setting.tau must be a finite non-negative number.")
@@ -206,14 +228,15 @@ class SolAttnWeight(AttnWeightTemplate):
         return False, None
 
     def _log_dense_guard(self, reason):
-        key = (reason, self.dense_steps, self.dense_layers)
+        key = (reason, self.dense_steps, self.dense_layers, self.dense_backend_name)
         if key in _DENSE_GUARD_LOGS:
             return
         if reason in ("warmup_step", "dense_layer"):
             logger.info(
-                "Sol-Attn dense guard active: dense_steps={}, dense_layers={}, backend=flash_attn3.",
+                "Sol-Attn dense guard active: dense_steps={}, dense_layers={}, backend={}.",
                 self.dense_steps,
                 sorted(self.dense_layers),
+                self.dense_backend_name,
             )
         else:
             logger.warning(
@@ -237,7 +260,7 @@ class SolAttnWeight(AttnWeightTemplate):
         max_seqlen_q,
         max_seqlen_kv,
     ):
-        """Run quality-guarded calls through the same FA3 backend as dense Wan."""
+        """Run quality-guarded calls through the configured dense backend."""
 
         dense_kwargs = {
             "drop_rate": drop_rate,
@@ -266,11 +289,12 @@ class SolAttnWeight(AttnWeightTemplate):
                 return out.reshape(q.shape[0], q.shape[1], -1)
             return out
         except Exception as exc:
-            warning_key = (type(exc).__name__, str(exc))
+            warning_key = (self.dense_backend_name, type(exc).__name__, str(exc))
             if warning_key not in _DENSE_BACKEND_WARNINGS:
                 logger.warning(
-                    "Sol-Attn dense guard could not use FlashAttention 3 ({}: {}); "
+                    "Sol-Attn dense guard could not use {} ({}: {}); "
                     "falling back to torch SDPA.",
+                    self.dense_backend_name,
                     type(exc).__name__,
                     exc,
                 )

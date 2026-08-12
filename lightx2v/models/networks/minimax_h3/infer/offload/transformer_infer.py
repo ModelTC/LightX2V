@@ -37,6 +37,7 @@ class MiniMaxH3OffloadTransformerInfer(MiniMaxH3TransformerInfer):
 
             self.offload_manager.prefetch_weights((block_index + 1) % num_blocks, blocks)
             block = self.offload_manager.cuda_buffers[0]
+            self.block_idx = block_index
             with torch_device_module.stream(self.offload_manager.compute_stream):
                 hidden_states = self.run_block(block_index, block, hidden_states, pre_infer_out)
             self.offload_manager.swap_blocks()
