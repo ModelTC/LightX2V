@@ -74,6 +74,24 @@ def get_sequence_parallel_world_size() -> int:
     return dist.get_world_size(group) if group else 1
 
 
+def set_sequence_parallel_group(group: Optional[dist.ProcessGroup]) -> None:
+    """Reuse an externally-created process group for SeedVR sequence parallelism."""
+    global _SEQUENCE_PARALLEL_GROUP
+    global _SEQUENCE_PARALLEL_CPU_GROUP
+    global _SEQUENCE_PARALLEL_GLOBAL_RANKS
+
+    _SEQUENCE_PARALLEL_GROUP = group
+    _SEQUENCE_PARALLEL_CPU_GROUP = None
+    if group is None:
+        _SEQUENCE_PARALLEL_GLOBAL_RANKS = None
+        return
+
+    if hasattr(dist, "get_process_group_ranks"):
+        _SEQUENCE_PARALLEL_GLOBAL_RANKS = list(dist.get_process_group_ranks(group))
+    else:
+        _SEQUENCE_PARALLEL_GLOBAL_RANKS = [dist.get_global_rank(group, rank) for rank in range(dist.get_world_size(group))]
+
+
 def get_model_shard_cpu_intra_group() -> Optional[dist.ProcessGroup]:
     """
     Get the CPU intra process group of model sharding.
@@ -169,7 +187,7 @@ def get_sequence_parallel_global_ranks() -> List[int]:
     that the caller rank belongs to.
     """
     if _SEQUENCE_PARALLEL_GLOBAL_RANKS is None:
-        return [dist.get_rank()]
+        return [dist.get_rank() if dist.is_initialized() else 0]
     return _SEQUENCE_PARALLEL_GLOBAL_RANKS
 
 

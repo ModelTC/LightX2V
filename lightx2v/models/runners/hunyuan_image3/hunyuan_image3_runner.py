@@ -1,6 +1,7 @@
 import importlib
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -381,14 +382,116 @@ class HunyuanImage3Runner(DefaultRunner):
             is_cache_writer=self._is_output_rank() if distributed_parallel_active else False,
         )
         return FlashInferAutotuneController.from_config(
-            config=self.config,
+            config=self._flashinfer_autotune_config(),
             distributed_context=distributed_context,
         )
 
+    def _flashinfer_autotune_config(self):
+        """Select a topology-specific cache without changing legacy configs."""
+        context = self._parallel_context()
+        phase = str(self._parallel_context_value(context, "phase", default="")).strip().lower()
+        if context is None or phase not in ("ar", "denoise"):
+            return self.config
+
+        # The grouped multi-micro denoise path does not invoke FlashInfer.
+        # Keep AR on its topology-specific FlashInfer cache, but avoid opening
+        # an irrelevant denoise autotune context for the grouped backend.
+        if phase == "denoise" and bool(self.config.get("flashinfer_multi_micro", False)):
+            controller_config = dict(self.config)
+            controller_config["flashinfer_autotune_mode"] = "off"
+            return controller_config
+
+        phase_caches = self.config.get("flashinfer_autotune_cache_by_phase")
+        if phase_caches is not None:
+            if not isinstance(phase_caches, Mapping):
+                raise ValueError("flashinfer_autotune_cache_by_phase must be a mapping with 'ar' and 'denoise' entries.")
+            if phase not in phase_caches:
+                raise ValueError(f"flashinfer_autotune_cache_by_phase is missing the active phase {phase!r}.")
+            phase_cache = phase_caches[phase]
+        else:
+            base_cache = self.config.get("flashinfer_autotune_cache")
+            if base_cache in (None, ""):
+                return self.config
+            base_cache = os.fspath(base_cache)
+            if "{phase}" in base_cache:
+                phase_cache = base_cache.format(phase=phase)
+            else:
+                cache_path = Path(base_cache)
+                phase_cache = cache_path.with_name(f"{cache_path.stem}_{phase}{cache_path.suffix}")
+
+        controller_config = dict(self.config)
+        controller_config["flashinfer_autotune_cache"] = phase_cache
+        return controller_config
+
+    def _parallel_context(self):
+        return self.config.get("parallel_context")
+
+    @staticmethod
+    def _parallel_context_value(context, *names, default=None):
+        if context is None:
+            return default
+        for name in names:
+            if not hasattr(context, name):
+                continue
+            value = getattr(context, name)
+            if callable(value):
+                value = value()
+            if value is not None:
+                return value
+        return default
+
+    def _activate_parallel_phase(self, phase):
+        context = self._parallel_context()
+        if context is None:
+            return
+        activate_phase = getattr(context, "activate_phase", None)
+        if not callable(activate_phase):
+            raise RuntimeError("HunyuanImage3 parallel_context must provide activate_phase(name).")
+        activate_phase(phase)
+
+    def _active_tp_group(self):
+        context = self._parallel_context()
+        group = self._parallel_context_value(context, "active_tp_group", "tp_group")
+        if group is not None:
+            return group
+        return getattr(self.model, "tp_group", None)
+
+    def _active_tp_size(self):
+        context = self._parallel_context()
+        size = self._parallel_context_value(context, "active_tp_size", "tp_size")
+        if size is not None:
+            return int(size)
+        group = self._active_tp_group()
+        return dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else 1
+
+    def _active_seq_group(self):
+        context = self._parallel_context()
+        group = self._parallel_context_value(context, "active_seq_group", "seq_p_group")
+        if group is not None:
+            return group
+        return getattr(self.model, "seq_p_group", None)
+
+    def _active_seq_size(self):
+        context = self._parallel_context()
+        size = self._parallel_context_value(context, "active_seq_size", "seq_p_size", "seq_size")
+        if size is not None:
+            return int(size)
+        group = self._active_seq_group()
+        return dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else 1
+
     def _sequence_parallel_enabled(self):
+        context = self._parallel_context()
+        active = self._parallel_context_value(context, "active_seq_parallel")
+        if active is not None:
+            return bool(active) and self._active_seq_size() > 1
+        if context is not None:
+            return self._active_seq_size() > 1
         return bool(self.config.get("seq_parallel", False) and dist.is_available() and dist.is_initialized() and getattr(self.model, "seq_p_group", None) is not None)
 
     def _tensor_parallel_enabled(self):
+        context = self._parallel_context()
+        if context is not None:
+            return self._active_tp_size() > 1
         return bool(self.config.get("tensor_parallel", False) and dist.is_available() and dist.is_initialized() and getattr(self.model, "tp_group", None) is not None)
 
     def _parallel_control_group(self):
@@ -406,9 +509,9 @@ class HunyuanImage3Runner(DefaultRunner):
         if sum((tensor_parallel_active, sequence_parallel_active, cfg_parallel_active)) > 1:
             return dist.group.WORLD
         if tensor_parallel_active:
-            return self.model.tp_group
+            return self._active_tp_group()
         if sequence_parallel_active:
-            return self.model.seq_p_group
+            return self._active_seq_group()
         return None
 
     def _is_output_rank(self):
@@ -560,6 +663,8 @@ class HunyuanImage3Runner(DefaultRunner):
             raise ValueError(f"HunyuanImage3 parallel.cfg_mode must be one of batch/serial/parallel, got {mode!r}.")
         if mode == "parallel" and not self._cfg_parallel_enabled():
             raise ValueError("HunyuanImage3 parallel.cfg_mode='parallel' requires enable_cfg=true and parallel.cfg_p_size=2.")
+        if self._sequence_parallel_enabled() and not self._cfg_parallel_enabled() and mode != "serial":
+            raise ValueError("HunyuanImage3 denoise TP+SP with CFG requires parallel.cfg_mode='serial'.")
         return mode
 
     def _prepare_cfg_parallel_branch_inputs(self, prepared_inputs, cfg_p_rank, mark_parallel_branch=True):
@@ -962,6 +1067,7 @@ class HunyuanImage3Runner(DefaultRunner):
             self._print_text_generation_chunk(prefix)
 
     def _generate_text(self, input_info, batch_cond_images=None, cond_inputs=None):
+        self._activate_parallel_phase("ar")
         bot_task = str(getattr(input_info, "bot_task", None) or self._resolve_bot_task()).strip().lower()
         if bot_task == "image":
             raise ValueError("HunyuanImage3 text generation requires bot_task='auto', 'think', 'recaption', or 'think_recaption'.")
@@ -998,6 +1104,7 @@ class HunyuanImage3Runner(DefaultRunner):
         return self._decode_text_result(generated_tokens, plan)
 
     def _generate_cot_text(self, prompt, image_size, batch_cond_images=None, cond_inputs=None):
+        self._activate_parallel_phase("ar")
         bot_task = self._resolve_bot_task()
         if bot_task == "image":
             return None
@@ -1244,6 +1351,7 @@ class HunyuanImage3Runner(DefaultRunner):
         return torch.randn(shape, generator=generator, device=latent_device, dtype=torch.bfloat16)
 
     def _denoise_latents(self, prepared_inputs, image_size):
+        self._activate_parallel_phase("denoise")
         cfg_mode = self._resolve_denoise_cfg_mode(prepared_inputs)
         serial_branch_inputs = None
         if cfg_mode == "parallel":

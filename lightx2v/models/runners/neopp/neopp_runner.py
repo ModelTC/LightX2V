@@ -1,9 +1,9 @@
 import base64
+import io
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torchvision.io as io
 from PIL import Image
 
 from lightx2v.models.networks.lora_adapter import LoraAdapter
@@ -234,9 +234,10 @@ class NeoppRunner(DefaultRunner):
             self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
             logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
 
-    def set_inference_params(self, index_offset_cond, index_offset_uncond=None, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0):
+    def set_inference_params(self, index_offset_cond, index_offset_uncond=None, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0, output_format="jpeg"):
         self.index_offset_cond = index_offset_cond
         self.index_offset_uncond = index_offset_uncond if self.enable_cfg else None
+        self.output_format = output_format
         self.scheduler.timestep_shift = timestep_shift
         self.model.cfg_interval = cfg_interval
         self.model.cfg_scale = cfg_scale
@@ -304,7 +305,23 @@ class NeoppRunner(DefaultRunner):
     def process_images_after_vae_decoder(self):
         image = self._denorm(self.scheduler.image_prediction.float())
         image = (image.clamp(0, 1) * 255.0).round().to(torch.uint8).cpu()
-        return base64.b64encode(io.encode_jpeg(image[0]).numpy()).decode("utf-8")
+        # CHW -> HWC
+        image = image[0].permute(1, 2, 0).numpy()
+        pil_image = Image.fromarray(image)
+
+        buffer = io.BytesIO()
+
+        output_format = self.output_format.lower() or "jpeg"
+        if output_format in ("jpg", "jpeg"):
+            pil_image.save(buffer, format="JPEG")
+        elif output_format == "png":
+            pil_image.save(buffer, format="PNG")
+        elif output_format == "webp":
+            pil_image.save(buffer, format="WEBP")
+        else:
+            raise ValueError(f"Unsupported output format: {output_format}")
+
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     def process_images_after_vae_decoder_for_debug(self):
         image = self._denorm(self.scheduler.image_prediction.float())

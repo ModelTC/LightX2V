@@ -20,7 +20,7 @@ Tested on **Intel Arc B390 GPU** (PTL-H / Xe2), PyTorch 2.9.1+xpu, oneAPI 2025.2
 |-----------|---------|
 | Intel oneAPI Base Toolkit | 2025.2 (provides `icpx`, `icx`, SYCL/ESIMD headers) |
 | oneDNN | 2025.2.0 (must match oneAPI version) |
-| Visual Studio | 2022, Desktop development with C++ workload |
+| C++ toolchain | Windows: Visual Studio 2022; Linux: GCC-compatible system linker/toolchain |
 | PyTorch | 2.9.1+xpu |
 | Python | 3.11 |
 | miniforge / miniconda | latest |
@@ -44,6 +44,8 @@ pip install --no-cache-dir torch==2.9.1+xpu torchvision torchaudio ^
 ---
 
 ## Build
+
+### Windows
 
 Open **cmd.exe** (not PowerShell), activate the conda env, then run:
 
@@ -70,6 +72,22 @@ Logs: `build_test.log` (full output), `build_test.err` (compiler warnings).
 > (not pip-installed): scikit-build-core dynamically injects `cmake>=3.22` as a build
 > requirement and the `build` package rejects it. `pip wheel` skips that pre-check and
 > locates cmake directly from PATH.
+
+### Linux
+
+Activate the oneAPI environment and the Python environment containing PyTorch
+XPU and oneDNN, then run:
+
+```bash
+source /opt/intel/oneapi/setvars.sh
+cd /path/to/lightx2v_kernel_xpu
+./build.sh
+```
+
+The Linux build follows the same five steps as Windows. It produces
+`lgrf_uni/libesimd.unify.lgrf.so`, a `_ext*.so` Python extension, and a Linux
+wheel under `dist/`. Set `PYTHON`, `CMAKE`, or `CXX` to override the detected
+commands; set `SKIP_TESTS=1` only when building on a host without an XPU.
 
 ---
 
@@ -185,7 +203,8 @@ lightx2v_kernel_xpu\
 │   │   ├── flash.attn.b.mha128.fp16.opt.h   # FP16 Flash Attention kernel
 │   │   └── flash.attn.b.mha128.bf16io.h     # BF16 I/O Flash Attention kernel
 │   ├── esimd_kernel_api.h      # DLL export macro
-│   └── build.bat               # icpx compile command
+│   ├── build.bat               # Windows icpx compile command
+│   └── build.sh                # Linux icpx compile command
 ├── csrc\                       # PyTorch C++ extension source (compiled by icx via CMake)
 │   ├── entry.cpp               # pybind11 module registration
 │   ├── sdp.cpp                 # sdp() Python wrapper — dtype dispatch + normAlpha cache
@@ -203,4 +222,5 @@ lightx2v_kernel_xpu\
 ├── CMakeLists.txt              # CMake build for .pyd
 ├── pyproject.toml              # scikit-build-core wheel config
 ├── build.bat                # Original full build script
+├── build.sh                 # Linux full build script
 ```

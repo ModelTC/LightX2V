@@ -9,6 +9,7 @@ from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
 from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
     TEXT_TAG,
@@ -39,7 +40,7 @@ from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
-from lightx2v.utils.envs import GET_RECORDER_MODE
+from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
 from lightx2v.utils.input_info import FL2AVInputInfo, I2AVInputInfo, L2AVInputInfo, Ref2AVInputInfo, T2AVInputInfo
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -47,6 +48,32 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
+
+
+def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
+    """Build H3 with either a dynamic LoRA branch or load-time merging."""
+    if config.get("lora_dynamic_apply", False):
+        if len(lora_configs) != 1:
+            raise ValueError("MiniMax-H3 dynamic LoRA currently accepts exactly one lora_configs entry")
+        lora_config = lora_configs[0]
+        if not lora_config.get("path"):
+            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].path")
+        if lora_config.get("alpha") is None:
+            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].alpha (use 8 for the MiniMax-H3 Turbo LoRA)")
+        model_kwargs.update(
+            lora_path=lora_config["path"],
+            lora_strength=lora_config.get("strength", 1.0),
+            lora_alpha=lora_config["alpha"],
+        )
+        return MiniMaxH3Model(**model_kwargs)
+    if config.get("dit_quantized", False):
+        raise ValueError("MiniMax-H3 merged LoRA inference requires original, non-quantized DiT weights")
+    if config.get("lazy_load", False):
+        raise ValueError("MiniMax-H3 lazy loading does not support LoRA merging")
+
+    model = MiniMaxH3Model(**model_kwargs)
+    MiniMaxH3LoraAdapter(model).apply_lora(lora_configs)
+    return model
 
 
 @RUNNER_REGISTER("minimax_h3")
@@ -116,7 +143,9 @@ class MiniMaxH3Runner(DefaultRunner):
         task = self.config["task"]
         common = {
             "seed": 0,
-            "prompt": "warmup" if (height, width) == self._WARMUP_RESOLUTIONS[0] else "A cinematic fox walking through a snowy forest.",
+            "prompt": "A sunrise over distant mountains reflected across a calm lake beneath drifting clouds."
+            if (height, width) == self._WARMUP_RESOLUTIONS[0]
+            else "A cinematic fox walking through a snowy forest.",
             "target_shape": [height, width],
             "target_video_length": int(self.config.get("target_video_length", 124)),
             "return_result_tensor": True,
@@ -152,18 +181,46 @@ class MiniMaxH3Runner(DefaultRunner):
         self.video_vae, self.audio_vae = self.load_vae()
 
     def load_transformer(self):
-        return MiniMaxH3Model(
-            model_path=self.config["model_path"],
-            config=self.config,
-            device=self.init_device,
-        )
+        model_kwargs = {
+            "model_path": self.config["model_path"],
+            "config": self.config,
+            "device": self.init_device,
+        }
+        lora_configs = self.config.get("lora_configs")
+        if lora_configs:
+            return build_minimax_h3_model_with_lora(
+                self.config,
+                model_kwargs,
+                lora_configs,
+            )
+        return MiniMaxH3Model(**model_kwargs)
 
     def load_text_encoder(self):
         return [MiniMaxH3Qwen3VLTextEncoder(self.config)]
 
     def load_vae(self):
         cpu_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
-        video_vae = MiniMaxH3VideoVAE.from_pretrained(self.config["model_path"], device=AI_DEVICE, cpu_offload=cpu_offload)
+        video_vae_quantized = self.config.get("video_vae_quantized", False)
+        video_vae_quant_scheme = self.config["video_vae_quant_scheme"] if video_vae_quantized else None
+        video_vae_quantized_ckpt = self.config["video_vae_quantized_ckpt"] if video_vae_quantized else None
+        vae_sensitive_layer_dtype = DTYPE_MAP[self.config.get("vae_sensitive_layer_dtype", "fp32")]
+        video_vae = MiniMaxH3VideoVAE.from_pretrained(
+            self.config["model_path"],
+            device=AI_DEVICE,
+            cpu_offload=cpu_offload,
+            checkpoint_path=video_vae_quantized_ckpt,
+            quant_scheme=video_vae_quant_scheme,
+            sensitive_layer_dtype=vae_sensitive_layer_dtype,
+        )
+        if self.config.get("vae_decode_parallel", False):
+            world_size = dist.get_world_size() if dist.is_initialized() else 1
+            if world_size > 1:
+                if self.config.get("tensor_parallel", False) or self.config.get("cfg_parallel", False):
+                    raise NotImplementedError("MiniMax-H3 vae_decode_parallel currently supports pure sequence parallel only")
+                video_vae.enable_decode_parallel()
+                logger.info(f"MiniMax-H3 spatial-tile VAE decode parallel enabled over {world_size} ranks")
+            else:
+                logger.info("MiniMax-H3 spatial-tile VAE decode parallel disabled for single-rank inference")
         audio_vae = MiniMaxH3AudioVAE.from_pretrained(self.config["model_path"], device=AI_DEVICE, cpu_offload=cpu_offload)
         configured_sample_rate = int(self.config.get("audio_sampling_rate", audio_vae.sampling_rate))
         if configured_sample_rate != audio_vae.sampling_rate:
@@ -495,8 +552,10 @@ class MiniMaxH3Runner(DefaultRunner):
         audio_latents = unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)
         with ProfilingContext4DebugL1("Run Video VAE Decoder"):
             video = self.video_vae.decode(video_latents)
-        with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
-            audio = self.audio_vae.decode(audio_latents)
+        audio = None
+        if not self.video_vae.decode_parallel or dist.get_rank() == 0:
+            with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
+                audio = self.audio_vae.decode(audio_latents)
         return video, audio
 
     @staticmethod
@@ -506,6 +565,8 @@ class MiniMaxH3Runner(DefaultRunner):
         return (video[0].permute(1, 2, 3, 0).float() * 255.0).round().to(torch.uint8).cpu()
 
     def process_images_after_vae_decoder(self):
+        if self.video_vae.decode_parallel and dist.get_rank() != 0:
+            return {"video": None, "audio": None}
         if self.input_info.return_result_tensor:
             return {
                 # Match the public tensor layout of the reference pipeline:
