@@ -60,7 +60,8 @@ def _mm_weight(
             mm_type = "Calib"
     if config.get("tensor_parallel", False) and split_dim is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        return MM_WEIGHT_REGISTER["TensorParallel"](
+        tp_mm_type = config.get("tp_mm_type", "TensorParallel")
+        return MM_WEIGHT_REGISTER[tp_mm_type](
             weight_name=weight_name,
             bias_name=bias_name,
             mm_type=mm_type,
