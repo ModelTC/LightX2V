@@ -22,6 +22,18 @@ if os.name == "nt":
         ctypes.CDLL(_dll)
     else:
         raise FileNotFoundError(f"esimd.unify.lgrf.dll not found in {_pkg_dir}")
+else:
+    # Load explicitly with global visibility so the extension can resolve the
+    # ESIMD entry points even on distributions that default to local dlopen.
+    _so = os.path.join(_pkg_dir, "libesimd.unify.lgrf.so")
+    if os.path.isfile(_so):
+        ctypes.CDLL(_so, mode=ctypes.RTLD_GLOBAL)
+    else:
+        raise FileNotFoundError(f"libesimd.unify.lgrf.so not found in {_pkg_dir}")
 
-from sycl_kernels._ext import sdp, onednn_w4a16, onednn_w8a16_fp8  # noqa: E402, F401
+from sycl_kernels._ext import (  # noqa: E402, F401
+    onednn_w4a16,
+    onednn_w8a16_fp8,
+    sdp,
+)
 from sycl_kernels.version import __version__  # noqa: E402, F401
