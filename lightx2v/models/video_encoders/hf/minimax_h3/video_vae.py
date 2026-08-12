@@ -37,6 +37,7 @@ import math
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -490,6 +491,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.config = dict(config)
         self.execution_device = torch.device(device or AI_DEVICE)
         self.cpu_offload = cpu_offload
+        self.decode_parallel = False
         self.infer_dtype = torch.float16
         self.sensitive_layer_dtype = sensitive_layer_dtype
 
@@ -651,7 +653,63 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.tile_sample_min_overlap_width = tile_sample_min_overlap_width or self.tile_sample_min_overlap_width
 
     def disable_tiling(self) -> None:
+        if self.decode_parallel:
+            raise RuntimeError("MiniMax-H3 VAE decode parallel requires tiling")
         self.use_tiling = False
+
+    def enable_decode_parallel(self) -> None:
+        if not self.use_tiling:
+            raise RuntimeError("MiniMax-H3 VAE decode parallel requires tiling")
+        if not dist.is_initialized() or dist.get_world_size() <= 1:
+            raise RuntimeError("MiniMax-H3 VAE decode parallel requires an initialized multi-rank process group")
+        self.decode_parallel = True
+
+    @staticmethod
+    def _restore_gathered_tiles(
+        gathered: list[torch.Tensor],
+        num_tiles: int,
+        world_size: int,
+    ) -> list[torch.Tensor]:
+        """Restore rank-local round-robin results to row-major tile order."""
+
+        results: list[torch.Tensor | None] = [None] * num_tiles
+        for rank, rank_tensors in enumerate(gathered):
+            for local_index, tile in enumerate(rank_tensors):
+                global_index = local_index * world_size + rank
+                if global_index >= num_tiles:
+                    break
+                results[global_index] = tile
+        if any(tile is None for tile in results):
+            raise RuntimeError("MiniMax-H3 VAE tile gather did not return every spatial tile")
+        return [tile for tile in results if tile is not None]
+
+    def _gather_tiled_results(
+        self,
+        local_tiles: list[torch.Tensor],
+        num_tiles: int,
+    ) -> list[torch.Tensor] | None:
+        """Gather padded rank-local tile stacks to the output rank.
+
+        The official H3 implementation all-gathers variable-length tile
+        stacks. LightX2V only consumes the decoded video on global rank 0, so
+        gathering once per clip avoids materializing and stitching
+        full clips on every rank while preserving the same tile assignment.
+        """
+
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        max_local_tiles = math.ceil(num_tiles / world_size)
+        local_stack = torch.stack(local_tiles, dim=0)
+        if local_stack.shape[0] < max_local_tiles:
+            padding = local_stack.new_empty((max_local_tiles - local_stack.shape[0], *local_stack.shape[1:]))
+            local_stack = torch.cat((local_stack, padding), dim=0)
+        local_stack = local_stack.contiguous()
+
+        gathered = [torch.empty_like(local_stack) for _ in range(world_size)] if rank == 0 else None
+        dist.gather(local_stack, gather_list=gathered, dst=0)
+        if rank != 0:
+            return None
+        return self._restore_gathered_tiles(gathered, num_tiles, world_size)
 
     def _split_tiles(self, length: int, tile_size: int, min_overlap: int) -> tuple[list[int], list[int], list[int]]:
         if tile_size >= length:
@@ -731,17 +789,31 @@ class MiniMaxH3VideoVAE(nn.Module):
         x_indices, x_lengths, x_overlaps = self._split_tiles(width, self.tile_sample_min_width, self.tile_sample_min_overlap_width)
 
         ratio = self.spatial_compression_ratio
-        rows = []
+        tiles = []
         for y_position, y_length in zip(y_indices, y_lengths):
-            row = []
             for x_position, x_length in zip(x_indices, x_lengths):
-                tile = latents[
-                    ...,
-                    y_position // ratio : y_position // ratio + y_length // ratio,
-                    x_position // ratio : x_position // ratio + x_length // ratio,
-                ]
-                row.append(self.decoder(self.post_quant_conv(tile)))
-            rows.append(row)
+                tiles.append(
+                    latents[
+                        ...,
+                        y_position // ratio : y_position // ratio + y_length // ratio,
+                        x_position // ratio : x_position // ratio + x_length // ratio,
+                    ]
+                )
+        if self.decode_parallel:
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+            if len(tiles) < world_size:
+                raise ValueError(f"MiniMax-H3 VAE tile parallel requires at least {world_size} spatial tiles per clip, got {len(tiles)}")
+            local_indices = list(range(rank, len(tiles), world_size))
+            local_decoded = [self.decoder(self.post_quant_conv(tiles[index])) for index in local_indices]
+            decoded_tiles = self._gather_tiled_results(local_decoded, len(tiles))
+            if rank != 0:
+                template = local_decoded[0]
+                return template.new_empty((template.shape[0], template.shape[1], 0, height, width))
+        else:
+            decoded_tiles = [self.decoder(self.post_quant_conv(tile)) for tile in tiles]
+
+        rows = [decoded_tiles[index : index + len(x_indices)] for index in range(0, len(decoded_tiles), len(x_indices))]
         return self._stitch_tiles(rows, y_overlaps, x_overlaps)
 
     def _encode_clip(self, pixels: torch.Tensor) -> torch.Tensor:
