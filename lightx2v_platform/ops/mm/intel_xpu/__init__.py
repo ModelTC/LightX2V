@@ -41,34 +41,13 @@ def GET_DTYPE():
 _INTEL_TENSOR_PARALLEL_CLASS = None
 
 
-class IntelTensorParallelMixin:
-    """Use a oneCCL-safe all-gather reduction for TP row projections."""
-
-    def apply(self, input_tensor):
-        output = self._mm.apply(input_tensor)
-
-        if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
-            # oneCCL 2021.15 can hang when TP all-reduce and SP collectives
-            # coexist. Gathering and summing locally is mathematically equal.
-            partials = [torch.empty_like(output) for _ in range(self.tp_size)]
-            dist.all_gather(partials, output.contiguous(), group=self.tp_group)
-            output.copy_(partials[0])
-            for partial in partials[1:]:
-                output.add_(partial)
-
-            if self._row_split_bias is not None:
-                output = output + self._row_split_bias
-
-        return output
-
-
 def _get_intel_tensor_parallel_class():
     """Build the subclass after the common TensorParallel class is registered."""
     global _INTEL_TENSOR_PARALLEL_CLASS
     if _INTEL_TENSOR_PARALLEL_CLASS is None:
         tensor_parallel_class = MM_WEIGHT_REGISTER["TensorParallel"]
 
-        class IntelTensorParallelWeight(IntelTensorParallelMixin, tensor_parallel_class):
+        class IntelTensorParallelWeight(tensor_parallel_class):
             """Tensor-parallel linear layer with a oneCCL hang workaround.
 
             oneCCL 2021.15 can hang when a TP all-reduce is used
@@ -76,6 +55,23 @@ def _get_intel_tensor_parallel_class():
             sum them locally to preserve the all-reduce result without entering
             the problematic oneCCL all-reduce path.
             """
+
+            def apply(self, input_tensor):
+                output = self._mm.apply(input_tensor)
+
+                if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
+                    # Work around the oneCCL 2021.15 TP all-reduce hang by using
+                    # all-gather followed by an equivalent local reduction.
+                    partials = [torch.empty_like(output) for _ in range(self.tp_size)]
+                    dist.all_gather(partials, output.contiguous(), group=self.tp_group)
+                    output.copy_(partials[0])
+                    for partial in partials[1:]:
+                        output.add_(partial)
+
+                    if self._row_split_bias is not None:
+                        output = output + self._row_split_bias
+
+                return output
 
         _INTEL_TENSOR_PARALLEL_CLASS = IntelTensorParallelWeight
     return _INTEL_TENSOR_PARALLEL_CLASS

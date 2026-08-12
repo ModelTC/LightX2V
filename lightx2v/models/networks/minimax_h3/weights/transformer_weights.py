@@ -32,8 +32,6 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
 
 
 def _rms(config, name, eps, create_cuda_buffer=False):
-    # H3 shards complete attention heads, not the dimension normalized by
-    # RMSNorm. Unlike Wan, these norms must therefore remain rank-local.
     return RMS_WEIGHT_REGISTER[config.get("rms_type", "torch_native")](
         name,
         create_cuda_buffer=create_cuda_buffer,
