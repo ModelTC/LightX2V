@@ -77,6 +77,8 @@ class MiniMaxH3AttentionWeights(WeightModule):
             calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
         else:
             calculate = attention_cls()
+        if attn_type == "sol_attn":
+            calculate.set_config(config.get("sol_attn_setting", {}))
         self.add_module("calculate", calculate)
         if config.get("seq_parallel", False):
             parallel = config.get("parallel", {})

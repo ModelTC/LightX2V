@@ -1,6 +1,10 @@
+import math
+
 import torch
 import torch.distributed as dist
+from loguru import logger
 
+from lightx2v.common.ops.attn.sol_attn import _morton3d_indices
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import *
@@ -82,6 +86,14 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             self.seq_p_quant_scheme = None
             self.seq_p_configured_quant_scheme = None
             self.use_new_seq_p_interface = False
+
+        sol_attn_setting = self.config.get("sol_attn_setting", {})
+        morton_requested = self.config.get("self_attn_1_type") == "sol_attn" and str(sol_attn_setting.get("reorder", "none")).lower() == "morton3d"
+        self._sol_global_morton_enabled = morton_requested and not self.seq_parallel
+        self._sol_morton_preordered = False
+        self._sol_morton_log_keys = set()
+        if morton_requested and self.seq_parallel:
+            logger.warning("Sol-Attn global Morton reorder is disabled with sequence parallelism; the attention backend will retain per-call reorder for correctness.")
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
@@ -125,8 +137,61 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         return self.infer_non_blocks(weights, x, pre_infer_out.embed)
 
     def infer_main_blocks(self, blocks, pre_infer_out):
+        if self._sol_global_morton_enabled:
+            return self._infer_main_blocks_with_morton(blocks, pre_infer_out)
         x = self.infer_func(blocks, pre_infer_out.x, pre_infer_out)
         return x
+
+    @staticmethod
+    def _morton_reorder_rope_cache(cache, permutation):
+        if torch.is_tensor(cache):
+            if cache.shape[0] != permutation.numel():
+                raise ValueError(f"Wan RoPE cache token count does not match the Morton permutation: cache={cache.shape[0]}, permutation={permutation.numel()}.")
+            return cache.index_select(0, permutation)
+        if isinstance(cache, tuple):
+            return tuple(WanTransformerInfer._morton_reorder_rope_cache(value, permutation) for value in cache)
+        raise TypeError(f"Unsupported Wan RoPE cache type for Morton reorder: {type(cache)!r}.")
+
+    def _infer_main_blocks_with_morton(self, blocks, pre_infer_out):
+        grid_output = getattr(pre_infer_out, "grid_sizes", None)
+        grid = getattr(grid_output, "tuple", None)
+        token_count = pre_infer_out.x.shape[0]
+        if grid is None or math.prod(int(value) for value in grid) != token_count:
+            message = f"Sol-Attn global Morton reorder requires a grid whose product equals T={token_count}, got {grid}."
+            if bool(self.config.get("sol_attn_setting", {}).get("strict", False)):
+                raise RuntimeError(message)
+            logger.warning("{} Falling back to per-attention Morton reorder.", message)
+            return self.infer_func(blocks, pre_infer_out.x, pre_infer_out)
+
+        permutation, inverse = _morton3d_indices(grid, pre_infer_out.x.device)
+        original_x = pre_infer_out.x
+        original_cos_sin = self.cos_sin
+        original_rope_positions = self.rope_positions
+        original_preordered = self._sol_morton_preordered
+
+        try:
+            pre_infer_out.x = original_x.index_select(0, permutation)
+            if self.rope_positions is None:
+                self.cos_sin = self._morton_reorder_rope_cache(self.cos_sin, permutation)
+            else:
+                self.rope_positions = self.rope_positions.index_select(0, permutation)
+            self._sol_morton_preordered = True
+            x = self.infer_func(blocks, pre_infer_out.x, pre_infer_out)
+        finally:
+            pre_infer_out.x = original_x
+            self.cos_sin = original_cos_sin
+            self.rope_positions = original_rope_positions
+            self._sol_morton_preordered = original_preordered
+
+        log_key = (tuple(int(value) for value in grid), str(original_x.device))
+        if log_key not in self._sol_morton_log_keys:
+            logger.info(
+                "Sol-Attn global Morton reorder active: grid={}, tokens={}; tokens and RoPE are reordered once around the Wan block stack.",
+                tuple(int(value) for value in grid),
+                token_count,
+            )
+            self._sol_morton_log_keys.add(log_key)
+        return x.index_select(0, inverse)
 
     def infer_non_blocks(self, weights, x, e):
         if e.dim() == 2:
@@ -259,6 +324,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             "block_idx": self.block_idx,
             "scheduler": self.scheduler,
             "grid_sizes": grid_sizes,
+            "sol_morton_preordered": self._sol_morton_preordered,
         }
 
         if self.seq_parallel:

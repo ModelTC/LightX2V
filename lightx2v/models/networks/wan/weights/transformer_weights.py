@@ -564,7 +564,10 @@ class WanSelfAttention(WeightModule):
             if "operator_setting" in general_sparse_attn_setting:
                 attention_weights_cls.operator_setting = general_sparse_attn_setting["operator_setting"]
 
-        self.add_module("self_attn_1", attention_weights_cls())
+        attention_weight = attention_weights_cls()
+        if self.config["self_attn_1_type"] == "sol_attn":
+            attention_weight.set_config(self.config.get("sol_attn_setting", {}))
+        self.add_module("self_attn_1", attention_weight)
 
         if self.config["seq_parallel"]:
             self.add_module(

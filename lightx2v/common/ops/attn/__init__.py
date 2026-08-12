@@ -7,6 +7,7 @@ from .radial_attn import RadialAttnWeight
 from .rainfusion_attn import RainfusionAttnWeight
 from .ring_attn import RingAttnWeight
 from .sage_attn import SageAttn2KInt8VFP8Weight, SageAttn2Weight, SageAttn3Weight, SparseSageAttn2Weight, SparseSageAttn3Weight
+from .sol_attn import SolAttnWeight
 from .sparge_attn import SpargeAttnWeight
 from .sparse_mask_generator import NbhdMaskGenerator, SlaMaskGenerator, SpargeMaskGenerator, SvgMaskGenerator
 from .sparse_operator import FlashinferOperator, FlexBlockOperator, MagiOperator, SlaTritonOperator, SparseFlashAttentionV4Operator, SparseSageAttentionV2Operator, SparseSageAttentionV3Operator

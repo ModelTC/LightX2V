@@ -42,12 +42,18 @@ class MiniMaxH3RefinerAttentionWeights(WeightModule):
             "norm_k",
             _rms(config, f"{prefix}.norm_k.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
         )
-        attn_type = config.get("attn_type", "flash_attn3")
+        # H3's text refiner attends over a short text-only sequence, while the
+        # main transformer attends over the much longer packed AV sequence.
+        # Allow sparse main attention without paying its setup/quality cost in
+        # the refiner. Existing configs retain their previous shared backend.
+        attn_type = config.get("refiner_attn_type", config.get("attn_type", "flash_attn3"))
         attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
         if attn_type == "dynamic_sparse_attn":
             calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
         else:
             calculate = attention_cls()
+        if attn_type == "sol_attn":
+            calculate.set_config(config.get("sol_attn_setting", {}))
         self.add_module("calculate", calculate)
         self.add_module("to_out", _linear(f"{prefix}.to_out.0", config=config, tp_split="row"))
 
