@@ -10,6 +10,7 @@ import torch.nn.functional as F
 os.environ.setdefault("SKIP_PLATFORM_CHECK", "1")
 
 from lightx2v.common.ops.attn.sol_attn import SolAttnWeight, _morton3d_indices  # noqa: E402
+from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer  # noqa: E402
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer  # noqa: E402
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER  # noqa: E402
 
@@ -91,6 +92,18 @@ class SolAttnBackendTest(unittest.TestCase):
         load_kernel.assert_not_called()
         dense_apply.assert_called_once()
         self.assertIs(actual, dense_output)
+
+    def test_dense_backend_can_use_sage_attention2(self):
+        backend = SolAttnWeight()
+        backend.set_config({"dense_backend": "sage_attn2"})
+
+        self.assertEqual(backend.dense_backend_name, "sage_attn2")
+        self.assertEqual(type(backend.dense_backend).__name__, "SageAttn2Weight")
+
+    def test_invalid_dense_backend_is_rejected(self):
+        backend = SolAttnWeight()
+        with self.assertRaisesRegex(ValueError, "dense_backend must be one of"):
+            backend.set_config({"dense_backend": "unknown"})
 
     def test_dense_layer_bypasses_sol_kernel_after_warmup(self):
         backend = SolAttnWeight()
@@ -180,6 +193,53 @@ class SolAttnBackendTest(unittest.TestCase):
         self.assertIs(pre_infer_out.x, original_x)
         self.assertIs(infer.cos_sin, original_cos_sin)
         self.assertFalse(infer._sol_morton_preordered)
+
+    def test_minimax_h3_passes_dense_guard_metadata(self):
+        class Identity:
+            @staticmethod
+            def apply(value):
+                return value
+
+        class Rope:
+            @staticmethod
+            def apply(q, k, *_args, **_kwargs):
+                return q, k
+
+        class Attention:
+            call = None
+
+            @classmethod
+            def apply(cls, **kwargs):
+                cls.call = kwargs
+                return kwargs["v"].reshape(kwargs["v"].shape[0], -1)
+
+        infer = MiniMaxH3TransformerInfer.__new__(MiniMaxH3TransformerInfer)
+        infer.num_heads = 2
+        infer.head_dim = 4
+        infer.infer_dtype = torch.float32
+        infer.scheduler = SimpleNamespace(step_index=6)
+        infer.block_idx = 3
+        weights = SimpleNamespace(
+            to_q=Identity(),
+            to_k=Identity(),
+            to_v=Identity(),
+            norm_q=Identity(),
+            norm_k=Identity(),
+            rope=Rope(),
+            calculate=Attention(),
+            to_out=Identity(),
+        )
+        pre_infer_out = SimpleNamespace(
+            rotary_emb=(torch.empty(5, 4), torch.empty(5, 4)),
+            sequence_parallel_state=None,
+        )
+
+        actual = infer._attention(weights, torch.randn(5, 8), pre_infer_out)
+
+        self.assertEqual(actual.shape, (5, 8))
+        self.assertIs(Attention.call["scheduler"], infer.scheduler)
+        self.assertEqual(Attention.call["block_idx"], 3)
+        self.assertFalse(Attention.call["causal"])
 
 
 if __name__ == "__main__":
