@@ -143,7 +143,9 @@ class MiniMaxH3Runner(DefaultRunner):
         task = self.config["task"]
         common = {
             "seed": 0,
-            "prompt": "warmup" if (height, width) == self._WARMUP_RESOLUTIONS[0] else "A cinematic fox walking through a snowy forest.",
+            "prompt": "A sunrise over distant mountains reflected across a calm lake beneath drifting clouds."
+            if (height, width) == self._WARMUP_RESOLUTIONS[0]
+            else "A cinematic fox walking through a snowy forest.",
             "target_shape": [height, width],
             "target_video_length": int(self.config.get("target_video_length", 124)),
             "return_result_tensor": True,
