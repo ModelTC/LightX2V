@@ -48,10 +48,20 @@ def _get_intel_tensor_parallel_class():
         tensor_parallel_class = MM_WEIGHT_REGISTER["TensorParallel"]
 
         class IntelTensorParallelWeight(tensor_parallel_class):
+            """Tensor-parallel linear layer with a oneCCL hang workaround.
+
+            The current oneCCL version can hang when a TP all-reduce is used
+            together with SP collectives. Gather every TP partial instead and
+            sum them locally to preserve the all-reduce result without entering
+            the problematic oneCCL all-reduce path.
+            """
+
             def apply(self, input_tensor):
                 output = self._mm.apply(input_tensor)
 
                 if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
+                    # Work around the current oneCCL TP all-reduce hang by using
+                    # all-gather followed by an equivalent local reduction.
                     partials = [torch.empty_like(output) for _ in range(self.tp_size)]
                     dist.all_gather(partials, output.contiguous(), group=self.tp_group)
                     output.copy_(partials[0])
@@ -85,12 +95,20 @@ def _get_tensor_parallel_rms_class():
         tensor_parallel_rms_class = RMS_WEIGHT_REGISTER["TensorParallelFP32"]
 
         class TensorParallelRMSWeight(tensor_parallel_rms_class):
-            """RMSNorm using an XPU-safe reduction for combined TP and SP."""
+            """Tensor-parallel RMSNorm with a oneCCL hang workaround.
+
+            The current oneCCL version can hang when a TP all-reduce is used
+            together with SP collectives. Gather the local squared sums from
+            every TP rank and add them locally, which is mathematically
+            equivalent to the original all-reduce.
+            """
 
             def apply(self, input_tensor):
                 input_fp32 = input_tensor.float()
                 local_sum = input_fp32.square().sum(dim=-1, keepdim=True)
                 if self.tp_size > 1 and self.tp_group is not None:
+                    # Avoid the problematic oneCCL all-reduce while retaining
+                    # the same global sum used by RMSNorm.
                     partials = [torch.empty_like(local_sum) for _ in range(self.tp_size)]
                     dist.all_gather(partials, local_sum.contiguous(), group=self.tp_group)
                     local_sum.copy_(partials[0])
