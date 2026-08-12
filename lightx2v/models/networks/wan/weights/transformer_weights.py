@@ -2,7 +2,6 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightTP  # noqa: F401
 from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
@@ -12,6 +11,7 @@ from lightx2v.utils.registry_factory import (
     ROPE_REGISTER,
     TENSOR_REGISTER,
 )
+
 _CAUSAL_ROPE_COMPUTE_DTYPES = {
     "float32": torch.float32,
     "float64": torch.float64,
