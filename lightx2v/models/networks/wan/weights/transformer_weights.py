@@ -2,7 +2,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightTP
+from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightTP  # noqa: F401
 from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
@@ -12,7 +12,7 @@ from lightx2v.utils.registry_factory import (
     ROPE_REGISTER,
     TENSOR_REGISTER,
 )
-from lightx2v_platform.ops import tensor_parallel_reduce
+from lightx2v_platform.ops import get_tensor_parallel_mm_type
 
 _CAUSAL_ROPE_COMPUTE_DTYPES = {
     "float32": torch.float32,
@@ -62,7 +62,7 @@ def _mm_weight(
             mm_type = "Calib"
     if config.get("tensor_parallel", False) and split_dim is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        return MM_WEIGHT_REGISTER["TensorParallel"](
+        return MM_WEIGHT_REGISTER[get_tensor_parallel_mm_type(config.get("seq_parallel", False))](
             weight_name=weight_name,
             bias_name=bias_name,
             mm_type=mm_type,
@@ -76,7 +76,6 @@ def _mm_weight(
             lazy_load_file=lazy_load_file,
             lora_prefix=lora_prefix,
             lora_path=lora_path,
-            prefer_all_gather=config.get("seq_parallel", False),
         )
     return MM_WEIGHT_REGISTER[mm_type](
         weight_name,
@@ -90,46 +89,9 @@ def _mm_weight(
     )
 
 
-class WanTensorParallelRMSWeight(RMSWeightTP):
-    """RMSNorm over the full Q/K hidden dimension sharded by Wan TP."""
-
-    def __init__(self, *args, prefer_all_gather=False, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.prefer_all_gather = prefer_all_gather
-
-    def apply(self, input_tensor):
-        input_fp32 = input_tensor.float()
-        local_sum = input_fp32.square().sum(dim=-1, keepdim=True)
-        if self.tp_size > 1 and self.tp_group is not None:
-            tensor_parallel_reduce(
-                local_sum,
-                self.tp_group,
-                self.tp_size,
-                prefer_all_gather=self.prefer_all_gather,
-            )
-
-        global_hidden_dim = input_tensor.shape[-1] * self.tp_size
-        normalized = input_fp32 * torch.rsqrt(local_sum / global_hidden_dim + self.eps)
-        return (normalized * self._get_actual_weight().float()).to(input_tensor.dtype)
-
-
 def _rms_weight(config, weight_name, create_cuda_buffer=False, create_cpu_buffer=False, lazy_load=False, lazy_load_file=None, lora_prefix="", lora_path=""):
     if config.get("tensor_parallel", False):
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        if config.get("seq_parallel", False):
-            return WanTensorParallelRMSWeight(
-                weight_name=weight_name,
-                tp_group=tp_group,
-                tp_rank=dist.get_rank(tp_group),
-                tp_size=dist.get_world_size(tp_group),
-                create_cuda_buffer=create_cuda_buffer,
-                create_cpu_buffer=create_cpu_buffer,
-                lazy_load=lazy_load,
-                lazy_load_file=lazy_load_file,
-                lora_prefix=lora_prefix,
-                lora_path=lora_path,
-                prefer_all_gather=True,
-            )
         tp_rms_norm_type = config.get("tp_rms_norm_type", "TensorParallelFP32")
         return RMS_WEIGHT_REGISTER[tp_rms_norm_type](
             weight_name=weight_name,

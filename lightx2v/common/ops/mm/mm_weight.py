@@ -2,6 +2,7 @@ import re
 from abc import ABCMeta, abstractmethod
 
 import torch
+import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
@@ -26,7 +27,6 @@ from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
-from lightx2v_platform.ops import tensor_parallel_reduce
 
 try:
     from lightx2v_kernel.gemm import (
@@ -2490,7 +2490,6 @@ class MMWeightTP(MMWeightTemplate):
         lora_prefix="diffusion_model.blocks",
         lora_path="",
         reduce_output=True,
-        prefer_all_gather=False,
     ):
         super().__init__(
             weight_name,
@@ -2508,7 +2507,6 @@ class MMWeightTP(MMWeightTemplate):
         self.tp_size = tp_size
         self.split_dim = split_dim  # "col" for column split, "row" for row split
         self.reduce_output = reduce_output
-        self.prefer_all_gather = prefer_all_gather
         assert split_dim in ["col", "row"], f"split_dim must be 'col' or 'row', got {split_dim}"
 
         self._mm = MM_WEIGHT_REGISTER.get(mm_type, MMWeight)(
@@ -2581,14 +2579,7 @@ class MMWeightTP(MMWeightTemplate):
 
         # For row split, need all-reduce to combine results from all ranks
         if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
-            # On Intel XPU TP+SP, the platform implementation may replace
-            # all-reduce with all-gather followed by a local sum.
-            tensor_parallel_reduce(
-                output,
-                self.tp_group,
-                self.tp_size,
-                prefer_all_gather=self.prefer_all_gather,
-            )
+            dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
             # Add bias after all-reduce (bias is not split for row split)
             if self._row_split_bias is not None:
                 output = output + self._row_split_bias

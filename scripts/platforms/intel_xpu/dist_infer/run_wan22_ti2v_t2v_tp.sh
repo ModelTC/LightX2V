@@ -10,6 +10,7 @@ config_json=${CONFIG_JSON:-${lightx2v_path}/configs/platforms/intel_xpu/dist_inf
 output_path=${OUTPUT_PATH:-${lightx2v_path}/save_results/output_wan22_ti2v_t2v_tp.mp4}
 
 export ZE_AFFINITY_MASK=${ZE_AFFINITY_MASK:-0,1}
+export PLATFORM=${PLATFORM:-intel_xpu}
 export PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-1}
 export PYTHONPATH=${PYTHONPATH:-}
 

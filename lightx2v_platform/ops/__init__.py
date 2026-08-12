@@ -3,6 +3,7 @@ import os
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 from .distributed import tensor_parallel_reduce
+from .mm import get_tensor_parallel_mm_type
 
 PLATFORM = os.getenv("PLATFORM")
 if PLATFORM == "cambricon_mlu":
