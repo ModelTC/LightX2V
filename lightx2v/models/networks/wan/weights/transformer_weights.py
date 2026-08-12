@@ -12,8 +12,6 @@ from lightx2v.utils.registry_factory import (
     ROPE_REGISTER,
     TENSOR_REGISTER,
 )
-from lightx2v_platform.ops import get_tensor_parallel_mm_type
-
 _CAUSAL_ROPE_COMPUTE_DTYPES = {
     "float32": torch.float32,
     "float64": torch.float64,
@@ -62,7 +60,8 @@ def _mm_weight(
             mm_type = "Calib"
     if config.get("tensor_parallel", False) and split_dim is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        return MM_WEIGHT_REGISTER[get_tensor_parallel_mm_type(config.get("seq_parallel", False))](
+        tp_mm_type = config.get("tp_mm_type", "TensorParallel")
+        return MM_WEIGHT_REGISTER[tp_mm_type](
             weight_name=weight_name,
             bias_name=bias_name,
             mm_type=mm_type,

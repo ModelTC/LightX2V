@@ -38,11 +38,6 @@ def GET_DTYPE():
     return DTYPE_MAP[RUNNING_FLAG]
 
 
-def get_tensor_parallel_mm_type(use_all_gather_reduce=False):
-    """Use the XPU-safe wrapper only when TP and SP are combined."""
-    return "IntelTensorParallel" if use_all_gather_reduce else "TensorParallel"
-
-
 _INTEL_TENSOR_PARALLEL_CLASS = None
 
 
@@ -80,16 +75,16 @@ class IntelTensorParallel:
         return _get_intel_tensor_parallel_class()(*args, **kwargs)
 
 
-_WAN_TENSOR_PARALLEL_RMS_CLASS = None
+_TENSOR_PARALLEL_RMS_CLASS = None
 
 
-def _get_wan_tensor_parallel_rms_class():
+def _get_tensor_parallel_rms_class():
     """Build the subclass after the common TensorParallelFP32 class is registered."""
-    global _WAN_TENSOR_PARALLEL_RMS_CLASS
-    if _WAN_TENSOR_PARALLEL_RMS_CLASS is None:
+    global _TENSOR_PARALLEL_RMS_CLASS
+    if _TENSOR_PARALLEL_RMS_CLASS is None:
         tensor_parallel_rms_class = RMS_WEIGHT_REGISTER["TensorParallelFP32"]
 
-        class WanTensorParallelRMSWeight(tensor_parallel_rms_class):
+        class TensorParallelRMSWeight(tensor_parallel_rms_class):
             """RMSNorm using an XPU-safe reduction for combined TP and SP."""
 
             def apply(self, input_tensor):
@@ -109,8 +104,8 @@ def _get_wan_tensor_parallel_rms_class():
                     output = output * weight.float()
                 return output.to(input_tensor.dtype)
 
-        _WAN_TENSOR_PARALLEL_RMS_CLASS = WanTensorParallelRMSWeight
-    return _WAN_TENSOR_PARALLEL_RMS_CLASS
+        _TENSOR_PARALLEL_RMS_CLASS = TensorParallelRMSWeight
+    return _TENSOR_PARALLEL_RMS_CLASS
 
 
 @RMS_WEIGHT_REGISTER("IntelTensorParallelFP32")
@@ -118,7 +113,7 @@ class IntelTensorParallelRMSWeight:
     """Lazily construct the Intel XPU tensor-parallel RMSNorm wrapper."""
 
     def __new__(cls, *args, **kwargs):
-        return _get_wan_tensor_parallel_rms_class()(*args, **kwargs)
+        return _get_tensor_parallel_rms_class()(*args, **kwargs)
 
 
 @PLATFORM_MM_WEIGHT_REGISTER("intel_xpu_mm")
