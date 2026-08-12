@@ -25,11 +25,15 @@ class SolAttnBackendTest(unittest.TestCase):
         k = torch.randn(9, 2, 8)
         v = torch.randn(9, 2, 8)
         actual = SolAttnWeight().apply(q, k, v)
-        expected = F.scaled_dot_product_attention(
-            q.unsqueeze(0).transpose(1, 2),
-            k.unsqueeze(0).transpose(1, 2),
-            v.unsqueeze(0).transpose(1, 2),
-        ).transpose(1, 2).reshape(9, -1)
+        expected = (
+            F.scaled_dot_product_attention(
+                q.unsqueeze(0).transpose(1, 2),
+                k.unsqueeze(0).transpose(1, 2),
+                v.unsqueeze(0).transpose(1, 2),
+            )
+            .transpose(1, 2)
+            .reshape(9, -1)
+        )
         torch.testing.assert_close(actual, expected)
 
     def test_strict_mode_rejects_ineligible_call(self):
@@ -116,11 +120,15 @@ class SolAttnBackendTest(unittest.TestCase):
         with mock.patch("lightx2v.common.ops.attn.sol_attn._load_sol_attn") as load_kernel:
             actual = backend.apply(q, k, v, scheduler=SimpleNamespace(step_index=8), block_idx=0)
 
-        expected = F.scaled_dot_product_attention(
-            q.unsqueeze(0).transpose(1, 2),
-            k.unsqueeze(0).transpose(1, 2),
-            v.unsqueeze(0).transpose(1, 2),
-        ).transpose(1, 2).reshape(7, -1)
+        expected = (
+            F.scaled_dot_product_attention(
+                q.unsqueeze(0).transpose(1, 2),
+                k.unsqueeze(0).transpose(1, 2),
+                v.unsqueeze(0).transpose(1, 2),
+            )
+            .transpose(1, 2)
+            .reshape(7, -1)
+        )
         self.assertEqual(backend.dense_layers, frozenset({0, 1, 4}))
         load_kernel.assert_not_called()
         torch.testing.assert_close(actual, expected)

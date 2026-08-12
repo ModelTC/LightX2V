@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/mnt/miaohua/wangshankun/LightX2V
-model_path=/mnt/miaohua/wangshankun/models/MiniMax-H3
+lightx2v_path=
+model_path=
 
 export CUDA_VISIBLE_DEVICES=0
 

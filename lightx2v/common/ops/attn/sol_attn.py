@@ -66,10 +66,7 @@ def _load_sol_attn():
     try:
         module = importlib.import_module("sol_attn")
     except ImportError as exc:
-        raise ImportError(
-            "Sol-Attn is not installed. Run scripts/install_sol_attn.sh, then "
-            "restart the LightX2V process."
-        ) from exc
+        raise ImportError("Sol-Attn is not installed. Run scripts/install_sol_attn.sh, then restart the LightX2V process.") from exc
     return module.sol_attn
 
 
@@ -292,8 +289,7 @@ class SolAttnWeight(AttnWeightTemplate):
             warning_key = (self.dense_backend_name, type(exc).__name__, str(exc))
             if warning_key not in _DENSE_BACKEND_WARNINGS:
                 logger.warning(
-                    "Sol-Attn dense guard could not use {} ({}: {}); "
-                    "falling back to torch SDPA.",
+                    "Sol-Attn dense guard could not use {} ({}: {}); falling back to torch SDPA.",
                     self.dense_backend_name,
                     type(exc).__name__,
                     exc,

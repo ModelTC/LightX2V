@@ -63,10 +63,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         if config.get("attn_type") == "sol_attn":
             reorder = str(config.get("sol_attn_setting", {}).get("reorder", "none")).lower()
             if reorder != "none":
-                raise ValueError(
-                    "MiniMax-H3 Sol-Attn requires sol_attn_setting.reorder='none': "
-                    "H3 packs text, audio, and video into one sequence, so Wan's pure-video Morton3D reorder is not valid."
-                )
+                raise ValueError("MiniMax-H3 Sol-Attn requires sol_attn_setting.reorder='none': H3 packs text, audio, and video into one sequence, so Wan's pure-video Morton3D reorder is not valid.")
 
         transformer_path = config.get("dit_original_ckpt") or os.path.join(model_path, "transformer")
         super().__init__(transformer_path, config, device, lora_path=lora_path, lora_strength=lora_strength)

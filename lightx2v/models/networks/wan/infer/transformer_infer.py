@@ -93,10 +93,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         self._sol_morton_preordered = False
         self._sol_morton_log_keys = set()
         if morton_requested and self.seq_parallel:
-            logger.warning(
-                "Sol-Attn global Morton reorder is disabled with sequence parallelism; "
-                "the attention backend will retain per-call reorder for correctness."
-            )
+            logger.warning("Sol-Attn global Morton reorder is disabled with sequence parallelism; the attention backend will retain per-call reorder for correctness.")
         self.infer_func = self.infer_without_offload
 
         self.cos_sin = None
@@ -149,10 +146,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
     def _morton_reorder_rope_cache(cache, permutation):
         if torch.is_tensor(cache):
             if cache.shape[0] != permutation.numel():
-                raise ValueError(
-                    "Wan RoPE cache token count does not match the Morton permutation: "
-                    f"cache={cache.shape[0]}, permutation={permutation.numel()}."
-                )
+                raise ValueError(f"Wan RoPE cache token count does not match the Morton permutation: cache={cache.shape[0]}, permutation={permutation.numel()}.")
             return cache.index_select(0, permutation)
         if isinstance(cache, tuple):
             return tuple(WanTransformerInfer._morton_reorder_rope_cache(value, permutation) for value in cache)
@@ -192,8 +186,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         log_key = (tuple(int(value) for value in grid), str(original_x.device))
         if log_key not in self._sol_morton_log_keys:
             logger.info(
-                "Sol-Attn global Morton reorder active: grid={}, tokens={}; "
-                "tokens and RoPE are reordered once around the Wan block stack.",
+                "Sol-Attn global Morton reorder active: grid={}, tokens={}; tokens and RoPE are reordered once around the Wan block stack.",
                 tuple(int(value) for value in grid),
                 token_count,
             )
