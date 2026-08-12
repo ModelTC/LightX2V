@@ -1,5 +1,5 @@
 {
-    "infer_steps": 10,
+    "infer_steps": 50,
     "text_len": 512,
     "target_video_length": 120,
     "target_height": 704,
