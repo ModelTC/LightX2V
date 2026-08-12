@@ -1,9 +1,9 @@
 import base64
+import io
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-import io
 from PIL import Image
 
 from lightx2v.models.networks.lora_adapter import LoraAdapter
@@ -234,16 +234,7 @@ class NeoppRunner(DefaultRunner):
             self.past_key_values_uncond = torch.load(to_x2v_uncond_kv_path, map_location="cpu").transpose(2, 3).to(AI_DEVICE)
             logger.info(f"KV cache uncond shape: {self.past_key_values_uncond.shape}")
 
-    def set_inference_params(
-        self,
-        index_offset_cond,
-        index_offset_uncond=None,
-        cfg_interval=(-1, 2),
-        cfg_scale=4.0,
-        cfg_norm="global",
-        timestep_shift=3.0,
-        output_format="jpeg"):
-
+    def set_inference_params(self, index_offset_cond, index_offset_uncond=None, cfg_interval=(-1, 2), cfg_scale=4.0, cfg_norm="global", timestep_shift=3.0, output_format="jpeg"):
         self.index_offset_cond = index_offset_cond
         self.index_offset_uncond = index_offset_uncond if self.enable_cfg else None
         self.output_format = output_format
