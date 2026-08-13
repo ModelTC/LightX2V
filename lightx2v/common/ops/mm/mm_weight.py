@@ -11,6 +11,7 @@ try:
 except ImportError:
     magi_register_custom_op = None
 
+from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
 from lightx2v.common.ops.mm.triton_kernels import (
     fp8_gemm_bias_triton,
     fp8_gemm_triton,
@@ -62,15 +63,11 @@ except ImportError:
     sgl_kernel = None
 
 
-def _fp8_scaled_mm_meta(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=None):
-    return torch.empty(mat_a.shape[0], mat_b.shape[1], dtype=out_dtype, device=mat_a.device)
-
-
 if magi_register_custom_op is not None and sgl_kernel is not None:
 
     @magi_register_custom_op(
         "lightx2v::fp8_scaled_mm",
-        infer_output_meta_fn=_fp8_scaled_mm_meta,
+        infer_output_meta_fn=sgl_fp8_scaled_mm_meta,
         is_subgraph_boundary=True,
     )
     def _fp8_scaled_mm(
@@ -81,7 +78,7 @@ if magi_register_custom_op is not None and sgl_kernel is not None:
         out_dtype: torch.dtype,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return sgl_kernel.fp8_scaled_mm(mat_a, mat_b, scales_a, scales_b, out_dtype, bias)
+        return sgl_fp8_scaled_mm(mat_a, mat_b, scales_a, scales_b, out_dtype, bias)
 
 
 try:
@@ -1863,7 +1860,7 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
                 self._get_actual_bias(),
             )
         else:
-            output_tensor = sgl_kernel.fp8_scaled_mm(
+            output_tensor = sgl_fp8_scaled_mm(
                 input_tensor_quant,
                 self.weight,
                 input_tensor_scale,

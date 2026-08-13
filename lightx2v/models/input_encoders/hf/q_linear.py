@@ -31,6 +31,7 @@ try:
 except ImportError:
     fp8_linear = None
 
+from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm
 from lightx2v.common.ops.mm.triton_kernels import fp8_gemm_bias_triton, fp8_gemm_triton, fp8_quantize_triton, int8_gemm_bias_triton, int8_gemm_triton, int8_quantize_triton
 
 
@@ -276,7 +277,7 @@ class SglQuantLinearFp8(nn.Module):
         input_tensor = input_tensor.squeeze(0)
         dtype = input_tensor.dtype
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
-        output_tensor = sgl_kernel.fp8_scaled_mm(
+        output_tensor = sgl_fp8_scaled_mm(
             input_tensor_quant,
             self.weight.t(),
             input_tensor_scale,
