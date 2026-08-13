@@ -596,6 +596,7 @@ class MiniMaxH3Runner(DefaultRunner):
                     audio=audio,
                     output_path=output_path,
                     video_chunks_number=1,
+                    video_codec_options=self.config.get("video_codec_options"),
                 )
             logger.info(f"MiniMax-H3 output saved to {output_path}")
         return {"video": None, "audio": None}
