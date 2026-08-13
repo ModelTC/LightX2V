@@ -1,6 +1,6 @@
 import logging
 import math
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Mapping
 from fractions import Fraction
 from io import BytesIO
 
@@ -189,6 +189,7 @@ def encode_video(
     audio: Audio | None,
     output_path: str,
     video_chunks_number: int,
+    video_codec_options: Mapping[str, str] | None = None,
 ) -> None:
     if isinstance(video, torch.Tensor):
         video = iter([video])
@@ -202,6 +203,8 @@ def encode_video(
     stream.width = width
     stream.height = height
     stream.pix_fmt = "yuv420p"
+    if video_codec_options:
+        stream.options = dict(video_codec_options)
 
     if audio is not None:
         audio_stream = _prepare_audio_stream(container, audio.sampling_rate)
