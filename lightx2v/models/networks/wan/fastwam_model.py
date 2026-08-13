@@ -42,6 +42,27 @@ class FastWAMNativeModel(BaseTransformerModel):
         self.pre_infer.set_scheduler(scheduler)
         self.transformer_infer.set_scheduler(scheduler)
 
+    def _sequential_expert_offload_enabled(self):
+        return bool(self.config.get("sequential_aux_offload", False))
+
+    def prepare_video_phase(self):
+        """Keep only the video expert resident while building the KV cache."""
+        if not self._sequential_expert_offload_enabled():
+            return
+        self.transformer_weights.action.to_cpu()
+        self.transformer_weights.action_head.to_cpu()
+        torch.cuda.empty_cache()
+        self.transformer_weights.video.to_cuda()
+
+    def prepare_action_phase(self):
+        """Keep only the action expert resident during action denoising."""
+        if not self._sequential_expert_offload_enabled():
+            return
+        self.transformer_weights.video.to_cpu()
+        torch.cuda.empty_cache()
+        self.transformer_weights.action.to_cuda()
+        self.transformer_weights.action_head.to_cuda()
+
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         adapter_path = self.config.get("adapter_model_path")
         if not adapter_path:
@@ -136,6 +157,7 @@ class FastWAMNativeModel(BaseTransformerModel):
         context, context_mask = self._append_robot_state_to_context(context, context_mask, robot_state)
 
         video_pre, video_kv_cache = self._prepare_video_cache(first_frame_latents, context, context_mask)
+        self.prepare_action_phase()
         action_chunk_size = int(action_chunk_size)
         attention_mask = self.transformer_infer.build_mot_attention_mask(
             video_seq_len=video_pre.tokens.shape[0],
