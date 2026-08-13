@@ -98,6 +98,7 @@ _TRAINER_MODULES = {
     "sgmd": "lightx2v_train.trainers.sgmd",
     "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",
     "training_cache": "lightx2v_train.trainers.training_cache",
+    "video_dfd": "lightx2v_train.trainers.dfd",
 }
 
 _INFERENCER_MODULES = {
