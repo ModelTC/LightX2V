@@ -270,15 +270,35 @@ class MiniMaxH3VideoAttention(nn.Module):
         super().__init__()
         self.heads = heads
         self.dim_head = dim_head
+        self.inner_dim = heads * dim_head
         self.sensitive_layer_dtype = sensitive_layer_dtype
-        inner_dim = heads * dim_head
 
         self.norm_q = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=False)
         self.norm_k = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=False)
-        self.to_q = nn.Linear(dim, inner_dim, bias=bias)
-        self.to_k = nn.Linear(dim, inner_dim, bias=bias)
-        self.to_v = nn.Linear(dim, inner_dim, bias=bias)
-        self.to_out = nn.ModuleList([nn.Linear(inner_dim, dim, bias=bias), nn.Dropout(0.0)])
+        self.to_q = nn.Linear(dim, self.inner_dim, bias=bias)
+        self.to_k = nn.Linear(dim, self.inner_dim, bias=bias)
+        self.to_v = nn.Linear(dim, self.inner_dim, bias=bias)
+        self.to_qkv = None
+        self.to_out = nn.ModuleList([nn.Linear(self.inner_dim, dim, bias=bias), nn.Dropout(0.0)])
+
+    def _pack_fp8_qkv(self) -> None:
+        from lightx2v.models.input_encoders.hf.q_linear import SglQuantLinearFp8
+
+        linears = (self.to_q, self.to_k, self.to_v)
+        with torch.device("meta"):
+            self.to_qkv = SglQuantLinearFp8(
+                linears[0].in_features,
+                sum(linear.out_features for linear in linears),
+                bias=linears[0].bias is not None,
+                dtype=linears[0].bias.dtype if linears[0].bias is not None else torch.float16,
+            )
+        self.to_qkv.weight = torch.cat([linear.weight for linear in linears], dim=0)
+        self.to_qkv.weight_scale = torch.cat([linear.weight_scale for linear in linears], dim=0)
+        if linears[0].bias is not None:
+            self.to_qkv.bias = torch.cat([linear.bias for linear in linears], dim=0)
+        self.to_q = None
+        self.to_k = None
+        self.to_v = None
 
     @staticmethod
     def _apply_rotary(
@@ -297,9 +317,15 @@ class MiniMaxH3VideoAttention(nn.Module):
         hidden_states: torch.Tensor,
         rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
-        query = self.to_q(hidden_states).unflatten(2, (self.heads, self.dim_head))
-        key = self.to_k(hidden_states).unflatten(2, (self.heads, self.dim_head))
-        value = self.to_v(hidden_states).unflatten(2, (self.heads, self.dim_head))
+        if self.to_qkv is None:
+            query = self.to_q(hidden_states)
+            key = self.to_k(hidden_states)
+            value = self.to_v(hidden_states)
+        else:
+            query, key, value = self.to_qkv(hidden_states).split(self.inner_dim, dim=-1)
+        query = query.unflatten(2, (self.heads, self.dim_head))
+        key = key.unflatten(2, (self.heads, self.dim_head))
+        value = value.unflatten(2, (self.heads, self.dim_head))
 
         infer_dtype = query.dtype
         if self.sensitive_layer_dtype != infer_dtype:
@@ -594,6 +620,10 @@ class MiniMaxH3VideoVAE(nn.Module):
             else:
                 cls._replace_decoder_linears_with_fp8(child)
 
+    def _pack_decoder_fp8_qkv(self) -> None:
+        for block in self.decoder.transformer_blocks:
+            block.attn._pack_fp8_qkv()
+
     @staticmethod
     def _make_fp8_linear(linear: nn.Linear) -> nn.Module:
         from lightx2v.models.input_encoders.hf.q_linear import SglQuantLinearFp8
@@ -659,6 +689,9 @@ class MiniMaxH3VideoVAE(nn.Module):
             )
         model._reset_runtime_buffers()
         model.load_report = load_safetensors_subset(model, weight_path)
+        if quant_scheme == "fp8-sgl":
+            # Pack only after loading the checkpoint's original Q/K/V keys.
+            model._pack_decoder_fp8_qkv()
         model._prepare_inference_dtypes()
         model.eval().requires_grad_(False)
         if not cpu_offload:
