@@ -103,6 +103,7 @@ _TRAINER_MODULES = {
     "ltx_t2av_teacher_forcing": "lightx2v_train.trainers.tf",
     "teacher_forcing": "lightx2v_train.trainers.tf",
     "video_ar_dmd": "lightx2v_train.trainers.dmd.video_ar_trainer",
+    "video_dfd": "lightx2v_train.trainers.dfd",
     "video_dmd": "lightx2v_train.trainers.dmd.video_trainer",
     "video_phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
     "video_sgmd": "lightx2v_train.trainers.sgmd",

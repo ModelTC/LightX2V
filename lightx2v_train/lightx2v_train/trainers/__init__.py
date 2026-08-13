@@ -30,6 +30,7 @@ _LAZY_EXPORTS = {
         ".dmd.video_ar_trainer",
         "VideoArDmdTrainer",
     ),
+    "VideoDfdTrainer": (".dfd", "VideoDfdTrainer"),
     "VideoDmdTrainer": (
         ".dmd.video_trainer",
         "VideoDmdTrainer",
@@ -64,6 +65,7 @@ __all__ = [
     "LingBotVideoDmdTrainer",
     "TFTrainer",
     "VideoArDmdTrainer",
+    "VideoDfdTrainer",
     "VideoDmdTrainer",
     "VideoPhasedDmdTrainer",
     "VideoSgmdTrainer",
