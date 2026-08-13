@@ -40,6 +40,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from loguru import logger
 
 from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     SafetensorsSubsetReport,
@@ -397,6 +398,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         norm_eps: float = 1e-5,
         infer_dtype: torch.dtype = torch.float16,
         sensitive_layer_dtype: torch.dtype = torch.float32,
+        use_compile: bool = False,
     ) -> None:
         super().__init__()
         dim = num_attention_heads * attention_head_dim
@@ -406,6 +408,8 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         self.patch_size_t = patch_size_t
         self.out_channels = out_channels
         self.num_register_tokens = num_register_tokens
+        self.use_compile = use_compile
+        self.compiled_blocks = {}
 
         self.rope = MiniMaxH3VideoRotaryPosEmbed(int(attention_head_dim * rope_dim_ratio), theta=rope_theta)
         self.proj_in = nn.Linear(in_channels, dim)
@@ -427,6 +431,22 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         self.norm_out = nn.LayerNorm(dim, elementwise_affine=True, eps=norm_eps)
         self.proj_out = nn.Linear(dim, out_channels * patch_size_t * patch_size * patch_size)
 
+    def _run_block(
+        self,
+        block_index: int,
+        block: MiniMaxH3VideoTransformerBlock,
+        hidden_states: torch.Tensor,
+        rotary_emb: tuple[torch.Tensor, torch.Tensor],
+    ) -> torch.Tensor:
+        if not self.use_compile:
+            return block(hidden_states, rotary_emb)
+
+        compiled_block = self.compiled_blocks.get(block_index)
+        if compiled_block is None:
+            compiled_block = torch.compile(block, dynamic=None)
+            self.compiled_blocks[block_index] = compiled_block
+        return compiled_block(hidden_states, rotary_emb)
+
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 4, 1).reshape(batch_size, num_frames * height * width, num_channels)
@@ -445,8 +465,8 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         suffix_ids = position_ids.new_zeros((batch_size, self.num_register_tokens + 1, 3))
         rotary_emb = self.rope(torch.cat([position_ids, suffix_ids], dim=1))
 
-        for block in self.transformer_blocks:
-            hidden_states = block(hidden_states, rotary_emb)
+        for block_index, block in enumerate(self.transformer_blocks):
+            hidden_states = self._run_block(block_index, block, hidden_states, rotary_emb)
 
         hidden_states = self.norm_out(hidden_states)
         if self.sensitive_layer_dtype != self.infer_dtype:
@@ -484,6 +504,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         cpu_offload: bool = False,
         quant_scheme: str | None = None,
         sensitive_layer_dtype: torch.dtype = torch.float32,
+        use_compile: bool = False,
     ) -> None:
         super().__init__()
         if quant_scheme not in {None, "fp8-sgl"}:
@@ -494,6 +515,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.decode_parallel = False
         self.infer_dtype = torch.float16
         self.sensitive_layer_dtype = sensitive_layer_dtype
+        if use_compile:
+            logger.info("[Compile] Using torch.compile for MiniMaxH3VideoViTDecoder3d")
 
         latent_channels = int(config.get("latent_channels", 24))
         out_channels = int(config.get("out_channels", 3))
@@ -533,6 +556,7 @@ class MiniMaxH3VideoVAE(nn.Module):
             norm_eps=float(config.get("decoder_norm_eps", 1e-5)),
             infer_dtype=self.infer_dtype,
             sensitive_layer_dtype=self.sensitive_layer_dtype,
+            use_compile=use_compile,
         )
         if quant_scheme == "fp8-sgl":
             self._replace_decoder_linears_with_fp8(self.decoder.transformer_blocks)
@@ -613,6 +637,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         checkpoint_path: str | Path | None = None,
         quant_scheme: str | None = None,
         sensitive_layer_dtype: torch.dtype = torch.float32,
+        use_compile: bool = False,
     ) -> "MiniMaxH3VideoVAE":
         vae_dir = _component_dir(model_path, "vae")
         if (checkpoint_path is None) != (quant_scheme is None):
@@ -630,6 +655,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                 cpu_offload=cpu_offload,
                 quant_scheme=quant_scheme,
                 sensitive_layer_dtype=sensitive_layer_dtype,
+                use_compile=use_compile,
             )
         model._reset_runtime_buffers()
         model.load_report = load_safetensors_subset(model, weight_path)

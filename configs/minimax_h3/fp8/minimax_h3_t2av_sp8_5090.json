@@ -10,7 +10,7 @@
   "offload_granularity": "block",
   "text_encoder_cpu_offload": true,
   "text_encoder_offload_granularity": "block",
-  "vae_cpu_offload": true,
+  "vae_cpu_offload": false,
   "vae_decode_parallel": true,
   "lazy_load": false,
   "unload_modules": false,
