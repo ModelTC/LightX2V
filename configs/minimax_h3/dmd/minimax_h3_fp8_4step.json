@@ -12,9 +12,9 @@
   "vae_cpu_offload": false,
   "lazy_load": false,
   "unload_modules": false,
-  "attn_type": "sage_attn2",
-  "rms_type": "sgl-kernel",
-  "rope_type": "minimax_h3_triton_rope",
+  "attn_type": "flash_attn3",
+  "rms_type": "torch_native",
+  "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
   "use_compile": false,
   "video_flow_shift": 6.0,
@@ -27,7 +27,7 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-sgl",
-  "dit_quantized_ckpt": "/data/nvme0/gushiqiao/models/Minimax-h3-Turbo/minimax_h3_fp8/minimax_h3_fp8.safetensors",
+  "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors",
   "lora_dynamic_apply": true,
   "lora_configs": [
     {
@@ -35,9 +35,5 @@
       "strength": 1.0,
       "alpha": 128
     }
-  ],
-  "parallel": {
-    "seq_p_size": 4,
-    "seq_p_attn_type": "ulysses"
-  }
+  ]
 }

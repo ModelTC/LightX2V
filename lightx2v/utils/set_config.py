@@ -88,6 +88,70 @@ def auto_calc_config(config):
         if cli_num_iterations is not None:
             config["num_iterations"] = cli_num_iterations
 
+    if config.get("model_cls") == "wan2.2_animate2":
+        # The official release keeps every component below one model root.
+        # Allow portable JSON profiles to use those release-relative paths.
+        path_keys = (
+            "dit_original_ckpt",
+            "dit_quantized_ckpt",
+            "t5_original_ckpt",
+            "t5_quantized_ckpt",
+            "t5_tokenizer_path",
+            "clip_original_ckpt",
+            "clip_quantized_ckpt",
+            "vae_path",
+        )
+        model_root = os.path.abspath(os.path.expanduser(str(config["model_path"])))
+        config["model_path"] = model_root
+        for key in path_keys:
+            value = config.get(key)
+            if not value:
+                continue
+            value = os.path.expanduser(str(value))
+            config[key] = value if os.path.isabs(value) else os.path.join(model_root, value)
+
+    if config.get("model_cls") == "ltx2_5":
+        # LTX-2.5 is distributed as a split checkpoint pack rather than the
+        # monolithic LTX-2/2.3 layout.  Keep JSON profiles relocatable by
+        # resolving every component relative to --model_path before path
+        # validation or any model construction happens.
+        path_keys = (
+            "dit_original_ckpt",
+            "dit_quantized_ckpt",
+            "text_encoder_original_ckpt",
+            "video_vae_original_ckpt",
+            "audio_vae_original_ckpt",
+            "duration_head_original_ckpt",
+            "upsampler_original_ckpt",
+        )
+        model_root = os.path.abspath(os.path.expanduser(str(config["model_path"])))
+        config["model_path"] = model_root
+        for key in path_keys:
+            value = config.get(key)
+            if not value:
+                continue
+            value = os.path.expanduser(str(value))
+            config[key] = value if os.path.isabs(value) else os.path.join(model_root, value)
+
+        # The release root has no config.json; the authoritative transformer
+        # architecture is embedded in the safetensors metadata.  Merge it in
+        # just like the directory-based LTX-2 loader does, while retaining
+        # LightX2V's rope implementation selector.
+        transformer_path = config.get("dit_original_ckpt")
+        if transformer_path and os.path.isfile(transformer_path):
+            try:
+                from safetensors import safe_open
+
+                with safe_open(transformer_path, framework="pt", device="cpu") as f:
+                    metadata = f.metadata() or {}
+                checkpoint_config = json.loads(metadata.get("config", "{}"))
+                transformer_config = dict(checkpoint_config.get("transformer", {}))
+                transformer_config.pop("rope_type", None)
+                config.update(transformer_config)
+                config["ltx_model_version"] = metadata.get("model_version", "")
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Failed to read LTX-2.5 transformer metadata from {transformer_path}: {exc}") from exc
+
     assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
 
     if config["model_cls"] in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:  # Special config for hunyuan video 1.5 model folder structure
@@ -258,7 +322,7 @@ def auto_calc_config(config):
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
-            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
+            if config["model_cls"] in ["ltx2", "ltx2_ar", "ltx2_5"]:
                 # LTX uses rope_type for the layout ("split"), while LightX2V
                 # uses it to select a registered RoPE implementation.
                 model_config.pop("rope_type", None)
@@ -278,7 +342,7 @@ def auto_calc_config(config):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
+            if config["model_cls"] in ["ltx2", "ltx2_ar", "ltx2_5"]:
                 # Upstream LTX2 uses rope_type for the layout name ("split"),
                 # while LightX2V uses it as the registered RoPE implementation.
                 model_config.pop("rope_type", None)

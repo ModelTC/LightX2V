@@ -1,6 +1,7 @@
 from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.utils.registry_factory import (
     MM_WEIGHT_REGISTER,
+    TENSOR_REGISTER,
 )
 
 
@@ -245,5 +246,19 @@ class LTX2PreWeights(WeightModule):
                 MM_WEIGHT_REGISTER["Default"](
                     "model.diffusion_model.audio_prompt_adaln_single.linear.weight",
                     "model.diffusion_model.audio_prompt_adaln_single.linear.bias",
+                ),
+            )
+
+
+class LTX25PreWeights(LTX2PreWeights):
+    """LTX-2.5 pre-block weights, including the generated-keyframe marker."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        if config.get("use_keyframes_abs_pos_embedding", False):
+            self.add_module(
+                "keyframes_abs_pos_embedding",
+                TENSOR_REGISTER["Default"](
+                    tensor_name="model.diffusion_model.keyframes_abs_pos_embedding",
                 ),
             )

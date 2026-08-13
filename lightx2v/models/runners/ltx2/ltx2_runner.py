@@ -47,6 +47,8 @@ def _ltx2_audio_to_stereo(audio: Audio) -> Audio:
 
 
 def _ltx2_normalize_image_strengths(image_strength, n: int) -> list[float]:
+    if image_strength is None:
+        return [1.0] * n
     if not isinstance(image_strength, list):
         return [float(image_strength)] * n
     if len(image_strength) == 1:
@@ -751,6 +753,7 @@ class LTX2Runner(DefaultRunner):
                 width=target_width,
                 dtype=GET_DTYPE(),
                 device=AI_DEVICE,
+                crf=int(self.config.get("image_conditioning_crf", 33)),
             )
 
             with torch.no_grad():
@@ -803,6 +806,7 @@ class LTX2Runner(DefaultRunner):
                 width=tw,
                 dtype=GET_DTYPE(),
                 device=AI_DEVICE,
+                crf=int(self.config.get("image_conditioning_crf", 33)),
             )
             with torch.no_grad():
                 enc = self.video_vae.encode(image).squeeze(0)
@@ -823,6 +827,7 @@ class LTX2Runner(DefaultRunner):
             width=tw,
             dtype=GET_DTYPE(),
             device=AI_DEVICE,
+            crf=int(self.config.get("image_conditioning_crf", 33)),
         )
         with torch.no_grad():
             encoded = self.video_vae.encode(image).squeeze(0)

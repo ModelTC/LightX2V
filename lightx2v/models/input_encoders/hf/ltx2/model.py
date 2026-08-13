@@ -6,12 +6,20 @@ from loguru import logger
 from safetensors import safe_open
 from transformers import AutoImageProcessor, Gemma3Processor
 
+from lightx2v.models.input_encoders.hf.ltx2.gemma.embeddings_connector import (
+    AudioEmbeddings1DConnectorConfigurator,
+    Embeddings1DConnectorConfigurator,
+)
+from lightx2v.models.input_encoders.hf.ltx2.gemma.embeddings_processor import (
+    EmbeddingsProcessor,
+)
 from lightx2v.models.input_encoders.hf.ltx2.gemma.encoders.base_encoder import (
     GemmaTextEncoder,
 )
 from lightx2v.models.input_encoders.hf.ltx2.gemma.encoders.encoder_configurator import (
     GEMMA_MODEL_OPS,
     GemmaTextEncoderConfigurator,
+    _create_feature_extractor,
 )
 from lightx2v.models.input_encoders.hf.ltx2.gemma.model import (
     Gemma3ForConditionalGeneration,
@@ -271,6 +279,175 @@ class LTX2TextEncoder:
             gc.collect()
 
         return True
+
+
+class LTX25TextEncoder(LTX2TextEncoder):
+    """LTX-2.5 Gemma 4 unified text encoder.
+
+    The public ``infer``/``encode_text`` interface intentionally matches
+    :class:`LTX2TextEncoder`.  ``checkpoint_path`` is the split Transformer
+    checkpoint (it owns the video/audio connector weights) and ``gemma_root``
+    is the self-contained Gemma 4 text-encoder safetensors file.
+    """
+
+    def load(self) -> GemmaTextEncoder:
+        from lightx2v.models.input_encoders.hf.ltx2.gemma.assets import (
+            LTX25_EMBEDDINGS_KEY_OPS,
+            LTX25_GEMMA_KEY_OPS,
+            LTX25GemmaAssets,
+            populate_gemma4_buffers,
+            read_safetensors_metadata,
+        )
+
+        if not Path(self.checkpoint_path).is_file():
+            raise FileNotFoundError(f"LTX-2.5 transformer checkpoint not found: {self.checkpoint_path}")
+        if not Path(self.gemma_root).is_file():
+            raise FileNotFoundError(f"LTX-2.5 text-encoder checkpoint not found: {self.gemma_root}")
+
+        transformer_config = self.loader.metadata(self.checkpoint_path)
+        transformer_metadata = read_safetensors_metadata(self.checkpoint_path)
+        assets = LTX25GemmaAssets.load(self.gemma_root)
+        gemma_config = assets.build_config()
+        self._validate_gemma_version(transformer_metadata, gemma_config)
+
+        gemma_model = assets.build_model(attn_implementation=self.gemma_attn_implementation)
+        populate_gemma4_buffers(gemma_model)
+
+        with torch.device("meta"):
+            video_connector = Embeddings1DConnectorConfigurator.from_config(transformer_config)
+            audio_connector = AudioEmbeddings1DConnectorConfigurator.from_config(transformer_config)
+            embeddings_processor = EmbeddingsProcessor(
+                video_connector=video_connector,
+                audio_connector=audio_connector,
+            )
+            feature_extractor = _create_feature_extractor(
+                transformer_config.get("transformer", {}),
+                gemma_config.text_config,
+            )
+            model = GemmaTextEncoder(
+                feature_extractor=feature_extractor,
+                embeddings_processor=embeddings_processor,
+                model=gemma_model,
+                dtype=self.dtype,
+            )
+
+        gemma_state = self.loader.load(
+            self.gemma_root,
+            sd_ops=LTX25_GEMMA_KEY_OPS,
+            device=self.device,
+        ).sd
+        gemma_state = self._cast_floating_state(gemma_state)
+        incompatible = model.load_state_dict(gemma_state, strict=False, assign=True)
+        if incompatible.unexpected_keys:
+            raise ValueError(f"Unexpected LTX-2.5 Gemma weights: {incompatible.unexpected_keys[:10]}")
+        del gemma_state
+
+        # Connector weights are stored with the Transformer, while the dual
+        # readout projections live in the text-encoder file.
+        embeddings_state = self.loader.load(
+            [self.checkpoint_path, self.gemma_root],
+            sd_ops=LTX25_EMBEDDINGS_KEY_OPS,
+            device=self.device,
+        ).sd
+        embeddings_state = self._cast_floating_state(embeddings_state)
+        incompatible = model.load_state_dict(embeddings_state, strict=False, assign=True)
+        if incompatible.unexpected_keys:
+            raise ValueError(f"Unexpected LTX-2.5 embeddings weights: {incompatible.unexpected_keys[:10]}")
+        del embeddings_state
+
+        uninitialized = [name for name, value in (*model.named_parameters(), *model.named_buffers()) if value.is_meta]
+        if uninitialized:
+            raise ValueError(f"Uninitialized LTX-2.5 text-encoder tensors: {uninitialized[:20]}")
+
+        hf_tokenizer = assets.build_tokenizer()
+        model.tokenizer = LTXVGemmaTokenizer.from_tokenizer(hf_tokenizer, 1024)
+        model.processor = assets.build_processor(hf_tokenizer)
+        return model.to(self.device).eval()
+
+    def _cast_floating_state(self, state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        if self.dtype is None:
+            return state_dict
+        return {key: value.to(dtype=self.dtype) if value.is_floating_point() else value for key, value in state_dict.items()}
+
+    def _move_text_encoder(self, device: torch.device | str) -> None:
+        """Move the complete Gemma/readout/connector stack as one lifecycle unit."""
+        self.text_encoder = self.text_encoder.to(device)
+
+    @torch.inference_mode()
+    def encode_text(self, prompts: list[str]) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        """Encode a fused prompt batch exactly like the LTX-2.5 source pipeline.
+
+        Gemma sees the full prompt batch in one forward.  Each batch slice is
+        then processed independently by the readout and connector modules.  In
+        addition to matching source arithmetic for CFG, this makes CPU offload
+        exception-safe: a failed tokenize/forward/connector call still returns
+        the complete text stack to CPU.
+        """
+        if not prompts:
+            return []
+
+        if self.cpu_offload:
+            try:
+                self._move_text_encoder(AI_DEVICE)
+            except BaseException:
+                # ``nn.Module.to`` mutates in place and can leave a partially
+                # moved module if allocation fails.
+                self._move_text_encoder("cpu")
+                raise
+
+        try:
+            tokenized = [self.text_encoder.tokenizer.tokenize_with_weights(text)["gemma"] for text in prompts]
+            model_device = self.text_encoder.model.device
+            input_ids = torch.tensor(
+                [[token for token, _ in pairs] for pairs in tokenized],
+                device=model_device,
+            )
+            attention_mask = torch.tensor(
+                [[weight for _, weight in pairs] for pairs in tokenized],
+                device=model_device,
+            )
+
+            outputs = self.text_encoder.model.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+            )
+            hidden_states = outputs.hidden_states
+            del outputs
+
+            result = []
+            for index in range(len(prompts)):
+                per_prompt_hidden = tuple(hidden[index : index + 1] for hidden in hidden_states)
+                per_prompt_mask = attention_mask[index : index + 1]
+                video_features, audio_features = self.text_encoder.feature_extractor(
+                    per_prompt_hidden,
+                    per_prompt_mask,
+                    "left",
+                )
+                additive_mask = self.text_encoder._convert_to_additive_mask(
+                    per_prompt_mask,
+                    video_features.dtype,
+                )
+                video_context, audio_context, _ = self.text_encoder.embeddings_processor.create_embeddings(
+                    video_features,
+                    audio_features,
+                    additive_mask,
+                )
+                result.append((video_context, audio_context))
+            return result
+        finally:
+            if self.cpu_offload:
+                self._move_text_encoder("cpu")
+
+    @staticmethod
+    def _validate_gemma_version(transformer_metadata: dict, gemma_config) -> None:
+        source = transformer_metadata.get("gemma_source_checkpoint")
+        if not isinstance(source, dict):
+            raise ValueError("LTX-2.5 Transformer metadata is missing gemma_source_checkpoint")
+        expected = source.get("gemma_version")
+        actual = getattr(gemma_config, "gemma_version", None)
+        if expected != actual:
+            raise ValueError(f"LTX-2.5 Gemma version mismatch: Transformer expects {expected!r}, text encoder declares {actual!r}")
 
 
 if __name__ == "__main__":

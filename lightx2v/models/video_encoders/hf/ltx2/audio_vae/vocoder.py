@@ -1,4 +1,6 @@
+import contextlib
 import math
+from collections.abc import Iterator
 from typing import List
 
 import einops
@@ -14,6 +16,20 @@ _REPLICATE_PAD_FLOAT32_PLATFORMS = {
     "cambricon_mlu",
     "metax_cuda",
 }
+
+
+@contextlib.contextmanager
+def _module_in_fp32(module: nn.Module, *, enabled: bool) -> Iterator[None]:
+    """Temporarily run a module with materialized FP32 weights (MPS fallback)."""
+    if not enabled:
+        yield
+        return
+    module_dtype = next(module.parameters()).dtype
+    module.float()
+    try:
+        yield
+    finally:
+        module.to(module_dtype)
 
 
 def get_padding(kernel_size: int, dilation: int = 1) -> int:
@@ -510,9 +526,8 @@ class MelSTFT(nn.Module):
 class VocoderWithBWE(nn.Module):
     """Vocoder with bandwidth extension (BWE) upsampling.
     Chains a mel-to-wav vocoder with a BWE module that upsamples the output
-    to a higher sample rate. The BWE computes a mel spectrogram from the
-    vocoder output, runs it through a second generator to predict a residual,
-    and adds it to a sinc-resampled skip connection.
+    to a higher sample rate. The complete forward pass uses FP32 accumulation,
+    matching LTX-2.5 and avoiding error compounding across the vocoder stacks.
     """
 
     def __init__(
@@ -565,22 +580,25 @@ class VocoderWithBWE(nn.Module):
         Returns:
             Waveform tensor of shape (B, out_channels, T_out) clipped to [-1, 1].
         """
-        x = self.vocoder(mel_spec)
-        _, _, length_low_rate = x.shape
-        output_length = length_low_rate * self.output_sampling_rate // self.input_sampling_rate
+        input_dtype = mel_spec.dtype
+        device_type = mel_spec.device.type
+        module_dtype = next(self.parameters()).dtype
+        fp32_ctx = _module_in_fp32(self, enabled=module_dtype != torch.float32) if device_type == "mps" else torch.autocast(device_type=device_type, dtype=torch.float32)
 
-        # Pad to multiple of hop_length for exact mel frame count
-        remainder = length_low_rate % self.hop_length
-        if remainder != 0:
-            x = F.pad(x, (0, self.hop_length - remainder))
+        with fp32_ctx:
+            x = self.vocoder(mel_spec.float())
+            _, _, length_low_rate = x.shape
+            output_length = length_low_rate * self.output_sampling_rate // self.input_sampling_rate
 
-        # Compute mel spectrogram from vocoder output: (B, C, n_mels, T_frames)
-        mel = self._compute_mel(x)
+            # Pad to multiple of hop_length for exact mel frame count.
+            remainder = length_low_rate % self.hop_length
+            if remainder != 0:
+                x = F.pad(x, (0, self.hop_length - remainder))
 
-        # Vocoder.forward expects (B, C, T, mel_bins) — transpose before calling bwe_generator
-        mel_for_bwe = mel.transpose(2, 3)  # (B, C, T_frames, mel_bins)
-        residual = self.bwe_generator(mel_for_bwe)
-        skip = self.resampler(x)
-        assert residual.shape == skip.shape, f"residual {residual.shape} != skip {skip.shape}"
+            mel = self._compute_mel(x)
+            mel_for_bwe = mel.transpose(2, 3)
+            residual = self.bwe_generator(mel_for_bwe)
+            skip = self.resampler(x)
+            assert residual.shape == skip.shape, f"residual {residual.shape} != skip {skip.shape}"
 
-        return torch.clamp(residual + skip, -1, 1)[..., :output_length]
+            return torch.clamp(residual + skip, -1, 1)[..., :output_length].to(input_dtype)

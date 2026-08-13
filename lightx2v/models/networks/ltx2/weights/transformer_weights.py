@@ -2,6 +2,8 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.rope.template import broadcast_freqs
+from lightx2v.common.ops.rope.torch_rope import TorchRealRope
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
@@ -9,6 +11,58 @@ from lightx2v.utils.registry_factory import (
     ROPE_REGISTER,
     TENSOR_REGISTER,
 )
+
+
+class _LTX25SplitRope(TorchRealRope):
+    """LTX-2.5's native split-half RoPE, including its bf16 op order.
+
+    The upstream implementation intentionally multiplies in the input dtype and
+    then uses two in-place ``addcmul_`` operations.  The generic real RoPE uses
+    fp32 intermediates and algebraically equivalent expressions; that is useful
+    for other models, but changes bf16 rounding at every LTX-2.5 block.
+    """
+
+    def apply_single(
+        self,
+        x: torch.Tensor,
+        freqs,
+        rotary_dim: int | None = None,
+        unsqueeze_dim: int = -2,
+        **kwargs,
+    ) -> torch.Tensor:
+        rotary_dim = rotary_dim or x.shape[-1]
+        if rotary_dim % 2:
+            raise ValueError(f"rotary_dim must be even, got {rotary_dim}.")
+
+        x_rot, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+        cos, sin, pairwise = self._cos_sin(freqs, rotary_dim)
+        if self.layout != "split_half" or not pairwise:
+            return super().apply_single(
+                x,
+                freqs,
+                rotary_dim=rotary_dim,
+                unsqueeze_dim=unsqueeze_dim,
+                **kwargs,
+            )
+
+        first, second = x_rot.chunk(2, dim=-1)
+        cos = broadcast_freqs(cos.to(dtype=x_rot.dtype), first, unsqueeze_dim)
+        sin = broadcast_freqs(sin.to(dtype=x_rot.dtype), first, unsqueeze_dim)
+        split_input = x_rot.reshape(*x_rot.shape[:-1], 2, rotary_dim // 2)
+        output = split_input * cos.unsqueeze(-2)
+        first_output = output[..., :1, :]
+        second_output = output[..., 1:, :]
+        first_output.addcmul_(-sin.unsqueeze(-2), split_input[..., 1:, :])
+        second_output.addcmul_(sin.unsqueeze(-2), split_input[..., :1, :])
+        output = output.flatten(-2)
+        return torch.cat((output, x_pass), dim=-1) if x_pass.shape[-1] else output
+
+
+def _make_ltx_rope(config):
+    rope_type = config.get("rope_type", "torch_real_rope")
+    if config.get("model_cls") == "ltx2_5" and rope_type == "torch_real_rope":
+        return _LTX25SplitRope(layout="split_half", compute_dtype=torch.float32)
+    return ROPE_REGISTER[rope_type](layout="split_half", compute_dtype=torch.float32)
 
 
 class LTX2TransformerWeights(WeightModule):
@@ -347,7 +401,7 @@ class LTX2Attention(WeightModule):
         self.apply_gated_attention = self.config.get("apply_gated_attention", False)
         self.add_module(
             "rope",
-            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="split_half", compute_dtype=torch.float32),
+            _make_ltx_rope(config),
         )
 
         block_lora_prefix = "model.diffusion_model.blocks"
@@ -480,12 +534,13 @@ class LTX2FFN(WeightModule):
         self.lazy_load_file = lazy_load_file
         block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
+        has_bias = config.get("audio_ff_bias", True) if ffn_prefix == "audio_ff" else config.get("ff_bias", True)
 
         self.add_module(
             f"net_0_proj",
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.weight",
-                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.bias",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.bias" if has_bias else None,
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=self.lazy_load,
@@ -498,7 +553,7 @@ class LTX2FFN(WeightModule):
             f"net_2",
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.weight",
-                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias" if has_bias else None,
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=self.lazy_load,
@@ -549,7 +604,7 @@ class LTX2AttentionTP(WeightModule):
         self.apply_gated_attention = self.config.get("apply_gated_attention", False)
         self.add_module(
             "rope",
-            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="split_half", compute_dtype=torch.float32),
+            _make_ltx_rope(config),
         )
 
         block_lora_prefix = "model.diffusion_model.blocks"
@@ -726,13 +781,14 @@ class LTX2FFNTP(WeightModule):
         self.lazy_load_file = lazy_load_file
         block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
+        has_bias = config.get("audio_ff_bias", True) if ffn_prefix == "audio_ff" else config.get("ff_bias", True)
 
         # First layer: column split
         self.add_module(
             f"net_0_proj",
             MM_WEIGHT_REGISTER["TensorParallel"](
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.weight",
-                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.bias",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.bias" if has_bias else None,
                 mm_type=mm_type,
                 tp_group=tp_group,
                 tp_rank=tp_rank,
@@ -751,7 +807,7 @@ class LTX2FFNTP(WeightModule):
             f"net_2",
             MM_WEIGHT_REGISTER["TensorParallel"](
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.weight",
-                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias" if has_bias else None,
                 mm_type=mm_type,
                 tp_group=tp_group,
                 tp_rank=tp_rank,

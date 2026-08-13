@@ -21,6 +21,7 @@ from lightx2v.models.input_encoders.hf.q_linear import (
     VllmQuantLinearFp8,
     VllmQuantLinearInt8,
 )
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v.utils.utils import load_weights
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.mm.cambricon_mlu.q_linear import MluQuantLinearInt8
@@ -60,7 +61,18 @@ class LayerNorm(nn.LayerNorm):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, num_heads, causal=False, attn_dropout=0.0, proj_dropout=0.0, quantized=False, quant_scheme=None, dtype=None):
+    def __init__(
+        self,
+        dim,
+        num_heads,
+        causal=False,
+        attn_dropout=0.0,
+        proj_dropout=0.0,
+        quantized=False,
+        quant_scheme=None,
+        dtype=None,
+        attn_type="torch_sdpa",
+    ):
         assert dim % num_heads == 0
         super().__init__()
         self.dim = dim
@@ -69,6 +81,13 @@ class SelfAttention(nn.Module):
         self.causal = causal
         self.attn_dropout = attn_dropout
         self.proj_dropout = proj_dropout
+        self.attn_type = attn_type
+        self.attn_op = None
+        if attn_type != "torch_sdpa":
+            try:
+                self.attn_op = ATTN_WEIGHT_REGISTER[attn_type]()
+            except KeyError as exc:
+                raise ValueError(f"Unsupported CLIP attention backend: {attn_type}") from exc
 
         # layers
         if quantized:
@@ -112,7 +131,12 @@ class SelfAttention(nn.Module):
         q, k, v = self.to_qkv(x).view(b, s, 3, n, d).unbind(2)
 
         # compute attention
-        x = TorchSDPAWeight().apply(q=q, k=k, v=v)
+        if self.attn_type == "torch_sdpa":
+            # Keep the established CLIP default path exactly unchanged.
+            x = TorchSDPAWeight().apply(q=q, k=k, v=v)
+        else:
+            dropout_p = self.attn_dropout if self.training else 0.0
+            x = self.attn_op.apply(q=q, k=k, v=v, dropout_p=dropout_p, causal=self.causal)
         x = x.reshape(b, s, c)
 
         # output
@@ -152,6 +176,7 @@ class AttentionBlock(nn.Module):
         quantized=False,
         quant_scheme=None,
         dtype=torch.float16,
+        attn_type="torch_sdpa",
     ):
         assert activation in ["quick_gelu", "gelu", "swi_glu"]
         super().__init__()
@@ -192,7 +217,17 @@ class AttentionBlock(nn.Module):
             linear_cls = nn.Linear
 
         self.norm1 = LayerNorm(dim, eps=norm_eps, dtype=dtype)
-        self.attn = SelfAttention(dim, num_heads, causal, attn_dropout, proj_dropout, quantized, quant_scheme, dtype)
+        self.attn = SelfAttention(
+            dim,
+            num_heads,
+            causal,
+            attn_dropout,
+            proj_dropout,
+            quantized,
+            quant_scheme,
+            dtype,
+            attn_type,
+        )
         self.norm2 = LayerNorm(dim, eps=norm_eps, dtype=dtype)
         if activation == "swi_glu":
             self.mlp = SwiGLU(dim, int(dim * mlp_ratio), dtype=dtype)
@@ -215,7 +250,17 @@ class AttentionBlock(nn.Module):
 
 
 class AttentionPool(nn.Module):
-    def __init__(self, dim, mlp_ratio, num_heads, activation="gelu", proj_dropout=0.0, norm_eps=1e-5, dtype=torch.float16):
+    def __init__(
+        self,
+        dim,
+        mlp_ratio,
+        num_heads,
+        activation="gelu",
+        proj_dropout=0.0,
+        norm_eps=1e-5,
+        dtype=torch.float16,
+        attn_type="torch_sdpa",
+    ):
         assert dim % num_heads == 0
         super().__init__()
         self.dim = dim
@@ -224,6 +269,13 @@ class AttentionPool(nn.Module):
         self.head_dim = dim // num_heads
         self.proj_dropout = proj_dropout
         self.norm_eps = norm_eps
+        self.attn_type = attn_type
+        self.attn_op = None
+        if attn_type != "torch_sdpa":
+            try:
+                self.attn_op = ATTN_WEIGHT_REGISTER[attn_type]()
+            except KeyError as exc:
+                raise ValueError(f"Unsupported CLIP attention backend: {attn_type}") from exc
 
         # layers
         gain = 1.0 / math.sqrt(dim)
@@ -247,7 +299,10 @@ class AttentionPool(nn.Module):
         k, v = self.to_kv(x).view(b, s, 2, n, d).unbind(2)
 
         # compute attention
-        x = TorchSDPAWeight().apply(q=q, k=k, v=v)
+        if self.attn_type == "torch_sdpa":
+            x = TorchSDPAWeight().apply(q=q, k=k, v=v)
+        else:
+            x = self.attn_op.apply(q=q, k=k, v=v)
         x = x.reshape(b, 1, c)
 
         # output
@@ -280,6 +335,7 @@ class VisionTransformer(nn.Module):
         norm_eps=1e-5,
         quantized=False,
         quant_scheme=None,
+        attn_type="torch_sdpa",
     ):
         if image_size % patch_size != 0:
             logger.info("[WARNING] image_size is not divisible by patch_size", flush=True)
@@ -309,7 +365,24 @@ class VisionTransformer(nn.Module):
         # transformer
         self.pre_norm = LayerNorm(dim, eps=norm_eps, dtype=dtype) if pre_norm else None
         self.transformer = nn.Sequential(
-            *[AttentionBlock(dim, mlp_ratio, num_heads, post_norm, False, activation, attn_dropout, proj_dropout, norm_eps, quantized, quant_scheme, dtype) for _ in range(num_layers)]
+            *[
+                AttentionBlock(
+                    dim,
+                    mlp_ratio,
+                    num_heads,
+                    post_norm,
+                    False,
+                    activation,
+                    attn_dropout,
+                    proj_dropout,
+                    norm_eps,
+                    quantized,
+                    quant_scheme,
+                    dtype,
+                    attn_type,
+                )
+                for _ in range(num_layers)
+            ]
         )
         self.post_norm = LayerNorm(dim, eps=norm_eps, dtype=dtype)
 
@@ -319,13 +392,24 @@ class VisionTransformer(nn.Module):
         elif pool_type == "token_fc":
             self.head = nn.Linear(dim, out_dim, dtype=dtype)
         elif pool_type == "attn_pool":
-            self.head = AttentionPool(dim, mlp_ratio, num_heads, activation, proj_dropout, norm_eps, dtype=dtype)
+            self.head = AttentionPool(
+                dim,
+                mlp_ratio,
+                num_heads,
+                activation,
+                proj_dropout,
+                norm_eps,
+                dtype=dtype,
+                attn_type=attn_type,
+            )
 
     def forward(self, x, interpolation=False, use_31_block=False):
         b = x.size(0)
 
         # embeddings
-        x = self.patch_embedding(x.type(self.patch_embedding.weight.type())).flatten(2).permute(0, 2, 1)
+        if getattr(self, "precast_patch_input", True):
+            x = x.type(self.patch_embedding.weight.type())
+        x = self.patch_embedding(x).flatten(2).permute(0, 2, 1)
         if self.pool_type in ("token", "token_fc"):
             x = torch.cat([self.cls_embedding.expand(b, -1, -1), x], dim=1)
         if interpolation:
@@ -370,6 +454,7 @@ class XLMRobertaCLIP(nn.Module):
         norm_eps=1e-5,
         quantized=False,
         quant_scheme=None,
+        attn_type="torch_sdpa",
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -408,6 +493,7 @@ class XLMRobertaCLIP(nn.Module):
             norm_eps=norm_eps,
             quantized=quantized,
             quant_scheme=quant_scheme,
+            attn_type=attn_type,
         )
         self.log_scale = nn.Parameter(math.log(1 / 0.07) * torch.ones([]))
 
@@ -459,7 +545,21 @@ def clip_xlm_roberta_vit_h_14(pretrained=False, pretrained_name="open-clip-xlm-r
 
 
 class CLIPModel:
-    def __init__(self, dtype, device, checkpoint_path, clip_quantized, clip_quantized_ckpt, quant_scheme, cpu_offload=False, use_31_block=True, load_from_rank0=False, dummy_model=False):
+    def __init__(
+        self,
+        dtype,
+        device,
+        checkpoint_path,
+        clip_quantized,
+        clip_quantized_ckpt,
+        quant_scheme,
+        cpu_offload=False,
+        use_31_block=True,
+        load_from_rank0=False,
+        dummy_model=False,
+        attn_type="torch_sdpa",
+        precast_patch_input=True,
+    ):
         self.dtype = dtype
         self.quantized = clip_quantized
         self.cpu_offload = cpu_offload
@@ -472,9 +572,20 @@ class CLIPModel:
 
         # init model
         self.model, self.transforms = clip_xlm_roberta_vit_h_14(
-            pretrained=False, return_transforms=True, return_tokenizer=False, dtype=dtype, device=device, quantized=self.quantized, quant_scheme=quant_scheme
+            pretrained=False,
+            return_transforms=True,
+            return_tokenizer=False,
+            dtype=dtype,
+            device=device,
+            quantized=self.quantized,
+            quant_scheme=quant_scheme,
+            attn_type=attn_type,
         )
         self.model = self.model.eval().requires_grad_(False)
+        # Keep the established explicit-cast path by default.  A caller that
+        # already owns the surrounding autocast region may opt out so Conv2d
+        # receives the source memory format instead of an eager NCHW copy.
+        self.model.visual.precast_patch_input = bool(precast_patch_input)
         if not dummy_model:
             weight_dict = load_weights(self.checkpoint_path, cpu_offload=cpu_offload, remove_key="textual", load_from_rank0=load_from_rank0)
             self.model.load_state_dict(weight_dict)

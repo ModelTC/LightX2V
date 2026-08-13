@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import torch
-from transformers import AutoImageProcessor, Gemma3ForConditionalGeneration, Gemma3Processor
+from transformers import AutoImageProcessor, Gemma3Processor, PreTrainedModel, ProcessorMixin
 
 from lightx2v.models.input_encoders.hf.ltx2.gemma.embeddings_processor import EmbeddingsProcessor
 from lightx2v.models.input_encoders.hf.ltx2.gemma.tokenizer import LTXVGemmaTokenizer
@@ -27,9 +27,9 @@ class GemmaTextEncoder(torch.nn.Module):
         self,
         feature_extractor: torch.nn.Module,
         embeddings_processor: EmbeddingsProcessor,
-        model: Gemma3ForConditionalGeneration | None = None,
+        model: PreTrainedModel | None = None,
         tokenizer: LTXVGemmaTokenizer | None = None,
-        processor: Gemma3Processor | None = None,
+        processor: ProcessorMixin | None = None,
         dtype: torch.dtype = torch.bfloat16,
     ):
         super().__init__()
@@ -51,7 +51,13 @@ class GemmaTextEncoder(torch.nn.Module):
         token_pairs = self.tokenizer.tokenize_with_weights(text)["gemma"]
         input_ids = torch.tensor([[t[0] for t in token_pairs]], device=self.model.device)
         attention_mask = torch.tensor([[w[1] for w in token_pairs]], device=self.model.device)
-        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+        # Gemma 4 unified is wrapped in a conditional-generation head.  LTX only
+        # consumes hidden states, so call its inner model and avoid materializing
+        # the very large vocabulary logits.  Keep the established Gemma 3 path
+        # unchanged.
+        model_type = getattr(getattr(self.model, "config", None), "model_type", "")
+        backbone = self.model.model if model_type == "gemma4_unified" else self.model
+        outputs = backbone(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
 
         # Block 2: Feature extraction
         video_feats, audio_feats = self.feature_extractor(outputs.hidden_states, attention_mask, padding_side)
@@ -73,6 +79,8 @@ class GemmaTextEncoder(torch.nn.Module):
         max_new_tokens: int = 512,
         seed: int = 10,
     ) -> str:
+        if getattr(getattr(self.model, "config", None), "model_type", "") == "gemma4_unified":
+            raise ValueError("The LTX-2.5 Gemma 4 unified encode checkpoint does not support prompt enhancement.")
         text = self.processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
         model_inputs = self.processor(

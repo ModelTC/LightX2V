@@ -55,14 +55,17 @@ _V2_EXPECTED_CONFIG = {
 }
 
 
-def _create_feature_extractor(transformer_config: dict) -> torch.nn.Module:
+def _create_feature_extractor(
+    transformer_config: dict,
+    gemma_text_config=None,
+) -> torch.nn.Module:
     """Select and create the appropriate feature extractor based on config.
     Detection logic:
     - V1: V2 config keys absent → projection lives in transformer
     - V2: V2 config keys present with exact expected values → per-token RMS norm with dual aggregate embeds
     - Anything else: NotImplementedError (config drift)
     """
-    gemma_text_config = GEMMA3_CONFIG_FOR_LTX.text_config
+    gemma_text_config = gemma_text_config or GEMMA3_CONFIG_FOR_LTX.text_config
     embedding_dim = gemma_text_config.hidden_size
     num_layers = gemma_text_config.num_hidden_layers + 1  # +1 for the embedding layer
     flat_dim = embedding_dim * num_layers

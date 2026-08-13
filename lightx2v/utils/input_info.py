@@ -172,6 +172,7 @@ class RS2VInputInfo:
 class AnimateInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
+    prompt_ref: str = field(default_factory=lambda: "人物动作的参考视频")
     prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)

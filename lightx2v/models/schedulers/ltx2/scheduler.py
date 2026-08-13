@@ -66,12 +66,14 @@ class LatentState:
         denoise_mask: Mask encoding the denoising strength for each token (patchified, shape: [T, 1])
         positions: Positional indices for each latent element (shape: [3, T] for video, [2, T] for audio)
         clean_latent: Initial state of the latent before denoising (patchified, shape: [T, D])
+        keyframes_mask: Optional per-token LTX-2.5 keyframe marker (shape: [T, 1])
     """
 
     latent: torch.Tensor
     denoise_mask: torch.Tensor
     positions: torch.Tensor
     clean_latent: torch.Tensor
+    keyframes_mask: Optional[torch.Tensor] = None
 
 
 class VideoLatentPatchifier:

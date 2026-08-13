@@ -252,13 +252,19 @@ def save_to_video(
 
         N, height, width, _ = frames.shape
 
-        # Ensure even dimensions for x264
-        width += width % 2
-        height += height % 2
-
         # Get ffmpeg executable from imageio_ffmpeg
         ffmpeg_exe = ffmpeg.get_ffmpeg_exe()
         out_pix = output_pix_fmt or "yuv420p"
+        if out_pix == "yuv420p" and (width % 2 or height % 2):
+            # yuv420p requires even dimensions.  Keep the actual raw-frame
+            # geometry (changing only ``-s`` corrupts frame boundaries) and
+            # use the same unsampled fallback MoviePy selects for odd output.
+            logger.warning(
+                "Video size {}x{} is odd; using yuv444p instead of yuv420p to preserve the exact crop.",
+                width,
+                height,
+            )
+            out_pix = "yuv444p"
 
         if lossless:
             command = [
@@ -494,6 +500,11 @@ def load_pt_safetensors(in_path, remove_key=None, include_keys=None):
     ext = os.path.splitext(in_path)[-1]
     if ext in (".pt", ".pth", ".tar"):
         state_dict = torch.load(in_path, map_location="cpu", weights_only=True)
+        # Some official training checkpoints (including Wan-Animate-2's VAE)
+        # keep the inference weights under ``model_state`` alongside optimizer
+        # and training metadata. ``load_weights`` requires a flat tensor dict.
+        if isinstance(state_dict, dict) and isinstance(state_dict.get("model_state"), dict):
+            state_dict = state_dict["model_state"]
         # 处理筛选逻辑
         keys_to_keep = []
         for key in state_dict.keys():
@@ -734,6 +745,31 @@ def validate_config_paths(config: dict) -> None:
     if "dit_original_ckpt" in config and config["dit_original_ckpt"] is not None:
         check_path_exists(config["dit_original_ckpt"])
         logger.debug(f"✓ Verified dit_original_ckpt: {config['dit_original_ckpt']}")
+
+    if config.get("model_cls") == "ltx2_5":
+        required_components = (
+            "dit_original_ckpt",
+            "text_encoder_original_ckpt",
+            "video_vae_original_ckpt",
+            "audio_vae_original_ckpt",
+        )
+        optional_components = (
+            "duration_head_original_ckpt",
+            "upsampler_original_ckpt",
+        )
+        for key in required_components:
+            value = config.get(key)
+            if not value:
+                raise ValueError(f"LTX-2.5 requires {key} in the config")
+            check_path_exists(value)
+            logger.debug(f"✓ Verified {key}: {value}")
+        for key in optional_components:
+            value = config.get(key)
+            if value:
+                check_path_exists(value)
+                logger.debug(f"✓ Verified {key}: {value}")
+        if config.get("use_upsampler", False) and not config.get("upsampler_original_ckpt"):
+            raise ValueError("LTX-2.5 two-stage inference requires upsampler_original_ckpt")
 
     if config.get("model_cls", "") == "infinitetalk":
         if config.get("adapter_model_path", None) is None:
