@@ -315,6 +315,15 @@ no-warmup
 
 若第二组稳定消除 Step 1 差距，归因于 allocator/workspace 冷启动，不要继续扩大 warmup step 或修改 scheduler。
 
+### Model offload 的两个清理边界
+
+不要把 encoder 后、transformer 上卡前的清理，与 transformer 下卡后的清理视为同一职责；逐处做消融实验：
+
+- encoder 后强制 `empty_cache()` 可能释放 warmup 留下且正式 DiT 可复用的 allocator/workspace。若 pressure-aware 清理能稳定降低延迟且不增加峰值，可只放宽这一处。
+- model offload 下卡后若不释放大块 allocator cache，权重虽已回到 CPU，服务空闲显存仍可能接近满卡；下一请求会在实际分配时触发回收/重试，导致 encoder、上卡和 Step 1 变慢。因此这一边界通常仍需显式释放，但必须由连续请求和空闲显存实测确认。
+
+至少连续运行三次相同请求，分别记录 encoder、Prepare DiT/H2D、Step 1、D2H、VAE、E2E 和请求间空闲显存。首请求变快不能证明方案成立；连续请求变慢或空闲显存长期高占用应判定失败。
+
 ## 实验模板
 
 占用 GPU 前先解析最终 config，检查 checkpoint、LoRA/adapter 和输入媒体路径。保留用户脚本的模型、task、config、prompt 和输入，仅按实验需要切换：

@@ -19,6 +19,7 @@
 - [13. Step 1 变快但冷启动总耗时更高](#13-step-1-变快但冷启动总耗时更高)
 - [14. 最终输出相近但数值不一致](#14-最终输出相近但数值不一致)
 - [15. warmup 后首请求因共享 config 扩充而重编译](#15-warmup-后首请求因共享-config-扩充而重编译)
+- [16. 多模态 timestep layout 在后续 step 重编译](#16-多模态-timestep-layout-在后续-step-重编译)
 
 ## 1. staging block 重复编译
 
@@ -136,3 +137,11 @@
 - **根因**：runner 与 transformer infer 共享同一个可变 config。首请求加入 `task_id`、输出路径等字段会改变字典结构；Dynamo 即使只读取稳定 key，也可能守卫整个 mapping。
 - **处理**：在 infer 初始化时只缓存图内需要且请求间不应变化的常量（如 `seq_parallel`、算子后端或是否具有图像上下文），编译路径改读这些属性。不要复制/冻结整份 config，也不要阻止合法的请求配置更新；图外初始化和 offload 控制路径可继续读取 config。
 - **验收**：必须走真实服务生命周期 `warmup → 首个 HTTP 请求`，确认请求确实扩充了 config、日志不再出现 config guard 重编译，且 Step 1 回到稳态量级。
+
+## 16. 多模态 timestep layout 在后续 step 重编译
+
+- **现象**：warmup 已覆盖正式空间和时间尺寸，正式 Step 1 也命中已有图，但 Step 2 或分支切换后的首步仍重编译。
+- **确认**：比较各代表 step 进入 block 的完整 signature，尤其是 timestep embedding、AdaLN 索引和 modality-specific sigma/flow shift；用 `TORCH_LOGS="recompiles,dynamic"` 定位具体维度 guard。
+- **根因**：多模态 scheduler 的首步可能让各模态共享同一 timestep，后续 step 则产生多个 unique timesteps。以 MiniMax-H3 为例，Step 0 的 `temb.shape[0]` 为 1，后续 step 为 2；只 warmup Step 0 无法覆盖后一种图。
+- **处理**：在同一次正式 scheduler 状态上执行能覆盖每种稳定 timestep layout 的最少代表 step，并保持 `step_pre → infer → step_post`。不要默认跑完整 denoise loop，也不要仅因 shape 写成 `(H,W,T)` 就认为 graph signature 已覆盖。
+- **验收**：重编译应全部发生在服务 ready 前；再走真实 HTTP 请求，确认每个正式 step 均无新 recompile，并分别报告新增 warmup 时间和正式 E2E。

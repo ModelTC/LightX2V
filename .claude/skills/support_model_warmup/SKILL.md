@@ -129,6 +129,7 @@ warmup 必须调用这些已有方法，而不是重新实现其中的数学或�
 
 - 使用 `step_index=0` 覆盖日志中的正式 Step 1。
 - 单一计算图通常只需 Step 0。
+- 多模态 scheduler 即使没有显式分支，不同 step 的 unique timestep 数、embedding shape 或 AdaLN 索引布局也可能不同；读取 `step_pre()` 和 pre-infer，选择覆盖每种稳定 layout 的最少代表 step。
 - 分支模型选择每个分支的首个有效 step。
 - 非连续 step 是否需要 `reset/prepare` 取决于 scheduler：仅在存在多步 solver history、跨分支状态或其他不可复用状态时重置；单步且无历史依赖时不要额外重置。
 - 若 Step 0 输出不能进入下一阶段或 VAE，再执行完成 unpatchify/finalize 所需的最后一步。
