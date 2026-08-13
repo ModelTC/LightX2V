@@ -89,6 +89,7 @@ class MiniMaxH3Runner(DefaultRunner):
     """
 
     _WARMUP_RESOLUTIONS = ((480, 480), (544, 960))
+    _WARMUP_STEP_COUNT = 2
     _WARMUP_TASKS = ("t2av", "fl2av", "i2av", "l2av", "ref2av")
 
     def __init__(self, config):
@@ -109,18 +110,21 @@ class MiniMaxH3Runner(DefaultRunner):
         if task not in self._WARMUP_TASKS:
             raise NotImplementedError(f"MiniMax-H3 warmup does not support task: {task}")
 
-        for height, width in self._WARMUP_RESOLUTIONS:
-            logger.info(f"Warmup: {height}x{width}")
+        num_frames = align_num_frames(int(self.config.get("target_video_length", 124)))
+        warmup_shapes = ((*resolution, num_frames) for resolution in self._WARMUP_RESOLUTIONS)
+        for height, width, num_frames in warmup_shapes:
+            logger.info(f"Warmup: {height}x{width}x{num_frames}")
             transformer_offloaded = not self.config.get("cpu_offload", False)
             try:
                 self.scheduler.generator = None
-                self._prepare_warmup_inputs(height, width)
+                self._prepare_warmup_inputs(height, width, num_frames)
                 self.inputs = self._run_input_encoder_local_h3()
                 self.init_run()
 
-                self.scheduler.step_pre(0)
-                self.model.infer(self.inputs)
-                self.scheduler.step_post()
+                for step_index in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
+                    self.scheduler.step_pre(step_index)
+                    self.model.infer(self.inputs)
+                    self.scheduler.step_post()
                 video_rows = self.scheduler.video_latents
                 audio_rows = self.scheduler.audio_latents
 
@@ -139,7 +143,7 @@ class MiniMaxH3Runner(DefaultRunner):
         logger.info("[Warmup] Warmup completed")
         self._maybe_freeze_gc()
 
-    def _prepare_warmup_inputs(self, height, width):
+    def _prepare_warmup_inputs(self, height, width, num_frames):
         task = self.config["task"]
         common = {
             "seed": 0,
@@ -147,7 +151,7 @@ class MiniMaxH3Runner(DefaultRunner):
             if (height, width) == self._WARMUP_RESOLUTIONS[0]
             else "A cinematic fox walking through a snowy forest.",
             "target_shape": [height, width],
-            "target_video_length": int(self.config.get("target_video_length", 124)),
+            "target_video_length": num_frames,
             "return_result_tensor": True,
         }
         image = Image.new("RGB", (width, height), color=0)
@@ -463,7 +467,7 @@ class MiniMaxH3Runner(DefaultRunner):
             raise ValueError("MiniMax-H3 conditioner token tags must be one-dimensional")
         if task == "t2av" and not bool((tags == TEXT_TAG).all()):
             raise ValueError("MiniMax-H3 t2av conditioner returned non-text modality rows")
-        self.maybe_empty_cache(force=True, collect_garbage=True)
+        self.maybe_empty_cache()
         return {"text_encoder_output": text_encoder_output}
 
     _run_input_encoder_local_t2av = _run_input_encoder_local_h3
