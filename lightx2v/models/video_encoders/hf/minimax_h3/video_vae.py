@@ -46,6 +46,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     SafetensorsSubsetReport,
     load_safetensors_subset,
 )
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 MINIMAX_H3_PIXEL_MEAN = (0.485, 0.456, 0.406)
@@ -266,12 +267,14 @@ class MiniMaxH3VideoAttention(nn.Module):
         eps: float = 1e-5,
         bias: bool = True,
         sensitive_layer_dtype: torch.dtype = torch.float32,
+        attn_type: str = "torch_sdpa",
     ) -> None:
         super().__init__()
         self.heads = heads
         self.dim_head = dim_head
         self.inner_dim = heads * dim_head
         self.sensitive_layer_dtype = sensitive_layer_dtype
+        self.calculate = ATTN_WEIGHT_REGISTER[attn_type]()
 
         self.norm_q = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=False)
         self.norm_k = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=False)
@@ -342,16 +345,14 @@ class MiniMaxH3VideoAttention(nn.Module):
             query = self._apply_rotary(query, cos, sin)
             key = self._apply_rotary(key, cos, sin)
 
-        # PyTorch SDPA uses [B, H, S, D]; the released attention dispatcher
-        # presents [B, S, H, D] at its boundary.
-        hidden_states = F.scaled_dot_product_attention(
-            query.transpose(1, 2),
-            key.transpose(1, 2),
-            value.transpose(1, 2),
-            dropout_p=0.0,
-            is_causal=False,
-        ).transpose(1, 2)
-        return self.to_out[0](hidden_states.flatten(2, 3))
+        hidden_states = self.calculate.apply(
+            query,
+            key,
+            value,
+            max_seqlen_q=query.shape[1],
+            max_seqlen_kv=key.shape[1],
+        ).view(query.shape[0], query.shape[1], self.inner_dim)
+        return self.to_out[0](hidden_states)
 
 
 class MiniMaxH3VideoTransformerBlock(nn.Module):
@@ -365,6 +366,7 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
         bias: bool = True,
         infer_dtype: torch.dtype = torch.float16,
         sensitive_layer_dtype: torch.dtype = torch.float32,
+        attn_type: str = "torch_sdpa",
     ) -> None:
         super().__init__()
         self.infer_dtype = infer_dtype
@@ -377,6 +379,7 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
             eps=eps,
             bias=bias,
             sensitive_layer_dtype=sensitive_layer_dtype,
+            attn_type=attn_type,
         )
         self.scale1 = nn.Parameter(torch.zeros(dim))
         self.norm2 = nn.RMSNorm(dim, eps=eps, elementwise_affine=True)
@@ -425,6 +428,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         infer_dtype: torch.dtype = torch.float16,
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
+        attn_type: str = "torch_sdpa",
     ) -> None:
         super().__init__()
         dim = num_attention_heads * attention_head_dim
@@ -450,6 +454,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
                     eps=norm_eps,
                     infer_dtype=infer_dtype,
                     sensitive_layer_dtype=sensitive_layer_dtype,
+                    attn_type=attn_type,
                 )
                 for _ in range(num_layers)
             ]
@@ -531,10 +536,13 @@ class MiniMaxH3VideoVAE(nn.Module):
         quant_scheme: str | None = None,
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
+        attn_type: str = "torch_sdpa",
     ) -> None:
         super().__init__()
         if quant_scheme not in {None, "fp8-sgl"}:
             raise NotImplementedError(f"Unsupported MiniMax-H3 video VAE quantization scheme: {quant_scheme!r}")
+        if attn_type not in {"torch_sdpa", "sage_attn2"}:
+            raise ValueError(f"Unsupported MiniMax-H3 video VAE attention type: {attn_type!r}; expected torch_sdpa or sage_attn2")
         self.config = dict(config)
         self.execution_device = torch.device(device or AI_DEVICE)
         self.cpu_offload = cpu_offload
@@ -583,6 +591,7 @@ class MiniMaxH3VideoVAE(nn.Module):
             infer_dtype=self.infer_dtype,
             sensitive_layer_dtype=self.sensitive_layer_dtype,
             use_compile=use_compile,
+            attn_type=attn_type,
         )
         if quant_scheme == "fp8-sgl":
             self._replace_decoder_linears_with_fp8(self.decoder.transformer_blocks)
@@ -668,6 +677,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         quant_scheme: str | None = None,
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
+        attn_type: str = "torch_sdpa",
     ) -> "MiniMaxH3VideoVAE":
         vae_dir = _component_dir(model_path, "vae")
         if (checkpoint_path is None) != (quant_scheme is None):
@@ -686,6 +696,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                 quant_scheme=quant_scheme,
                 sensitive_layer_dtype=sensitive_layer_dtype,
                 use_compile=use_compile,
+                attn_type=attn_type,
             )
         model._reset_runtime_buffers()
         model.load_report = load_safetensors_subset(model, weight_path)

@@ -217,6 +217,7 @@ class MiniMaxH3Runner(DefaultRunner):
             quant_scheme=video_vae_quant_scheme,
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
             use_compile=self.config.get("vae_use_compile", False),
+            attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
         )
         if self.config.get("vae_decode_parallel", False):
             world_size = dist.get_world_size() if dist.is_initialized() else 1
