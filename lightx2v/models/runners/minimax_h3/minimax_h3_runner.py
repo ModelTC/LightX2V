@@ -88,7 +88,10 @@ class MiniMaxH3Runner(DefaultRunner):
     graph.
     """
 
-    _WARMUP_RESOLUTIONS = ((480, 480), (544, 960))
+    _WARMUP_SHAPES = (
+        (480, 480, 158),  # aligned from a 6-second request
+        (544, 960, 124),
+    )
     _WARMUP_STEP_COUNT = 2
     _WARMUP_TASKS = ("t2av", "fl2av", "i2av", "l2av", "ref2av")
 
@@ -110,9 +113,7 @@ class MiniMaxH3Runner(DefaultRunner):
         if task not in self._WARMUP_TASKS:
             raise NotImplementedError(f"MiniMax-H3 warmup does not support task: {task}")
 
-        num_frames = align_num_frames(int(self.config.get("target_video_length", 124)))
-        warmup_shapes = ((*resolution, num_frames) for resolution in self._WARMUP_RESOLUTIONS)
-        for height, width, num_frames in warmup_shapes:
+        for height, width, num_frames in self._WARMUP_SHAPES:
             logger.info(f"Warmup: {height}x{width}x{num_frames}")
             transformer_offloaded = not self.config.get("cpu_offload", False)
             try:
@@ -148,7 +149,7 @@ class MiniMaxH3Runner(DefaultRunner):
         common = {
             "seed": 0,
             "prompt": "A sunrise over distant mountains reflected across a calm lake beneath drifting clouds."
-            if (height, width) == self._WARMUP_RESOLUTIONS[0]
+            if (height, width, num_frames) == self._WARMUP_SHAPES[0]
             else "A cinematic fox walking through a snowy forest.",
             "target_shape": [height, width],
             "target_video_length": num_frames,
@@ -566,7 +567,7 @@ class MiniMaxH3Runner(DefaultRunner):
     def _video_to_uint8_frames(video):
         if video.ndim != 5 or video.shape[0] != 1 or video.shape[1] != 3:
             raise ValueError(f"decoded H3 video must be [1,3,F,H,W], got {tuple(video.shape)}")
-        return (video[0].permute(1, 2, 3, 0).float() * 255.0).round().to(torch.uint8).cpu()
+        return (video[0].permute(1, 2, 3, 0).float() * 255.0).round().to(torch.uint8).contiguous().cpu()
 
     def process_images_after_vae_decoder(self):
         if self.video_vae.decode_parallel and dist.get_rank() != 0:
