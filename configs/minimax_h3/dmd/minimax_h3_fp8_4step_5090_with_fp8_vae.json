@@ -14,11 +14,7 @@
   "vae_sensitive_layer_dtype": "fp32",
   "lazy_load": false,
   "unload_modules": false,
-  "attn_type": "dynamic_sparse_attn",
-  "dynamic_sparse_attn_setting": {
-      "sparsity_ratio": 0.9,
-      "operator": "sage2"
-  },
+  "attn_type": "sage_attn2",
   "rms_type": "sgl-kernel",
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
