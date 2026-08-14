@@ -10,15 +10,16 @@
   "offload_granularity": "model",
   "text_encoder_cpu_offload": false,
   "text_encoder_tensor_parallel": true,
-  "vae_cpu_offload": true,
+  "vae_cpu_offload": false,
   "vae_decode_parallel": true,
   "lazy_load": false,
   "unload_modules": false,
-  "attn_type": "sage_attn2",
+  "attn_type": "flash_attn3",
   "rms_type": "sgl-kernel",
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
-  "use_compile": false,
+  "use_compile": true,
+  "vae_use_compile": true,
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
@@ -27,8 +28,12 @@
   "audio_channels": 2,
   "keep_latents_dtype_in_scheduler": true,
   "parallel": {
-    "tensor_p_size": 2,
-    "seq_p_size": 4,
+    "tensor_p_size": 4,
+    "seq_p_size": 2,
     "seq_p_attn_type": "ulysses"
+  },
+  "video_codec_options": {
+    "preset": "ultrafast",
+    "crf": "18"
   }
 }
