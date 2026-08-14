@@ -25,7 +25,7 @@ except ImportError:
 
 capability = torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None
 # Keep the legacy SM89 override; SM120 follows SageAttention's dispatcher.
-if capability == (8, 9):
+if capability in [(8, 9), (12, 0)]:
     try:
         from sageattention import sageattn_qk_int8_pv_fp16_triton as sageattn
     except ImportError:
