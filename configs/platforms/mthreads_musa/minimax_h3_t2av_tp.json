@@ -29,5 +29,9 @@
   "keep_latents_dtype_in_scheduler": true,
   "parallel": {
     "tensor_p_size": 8
+  },
+  "video_codec_options": {
+    "preset": "ultrafast",
+    "crf": "18"
   }
 }
