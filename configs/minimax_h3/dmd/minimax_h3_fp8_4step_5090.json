@@ -11,6 +11,7 @@
   "text_encoder_cpu_offload": true,
   "text_encoder_offload_granularity": "block",
   "vae_cpu_offload": true,
+  "vae_decode_parallel": true,
   "lazy_load": false,
   "unload_modules": false,
   "attn_type": "sage_attn2",

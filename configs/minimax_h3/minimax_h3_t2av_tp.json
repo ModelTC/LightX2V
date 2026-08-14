@@ -11,6 +11,7 @@
   "text_encoder_cpu_offload": false,
   "text_encoder_tensor_parallel": true,
   "vae_cpu_offload": true,
+  "vae_decode_parallel": true,
   "lazy_load": false,
   "unload_modules": false,
   "attn_type": "sage_attn2",
