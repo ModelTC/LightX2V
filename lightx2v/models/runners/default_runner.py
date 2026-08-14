@@ -110,6 +110,10 @@ class DefaultRunner(BaseRunner):
 
         self.run_warmup()
 
+        torch_device_module.synchronize()
+        if dist.is_initialized() and dist.get_world_size() > 1:
+            dist.barrier()
+
     def run_warmup(self):
         raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
 
