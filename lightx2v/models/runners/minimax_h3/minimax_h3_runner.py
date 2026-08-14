@@ -216,12 +216,12 @@ class MiniMaxH3Runner(DefaultRunner):
             checkpoint_path=video_vae_quantized_ckpt,
             quant_scheme=video_vae_quant_scheme,
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
+            use_compile=self.config.get("vae_use_compile", False),
+            attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
         )
         if self.config.get("vae_decode_parallel", False):
             world_size = dist.get_world_size() if dist.is_initialized() else 1
             if world_size > 1:
-                if self.config.get("tensor_parallel", False) or self.config.get("cfg_parallel", False):
-                    raise NotImplementedError("MiniMax-H3 vae_decode_parallel currently supports pure sequence parallel only")
                 video_vae.enable_decode_parallel()
                 logger.info(f"MiniMax-H3 spatial-tile VAE decode parallel enabled over {world_size} ranks")
             else:
