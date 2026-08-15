@@ -20,6 +20,60 @@ _DENSE_GUARD_LOGS = set()
 _DENSE_BACKEND_WARNINGS = set()
 
 
+class _CompiledSolAttnWithKeywordStream:
+    """Adapt CuTe's positional TVM-FFI stream argument to upstream calls."""
+
+    def __init__(self, compiled):
+        self.compiled = compiled
+
+    def __call__(self, *args, **kwargs):
+        stream = kwargs.pop("stream", None)
+        if kwargs:
+            return self.compiled(*args, **kwargs)
+        if stream is not None:
+            args = (*args, stream)
+        return self.compiled(*args)
+
+    def __getattr__(self, name):
+        return getattr(self.compiled, name)
+
+
+def _torch_stream_handle(stream):
+    """Return a CUDA stream handle from legacy or unified PyTorch streams."""
+
+    handle = getattr(stream, "cuda_stream", None)
+    if handle is None:
+        handle = stream.native_handle
+        if callable(handle):
+            handle = handle()
+    return handle
+
+
+def _install_sol_attn_runtime_compat(interface):
+    """Install LightX2V compatibility for the pinned upstream SM120 backend."""
+
+    if getattr(interface, "_lightx2v_runtime_compat", False):
+        return
+
+    def current_stream(device):
+        import cuda.bindings.driver as cuda
+
+        return cuda.CUstream(_torch_stream_handle(torch.cuda.current_stream(device)))
+
+    interface._stream = current_stream
+    original_compile_sm120 = getattr(interface, "_compile_sm120", None)
+    if original_compile_sm120 is not None:
+
+        def compile_sm120(key, *args, **kwargs):
+            compiled, call_args = original_compile_sm120(key, *args, **kwargs)
+            compiled = _CompiledSolAttnWithKeywordStream(compiled)
+            interface._compiled[key] = compiled
+            return compiled, call_args
+
+        interface._compile_sm120 = compile_sm120
+    interface._lightx2v_runtime_compat = True
+
+
 def _parse_dense_layers(value):
     """Parse layer indices from JSON lists or Sol-Engine-style ranges."""
 
@@ -67,7 +121,26 @@ def _load_sol_attn():
         module = importlib.import_module("sol_attn")
     except ImportError as exc:
         raise ImportError("Sol-Attn is not installed. Run scripts/install_sol_attn.sh, then restart the LightX2V process.") from exc
+    interface = importlib.import_module("sol_attn.interface")
+    _install_sol_attn_runtime_compat(interface)
     return module.sol_attn
+
+
+@torch.compiler.disable
+def _run_sol_attn(q, k, v, *, scale, tau, thresh_type, kv_splits, sink_tokens, sink_start):
+    """Keep CuTe DSL and TVM FFI calls outside TorchDynamo graphs."""
+
+    return _load_sol_attn()(
+        q,
+        k,
+        v,
+        scale=scale,
+        tau=tau,
+        thresh_type=thresh_type,
+        kv_splits=kv_splits,
+        sink_tokens=sink_tokens,
+        sink_start=sink_start,
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -419,8 +492,7 @@ class SolAttnWeight(AttnWeightTemplate):
             v = v.index_select(1, permutation)
 
         try:
-            kernel = _load_sol_attn()
-            out = kernel(
+            out = _run_sol_attn(
                 q,
                 k,
                 v,

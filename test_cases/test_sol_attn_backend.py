@@ -9,13 +9,30 @@ import torch.nn.functional as F
 
 os.environ.setdefault("SKIP_PLATFORM_CHECK", "1")
 
-from lightx2v.common.ops.attn.sol_attn import SolAttnWeight, _morton3d_indices  # noqa: E402
+from lightx2v.common.ops.attn.sol_attn import (  # noqa: E402
+    SolAttnWeight,
+    _CompiledSolAttnWithKeywordStream,
+    _morton3d_indices,
+    _torch_stream_handle,
+)
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer  # noqa: E402
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer  # noqa: E402
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER  # noqa: E402
 
 
 class SolAttnBackendTest(unittest.TestCase):
+    def test_unified_torch_stream_uses_native_handle(self):
+        self.assertEqual(_torch_stream_handle(SimpleNamespace(native_handle=1234)), 1234)
+        self.assertEqual(_torch_stream_handle(SimpleNamespace(native_handle=lambda: 5678)), 5678)
+        self.assertEqual(_torch_stream_handle(SimpleNamespace(cuda_stream=9012, native_handle=1234)), 9012)
+
+    def test_tvm_ffi_keyword_stream_is_forwarded_positionally(self):
+        compiled = mock.Mock(return_value="output")
+        wrapped = _CompiledSolAttnWithKeywordStream(compiled)
+
+        self.assertEqual(wrapped("q", "k", stream="stream"), "output")
+        compiled.assert_called_once_with("q", "k", "stream")
+
     def test_backend_is_registered(self):
         self.assertIs(ATTN_WEIGHT_REGISTER["sol_attn"], SolAttnWeight)
 
