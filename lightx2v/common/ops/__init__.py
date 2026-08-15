@@ -2,6 +2,7 @@ from .attn import *
 from .conv import *
 from .embedding import *
 from .mm import *
+from .moe import *
 from .norm import *
 from .rope import *
 from .tensor import *
