@@ -8,6 +8,7 @@ os.environ.setdefault("SKIP_PLATFORM_CHECK", "1")
 
 from lightx2v.common.modules.weight_module import WeightModule  # noqa: E402
 from lightx2v.common.ops.moe.fused_moe import TorchExpertLoopFusedMoE, TorchGroupedMMFusedMoE, create_local_fused_moe  # noqa: E402
+from lightx2v.models.networks.hunyuan3d.weights.transformer_weights import Hunyuan3DMoEWeights  # noqa: E402
 from lightx2v.utils.registry_factory import FUSED_MOE_REGISTER  # noqa: E402
 
 
@@ -46,6 +47,30 @@ class TorchFusedMoETest(unittest.TestCase):
         self.assertIs(FUSED_MOE_REGISTER["torch_grouped_mm"], TorchGroupedMMFusedMoE)
         for backend in ("flashinfer", "multi_micro", "torch_expert_loop", "torch_grouped_mm"):
             self.assertTrue(issubclass(FUSED_MOE_REGISTER[backend], WeightModule))
+
+    def test_hunyuan3d_accepts_local_backends(self):
+        for backend in ("torch_expert_loop", "flashinfer"):
+            weights = Hunyuan3DMoEWeights({"moe_backend": backend, "num_experts": 2}, 0, "Default")
+            self.assertEqual(weights.moe_backend, backend)
+
+    def test_hunyuan3d_transfers_routed_weights_to_fused_module(self):
+        weights = Hunyuan3DMoEWeights({"moe_backend": "torch_expert_loop", "num_experts": 2}, 0, "Default")
+        for expert in weights.experts:
+            expert.fc1.pin_weight = torch.randn(4, 8)
+            expert.fc1.pin_bias = torch.randn(8)
+            expert.fc2.pin_weight = torch.randn(8, 4)
+            expert.fc2.pin_bias = torch.randn(4)
+
+        weights._build_fused_moe()
+
+        self.assertIs(weights._modules["fused_moe"], weights.fused_moe)
+        self.assertIsInstance(weights.fused_moe, WeightModule)
+        self.assertEqual(weights.fused_moe.fc1_weights[0].shape, (8, 4))
+        for expert in weights.experts:
+            self.assertIsNone(expert.fc1.pin_weight)
+            self.assertIsNone(expert.fc2.pin_weight)
+        for method in ("to_cuda", "to_cpu", "to_cuda_async", "to_cpu_async"):
+            self.assertNotIn(method, Hunyuan3DMoEWeights.__dict__)
 
     def test_local_factory_preserves_backend_weight_layout(self):
         fc1_weight = tuple(torch.randn(3, 8, 4).unbind())
