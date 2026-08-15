@@ -13,10 +13,15 @@ elif PLATFORM == "hygon_dcu":
 elif PLATFORM == "amd_rocm":
     from .attn.amd_rocm import *
 elif PLATFORM == "ascend_npu":
+    # Keep MoE before MM: MM imports common utilities that snapshot the
+    # platform registries during lightx2v initialization.
+    # isort: off
     from .attn.ascend_npu import *
+    from .moe.ascend_npu import *
     from .mm.ascend_npu import *
     from .norm.ascend_npu import *
     from .rope.ascend_npu import *
+    # isort: on
 elif PLATFORM == "metax_cuda":
     from .attn.metax_cuda import *
 elif PLATFORM == "enflame_gcu":

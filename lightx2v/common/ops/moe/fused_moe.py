@@ -41,7 +41,6 @@ except ImportError:  # pragma: no cover
 
 
 FusedMoEActivation = Literal["gelu", "swiglu"]
-FusedMoEBackend = Literal["flashinfer", "multi_micro", "torch_grouped_mm", "torch_expert_loop"]
 
 _MULTI_MICRO_SHARDS = 2
 _MULTI_MICRO_NUM_EXPERTS = 64
@@ -1042,7 +1041,7 @@ def _validate_packed_local_experts(
 
 
 def create_local_fused_moe(
-    backend: Literal["flashinfer", "torch_grouped_mm", "torch_expert_loop"],
+    backend: Literal["flashinfer", "npu_grouped_mm", "torch_grouped_mm", "torch_expert_loop"],
     fc1_weight: torch.Tensor | Sequence[torch.Tensor],
     fc2_weight: torch.Tensor | Sequence[torch.Tensor],
     activation: FusedMoEActivation,
@@ -1060,7 +1059,7 @@ def create_local_fused_moe(
             fc2_bias,
             fc1_gate_weight,
         )
-    if backend != "flashinfer":
+    if backend not in {"flashinfer", "npu_grouped_mm"}:
         raise ValueError(f"unsupported local fused MoE backend {backend!r}")
     if fc1_gate_weight is not None:
         raise ValueError("split SwiGLU weights are supported only by Torch fused MoE backends")
@@ -1076,6 +1075,15 @@ def create_local_fused_moe(
         packed_fc1_bias,
         packed_fc2_bias,
     )
+    if backend == "npu_grouped_mm":
+        return FUSED_MOE_REGISTER[backend](
+            packed_fc1_weight,
+            packed_fc2_weight,
+            activation,
+            packed_fc1_bias,
+            packed_fc2_bias,
+        )
+
     shard = FlashInferMoEWeightShard(
         packed_fc1_weight,
         packed_fc2_weight,
@@ -1094,7 +1102,6 @@ __all__ = [
     "FlashInferFusedMoE",
     "FlashInferMoEWeightShard",
     "FusedMoEActivation",
-    "FusedMoEBackend",
     "FusedMoETemplate",
     "MultiMicroFusedMoE",
     "TorchExpertLoopFusedMoE",
