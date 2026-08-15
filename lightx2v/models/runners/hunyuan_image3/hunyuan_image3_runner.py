@@ -388,6 +388,11 @@ class HunyuanImage3Runner(DefaultRunner):
 
     def _flashinfer_autotune_config(self):
         """Select the FlashInfer cache for the active parallel phase."""
+        if self.config["moe_backend"] == "torch_grouped_mm":
+            controller_config = dict(self.config)
+            controller_config["flashinfer_autotune_mode"] = "off"
+            return controller_config
+
         context = self._parallel_context()
         phase = str(self._parallel_context_value(context, "phase", default="")).strip().lower()
         if context is None or phase not in ("ar", "denoise"):

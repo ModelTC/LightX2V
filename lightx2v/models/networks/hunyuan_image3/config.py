@@ -1,7 +1,5 @@
 SUPPORTED_TASKS = {"t2t", "t2i", "ti2t", "ti2i", "i2i"}
 SUPPORTED_BOT_TASKS = {"image", "auto", "think", "recaption", "think_recaption"}
-SUPPORTED_MOE_BACKENDS = {"flashinfer", "multi_micro"}
-LEGACY_MOE_KEYS = ("moe_impl", "flashinfer_multi_micro", "flashinfer_multi_micro_backend")
 
 
 def _config_ints(value):
@@ -12,26 +10,8 @@ def _config_ints(value):
     return [int(value)]
 
 
-def _normalize_moe_backend(config):
-    legacy_keys = [key for key in LEGACY_MOE_KEYS if key in config]
-    if legacy_keys:
-        raise ValueError(f"HunyuanImage3 no longer supports legacy MoE keys {legacy_keys}; use the required moe_backend field instead.")
-    if "moe_backend" not in config:
-        raise ValueError(f"HunyuanImage3 requires moe_backend to be one of {sorted(SUPPORTED_MOE_BACKENDS)}.")
-
-    backend = config["moe_backend"]
-    if not isinstance(backend, str):
-        raise ValueError(f"HunyuanImage3 moe_backend must be a string, got {backend!r}.")
-    backend = backend.strip().lower()
-    if backend not in SUPPORTED_MOE_BACKENDS:
-        raise ValueError(f"HunyuanImage3 moe_backend must be one of {sorted(SUPPORTED_MOE_BACKENDS)}, got {backend!r}.")
-    config["moe_backend"] = backend
-    return backend
-
-
 def normalize_hunyuan_image3_phase_parallel(config, parallel_config):
-    moe_backend = _normalize_moe_backend(config)
-    multi_micro = moe_backend == "multi_micro"
+    moe_backend = config["moe_backend"]
 
     phase_keys_present = any(key in parallel_config for key in ("storage_tensor_p_size", "ar", "denoise"))
     raw_phase_aware = parallel_config.get("phase_aware")
@@ -45,7 +25,7 @@ def normalize_hunyuan_image3_phase_parallel(config, parallel_config):
     if phase_keys_present and not phase_aware:
         raise ValueError("HunyuanImage3 phase-specific parallel fields require parallel.phase_aware=true.")
     if not phase_aware:
-        if multi_micro:
+        if moe_backend == "multi_micro":
             raise ValueError("HunyuanImage3 moe_backend='multi_micro' requires parallel.phase_aware=true.")
         parallel_config["phase_aware"] = False
         return False
@@ -94,7 +74,7 @@ def normalize_hunyuan_image3_phase_parallel(config, parallel_config):
     if ar_tensor_p_size != denoise_tensor_p_size * denoise_seq_p_size:
         raise ValueError(f"HunyuanImage3 AR and denoise phases must cover the same ranks: ar_tp={ar_tensor_p_size}, denoise_tp={denoise_tensor_p_size}, denoise_sp={denoise_seq_p_size}.")
 
-    if multi_micro:
+    if moe_backend == "multi_micro":
         if micro_shard_count != 2:
             raise ValueError(f"HunyuanImage3 moe_backend='multi_micro' requires exactly two micro shards; got {micro_shard_count}.")
         num_experts = _config_ints(config.get("num_experts"))
@@ -189,9 +169,6 @@ def _normalize_parallel_config(config, parallel_config, task):
     if tensor_p_size > 1:
         if pipeline_parallel:
             raise ValueError("HunyuanImage3 tensor parallel requires parallel.pipeline_parallel=false.")
-        moe_backend = config["moe_backend"]
-        if moe_backend not in SUPPORTED_MOE_BACKENDS:
-            raise ValueError(f"HunyuanImage3 tensor parallel supports moe_backend values {sorted(SUPPORTED_MOE_BACKENDS)}.")
     if cfg_p_size == 2 and not config.get("enable_cfg", False):
         raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires enable_cfg=true.")
     if task in {"t2t", "ti2t"} and cfg_p_size != 1:
@@ -228,7 +205,7 @@ def _normalize_parallel_config(config, parallel_config, task):
 
 
 def normalize_hunyuan_image3_config(config):
-    moe_backend = _normalize_moe_backend(config)
+    moe_backend = config["moe_backend"]
     task = str(config.get("task", "t2i")).strip().lower()
     if task not in SUPPORTED_TASKS:
         raise ValueError(f"HunyuanImage3 task must be one of {sorted(SUPPORTED_TASKS)}, got {task!r}.")

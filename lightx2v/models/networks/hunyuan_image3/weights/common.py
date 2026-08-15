@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 import lightx2v.common.ops  # noqa: F401
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.moe import FlashInferMoEWeightShard
+from lightx2v.common.ops.moe import FlashInferMoEWeightShard, FusedMoETemplate
 from lightx2v.models.networks.hunyuan_image3.weights.hybrid_tp import (
     FUSED_GATE_UP_LAYOUT,
     GROUPED_QKV_LAYOUT,
@@ -379,6 +379,40 @@ class HunyuanImage3DenseMLPWeights(WeightModule):
         )
 
 
+class _MicroRouteFusedMoE(FusedMoETemplate):
+    def __init__(self, fused_moe, num_experts, micro_shard_count):
+        super().__init__()
+        self.add_module("fused_moe", fused_moe)
+        self.num_experts = int(num_experts)
+        self.micro_shard_count = int(micro_shard_count)
+
+    def apply(
+        self,
+        input,
+        token_selected_experts,
+        token_final_scales,
+        output=None,
+    ):
+        micro_offsets = torch.arange(
+            self.micro_shard_count,
+            device=token_selected_experts.device,
+            dtype=torch.int64,
+        )
+        micro_offsets.mul_(self.num_experts)
+        expanded_experts = token_selected_experts.to(torch.int64).unsqueeze(-1) + micro_offsets
+        expanded_scales = token_final_scales.unsqueeze(-1).expand(
+            *token_final_scales.shape,
+            self.micro_shard_count,
+        )
+        expanded_top_k = token_selected_experts.shape[1] * self.micro_shard_count
+        return self.fused_moe.apply(
+            input,
+            expanded_experts.reshape(input.shape[0], expanded_top_k),
+            expanded_scales.reshape(input.shape[0], expanded_top_k),
+            output,
+        )
+
+
 class HunyuanImage3MoEWeights(WeightModule):
     def __init__(
         self,
@@ -396,7 +430,7 @@ class HunyuanImage3MoEWeights(WeightModule):
         self.num_experts = int(_moe_value(config, "num_experts", block_index, 1))
         self.moe_topk = int(_moe_value(config, "moe_topk", block_index, 1))
         self.moe_backend = config["moe_backend"]
-        assert self.moe_backend in {"flashinfer", "multi_micro"}
+        assert self.moe_backend in {"flashinfer", "multi_micro", "torch_grouped_mm"}
         self.parallel_context, _, self.storage_tp_rank, self.storage_tp_size = resolve_storage_tp(config)
         self.micro_shard_count = resolve_micro_shard_count(config, self.storage_tp_size) if self.parallel_context is not None else 1
         self.logical_tp_size = self.storage_tp_size * self.micro_shard_count
@@ -596,20 +630,41 @@ class HunyuanImage3MoEWeights(WeightModule):
             tune_max_num_tokens=self.tune_max_num_tokens,
         )
 
+    def _build_torch_grouped_backend(self, fc1_weight, fc2_weight):
+        # torch_grouped_mm replaces the original eager per-expert MoE path.
+        return FUSED_MOE_REGISTER["torch_grouped_mm"](fc1_weight, fc2_weight, "swiglu")
+
     def _build_fused_moe_backends(self):
         if not self._moe_weights_initialized:
             raise RuntimeError("HunyuanImage3 fused MoE backends require initialized resident weights")
 
         if self.parallel_context is None:
-            self._fused_moe_by_phase = {"default": self._build_flashinfer_backend((0,))}
+            if self.moe_backend == "torch_grouped_mm":
+                backend = self._build_torch_grouped_backend(self.moe_fc1_weight[0], self.moe_fc2_weight[0])
+            else:
+                backend = self._build_flashinfer_backend((0,))
+            self._fused_moe_by_phase = {"default": backend}
             return
 
         local_micro_shard_id = int(getattr(self.parallel_context, "local_micro_shard_id"))
         if not 0 <= local_micro_shard_id < self.micro_shard_count:
             raise RuntimeError(f"Invalid HunyuanImage3 local micro shard id {local_micro_shard_id}")
 
-        ar_backend = self._build_flashinfer_backend((local_micro_shard_id,))
-        if self.moe_backend == "multi_micro":
+        if self.moe_backend == "torch_grouped_mm":
+            ar_backend = self._build_torch_grouped_backend(
+                self.moe_fc1_weight[local_micro_shard_id],
+                self.moe_fc2_weight[local_micro_shard_id],
+            )
+            denoise_backend = _MicroRouteFusedMoE(
+                self._build_torch_grouped_backend(
+                    self.moe_fc1_weight.flatten(0, 1),
+                    self.moe_fc2_weight.flatten(0, 1),
+                ),
+                self.num_experts,
+                self.micro_shard_count,
+            )
+        elif self.moe_backend == "multi_micro":
+            ar_backend = self._build_flashinfer_backend((local_micro_shard_id,))
             denoise_backend = FUSED_MOE_REGISTER["multi_micro"](
                 self.moe_fc1_weight,
                 self.moe_fc2_weight,
@@ -617,6 +672,7 @@ class HunyuanImage3MoEWeights(WeightModule):
                 "grouped_mm",
             )
         else:
+            ar_backend = self._build_flashinfer_backend((local_micro_shard_id,))
             denoise_backend = self._build_flashinfer_backend(range(self.micro_shard_count))
 
         self._fused_moe_by_phase = {"ar": ar_backend, "denoise": denoise_backend}

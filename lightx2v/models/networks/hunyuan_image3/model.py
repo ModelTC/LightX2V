@@ -220,8 +220,6 @@ class HunyuanImage3Model(BaseTransformerModel):
             raise NotImplementedError("HunyuanImage3 tensor parallel loads and shards safetensors locally on each rank; set load_from_rank0=false.")
         if self.lora_path is not None:
             raise NotImplementedError("HunyuanImage3 tensor parallel does not support LoRA weight loading yet.")
-        moe_backend = str(self.config.get("moe_backend", "")).strip().lower()
-        assert moe_backend in {"flashinfer", "multi_micro"}
 
         divisibility_checks = {
             "num_attention_heads": [int(self.config.get("num_attention_heads") or self.config["num_heads"])],

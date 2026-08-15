@@ -8,7 +8,7 @@ import torch
 os.environ.setdefault("SKIP_PLATFORM_CHECK", "1")
 
 from lightx2v.models.networks.hunyuan_image3.config import normalize_hunyuan_image3_config  # noqa: E402
-from lightx2v.models.networks.hunyuan_image3.weights.common import HunyuanImage3MoEWeights  # noqa: E402
+from lightx2v.models.networks.hunyuan_image3.weights.common import HunyuanImage3MoEWeights, _MicroRouteFusedMoE  # noqa: E402
 from lightx2v.utils.registry_factory import FUSED_MOE_REGISTER  # noqa: E402
 
 
@@ -62,32 +62,35 @@ class _FakeBackend:
         raise AssertionError("backend execution is outside this construction test")
 
 
+class _RecordingBackend:
+    def __init__(self):
+        self.call = None
+
+    def apply(self, input, token_selected_experts, token_final_scales, output=None):
+        self.call = (input, token_selected_experts, token_final_scales, output)
+        if output is None:
+            return torch.zeros_like(input)
+        output.zero_()
+        return output
+
+
 class HunyuanImage3FusedMoETest(unittest.TestCase):
-    def test_legacy_moe_keys_are_rejected(self):
-        legacy_values = {
-            "moe_impl": "flashinfer",
-            "flashinfer_multi_micro": True,
-            "flashinfer_multi_micro_backend": "grouped_mm",
-        }
-        for key, value in legacy_values.items():
-            with self.subTest(key=key):
-                config = {"moe_backend": "flashinfer", key: value}
-                with self.assertRaisesRegex(ValueError, "legacy MoE keys"):
-                    normalize_hunyuan_image3_config(config)
+    def test_micro_route_adapter_expands_experts_and_scales(self):
+        backend = _RecordingBackend()
+        adapter = _MicroRouteFusedMoE(backend, num_experts=3, micro_shard_count=2)
+        input_tensor = torch.randn(1, 4)
+        selected_experts = torch.tensor([[1, 0]], dtype=torch.int32)
+        final_scales = torch.tensor([[0.25, 0.75]])
+        output = torch.empty_like(input_tensor)
 
-    def test_backend_validation_accepts_only_model_backends(self):
-        for backend in ("flashinfer", "multi_micro"):
-            with self.subTest(backend=backend):
-                config = _phase_aware_config(f" {backend.upper()} ")
-                normalized = normalize_hunyuan_image3_config(config)
-                self.assertEqual(normalized["moe_backend"], backend)
+        result = adapter.apply(input_tensor, selected_experts, final_scales, output)
 
-        with self.assertRaisesRegex(ValueError, "requires moe_backend"):
-            normalize_hunyuan_image3_config({})
-        for backend in ("eager", "torch", "torch_grouped_mm", "torch_expert_loop"):
-            with self.subTest(invalid_backend=backend):
-                with self.assertRaisesRegex(ValueError, "moe_backend must be one of"):
-                    normalize_hunyuan_image3_config({"moe_backend": backend})
+        self.assertIs(result, output)
+        self.assertIs(adapter._modules["fused_moe"], backend)
+        _, expanded_experts, expanded_scales, forwarded_output = backend.call
+        torch.testing.assert_close(expanded_experts, torch.tensor([[1, 4, 0, 3]]))
+        torch.testing.assert_close(expanded_scales, torch.tensor([[0.25, 0.25, 0.75, 0.75]]))
+        self.assertIs(forwarded_output, output)
 
     def test_multi_micro_requires_phase_aware_two_micro_topology(self):
         with self.assertRaisesRegex(ValueError, "phase-aware parallel configuration"):
@@ -127,6 +130,7 @@ class HunyuanImage3FusedMoETest(unittest.TestCase):
         expected_calls = {
             "flashinfer": ["flashinfer", "flashinfer"],
             "multi_micro": ["flashinfer", "multi_micro"],
+            "torch_grouped_mm": ["torch_grouped_mm", "torch_grouped_mm"],
         }
 
         for backend, expected in expected_calls.items():
@@ -140,7 +144,7 @@ class HunyuanImage3FusedMoETest(unittest.TestCase):
 
                     return build
 
-                replacements = {name: factory(name) for name in ("flashinfer", "multi_micro")}
+                replacements = {name: factory(name) for name in ("flashinfer", "multi_micro", "torch_grouped_mm")}
                 weights = _resident_weights(backend)
                 with mock.patch.dict(FUSED_MOE_REGISTER._dict, replacements):
                     weights._build_fused_moe_backends()
@@ -151,6 +155,36 @@ class HunyuanImage3FusedMoETest(unittest.TestCase):
                 if backend == "multi_micro":
                     self.assertEqual(calls[1][1][0].shape, (2, 3, 6, 4))
                     self.assertEqual(calls[1][1][1].shape, (2, 3, 4, 3))
+
+                if backend == "torch_grouped_mm":
+                    self.assertEqual(calls[0][1][0].shape, (3, 6, 4))
+                    self.assertEqual(calls[0][1][1].shape, (3, 4, 3))
+                    self.assertEqual(calls[1][1][0].shape, (6, 6, 4))
+                    self.assertEqual(calls[1][1][1].shape, (6, 4, 3))
+                    denoise_backend = weights._fused_moe_by_phase["denoise"]
+                    self.assertIsInstance(denoise_backend, _MicroRouteFusedMoE)
+                    self.assertIs(denoise_backend._modules["fused_moe"], denoise_backend.fused_moe)
+
+    def test_non_phase_aware_grouped_backend_uses_one_micro_shard(self):
+        calls = []
+
+        def build(*args, **kwargs):
+            calls.append((args, kwargs))
+            return _FakeBackend("torch_grouped_mm")
+
+        weights = _resident_weights("torch_grouped_mm")
+        weights.parallel_context = None
+        weights.micro_shard_count = 1
+        weights.logical_tp_size = 1
+        weights.moe_fc1_weight = weights.moe_fc1_weight[:1]
+        weights.moe_fc2_weight = weights.moe_fc2_weight[:1]
+        with mock.patch.dict(FUSED_MOE_REGISTER._dict, {"torch_grouped_mm": build}):
+            weights._build_fused_moe_backends()
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0][0].shape, (3, 6, 4))
+        self.assertEqual(calls[0][0][1].shape, (3, 4, 3))
+        self.assertEqual(set(weights._fused_moe_by_phase), {"default"})
 
 
 if __name__ == "__main__":
