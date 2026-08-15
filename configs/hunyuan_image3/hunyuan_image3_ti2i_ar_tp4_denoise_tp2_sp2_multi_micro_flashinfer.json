@@ -4,9 +4,7 @@
     "flow_shift": 1.0,
     "image_size": "auto",
     "feature_caching": "NoCaching",
-    "moe_impl": "flashinfer",
-    "flashinfer_multi_micro": true,
-    "flashinfer_multi_micro_backend": "grouped_mm",
+    "moe_backend": "multi_micro",
     "attn_impl": "torch_sdpa",
     "flashinfer_autotune_mode": "auto",
     "flashinfer_autotune_cache_by_phase": {

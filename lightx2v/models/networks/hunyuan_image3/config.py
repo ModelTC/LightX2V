@@ -1,5 +1,7 @@
 SUPPORTED_TASKS = {"t2t", "t2i", "ti2t", "ti2i", "i2i"}
 SUPPORTED_BOT_TASKS = {"image", "auto", "think", "recaption", "think_recaption"}
+SUPPORTED_MOE_BACKENDS = {"flashinfer", "multi_micro", "torch_expert_loop"}
+LEGACY_MOE_KEYS = ("moe_impl", "flashinfer_multi_micro", "flashinfer_multi_micro_backend")
 
 
 def _config_ints(value):
@@ -10,15 +12,26 @@ def _config_ints(value):
     return [int(value)]
 
 
-def _multi_micro_enabled(config):
-    value = config.get("flashinfer_multi_micro", False)
-    if not isinstance(value, bool):
-        raise ValueError(f"HunyuanImage3 flashinfer_multi_micro must be a boolean, got {value!r}.")
-    return value
+def _normalize_moe_backend(config):
+    legacy_keys = [key for key in LEGACY_MOE_KEYS if key in config]
+    if legacy_keys:
+        raise ValueError(f"HunyuanImage3 no longer supports legacy MoE keys {legacy_keys}; use the required moe_backend field instead.")
+    if "moe_backend" not in config:
+        raise ValueError(f"HunyuanImage3 requires moe_backend to be one of {sorted(SUPPORTED_MOE_BACKENDS)}.")
+
+    backend = config["moe_backend"]
+    if not isinstance(backend, str):
+        raise ValueError(f"HunyuanImage3 moe_backend must be a string, got {backend!r}.")
+    backend = backend.strip().lower()
+    if backend not in SUPPORTED_MOE_BACKENDS:
+        raise ValueError(f"HunyuanImage3 moe_backend must be one of {sorted(SUPPORTED_MOE_BACKENDS)}, got {backend!r}.")
+    config["moe_backend"] = backend
+    return backend
 
 
 def normalize_hunyuan_image3_phase_parallel(config, parallel_config):
-    multi_micro = _multi_micro_enabled(config)
+    moe_backend = _normalize_moe_backend(config)
+    multi_micro = moe_backend == "multi_micro"
 
     phase_keys_present = any(key in parallel_config for key in ("storage_tensor_p_size", "ar", "denoise"))
     raw_phase_aware = parallel_config.get("phase_aware")
@@ -33,7 +46,7 @@ def normalize_hunyuan_image3_phase_parallel(config, parallel_config):
         raise ValueError("HunyuanImage3 phase-specific parallel fields require parallel.phase_aware=true.")
     if not phase_aware:
         if multi_micro:
-            raise ValueError("HunyuanImage3 flashinfer_multi_micro requires parallel.phase_aware=true.")
+            raise ValueError("HunyuanImage3 moe_backend='multi_micro' requires parallel.phase_aware=true.")
         parallel_config["phase_aware"] = False
         return False
 
@@ -82,15 +95,25 @@ def normalize_hunyuan_image3_phase_parallel(config, parallel_config):
         raise ValueError(f"HunyuanImage3 AR and denoise phases must cover the same ranks: ar_tp={ar_tensor_p_size}, denoise_tp={denoise_tensor_p_size}, denoise_sp={denoise_seq_p_size}.")
 
     if multi_micro:
-        moe_impl = str(config.get("moe_impl", "eager")).strip().lower()
-        if moe_impl != "flashinfer":
-            raise ValueError(f"HunyuanImage3 flashinfer_multi_micro requires moe_impl='flashinfer', got {moe_impl!r}.")
-        backend = str(config.get("flashinfer_multi_micro_backend", "grouped_mm")).strip().lower()
-        if backend != "grouped_mm":
-            raise ValueError(f"HunyuanImage3 flashinfer_multi_micro only supports backend='grouped_mm'; got {backend!r}.")
         if micro_shard_count != 2:
-            raise ValueError(f"HunyuanImage3 flashinfer_multi_micro requires exactly two micro shards; got {micro_shard_count}.")
-        config["flashinfer_multi_micro_backend"] = backend
+            raise ValueError(f"HunyuanImage3 moe_backend='multi_micro' requires exactly two micro shards; got {micro_shard_count}.")
+        num_experts = _config_ints(config.get("num_experts"))
+        top_k = _config_ints(config.get("moe_topk"))
+        hidden_size = int(config.get("hidden_size", 0))
+        intermediate_sizes = _config_ints(config.get("moe_intermediate_size"))
+        if not num_experts or any(value != 64 for value in num_experts):
+            raise ValueError(f"HunyuanImage3 multi_micro requires 64 experts, got {num_experts}.")
+        if not top_k or any(value != 8 for value in top_k):
+            raise ValueError(f"HunyuanImage3 multi_micro requires top-8 routing, got {top_k}.")
+        if hidden_size != 4096:
+            raise ValueError(f"HunyuanImage3 multi_micro requires hidden_size=4096, got {hidden_size}.")
+        logical_tp_size = storage_tensor_p_size * micro_shard_count
+        invalid_intermediate = [value for value in intermediate_sizes if value % logical_tp_size or value // logical_tp_size != 768]
+        if not intermediate_sizes or invalid_intermediate:
+            raise ValueError(
+                "HunyuanImage3 multi_micro requires moe_intermediate_size / "
+                f"(storage_tensor_p_size * micro_shard_count) = 768, got {intermediate_sizes}."
+            )
 
     divisibility_checks = {
         "num_attention_heads": _config_ints(config.get("num_attention_heads") or config.get("num_heads")),
@@ -166,9 +189,9 @@ def _normalize_parallel_config(config, parallel_config, task):
     if tensor_p_size > 1:
         if pipeline_parallel:
             raise ValueError("HunyuanImage3 tensor parallel requires parallel.pipeline_parallel=false.")
-        moe_impl = str(config.get("moe_impl", "eager")).strip().lower()
-        if moe_impl not in ("eager", "flashinfer"):
-            raise ValueError("HunyuanImage3 tensor parallel supports moe_impl='eager' or 'flashinfer'.")
+        moe_backend = config["moe_backend"]
+        if moe_backend not in SUPPORTED_MOE_BACKENDS:
+            raise ValueError(f"HunyuanImage3 tensor parallel supports moe_backend values {sorted(SUPPORTED_MOE_BACKENDS)}.")
     if cfg_p_size == 2 and not config.get("enable_cfg", False):
         raise ValueError("HunyuanImage3 parallel.cfg_p_size=2 requires enable_cfg=true.")
     if task in {"t2t", "ti2t"} and cfg_p_size != 1:
@@ -205,6 +228,7 @@ def _normalize_parallel_config(config, parallel_config, task):
 
 
 def normalize_hunyuan_image3_config(config):
+    moe_backend = _normalize_moe_backend(config)
     task = str(config.get("task", "t2i")).strip().lower()
     if task not in SUPPORTED_TASKS:
         raise ValueError(f"HunyuanImage3 task must be one of {sorted(SUPPORTED_TASKS)}, got {task!r}.")
@@ -227,8 +251,8 @@ def normalize_hunyuan_image3_config(config):
 
     parallel_config = config.get("parallel")
     if not isinstance(parallel_config, dict):
-        if _multi_micro_enabled(config):
-            raise ValueError("HunyuanImage3 flashinfer_multi_micro requires a phase-aware parallel configuration.")
+        if moe_backend == "multi_micro":
+            raise ValueError("HunyuanImage3 moe_backend='multi_micro' requires a phase-aware parallel configuration.")
         return config
 
     parallel_config = dict(parallel_config)
