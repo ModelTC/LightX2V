@@ -5,10 +5,6 @@ from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerI
 from lightx2v.utils.envs import GET_DTYPE
 
 
-def _round_up_to_multiple(value, multiple):
-    return ((value + multiple - 1) // multiple) * multiple
-
-
 class LingBotVideoTransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
@@ -82,118 +78,9 @@ class LingBotVideoTransformerInfer(BaseTransformerInfer):
         top_scores = top_scores * self.route_scale
         return top_indices, top_scores.to(tokens.dtype)
 
-    @staticmethod
-    def _reorder_tokens(tokens, top_scores, top_indices, num_experts):
-        num_tokens = tokens.shape[0]
-        top_k = top_indices.shape[1]
-        flat_scores = top_scores.reshape(-1)
-        flat_indices = top_indices.reshape(-1)
-        active_positions = torch.where(flat_scores != 0)[0]
-        active_experts = flat_indices[active_positions]
-
-        counts = torch.zeros(num_experts, device=tokens.device, dtype=torch.int64)
-        counts.scatter_add_(0, active_experts, torch.ones_like(active_experts, dtype=torch.int64))
-
-        sort_order = torch.argsort(active_experts, stable=True)
-        sorted_positions = active_positions[sort_order]
-        sorted_scores = flat_scores[sorted_positions]
-        original_token_idx = sorted_positions // top_k
-        permuted_tokens = tokens[original_token_idx]
-        return permuted_tokens, counts, sorted_positions, sorted_scores, num_tokens, top_k
-
-    @staticmethod
-    def _pad_grouped_tokens(tokens, counts, align=8):
-        num_tokens = tokens.shape[0]
-        num_experts = int(counts.shape[0])
-        max_len = _round_up_to_multiple(num_tokens + num_experts * align, align)
-        counts_i64 = counts.to(torch.int64)
-        total_per_expert = torch.clamp_min(counts_i64, align)
-        aligned_counts_i64 = (total_per_expert + align - 1) // align * align
-        write_offsets = torch.cumsum(aligned_counts_i64, dim=0) - aligned_counts_i64
-        end_offsets = torch.cumsum(aligned_counts_i64, dim=0)
-        start_indices = torch.cumsum(counts_i64, dim=0) - counts_i64
-
-        slots = torch.arange(max_len, dtype=torch.int64, device=tokens.device)
-        expert_idx = torch.bucketize(slots, end_offsets, right=True)
-        valid_expert = expert_idx < num_experts
-        safe_expert_idx = expert_idx.clamp(max=num_experts - 1)
-        local_idx = slots - write_offsets[safe_expert_idx]
-        source_idx = start_indices[safe_expert_idx] + local_idx
-        valid = valid_expert & (local_idx < counts_i64[safe_expert_idx])
-        fill = torch.full_like(source_idx, num_tokens)
-        permuted_indices = torch.where(valid, source_idx, fill)
-
-        tokens_with_pad = torch.vstack((tokens, tokens.new_zeros((tokens.shape[-1],))))
-        input_shape = tokens_with_pad.shape
-        return input_shape, tokens_with_pad[permuted_indices], permuted_indices, aligned_counts_i64.to(torch.int32)
-
-    @staticmethod
-    def _unpad_grouped_tokens(output, input_shape, permuted_indices):
-        unpermuted = output.new_empty(input_shape)
-        unpermuted[permuted_indices, :] = output
-        return unpermuted[:-1]
-
-    def _run_experts_for_loop(self, weights, tokens, counts):
-        count_list = counts.tolist()
-        splits = torch.split(tokens, count_list, dim=0)
-        outputs = []
-        for expert_idx, expert_tokens in enumerate(splits):
-            if expert_tokens.numel() == 0:
-                continue
-            h = F.silu(expert_tokens @ weights.experts.w1.tensor[expert_idx].transpose(-2, -1))
-            h = h * (expert_tokens @ weights.experts.w3.tensor[expert_idx].transpose(-2, -1))
-            h = h @ weights.experts.w2.tensor[expert_idx].transpose(-2, -1)
-            outputs.append(h)
-        if not outputs:
-            return tokens.new_zeros(tokens.shape)
-        return torch.cat(outputs, dim=0)
-
-    def _run_grouped_experts(self, weights, tokens, counts):
-        if not hasattr(torch, "_grouped_mm"):
-            return self._run_experts_for_loop(weights, tokens, counts)
-        input_shape, padded_tokens, permuted_indices, aligned_counts = self._pad_grouped_tokens(tokens, counts)
-        offsets = torch.cumsum(aligned_counts, dim=0, dtype=torch.int32)
-        h = F.silu(
-            torch._grouped_mm(
-                padded_tokens.bfloat16(),
-                weights.experts.w1.tensor.bfloat16().transpose(-2, -1),
-                offs=offsets,
-            )
-        )
-        h = h * torch._grouped_mm(
-            padded_tokens.bfloat16(),
-            weights.experts.w3.tensor.bfloat16().transpose(-2, -1),
-            offs=offsets,
-        )
-        out = torch._grouped_mm(
-            h,
-            weights.experts.w2.tensor.bfloat16().transpose(-2, -1),
-            offs=offsets,
-        ).type_as(padded_tokens)
-        return self._unpad_grouped_tokens(out, input_shape, permuted_indices)
-
-    @staticmethod
-    def _restore_tokens(expert_output, sorted_positions, sorted_scores, num_tokens, top_k):
-        dim = expert_output.shape[-1]
-        unsorted = torch.zeros((num_tokens * top_k, dim), dtype=expert_output.dtype, device=expert_output.device)
-        unsorted[sorted_positions] = expert_output
-        unsorted = unsorted.reshape(num_tokens, top_k, dim)
-
-        scores_unsorted = torch.zeros(num_tokens * top_k, dtype=sorted_scores.dtype, device=sorted_scores.device)
-        scores_unsorted[sorted_positions] = sorted_scores
-        scores_unsorted = scores_unsorted.reshape(num_tokens, top_k, 1)
-        return (unsorted.float() * scores_unsorted).sum(dim=1).to(expert_output.dtype)
-
     def _moe(self, weights, hidden_states):
         top_indices, top_scores = self._route(weights, hidden_states)
-        permuted_tokens, counts, sorted_positions, sorted_scores, num_tokens, top_k = self._reorder_tokens(
-            hidden_states,
-            top_scores,
-            top_indices,
-            self.num_experts,
-        )
-        expert_output = self._run_grouped_experts(weights, permuted_tokens, counts)
-        output = self._restore_tokens(expert_output, sorted_positions, sorted_scores, num_tokens, top_k)
+        output = weights.fused_moe.apply(hidden_states, top_indices, top_scores)
         if getattr(weights, "shared_experts", None) is not None:
             output = output + self._dense_mlp(weights.shared_experts, hidden_states)
         return output

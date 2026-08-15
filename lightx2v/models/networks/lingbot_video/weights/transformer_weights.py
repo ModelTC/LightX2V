@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.moe.fused_moe import create_local_fused_moe
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER, TENSOR_REGISTER
 
 
@@ -65,10 +66,12 @@ class LingBotVideoFFNWeights(WeightModule):
     def __init__(self, prefix, block_index, config):
         super().__init__()
         num_experts = int(config.get("num_experts", 0))
+        self.moe_backend = config.get("moe_backend", "torch_grouped_mm")
         decoder_sparse_step = int(config.get("decoder_sparse_step", 1))
         mlp_only_layers = tuple(config.get("mlp_only_layers", ()))
         use_moe = block_index not in mlp_only_layers and num_experts > 0 and (block_index + 1) % decoder_sparse_step == 0
         self.use_moe = use_moe
+        self.fused_moe = None
         if use_moe:
             self.add_module("router", LingBotVideoRouterWeights(prefix))
             self.add_module("experts", LingBotVideoExpertsWeights(prefix))
@@ -78,6 +81,59 @@ class LingBotVideoFFNWeights(WeightModule):
                 self.shared_experts = None
         else:
             self.add_module("dense", LingBotVideoDenseMLPWeights(f"{prefix}.ffn"))
+
+    def load(self, weight_dict):
+        super().load(weight_dict)
+        self._build_fused_moe()
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        destination = super().load_state_dict(destination, block_index, adapter_block_index)
+        self._build_fused_moe()
+        return destination
+
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        super().load_state_dict_from_disk(block_index, adapter_block_index)
+        self._build_fused_moe()
+
+    def to_cuda(self, non_blocking=False):
+        self._clear_fused_moe()
+        super().to_cuda(non_blocking=non_blocking)
+        self._build_fused_moe()
+
+    def to_cpu(self, non_blocking=False):
+        self._clear_fused_moe()
+        super().to_cpu(non_blocking=non_blocking)
+
+    def to_cuda_async(self, non_blocking=True):
+        self._clear_fused_moe()
+        super().to_cuda_async(non_blocking=non_blocking)
+        self._build_fused_moe()
+
+    def to_cpu_async(self, non_blocking=True):
+        self._clear_fused_moe()
+        super().to_cpu_async(non_blocking=non_blocking)
+
+    def _clear_fused_moe(self):
+        self.fused_moe = None
+
+    def _build_fused_moe(self):
+        self._clear_fused_moe()
+        if not self.use_moe:
+            return
+
+        w1 = getattr(self.experts.w1, "tensor", None)
+        w2 = getattr(self.experts.w2, "tensor", None)
+        w3 = getattr(self.experts.w3, "tensor", None)
+        if w1 is None or w2 is None or w3 is None:
+            return
+
+        self.fused_moe = create_local_fused_moe(
+            self.moe_backend,
+            w3,
+            w2,
+            "swiglu",
+            fc1_gate_weight=w1,
+        )
 
 
 class LingBotVideoRouterWeights(WeightModule):

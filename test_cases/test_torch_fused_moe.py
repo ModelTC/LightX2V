@@ -1,5 +1,6 @@
 import os
 import unittest
+from types import SimpleNamespace
 
 import torch
 import torch.nn.functional as F
@@ -9,6 +10,8 @@ os.environ.setdefault("SKIP_PLATFORM_CHECK", "1")
 from lightx2v.common.modules.weight_module import WeightModule  # noqa: E402
 from lightx2v.common.ops.moe.fused_moe import TorchExpertLoopFusedMoE, TorchGroupedMMFusedMoE, create_local_fused_moe  # noqa: E402
 from lightx2v.models.networks.hunyuan3d.weights.transformer_weights import Hunyuan3DMoEWeights  # noqa: E402
+from lightx2v.models.networks.lingbot_video.infer.transformer_infer import LingBotVideoTransformerInfer  # noqa: E402
+from lightx2v.models.networks.lingbot_video.weights.transformer_weights import LingBotVideoFFNWeights  # noqa: E402
 from lightx2v.utils.registry_factory import FUSED_MOE_REGISTER  # noqa: E402
 
 
@@ -117,6 +120,50 @@ class TorchFusedMoETest(unittest.TestCase):
         self.assertEqual(backend.fc1_weights[0].data_ptr(), w3[0].data_ptr())
         self.assertEqual(backend.fc1_gate_weights[0].data_ptr(), w1[0].data_ptr())
         self.assertEqual(backend.fc2_weights[0].data_ptr(), w2[0].data_ptr())
+
+    def test_lingbot_default_backend_binds_split_weights(self):
+        weights = LingBotVideoFFNWeights("blocks.0", 0, {"num_experts": 3})
+        w1 = torch.randn(3, 7, 5)
+        w2 = torch.randn(3, 5, 7)
+        w3 = torch.randn(3, 7, 5)
+        weights.experts.w1.tensor = w1
+        weights.experts.w2.tensor = w2
+        weights.experts.w3.tensor = w3
+
+        weights._build_fused_moe()
+
+        self.assertEqual(weights.moe_backend, "torch_grouped_mm")
+        self.assertIsInstance(weights.fused_moe, TorchGroupedMMFusedMoE)
+        self.assertEqual(weights.fused_moe.grouped_fc1_weight.data_ptr(), w3.data_ptr())
+        self.assertEqual(weights.fused_moe.grouped_fc1_gate_weight.data_ptr(), w1.data_ptr())
+        self.assertEqual(weights.fused_moe.grouped_fc2_weight.data_ptr(), w2.data_ptr())
+
+    def test_lingbot_infer_calls_routed_module_once_and_adds_shared_expert(self):
+        class Backend:
+            def __init__(self):
+                self.calls = 0
+
+            def apply(self, hidden_states, top_indices, top_scores):
+                self.calls += 1
+                self.args = (hidden_states, top_indices, top_scores)
+                return hidden_states + 1
+
+        infer = object.__new__(LingBotVideoTransformerInfer)
+        top_indices = torch.tensor([[0, 1], [1, 0]])
+        top_scores = torch.tensor([[0.6, 0.4], [0.3, 0.7]])
+        infer._route = lambda weights, hidden_states: (top_indices, top_scores)
+        infer._dense_mlp = lambda weights, hidden_states: hidden_states * 2
+        backend = Backend()
+        weights = SimpleNamespace(fused_moe=backend, shared_experts=object())
+        hidden_states = torch.randn(2, 4)
+
+        actual = infer._moe(weights, hidden_states)
+
+        self.assertEqual(backend.calls, 1)
+        self.assertIs(backend.args[0], hidden_states)
+        self.assertIs(backend.args[1], top_indices)
+        self.assertIs(backend.args[2], top_scores)
+        torch.testing.assert_close(actual, hidden_states * 3 + 1)
 
     def test_local_flashinfer_rejects_mismatched_experts(self):
         fc1_weight = torch.randn(3, 8, 4)
