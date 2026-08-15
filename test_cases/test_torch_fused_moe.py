@@ -126,9 +126,9 @@ class TorchFusedMoETest(unittest.TestCase):
         w1 = torch.randn(3, 7, 5)
         w2 = torch.randn(3, 5, 7)
         w3 = torch.randn(3, 7, 5)
-        weights.experts.w1.tensor = w1
-        weights.experts.w2.tensor = w2
-        weights.experts.w3.tensor = w3
+        weights.experts.w1.pin_tensor = w1
+        weights.experts.w2.pin_tensor = w2
+        weights.experts.w3.pin_tensor = w3
 
         weights._build_fused_moe()
 
@@ -137,6 +137,11 @@ class TorchFusedMoETest(unittest.TestCase):
         self.assertEqual(weights.fused_moe.grouped_fc1_weight.data_ptr(), w3.data_ptr())
         self.assertEqual(weights.fused_moe.grouped_fc1_gate_weight.data_ptr(), w1.data_ptr())
         self.assertEqual(weights.fused_moe.grouped_fc2_weight.data_ptr(), w2.data_ptr())
+        self.assertIs(weights._modules["fused_moe"], weights.fused_moe)
+        self.assertNotIn("experts", weights._modules)
+        self.assertFalse(hasattr(weights, "experts"))
+        for method in ("to_cuda", "to_cpu", "to_cuda_async", "to_cpu_async", "_clear_fused_moe"):
+            self.assertNotIn(method, LingBotVideoFFNWeights.__dict__)
 
     def test_lingbot_infer_calls_routed_module_once_and_adds_shared_expert(self):
         class Backend:
