@@ -221,9 +221,7 @@ class HunyuanImage3Model(BaseTransformerModel):
         if self.lora_path is not None:
             raise NotImplementedError("HunyuanImage3 tensor parallel does not support LoRA weight loading yet.")
         moe_backend = str(self.config.get("moe_backend", "")).strip().lower()
-        supported_moe_backends = {"flashinfer", "multi_micro", "torch_expert_loop"}
-        if moe_backend not in supported_moe_backends:
-            raise NotImplementedError(f"HunyuanImage3 tensor parallel supports moe_backend values {sorted(supported_moe_backends)}, got {moe_backend!r}.")
+        assert moe_backend in {"flashinfer", "multi_micro"}
 
         divisibility_checks = {
             "num_attention_heads": [int(self.config.get("num_attention_heads") or self.config["num_heads"])],

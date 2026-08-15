@@ -1,6 +1,6 @@
 SUPPORTED_TASKS = {"t2t", "t2i", "ti2t", "ti2i", "i2i"}
 SUPPORTED_BOT_TASKS = {"image", "auto", "think", "recaption", "think_recaption"}
-SUPPORTED_MOE_BACKENDS = {"flashinfer", "multi_micro", "torch_expert_loop"}
+SUPPORTED_MOE_BACKENDS = {"flashinfer", "multi_micro"}
 LEGACY_MOE_KEYS = ("moe_impl", "flashinfer_multi_micro", "flashinfer_multi_micro_backend")
 
 

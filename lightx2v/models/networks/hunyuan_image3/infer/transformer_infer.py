@@ -650,11 +650,6 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             return self._apply_phase_mlp(phase.gate_and_up_proj, phase.down_proj, hidden_states)
 
         moe = phase.moe
-        if self.hidden_act != "silu":
-            raise NotImplementedError("HunyuanImage3 fused MoE currently supports only silu/SwiGLU experts.")
-        if hidden_states.device.type == "cuda" and hidden_states.device.index is not None:
-            torch.cuda.set_device(hidden_states.device.index)
-
         original_dtype = hidden_states.dtype
         compute_dtype = original_dtype if original_dtype in (torch.float16, torch.bfloat16) else torch.bfloat16
         active_phase = self._active_phase().strip().lower()
