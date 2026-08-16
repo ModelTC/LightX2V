@@ -23,7 +23,12 @@ elif PLATFORM == "ascend_npu":
     from .rope.ascend_npu import *
     # isort: on
 elif PLATFORM == "metax_cuda":
+    # MetaX attention imports the common registry, so platform MoE backends
+    # must be registered before that one-time registry merge.
+    # isort: off
+    from .moe.metax_cuda import *
     from .attn.metax_cuda import *
+    # isort: on
 elif PLATFORM == "enflame_gcu":
     from .attn.enflame_gcu import *
     from .norm.enflame_gcu import *

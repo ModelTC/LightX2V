@@ -55,7 +55,7 @@ class Hunyuan3DMoEWeights(WeightModule):
         self.moe_top_k = config.get("moe_top_k", 2)
 
         self.moe_backend = config["moe_backend"]
-        assert self.moe_backend in {"torch_expert_loop", "flashinfer", "npu_grouped_mm"}
+        assert self.moe_backend in {"torch_expert_loop", "flashinfer", "npu_grouped_mm", "metax_mctlass_moe"}
 
         fi_cfg = config.get("moe_flashinfer_setting") or {}
         if fi_cfg.get("autotune") and self.moe_backend != "flashinfer":

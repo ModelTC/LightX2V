@@ -1041,7 +1041,7 @@ def _validate_packed_local_experts(
 
 
 def create_local_fused_moe(
-    backend: Literal["flashinfer", "npu_grouped_mm", "torch_grouped_mm", "torch_expert_loop"],
+    backend: Literal["flashinfer", "npu_grouped_mm", "metax_mctlass_moe", "torch_grouped_mm", "torch_expert_loop"],
     fc1_weight: torch.Tensor | Sequence[torch.Tensor],
     fc2_weight: torch.Tensor | Sequence[torch.Tensor],
     activation: FusedMoEActivation,
@@ -1059,7 +1059,7 @@ def create_local_fused_moe(
             fc2_bias,
             fc1_gate_weight,
         )
-    if backend not in {"flashinfer", "npu_grouped_mm"}:
+    if backend not in {"flashinfer", "npu_grouped_mm", "metax_mctlass_moe"}:
         raise ValueError(f"unsupported local fused MoE backend {backend!r}")
     if fc1_gate_weight is not None:
         raise ValueError("split SwiGLU weights are supported only by Torch fused MoE backends")
@@ -1075,7 +1075,7 @@ def create_local_fused_moe(
         packed_fc1_bias,
         packed_fc2_bias,
     )
-    if backend == "npu_grouped_mm":
+    if backend in {"npu_grouped_mm", "metax_mctlass_moe"}:
         return FUSED_MOE_REGISTER[backend](
             packed_fc1_weight,
             packed_fc2_weight,

@@ -9,6 +9,9 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 default_lightx2v_path=$(cd -- "${script_dir}/../../.." && pwd)
 
 lightx2v_path=${LIGHTX2V_PATH:-${default_lightx2v_path}}
+# Select hunyuan3d_shape_mctlass_moe.json together with HUNYUAN3D_DTYPE=BF16
+# to opt into the MetaX MCTlass MoE backend.
+shape_config=${HUNYUAN3D_SHAPE_CONFIG:-${lightx2v_path}/configs/platforms/metax/hunyuan3d_shape.json}
 hy_repo=${HUNYUAN3D_REPO:-/data/Hunyuan3D-2.1-platform}
 model_path=${HUNYUAN3D_MODEL_PATH:-/data/models/Hunyuan3D-2.1}
 dino_ckpt_path=${HUNYUAN3D_DINO_PATH:-/data/models/dinov2-giant}
@@ -29,6 +32,11 @@ fi
 if [[ ! -s "${realesrgan_ckpt_path}" ]]; then
     echo "Missing RealESRGAN checkpoint: ${realesrgan_ckpt_path}" >&2
     echo "Place it under the external model directory or set HUNYUAN3D_REALESRGAN_PATH." >&2
+    exit 1
+fi
+
+if [[ ! -s "${shape_config}" ]]; then
+    echo "Missing Hunyuan3D shape config: ${shape_config}" >&2
     exit 1
 fi
 
@@ -54,7 +62,7 @@ if [[ "${HUNYUAN3D_FORCE_REBUILD:-0}" == "1" || ! -s "${rasterizer_extension}" |
 fi
 
 source "${lightx2v_path}/scripts/base/base.sh"
-export DTYPE=FP16
+export DTYPE="${HUNYUAN3D_DTYPE:-FP16}"
 
 mkdir -p "${lightx2v_path}/save_results/hunyuan3d-metax" "${HF_MODULES_CACHE}"
 
@@ -63,7 +71,7 @@ echo "=== Step 1/2: shape generation on MetaX ==="
     --model_cls hunyuan3d \
     --task i23d \
     --model_path "${model_path}" \
-    --config_json "${lightx2v_path}/configs/platforms/metax/hunyuan3d_shape.json" \
+    --config_json "${shape_config}" \
     --image_path "${hy_repo}/assets/demo.png" \
     --save_result_path "${lightx2v_path}/save_results/hunyuan3d-metax/shape.glb" \
     --seed 42
