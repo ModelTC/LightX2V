@@ -1,201 +1,131 @@
-"""DOPSD capability for Flux2 models."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Mapping
 
 import torch
-import torch.nn.functional as F
+from diffusers import Flux2KleinPipeline
 
 from lightx2v_train.model_capabilities import (
     BoundCapability,
     DopsdCapability,
-    DopsdLossResult,
-    DopsdStepContext,
+    DopsdPreparedBatch,
+    DopsdPreparedTeacherBatch,
 )
 
 
+@dataclass(frozen=True)
+class Flux2DopsdReference:
+    latents: torch.Tensor
+    ids: torch.Tensor
+
+
 class Flux2DopsdCapability(BoundCapability, DopsdCapability):
+    """Flux2 tensor preparation and denoising required by DOPSD."""
+
     @property
-    def device(self):
+    def device(self) -> torch.device:
         return self.model.device
 
-    def configure_adapters(
+    def _image(self, image: torch.Tensor, running_dtype: torch.dtype) -> torch.Tensor:
+        if image.ndim == 3:
+            image = image.unsqueeze(0)
+        if image.ndim != 4 or image.shape[0] != 1:
+            raise ValueError(f"DOPSD requires one reference image per rank with shape [1, C, H, W], got {tuple(image.shape)}.")
+        return image.to(device=self.device, dtype=running_dtype)
+
+    def _initial_state(
         self,
-        rank,
-        alpha,
-        target_modules,
-        student_adapter,
-        teacher_adapter,
-        initialize_teacher,
-    ) -> None:
-        self.model.add_dual_lora(
-            rank,
-            alpha,
-            target_modules,
-            student_adapter=student_adapter,
-            teacher_adapter=teacher_adapter,
-            init_teacher_from_student=initialize_teacher,
+        height: int,
+        width: int,
+        generator: torch.Generator | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, tuple[int, int]]:
+        unpacked_state = self.model.prepare_infer_latents(height, width, generator=generator)
+        state_ids = Flux2KleinPipeline._prepare_latent_ids(unpacked_state).to(self.device)
+        state = Flux2KleinPipeline._pack_latents(unpacked_state)
+        return state, state_ids, tuple(unpacked_state.shape[-2:])
+
+    def _reference(self, image: torch.Tensor) -> Flux2DopsdReference:
+        encoded = self.model.vae.encode(image).latent_dist.mode()
+        normalized = self.model._normalize_patch_latents(encoded)
+        reference_ids = Flux2KleinPipeline._prepare_image_ids([normalized[:1]])
+        reference_ids = reference_ids.repeat(normalized.shape[0], 1, 1).to(self.device)
+        reference_latents = Flux2KleinPipeline._pack_latents(normalized)
+        return Flux2DopsdReference(
+            latents=reference_latents.to(device=self.device, dtype=self.model.running_dtype),
+            ids=reference_ids,
         )
-        self.set_training(student_adapter, teacher_adapter)
 
-    def parameters(self):
-        return self.model.trainable_parameters()
-
-    def compute_loss(
+    def prepare_training_batch(
         self,
-        batch,
-        context: DopsdStepContext,
-    ) -> DopsdLossResult:
-        image = batch["inputs"].get("target_image")
+        batch: Mapping[str, Any],
+        teacher_prompts: list[str],
+        running_dtype: torch.dtype,
+    ) -> DopsdPreparedBatch:
+        image = batch.get("inputs", {}).get("target_image")
         if image is None:
-            raise ValueError("D-OPSD requires inputs.target_image.")
-        image = image.to(
-            device=self.device,
-            dtype=context.running_dtype,
-        )
-        if image.shape[0] != 1:
-            raise ValueError("D-OPSD only supports physical batch size 1.")
-        _, _, height, width = image.shape
-        latent_hw = (height // 16, width // 16)
-        timestep_scale = float(context.scheduler.num_train_timesteps)
-
-        with torch.no_grad():
-            student_condition = self.model.encode_condition(batch)
-            teacher_condition = self.model.encode_prompt_text(context.teacher_prompts(batch["conditioning"]["prompt"]))
-            reference_latents, reference_ids = self.model.prepare_reference_image_latents(image)
-            initial_latents, latent_ids = self.model.prepare_dopsd_initial_latents(
-                height,
-                width,
-            )
-            context.scheduler.set_timesteps(
-                context.num_training_steps,
-                latent_hw=latent_hw,
-            )
-            timesteps = context.scheduler.infer_timesteps
-
-        latents = initial_latents
-        total_loss = 0.0
-        weights = context.step_loss_weights(len(timesteps))
-        student_trajectory = []
-        teacher_trajectory = []
-        for step_index, timestep in enumerate(timesteps):
-            time = (timestep.reshape(1) / timestep_scale).to(
-                device=self.device,
-                dtype=context.running_dtype,
-            )
-            if step_index + 1 < len(timesteps):
-                next_time = timesteps[step_index + 1].reshape(1)
-                next_time = next_time / timestep_scale
-            else:
-                next_time = torch.zeros_like(time)
-            next_time = next_time.to(
-                device=self.device,
-                dtype=context.running_dtype,
-            )
-            latents = latents.detach().requires_grad_(True)
-            with torch.no_grad():
-                teacher_velocity = self.model.predict_velocity(
-                    latents,
-                    time,
-                    teacher_condition,
-                    latent_ids,
-                    context.teacher_adapter,
-                    teacher_image_latents=reference_latents,
-                    teacher_image_latent_ids=reference_ids,
-                )
-                teacher_x0 = latents - time.reshape(1, 1, 1) * teacher_velocity
-            student_velocity = self.model.predict_velocity(
-                latents,
-                time,
-                student_condition,
-                latent_ids,
-                context.student_adapter,
-            )
-            student_x0 = latents - time.reshape(1, 1, 1) * student_velocity
-            latents = latents + student_velocity * (next_time - time).reshape(1, 1, 1)
-            total_loss = total_loss + weights[step_index] * F.mse_loss(
-                student_x0,
-                teacher_x0.detach(),
-            )
-            if context.collect_trajectory:
-                student_trajectory.append(student_x0.detach())
-                teacher_trajectory.append(teacher_x0.detach())
-
-        return DopsdLossResult(
-            loss=total_loss / sum(weights),
-            student_trajectory=tuple(student_trajectory),
-            teacher_trajectory=tuple(teacher_trajectory),
-            latent_ids=latent_ids if context.collect_trajectory else None,
-            height=height if context.collect_trajectory else None,
-            width=width if context.collect_trajectory else None,
+            raise ValueError("DOPSD requires inputs.target_image.")
+        image = self._image(image, running_dtype)
+        height, width = image.shape[-2:]
+        initial_state, state_ids, latent_hw = self._initial_state(height, width, generator=None)
+        return DopsdPreparedBatch(
+            initial_state=initial_state,
+            state_ids=state_ids,
+            student_condition=self.model.encode_condition(batch),
+            teacher_condition=self.model.encode_prompt_condition(teacher_prompts),
+            teacher_reference=self._reference(image),
+            latent_hw=latent_hw,
         )
 
-    def ema_update(self, student_adapter, teacher_adapter, decay) -> None:
-        self.model.ema_update_lora_adapter(
-            student_adapter,
-            teacher_adapter,
-            decay,
-        )
-
-    def decode_trajectory(self, trajectory, latent_ids):
-        return self.model.decode_packed_x0_to_images(trajectory, latent_ids)
-
-    def set_training(self, student_adapter, teacher_adapter) -> None:
-        self.model.set_dual_lora_trainable(
-            student_adapter,
-            teacher_adapter,
-        )
-
-    def set_eval(self) -> None:
-        self.model.set_denoiser_eval()
-
-    def set_active_adapter(self, adapter_name) -> None:
-        self.model.set_active_adapter(adapter_name)
-
-    def encode_prompt(self, prompts):
-        return self.model.encode_prompt_text(prompts)
-
-    def prepare_reference(self, image):
-        return self.model.prepare_reference_image_latents(image)
-
-    def initial_latents(self, height, width, generator=None):
-        return self.model.prepare_dopsd_initial_latents(
-            height,
-            width,
-            generator=generator,
+    def prepare_teacher_batch(
+        self,
+        reference_image: torch.Tensor,
+        teacher_prompts: list[str],
+        running_dtype: torch.dtype,
+        generator: torch.Generator | None = None,
+    ) -> DopsdPreparedTeacherBatch:
+        image = self._image(reference_image, running_dtype)
+        height, width = image.shape[-2:]
+        initial_state, state_ids, latent_hw = self._initial_state(height, width, generator)
+        return DopsdPreparedTeacherBatch(
+            initial_state=initial_state,
+            state_ids=state_ids,
+            condition=self.model.encode_prompt_condition(teacher_prompts),
+            reference=self._reference(image),
+            latent_hw=latent_hw,
+            height=height,
+            width=width,
         )
 
     def predict_velocity(
         self,
-        latents,
-        time,
-        condition,
-        latent_ids,
-        adapter_name,
-        **kwargs,
-    ):
-        return self.model.predict_velocity(
-            latents,
-            time,
-            condition,
-            latent_ids,
-            adapter_name,
-            **kwargs,
-        )
+        state: torch.Tensor,
+        time: torch.Tensor,
+        condition: Any,
+        state_ids: torch.Tensor,
+        reference: Any = None,
+    ) -> torch.Tensor:
+        hidden_states = state
+        image_ids = state_ids
+        if reference is not None:
+            if not isinstance(reference, Flux2DopsdReference):
+                raise TypeError(f"Flux2 DOPSD expected Flux2DopsdReference, got {type(reference).__name__}.")
+            hidden_states = torch.cat([state, reference.latents], dim=1)
+            image_ids = torch.cat([state_ids, reference.ids], dim=1)
 
-    def load_adapter(self, path, adapter_name, weights_subdir=None) -> None:
-        self.model.load_lora_weights_for_resume(
-            path,
-            adapter_name=adapter_name,
-            weights_subdir=weights_subdir,
-        )
+        velocity = self.model.transformer(
+            hidden_states=hidden_states,
+            timestep=time,
+            guidance=None,
+            encoder_hidden_states=condition["prompt_embed"],
+            txt_ids=condition["text_ids"],
+            img_ids=image_ids,
+            joint_attention_kwargs={},
+            return_dict=False,
+        )[0]
+        return velocity[:, : state.shape[1]]
 
-    def save_adapter(self, path, adapter_name, weights_subdir=None) -> None:
-        self.model.save_lora_weights(
-            path,
-            adapter_name=adapter_name,
-            weights_subdir=weights_subdir,
-        )
-
-    def copy_adapter(self, source_adapter, target_adapter) -> None:
-        self.model.copy_lora_adapter_weights(
-            source_adapter,
-            target_adapter,
-        )
+    @torch.no_grad()
+    def decode_state(self, state: torch.Tensor, state_ids: torch.Tensor):
+        unpacked = Flux2KleinPipeline._unpack_latents_with_ids(state, state_ids)
+        return self.model.decode_latent(unpacked)

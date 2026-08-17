@@ -65,64 +65,6 @@ class BaseModel(CapabilityProvider):
         )
         self.denoiser_module().add_adapter(lora_config)
 
-    def add_dual_lora(
-        self,
-        rank,
-        alpha,
-        target_modules,
-        student_adapter="student",
-        teacher_adapter="teacher",
-        init_teacher_from_student=True,
-    ):
-        lora_config = LoraConfig(
-            r=rank,
-            lora_alpha=alpha,
-            init_lora_weights="gaussian",
-            target_modules=target_modules,
-        )
-        denoiser = self.denoiser_module()
-        denoiser.requires_grad_(False)
-        denoiser.add_adapter(lora_config, adapter_name=student_adapter)
-        denoiser.add_adapter(lora_config, adapter_name=teacher_adapter)
-        denoiser.set_adapter(student_adapter)
-        if init_teacher_from_student:
-            self.copy_lora_adapter_weights(student_adapter, teacher_adapter)
-
-    @torch.no_grad()
-    def copy_lora_adapter_weights(self, src_adapter, dst_adapter):
-        named_params = dict(self.denoiser_module().named_parameters())
-        for name, param in named_params.items():
-            if src_adapter not in name:
-                continue
-            dst_name = name.replace(src_adapter, dst_adapter)
-            if dst_name in named_params:
-                named_params[dst_name].data.copy_(param.data)
-
-    def set_active_adapter(self, adapter_name):
-        self.denoiser_module().set_adapter(adapter_name)
-
-    def set_dual_lora_trainable(self, student_adapter="student", teacher_adapter="teacher"):
-        denoiser = self.denoiser_module()
-        denoiser.requires_grad_(False)
-        denoiser.train()
-        for name, param in denoiser.named_parameters():
-            if student_adapter in name and "lora" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-
-    @torch.no_grad()
-    def ema_update_lora_adapter(self, src_adapter="student", dst_adapter="teacher", ema_decay=0.999):
-        named_params = dict(self.denoiser_module().named_parameters())
-        for name, src_param in named_params.items():
-            if src_adapter not in name:
-                continue
-            dst_name = name.replace(src_adapter, dst_adapter)
-            if dst_name not in named_params:
-                continue
-            dst_param = named_params[dst_name]
-            dst_param.data.mul_(ema_decay).add_(src_param.data, alpha=1.0 - ema_decay)
-
     def set_lora_trainable(self):
         denoiser = self.denoiser_module()
         denoiser.requires_grad_(False)

@@ -4,11 +4,20 @@ import torch
 from diffusers import AutoencoderKLFlux2, Flux2KleinPipeline, Flux2Transformer2DModel
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
-from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, DopsdCapability, FlowMatchingSFTCapability
-from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
+from lightx2v_train.model_capabilities import (
+    AdapterBankCapability,
+    ConsistencyCapability,
+    DistillationCapability,
+    DopsdCapability,
+    FlowMatchingSFTCapability,
+)
+from lightx2v_train.model_zoo.capability_adapters import (
+    PeftAdapterBankCapability,
+    SpatialLatentGeometry,
+)
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
-from lightx2v_train.model_zoo.flux2.capability_adapters import Flux2ConsistencyCapability
-from lightx2v_train.model_zoo.flux2.capability_adapters.flux2_dopsd_capability import (
+from lightx2v_train.model_zoo.flux2.capability_adapters import (
+    Flux2ConsistencyCapability,
     Flux2DopsdCapability,
 )
 from lightx2v_train.utils.registry import MODEL_REGISTER
@@ -51,6 +60,10 @@ class Flux2KleinModel(BaseModel):
         self.capabilities.register(
             DopsdCapability,
             Flux2DopsdCapability(self),
+        )
+        self.capabilities.register(
+            AdapterBankCapability,
+            PeftAdapterBankCapability(self),
         )
 
     def load_components(self, transformer_only=False, reference_model=None):
@@ -135,9 +148,6 @@ class Flux2KleinModel(BaseModel):
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
 
-    def encode_prompt_text(self, prompt):
-        return self.encode_prompt_condition(prompt)
-
     def prepare_denoiser_input(self, noisy_latent, condition=None):
         h, w = noisy_latent.shape[2], noisy_latent.shape[3]
         packed = Flux2KleinPipeline._pack_latents(noisy_latent)
@@ -180,12 +190,6 @@ class Flux2KleinModel(BaseModel):
         image = self.vae.decode(latent).sample
         return self.image_processor.postprocess(image, output_type="pil")
 
-    @torch.no_grad()
-    def decode_packed_x0_to_images(self, packed_x0, latent_ids):
-        # height/width must be latent token grid sizes from img_ids, not pixel sizes.
-        unpatchified = Flux2KleinPipeline._unpack_latents_with_ids(packed_x0, latent_ids)
-        return self.decode_latent(unpatchified)
-
     def assemble_pipeline(self, scheduler=None):
         return Flux2KleinPipeline(
             tokenizer=self.text_pipeline.tokenizer,
@@ -206,48 +210,3 @@ class Flux2KleinModel(BaseModel):
             "max_sequence_length": self.config["model"].get("max_sequence_length", 512),
             "text_encoder_out_layers": tuple(self.config["model"].get("text_encoder_out_layers", (9, 18, 27))),
         }
-
-    @torch.no_grad()
-    def prepare_reference_image_latents(self, images):
-        pipeline = self.assemble_pipeline()
-        reference_images = images.to(device=self.device, dtype=self.running_dtype)
-        encoded_image_latents = pipeline._encode_vae_image(image=reference_images, generator=None)
-        image_latent_ids = pipeline._prepare_image_ids([encoded_image_latents[:1]])
-        image_latent_ids = image_latent_ids.repeat(encoded_image_latents.shape[0], 1, 1).to(self.device)
-        image_latents = pipeline._pack_latents(encoded_image_latents).to(device=self.device, dtype=self.running_dtype)
-        return image_latents, image_latent_ids
-
-    def prepare_dopsd_initial_latents(self, height, width, generator=None):
-        pipeline = self.assemble_pipeline()
-        num_latents_channels = self.transformer.config.in_channels // 4
-        return pipeline.prepare_latents(
-            batch_size=1,
-            num_latents_channels=num_latents_channels,
-            height=height,
-            width=width,
-            dtype=self.running_dtype,
-            device=self.device,
-            generator=generator,
-            latents=None,
-        )
-
-    def predict_velocity(self, packed_latents, timestep, condition, latent_ids, adapter_name, teacher_image_latents=None, teacher_image_latent_ids=None):
-        self.set_active_adapter(adapter_name)
-        if teacher_image_latents is not None:
-            hidden_states = torch.cat([packed_latents, teacher_image_latents], dim=1)
-            img_ids = torch.cat([latent_ids, teacher_image_latent_ids], dim=1)
-        else:
-            hidden_states = packed_latents
-            img_ids = latent_ids
-
-        v_pred = self.transformer(
-            hidden_states=hidden_states,
-            timestep=timestep,
-            guidance=None,
-            encoder_hidden_states=condition["prompt_embed"],
-            txt_ids=condition["text_ids"],
-            img_ids=img_ids,
-            joint_attention_kwargs={},
-            return_dict=False,
-        )[0]
-        return v_pred[:, : packed_latents.size(1)]

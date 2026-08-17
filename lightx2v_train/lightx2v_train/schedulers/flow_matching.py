@@ -102,17 +102,29 @@ class RectifiedFlowMatchingScheduler:
     # ==============================
     # The following methods are for inference only
     # ==============================
-    def set_timesteps(self, num_inference_steps, sigmas=None, latent_hw=None):
-        self.num_inference_steps = num_inference_steps
-
+    def build_inference_sigmas(self, num_inference_steps, sigmas=None, latent_hw=None):
+        """Build an immutable inference schedule without changing scheduler state."""
+        num_inference_steps = int(num_inference_steps)
+        if num_inference_steps <= 0:
+            raise ValueError(f"num_inference_steps must be positive, got {num_inference_steps}.")
         if sigmas is None:
             sigmas = torch.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
             if self.do_time_shift:
                 sigmas = self.time_shift(sigmas, latent_hw=latent_hw, num_steps=num_inference_steps)
         else:
             sigmas = torch.tensor(sigmas, dtype=torch.float32)
-        self.infer_sigmas = torch.cat([sigmas, torch.zeros(1)]).to(self.device)
-        self.infer_timesteps = (sigmas * self.num_train_timesteps).to(self.device)
+            if sigmas.ndim != 1 or sigmas.numel() != num_inference_steps:
+                raise ValueError(f"sigmas must contain exactly {num_inference_steps} values, got shape {tuple(sigmas.shape)}.")
+        return torch.cat([sigmas, torch.zeros(1)]).to(self.device)
+
+    def set_timesteps(self, num_inference_steps, sigmas=None, latent_hw=None):
+        self.num_inference_steps = int(num_inference_steps)
+        self.infer_sigmas = self.build_inference_sigmas(
+            self.num_inference_steps,
+            sigmas=sigmas,
+            latent_hw=latent_hw,
+        )
+        self.infer_timesteps = self.infer_sigmas[:-1] * self.num_train_timesteps
 
     def step(self, model_output, step_index, latent):
         f"""

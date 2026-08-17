@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Collection
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import torch
 from torch import Tensor
@@ -232,111 +233,122 @@ class AutoregressiveDistillationCapability(ModelCapability):
 
 
 @dataclass(frozen=True)
-class DopsdStepContext:
-    scheduler: Any
-    num_training_steps: int
-    running_dtype: torch.dtype
-    student_adapter: str
-    teacher_adapter: str
-    teacher_prompts: Callable[[Any], list[str]]
-    step_loss_weights: Callable[[int], list[float]]
-    collect_trajectory: bool = False
+class DopsdPreparedBatch:
+    """Model-specific values needed by the model-agnostic DOPSD objective."""
+
+    initial_state: Tensor
+    state_ids: Tensor
+    student_condition: Any
+    teacher_condition: Any
+    teacher_reference: Any
+    latent_hw: tuple[int, int]
 
 
 @dataclass(frozen=True)
-class DopsdLossResult:
-    loss: Tensor
-    student_trajectory: tuple[Tensor, ...] = ()
-    teacher_trajectory: tuple[Tensor, ...] = ()
-    latent_ids: Tensor | None = None
-    height: int | None = None
-    width: int | None = None
+class DopsdPreparedTeacherBatch:
+    """Prepared inputs for a privileged-teacher rollout."""
+
+    initial_state: Tensor
+    state_ids: Tensor
+    condition: Any
+    reference: Any
+    latent_hw: tuple[int, int]
+    height: int
+    width: int
 
 
 class DopsdCapability(ModelCapability):
+    """Model operations required by DOPSD.
+
+    Adapter lifecycle and objective math intentionally live outside this
+    capability so a new model only needs to describe its own data path.
+    """
+
     @property
     @abstractmethod
-    def device(self):
+    def device(self) -> torch.device:
         pass
 
     @abstractmethod
-    def configure_adapters(
+    def prepare_training_batch(
         self,
-        rank,
-        alpha,
-        target_modules,
-        student_adapter,
-        teacher_adapter,
-        initialize_teacher,
-    ) -> None:
+        batch: Mapping[str, Any],
+        teacher_prompts: list[str],
+        running_dtype: torch.dtype,
+    ) -> DopsdPreparedBatch:
         pass
 
     @abstractmethod
-    def parameters(self):
-        pass
-
-    @abstractmethod
-    def compute_loss(
+    def prepare_teacher_batch(
         self,
-        batch,
-        context: DopsdStepContext,
-    ) -> DopsdLossResult:
-        pass
-
-    @abstractmethod
-    def ema_update(self, student_adapter, teacher_adapter, decay) -> None:
-        pass
-
-    @abstractmethod
-    def decode_trajectory(self, trajectory, latent_ids):
-        pass
-
-    @abstractmethod
-    def set_training(self, student_adapter, teacher_adapter) -> None:
-        pass
-
-    @abstractmethod
-    def set_eval(self) -> None:
-        pass
-
-    @abstractmethod
-    def set_active_adapter(self, adapter_name) -> None:
-        pass
-
-    @abstractmethod
-    def encode_prompt(self, prompts):
-        pass
-
-    @abstractmethod
-    def prepare_reference(self, image):
-        pass
-
-    @abstractmethod
-    def initial_latents(self, height, width, generator=None):
+        reference_image: Tensor,
+        teacher_prompts: list[str],
+        running_dtype: torch.dtype,
+        generator: torch.Generator | None = None,
+    ) -> DopsdPreparedTeacherBatch:
         pass
 
     @abstractmethod
     def predict_velocity(
         self,
-        latents,
-        time,
-        condition,
-        latent_ids,
-        adapter_name,
-        **kwargs,
-    ):
+        state: Tensor,
+        time: Tensor,
+        condition: Any,
+        state_ids: Tensor,
+        reference: Any = None,
+    ) -> Tensor:
         pass
 
     @abstractmethod
-    def load_adapter(self, path, adapter_name, weights_subdir=None) -> None:
+    def decode_state(self, state: Tensor, state_ids: Tensor):
+        pass
+
+
+class AdapterBankCapability(ModelCapability):
+    """Lifecycle for multiple named parameter-efficient adapters."""
+
+    @abstractmethod
+    def configure_pair(
+        self,
+        rank: int,
+        alpha: int,
+        target_modules: Any,
+        student_adapter: str,
+        teacher_adapter: str,
+        initialize_teacher: bool,
+    ) -> None:
         pass
 
     @abstractmethod
-    def save_adapter(self, path, adapter_name, weights_subdir=None) -> None:
+    def parameters(self, adapter_name: str) -> Iterable[Tensor]:
         pass
 
     @abstractmethod
-    def copy_adapter(self, source_adapter, target_adapter) -> None:
+    def activate(
+        self,
+        adapter_name: str,
+        training: bool | None = None,
+    ) -> AbstractContextManager[None]:
+        pass
+
+    @abstractmethod
+    def set_trainable(self, adapter_name: str) -> None:
+        pass
+
+    @abstractmethod
+    def copy(self, source_adapter: str, target_adapter: str) -> None:
+        pass
+
+    @abstractmethod
+    def ema_update(self, source_adapter: str, target_adapter: str, decay: float) -> None:
+        pass
+
+    @abstractmethod
+    def load(self, path, adapter_name: str, weights_subdir: str | None = None) -> None:
+        pass
+
+    @abstractmethod
+    def save(self, path, adapter_name: str, weights_subdir: str | None = None) -> None:
         pass
 
 
