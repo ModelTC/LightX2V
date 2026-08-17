@@ -5,8 +5,8 @@ from contextlib import nullcontext
 import torch
 from peft import LoraConfig, inject_adapter_in_model
 
-from lightx2v_train.model_capabilities import DistillationCapability
-from lightx2v_train.model_zoo.minimax_h3.capability_adapters import MiniMaxH3DistillationCapability
+from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability
+from lightx2v_train.model_zoo.minimax_h3.capability_adapters import MiniMaxH3ConsistencyCapability, MiniMaxH3DistillationCapability
 from lightx2v_train.model_zoo.native.minimax_h3 import load_minimax_h3_transformer
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
@@ -25,6 +25,10 @@ class MiniMaxH3T2AVModel(BaseModel):
         self.capabilities.register(
             DistillationCapability,
             MiniMaxH3DistillationCapability(self),
+        )
+        self.capabilities.register(
+            ConsistencyCapability,
+            MiniMaxH3ConsistencyCapability(self),
         )
 
     def load_components(self, transformer_only=False, reference_model=None):

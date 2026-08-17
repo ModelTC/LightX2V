@@ -11,6 +11,7 @@ from safetensors.torch import load_file
 
 from lightx2v_train.model_capabilities import (
     AutoregressiveDistillationCapability,
+    ConsistencyCapability,
     DistillationCapability,
     FlowMatchingSFTCapability,
     TeacherForcingCapability,
@@ -18,6 +19,7 @@ from lightx2v_train.model_capabilities import (
 from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_autoregressive_distillation_capability import (
     LTXAutoregressiveDistillationCapability,
 )
+from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_consistency_capability import LTXConsistencyCapability
 from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_distillation_capability import LTXDistillationCapability
 from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_flow_matching_capability import LTXFlowMatchingCapability
 from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_teacher_forcing_capability import LTXTeacherForcingCapability
@@ -54,6 +56,10 @@ class LTX2T2AVModel(BaseModel):
         self.capabilities.register(
             DistillationCapability,
             LTXDistillationCapability(self),
+        )
+        self.capabilities.register(
+            ConsistencyCapability,
+            LTXConsistencyCapability(self),
         )
         if self.config["model"]["name"] == "ltx_t2av_ar":
             self.capabilities.register(

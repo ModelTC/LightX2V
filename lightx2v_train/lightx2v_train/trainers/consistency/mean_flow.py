@@ -23,10 +23,21 @@ from .objective_factory import CONSISTENCY_OBJECTIVE_REGISTER
 
 def _where_condition(mask: Tensor, positive: Any, negative: Any):
     if torch.is_tensor(positive):
+        if not torch.is_tensor(negative):
+            raise TypeError(f"MeanFlow condition branches have incompatible types: Tensor and {type(negative).__name__}.")
         return torch.where(expand_time(mask, positive.ndim), positive, negative)
     if isinstance(positive, Mapping):
+        if not isinstance(negative, Mapping) or positive.keys() != negative.keys():
+            raise ValueError("MeanFlow condition mappings must have identical keys.")
         return {key: _where_condition(mask, value, negative[key]) for key, value in positive.items()}
-    raise TypeError(f"MeanFlow condition dropout does not support {type(positive).__name__}.")
+    if isinstance(positive, (list, tuple)):
+        if not isinstance(negative, type(positive)) or len(positive) != len(negative):
+            raise ValueError("MeanFlow condition sequences must have identical types and lengths.")
+        values = [_where_condition(mask, value, negative[index]) for index, value in enumerate(positive)]
+        return type(positive)(values)
+    if positive == negative:
+        return positive
+    raise ValueError(f"MeanFlow cannot mix non-tensor condition metadata with different values: {positive!r} and {negative!r}.")
 
 
 @CONSISTENCY_OBJECTIVE_REGISTER("mean_flow")
@@ -59,9 +70,8 @@ class MeanFlowObjective(ConsistencyObjective):
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
         require_singleton_clean(clean)
-        latent_hw = (clean.shape[-2], clean.shape[-1])
-        first = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device).float()
-        second = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device).float()
+        first = scheduler.sample_timestep_or_sigma(latent_hw=context.latent_hw).to(clean.device).float()
+        second = scheduler.sample_timestep_or_sigma(latent_hw=context.latent_hw).to(clean.device).float()
         t = torch.maximum(first, second)
         random_r = torch.minimum(first, second)
         use_random_r = torch.rand(1, device=clean.device) < self.config.random_endpoint_probability

@@ -13,15 +13,9 @@ from lightx2v_train.model_capabilities import (
     LossResult,
     SFTStepContext,
 )
-from lightx2v_train.model_zoo.native.ltx2 import (
-    AudioLatentShape,
-    AudioPatchifier,
-    Modality,
-    SpatioTemporalScaleFactors,
-    VideoLatentPatchifier,
-    VideoLatentShape,
-    get_pixel_coords,
-)
+from lightx2v_train.model_zoo.native.ltx2 import Modality
+
+from .common import LTXLatentCodec
 
 
 class LTXFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
@@ -33,8 +27,7 @@ class LTXFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
         self.video_loss_weight = float(config.get("video_loss_weight", 1.0))
         self.audio_loss_weight = float(config.get("audio_loss_weight", 1.0))
         self.default_fps = float(config.get("default_fps", 24.0))
-        self.video_patchifier = VideoLatentPatchifier(patch_size=1)
-        self.audio_patchifier = AudioPatchifier(patch_size=1)
+        self.latent_codec = LTXLatentCodec(model, default_fps=self.default_fps)
 
     def compute_loss(
         self,
@@ -42,16 +35,13 @@ class LTXFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
         context: SFTStepContext,
     ) -> LossResult:
         inputs = batch["inputs"]
-        video_data = inputs.get("video_latents")
-        audio_data = inputs.get("audio_latents")
         conditions = batch["conditioning"].get("positive")
-        if video_data is None or audio_data is None or conditions is None:
-            raise KeyError("LTX flow matching expects inputs.video_latents, inputs.audio_latents, and conditioning.positive.")
-
-        video_latents = self._video_latents(video_data, context.running_dtype)
-        audio_latents = self._audio_latents(audio_data, context.running_dtype)
-        video_tokens = self.video_patchifier.patchify(video_latents)
-        audio_tokens = self.audio_patchifier.patchify(audio_latents)
+        if conditions is None:
+            raise KeyError("LTX flow matching expects conditioning.positive.")
+        video_data, _, video_latents, _, video_tokens, audio_tokens = self.latent_codec.prepare(
+            inputs,
+            context.running_dtype,
+        )
 
         video_context, audio_context, context_mask = self.model.prepare_text_condition(conditions)
         video_noisy = self._initialize_noisy_target(
@@ -66,18 +56,10 @@ class LTXFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
         video_input, video_target, video_timesteps, video_mask, video_sigmas = video_noisy
         audio_input, audio_target, audio_timesteps, audio_mask, audio_sigmas = audio_noisy
 
-        video_positions = self._video_positions(
+        video_positions, audio_positions = self.latent_codec.positions(
             video_data,
             video_latents,
-        )
-        audio_positions = self.audio_patchifier.get_patch_grid_bounds(
-            output_shape=AudioLatentShape(
-                frames=audio_tokens.shape[1],
-                mel_bins=16,
-                batch=1,
-                channels=8,
-            ),
-            device=audio_tokens.device,
+            audio_tokens,
         )
         video = Modality(
             enabled=True,
@@ -124,26 +106,6 @@ class LTXFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
             },
         )
 
-    def _video_latents(self, data, dtype):
-        latents = data["latents"].to(device=self.model.device, dtype=dtype)
-        if latents.ndim == 4:
-            latents = latents.unsqueeze(0)
-        if latents.ndim != 5:
-            raise ValueError(f"LTX video latents must have shape [B,C,F,H,W] or [C,F,H,W], got {tuple(latents.shape)}.")
-        if latents.shape[0] != 1:
-            raise ValueError("LTX flow matching only supports physical batch size 1.")
-        return latents.contiguous()
-
-    def _audio_latents(self, data, dtype):
-        latents = data["latents"].to(device=self.model.device, dtype=dtype)
-        if latents.ndim == 3:
-            latents = latents.unsqueeze(0)
-        if latents.ndim != 4:
-            raise ValueError(f"LTX audio latents must have shape [B,C,T,F] or [C,T,F], got {tuple(latents.shape)}.")
-        if latents.shape[0] != 1:
-            raise ValueError("LTX flow matching only supports physical batch size 1.")
-        return latents.contiguous()
-
     @staticmethod
     def _initialize_noisy_target(latents: Tensor, scheduler, sigmas=None):
         _, sequence_length, _ = latents.shape
@@ -171,29 +133,6 @@ class LTXFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
             device=latents.device,
         )
         return noisy, target, timesteps, mask, sigmas
-
-    def _video_positions(self, data, latents):
-        frames = int(data["num_frames"][0].item()) if "num_frames" in data else latents.shape[2]
-        height = int(data["height"][0].item()) if "height" in data else latents.shape[3]
-        width = int(data["width"][0].item()) if "width" in data else latents.shape[4]
-        fps = float(data["fps"][0].item()) if "fps" in data else self.default_fps
-        latent_coords = self.video_patchifier.get_patch_grid_bounds(
-            output_shape=VideoLatentShape(
-                frames=frames,
-                height=height,
-                width=width,
-                batch=1,
-                channels=128,
-            ),
-            device=latents.device,
-        )
-        positions = get_pixel_coords(
-            latent_coords=latent_coords,
-            scale_factors=SpatioTemporalScaleFactors.default(),
-            causal_fix=True,
-        ).float()
-        positions[:, 0, ...] /= fps
-        return positions
 
     @staticmethod
     def _masked_mse(prediction, target, mask):

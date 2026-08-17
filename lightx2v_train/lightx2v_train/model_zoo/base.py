@@ -56,22 +56,6 @@ class BaseModel(CapabilityProvider):
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
 
-    def configure_consistency_model(self, capabilities):
-        """Install optional architecture pieces required by an objective."""
-        capabilities = frozenset(capabilities)
-        if capabilities:
-            names = ", ".join(sorted(capabilities))
-            raise NotImplementedError(f"{self.__class__.__name__} does not support consistency capabilities: {names}.")
-
-    def set_consistency_modules_trainable(self):
-        """Re-enable objective-specific modules after LoRA freezes the backbone."""
-
-    def consistency_auxiliary_parameter_names(self):
-        return ()
-
-    def predict_consistency_log_variance(self, time):
-        raise NotImplementedError(f"{self.__class__.__name__} does not implement a consistency log-variance head.")
-
     def add_lora(self, rank, alpha, target_modules):
         lora_config = LoraConfig(
             r=rank,
@@ -271,8 +255,19 @@ class BaseModel(CapabilityProvider):
             self.denoiser_module().delete_adapters(adapter_name)
             self._infer_lora_adapter_name = None
 
-    def save_lora_weights(self, save_dir, adapter_name=None, weights_subdir=None):
-        peft_state_dict, auxiliary_state_dict = self._get_lora_and_auxiliary_state_dict_for_save(adapter_name=adapter_name)
+    def save_lora_weights(
+        self,
+        save_dir,
+        adapter_name=None,
+        weights_subdir=None,
+        *,
+        auxiliary_parameter_names=(),
+        auxiliary_weights_name=None,
+    ):
+        peft_state_dict, auxiliary_state_dict = self._get_lora_and_auxiliary_state_dict_for_save(
+            adapter_name=adapter_name,
+            auxiliary_parameter_names=auxiliary_parameter_names,
+        )
         if not is_main_process():
             return
 
@@ -284,15 +279,21 @@ class BaseModel(CapabilityProvider):
         else:
             save_file(lora_state_dict, os.path.join(output_dir, "pytorch_lora_weights.safetensors"))
         if auxiliary_state_dict:
+            if not auxiliary_weights_name:
+                raise ValueError("auxiliary_weights_name is required when auxiliary parameters are saved.")
             save_file(
                 auxiliary_state_dict,
-                os.path.join(output_dir, "consistency_auxiliary.safetensors"),
+                os.path.join(output_dir, auxiliary_weights_name),
             )
 
     def _get_lora_state_dict_for_save(self, adapter_name=None):
         return self._get_lora_and_auxiliary_state_dict_for_save(adapter_name=adapter_name)[0]
 
-    def _get_lora_and_auxiliary_state_dict_for_save(self, adapter_name=None):
+    def _get_lora_and_auxiliary_state_dict_for_save(
+        self,
+        adapter_name=None,
+        auxiliary_parameter_names=(),
+    ):
         denoiser = self.denoiser_module()
         peft_kwargs = {} if adapter_name is None else {"adapter_name": adapter_name}
         if not is_fsdp2_module(denoiser):
@@ -309,10 +310,10 @@ class BaseModel(CapabilityProvider):
                 return {}, {}
 
         peft_state_dict = get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
-        auxiliary_names = set(self.consistency_auxiliary_parameter_names())
+        auxiliary_names = set(auxiliary_parameter_names)
         missing = auxiliary_names - state_dict.keys()
         if missing:
-            raise RuntimeError(f"Consistency auxiliary parameters are missing from the model state: {sorted(missing)}")
+            raise RuntimeError(f"Auxiliary parameters are missing from the model state: {sorted(missing)}")
         auxiliary_state_dict = {name: state_dict[name].detach().cpu().contiguous() for name in auxiliary_names}
         return peft_state_dict, auxiliary_state_dict
 
@@ -331,44 +332,26 @@ class BaseModel(CapabilityProvider):
         if incompatible and incompatible.unexpected_keys:
             logger.warning("Unexpected keys when resuming LoRA: {}", incompatible.unexpected_keys)
 
-    def save_consistency_auxiliary_weights(self, save_dir):
-        names = set(self.consistency_auxiliary_parameter_names())
+    def load_auxiliary_weights(
+        self,
+        checkpoint_dir,
+        parameter_names,
+        *,
+        weights_name,
+    ):
+        names = set(parameter_names)
         if not names:
             return
-        denoiser = self.denoiser_module()
-        if is_fsdp2_module(denoiser):
-            options = StateDictOptions(
-                full_state_dict=True,
-                cpu_offload=True,
-                ignore_frozen_params=False,
-                strict=False,
-            )
-            state_dict, _ = get_state_dict(denoiser, (), options=options)
-        else:
-            state_dict = denoiser.state_dict()
-        if not is_main_process():
-            return
-        missing = names - state_dict.keys()
-        if missing:
-            raise RuntimeError(f"Consistency auxiliary parameters are missing from the model state: {sorted(missing)}")
-        auxiliary = {name: state_dict[name].detach().cpu().contiguous() for name in names if name in state_dict}
-        if auxiliary:
-            save_file(auxiliary, os.path.join(save_dir, "consistency_auxiliary.safetensors"))
-
-    def load_consistency_auxiliary_weights(self, checkpoint_dir):
-        names = set(self.consistency_auxiliary_parameter_names())
-        if not names:
-            return
-        path = os.path.join(checkpoint_dir, "consistency_auxiliary.safetensors")
+        path = os.path.join(checkpoint_dir, weights_name)
         if not os.path.exists(path):
-            raise RuntimeError(f"Consistency auxiliary weights were not found at {path}.")
+            raise RuntimeError(f"Auxiliary weights were not found at {path}.")
         incompatible = self.denoiser_module().load_state_dict(load_file(path), strict=False)
         missing = [name for name in incompatible.missing_keys if name in names]
         unexpected = [name for name in incompatible.unexpected_keys if name in names]
         if missing:
-            raise RuntimeError(f"Missing consistency auxiliary keys in {path}: {missing}")
+            raise RuntimeError(f"Missing auxiliary keys in {path}: {missing}")
         if unexpected:
-            logger.warning("Unexpected consistency auxiliary keys: {}", unexpected)
+            logger.warning("Unexpected auxiliary keys in {}: {}", path, unexpected)
 
     def load_full_weights_for_resume(self, resume_ckpt_path):
         raise NotImplementedError(f"{self.__class__.__name__} must define load_full_weights_for_resume().")

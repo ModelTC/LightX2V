@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Collection
 from typing import Any, Mapping
 
 import torch
@@ -110,9 +111,21 @@ class CommonParallelCapability(BoundCapability, ParallelCapability):
 
 
 class CommonCheckpointCapability(BoundCapability, CheckpointCapability):
+    _CONSISTENCY_AUXILIARY_WEIGHTS_NAME = "consistency_auxiliary.safetensors"
+
+    def _consistency_auxiliary_parameter_names(self) -> tuple[str, ...]:
+        capabilities = self.model.ensure_capabilities()
+        if not capabilities.supports(ConsistencyCapability):
+            return ()
+        return capabilities.require(ConsistencyCapability).auxiliary_parameter_names()
+
     def save_weights(self, save_dir, train_type) -> None:
         if train_type == "lora":
-            self.model.save_lora_weights(save_dir)
+            self.model.save_lora_weights(
+                save_dir,
+                auxiliary_parameter_names=self._consistency_auxiliary_parameter_names(),
+                auxiliary_weights_name=self._CONSISTENCY_AUXILIARY_WEIGHTS_NAME,
+            )
         elif is_main_process():
             torch.save(
                 self.model.denoiser_module().state_dict(),
@@ -122,7 +135,11 @@ class CommonCheckpointCapability(BoundCapability, CheckpointCapability):
     def load_weights(self, save_dir, train_type) -> None:
         if train_type == "lora":
             self.model.load_lora_weights_for_resume(save_dir)
-            self.model.load_consistency_auxiliary_weights(save_dir)
+            self.model.load_auxiliary_weights(
+                save_dir,
+                self._consistency_auxiliary_parameter_names(),
+                weights_name=self._CONSISTENCY_AUXILIARY_WEIGHTS_NAME,
+            )
             return
         path = os.path.join(save_dir, "model_state.pt")
         if not os.path.exists(path):
@@ -180,11 +197,17 @@ class GenericFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
 
 
 class GenericConsistencyCapability(BoundCapability, ConsistencyCapability):
-    def configure(self, features) -> None:
-        self.model.configure_consistency_model(features)
+    def configure(self, features: Collection[str]) -> None:
+        features = frozenset(features)
+        if features:
+            names = ", ".join(sorted(features))
+            raise NotImplementedError(f"{type(self.model).__name__} does not support consistency features: {names}.")
 
     def restore_trainable_auxiliary(self) -> None:
-        self.model.set_consistency_modules_trainable()
+        pass
+
+    def auxiliary_parameter_names(self) -> tuple[str, ...]:
+        return ()
 
     def encode_latent(self, batch):
         return _require_singleton_tensor(
@@ -194,6 +217,10 @@ class GenericConsistencyCapability(BoundCapability, ConsistencyCapability):
 
     def encode_condition(self, batch):
         return self.model.encode_condition(batch)
+
+    def sampling_latent_hw(self, batch, clean) -> tuple[int, int]:
+        del batch
+        return int(clean.shape[-2]), int(clean.shape[-1])
 
     def predict(self, request, path):
         prediction = self.model.predict_denoiser_output(
@@ -211,7 +238,8 @@ class GenericConsistencyCapability(BoundCapability, ConsistencyCapability):
         )
 
     def predict_log_variance(self, time):
-        return self.model.predict_consistency_log_variance(time)
+        del time
+        raise NotImplementedError(f"{type(self.model).__name__} does not provide a consistency log-variance head.")
 
     def set_frozen(self, training: bool = False) -> None:
         denoiser = self.model.denoiser_module()

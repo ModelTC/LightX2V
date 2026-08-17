@@ -9,8 +9,9 @@ from peft import LoraConfig, inject_adapter_in_model
 from peft.utils import set_peft_model_state_dict
 from safetensors.torch import load_file
 
-from lightx2v_train.model_capabilities import DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters.common import GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_consistency_capability import LingBotConsistencyCapability
 from lightx2v_train.model_zoo.wan.capability_adapters.wan_distillation_capability import (
     LingBotDistillationCapability,
 )
@@ -54,6 +55,10 @@ class LingBotVideoModel(BaseModel):
         self.capabilities.register(
             DistillationCapability,
             LingBotDistillationCapability(self),
+        )
+        self.capabilities.register(
+            ConsistencyCapability,
+            LingBotConsistencyCapability(self),
         )
 
     vae_scale_factor_temporal = 4

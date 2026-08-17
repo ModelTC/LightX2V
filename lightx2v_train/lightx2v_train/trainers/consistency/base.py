@@ -118,6 +118,7 @@ class ConsistencyBatch:
 class ConsistencyStepContext:
     iteration: int
     global_batch_size: int
+    latent_hw: tuple[int, int]
 
 
 @dataclass

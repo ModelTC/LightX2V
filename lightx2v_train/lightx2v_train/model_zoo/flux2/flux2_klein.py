@@ -4,8 +4,9 @@ import torch
 from diffusers import AutoencoderKLFlux2, Flux2KleinPipeline, Flux2Transformer2DModel
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
-from lightx2v_train.model_capabilities import DistillationCapability, DopsdCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, DopsdCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.flux2.capability_adapters import Flux2ConsistencyCapability
 from lightx2v_train.model_zoo.flux2.capability_adapters.flux2_dopsd_capability import (
     Flux2DopsdCapability,
 )
@@ -35,6 +36,10 @@ class Flux2KleinModel(BaseModel):
         self.capabilities.register(
             DistillationCapability,
             GenericDistillationCapability(self),
+        )
+        self.capabilities.register(
+            ConsistencyCapability,
+            Flux2ConsistencyCapability(self),
         )
         self.capabilities.register(
             DopsdCapability,

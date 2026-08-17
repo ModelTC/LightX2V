@@ -90,8 +90,7 @@ class TCMObjective(CMObjective):
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
         require_singleton_clean(clean)
-        latent_hw = (clean.shape[-2], clean.shape[-1])
-        t = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device).float()
+        t = scheduler.sample_timestep_or_sigma(latent_hw=context.latent_hw).to(clean.device).float()
         t = t.clamp_min(self.tcm_config.transition_time + self.config.time_pair.safety_epsilon)
 
         boundary_mask = torch.rand(1, device=clean.device) < self.tcm_config.boundary_probability

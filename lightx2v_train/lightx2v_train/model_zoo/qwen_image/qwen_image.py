@@ -1,13 +1,12 @@
-import copy
 from dataclasses import dataclass
 
 import torch
 from diffusers import AutoencoderKLQwenImage, QwenImagePipeline, QwenImageTransformer2DModel
 from diffusers.image_processor import VaeImageProcessor
-from torch import nn
 
 from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
-from lightx2v_train.model_zoo.capability_adapters.common import GenericConsistencyCapability, GenericDistillationCapability, GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from ..base import BaseModel
@@ -42,7 +41,7 @@ class QwenImageModel(BaseModel):
         )
         self.capabilities.register(
             ConsistencyCapability,
-            GenericConsistencyCapability(self),
+            QwenImageConsistencyCapability(self),
         )
 
     def load_components(self, transformer_only=False, reference_model=None):
@@ -80,57 +79,6 @@ class QwenImageModel(BaseModel):
         # Qwen-Image follows x_t = (1 - t) * x_0 + t * noise and predicts
         # the corresponding velocity noise - x_0.
         return "velocity"
-
-    def configure_consistency_model(self, capabilities):
-        capabilities = frozenset(capabilities)
-        unsupported = capabilities - {"endpoint_time", "log_variance"}
-        if unsupported:
-            names = ", ".join(sorted(unsupported))
-            raise NotImplementedError(f"QwenImageModel does not support consistency capabilities: {names}.")
-
-        transformer = self.transformer
-        if "log_variance" in capabilities and not hasattr(transformer, "logvar_linear"):
-            transformer.logvar_linear = nn.Linear(transformer.inner_dim, 1).to(
-                device=self.device,
-                dtype=self.running_dtype,
-            )
-
-        if "endpoint_time" in capabilities:
-            if not hasattr(transformer, "r_timestep_embedder"):
-                transformer.r_timestep_embedder = copy.deepcopy(transformer.time_text_embed.timestep_embedder)
-            self._consistency_endpoint_time = None
-        if "endpoint_time" in capabilities and not hasattr(self, "_consistency_endpoint_hook"):
-            self._consistency_endpoint_hook = transformer.time_text_embed.register_forward_hook(self._add_endpoint_time_embedding)
-        self._consistency_capabilities = getattr(self, "_consistency_capabilities", frozenset()) | capabilities
-
-    def _add_endpoint_time_embedding(self, time_embedder, inputs, output):
-        endpoint_time = getattr(self, "_consistency_endpoint_time", None)
-        if endpoint_time is None:
-            return output
-        projected = time_embedder.time_proj(endpoint_time)
-        projected = projected.to(device=output.device, dtype=output.dtype)
-        endpoint_embedding = self.transformer.r_timestep_embedder(projected)
-        return output + endpoint_embedding.to(dtype=output.dtype)
-
-    def set_consistency_modules_trainable(self):
-        transformer = self.transformer
-        for name in ("logvar_linear", "r_timestep_embedder"):
-            module = getattr(transformer, name, None)
-            if module is not None:
-                module.requires_grad_(True)
-
-    def consistency_auxiliary_parameter_names(self):
-        prefixes = ("logvar_linear.", "r_timestep_embedder.")
-        return tuple(name for name, _ in self.transformer.named_parameters() if name.startswith(prefixes))
-
-    def predict_consistency_log_variance(self, time):
-        if not hasattr(self.transformer, "logvar_linear"):
-            raise RuntimeError("The Qwen consistency log-variance head has not been configured.")
-        time_embedder = self.transformer.time_text_embed
-        projected = time_embedder.time_proj(time)
-        dtype = self.transformer.logvar_linear.weight.dtype
-        embedding = time_embedder.timestep_embedder(projected.to(device=self.device, dtype=dtype))
-        return self.transformer.logvar_linear(embedding)
 
     def fsdp2_shard_plan(self, fsdp_config):
         reshard_config = fsdp_config["reshard_after_forward"]
@@ -182,23 +130,16 @@ class QwenImageModel(BaseModel):
             width=w,
         )
 
-    def denoise(self, denoiser_input, timestep_or_sigma, condition, endpoint_time=None):
-        if endpoint_time is not None and not hasattr(self.transformer, "r_timestep_embedder"):
-            raise RuntimeError("endpoint_time was provided before Qwen endpoint conditioning was configured.")
-        previous_endpoint = getattr(self, "_consistency_endpoint_time", None)
-        self._consistency_endpoint_time = endpoint_time
-        try:
-            return self.transformer(
-                hidden_states=denoiser_input.hidden_states,
-                timestep=timestep_or_sigma,  # timestep_or_sigma is in [0, 1] not [0, 1000]
-                guidance=None,
-                encoder_hidden_states_mask=condition["prompt_embed_mask"],
-                encoder_hidden_states=condition["prompt_embed"],
-                img_shapes=denoiser_input.img_shapes,
-                return_dict=False,
-            )[0]
-        finally:
-            self._consistency_endpoint_time = previous_endpoint
+    def denoise(self, denoiser_input, timestep_or_sigma, condition):
+        return self.transformer(
+            hidden_states=denoiser_input.hidden_states,
+            timestep=timestep_or_sigma,  # timestep_or_sigma is in [0, 1] not [0, 1000]
+            guidance=None,
+            encoder_hidden_states_mask=condition["prompt_embed_mask"],
+            encoder_hidden_states=condition["prompt_embed"],
+            img_shapes=denoiser_input.img_shapes,
+            return_dict=False,
+        )[0]
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
         return QwenImagePipeline._unpack_latents(

@@ -6,8 +6,9 @@ from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.transformers import LongCatImageTransformer2DModel
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import prepare_pos_ids
 
-from lightx2v_train.model_capabilities import DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.longcat_image.capability_adapters import LongCatImageConsistencyCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from ..base import BaseModel
@@ -34,6 +35,10 @@ class LongCatImageModel(BaseModel):
         self.capabilities.register(
             DistillationCapability,
             GenericDistillationCapability(self),
+        )
+        self.capabilities.register(
+            ConsistencyCapability,
+            LongCatImageConsistencyCapability(self),
         )
 
     def load_components(self, transformer_only=False, reference_model=None):

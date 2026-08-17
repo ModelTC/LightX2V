@@ -215,6 +215,7 @@ class ConsistencyTrainer(FlowMatchingTrainer):
             context = ConsistencyStepContext(
                 iteration=int(getattr(self, "current_train_iteration", 0)),
                 global_batch_size=(clean.shape[0] * get_data_parallel_world_size() * self.gradient_accumulation_iters),
+                latent_hw=self.consistency.sampling_latent_hw(sample, clean),
             )
             training_state = self.objective.sample_training_state(
                 clean,
@@ -256,5 +257,10 @@ class ConsistencyTrainer(FlowMatchingTrainer):
 
         negative_sample = dict(sample)
         negative_sample["conditioning"] = dict(conditioning)
+        cached_negative = negative_sample["conditioning"].get("negative")
+        if cached_negative is None:
+            negative_sample["conditioning"].pop("positive", None)
+        else:
+            negative_sample["conditioning"]["positive"] = cached_negative
         negative_sample["conditioning"]["prompt"] = encoded_prompt
         return self.consistency.encode_condition(negative_sample)

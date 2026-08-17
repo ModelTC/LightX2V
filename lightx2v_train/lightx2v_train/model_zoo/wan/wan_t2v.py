@@ -13,6 +13,7 @@ from safetensors.torch import load_file
 
 from lightx2v_train.model_capabilities import (
     AutoregressiveDistillationCapability,
+    ConsistencyCapability,
     DistillationCapability,
     FlowMatchingSFTCapability,
     TeacherForcingCapability,
@@ -21,6 +22,7 @@ from lightx2v_train.model_zoo.capability_adapters.common import GenericFlowMatch
 from lightx2v_train.model_zoo.wan.capability_adapters.wan_autoregressive_distillation_capability import (
     WanAutoregressiveDistillationCapability,
 )
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_consistency_capability import WanConsistencyCapability
 from lightx2v_train.model_zoo.wan.capability_adapters.wan_distillation_capability import (
     WanDistillationCapability,
 )
@@ -59,6 +61,10 @@ class WanT2VModel(BaseModel):
         self.capabilities.register(
             DistillationCapability,
             WanDistillationCapability(self),
+        )
+        self.capabilities.register(
+            ConsistencyCapability,
+            WanConsistencyCapability(self),
         )
         if self.use_causal_transformer:
             self.capabilities.register(

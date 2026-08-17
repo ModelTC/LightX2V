@@ -133,12 +133,10 @@ class PCMObjective(ConsistencyObjective):
         scheduler,
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
-        del context
         require_singleton_clean(clean)
-        latent_hw = (clean.shape[-2], clean.shape[-1])
         time = self.time_grid.sample(
             scheduler,
-            latent_hw=latent_hw,
+            latent_hw=context.latent_hw,
             device=clean.device,
         )
         return {

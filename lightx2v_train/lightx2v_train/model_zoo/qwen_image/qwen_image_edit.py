@@ -6,8 +6,9 @@ from PIL import Image
 from diffusers import AutoencoderKLQwenImage, QwenImageEditPlusPipeline, QwenImageTransformer2DModel
 from diffusers.image_processor import VaeImageProcessor
 
-from lightx2v_train.model_capabilities import FlowMatchingSFTCapability
+from lightx2v_train.model_capabilities import ConsistencyCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters.common import GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from ..base import BaseModel
@@ -49,6 +50,10 @@ class QwenImageEditModel(BaseModel):
         self.capabilities.register(
             FlowMatchingSFTCapability,
             GenericFlowMatchingCapability(self),
+        )
+        self.capabilities.register(
+            ConsistencyCapability,
+            QwenImageConsistencyCapability(self),
         )
 
     def load_components(self, transformer_only=False, reference_model=None):

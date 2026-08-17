@@ -49,8 +49,7 @@ class SCMObjective(ConsistencyObjective):
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
         require_singleton_clean(clean)
-        latent_hw = (clean.shape[-2], clean.shape[-1])
-        t = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device).float()
+        t = scheduler.sample_timestep_or_sigma(latent_hw=context.latent_hw).to(clean.device).float()
         return {
             "noise": torch.randn_like(clean) * self.config.sigma_data,
             "t": t,

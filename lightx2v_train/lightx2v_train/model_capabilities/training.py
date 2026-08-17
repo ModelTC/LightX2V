@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
@@ -54,36 +55,44 @@ class TeacherForcingCapability(ModelCapability):
 
 class ConsistencyCapability(ModelCapability):
     @abstractmethod
-    def configure(self, features) -> None:
-        pass
+    def configure(self, features: Collection[str]) -> None:
+        """Install model structure required by the selected objective."""
 
     @abstractmethod
     def restore_trainable_auxiliary(self) -> None:
-        pass
+        """Make objective-specific parameters trainable after backbone setup."""
+
+    @abstractmethod
+    def auxiliary_parameter_names(self) -> tuple[str, ...]:
+        """Return configured denoiser keys stored beside parameter-efficient weights."""
 
     @abstractmethod
     def encode_latent(self, batch):
-        pass
+        """Encode one training sample into the objective's clean state."""
 
     @abstractmethod
     def encode_condition(self, batch):
-        pass
+        """Encode one training sample's conditioning inputs."""
+
+    @abstractmethod
+    def sampling_latent_hw(self, batch, clean) -> tuple[int, int]:
+        """Return latent spatial geometry used by resolution-aware schedulers."""
 
     @abstractmethod
     def predict(self, request, path):
-        pass
+        """Run the model and convert its output to the requested parameterization."""
 
     @abstractmethod
     def predict_log_variance(self, time):
-        pass
+        """Predict the learned loss log-variance required by sCM."""
 
     @abstractmethod
     def set_frozen(self, training: bool = False) -> None:
-        pass
+        """Freeze the denoiser while selecting its train/eval execution mode."""
 
     @abstractmethod
     def denoiser(self):
-        pass
+        """Return the module owned by this capability."""
 
 
 class DistillationCapability(ModelCapability):

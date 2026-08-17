@@ -162,8 +162,7 @@ class CMObjective(ConsistencyObjective):
         context: ConsistencyStepContext,
     ) -> Mapping[str, Tensor]:
         require_singleton_clean(clean)
-        latent_hw = (clean.shape[-2], clean.shape[-1])
-        sampled_t = scheduler.sample_timestep_or_sigma(latent_hw=latent_hw).to(clean.device)
+        sampled_t = scheduler.sample_timestep_or_sigma(latent_hw=context.latent_hw).to(clean.device)
         pair = self.time_pair_sampler.sample(sampled_t, context)
         return {
             "noise": torch.randn_like(clean),
