@@ -1,15 +1,16 @@
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import MiniMaxH3TensorParallelLinear
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
 def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
     kind = "Default-ForceFp32" if force_fp32 else "Default"
+    lora_kwargs = {"lora_prefix": "token_refiner"} if name.startswith("token_refiner.") else {}
     if config is not None and config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        return MiniMaxH3TensorParallelLinear(
+        tp_mm_type = config.get("tp_mm_type", "TensorParallel")
+        return MM_WEIGHT_REGISTER[tp_mm_type](
             weight_name=f"{name}.weight",
             bias_name=f"{name}.bias" if bias else None,
             mm_type=kind,
@@ -17,8 +18,10 @@ def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
             tp_rank=dist.get_rank(tp_group),
             tp_size=dist.get_world_size(tp_group),
             split_dim=tp_split,
+            lora_column_chunks=2 if ".ff.net.0.proj" in name else 1,
+            **lora_kwargs,
         )
-    return MM_WEIGHT_REGISTER[kind](f"{name}.weight", f"{name}.bias" if bias else None)
+    return MM_WEIGHT_REGISTER[kind](f"{name}.weight", f"{name}.bias" if bias else None, **lora_kwargs)
 
 
 def _rms(config, name, eps):
@@ -39,12 +42,18 @@ class MiniMaxH3RefinerAttentionWeights(WeightModule):
             "norm_k",
             _rms(config, f"{prefix}.norm_k.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
         )
-        attn_type = config.get("attn_type", "flash_attn3")
+        # H3's text refiner attends over a short text-only sequence, while the
+        # main transformer attends over the much longer packed AV sequence.
+        # Allow sparse main attention without paying its setup/quality cost in
+        # the refiner. Existing configs retain their previous shared backend.
+        attn_type = config.get("refiner_attn_type", config.get("attn_type", "flash_attn3"))
         attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
         if attn_type == "dynamic_sparse_attn":
             calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
         else:
             calculate = attention_cls()
+        if attn_type == "sol_attn":
+            calculate.set_config(config.get("sol_attn_setting", {}))
         self.add_module("calculate", calculate)
         self.add_module("to_out", _linear(f"{prefix}.to_out.0", config=config, tp_split="row"))
 

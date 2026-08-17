@@ -129,29 +129,15 @@ class Embeddings1DConnector(torch.nn.Module):
             self.learnable_registers = torch.nn.Parameter(torch.rand(self.num_learnable_registers, self.inner_dim, dtype=torch.bfloat16) * 2.0 - 1.0)
 
     def _replace_padded_with_learnable_registers(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        assert hidden_states.shape[1] % self.num_learnable_registers == 0, (
-            f"Hidden states sequence length {hidden_states.shape[1]} must be divisible by num_learnable_registers {self.num_learnable_registers}."
-        )
+        batch_size, seq_len, _ = hidden_states.shape
+        assert seq_len % self.num_learnable_registers == 0, f"Hidden states sequence length {seq_len} must be divisible by num_learnable_registers {self.num_learnable_registers}."
 
-        num_registers_duplications = hidden_states.shape[1] // self.num_learnable_registers
-        learnable_registers = torch.tile(self.learnable_registers, (num_registers_duplications, 1))
-        attention_mask_binary = (attention_mask.squeeze(1).squeeze(1).unsqueeze(-1) >= -9000.0).int()
-
-        non_zero_hidden_states = hidden_states[:, attention_mask_binary.squeeze().bool(), :]
-        non_zero_nums = non_zero_hidden_states.shape[1]
-        pad_length = hidden_states.shape[1] - non_zero_nums
-        adjusted_hidden_states = torch.nn.functional.pad(non_zero_hidden_states, pad=(0, 0, 0, pad_length), value=0)
-        flipped_mask = torch.flip(attention_mask_binary, dims=[1])
-        hidden_states = flipped_mask * adjusted_hidden_states + (1 - flipped_mask) * learnable_registers
-
-        attention_mask = torch.full_like(
-            attention_mask,
-            0.0,
-            dtype=attention_mask.dtype,
-            device=attention_mask.device,
-        )
-
-        return hidden_states, attention_mask
+        registers = self.learnable_registers.repeat(seq_len // self.num_learnable_registers, 1).to(hidden_states.dtype)
+        registers = registers.unsqueeze(0).expand(batch_size, -1, -1)
+        binary_mask = attention_mask[:, 0, 0, :].unsqueeze(-1) >= 0
+        binary_mask = binary_mask.to(hidden_states.dtype)
+        hidden_states = binary_mask * hidden_states + (1 - binary_mask) * registers
+        return hidden_states, torch.zeros_like(attention_mask)
 
     def forward(
         self,
@@ -170,7 +156,7 @@ class Embeddings1DConnector(torch.nn.Module):
             hidden_states, attention_mask = self._replace_padded_with_learnable_registers(hidden_states, attention_mask)
 
         indices_grid = torch.arange(hidden_states.shape[1], dtype=torch.float32, device=hidden_states.device)
-        indices_grid = indices_grid[None, None, :]
+        indices_grid = indices_grid[None, None, :].expand(hidden_states.shape[0], -1, -1)
         freq_grid_generator = generate_freq_grid_np if self.double_precision_rope else generate_freq_grid_pytorch
         freqs_cis = precompute_freqs_cis(
             indices_grid=indices_grid,

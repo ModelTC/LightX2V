@@ -78,7 +78,7 @@ class NeoppPreInfer:
         self.merge_size = 2
         self.embed_dim = config["vision_config"]["hidden_size"]
         self.add_noise_scale_embedding = config.get("add_noise_scale_embedding", True)
-        self.noise_scale_max_value = config["noise_scale_max_value"]
+        self.noise_scale_max_value = config.get("noise_scale_max_value", 8.0)
         self.frequency_embedding_size = 256
         self.rope_dim_part = self.embed_dim // 2
         self.cos_cached_x, self.sin_cached_x = precompute_rope_freqs_sincos(

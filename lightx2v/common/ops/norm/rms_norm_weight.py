@@ -304,6 +304,27 @@ class RMSWeightTP(RMSWeightTemplate):
         return output if weight is None else (output * weight).to(self.infer_dtype)
 
 
+@RMS_WEIGHT_REGISTER("TensorParallelFP32")
+class RMSWeightTPFP32(RMSWeightTP):
+    """Tensor-parallel RMSNorm with FP32 accumulation and computation."""
+
+    def apply(self, input_tensor):
+        input_dtype = input_tensor.dtype
+        input_fp32 = input_tensor.float()
+        local_sum = input_fp32.square().sum(dim=-1, keepdim=True)
+
+        if self.tp_size > 1 and self.tp_group is not None:
+            dist.all_reduce(local_sum, op=dist.ReduceOp.SUM, group=self.tp_group)
+
+        global_hidden_dim = input_tensor.shape[-1] * self.tp_size
+        output = input_fp32 * torch.rsqrt(local_sum / global_hidden_dim + self.eps)
+
+        weight = self._get_actual_weight()
+        if weight is not None:
+            output = output * weight.float()
+        return output.to(input_dtype)
+
+
 @RMS_WEIGHT_REGISTER("sgl-kernel")
 class RMSWeightSgl(RMSWeight):
     def __init__(

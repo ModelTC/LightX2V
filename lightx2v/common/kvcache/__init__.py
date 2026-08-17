@@ -2,6 +2,7 @@ from .fifo import FIFOKVCachePool
 from .manager import KVCacheManager
 from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
 from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, SpatialRollingKVCachePool
+from .static import StaticKVCachePool
 
 __all__ = [
     "FIFOKVCachePool",
@@ -11,4 +12,5 @@ __all__ = [
     "SpatialRollingKVCachePool",
     "KIVIQuantRollingKVCachePool",
     "StepKiviQuantRollingKVCachePool",
+    "StaticKVCachePool",
 ]

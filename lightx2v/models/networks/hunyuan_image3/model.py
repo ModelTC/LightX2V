@@ -12,6 +12,14 @@ from lightx2v.models.networks.hunyuan_image3.infer.module_io import HunyuanImage
 from lightx2v.models.networks.hunyuan_image3.infer.post_infer import HunyuanImage3PostInfer
 from lightx2v.models.networks.hunyuan_image3.infer.pre_infer import HunyuanImage3PreInfer
 from lightx2v.models.networks.hunyuan_image3.infer.transformer_infer import HunyuanImage3TransformerInfer
+from lightx2v.models.networks.hunyuan_image3.weights.hybrid_tp import (
+    resolve_micro_shard_count,
+    resolve_storage_tp,
+    select_column_storage_shard,
+    select_fused_gate_up_storage_shard,
+    select_grouped_qkv_storage_shard,
+    select_row_storage_shard,
+)
 from lightx2v.models.networks.hunyuan_image3.weights.post_weights import HunyuanImage3PostWeights
 from lightx2v.models.networks.hunyuan_image3.weights.pre_weights import HunyuanImage3PreWeights
 from lightx2v.models.networks.hunyuan_image3.weights.transformer_weights import HunyuanImage3TransformerWeights
@@ -175,15 +183,19 @@ class HunyuanImage3Model(BaseTransformerModel):
         # HunyuanImage3 shards safetensors locally on every TP rank instead of
         # using BaseTransformerModel's rank-0 loading and broadcast path.
         self.use_tp = False
-        self.tensor_parallel = bool(self.config.get("tensor_parallel", False))
+        self.parallel_context, storage_group, storage_rank, storage_size = resolve_storage_tp(self.config)
+        self.tensor_parallel = bool(self.config.get("tensor_parallel", False) or storage_size > 1)
         if self.tensor_parallel:
-            self.tp_group = self.config["device_mesh"].get_group(mesh_dim="tensor_p")
-            self.tp_rank = dist.get_rank(self.tp_group)
-            self.tp_size = dist.get_world_size(self.tp_group)
+            # These model-level fields intentionally describe resident weight
+            # topology, never the phase-dependent active AR topology.
+            self.tp_group = storage_group
+            self.tp_rank = storage_rank
+            self.tp_size = storage_size
         else:
             self.tp_group = None
             self.tp_rank = 0
             self.tp_size = 1
+        self.micro_shard_count = resolve_micro_shard_count(self.config, self.tp_size)
 
     @staticmethod
     def _iter_config_ints(value):
@@ -228,10 +240,11 @@ class HunyuanImage3Model(BaseTransformerModel):
                 moe_intermediate *= len(shared_experts)
             divisibility_checks["shared_mlp_intermediate_size"] = [experts * intermediate for experts, intermediate in zip(shared_experts, moe_intermediate)]
 
+        finest_tp_size = self.tp_size * self.micro_shard_count
         for name, values in divisibility_checks.items():
-            invalid = sorted({value for value in values if value % self.tp_size})
+            invalid = sorted({value for value in values if value % finest_tp_size})
             if invalid:
-                raise ValueError(f"HunyuanImage3 TP size {self.tp_size} must divide every {name}; invalid values: {invalid}.")
+                raise ValueError(f"HunyuanImage3 storage TP size {self.tp_size} * micro_shard_count {self.micro_shard_count} must divide every {name}; invalid values: {invalid}.")
 
     @staticmethod
     def _tp_split_type(key):
@@ -256,25 +269,26 @@ class HunyuanImage3Model(BaseTransformerModel):
 
         if split_type == "row":
             # Row-parallel biases are replicated and added after the reduction.
-            if tensor.ndim == 1:
-                return tensor
-            if tensor.ndim != 2 or tensor.shape[1] % self.tp_size:
-                raise ValueError(f"Cannot row-shard HunyuanImage3 tensor {key} with shape {tuple(tensor.shape)} across TP size {self.tp_size}.")
-            return torch.chunk(tensor, self.tp_size, dim=1)[self.tp_rank].contiguous()
+            return select_row_storage_shard(tensor, self.tp_rank, self.tp_size)
+
+        if split_type == "qkv_col":
+            num_heads = int(self.config.get("num_attention_heads") or self.config["num_heads"])
+            num_kv_heads = int(self.config.get("num_key_value_heads") or num_heads)
+            head_dim = int(self.config.get("attention_head_dim", self.config["hidden_size"] // num_heads))
+            return select_grouped_qkv_storage_shard(
+                tensor,
+                self.tp_rank,
+                self.tp_size,
+                self.micro_shard_count,
+                num_heads,
+                num_kv_heads,
+                head_dim,
+            )
 
         if split_type == "gate_up_col":
-            if tensor.shape[0] % 2:
-                raise ValueError(f"HunyuanImage3 fused gate/up tensor {key} has an odd output dimension: {tuple(tensor.shape)}.")
-            gate, up = tensor.chunk(2, dim=0)
-            if gate.shape[0] % self.tp_size:
-                raise ValueError(f"Cannot shard HunyuanImage3 fused gate/up tensor {key} with shape {tuple(tensor.shape)} across TP size {self.tp_size}.")
-            gate_shard = torch.chunk(gate, self.tp_size, dim=0)[self.tp_rank]
-            up_shard = torch.chunk(up, self.tp_size, dim=0)[self.tp_rank]
-            return torch.cat((gate_shard, up_shard), dim=0).contiguous()
+            return select_fused_gate_up_storage_shard(tensor, self.tp_rank, self.tp_size, self.micro_shard_count)
 
-        if tensor.shape[0] % self.tp_size:
-            raise ValueError(f"Cannot column-shard HunyuanImage3 tensor {key} with shape {tuple(tensor.shape)} across TP size {self.tp_size}.")
-        return torch.chunk(tensor, self.tp_size, dim=0)[self.tp_rank].contiguous()
+        return select_column_storage_shard(tensor, self.tp_rank, self.tp_size)
 
     def _resolve_sequence_parallel_attn_type(self):
         if not self.config.get("seq_parallel", False):
@@ -369,6 +383,28 @@ class HunyuanImage3Model(BaseTransformerModel):
         if hasattr(self.transformer_infer, "offload_manager"):
             self._init_offload_manager()
 
+    def _active_seq_group(self):
+        if self.parallel_context is not None:
+            return getattr(self.parallel_context, "active_seq_group", getattr(self.parallel_context, "seq_p_group", None))
+        return self.seq_p_group
+
+    def _active_seq_size(self):
+        if self.parallel_context is not None:
+            return int(getattr(self.parallel_context, "active_seq_size", getattr(self.parallel_context, "seq_p_size", 1)))
+        group = self._active_seq_group()
+        return dist.get_world_size(group) if group is not None else 1
+
+    def _active_seq_rank(self):
+        if self.parallel_context is not None:
+            return int(getattr(self.parallel_context, "active_seq_rank", getattr(self.parallel_context, "seq_p_rank", 0)))
+        group = self._active_seq_group()
+        return dist.get_rank(group) if group is not None else 0
+
+    def _active_seq_parallel(self):
+        if self.parallel_context is not None:
+            return bool(getattr(self.parallel_context, "active_seq_parallel", self._active_seq_size() > 1)) and self._active_seq_size() > 1
+        return bool(self.config.get("seq_parallel", False))
+
     def reset_taylor_cache(self):
         self.taylor_cache = None
         self.taylor_counter = 0
@@ -386,7 +422,7 @@ class HunyuanImage3Model(BaseTransformerModel):
 
     def _infer_transformer(self, pre_infer_out):
         hidden_states = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
-        if self.config["seq_parallel"]:
+        if self._active_seq_parallel():
             hidden_states = self._seq_parallel_post_process(hidden_states, pre_infer_out.sequence_parallel_state)
         return hidden_states
 
@@ -423,7 +459,7 @@ class HunyuanImage3Model(BaseTransformerModel):
             self.scheduler.infer_condition = infer_condition
         pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
         # in default setting seq_parallel is False
-        if self.config["seq_parallel"]:
+        if self._active_seq_parallel():
             pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
         if inputs.get("cache_dic") is not None:
             hidden_states = self._infer_transformer_with_taylor_cache(pre_infer_out, inputs["cache_dic"])
@@ -439,8 +475,11 @@ class HunyuanImage3Model(BaseTransformerModel):
                 "HunyuanImage3 sequence parallel expects batch size 1 per transformer forward; use parallel.cfg_mode='serial' when cfg_p_size=1 (including TP+SP), or 'parallel' for CFG+SP."
             )
 
-        world_size = dist.get_world_size(self.seq_p_group)
-        rank = dist.get_rank(self.seq_p_group)
+        seq_group = self._active_seq_group()
+        if seq_group is None:
+            raise RuntimeError("HunyuanImage3 sequence parallel is active without an active sequence process group.")
+        world_size = self._active_seq_size()
+        rank = self._active_seq_rank()
         original_seq_len = int(pre_infer_out.hidden_states.shape[1])
         padding_size = (-original_seq_len) % world_size
         padded_seq_len = original_seq_len + padding_size
@@ -489,15 +528,19 @@ class HunyuanImage3Model(BaseTransformerModel):
     def _seq_parallel_post_process(self, x, sequence_parallel_state):
         if sequence_parallel_state is None:
             raise RuntimeError("HunyuanImage3 sequence parallel post-process is missing sequence metadata.")
-        world_size = dist.get_world_size(self.seq_p_group)
+        seq_group = self._active_seq_group()
+        if seq_group is None:
+            raise RuntimeError("HunyuanImage3 sequence parallel is active without an active sequence process group.")
+        world_size = self._active_seq_size()
         local = x.transpose(0, 1).contiguous()
         output_shape = (local.shape[0] * world_size, *local.shape[1:])
-        key = ("hidden", local.device, local.dtype, output_shape)
+        phase = getattr(self.parallel_context, "phase", "legacy") if self.parallel_context is not None else "legacy"
+        key = ("hidden", phase, id(seq_group), local.device, local.dtype, output_shape)
         gathered = self._sp_gather_buffers.get(key)
         if gathered is None or gathered.shape != output_shape:
             gathered = torch.empty(output_shape, device=local.device, dtype=local.dtype)
             self._sp_gather_buffers[key] = gathered
-        dist.all_gather_into_tensor(gathered, local, group=self.seq_p_group)
+        dist.all_gather_into_tensor(gathered, local, group=seq_group)
         return gathered[: sequence_parallel_state.original_seq_len].transpose(0, 1).contiguous()
 
     @staticmethod

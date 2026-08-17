@@ -276,6 +276,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 use_31_block=self.config.get("use_31_block", True),
                 load_from_rank0=False,
                 dummy_model=self.config.get("dummy_model", False),
+                attn_type=self.config.get("clip_attn_type", "torch_sdpa"),
+                precast_patch_input=self.config.get("clip_precast_patch_input", True),
             )
 
         return image_encoder
@@ -287,7 +289,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             t5_device = torch.device("cpu")
         else:
             t5_device = torch.device(AI_DEVICE)
-        tokenizer_path = os.path.join(self.config["model_path"], "google/umt5-xxl")
+        tokenizer_path = self.config.get("t5_tokenizer_path") or os.path.join(self.config["model_path"], "google/umt5-xxl")
         # quant_config
         t5_quantized = self.config.get("t5_quantized", False)
         if t5_quantized:
@@ -331,6 +333,17 @@ class WanRunner(DisaggMixin, DefaultRunner):
             return self.config.get("parallel", {}).get("vae_parallel", True)
         return False
 
+    @staticmethod
+    def _resolve_vae_dtype(value, default=None):
+        if value is None:
+            return default
+        if isinstance(value, str):
+            try:
+                return DTYPE_MAP[value]
+            except KeyError as exc:
+                raise ValueError(f"Unsupported VAE dtype: {value!r}") from exc
+        return value
+
     def load_vae_encoder(self):
         # offload config
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
@@ -348,8 +361,10 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "load_from_rank0": False,
             "use_lightvae": self.config.get("use_lightvae", False),
             "dummy_model": self.config.get("dummy_model", False),
-            "dtype": GET_DTYPE() if not self.config.get("vae_dtype", None) else self.config["vae_dtype"],
+            "dtype": self._resolve_vae_dtype(self.config.get("vae_dtype"), GET_DTYPE()),
         }
+        if self.config.get("vae_weight_dtype") is not None:
+            vae_config["weight_dtype"] = self._resolve_vae_dtype(self.config["vae_weight_dtype"])
 
         if self.config["task"] not in ["i2v", "flf2v", "animate", "vace", "s2v", "rs2v"]:
             return None
@@ -371,10 +386,12 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
             "use_lightvae": self.config.get("use_lightvae", False),
-            "dtype": GET_DTYPE() if not self.config.get("vae_dtype", None) else self.config["vae_dtype"],
+            "dtype": self._resolve_vae_dtype(self.config.get("vae_dtype"), GET_DTYPE()),
             "load_from_rank0": False,
             "dummy_model": self.config.get("dummy_model", False),
         }
+        if self.config.get("vae_weight_dtype") is not None:
+            vae_config["weight_dtype"] = self._resolve_vae_dtype(self.config["vae_weight_dtype"])
         if self.config.get("use_tae", False):
             tae_path = find_torch_model_path(self.config, "tae_path", self.tiny_vae_name)
             vae_decoder = self.tiny_vae_cls(vae_path=tae_path, device=self.init_device, need_scaled=self.config.get("need_scaled", False)).to(AI_DEVICE)

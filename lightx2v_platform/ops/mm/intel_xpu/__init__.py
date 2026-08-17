@@ -7,9 +7,11 @@ import re
 from abc import ABCMeta, abstractmethod
 
 import torch
+import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate, MMWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
@@ -34,6 +36,102 @@ def GET_DTYPE():
     RUNNING_FLAG = os.getenv("DTYPE", "BF16")
     assert RUNNING_FLAG in ["BF16", "FP16"]
     return DTYPE_MAP[RUNNING_FLAG]
+
+
+_INTEL_TENSOR_PARALLEL_CLASS = None
+
+
+def _get_intel_tensor_parallel_class():
+    """Build the subclass after the common TensorParallel class is registered."""
+    global _INTEL_TENSOR_PARALLEL_CLASS
+    if _INTEL_TENSOR_PARALLEL_CLASS is None:
+        tensor_parallel_class = MM_WEIGHT_REGISTER["TensorParallel"]
+
+        class IntelTensorParallelWeight(tensor_parallel_class):
+            """Tensor-parallel linear layer with a oneCCL hang workaround.
+
+            oneCCL 2021.15 can hang when a TP all-reduce is used
+            together with SP collectives. Gather every TP partial instead and
+            sum them locally to preserve the all-reduce result without entering
+            the problematic oneCCL all-reduce path.
+            """
+
+            def apply(self, input_tensor):
+                output = self._mm.apply(input_tensor)
+
+                if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
+                    # Work around the oneCCL 2021.15 TP all-reduce hang by using
+                    # all-gather followed by an equivalent local reduction.
+                    partials = [torch.empty_like(output) for _ in range(self.tp_size)]
+                    dist.all_gather(partials, output.contiguous(), group=self.tp_group)
+                    output.copy_(partials[0])
+                    for partial in partials[1:]:
+                        output.add_(partial)
+
+                    if self._row_split_bias is not None:
+                        output = output + self._row_split_bias
+
+                return output
+
+        _INTEL_TENSOR_PARALLEL_CLASS = IntelTensorParallelWeight
+    return _INTEL_TENSOR_PARALLEL_CLASS
+
+
+@MM_WEIGHT_REGISTER("IntelTensorParallel")
+class IntelTensorParallel:
+    """Lazily construct the Intel XPU tensor-parallel MM wrapper."""
+
+    def __new__(cls, *args, **kwargs):
+        return _get_intel_tensor_parallel_class()(*args, **kwargs)
+
+
+_TENSOR_PARALLEL_RMS_CLASS = None
+
+
+def _get_tensor_parallel_rms_class():
+    """Build the subclass after the common TensorParallelFP32 class is registered."""
+    global _TENSOR_PARALLEL_RMS_CLASS
+    if _TENSOR_PARALLEL_RMS_CLASS is None:
+        tensor_parallel_rms_class = RMS_WEIGHT_REGISTER["TensorParallelFP32"]
+
+        class TensorParallelRMSWeight(tensor_parallel_rms_class):
+            """Tensor-parallel RMSNorm with a oneCCL hang workaround.
+
+            oneCCL 2021.15 can hang when a TP all-reduce is used
+            together with SP collectives. Gather the local squared sums from
+            every TP rank and add them locally, which is mathematically
+            equivalent to the original all-reduce.
+            """
+
+            def apply(self, input_tensor):
+                input_fp32 = input_tensor.float()
+                local_sum = input_fp32.square().sum(dim=-1, keepdim=True)
+                if self.tp_size > 1 and self.tp_group is not None:
+                    # Avoid the problematic oneCCL all-reduce while retaining
+                    # the same global sum used by RMSNorm.
+                    partials = [torch.empty_like(local_sum) for _ in range(self.tp_size)]
+                    dist.all_gather(partials, local_sum.contiguous(), group=self.tp_group)
+                    local_sum.copy_(partials[0])
+                    for partial in partials[1:]:
+                        local_sum.add_(partial)
+
+                global_hidden_dim = input_tensor.shape[-1] * self.tp_size
+                output = input_fp32 * torch.rsqrt(local_sum / global_hidden_dim + self.eps)
+                weight = self._get_actual_weight()
+                if weight is not None:
+                    output = output * weight.float()
+                return output.to(input_tensor.dtype)
+
+        _TENSOR_PARALLEL_RMS_CLASS = TensorParallelRMSWeight
+    return _TENSOR_PARALLEL_RMS_CLASS
+
+
+@RMS_WEIGHT_REGISTER("IntelTensorParallelFP32")
+class IntelTensorParallelRMSWeight:
+    """Lazily construct the Intel XPU tensor-parallel RMSNorm wrapper."""
+
+    def __new__(cls, *args, **kwargs):
+        return _get_tensor_parallel_rms_class()(*args, **kwargs)
 
 
 @PLATFORM_MM_WEIGHT_REGISTER("intel_xpu_mm")

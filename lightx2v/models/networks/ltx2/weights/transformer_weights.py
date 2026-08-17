@@ -11,6 +11,11 @@ from lightx2v.utils.registry_factory import (
 )
 
 
+def _make_ltx_rope(config):
+    rope_type = config.get("rope_type", "torch_real_rope")
+    return ROPE_REGISTER[rope_type](layout="split_half", compute_dtype=torch.float32)
+
+
 class LTX2TransformerWeights(WeightModule):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
@@ -347,7 +352,7 @@ class LTX2Attention(WeightModule):
         self.apply_gated_attention = self.config.get("apply_gated_attention", False)
         self.add_module(
             "rope",
-            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="split_half", compute_dtype=torch.float32),
+            _make_ltx_rope(config),
         )
 
         block_lora_prefix = "model.diffusion_model.blocks"
@@ -480,12 +485,13 @@ class LTX2FFN(WeightModule):
         self.lazy_load_file = lazy_load_file
         block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
+        has_bias = config.get("audio_ff_bias", True) if ffn_prefix == "audio_ff" else config.get("ff_bias", True)
 
         self.add_module(
             f"net_0_proj",
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.weight",
-                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.bias",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.bias" if has_bias else None,
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=self.lazy_load,
@@ -498,7 +504,7 @@ class LTX2FFN(WeightModule):
             f"net_2",
             MM_WEIGHT_REGISTER[self.mm_type](
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.weight",
-                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias" if has_bias else None,
                 create_cuda_buffer=create_cuda_buffer,
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=self.lazy_load,
@@ -549,7 +555,7 @@ class LTX2AttentionTP(WeightModule):
         self.apply_gated_attention = self.config.get("apply_gated_attention", False)
         self.add_module(
             "rope",
-            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](layout="split_half", compute_dtype=torch.float32),
+            _make_ltx_rope(config),
         )
 
         block_lora_prefix = "model.diffusion_model.blocks"
@@ -726,13 +732,14 @@ class LTX2FFNTP(WeightModule):
         self.lazy_load_file = lazy_load_file
         block_lora_prefix = "model.diffusion_model.blocks"
         model_prefix = "model.diffusion_model"
+        has_bias = config.get("audio_ff_bias", True) if ffn_prefix == "audio_ff" else config.get("ff_bias", True)
 
         # First layer: column split
         self.add_module(
             f"net_0_proj",
             MM_WEIGHT_REGISTER["TensorParallel"](
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.weight",
-                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.bias",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.0.proj.bias" if has_bias else None,
                 mm_type=mm_type,
                 tp_group=tp_group,
                 tp_rank=tp_rank,
@@ -751,7 +758,7 @@ class LTX2FFNTP(WeightModule):
             f"net_2",
             MM_WEIGHT_REGISTER["TensorParallel"](
                 f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.weight",
-                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias",
+                f"{model_prefix}.{block_prefix}.{block_index}.{ffn_prefix}.net.2.bias" if has_bias else None,
                 mm_type=mm_type,
                 tp_group=tp_group,
                 tp_rank=tp_rank,

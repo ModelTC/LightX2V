@@ -57,6 +57,11 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             rotary_dim=pre_infer_out.rotary_emb[0].shape[-1],
         )
         sp_state = pre_infer_out.sequence_parallel_state
+        attention_kwargs = {
+            "causal": False,
+            "scheduler": self.scheduler,
+            "block_idx": self.block_idx,
+        }
         if sp_state is None:
             seq_len = q.shape[0]
             cu_seqlens = torch.tensor((0, seq_len), dtype=torch.int32, device=q.device)
@@ -68,7 +73,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
                 cu_seqlens_kv=cu_seqlens,
                 max_seqlen_q=seq_len,
                 max_seqlen_kv=seq_len,
-                causal=False,
+                **attention_kwargs,
             )
         else:
             aux_length = sp_state.aux_length
@@ -87,7 +92,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
                 tensor_fusion=self.seq_p_tensor_fusion,
                 head_parallel=self.seq_p_head_parallel,
                 aux_first=True,
-                attention_kwargs={"causal": False},
+                attention_kwargs=attention_kwargs,
             )
             if aux_out is not None:
                 out = torch.cat((aux_out, out), dim=0)
@@ -122,6 +127,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
 
     def infer_without_offload(self, blocks, hidden_states, pre_infer_out):
         for block_index, block in enumerate(blocks):
+            self.block_idx = block_index
             hidden_states = self.run_block(block_index, block, hidden_states, pre_infer_out)
         return hidden_states
 

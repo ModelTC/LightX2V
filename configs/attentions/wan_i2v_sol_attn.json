@@ -1,0 +1,22 @@
+{
+    "infer_steps": 40,
+    "target_video_length": 81,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "sol_attn",
+    "sol_attn_setting": {
+        "tau": 0.8,
+        "thresh_type": "diag",
+        "kv_splits": "auto",
+        "reorder": "morton3d",
+        "dense_steps": 8,
+        "dense_layers": [0],
+        "strict": true
+    },
+    "cross_attn_1_type": "flash_attn3",
+    "cross_attn_2_type": "flash_attn3",
+    "sample_guide_scale": 5,
+    "sample_shift": 3,
+    "enable_cfg": true,
+    "cpu_offload": false
+}

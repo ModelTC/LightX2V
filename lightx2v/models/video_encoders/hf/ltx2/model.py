@@ -1,4 +1,4 @@
-from typing import Iterator
+from collections.abc import Iterator
 
 import torch
 
@@ -11,15 +11,21 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.model_configurator import 
     AudioEncoderConfigurator,
     VocoderConfigurator,
 )
-from lightx2v.models.video_encoders.hf.ltx2.audio_vae.vocoder import Vocoder
+from lightx2v.models.video_encoders.hf.ltx2.audio_vae.vocoder import Vocoder, VocoderWithBWE
 from lightx2v.models.video_encoders.hf.ltx2.upsampler.model import LatentUpsamplerConfigurator
+from lightx2v.models.video_encoders.hf.ltx2.video_vae.diffusion_video_decoder import DiffusionVideoDecoder
 from lightx2v.models.video_encoders.hf.ltx2.video_vae.model_configurator import (
     VAE_DECODER_COMFY_KEYS_FILTER,
     VAE_ENCODER_COMFY_KEYS_FILTER,
     VideoDecoderConfigurator,
     VideoEncoderConfigurator,
+    video_decoder_sd_ops_for_checkpoint,
 )
-from lightx2v.models.video_encoders.hf.ltx2.video_vae.tiling import TilingConfig
+from lightx2v.models.video_encoders.hf.ltx2.video_vae.tiling import (
+    SpatialTilingConfig,
+    TemporalTilingConfig,
+    TilingConfig,
+)
 from lightx2v.models.video_encoders.hf.ltx2.video_vae.video_vae import VideoDecoder, VideoEncoder, decode_video
 from lightx2v.utils.ltx2_media_io import *
 from lightx2v.utils.ltx2_utils import *
@@ -90,17 +96,17 @@ class LTX2VideoVAE:
         if video_frames.dim() == 4:
             video_frames = video_frames.unsqueeze(0)
 
-        if self.cpu_offload:
-            self.encoder = self.encoder.to(AI_DEVICE)
+        try:
+            if self.cpu_offload:
+                self.encoder = self.encoder.to(AI_DEVICE)
 
-        out = self.encoder(video_frames)
-        if out.dim() == 5:
-            out = out.squeeze(0)
-
-        if self.cpu_offload:
-            self.encoder = self.encoder.to("cpu")
-
-        return out
+            out = self.encoder(video_frames)
+            if out.dim() == 5:
+                out = out.squeeze(0)
+            return out
+        finally:
+            if self.cpu_offload:
+                self.encoder = self.encoder.to("cpu")
 
     def decode(
         self,
@@ -112,10 +118,123 @@ class LTX2VideoVAE:
         if self.use_tiling and tiling_config is None:
             tiling_config = TilingConfig.default()
 
-        if self.cpu_offload:
-            self.decoder = self.decoder.to(AI_DEVICE)
         try:
+            if self.cpu_offload:
+                self.decoder = self.decoder.to(AI_DEVICE)
             yield from decode_video(latent, self.decoder, tiling_config, generator)
+        finally:
+            if self.cpu_offload:
+                self.decoder = self.decoder.to("cpu")
+
+
+class LTX25VideoVAE(LTX2VideoVAE):
+    """LTX-2.5 split video VAE with a native chunked-eager DiffVAE decoder.
+
+    The public constructor and encode/decode interface intentionally match
+    :class:`LTX2VideoVAE`; only model construction and checkpoint key mapping
+    differ.  Standalone ``vae/*.safetensors`` files use bare ``encoder.*`` and
+    ``decoder.*`` keys, including fused decoder QKV projections.
+    """
+
+    def __init__(
+        self,
+        checkpoint_path: str,
+        device: torch.device,
+        dtype: torch.dtype = torch.bfloat16,
+        load_encoder: bool = True,
+        use_tiling: bool = False,
+        cpu_offload: bool = False,
+        optimization: str = "chunked_eager",
+    ):
+        if optimization != "chunked_eager":
+            raise ValueError(f"Unsupported LTX-2.5 DiffVAE optimization {optimization!r}; only 'chunked_eager' is available")
+        self.optimization = optimization
+        super().__init__(
+            checkpoint_path=checkpoint_path,
+            device=device,
+            dtype=dtype,
+            load_encoder=load_encoder,
+            use_tiling=use_tiling,
+            cpu_offload=cpu_offload,
+        )
+
+    def load(self) -> tuple[VideoEncoder | None, DiffusionVideoDecoder | None]:
+        config = self.loader.metadata(self.checkpoint_path)
+
+        if self.load_encoder_flag:
+            with torch.device("meta"):
+                encoder = VideoEncoderConfigurator.from_config(config)
+            encoder_state = self.loader.load(
+                self.checkpoint_path,
+                sd_ops=VAE_ENCODER_COMFY_KEYS_FILTER,
+                device=self.device,
+            ).sd
+            if self.dtype is not None:
+                encoder_state = {key: value.to(dtype=self.dtype) for key, value in encoder_state.items()}
+            incompatible = encoder.load_state_dict(encoder_state, strict=False, assign=True)
+            if incompatible.missing_keys:
+                raise ValueError(f"LTX-2.5 video encoder checkpoint is missing keys: {incompatible.missing_keys}")
+            self.encoder = encoder.to(self.device).eval()
+
+        with torch.device("meta"):
+            decoder = VideoDecoderConfigurator.from_config(config)
+        if not isinstance(decoder, DiffusionVideoDecoder):
+            raise TypeError("LTX25VideoVAE requires a CausalDiffusionVAE checkpoint")
+        decoder_state = self.loader.load(
+            self.checkpoint_path,
+            sd_ops=video_decoder_sd_ops_for_checkpoint(self.checkpoint_path, config),
+            device=self.device,
+        ).sd
+        if self.dtype is not None:
+            decoder_state = {key: value.to(dtype=self.dtype) for key, value in decoder_state.items()}
+        incompatible = decoder.load_state_dict(decoder_state, strict=False, assign=True)
+        if incompatible.missing_keys:
+            raise ValueError(f"LTX-2.5 diffusion video decoder checkpoint is missing keys: {incompatible.missing_keys}")
+        unexpected = [key for key in incompatible.unexpected_keys if key != "type_emb"]
+        if unexpected:
+            raise ValueError(f"LTX-2.5 diffusion video decoder has unexpected keys: {unexpected}")
+        self.decoder = decoder.to(self.device).eval()
+        return self.encoder, self.decoder
+
+    def decode(
+        self,
+        latent: torch.Tensor,
+        tiling_config: TilingConfig | None = None,
+        generator: torch.Generator | None = None,
+    ) -> Iterator[torch.Tensor]:
+        """Yield source-compatible float video chunks in ``[0, 1]``.
+
+        LTX-2.5's upstream ``DiffusionVideoDecoder.decode_video`` keeps the
+        DiffVAE output in BF16 ``FHWC`` form until the BT.709 encoder sink.
+        The older LightX2V LTX wrapper converts to RGB uint8 inside the VAE,
+        which changes the later YUV conversion.  Keep this override scoped to
+        LTX-2.5 so the established LTX-2.3 return contract is unchanged.
+        """
+        try:
+            if self.cpu_offload:
+                self.decoder = self.decoder.to(AI_DEVICE)
+            if self.use_tiling and tiling_config is None:
+                min_t, min_h, min_w = self.decoder._stage_min_sizes
+                frames = (max(latent.shape[2], min_t) - 1) * 8 + 1
+                height = max(latent.shape[3], min_h) * 32
+                width = max(latent.shape[4], min_w) * 32
+                long_side = max(height, width)
+                spatial_tile = min(long_side, 1536)
+                tiling_config = TilingConfig(
+                    spatial_config=SpatialTilingConfig(
+                        tile_size_in_pixels=spatial_tile,
+                        tile_overlap_in_pixels=96 if long_side > spatial_tile else 0,
+                    ),
+                    temporal_config=TemporalTilingConfig(
+                        tile_size_in_frames=128,
+                        tile_overlap_in_frames=8 if frames > 128 else 0,
+                    ),
+                )
+
+            decoded_chunks = self.decoder.tiled_decode(latent, tiling_config, generator=generator) if tiling_config is not None else iter((self.decoder(latent, generator=generator),))
+            for decoded in decoded_chunks:
+                video = decoded[0].permute(1, 2, 3, 0).contiguous()
+                yield video.add_(1.0).mul_(0.5).clamp_(0.0, 1.0)
         finally:
             if self.cpu_offload:
                 self.decoder = self.decoder.to("cpu")
@@ -178,22 +297,34 @@ class LTX2AudioVAE:
         return encoder, decoder, vocoder
 
     def encode(self, audio_spectrogram: torch.Tensor) -> torch.Tensor:
-        if self.cpu_offload:
-            self.encoder = self.encoder.to(AI_DEVICE)
-        out = self.encoder(audio_spectrogram)
-        if self.cpu_offload:
-            self.encoder = self.encoder.to("cpu")
-        return out
+        try:
+            if self.cpu_offload:
+                self.encoder = self.encoder.to(AI_DEVICE)
+            return self.encoder(audio_spectrogram)
+        finally:
+            if self.cpu_offload:
+                self.encoder = self.encoder.to("cpu")
 
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        if self.cpu_offload:
-            self.decoder = self.decoder.to(AI_DEVICE)
-            self.vocoder = self.vocoder.to(AI_DEVICE)
-        out = decode_audio(latent, self.decoder, self.vocoder)
-        if self.cpu_offload:
-            self.decoder = self.decoder.to("cpu")
-            self.vocoder = self.vocoder.to("cpu")
-        return out
+        try:
+            if self.cpu_offload:
+                self.decoder = self.decoder.to(AI_DEVICE)
+                self.vocoder = self.vocoder.to(AI_DEVICE)
+            return decode_audio(latent, self.decoder, self.vocoder)
+        finally:
+            if self.cpu_offload:
+                self.decoder = self.decoder.to("cpu")
+                self.vocoder = self.vocoder.to("cpu")
+
+
+class LTX25AudioVAE(LTX2AudioVAE):
+    """Enable the released LTX-2.5 vocoder's FP32 BWE path."""
+
+    def load(self):
+        components = super().load()
+        if isinstance(self.vocoder, VocoderWithBWE):
+            self.vocoder.force_fp32 = True
+        return components
 
 
 class LTX2Upsampler:
@@ -284,13 +415,13 @@ class LTX2Upsampler:
             Upsampled latent tensor of shape [B, C, F, H*2, W*2] or [C, F, H*2, W*2].
         """
 
-        if self.cpu_offload:
-            self.upsampler = self.upsampler.to(AI_DEVICE)
-        upsampled = self.upsample_video(latent, video_encoder, self.upsampler)
-        if self.cpu_offload:
-            self.upsampler = self.upsampler.to("cpu")
-
-        return upsampled
+        try:
+            if self.cpu_offload:
+                self.upsampler = self.upsampler.to(AI_DEVICE)
+            return self.upsample_video(latent, video_encoder, self.upsampler)
+        finally:
+            if self.cpu_offload:
+                self.upsampler = self.upsampler.to("cpu")
 
     @staticmethod
     def upsample_video(latent: torch.Tensor, video_encoder: VideoEncoder, upsampler) -> torch.Tensor:

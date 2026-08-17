@@ -20,12 +20,14 @@ from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import Hunyua
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2ARRunner, LTX2Runner  # noqa: F401
+from lightx2v.models.runners.ltx2.ltx25_runner import LTX25Runner  # noqa: F401
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_dancer_runner import WanDancerRunner  # noqa: F401
@@ -112,6 +114,7 @@ def main():
             "longcat_image",
             "cosmos3",
             "wan2.2_animate",
+            "wan22_animate2_distilled",
             "wan2.2_s2v",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
@@ -125,6 +128,7 @@ def main():
             "flux2_dev",
             "ltx2",
             "ltx2_ar",
+            "ltx2_5",
             "minimax_h3",
             "bagel",
             "sensenova_vision",
@@ -186,6 +190,7 @@ def main():
     parser.add_argument("--use_prompt_enhancer", action="store_true")
     parser.add_argument("--warmup", action="store_true", help="Warm up the model before inference. Disabled by default.")
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
+    parser.add_argument("--prompt_ref", type=str, default="人物动作的参考视频", help="Reference/driving-video prompt for Wan-Animate-2.")
     parser.add_argument("--negative_prompt", type=str, default="")
     parser.add_argument(
         "--image_path",
@@ -202,6 +207,13 @@ def main():
         help="Input audio path: Wan s2v / rs2v, LTX-2 ltx2_s2v, or MiniMax-H3 ref2av reference audio. H3 accepts comma-separated paths.",
     )
     parser.add_argument("--image_strength", type=str, default="1.0", help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
+    parser.add_argument(
+        "--num_frames",
+        dest="target_video_length",
+        type=int,
+        default=None,
+        help="LTX-2.5: explicit output frame count (must be 8k+1). Omit to use DurationHead when enabled.",
+    )
     parser.add_argument(
         "--i2i_denoise_strength",
         type=float,
@@ -327,6 +339,8 @@ def main():
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
     args = parser.parse_args()
+    if args.model_cls == "wan22_animate2_distilled" and args.seed < 0:
+        parser.error("wan22_animate2_distilled requires a non-negative --seed")
     seed_all(args.seed)
 
     # set config

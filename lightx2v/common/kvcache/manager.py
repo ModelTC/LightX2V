@@ -8,6 +8,7 @@ from .base import BaseKVCachePool
 from .fifo import FIFOKVCachePool
 from .quant import KIVIQuantRollingKVCachePool, StepKiviQuantRollingKVCachePool
 from .rolling import HybridStepRollingKVCachePool, RollingKVCachePool, SpatialRollingKVCachePool, StepRollingKVCachePool
+from .static import StaticKVCachePool
 from .utils import *
 
 SELF_ATTN_KV_CACHE_REGISTRY = {}
@@ -75,6 +76,10 @@ def _fifo_kwargs(_config, _ar_config, _kv_quant):
     return {}
 
 
+def _static_kwargs(_config, _ar_config, _kv_quant):
+    return {}
+
+
 def _get_self_attn_kv_cache_entry(scheme: str, step: bool):
     entry = SELF_ATTN_KV_CACHE_REGISTRY.get((scheme, bool(step)))
     if entry is None:
@@ -87,6 +92,7 @@ register_self_attn_kv_cache("fp", StepRollingKVCachePool, step=True, kwargs_buil
 register_self_attn_kv_cache("kivi", KIVIQuantRollingKVCachePool, kwargs_builder=_kivi_kwargs)
 register_self_attn_kv_cache("kivi", StepKiviQuantRollingKVCachePool, step=True, kwargs_builder=_step_kivi_kwargs)
 register_self_attn_kv_cache("fifo", FIFOKVCachePool, kwargs_builder=_fifo_kwargs)
+register_self_attn_kv_cache("static", StaticKVCachePool, kwargs_builder=_static_kwargs)
 
 
 def build_self_attn_kv_cache(
@@ -181,15 +187,19 @@ class KVCacheManager:
         kv_cache_scheme: str | None = None,
         step_kv_cache: bool | None = None,
         dtype: torch.dtype | None = None,
+        num_heads: int | None = None,
     ):
         missing = object()
         old_kv_size = getattr(self, "kv_size", missing)
         old_dtype = self.dtype
+        old_cache_num_heads = getattr(self, "cache_num_heads", missing)
         old_scheme = self.ar_config.get("kv_cache_scheme")
         old_step = self.ar_config.get("step_kv_cache")
         try:
             self.kv_size = int(kv_size)
             self.dtype = self.dtype if dtype is None else dtype
+            if num_heads is not None:
+                self.cache_num_heads = int(num_heads)
             if kv_cache_scheme is not None:
                 self.ar_config["kv_cache_scheme"] = kv_cache_scheme
             if step_kv_cache is not None:
@@ -201,6 +211,11 @@ class KVCacheManager:
             else:
                 self.kv_size = old_kv_size
             self.dtype = old_dtype
+            if old_cache_num_heads is missing:
+                if hasattr(self, "cache_num_heads"):
+                    delattr(self, "cache_num_heads")
+            else:
+                self.cache_num_heads = old_cache_num_heads
             if old_scheme is None:
                 self.ar_config.pop("kv_cache_scheme", None)
             else:
