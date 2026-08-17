@@ -2,6 +2,7 @@ from contextlib import contextmanager
 
 import pytest
 import torch
+
 from lightx2v_train.model_capabilities import (
     AdapterBankCapability,
     DopsdCapability,

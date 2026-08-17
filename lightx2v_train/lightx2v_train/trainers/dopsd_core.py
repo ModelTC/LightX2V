@@ -36,10 +36,7 @@ class DopsdConfig:
     def from_training_config(cls, training_config: Mapping[str, Any]) -> "DopsdConfig":
         train_type = training_config.get("train_type")
         if train_type != "lora":
-            raise ValueError(
-                "DOPSD trains a student LoRA and an EMA teacher LoRA; "
-                f"training.train_type must be 'lora', got {train_type!r}."
-            )
+            raise ValueError(f"DOPSD trains a student LoRA and an EMA teacher LoRA; training.train_type must be 'lora', got {train_type!r}.")
         raw = training_config.get("dopsd", {}) or {}
         if not isinstance(raw, Mapping):
             raise ValueError("training.dopsd must be a mapping.")
@@ -179,9 +176,7 @@ class DopsdObjective:
         if time.ndim == 0:
             time = time.reshape(1)
         if time.shape[0] not in (1, state.shape[0]):
-            raise ValueError(
-                f"Time batch dimension must be 1 or {state.shape[0]}, got {tuple(time.shape)}."
-            )
+            raise ValueError(f"Time batch dimension must be 1 or {state.shape[0]}, got {tuple(time.shape)}.")
         return time.reshape(time.shape[0], *([1] * (state.ndim - 1)))
 
     def _schedule(self, num_steps: int, latent_hw: tuple[int, int], state: Tensor) -> Tensor:
@@ -220,9 +215,12 @@ class DopsdObjective:
             # differentiable student regression performed at every step.
             state = state.detach().requires_grad_(True)
 
-            with torch.no_grad(), self.adapters.activate(
-                self.config.teacher_adapter,
-                training=False,
+            with (
+                torch.no_grad(),
+                self.adapters.activate(
+                    self.config.teacher_adapter,
+                    training=False,
+                ),
             ):
                 teacher_velocity = self.model.predict_velocity(
                     state,

@@ -34,11 +34,7 @@ class PeftAdapterBankCapability(BoundCapability, AdapterBankCapability):
     def _named_adapter_parameters(self, adapter_name: str) -> dict[str, torch.nn.Parameter]:
         adapter_name = self._validate_name(adapter_name)
         token = self._adapter_token(adapter_name)
-        parameters = {
-            name: parameter
-            for name, parameter in self._denoiser().named_parameters()
-            if token in f".{name}."
-        }
+        parameters = {name: parameter for name, parameter in self._denoiser().named_parameters() if token in f".{name}."}
         if not parameters:
             raise RuntimeError(f"No parameters found for adapter {adapter_name!r}.")
         self._known_adapters.add(adapter_name)
@@ -75,19 +71,13 @@ class PeftAdapterBankCapability(BoundCapability, AdapterBankCapability):
             if target_parameter is None:
                 raise RuntimeError(f"Adapter {target_adapter!r} is missing parameter {target_name!r}.")
             if source_parameter.shape != target_parameter.shape:
-                raise RuntimeError(
-                    f"Adapter parameter shape mismatch: {source_name}={tuple(source_parameter.shape)}, "
-                    f"{target_name}={tuple(target_parameter.shape)}."
-                )
+                raise RuntimeError(f"Adapter parameter shape mismatch: {source_name}={tuple(source_parameter.shape)}, {target_name}={tuple(target_parameter.shape)}.")
             mapped_target_names.add(target_name)
             pairs.append((source_parameter, target_parameter))
 
         unexpected_targets = set(target_parameters) - mapped_target_names
         if unexpected_targets:
-            raise RuntimeError(
-                f"Adapter {target_adapter!r} has parameters without a source match: "
-                f"{sorted(unexpected_targets)}"
-            )
+            raise RuntimeError(f"Adapter {target_adapter!r} has parameters without a source match: {sorted(unexpected_targets)}")
         result = tuple(pairs)
         self._parameter_pair_cache[cache_key] = result
         return result
