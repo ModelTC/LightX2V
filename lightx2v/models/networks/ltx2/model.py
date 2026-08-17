@@ -70,6 +70,10 @@ class LTX2Model(BaseTransformerModel):
     pre_weight_class = LTX2PreWeights
     transformer_weight_class = LTX2TransformerWeights
     post_weight_class = LTX2PostWeights
+    pre_infer_class = LTX2PreInfer
+    post_infer_class = LTX2PostInfer
+    transformer_infer_class = LTX2TransformerInfer
+    offload_transformer_infer_class = LTX2OffloadTransformerInfer
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, None, lora_path, lora_strength)
@@ -96,9 +100,8 @@ class LTX2Model(BaseTransformerModel):
         self._init_infer()
 
     def _init_infer_class(self):
-        self.pre_infer_class = LTX2PreInfer
-        self.post_infer_class = LTX2PostInfer
-        self.transformer_infer_class = LTX2TransformerInfer if not self.cpu_offload else LTX2OffloadTransformerInfer
+        if self.cpu_offload:
+            self.transformer_infer_class = self.offload_transformer_infer_class
 
     def _should_load_weights(self):
         """Determine if current rank should load weights from disk."""

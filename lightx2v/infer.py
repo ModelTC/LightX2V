@@ -114,7 +114,7 @@ def main():
             "longcat_image",
             "cosmos3",
             "wan2.2_animate",
-            "wan2.2_animate2",
+            "wan22_animate2_distilled",
             "wan2.2_s2v",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
@@ -339,11 +339,9 @@ def main():
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
     args = parser.parse_args()
-    # Wan-Animate-2 follows the upstream ``-1`` request sentinel and chooses a
-    # shared random seed after the distributed process group is initialized.
-    # NumPy rejects negative seeds, so do not consume the sentinel here.
-    if not (args.model_cls == "wan2.2_animate2" and args.seed == -1):
-        seed_all(args.seed)
+    if args.model_cls == "wan22_animate2_distilled" and args.seed < 0:
+        parser.error("wan22_animate2_distilled requires a non-negative --seed")
+    seed_all(args.seed)
 
     # set config
     config = set_config(args)

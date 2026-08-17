@@ -8,7 +8,7 @@ from torch.distributed.tensor.device_mesh import init_device_mesh
 
 from lightx2v.utils.input_info import ALL_INPUT_INFO_KEYS
 from lightx2v.utils.lockable_dict import LockableDict
-from lightx2v.utils.utils import is_main_process
+from lightx2v.utils.utils import find_torch_model_path, is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -88,50 +88,19 @@ def auto_calc_config(config):
         if cli_num_iterations is not None:
             config["num_iterations"] = cli_num_iterations
 
-    if config.get("model_cls") == "wan2.2_animate2":
-        # The official release keeps every component below one model root.
-        # Allow portable JSON profiles to use those release-relative paths.
-        path_keys = (
-            "dit_original_ckpt",
-            "dit_quantized_ckpt",
-            "t5_original_ckpt",
-            "t5_quantized_ckpt",
-            "t5_tokenizer_path",
-            "clip_original_ckpt",
-            "clip_quantized_ckpt",
-            "vae_path",
-        )
-        model_root = os.path.abspath(os.path.expanduser(str(config["model_path"])))
-        config["model_path"] = model_root
-        for key in path_keys:
-            value = config.get(key)
-            if not value:
-                continue
-            value = os.path.expanduser(str(value))
-            config[key] = value if os.path.isabs(value) else os.path.join(model_root, value)
-
     if config.get("model_cls") == "ltx2_5":
-        # LTX-2.5 is distributed as a split checkpoint pack rather than the
-        # monolithic LTX-2/2.3 layout.  Keep JSON profiles relocatable by
-        # resolving every component relative to --model_path before path
-        # validation or any model construction happens.
-        path_keys = (
-            "dit_original_ckpt",
-            "dit_quantized_ckpt",
-            "text_encoder_original_ckpt",
-            "video_vae_original_ckpt",
-            "audio_vae_original_ckpt",
-            "duration_head_original_ckpt",
-            "upsampler_original_ckpt",
-        )
-        model_root = os.path.abspath(os.path.expanduser(str(config["model_path"])))
-        config["model_path"] = model_root
-        for key in path_keys:
-            value = config.get(key)
-            if not value:
-                continue
-            value = os.path.expanduser(str(value))
-            config[key] = value if os.path.isabs(value) else os.path.join(model_root, value)
+        # Match Wan's checkpoint lookup contract: an explicit component path
+        # wins; otherwise find the released filename below --model_path.
+        component_files = {
+            "dit_original_ckpt": "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors",
+            "text_encoder_original_ckpt": "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
+            "video_vae_original_ckpt": "vae/ltx-2.5-video-vae-bf16.safetensors",
+            "audio_vae_original_ckpt": "vae/ltx-2.5-audio-vae-bf16.safetensors",
+            "duration_head_original_ckpt": "model_patches/ltx-2.5-duration-head-bf16.safetensors",
+            "upsampler_original_ckpt": "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        }
+        for key, filename in component_files.items():
+            config[key] = find_torch_model_path(config, key, filename, subdir=[])
 
         # The release root has no config.json; the authoritative transformer
         # architecture is embedded in the safetensors metadata.  Merge it in
@@ -312,7 +281,6 @@ def auto_calc_config(config):
             }.get(config.get("dit_quant_scheme"), config.get("dit_quant_scheme", "Default"))
         config["enable_cfg"] = False
         config["fps"] = 24
-        config["target_fps"] = 24
         config["vae_spatial_scale_factor"] = 16
         config["vae_scale_factor"] = 16
         config.setdefault("video_flow_shift", 12.0)

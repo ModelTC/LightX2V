@@ -11,7 +11,7 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.model_configurator import 
     AudioEncoderConfigurator,
     VocoderConfigurator,
 )
-from lightx2v.models.video_encoders.hf.ltx2.audio_vae.vocoder import Vocoder
+from lightx2v.models.video_encoders.hf.ltx2.audio_vae.vocoder import Vocoder, VocoderWithBWE
 from lightx2v.models.video_encoders.hf.ltx2.upsampler.model import LatentUpsamplerConfigurator
 from lightx2v.models.video_encoders.hf.ltx2.video_vae.diffusion_video_decoder import DiffusionVideoDecoder
 from lightx2v.models.video_encoders.hf.ltx2.video_vae.model_configurator import (
@@ -21,7 +21,11 @@ from lightx2v.models.video_encoders.hf.ltx2.video_vae.model_configurator import 
     VideoEncoderConfigurator,
     video_decoder_sd_ops_for_checkpoint,
 )
-from lightx2v.models.video_encoders.hf.ltx2.video_vae.tiling import TilingConfig
+from lightx2v.models.video_encoders.hf.ltx2.video_vae.tiling import (
+    SpatialTilingConfig,
+    TemporalTilingConfig,
+    TilingConfig,
+)
 from lightx2v.models.video_encoders.hf.ltx2.video_vae.video_vae import VideoDecoder, VideoEncoder, decode_video
 from lightx2v.utils.ltx2_media_io import *
 from lightx2v.utils.ltx2_utils import *
@@ -206,15 +210,31 @@ class LTX25VideoVAE(LTX2VideoVAE):
         which changes the later YUV conversion.  Keep this override scoped to
         LTX-2.5 so the established LTX-2.3 return contract is unchanged.
         """
-        if tiling_config is not None or self.use_tiling:
-            raise NotImplementedError("LTX-2.5 DiffVAE multi-tile decode is not implemented; the supplied 121x1024x1536 profile is a single AUTO tile")
-
         try:
             if self.cpu_offload:
                 self.decoder = self.decoder.to(AI_DEVICE)
-            decoded = self.decoder(latent, generator=generator)
-            video = decoded[0].permute(1, 2, 3, 0).contiguous()
-            yield video.add_(1.0).mul_(0.5).clamp_(0.0, 1.0)
+            if self.use_tiling and tiling_config is None:
+                min_t, min_h, min_w = self.decoder._stage_min_sizes
+                frames = (max(latent.shape[2], min_t) - 1) * 8 + 1
+                height = max(latent.shape[3], min_h) * 32
+                width = max(latent.shape[4], min_w) * 32
+                long_side = max(height, width)
+                spatial_tile = min(long_side, 1536)
+                tiling_config = TilingConfig(
+                    spatial_config=SpatialTilingConfig(
+                        tile_size_in_pixels=spatial_tile,
+                        tile_overlap_in_pixels=96 if long_side > spatial_tile else 0,
+                    ),
+                    temporal_config=TemporalTilingConfig(
+                        tile_size_in_frames=128,
+                        tile_overlap_in_frames=8 if frames > 128 else 0,
+                    ),
+                )
+
+            decoded_chunks = self.decoder.tiled_decode(latent, tiling_config, generator=generator) if tiling_config is not None else iter((self.decoder(latent, generator=generator),))
+            for decoded in decoded_chunks:
+                video = decoded[0].permute(1, 2, 3, 0).contiguous()
+                yield video.add_(1.0).mul_(0.5).clamp_(0.0, 1.0)
         finally:
             if self.cpu_offload:
                 self.decoder = self.decoder.to("cpu")
@@ -295,6 +315,16 @@ class LTX2AudioVAE:
             if self.cpu_offload:
                 self.decoder = self.decoder.to("cpu")
                 self.vocoder = self.vocoder.to("cpu")
+
+
+class LTX25AudioVAE(LTX2AudioVAE):
+    """Enable the released LTX-2.5 vocoder's FP32 BWE path."""
+
+    def load(self):
+        components = super().load()
+        if isinstance(self.vocoder, VocoderWithBWE):
+            self.vocoder.force_fp32 = True
+        return components
 
 
 class LTX2Upsampler:

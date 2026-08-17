@@ -886,6 +886,26 @@ class LTX2Scheduler(BaseScheduler):
             raise ValueError("Sigma can't be 0.0")
         return ((sample.to(calc_dtype) - denoised_sample.to(calc_dtype)) / sigma).to(sample.dtype)
 
+    def _unpatchify_final_latents(self) -> None:
+        _, frames_v, height_v, width_v = self.video_latent_shape_orig
+        channels_a, _, mel_bins_a = self.audio_latent_shape_orig
+
+        video_latent = self.video_latent_state.latent
+        main_tokens = self._video_main_num_tokens
+        if main_tokens is not None and video_latent.shape[0] > main_tokens:
+            video_latent = video_latent[:main_tokens]
+        self.video_latent_state.latent = self.video_patchifier.unpatchify(
+            video_latent,
+            frames_v,
+            height_v,
+            width_v,
+        )
+        self.audio_latent_state.latent = self.audio_patchifier.unpatchify(
+            self.audio_latent_state.latent,
+            channels=channels_a,
+            mel_bins=mel_bins_a,
+        )
+
     def step_post(self):
         self.v_noise_pred = self.post_process_latent(self.v_noise_pred, self.video_latent_state.denoise_mask, self.video_latent_state.clean_latent)
         self.a_noise_pred = self.post_process_latent(self.a_noise_pred, self.audio_latent_state.denoise_mask, self.audio_latent_state.clean_latent)
@@ -904,15 +924,7 @@ class LTX2Scheduler(BaseScheduler):
 
         # Unpatchify latents on the final step (aligned with source code)
         if self.step_index == self.infer_steps - 1:
-            channels_v, frames_v, height_v, width_v = self.video_latent_shape_orig
-            channels_a, frames_a, mel_bins_a = self.audio_latent_shape_orig
-
-            vl = self.video_latent_state.latent
-            main_n = getattr(self, "_video_main_num_tokens", None)
-            if main_n is not None and vl.shape[0] > main_n:
-                vl = vl[:main_n]
-            self.video_latent_state.latent = self.video_patchifier.unpatchify(vl, frames_v, height_v, width_v)
-            self.audio_latent_state.latent = self.audio_patchifier.unpatchify(self.audio_latent_state.latent, channels=channels_a, mel_bins=mel_bins_a)
+            self._unpatchify_final_latents()
 
     def clear(self):
         """Clear scheduler state."""

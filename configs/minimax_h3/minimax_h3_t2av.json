@@ -1,10 +1,9 @@
 {
   "infer_steps": 30,
   "target_video_length": 362,
-  "target_height": 544,
-  "target_width": 960,
+  "target_height": 1344,
+  "target_width": 768,
   "fps": 24,
-  "target_fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
   "offload_granularity": "model",
@@ -23,5 +22,9 @@
   "audio_sampling_rate": 32000,
   "audio_latents_per_second": 40,
   "audio_channels": 2,
-  "keep_latents_dtype_in_scheduler": true
+  "keep_latents_dtype_in_scheduler": true,
+  "parallel": {
+    "seq_p_size": 4,
+    "seq_p_attn_type": "ulysses"
+  }
 }

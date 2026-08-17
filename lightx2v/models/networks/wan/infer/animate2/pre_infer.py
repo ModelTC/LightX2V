@@ -4,60 +4,18 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.models.networks.wan.infer.module_io import GridOutput, WanPreInferModuleOutput
-from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
+from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
+from lightx2v.models.networks.wan.infer.utils import sinusoidal_embedding_1d
 
 
-def sinusoidal_embedding_1d_source(dim, position):
-    """Wan-Animate-2's float64 sinusoidal embedding, returned as float32."""
-    if dim % 2:
-        raise ValueError(f"Sinusoidal embedding dimension must be even, got {dim}.")
-    half = dim // 2
-    position = position.to(torch.float64)
-    sinusoid = torch.outer(
-        position,
-        torch.pow(10000, -torch.arange(half, device=position.device, dtype=torch.float64).div(half)),
-    )
-    return torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1).float()
-
-
-def rope_params_source(max_seq_len, dim, theta=10000, offset=0):
-    """Build the same CPU float64-complex table as the source implementation."""
-    if dim % 2:
-        raise ValueError(f"RoPE dimension must be even, got {dim}.")
-    positions = torch.arange(max_seq_len) + int(offset)
-    inv_freq = 1.0 / torch.pow(
-        theta,
-        torch.arange(0, dim, 2, dtype=torch.float64).div(dim),
-    )
-    angles = torch.outer(positions, inv_freq)
-    return torch.polar(torch.ones_like(angles), angles)
-
-
-def build_rope_table(head_dim, *, offset_t=0, offset_h=0, offset_w=0, max_seq_len=512):
-    return torch.cat(
-        [
-            rope_params_source(max_seq_len, head_dim - 4 * (head_dim // 6), offset=offset_t),
-            rope_params_source(max_seq_len, 2 * (head_dim // 6), offset=offset_h),
-            rope_params_source(max_seq_len, 2 * (head_dim // 6), offset=offset_w),
-        ],
-        dim=1,
-    )
-
-
-class WanAnimate2PreInfer:
+class WanAnimate2PreInfer(WanPreInfer):
     def __init__(self, config):
-        self.config = config
-        self.freq_dim = int(config["freq_dim"])
-        self.dim = int(config["dim"])
-        self.num_heads = int(config["num_heads"])
-        self.head_dim = self.dim // self.num_heads
-        self.text_len = int(config["text_len"])
-        self.infer_dtype = GET_DTYPE()
-        self.sensitive_dtype = GET_SENSITIVE_DTYPE()
-        self.seq_p_group = config.get("device_mesh").get_group(mesh_dim="seq_p") if config.get("seq_parallel", False) else None
+        super().__init__(config)
+        self._rope_freqs_cache = {}
 
-    def set_scheduler(self, scheduler):
-        self.scheduler = scheduler
+    def clear_rope_cache(self):
+        """Drop the small per-clip GPU frequency cache on runner cleanup."""
+        self._rope_freqs_cache.clear()
 
     def _sequence_parallel_size(self):
         return dist.get_world_size(self.seq_p_group) if self.seq_p_group is not None else 1
@@ -74,53 +32,103 @@ class WanAnimate2PreInfer:
             x = torch.cat([x, x.new_zeros(padded_len - valid_len, x.shape[-1])], dim=0)
         return x, grid, valid_len
 
-    @staticmethod
-    def _mm_fp32(module, value):
-        value = value.float()
-        weight = module._get_actual_weight().float()
-        bias = module._get_actual_bias()
-        output = torch.mm(value, weight) if bias is None else torch.addmm(bias.float(), value, weight)
-        if getattr(module, "has_lora_branch", False):
-            hidden = torch.mm(value, module.lora_down.float().t())
-            lora = torch.mm(hidden, module.lora_up.float().t())
-            output = output + float(module.lora_strength * module.lora_scale) * lora
-        return output
-
     def _time_embeddings(self, weights, timestep):
-        embedding = sinusoidal_embedding_1d_source(self.freq_dim, timestep.flatten())
-        embedding = self._mm_fp32(weights.time_embedding_0, embedding)
+        embedding = sinusoidal_embedding_1d(self.freq_dim, timestep.flatten()).to(self.sensitive_layer_dtype)
+        embedding = weights.time_embedding_0.apply(embedding)
         embedding = torch.nn.functional.silu(embedding)
-        embedding = self._mm_fp32(weights.time_embedding_2, embedding)
-        embedding0 = self._mm_fp32(weights.time_projection_1, torch.nn.functional.silu(embedding))
+        embedding = weights.time_embedding_2.apply(embedding)
+        embedding0 = weights.time_projection_1.apply(torch.nn.functional.silu(embedding))
         return embedding, embedding0.unflatten(1, (6, self.dim)).squeeze(0)
 
-    @staticmethod
-    def _layer_norm_fp32(module, value):
-        weight = module._get_actual_weight()
-        bias = module._get_actual_bias()
-        return torch.nn.functional.layer_norm(
-            value.float(),
-            (value.shape[-1],),
-            None if weight is None else weight.float(),
-            None if bias is None else bias.float(),
-            module.eps,
-        )
-
     def _context(self, weights, text_context, clip_features):
-        text_context = text_context.squeeze(0)
-        text = weights.text_embedding_0.apply(text_context.to(self.sensitive_dtype))
+        text = weights.text_embedding_0.apply(text_context.squeeze(0).to(self.sensitive_layer_dtype))
         text = torch.nn.functional.gelu(text, approximate="tanh")
         text = weights.text_embedding_2.apply(text)
 
-        # CUDA autocast runs LayerNorm in FP32 in the released pipeline.  The
-        # first result is cast by the following Linear, while the final
-        # LayerNorm remains FP32 and promotes the concatenated context.
-        clip = self._layer_norm_fp32(weights.proj_0, clip_features)
+        # The registered LN backend owns its accumulation precision.  Cast at
+        # component boundaries only so every GEMM sees the same dtype as its
+        # weight (MMWeight uses torch.mm(..., out=...) and will not autocast).
+        clip = weights.proj_0.apply(clip_features.to(self.sensitive_layer_dtype))
         clip = weights.proj_1.apply(clip.to(self.infer_dtype))
         clip = torch.nn.functional.gelu(clip, approximate="none")
         clip = weights.proj_3.apply(clip)
-        clip = self._layer_norm_fp32(weights.proj_4, clip)
-        return torch.cat([clip, text], dim=0)
+        clip = weights.proj_4.apply(clip.to(self.sensitive_layer_dtype))
+        return torch.cat([clip.to(self.infer_dtype), text.to(self.infer_dtype)], dim=0)
+
+    def _rope_freqs(
+        self,
+        grid,
+        padded_len,
+        device,
+        *,
+        offset_t=0,
+        offset_h=0,
+        offset_w=0,
+        time_stride=1,
+    ):
+        """Assemble Wan RoPE frequencies with Animate2 reference offsets."""
+        grid = tuple(int(value) for value in grid)
+        key = (
+            grid,
+            int(padded_len),
+            str(device),
+            int(offset_t),
+            int(offset_h),
+            int(offset_w),
+            int(time_stride),
+        )
+        cached = self._rope_freqs_cache.get(key)
+        if cached is not None:
+            return cached
+
+        frames, height, width = grid
+        valid_len = frames * height * width
+        if padded_len < valid_len:
+            raise ValueError(f"Wan-Animate-2 RoPE padded length {padded_len} is smaller than the grid token count {valid_len}.")
+        if frames <= 0 or height <= 0 or width <= 0 or time_stride <= 0:
+            raise ValueError(f"Invalid Wan-Animate-2 RoPE grid/stride: grid={grid}, stride={time_stride}.")
+        if offset_t < 0 or offset_h < 0 or offset_w < 0:
+            raise ValueError(f"Wan-Animate-2 RoPE offsets must be resolved to non-negative values before table construction, got {(offset_t, offset_h, offset_w)}.")
+        max_position = max(
+            offset_t + (frames - 1) * time_stride,
+            offset_h + height - 1,
+            offset_w + width - 1,
+        )
+        if max_position >= self.freqs.shape[0]:
+            raise ValueError(f"Wan-Animate-2 RoPE position {max_position} exceeds Wan's frequency table length {self.freqs.shape[0]}.")
+
+        complex_dim = self.head_size // 2
+        table_t, table_h, table_w = self.freqs.split(
+            [complex_dim - 2 * (complex_dim // 3), complex_dim // 3, complex_dim // 3],
+            dim=1,
+        )
+        freqs = torch.cat(
+            [
+                table_t[offset_t : offset_t + frames * time_stride : time_stride].view(frames, 1, 1, -1).expand(frames, height, width, -1),
+                table_h[offset_h : offset_h + height].view(1, height, 1, -1).expand(frames, height, width, -1),
+                table_w[offset_w : offset_w + width].view(1, 1, width, -1).expand(frames, height, width, -1),
+            ],
+            dim=-1,
+        ).reshape(valid_len, 1, -1)
+        if padded_len > valid_len:
+            freqs = torch.cat(
+                [
+                    freqs,
+                    torch.ones(
+                        padded_len - valid_len,
+                        1,
+                        freqs.shape[-1],
+                        dtype=freqs.dtype,
+                        device=freqs.device,
+                    ),
+                ],
+                dim=0,
+            )
+        if self.rope is None:
+            raise RuntimeError("Wan RoPE must be initialized before Animate2 inference.")
+        freqs = self.rope.prepare_freqs(freqs.to(device), rotary_dim=self.head_size)
+        self._rope_freqs_cache[key] = freqs
+        return freqs
 
     @staticmethod
     def _grid_output(grid, device):
@@ -169,13 +177,15 @@ class WanAnimate2PreInfer:
             adapter_args={
                 "mode": "reference",
                 "reference_kv_cache": animate["reference_kv_cache"],
-                "rope_table": build_rope_table(
-                    self.head_dim,
+                "rope_freqs": self._rope_freqs(
+                    grid,
+                    x.shape[0],
+                    x.device,
                     offset_t=offset_t,
                     offset_h=offset_h,
                     offset_w=offset_w,
-                ).to(x.device),
-                "refer_stride": int(self.config.get("refer_stride", 1)),
+                    time_stride=int(self.config.get("refer_stride", 1)),
+                ),
             },
         )
 
@@ -196,16 +206,6 @@ class WanAnimate2PreInfer:
         reference_grid = tuple(int(value) for value in animate["reference_latents"].shape[1:])
         reference_grid = (reference_grid[0], reference_grid[1] // 2, reference_grid[2] // 2)
 
-        offset_t = int(self.config.get("refer_offset_t", 0))
-        offset_h = int(self.config.get("refer_offset_h", 0))
-        offset_w = int(self.config.get("refer_offset_w", 0))
-        if offset_t < 0:
-            offset_t = grid[0]
-        if offset_h < 0:
-            offset_h = grid[1]
-        if offset_w < 0:
-            offset_w = grid[2]
-
         return WanPreInferModuleOutput(
             embed=embedding,
             grid_sizes=self._grid_output(grid, x.device),
@@ -217,14 +217,7 @@ class WanAnimate2PreInfer:
                 "mode": "generation",
                 "reference_kv_cache": animate["reference_kv_cache"],
                 "reference_grid": reference_grid,
-                "rope_table": build_rope_table(self.head_dim).to(x.device),
-                "reference_rope_table": build_rope_table(
-                    self.head_dim,
-                    offset_t=offset_t,
-                    offset_h=offset_h,
-                    offset_w=offset_w,
-                ).to(x.device),
-                "refer_stride": int(self.config.get("refer_stride", 1)),
+                "rope_freqs": self._rope_freqs(grid, x.shape[0], x.device),
                 "origin_len": int(animate["origin_len"]),
                 "origin_area": tuple(int(value) for value in animate["origin_area"]),
                 "is_uncondition": not self.scheduler.infer_condition,

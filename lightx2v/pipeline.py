@@ -109,11 +109,11 @@ class LightX2VPipeline:
             "wan2.2_audio",
             "wan2.2_moe_distill",
             "wan2.2_animate",
-            "wan2.2_animate2",
+            "wan22_animate2_distilled",
             "wan2.2_s2v",
         ]:
             self.vae_stride = (4, 8, 8)
-            if self.model_cls.startswith("wan2.2") and self.model_cls != "wan2.2_animate2":
+            if self.model_cls.startswith("wan2.2"):
                 self.use_image_encoder = False
         elif self.model_cls in ["wan2.2", "wan2.2_matrix_game3"]:
             self.vae_stride = (4, 16, 16)
@@ -135,7 +135,6 @@ class LightX2VPipeline:
             self.vae_spatial_scale_factor = 16
             self.vae_scale_factor = 16
             self.fps = 24
-            self.target_fps = 24
             self.audio_sampling_rate = 32000
             self.audio_flow_shift = 3.0
         elif self.model_cls in ["lingbot_video", "lingbot-video"]:
@@ -285,7 +284,6 @@ class LightX2VPipeline:
             self.attn_type = attn_mode
             if self.model_cls == "minimax_h3":
                 self.video_flow_shift = sample_shift
-                self.target_fps = fps
                 self.fps = fps
                 self.audio_sampling_rate = 32000
                 self.audio_flow_shift = getattr(self, "audio_flow_shift", 3.0)
@@ -382,7 +380,7 @@ class LightX2VPipeline:
             "wan2.2_audio",
             "wan2.2_moe_distill",
             "wan2.2_animate",
-            "wan2.2_animate2",
+            "wan22_animate2_distilled",
             "wan2.2_s2v",
         ]:
             self.t5_cpu_offload = text_encoder_offload
@@ -476,7 +474,7 @@ class LightX2VPipeline:
         # image_strength can be a scalar (float/int) or a list matching the number of images
         # i2i_denoise_strength controls single-image edit redraw strength when explicitly set
         # image_frame_idx: optional list of pixel frame indices (one per image), or None to evenly space in [0, num_frames-1]
-        if self.model_cls in {"wan2.2_animate2", "ltx2", "ltx2_5"} and save_result_path == "lightx2v_gen_result.png":
+        if self.model_cls in {"wan22_animate2_distilled", "ltx2", "ltx2_5"} and save_result_path == "lightx2v_gen_result.png":
             save_result_path = "lightx2v_gen_result.mp4"
         self.seed = seed
         self.image_path = image_path
@@ -512,9 +510,9 @@ class LightX2VPipeline:
         # Do not merge its T2AV/I2AV/L2AV/FL2AV/Ref2AV schemas here.
         input_support_tasks = [] if self.model_cls == "minimax_h3" else self.support_tasks
         input_info = init_empty_input_info(self.task, input_support_tasks)
-        # Wan-Animate-2 resolves its ``-1`` random-seed sentinel in the runner,
-        # where rank 0 can broadcast one request seed to every SP rank.
-        if self.seed is not None and not (self.model_cls == "wan2.2_animate2" and self.seed == -1):
+        if self.model_cls == "wan22_animate2_distilled" and (self.seed is None or self.seed < 0):
+            raise ValueError("wan22_animate2_distilled requires a non-negative seed")
+        if self.seed is not None:
             seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
         gen_result = self.runner.run_pipeline(input_info)

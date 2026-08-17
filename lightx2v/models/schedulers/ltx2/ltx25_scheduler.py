@@ -7,31 +7,17 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 class LTX25Scheduler(LTX2Scheduler):
     """LTX-2.5 scheduler with distilled stage-1 ancestral Euler sampling.
 
-    The stochastic path is opt-in through ``ltx25_ancestral_stage1`` and only
-    active for stage 1. Stage 2 and non-distilled/base configurations retain the
+    Stage 1 always uses the released ancestral settings. Stage 2 reuses the
     deterministic LTX-2 Euler update.
     """
 
     ANCESTRAL_NOISE_SEED_OFFSET = 10_000
+    ANCESTRAL_ETA = 1.0
+    ANCESTRAL_S_NOISE = 1.0
 
     def __init__(self, config):
         super().__init__(config)
         self._stage = 1
-        ancestral_requested = bool(config.get("ltx25_ancestral_stage1", False))
-        if ancestral_requested and config.get("pipeline_type") != "distilled":
-            raise ValueError("ltx25_ancestral_stage1 is only valid with pipeline_type='distilled'")
-        self._use_ancestral_stage1 = ancestral_requested
-        self._ancestral_eta = float(config.get("ancestral_eta", config.get("ltx25_ancestral_eta", 1.0)))
-        self._ancestral_s_noise = float(config.get("ancestral_s_noise", config.get("ltx25_ancestral_s_noise", 1.0)))
-        self._ancestral_noise_seed_offset = int(
-            config.get(
-                "ancestral_noise_seed_offset",
-                config.get(
-                    "ltx25_ancestral_noise_seed_offset",
-                    self.ANCESTRAL_NOISE_SEED_OFFSET,
-                ),
-            )
-        )
         self._ancestral_generator = None
 
     @property
@@ -45,13 +31,13 @@ class LTX25Scheduler(LTX2Scheduler):
 
     @property
     def use_ancestral_step(self) -> bool:
-        return self._use_ancestral_stage1 and self._stage == 1
+        return self._stage == 1
 
     def prepare(self, seed: int, *args, **kwargs):
         super().prepare(seed, *args, **kwargs)
         self._ancestral_generator = None
         if self.use_ancestral_step:
-            self._ancestral_generator = torch.Generator(device=AI_DEVICE).manual_seed(seed + self._ancestral_noise_seed_offset)
+            self._ancestral_generator = torch.Generator(device=AI_DEVICE).manual_seed(seed + self.ANCESTRAL_NOISE_SEED_OFFSET)
 
     def _prepare_video_latents(self, *args, **kwargs) -> None:
         super()._prepare_video_latents(*args, **kwargs)
@@ -102,26 +88,6 @@ class LTX25Scheduler(LTX2Scheduler):
             x_next = (alpha_next / alpha_down) * x_next + noise.to(torch.float32) * s_noise * renoise_coeff
         return x_next.to(sample.dtype)
 
-    def _unpatchify_final_latents(self) -> None:
-        _, frames_v, height_v, width_v = self.video_latent_shape_orig
-        channels_a, _, mel_bins_a = self.audio_latent_shape_orig
-
-        video_latent = self.video_latent_state.latent
-        main_tokens = getattr(self, "_video_main_num_tokens", None)
-        if main_tokens is not None and video_latent.shape[0] > main_tokens:
-            video_latent = video_latent[:main_tokens]
-        self.video_latent_state.latent = self.video_patchifier.unpatchify(
-            video_latent,
-            frames_v,
-            height_v,
-            width_v,
-        )
-        self.audio_latent_state.latent = self.audio_patchifier.unpatchify(
-            self.audio_latent_state.latent,
-            channels=channels_a,
-            mel_bins=mel_bins_a,
-        )
-
     def step_post(self):
         if not self.use_ancestral_step:
             return super().step_post()
@@ -147,7 +113,7 @@ class LTX25Scheduler(LTX2Scheduler):
             self._unpatchify_final_latents()
             return
 
-        if self._ancestral_eta > 0:
+        if self.ANCESTRAL_ETA > 0:
             video_noise = torch.randn(
                 self.video_latent_state.latent.shape,
                 generator=self._ancestral_generator,
@@ -172,8 +138,8 @@ class LTX25Scheduler(LTX2Scheduler):
             sigma,
             sigma_next,
             video_noise,
-            eta=self._ancestral_eta,
-            s_noise=self._ancestral_s_noise,
+            eta=self.ANCESTRAL_ETA,
+            s_noise=self.ANCESTRAL_S_NOISE,
         )
         audio_next = self.ancestral_euler_step(
             self.audio_latent_state.latent.float(),
@@ -181,11 +147,11 @@ class LTX25Scheduler(LTX2Scheduler):
             sigma,
             sigma_next,
             audio_noise,
-            eta=self._ancestral_eta,
-            s_noise=self._ancestral_s_noise,
+            eta=self.ANCESTRAL_ETA,
+            s_noise=self.ANCESTRAL_S_NOISE,
         )
 
-        if self._ancestral_eta > 0:
+        if self.ANCESTRAL_ETA > 0:
             # Conditioning is re-applied after stochastic noise injection,
             # matching the source ancestral loop.
             video_next = self.post_process_latent(

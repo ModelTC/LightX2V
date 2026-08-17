@@ -1,5 +1,6 @@
 import math
 import os
+import socket
 import subprocess
 from copy import deepcopy
 
@@ -20,10 +21,147 @@ from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_wi
 from lightx2v.models.schedulers.wan.animate2 import WanAnimate2Scheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import is_main_process, mux_audio_from_video, wan_vae_to_comfy
+from lightx2v.utils.video_recorder import VideoRecorder
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-@RUNNER_REGISTER("wan2.2_animate2")
+class _Animate2VideoRecorder(VideoRecorder):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.returncode = None
+
+    def start_ffmpeg_process_local(self):
+        output_pix_fmt = "yuv420p" if self.width % 2 == 0 and self.height % 2 == 0 else "yuv444p"
+        if output_pix_fmt != "yuv420p":
+            logger.warning(
+                "Wan-Animate-2 stream output is {}x{}; using yuv444p to preserve the exact crop.",
+                self.width,
+                self.height,
+            )
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-color_range",
+            "pc",
+            "-colorspace",
+            "rgb",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "iec61966-2-1",
+            "-r",
+            str(self.fps),
+            "-s",
+            f"{self.width}x{self.height}",
+            "-i",
+            f"tcp://127.0.0.1:{self.video_port}",
+            "-b:v",
+            "4M",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-g",
+            str(max(1, round(self.fps))),
+            "-pix_fmt",
+            output_pix_fmt,
+            "-f",
+            "mp4",
+            self.livestream_url,
+            "-y",
+            "-loglevel",
+            self.ffmpeg_log_level,
+        ]
+        try:
+            self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
+            logger.info("Wan-Animate-2 FFmpeg stream started with PID: {}", self.ffmpeg_process.pid)
+            logger.info("FFmpeg command: {}", " ".join(ffmpeg_cmd))
+        except Exception as exc:
+            logger.error("Failed to start Wan-Animate-2 FFmpeg stream: {}", exc)
+            raise
+
+    def stop(self, wait=True):
+        if not wait:
+            return self._abort()
+
+        process = self.ffmpeg_process
+        try:
+            super().stop(wait=True)
+        finally:
+            self.returncode = process.returncode if process is not None else None
+        return self.returncode
+
+    def _abort(self):
+        """Stop promptly after inference failure instead of draining queued frames."""
+        if self.ffmpeg_process is None and self.video_queue is None and self.video_conn is None and self.video_socket is None:
+            return self.returncode
+
+        process = self.ffmpeg_process
+        if self.video_queue is not None:
+            while True:
+                try:
+                    self.video_queue.get_nowait()
+                except Exception:
+                    break
+            self.video_queue.put(None)
+
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+
+        # If FFmpeg had not connected yet, wake the worker's blocking accept()
+        # with a short-lived local peer before closing the listening socket.
+        wake_conn = None
+        if self.video_socket is not None and self.video_thread is not None and self.video_thread.is_alive():
+            try:
+                wake_conn = socket.create_connection(("127.0.0.1", self.video_port), timeout=0.2)
+            except OSError:
+                pass
+            try:
+                self.video_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            self.video_socket.close()
+            self.video_socket = None
+
+        if self.video_thread is not None and self.video_thread.is_alive():
+            self.video_thread.join(timeout=2)
+            if self.video_thread.is_alive():
+                logger.warning("Wan-Animate-2 video worker did not stop within 2 seconds after abort.")
+
+        if wake_conn is not None:
+            wake_conn.close()
+        if self.video_conn is not None:
+            try:
+                self.video_conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            self.video_conn.close()
+            self.video_conn = None
+        if self.video_socket is not None:
+            self.video_socket.close()
+            self.video_socket = None
+
+        self.ffmpeg_process = None
+        self.video_thread = None
+        self.video_queue = None
+        self.stoppable_t = None
+        self.returncode = process.returncode if process is not None else None
+        logger.info("Wan-Animate-2 stream recorder aborted.")
+        return self.returncode
+
+
+@RUNNER_REGISTER("wan22_animate2_distilled")
 class WanAnimate2Runner(WanRunner):
     """Native LightX2V runner for Wan-Animate-2.
 
@@ -33,19 +171,7 @@ class WanAnimate2Runner(WanRunner):
     ``wan2.2_animate`` runner.
     """
 
-    _MODEL_PATH_KEYS = (
-        "dit_original_ckpt",
-        "dit_quantized_ckpt",
-        "t5_original_ckpt",
-        "t5_quantized_ckpt",
-        "t5_tokenizer_path",
-        "clip_original_ckpt",
-        "clip_quantized_ckpt",
-        "vae_path",
-    )
-
     def __init__(self, config):
-        self._resolve_model_relative_paths(config)
         super().__init__(config)
         if self.config.get("disagg_mode"):
             raise NotImplementedError("Wan-Animate-2 does not support disaggregated inference yet.")
@@ -56,9 +182,9 @@ class WanAnimate2Runner(WanRunner):
         if self.config.get("enable_reuse", False):
             raise NotImplementedError("Wan-Animate-2 request reuse is not implemented for autoregressive inputs.")
         if self.config["task"] != "animate":
-            raise ValueError("wan2.2_animate2 requires task='animate'.")
+            raise ValueError("wan22_animate2_distilled requires task='animate'.")
         if self.config.get("use_stream_vae", False):
-            raise NotImplementedError("Wan-Animate-2 does not support stream VAE decode because the source drops its first latent.")
+            raise NotImplementedError("Wan-Animate-2 must drop its leading latent before Wan VAE decode; use_stream_vae is not supported.")
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("Wan-Animate-2 currently requires feature_caching='NoCaching'.")
         if self.config.get("use_tae", False):
@@ -66,38 +192,11 @@ class WanAnimate2Runner(WanRunner):
         if not self.config.get("use_image_encoder", True) or not self.config.get("use_img_emb", True):
             raise ValueError("Wan-Animate-2 requires both use_image_encoder=true and use_img_emb=true.")
         if not self.config.get("use_31_block", True):
-            raise ValueError("Wan-Animate-2 source parity requires use_31_block=true for its CLIP image features.")
-        source_uses_cfg = float(self.config["sample_guide_scale"]) > 1.0
-        if bool(self.config.get("enable_cfg", False)) != source_uses_cfg:
-            raise ValueError(
-                "Wan-Animate-2 source inference enables CFG exactly when sample_guide_scale > 1; "
-                f"got enable_cfg={self.config.get('enable_cfg', False)!r}, "
-                f"sample_guide_scale={self.config['sample_guide_scale']!r}."
-            )
-
-    @classmethod
-    def _resolve_model_relative_paths(cls, config):
-        model_path = os.path.abspath(os.path.expanduser(str(config["model_path"])))
-        config["model_path"] = model_path
-        for key in cls._MODEL_PATH_KEYS:
-            value = config.get(key)
-            if not isinstance(value, str) or not value or os.path.isabs(value):
-                continue
-            expanded = os.path.expanduser(value)
-            cwd_candidate = os.path.abspath(expanded)
-            # ``auto_calc_config`` may already have prefixed a relative
-            # model_path. Keep that path instead of adding the model root twice;
-            # service callers that pass release-relative component paths still
-            # take the normal join below.
-            try:
-                already_under_root = os.path.commonpath((cwd_candidate, model_path)) == model_path
-            except ValueError:
-                already_under_root = False
-            config[key] = cwd_candidate if already_under_root else os.path.join(model_path, expanded)
+            raise ValueError("Wan-Animate-2 requires use_31_block=true for its CLIP image features.")
+        if self.config.get("enable_cfg", False) != (float(self.config["sample_guide_scale"]) > 1.0):
+            raise ValueError("Wan-Animate-2 enables CFG exactly when sample_guide_scale > 1.")
 
     def init_scheduler(self):
-        # DefaultRunner.__init__ dispatches here before WanRunner.__init__ has
-        # finished, so keep this initializer independent of runner attributes.
         if self.config.get("disagg_mode") == "decode":
             return super().init_scheduler()
         self.scheduler = WanAnimate2Scheduler(self.config)
@@ -130,24 +229,6 @@ class WanAnimate2Runner(WanRunner):
         """Keep the reference prompt request-scoped in service mode."""
         super().set_inputs(inputs)
         self.input_info.prompt_ref = inputs.get("prompt_ref", "人物动作的参考视频")
-
-    def run_image_encoder(self, first_frame, last_frame=None):
-        # The released pipeline calls CLIP from inside its outer BF16 autocast
-        # region.  CLIP's own nested FP16 autocast covers the vision model, but
-        # its bicubic resize/normalization still inherits this outer context.
-        # It also reaches Conv2d in channels-last layout after rearranging its
-        # CTHW input; preserve that layout because cuDNN's result differs by a
-        # few FP16 ULPs and the error compounds through all 31 vision blocks.
-        # Force a real NCHW allocation before converting to channels-last.  A
-        # size-one batch may otherwise already satisfy the channels-last
-        # predicate with a non-standard batch stride, which makes interpolate
-        # select a different CUDA layout than the native Animate-2 pipeline.
-        first_frame = first_frame.contiguous().contiguous(memory_format=torch.channels_last)
-        if last_frame is not None:
-            last_frame = last_frame.contiguous().contiguous(memory_format=torch.channels_last)
-        device_type = str(AI_DEVICE).split(":", 1)[0]
-        with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-            return super().run_image_encoder(first_frame, last_frame)
 
     @staticmethod
     def _padding_resize(image, height, width, return_padding_info=False):
@@ -310,18 +391,8 @@ class WanAnimate2Runner(WanRunner):
         # DefaultRunner's audio mux reads video_path. Keep legacy src_pose_path
         # fallback inputs source-compatible by recording the resolved driver.
         self.input_info.video_path = video_path
-        if self.input_info.seed == -1:
-            # Match the source pipeline's request-time sentinel semantics while
-            # keeping all distributed ranks on the same randomly chosen seed.
-            # Do not sample with torch here: choose OS entropy on rank 0 so the
-            # request is random even when the caller used the -1 sentinel.
-            seed_tensor = torch.zeros((), dtype=torch.int64, device=AI_DEVICE)
-            if not dist.is_initialized() or dist.get_rank() == 0:
-                seed_tensor.fill_(int.from_bytes(os.urandom(4), "little"))
-            if dist.is_initialized():
-                dist.broadcast(seed_tensor, src=0)
-            self.input_info.seed = int(seed_tensor.cpu())
-            logger.info("Wan-Animate-2 selected random seed {}", self.input_info.seed)
+        if self.input_info.seed is None or int(self.input_info.seed) < 0:
+            raise ValueError("Wan-Animate-2 requires a non-negative --seed.")
 
         reference_bgr = cv2.imread(reference_path, cv2.IMREAD_COLOR)
         if reference_bgr is None:
@@ -365,13 +436,7 @@ class WanAnimate2Runner(WanRunner):
         )
 
     def _encode_text(self, prompt):
-        # Upstream invokes UMT5 inside the same outer BF16 autocast region as
-        # the rest of its conditioning stack.  Although the parameters and
-        # residual stream are already BF16, autocast changes the einsum/GEMM
-        # dispatch used inside each T5 block and is numerically observable.
-        device_type = str(AI_DEVICE).split(":", 1)[0]
-        with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-            encoded = self.text_encoders[0].infer([prompt])
+        encoded = self.text_encoders[0].infer([prompt])
         text_len = int(self.config["text_len"])
         return torch.stack([torch.cat([value, value.new_zeros(text_len - value.size(0), value.size(1))]) for value in encoded])
 
@@ -382,7 +447,7 @@ class WanAnimate2Runner(WanRunner):
 
         prompt = input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else input_info.prompt
         prompt_ref = input_info.prompt_ref or prompt
-        negative_prompt = input_info.negative_prompt or self.config.get("sample_neg_prompt", "")
+        negative_prompt = input_info.negative_prompt or ""
         context_ref = self._encode_text(prompt_ref)
 
         if self.config.get("enable_cfg", False) and self.config.get("cfg_parallel", False):
@@ -408,10 +473,8 @@ class WanAnimate2Runner(WanRunner):
         if transient:
             self.vae_encoder = self.load_vae_encoder()
         try:
-            dtype = self.vae_encoder.dtype
-            device_type = str(AI_DEVICE).split(":", 1)[0]
-            with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-                return self.vae_encoder.encode(pixels.to(device=AI_DEVICE, dtype=dtype)).to(GET_DTYPE())
+            pixels = pixels.to(device=AI_DEVICE, dtype=self.vae_encoder.dtype)
+            return self.vae_encoder.encode(pixels).to(GET_DTYPE())
         finally:
             if transient:
                 del self.vae_encoder
@@ -461,11 +524,34 @@ class WanAnimate2Runner(WanRunner):
     def get_video_segment_num(self):
         self.video_segment_num = len(self.segment_plan)
 
+    def _output_video_path(self):
+        output_path = self.input_info.save_result_path
+        if isinstance(output_path, dict):
+            return output_path.get("data", "")
+        return output_path
+
+    def _should_stream_save_video(self):
+        return bool(self.config.get("stream_save_video", True) and not self.input_info.return_result_tensor and self._output_video_path() and is_main_process())
+
     def init_run(self):
         self.gen_video_final = None
         self.get_video_segment_num()
         self.all_out_frames = []
         self.previous_frame = None
+        self.stream_save_video = self._should_stream_save_video()
+        self.stream_written_frames = 0
+        save_result = self._output_video_path() is not None
+        self.collect_output = bool(self.input_info.return_result_tensor or (save_result and is_main_process() and not self.stream_save_video))
+        self.stream_video_recorder = None
+
+        if self.stream_save_video:
+            output_path = self._output_video_path()
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            self.stream_video_recorder = _Animate2VideoRecorder(
+                livestream_url=output_path,
+                fps=float(self.config.get("fps", 24)),
+            )
+            logger.info("Wan-Animate-2 will stream {} frames to {}", self.real_frame_len, output_path)
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.model = self.load_transformer()
@@ -577,6 +663,9 @@ class WanAnimate2Runner(WanRunner):
         transformer_infer = getattr(self.model, "transformer_infer", None)
         if transformer_infer is not None:
             transformer_infer.reference_kv_cache = None
+        pre_infer = getattr(self.model, "pre_infer", None)
+        if pre_infer is not None and hasattr(pre_infer, "clear_rope_cache"):
+            pre_infer.clear_rope_cache()
         if hasattr(self, "reference_kv_cache_manager"):
             del self.reference_kv_cache_manager
         self.maybe_empty_cache()
@@ -591,53 +680,113 @@ class WanAnimate2Runner(WanRunner):
             self._release_segment_conditioning()
 
     def run_vae_decoder(self, latents):
-        transient = self.config.get("lazy_load", False) or self.config.get("unload_modules", False)
-        if transient:
-            self.vae_decoder = self.load_vae_decoder()
-        try:
-            # Source passes FP32 x0 through a BF16-autocast VAE and materializes
-            # FP32 decoded frames for the next segment's overlap condition.
-            device_type = str(AI_DEVICE).split(":", 1)[0]
-            with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-                return self.vae_decoder.decode(latents[:, 1:].float()).float()
-        finally:
-            if transient:
-                del self.vae_decoder
-                self.maybe_empty_cache()
+        # Animate-2 adds one leading latent that is not decoded; the remaining
+        # VAE execution and offload lifecycle are the regular Wan path.
+        return super().run_vae_decoder(latents[:, 1:])
+
+    def _crop_output_video(self, video):
+        crop_type = self.output_crop["padding_type"]
+        padding = self.output_crop["padding"]
+        side_long = self.output_crop["side_long"]
+        if crop_type == "width":
+            return video[..., padding : padding + side_long]
+        return video[..., padding : padding + side_long, :]
+
+    def _publish_video_segment(self, video):
+        remaining_frames = self.real_frame_len - self.stream_written_frames
+        valid_frames = min(video.shape[2], max(remaining_frames, 0))
+        if valid_frames <= 0:
+            return
+        if self.stream_video_recorder is None:
+            raise RuntimeError("Wan-Animate-2 stream recorder is not initialized.")
+
+        video = self._crop_output_video(video[:, :, :valid_frames]).cpu()
+        frames = wan_vae_to_comfy(video).contiguous()
+        self.stream_video_recorder.pub_video(frames)
+        self.stream_written_frames += valid_frames
 
     def end_run_segment(self, segment_idx):
         self.previous_frame = self.gen_video[0, :, -1:].detach().clone()
         output = self.gen_video if segment_idx == 0 else self.gen_video[:, :, 1:]
-        self.all_out_frames.append(output.cpu())
+        if self.stream_save_video:
+            self._publish_video_segment(output)
+        elif self.collect_output:
+            self.all_out_frames.append(output.cpu())
         del self.gen_video
 
         self._release_segment_conditioning()
 
     def process_images_after_vae_decoder(self):
+        if self.stream_save_video:
+            if self.stream_written_frames != self.real_frame_len:
+                raise RuntimeError(f"Wan-Animate-2 streamed an unexpected number of frames: expected={self.real_frame_len}, actual={self.stream_written_frames}.")
+            self.gen_video_final = None
+            return {"video": None}
+
+        if not self.collect_output:
+            self.gen_video_final = None
+            return {"video": None}
+
         video = torch.cat(self.all_out_frames, dim=2)[:, :, : self.real_frame_len]
-        crop_type = self.output_crop["padding_type"]
-        padding = self.output_crop["padding"]
-        side_long = self.output_crop["side_long"]
-        if crop_type == "width":
-            video = video[..., padding : padding + side_long]
-        else:
-            video = video[..., padding : padding + side_long, :]
-        self.gen_video_final = video
+        self.gen_video_final = self._crop_output_video(video)
         return super().process_images_after_vae_decoder()
 
+    def _close_stream_video(self, *, wait, mux_audio):
+        recorder = getattr(self, "stream_video_recorder", None)
+        if recorder is None:
+            return
+
+        self.stream_video_recorder = None
+        output_path = self._output_video_path()
+        returncode = recorder.stop(wait=wait)
+        if not mux_audio:
+            return
+        if returncode != 0:
+            raise RuntimeError(f"Wan-Animate-2 FFmpeg stream failed with exit code {returncode}.")
+        if not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
+            raise RuntimeError(f"Wan-Animate-2 FFmpeg stream did not produce a valid output file: {output_path}")
+
+        input_video_path = getattr(self.input_info, "video_path", "")
+        if input_video_path:
+            muxed_path = mux_audio_from_video(
+                input_video_path,
+                output_path,
+                prefer_copy=self.config.get("audio_mux_prefer_copy", True),
+            )
+            if muxed_path:
+                logger.info("Audio muxed from input video: {}", input_video_path)
+        logger.info("Wan-Animate-2 video saved to {}", output_path)
+
+    def run_main(self):
+        try:
+            return super().run_main()
+        except BaseException:
+            try:
+                self._close_stream_video(wait=False, mux_audio=False)
+            except Exception:
+                logger.exception("Failed to stop Wan-Animate-2 stream recorder after an inference error.")
+            raise
+
     def end_run(self):
-        for name in (
-            "generation_clip",
-            "generation_reference_latents",
-            "reference_pixels",
-            "previous_frame",
-            "reference_kv_cache_manager",
-            "all_out_frames",
-            "driving_frames",
-            "reference_image",
-            "segment_plan",
-            "output_crop",
-        ):
-            if hasattr(self, name):
-                delattr(self, name)
-        super().end_run()
+        try:
+            self._close_stream_video(wait=True, mux_audio=True)
+        finally:
+            for name in (
+                "generation_clip",
+                "generation_reference_latents",
+                "reference_pixels",
+                "previous_frame",
+                "reference_kv_cache_manager",
+                "all_out_frames",
+                "driving_frames",
+                "reference_image",
+                "segment_plan",
+                "output_crop",
+                "stream_video_recorder",
+                "stream_save_video",
+                "stream_written_frames",
+                "collect_output",
+            ):
+                if hasattr(self, name):
+                    delattr(self, name)
+            super().end_run()

@@ -8,18 +8,13 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanAnimate2Scheduler(BaseScheduler):
-    """Wan-Animate-2's shifted-flow DPM-Solver++ scheduler.
-
-    This is the order-2 midpoint path used by the upstream inference pipeline.
-    Both the base and distilled checkpoints use this implementation there; the
-    distilled profile only changes the number of inference steps and CFG.
-    """
+    """Wan-Animate-2 distilled shifted-flow DPM-Solver++ scheduler."""
 
     solver_order = 2
+    num_train_timesteps = 1000
 
     def __init__(self, config):
         super().__init__(config)
-        self.num_train_timesteps = int(config.get("num_train_timesteps", 1000))
         self.sample_shift = float(config["sample_shift"])
         self.sample_guide_scale = float(config["sample_guide_scale"])
         self.keep_latents_dtype_in_scheduler = True
@@ -37,7 +32,6 @@ class WanAnimate2Scheduler(BaseScheduler):
         """Refresh request-scoped values used by Wan disaggregated inference."""
         self.config = config
         self.infer_steps = int(config["infer_steps"])
-        self.num_train_timesteps = int(config.get("num_train_timesteps", 1000))
         self.sample_shift = float(config["sample_shift"])
         self.sample_guide_scale = float(config["sample_guide_scale"])
         self.caching_records = [True] * self.infer_steps

@@ -4,7 +4,6 @@
   "target_height": 768,
   "target_width": 1344,
   "fps": 24,
-  "target_fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
   "offload_granularity": "model",
@@ -27,13 +26,17 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-sgl",
-  "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors",
+  "dit_quantized_ckpt": "/data/nvme0/gushiqiao/models/Minimax-h3-Turbo/minimax_h3_fp8/minimax_h3_fp8.safetensors",
   "lora_dynamic_apply": true,
   "lora_configs": [
     {
-      "path": "lightx2v/Minimax-h3-Turbo/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
-      "strength": 1.0,
+      "path": "/data/nvme0/gushiqiao/models/Minimax-h3-Turbo/300/pytorch_lora_weights.safetensors",
+      "strength": 0.8,
       "alpha": 128
     }
-  ]
+  ],
+  "parallel": {
+    "seq_p_size": 4,
+    "seq_p_attn_type": "ulysses"
+  }
 }

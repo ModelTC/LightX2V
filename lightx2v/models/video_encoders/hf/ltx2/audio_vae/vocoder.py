@@ -546,6 +546,7 @@ class VocoderWithBWE(nn.Module):
         self.input_sampling_rate = input_sampling_rate
         self.output_sampling_rate = output_sampling_rate
         self.hop_length = hop_length
+        self.force_fp32 = False
         # Compute the resampler on CPU so the sinc filter is materialized even when
         # the model is constructed on meta device (SingleGPUModelBuilder pattern).
         # The filter is not stored in the checkpoint (persistent=False).
@@ -572,33 +573,29 @@ class VocoderWithBWE(nn.Module):
         mel, _, _, _ = self.mel_stft.mel_spectrogram(flat)  # (B*C, n_mels, T_frames)
         return mel.reshape(batch, n_channels, mel.shape[1], mel.shape[2])  # (B, C, n_mels, T_frames)
 
+    def _forward_impl(self, mel_spec: torch.Tensor) -> torch.Tensor:
+        x = self.vocoder(mel_spec)
+        _, _, length_low_rate = x.shape
+        output_length = length_low_rate * self.output_sampling_rate // self.input_sampling_rate
+
+        remainder = length_low_rate % self.hop_length
+        if remainder != 0:
+            x = F.pad(x, (0, self.hop_length - remainder))
+
+        mel = self._compute_mel(x)
+        residual = self.bwe_generator(mel.transpose(2, 3))
+        skip = self.resampler(x)
+        assert residual.shape == skip.shape, f"residual {residual.shape} != skip {skip.shape}"
+        return torch.clamp(residual + skip, -1, 1)[..., :output_length]
+
     def forward(self, mel_spec: torch.Tensor) -> torch.Tensor:
-        """Run the full vocoder + BWE forward pass.
-        Args:
-            mel_spec: Mel spectrogram of shape (B, 2, T, mel_bins) for stereo
-                      or (B, T, mel_bins) for mono. Same format as Vocoder.forward.
-        Returns:
-            Waveform tensor of shape (B, out_channels, T_out) clipped to [-1, 1].
-        """
+        """Run vocoder+BWE, optionally using LTX-2.5's FP32 path."""
+        if not self.force_fp32:
+            return self._forward_impl(mel_spec)
+
         input_dtype = mel_spec.dtype
         device_type = mel_spec.device.type
         module_dtype = next(self.parameters()).dtype
         fp32_ctx = _module_in_fp32(self, enabled=module_dtype != torch.float32) if device_type == "mps" else torch.autocast(device_type=device_type, dtype=torch.float32)
-
         with fp32_ctx:
-            x = self.vocoder(mel_spec.float())
-            _, _, length_low_rate = x.shape
-            output_length = length_low_rate * self.output_sampling_rate // self.input_sampling_rate
-
-            # Pad to multiple of hop_length for exact mel frame count.
-            remainder = length_low_rate % self.hop_length
-            if remainder != 0:
-                x = F.pad(x, (0, self.hop_length - remainder))
-
-            mel = self._compute_mel(x)
-            mel_for_bwe = mel.transpose(2, 3)
-            residual = self.bwe_generator(mel_for_bwe)
-            skip = self.resampler(x)
-            assert residual.shape == skip.shape, f"residual {residual.shape} != skip {skip.shape}"
-
-            return torch.clamp(residual + skip, -1, 1)[..., :output_length].to(input_dtype)
+            return self._forward_impl(mel_spec.float()).to(input_dtype)

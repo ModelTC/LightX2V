@@ -75,6 +75,9 @@ class LTX2PreInfer:
         )
         return pe
 
+    def _project_video_latent(self, weights, latent):
+        return weights.patchify_proj.apply(latent)
+
     def _infer_video(self, weights, inputs, av_ca_factor):
         """Process video modality data."""
         # Get video modality data
@@ -88,7 +91,7 @@ class LTX2PreInfer:
             v_context = inputs["text_encoder_output"]["v_context_n"]
 
         # 1. Patchify projection
-        video_x = weights.patchify_proj.apply(v_latent)
+        video_x = self._project_video_latent(weights, v_latent)
 
         # 2. Timestep embeddings (adaln)
         v_timestep = v_timesteps * self.timestep_scale_multiplier
@@ -276,25 +279,25 @@ class LTX2PreInfer:
 class LTX25PreInfer(LTX2PreInfer):
     """LTX-2.5 preprocessing additions on top of the shared LTX-2 path."""
 
-    def _infer_video(self, weights, inputs, av_ca_factor):
-        video_args = super()._infer_video(weights, inputs, av_ca_factor)
-
-        # Keep the leading batch dimension for this projection, as ltx-core's
-        # ``nn.Linear`` does.  For the 128 -> 4096 bf16 shape used by LTX-2.5,
-        # cuBLAS selects a different accumulation path for a flattened 2-D
-        # addmm and the rounding delta is then carried through all 48 blocks.
-        latent = self.scheduler.video_latent_state.latent.unsqueeze(0)
+    def _project_video_latent(self, weights, latent):
+        # Keep the source's leading batch dimension.  For the released BF16
+        # 128 -> 4096 projection, flattening to 2-D selects a different GEMM
+        # accumulation path and changes the result.
+        latent = latent.unsqueeze(0)
         patchify = weights.patchify_proj
-        video_x = torch.nn.functional.linear(
+        output = torch.nn.functional.linear(
             latent,
             patchify._get_actual_weight().t(),
             patchify._get_actual_bias(),
         )
         if patchify.has_lora_branch:
-            lora_x = torch.nn.functional.linear(latent, patchify.lora_down)
-            lora_x = torch.nn.functional.linear(lora_x, patchify.lora_up)
-            video_x = video_x + patchify.lora_strength * patchify.lora_scale * lora_x
-        video_args.x = video_x.squeeze(0)
+            lora_output = torch.nn.functional.linear(latent, patchify.lora_down)
+            lora_output = torch.nn.functional.linear(lora_output, patchify.lora_up)
+            output = output + patchify.lora_strength * patchify.lora_scale * lora_output
+        return output.squeeze(0)
+
+    def _infer_video(self, weights, inputs, av_ca_factor):
+        video_args = super()._infer_video(weights, inputs, av_ca_factor)
 
         if not self.config.get("use_keyframes_abs_pos_embedding", False):
             return video_args

@@ -8,11 +8,10 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.ltx2.duration_head import LTX25DurationPredictor
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX25TextEncoder
-from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.ltx2.ltx25_model import LTX25Model
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner
 from lightx2v.models.schedulers.ltx2.ltx25_scheduler import LTX25Scheduler
-from lightx2v.models.video_encoders.hf.ltx2.model import LTX2AudioVAE, LTX25VideoVAE
+from lightx2v.models.video_encoders.hf.ltx2.model import LTX25AudioVAE, LTX25VideoVAE
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.ltx2_media_io import encode_video_ltx25
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -29,12 +28,19 @@ class LTX25Runner(LTX2Runner):
     stage-1 ancestral sampler.
     """
 
+    transformer_model_class = LTX25Model
+    text_encoder_class = LTX25TextEncoder
+    video_vae_class = LTX25VideoVAE
+    audio_vae_class = LTX25AudioVAE
+    text_encoder_checkpoint_key = "dit_original_ckpt"
+    text_encoder_root_key = "text_encoder_original_ckpt"
+    video_vae_checkpoint_key = "video_vae_original_ckpt"
+    audio_vae_checkpoint_key = "audio_vae_original_ckpt"
+
     def __init__(self, config):
         task = config.get("task")
         if task not in ("t2av", "i2av"):
             raise NotImplementedError(f"LTX-2.5 currently supports t2av and i2av, got {task!r}")
-        if config.get("pipeline_type", "distilled") != "distilled":
-            raise NotImplementedError("The first LTX-2.5 profile implements the official distilled pipeline")
         if config.get("enable_cfg", False) or float(config.get("sample_guide_scale", 1.0)) != 1.0:
             raise ValueError("The LTX-2.5 distilled pipeline requires CFG=1 (enable_cfg=false)")
         if config.get("disagg_mode"):
@@ -54,56 +60,8 @@ class LTX25Runner(LTX2Runner):
         super().load_model()
         self.duration_predictor = self.load_duration_predictor()
 
-    def load_transformer(self, use_distilled_lora=False):  # noqa: ARG002
-        kwargs = {
-            "model_path": self.config["model_path"],
-            "config": self.config,
-            "device": self.init_device,
-        }
-        model = LTX25Model(**kwargs)
-        lora_configs = self.config.get("lora_configs")
-        if lora_configs:
-            LoraAdapter(model, model_prefix="model.diffusion_model.").apply_lora(lora_configs)
-        return model
-
-    def load_text_encoder(self):
-        text_encoder_offload = self.config.get(
-            "gemma_cpu_offload",
-            self.config.get("cpu_offload", False),
-        )
-        device = torch.device("cpu") if text_encoder_offload else torch.device(AI_DEVICE)
-        text_encoder = LTX25TextEncoder(
-            checkpoint_path=self.config["dit_original_ckpt"],
-            gemma_root=self.config["text_encoder_original_ckpt"],
-            device=device,
-            dtype=GET_DTYPE(),
-            cpu_offload=text_encoder_offload,
-            gemma_attn_implementation=self.config.get("gemma_attn_implementation"),
-        )
-        lora_configs = self.config.get("lora_configs")
-        if lora_configs:
-            text_encoder.apply_lora(lora_configs)
-        return [text_encoder]
-
-    def load_vae(self):
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
-        device = torch.device("cpu") if vae_offload else torch.device(AI_DEVICE)
-        video_vae = LTX25VideoVAE(
-            checkpoint_path=self.config["video_vae_original_ckpt"],
-            device=device,
-            dtype=GET_DTYPE(),
-            load_encoder=self.config["task"] == "i2av" or self.config.get("use_upsampler", False),
-            use_tiling=self.config.get("use_tiling_vae", False),
-            cpu_offload=vae_offload,
-            optimization=self.config.get("diffvae_optimization", "chunked_eager"),
-        )
-        audio_vae = LTX2AudioVAE(
-            checkpoint_path=self.config["audio_vae_original_ckpt"],
-            device=device,
-            dtype=GET_DTYPE(),
-            cpu_offload=vae_offload,
-        )
-        return video_vae, audio_vae
+    def _video_vae_extra_kwargs(self):
+        return {"optimization": "chunked_eager"}
 
     def load_duration_predictor(self):
         path = self.config.get("duration_head_original_ckpt")

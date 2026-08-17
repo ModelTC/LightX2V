@@ -645,6 +645,8 @@ class DiffusionVideoDecoder(nn.Module):
         )
         self._trailing_latent_frames = (stage_kernels[0][0] // 2) * 2
         self._stage_min_sizes = _all_stages_min_size(stage_kernels, upsamples, self.stage5_kernel)
+        upsample4_stride = upsamples[3][0]
+        self._tile_min_sizes = tuple(max(stage_kernels[3][axis], math.ceil(self.stage5_kernel[axis] / upsample4_stride[axis])) for axis in range(3))
 
         self.per_channel_statistics = PerChannelStatistics(latent_channels=in_channels)
         self.conv_in = ChannelLinear(in_channels, stage_channels[0], bias=True)
@@ -682,10 +684,10 @@ class DiffusionVideoDecoder(nn.Module):
         elif not _NATTEN_AVAILABLE:
             logger.warning("NATTEN is unavailable; LTX-2.5 DiffVAE will use the numerically aligned pure-PyTorch neighborhood-attention fallback, which is substantially slower.")
 
-    def _run_det_stage(self, x: torch.Tensor, stage_index: int) -> torch.Tensor:
+    def _run_det_stage(self, x: torch.Tensor, stage_index: int, *, drop_leading_frame: bool = True) -> torch.Tensor:
         for block in self.det_stages[stage_index]:
             x = block(x)
-        return self.upsamples[stage_index](x, drop_leading_frame=True)
+        return self.upsamples[stage_index](x, drop_leading_frame=drop_leading_frame)
 
     def _forward_stages_1_to_3(self, latent: torch.Tensor) -> torch.Tensor:
         x = self.per_channel_statistics.un_normalize(latent).permute(0, 2, 3, 4, 1)
@@ -694,9 +696,11 @@ class DiffusionVideoDecoder(nn.Module):
             x = self._run_det_stage(x, stage_index)
         return x
 
-    def _forward_stage_4(self, x: torch.Tensor) -> torch.Tensor:
+    def _forward_stage_4(self, x: torch.Tensor, *, pad_trailing: bool = True) -> torch.Tensor:
         for block in self.det_stages[3]:
             x = block(x)
+        if not pad_trailing:
+            return x
         ghost_frames = self._trailing_latent_frames * (8 // self.upsamples[3].stride[0])
         content_frames = max(x.shape[1] - ghost_frames, 1)
         minimum_frames = max(1, math.ceil(self.stage5_kernel[0] / self.upsamples[3].stride[0]))
@@ -708,13 +712,21 @@ class DiffusionVideoDecoder(nn.Module):
         pixels: torch.Tensor,
         stage4_features: torch.Tensor,
         timestep: torch.Tensor,
+        *,
+        drop_leading_frame: bool = True,
     ) -> torch.Tensor:
         patched = patchify(pixels, patch_size_hw=self.patch_size, patch_size_t=1)
         x = self.conv_in_x_t(patched.permute(0, 2, 3, 4, 1))
         t_emb = self.t_embedder(self.timestep_scale_multiplier * timestep, hidden_dtype=x.dtype)
         modulation = self.shared_adaln(t_emb)
         for block in self.diff_blocks:
-            x = block(x, stage4_features, modulation, self.upsamples[3], drop_leading_frame=True)
+            x = block(
+                x,
+                stage4_features,
+                modulation,
+                self.upsamples[3],
+                drop_leading_frame=drop_leading_frame,
+            )
         x = self.conv_out(self.norm_out(x)).permute(0, 4, 1, 2, 3).contiguous()
         return unpatchify(x, patch_size_hw=self.patch_size, patch_size_t=1)
 
@@ -795,8 +807,192 @@ class DiffusionVideoDecoder(nn.Module):
         accumulator_dtype = torch.float16 if pixels.dtype == torch.bfloat16 else pixels.dtype
         return pixels.to(accumulator_dtype).to(sample.dtype)
 
-    def tiled_decode(self, *args, **kwargs) -> Iterator[torch.Tensor]:
-        raise NotImplementedError("LTX-2.5 DiffVAE currently supports its native internal chunked-eager path; set use_tiling_vae=false.")
+    def _decode_one_tile(
+        self,
+        stage4_features: torch.Tensor,
+        pixels: torch.Tensor,
+        timesteps: torch.Tensor,
+        *,
+        is_origin: bool,
+        pad_trailing: bool,
+    ) -> torch.Tensor:
+        context = self._forward_stage_4(stage4_features, pad_trailing=pad_trailing)
+        for step in range(timesteps.shape[1] - 1):
+            prediction = self._diffusion_prediction(
+                pixels,
+                context,
+                timesteps[:, step],
+                drop_leading_frame=is_origin,
+            )
+            pixels = self._euler_step(pixels, prediction, timesteps[:, step], timesteps[:, step + 1])
+        prediction = self._diffusion_prediction(
+            pixels,
+            context,
+            timesteps[:, -1],
+            drop_leading_frame=is_origin,
+        )
+        if self.model_output_type == "x0":
+            return prediction
+        return self._euler_step(pixels, prediction, timesteps[:, -1], torch.zeros_like(timesteps[:, -1]))
+
+    @torch.no_grad()
+    def tiled_decode(
+        self,
+        sample: torch.Tensor,
+        tiling_config,
+        generator: torch.Generator | None = None,
+    ) -> Iterator[torch.Tensor]:
+        """Decode DiffVAE stage 4/5 tiles and yield blended temporal chunks."""
+        from lightx2v.models.video_encoders.hf.ltx2.video_vae import diffusion_tiling
+
+        if sample.ndim != 5:
+            raise ValueError(f"Expected DiffVAE latent [B,C,T,H,W], got {tuple(sample.shape)}")
+
+        content_frames = (sample.shape[2] - 1) * 8 + 1
+        content_height, content_width = sample.shape[3] * 32, sample.shape[4] * 32
+        latent, h_pad, w_pad = self._ensure_min_shape(sample)
+        work_frames = (latent.shape[2] - 1) * 8 + 1
+        work_height, work_width = latent.shape[3] * 32, latent.shape[4] * 32
+
+        strides = tuple(tuple(module.stride) for module in self.upsamples)
+        stage4_t, stage4_h, stage4_w = diffusion_tiling.stage4_shape_from_latent(
+            latent.shape[2],
+            latent.shape[3],
+            latent.shape[4],
+            strides,
+        )
+        trailing = latent[:, :, -1:].expand(
+            *latent.shape[:2],
+            self._trailing_latent_frames,
+            *latent.shape[3:],
+        )
+        stage4_features = self._forward_stages_1_to_3(torch.cat((latent, trailing), dim=2))
+        tiles = diffusion_tiling.prepare_tile_schedule(
+            torch.Size((latent.shape[0], stage4_t, stage4_h, stage4_w, stage4_features.shape[-1])),
+            tiling_config,
+            pixel_height=work_height,
+            pixel_width=work_width,
+            upsample_stride=tuple(self.upsamples[3].stride),
+            patch_size=self.patch_size,
+            min_tile_size=self._tile_min_sizes,
+        )
+        groups = diffusion_tiling.group_tiles_by_temporal_slice(tiles)
+        timesteps = self.default_inference_timesteps.to(sample.device).unsqueeze(0).expand(sample.shape[0], -1)
+        full_shape = (sample.shape[0], self.out_channels, work_frames, work_height, work_width)
+        accumulator_dtype = torch.float16 if sample.dtype == torch.bfloat16 else sample.dtype
+        random_device = generator.device if generator is not None else sample.device
+
+        h_start, w_start = h_pad.before * 32, w_pad.before * 32
+
+        def emit(
+            buffer: torch.Tensor,
+            weights: torch.Tensor,
+            global_start: int,
+        ) -> torch.Tensor | None:
+            if global_start >= content_frames or buffer.shape[2] == 0:
+                return None
+            keep = min(buffer.shape[2], content_frames - global_start)
+            weights = weights[:, :, :keep].clamp_min(torch.finfo(weights.dtype).tiny)
+            chunk = (buffer[:, :, :keep] / weights).to(sample.dtype)
+            return chunk[
+                :,
+                :,
+                :,
+                h_start : h_start + content_height,
+                w_start : w_start + content_width,
+            ].contiguous()
+
+        previous_buffer: torch.Tensor | None = None
+        previous_weights: torch.Tensor | None = None
+        previous_slice: slice | None = None
+
+        for group in groups:
+            temporal_slice = group[0].out_coords[2]
+            group_start, group_stop, _ = temporal_slice.indices(work_frames)
+            group_frames = group_stop - group_start
+            buffer = torch.zeros(
+                sample.shape[0],
+                self.out_channels,
+                group_frames,
+                work_height,
+                work_width,
+                device=sample.device,
+                dtype=accumulator_dtype,
+            )
+            weights = torch.zeros(
+                sample.shape[0],
+                1,
+                group_frames,
+                work_height,
+                work_width,
+                device=sample.device,
+                dtype=accumulator_dtype,
+            )
+
+            for tile in group:
+                _, t_coord, h_coord, w_coord, _ = tile.in_coords
+                t0, t1, _ = t_coord.indices(stage4_t)
+                h0, h1, _ = h_coord.indices(stage4_h)
+                w0, w1, _ = w_coord.indices(stage4_w)
+                is_origin = t0 == 0
+                pad_trailing = t1 == stage4_t
+                feature_stop = stage4_features.shape[1] if pad_trailing else t1
+                feature_tile = stage4_features[:, t0:feature_stop, h0:h1, w0:w1]
+
+                output_shape = diffusion_tiling.tile_shape(full_shape, tile.out_coords)
+                stride_t, stride_h, stride_w = self.upsamples[3].stride
+                canvas_frames = (t1 - t0) * stride_t - (1 if is_origin and stride_t == 2 else 0)
+                if pad_trailing:
+                    canvas_frames = max(canvas_frames, self.stage5_kernel[0])
+                canvas_height = (h1 - h0) * stride_h * self.patch_size
+                canvas_width = (w1 - w0) * stride_w * self.patch_size
+                pixels = torch.randn(
+                    (sample.shape[0], self.out_channels, canvas_frames, canvas_height, canvas_width),
+                    dtype=sample.dtype,
+                    device=random_device,
+                    generator=generator,
+                ).to(sample.device)
+                decoded = self._decode_one_tile(
+                    feature_tile,
+                    pixels,
+                    timesteps,
+                    is_origin=is_origin,
+                    pad_trailing=pad_trailing,
+                )
+                decoded = decoded[:, :, : output_shape[2], : output_shape[3], : output_shape[4]]
+                mask = diffusion_tiling.separable_mask(tile, device=sample.device, dtype=accumulator_dtype)
+
+                out_t = tile.out_coords[2]
+                out_h = tile.out_coords[3]
+                out_w = tile.out_coords[4]
+                local_t = slice(out_t.start - group_start, out_t.stop - group_start)
+                coords = (slice(None), slice(None), local_t, out_h, out_w)
+                buffer[coords] += decoded.to(accumulator_dtype) * mask
+                weight_coords = (slice(None), slice(None), local_t, out_h, out_w)
+                weights[weight_coords] += mask[:, :1]
+
+            if previous_buffer is not None:
+                assert previous_weights is not None and previous_slice is not None
+                overlap = max(0, previous_slice.stop - group_start)
+                if overlap:
+                    previous_buffer[:, :, -overlap:] += buffer[:, :, :overlap]
+                    previous_weights[:, :, -overlap:] += weights[:, :, :overlap]
+                    buffer[:, :, :overlap] = previous_buffer[:, :, -overlap:]
+                    weights[:, :, :overlap] = previous_weights[:, :, -overlap:]
+                exclusive = max(0, group_start - previous_slice.start)
+                chunk = emit(previous_buffer[:, :, :exclusive], previous_weights[:, :, :exclusive], previous_slice.start)
+                if chunk is not None:
+                    yield chunk
+
+            previous_buffer = buffer
+            previous_weights = weights
+            previous_slice = slice(group_start, group_stop)
+
+        if previous_buffer is not None:
+            assert previous_weights is not None and previous_slice is not None
+            chunk = emit(previous_buffer, previous_weights, previous_slice.start)
+            if chunk is not None:
+                yield chunk
 
 
 __all__ = ["DiffusionVideoDecoder"]

@@ -6,8 +6,6 @@ from lightx2v.models.networks.wan.infer.animate2 import (
 )
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.model import WanModel
-from lightx2v.utils.envs import GET_DTYPE, GET_SENSITIVE_DTYPE
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanAnimate2Model(WanModel):
@@ -22,14 +20,6 @@ class WanAnimate2Model(WanModel):
         lora_path=None,
         lora_strength=1.0,
     ):
-        if AI_DEVICE != "cuda" or GET_DTYPE() is not torch.bfloat16 or GET_SENSITIVE_DTYPE() is not torch.bfloat16:
-            raise NotImplementedError("Wan-Animate-2 source-parity inference requires CUDA with DTYPE=BF16 and SENSITIVE_LAYER_DTYPE=None/BF16.")
-        if config.get("lazy_load", False):
-            raise NotImplementedError("Wan-Animate-2 does not support lazy loading yet.")
-        if config.get("feature_caching", "NoCaching") != "NoCaching":
-            raise NotImplementedError("Wan-Animate-2 requires feature_caching='NoCaching'.")
-        if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "phase":
-            raise NotImplementedError("Wan-Animate-2 supports model/block offload, not phase offload.")
         super().__init__(
             model_path,
             config,
@@ -65,15 +55,6 @@ class WanAnimate2Model(WanModel):
         self.pre_infer_class = WanAnimate2PreInfer
         self.post_infer_class = WanPostInfer
         self.transformer_infer_class = WanAnimate2TransformerInfer
-
-    def _infer_cond_uncond(self, inputs, infer_condition=True):
-        # The source wraps the complete transformer in composable FSDP with
-        # ``output_dtype=torch.bfloat16``.  Its internal forward returns FP32,
-        # but the value seen by CFG and the DPM scheduler is therefore BF16.
-        # Keeping this boundary matters from the second solver update onward:
-        # a CPU FP32 sigma multiplied by a CUDA BF16 tensor follows a different
-        # rounding path from the same BF16 values stored in an FP32 tensor.
-        return super()._infer_cond_uncond(inputs, infer_condition).to(torch.bfloat16)
 
     @torch.no_grad()
     def prepare_reference(self, inputs):
