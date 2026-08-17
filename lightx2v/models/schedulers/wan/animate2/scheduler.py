@@ -8,7 +8,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class WanAnimate2Scheduler(BaseScheduler):
-    """Wan-Animate-2 distilled shifted-flow DPM-Solver++ scheduler."""
+    """Wan-Animate-2 shifted-flow scheduler with official distilled Euler mode."""
 
     solver_order = 2
     num_train_timesteps = 1000
@@ -17,6 +17,9 @@ class WanAnimate2Scheduler(BaseScheduler):
         super().__init__(config)
         self.sample_shift = float(config["sample_shift"])
         self.sample_guide_scale = float(config["sample_guide_scale"])
+        self.flow_solver = str(config.get("flow_solver", config.get("scheduler", "dpm++"))).strip().lower()
+        if self.flow_solver not in ("euler", "dpm++"):
+            raise ValueError(f"Unsupported Wan-Animate-2 scheduler: {self.flow_solver!r}")
         self.keep_latents_dtype_in_scheduler = True
         self.caching_records_2 = [True] * self.infer_steps
         self.noise_pred = None
@@ -34,6 +37,9 @@ class WanAnimate2Scheduler(BaseScheduler):
         self.infer_steps = int(config["infer_steps"])
         self.sample_shift = float(config["sample_shift"])
         self.sample_guide_scale = float(config["sample_guide_scale"])
+        self.flow_solver = str(config.get("flow_solver", config.get("scheduler", self.flow_solver))).strip().lower()
+        if self.flow_solver not in ("euler", "dpm++"):
+            raise ValueError(f"Unsupported Wan-Animate-2 scheduler: {self.flow_solver!r}")
         self.caching_records = [True] * self.infer_steps
         self.caching_records_2 = [True] * self.infer_steps
         self.step_index = 0
@@ -164,7 +170,11 @@ class WanAnimate2Scheduler(BaseScheduler):
         # Upstream lower_order_final=True and final_sigmas_type="zero", so the
         # final update is first order. The first update is also first order while
         # the multistep history warms up; all intervening updates use midpoint.
-        use_first_order = self.lower_order_nums < 1 or self.step_index == self.infer_steps - 1
+        use_first_order = (
+            self.flow_solver == "euler"
+            or self.lower_order_nums < 1
+            or self.step_index == self.infer_steps - 1
+        )
         if use_first_order:
             previous_sample = self._first_order_update(converted, sample)
         else:
