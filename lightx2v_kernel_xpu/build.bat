@@ -144,6 +144,7 @@ if exist _cmake_build rmdir /s /q _cmake_build
     -DCMAKE_CXX_STANDARD=20 ^
     "-DCMAKE_PREFIX_PATH=%torch_root%" ^
     "-DPython_EXECUTABLE=%PYEXE%" ^
+    -DENABLE_CUTE_FMHA=OFF ^
     -B _cmake_build -S . >> "%LOGFILE%" 2>> "%ERRFILE%"
 if errorlevel 1 (echo CMAKE CONFIGURE FAILED >> "%LOGFILE%" & goto :dump_and_fail)
 
@@ -199,6 +200,7 @@ cd /d "%PROJ%"
 
 if exist dist rmdir /s /q dist
 set "CMAKE_PREFIX_PATH=%torch_root%"
+set "CMAKE_ARGS=-DENABLE_CUTE_FMHA=OFF"
 
 "%PYEXE%" -m pip wheel . --no-build-isolation -w dist >> "%LOGFILE%" 2>> "%ERRFILE%"
 if errorlevel 1 (echo WHEEL BUILD FAILED >> "%LOGFILE%" & goto :dump_and_fail)

@@ -1,7 +1,13 @@
 cmake_minimum_required(VERSION 3.22 FATAL_ERROR)
 project(sycl-kernels LANGUAGES CXX)
 
-option(ENABLE_CUTE_FMHA "Build the CUTLASS-SYCL CUTE FMHA library" ON)
+if(WIN32)
+    set(ENABLE_CUTE_FMHA_DEFAULT OFF)
+else()
+    set(ENABLE_CUTE_FMHA_DEFAULT ON)
+endif()
+option(ENABLE_CUTE_FMHA "Build the Linux-only CUTLASS-SYCL CUTE FMHA library"
+    ${ENABLE_CUTE_FMHA_DEFAULT})
 set(CUTLASS_SYCL_ROOT "$ENV{CUTLASS_SYCL_ROOT}" CACHE PATH
     "Path to the CUTLASS-SYCL/sycl-tla source tree")
 set(XPU_TARGET "bmg" CACHE STRING "Intel GPU AOT target (bmg or ptl-h)")

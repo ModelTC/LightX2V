@@ -57,6 +57,8 @@ from sycl_kernels.version import __version__  # noqa: E402, F401
 def _load_cute_fmha():
     global _cute_fmha_loaded
 
+    if os.name == "nt":
+        raise RuntimeError("CUTE FMHA is supported on Linux only")
     if _cute_fmha_loaded:
         return
     import torch
@@ -81,6 +83,8 @@ def cute_sdp(q, k, v):
 
 
 def has_cute_fmha():
+    if os.name == "nt":
+        return False
     try:
         _load_cute_fmha()
         return True
