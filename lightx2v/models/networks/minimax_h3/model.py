@@ -335,7 +335,10 @@ class MiniMaxH3Model(BaseTransformerModel):
 
         if tensor.shape[0] % self.tp_size:
             raise ValueError(f"Cannot column-shard {key} shape {tuple(tensor.shape)} across TP size {self.tp_size}")
-        return torch.chunk(tensor, self.tp_size, dim=0)[self.tp_rank].contiguous()
+        # A dim-0 chunk is already contiguous, so ``.contiguous()`` would keep
+        # it as a view backed by the full checkpoint tensor. Materialize the
+        # local shard so CPU loading does not retain peer ranks' storage.
+        return torch.chunk(tensor, self.tp_size, dim=0)[self.tp_rank].clone(memory_format=torch.contiguous_format)
 
     def _should_load_weights(self):
         # Each TP rank reads its own slices.  This is also correct for TP+SP,
