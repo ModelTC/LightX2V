@@ -78,7 +78,7 @@ _MODEL_MODULES = {
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.longcat_image",
     "ltx_t2av": "lightx2v_train.model_zoo.ltx.ltx_t2av",
     "ltx_t2av_ar": "lightx2v_train.model_zoo.ltx.ltx_t2av",
-    "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3_t2av",
+    "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_t2av",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.qwen_image",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.qwen_image_edit",
     "wan_t2v": "lightx2v_train.model_zoo.wan.wan_t2v",
