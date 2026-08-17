@@ -75,6 +75,7 @@ def main(args=None):
     launcher = _launch_isaac_sim()
     try:
         from common.contract import get_contract
+
         from simulator.robodojo_node.env import build_robodojo_env
         from simulator.sim.node import run_simulator_node
 

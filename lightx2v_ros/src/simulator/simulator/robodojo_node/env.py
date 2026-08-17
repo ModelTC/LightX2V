@@ -8,7 +8,6 @@ from common.contract import EnvContract
 
 from simulator.sim.base_env import BaseSimEnv, Observation
 
-
 DEFAULT_TASK_NAME = "stack_bowls"
 DEFAULT_ENV_CFG_TYPE = "arx_x5"
 
@@ -164,9 +163,8 @@ class RoboDojoEnv(BaseSimEnv):
         self._validate_joint_robot()
 
     def _build_env_cfg(self):
-        from omegaconf import OmegaConf
-
         import env.global_configs as global_configs
+        from omegaconf import OmegaConf
         from utils.load_file import load_yaml
         from utils.pipeline_utils import process_config, process_randomization, resolve_random_task_num_envs
 
