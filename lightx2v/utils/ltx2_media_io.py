@@ -1,5 +1,9 @@
 import logging
 import math
+import os
+import queue
+import tempfile
+import threading
 from collections.abc import Generator, Iterator, Mapping
 from fractions import Fraction
 from io import BytesIO
@@ -229,6 +233,190 @@ def encode_video(
 
     container.close()
     logger.info(f"Video saved to {output_path}")
+
+
+class AsyncAudioVideoWriter:
+    """Encode CPU RGB chunks on a background thread and atomically publish an MP4.
+
+    The worker thread exclusively owns the PyAV container.  Producers submit
+    bounded video chunks while the accelerator decodes the following chunk,
+    then submit the final audio waveform.  A bounded queue provides
+    backpressure without retaining the complete decoded video in host memory.
+    """
+
+    _FINISH = object()
+
+    def __init__(
+        self,
+        *,
+        output_path: str,
+        fps: int,
+        audio_sample_rate: int | None,
+        queue_size: int = 2,
+        video_codec_options: Mapping[str, str] | None = None,
+    ) -> None:
+        if queue_size <= 0:
+            raise ValueError(f"queue_size must be positive, got {queue_size}")
+        self.output_path = os.fspath(output_path)
+        self.fps = int(fps)
+        self.audio_sample_rate = int(audio_sample_rate) if audio_sample_rate is not None else None
+        self.video_codec_options = dict(video_codec_options) if video_codec_options else None
+        self._queue: queue.Queue[object] = queue.Queue(maxsize=queue_size)
+        self._error: BaseException | None = None
+        self._cancelled = threading.Event()
+        self._done = threading.Event()
+        self._closed = False
+
+        output_dir = os.path.dirname(os.path.abspath(self.output_path))
+        os.makedirs(output_dir, exist_ok=True)
+        fd, self._temporary_path = tempfile.mkstemp(prefix=f".{os.path.basename(self.output_path)}.", suffix=".tmp.mp4", dir=output_dir)
+        os.close(fd)
+
+        self._thread = threading.Thread(target=self._worker, name="lightx2v-av-writer")
+        self._thread.start()
+
+    def _raise_if_failed(self) -> None:
+        if self._error is not None:
+            raise RuntimeError(f"Asynchronous audio-video encoding failed for {self.output_path}") from self._error
+
+    def _put(self, item: object) -> None:
+        if self._closed:
+            raise RuntimeError("Cannot submit data to a closed audio-video writer")
+        while True:
+            self._raise_if_failed()
+            try:
+                self._queue.put(item, timeout=0.1)
+                return
+            except queue.Full:
+                if self._done.is_set():
+                    self._raise_if_failed()
+                    raise RuntimeError("Audio-video writer stopped before accepting all data")
+
+    def submit_video(self, frames: torch.Tensor) -> None:
+        """Submit one CPU ``[F,H,W,3]`` RGB uint8 chunk."""
+
+        if frames.ndim != 4 or frames.shape[-1] != 3:
+            raise ValueError(f"video chunk must be [F,H,W,3], got {tuple(frames.shape)}")
+        if frames.shape[0] <= 0:
+            return
+        if frames.dtype != torch.uint8:
+            raise TypeError(f"video chunk must use torch.uint8, got {frames.dtype}")
+        if frames.device.type != "cpu":
+            raise ValueError(f"video chunk must be on CPU, got {frames.device}")
+        self._put(("video", frames.contiguous()))
+
+    def submit_audio(self, audio: Audio) -> None:
+        """Submit the final audio waveform after the video producer is done."""
+
+        if self.audio_sample_rate is None:
+            raise RuntimeError("This writer was created without an audio stream")
+        if int(audio.sampling_rate) != self.audio_sample_rate:
+            raise ValueError(f"audio sampling rate mismatch: writer={self.audio_sample_rate}, payload={audio.sampling_rate}")
+        self._put(("audio", audio))
+
+    def finish(self) -> None:
+        """Drain queued chunks, finalize the MP4, and atomically publish it."""
+
+        if self._closed:
+            self._raise_if_failed()
+            return
+        try:
+            self._put(self._FINISH)
+        except BaseException:
+            self.abort()
+            raise
+        self._thread.join()
+        self._closed = True
+        self._raise_if_failed()
+
+    def abort(self) -> None:
+        """Stop after the current encode operation and remove the partial file."""
+
+        if self._closed:
+            return
+        self._cancelled.set()
+        while not self._done.is_set():
+            try:
+                self._queue.put(self._FINISH, timeout=0.1)
+                break
+            except queue.Full:
+                continue
+        self._thread.join()
+        self._closed = True
+
+    def _worker(self) -> None:
+        container = None
+        video_stream = None
+        audio_stream = None
+        audio_payload = None
+        success = False
+        try:
+            while True:
+                item = self._queue.get()
+                if item is self._FINISH:
+                    break
+                if self._cancelled.is_set():
+                    continue
+
+                kind, payload = item
+                if kind == "video":
+                    frames = payload
+                    if container is None:
+                        _, height, width, _ = frames.shape
+                        container = av.open(self._temporary_path, mode="w")
+                        video_stream = container.add_stream("libx264", rate=self.fps)
+                        video_stream.width = width
+                        video_stream.height = height
+                        video_stream.pix_fmt = "yuv420p"
+                        if self.video_codec_options:
+                            video_stream.options = dict(self.video_codec_options)
+                        if self.audio_sample_rate is not None:
+                            audio_stream = _prepare_audio_stream(container, self.audio_sample_rate)
+                    elif frames.shape[1] != video_stream.height or frames.shape[2] != video_stream.width:
+                        raise ValueError(
+                            f"video chunk size changed from {video_stream.height}x{video_stream.width} to {frames.shape[1]}x{frames.shape[2]}"
+                        )
+
+                    for frame_array in frames.numpy():
+                        frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
+                        for packet in video_stream.encode(frame):
+                            container.mux(packet)
+                elif kind == "audio":
+                    if audio_payload is not None:
+                        raise RuntimeError("Audio was submitted more than once")
+                    audio_payload = payload
+                else:
+                    raise RuntimeError(f"Unknown audio-video writer message: {kind!r}")
+
+            if self._cancelled.is_set():
+                return
+            if container is None or video_stream is None:
+                raise RuntimeError("No video frames were submitted")
+            for packet in video_stream.encode():
+                container.mux(packet)
+            if self.audio_sample_rate is not None:
+                if audio_payload is None or audio_stream is None:
+                    raise RuntimeError("No audio waveform was submitted")
+                _write_audio(container, audio_stream, audio_payload)
+            container.close()
+            container = None
+            os.replace(self._temporary_path, self.output_path)
+            success = True
+            logger.info(f"Video saved to {self.output_path}")
+        except BaseException as exc:
+            self._error = exc
+        finally:
+            if container is not None:
+                try:
+                    container.close()
+                except Exception:
+                    pass
+            if not success and os.path.exists(self._temporary_path):
+                try:
+                    os.remove(self._temporary_path)
+                except OSError:
+                    pass
+            self._done.set()
 
 
 _INT_FORMAT_MAX: dict[str, float] = {

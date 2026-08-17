@@ -20,13 +20,15 @@ pinned with the released checkpoint.  This module intentionally depends only on
 PyTorch and safetensors: no third-party model implementation is imported at
 runtime.
 
-There are two explicit decode boundaries:
+There are three explicit decode boundaries:
 
 * :meth:`decode_raw` consumes already denormalized VAE latents and returns
   ImageNet-normalized RGB, matching the low-level autoencoder output.
 * :meth:`decode` consumes diffusion-space latents, applies the released
   per-channel mean/std, runs the mixed FP16/FP32 decoder, and returns RGB in
   ``[0, 1]`` with shape ``[batch, 3, frames, height, width]``.
+* :meth:`decode_iter` applies the same recipe but yields stable temporal chunks
+  so CPU video encoding can overlap the next accelerator decode.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from __future__ import annotations
 import gc
 import json
 import math
+from collections.abc import Iterator
 from pathlib import Path
 
 import torch
@@ -954,7 +957,17 @@ class MiniMaxH3VideoVAE(nn.Module):
             if self.cpu_offload:
                 self.offload()
 
-    def _decode(self, latents: torch.Tensor) -> torch.Tensor:
+    def _decode_iter(self, latents: torch.Tensor) -> Iterator[torch.Tensor]:
+        """Yield temporally stable decoder chunks before RGB postprocessing.
+
+        The released decoder operates on overlapping temporal clips.  A clip's
+        leading frames are blended with the overlap retained from the previous
+        clip before they are yielded, so consumers never observe frames that
+        will later be modified.  Padding only affects the final clip; when it
+        is present, the last main chunk is retained until the padded tail can
+        be removed exactly as in the original concatenating implementation.
+        """
+
         tokens_chunk_size = self.tokens_chunk_size
         temporal_ratio = self.temporal_compression_ratio
         chunk_num_frames = tokens_chunk_size * temporal_ratio
@@ -970,8 +983,8 @@ class MiniMaxH3VideoVAE(nn.Module):
                 dim=2,
             )
 
-        decoded_chunks: list[torch.Tensor] = []
         overlap = None
+        final_main_chunk = None
         for chunk_index in range(num_chunks):
             start = chunk_index * tokens_chunk_size
             clip = self._decode_clip(latents[:, :, start : start + tokens_chunk_size + self.token_overlap])
@@ -982,19 +995,34 @@ class MiniMaxH3VideoVAE(nn.Module):
                 if overlap_index == 0:
                     if overlap is not None:
                         chunk = self._blend(overlap, chunk, self.frame_overlap, dim=-3)
-                    decoded_chunks.append(chunk)
+                    if pad_tokens > 0 and chunk_index == num_chunks - 1:
+                        final_main_chunk = chunk
+                    else:
+                        yield chunk
                 else:
                     overlap = chunk
-        if overlap is not None:
-            decoded_chunks.append(overlap)
 
-        decoded = torch.cat(decoded_chunks, dim=2)
         if pad_tokens > 0:
             intra_tail = self.clip_length % temporal_ratio
             num_tokens_before_pad = latents.shape[2] - pad_tokens
             pad_frames = sum(intra_tail if intra_tail and (num_tokens_before_pad + offset) % tokens_chunk_size == 0 else temporal_ratio for offset in range(pad_tokens))
-            decoded = decoded[:, :, :-pad_frames]
-        return decoded
+            if final_main_chunk is None:
+                raise RuntimeError("MiniMax-H3 VAE decoder did not retain the padded final chunk")
+            final_parts = [final_main_chunk]
+            if overlap is not None:
+                final_parts.append(overlap)
+            final_chunk = torch.cat(final_parts, dim=2)
+            if pad_frames >= final_chunk.shape[2] and final_chunk.shape[2] != 0:
+                raise RuntimeError(f"MiniMax-H3 VAE padding ({pad_frames} frames) consumes the entire final decoded chunk ({final_chunk.shape[2]} frames)")
+            yield final_chunk[:, :, : final_chunk.shape[2] - pad_frames]
+        elif overlap is not None:
+            yield overlap
+
+    def _decode(self, latents: torch.Tensor) -> torch.Tensor:
+        decoded_chunks = list(self._decode_iter(latents))
+        if not decoded_chunks:
+            raise RuntimeError("MiniMax-H3 VAE decoder produced no temporal chunks")
+        return torch.cat(decoded_chunks, dim=2)
 
     def denormalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
         mean = self.latents_mean.to(device=latents.device).view(1, -1, 1, 1, 1)
@@ -1050,6 +1078,42 @@ class MiniMaxH3VideoVAE(nn.Module):
             if self.cpu_offload:
                 self.offload()
 
+    def _run_decode_iter(
+        self,
+        latents: torch.Tensor,
+        *,
+        denormalize: bool,
+        postprocess: bool,
+        return_cpu: bool | None,
+    ) -> Iterator[torch.Tensor]:
+        """Run the decoder and yield postprocessed temporal chunks."""
+
+        try:
+            if latents.ndim != 5 or latents.shape[1] != self.post_quant_conv.in_channels:
+                raise ValueError(f"video latents must have shape [batch, {self.post_quant_conv.in_channels}, frames, height, width], got {tuple(latents.shape)}")
+            device = self._activate()
+            latents = latents.to(device=device, dtype=self.sensitive_layer_dtype)
+            if denormalize:
+                latents = self.denormalize_latents(latents)
+            if self.sensitive_layer_dtype != self.infer_dtype:
+                latents = latents.to(self.infer_dtype)
+            if return_cpu is None:
+                return_cpu = self.cpu_offload
+
+            with torch.no_grad():
+                for video in self._decode_iter(latents):
+                    if self.sensitive_layer_dtype != self.infer_dtype:
+                        video = video.to(self.sensitive_layer_dtype)
+                    if postprocess:
+                        video = self.postprocess(video)
+                    video = video.float()
+                    if return_cpu:
+                        video = video.cpu()
+                    yield video
+        finally:
+            if self.cpu_offload:
+                self.offload()
+
     def decode_raw(self, denormalized_latents: torch.Tensor, *, return_cpu: bool | None = None) -> torch.Tensor:
         """Decode VAE-space latents to ImageNet-normalized RGB."""
 
@@ -1069,6 +1133,21 @@ class MiniMaxH3VideoVAE(nn.Module):
         """
 
         return self._run_decode(
+            latents,
+            denormalize=True,
+            postprocess=True,
+            return_cpu=return_cpu,
+        )
+
+    def decode_iter(self, latents: torch.Tensor, *, return_cpu: bool | None = None) -> Iterator[torch.Tensor]:
+        """Yield normalized diffusion latents as stable RGB temporal chunks.
+
+        Each result has shape ``[B, 3, chunk_frames, H, W]``, dtype
+        ``float32``, and values in ``[0, 1]``.  The generator keeps an
+        offloaded VAE active until it is exhausted or closed by the caller.
+        """
+
+        yield from self._run_decode_iter(
             latents,
             denormalize=True,
             postprocess=True,
