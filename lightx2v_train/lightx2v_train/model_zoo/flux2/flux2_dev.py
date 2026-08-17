@@ -5,6 +5,7 @@ from diffusers import AutoencoderKLFlux2, Flux2Pipeline, Flux2Transformer2DModel
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
 from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.flux2.capability_adapters import Flux2ConsistencyCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
@@ -32,7 +33,14 @@ class Flux2DevModel(BaseModel):
         )
         self.capabilities.register(
             DistillationCapability,
-            GenericDistillationCapability(self),
+            GenericDistillationCapability(
+                self,
+                latent_geometry=SpatialLatentGeometry(
+                    channels_path="transformer.config.in_channels",
+                    spatial_downsample_multiplier=2,
+                ),
+                guidance_in_denoiser_space=True,
+            ),
         )
         self.capabilities.register(
             ConsistencyCapability,
@@ -163,14 +171,6 @@ class Flux2DevModel(BaseModel):
         latent_w = 2 * (int(width) // (self.vae_scale_factor * 2))
         shape = (1, self.transformer.config.in_channels, latent_h // 2, latent_w // 2)
         return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
-
-    def dmd_latent_shape(self, height, width):
-        latent_h = 2 * (int(height) // (self.vae_scale_factor * 2))
-        latent_w = 2 * (int(width) // (self.vae_scale_factor * 2))
-        return (1, int(self.transformer.config.in_channels), latent_h // 2, latent_w // 2)
-
-    def cfg_on_denoiser_output(self):
-        return True
 
     def decode_latent(self, latent):
         latent = self._denormalize_patch_latents(latent)

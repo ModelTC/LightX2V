@@ -217,12 +217,6 @@ class BaseModel(CapabilityProvider):
     def prepare_infer_latents(self, height, width, generator=None):
         raise NotImplementedError
 
-    def dmd_latent_shape(self, height, width):
-        raise NotImplementedError(f"{self.__class__.__name__} must define dmd_latent_shape().")
-
-    def cfg_on_denoiser_output(self):
-        return False
-
     def decode_latent(self, latent):
         raise NotImplementedError
 

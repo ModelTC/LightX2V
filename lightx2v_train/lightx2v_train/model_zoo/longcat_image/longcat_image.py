@@ -7,6 +7,7 @@ from diffusers.models.transformers import LongCatImageTransformer2DModel
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import prepare_pos_ids
 
 from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.longcat_image.capability_adapters import LongCatImageConsistencyCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
@@ -34,7 +35,13 @@ class LongCatImageModel(BaseModel):
         )
         self.capabilities.register(
             DistillationCapability,
-            GenericDistillationCapability(self),
+            GenericDistillationCapability(
+                self,
+                latent_geometry=SpatialLatentGeometry(
+                    channels_path="vae.config.latent_channels",
+                ),
+                guidance_in_denoiser_space=True,
+            ),
         )
         self.capabilities.register(
             ConsistencyCapability,
@@ -165,14 +172,6 @@ class LongCatImageModel(BaseModel):
         # latent shape: (batch=1, latent_channels, latent_h, latent_w)
         shape = (1, self.vae.config.latent_channels, latent_h, latent_w)
         return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
-
-    def dmd_latent_shape(self, height, width):
-        latent_h = 2 * (int(height) // (self.vae_scale_factor * 2))
-        latent_w = 2 * (int(width) // (self.vae_scale_factor * 2))
-        return (1, int(self.vae.config.latent_channels), latent_h, latent_w)
-
-    def cfg_on_denoiser_output(self):
-        return True
 
     def decode_latent(self, latent):
         # Reverse the normalization from encode_to_latent:

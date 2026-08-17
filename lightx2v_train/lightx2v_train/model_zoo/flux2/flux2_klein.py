@@ -5,6 +5,7 @@ from diffusers import AutoencoderKLFlux2, Flux2KleinPipeline, Flux2Transformer2D
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
 from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, DopsdCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.flux2.capability_adapters import Flux2ConsistencyCapability
 from lightx2v_train.model_zoo.flux2.capability_adapters.flux2_dopsd_capability import (
@@ -35,7 +36,13 @@ class Flux2KleinModel(BaseModel):
         )
         self.capabilities.register(
             DistillationCapability,
-            GenericDistillationCapability(self),
+            GenericDistillationCapability(
+                self,
+                latent_geometry=SpatialLatentGeometry(
+                    channels_path="transformer.config.in_channels",
+                    spatial_downsample_multiplier=2,
+                ),
+            ),
         )
         self.capabilities.register(
             ConsistencyCapability,
@@ -130,16 +137,6 @@ class Flux2KleinModel(BaseModel):
 
     def encode_prompt_text(self, prompt):
         return self.encode_prompt_condition(prompt)
-
-    def dmd_latent_shape(self, height, width):
-        latent_h = 2 * (int(height) // (self.vae_scale_factor * 2))
-        latent_w = 2 * (int(width) // (self.vae_scale_factor * 2))
-        return (
-            1,
-            self.transformer.config.in_channels,
-            latent_h // 2,
-            latent_w // 2,
-        )
 
     def prepare_denoiser_input(self, noisy_latent, condition=None):
         h, w = noisy_latent.shape[2], noisy_latent.shape[3]

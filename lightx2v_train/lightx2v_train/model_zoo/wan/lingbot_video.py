@@ -384,13 +384,10 @@ class LingBotVideoModel(BaseModel):
     def postprocess_denoiser_output(self, prediction, denoiser_input):
         return prediction
 
-    def cfg_on_denoiser_output(self):
-        return False
-
     def _latent_channels(self):
         return int(self.transformer.config.in_channels)
 
-    def dmd_latent_shape(self, height, width):
+    def _inference_latent_shape(self, height, width):
         num_frames = int(self.config.get("inference", {}).get("num_frames", 9))
         if num_frames != 1 and (num_frames - 1) % self.vae_scale_factor_temporal != 0:
             raise ValueError(f"LingBot-Video num_frames must be 1 or 4n+1, got {num_frames}.")
@@ -405,7 +402,7 @@ class LingBotVideoModel(BaseModel):
         )
 
     def prepare_infer_latents(self, height, width, generator=None):
-        shape = self.dmd_latent_shape(height, width)
+        shape = self._inference_latent_shape(height, width)
         return torch.randn(shape, generator=generator, device=self.device, dtype=torch.float32)
 
     def _vae_latent_to_dit(self, latents):

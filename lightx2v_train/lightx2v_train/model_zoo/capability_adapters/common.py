@@ -25,6 +25,8 @@ from lightx2v_train.runtime.parallel import (
 )
 from lightx2v_train.utils.image_size_buckets import parse_image_size_buckets
 
+from .latent_geometry import LatentGeometry
+
 
 def _require_single_prompt(prompt):
     if isinstance(prompt, str):
@@ -253,6 +255,17 @@ class GenericConsistencyCapability(BoundCapability, ConsistencyCapability):
 class GenericDistillationCapability(BoundCapability, DistillationCapability):
     """Distribution-matching operations shared by image flow models."""
 
+    def __init__(
+        self,
+        model,
+        *,
+        latent_geometry: LatentGeometry | None = None,
+        guidance_in_denoiser_space: bool = False,
+    ) -> None:
+        super().__init__(model)
+        self._latent_geometry = latent_geometry
+        self._guidance_in_denoiser_space = bool(guidance_in_denoiser_space)
+
     @property
     def device(self):
         return self.model.device
@@ -293,11 +306,9 @@ class GenericDistillationCapability(BoundCapability, DistillationCapability):
                 configured = ", ".join(f"{bucket_height}x{bucket_width}" for bucket_height, bucket_width in sorted(configured_buckets))
                 raise ValueError(f"Image DMD sample size {height}x{width} is not in training.dmd.image_sizes: [{configured}].")
 
-        spatial_scale = int(self.model.vae_scale_factor)
-        size_multiple = spatial_scale * 2
-        if height % size_multiple or width % size_multiple:
-            raise ValueError(f"Image DMD target_height and target_width must be divisible by the model image size multiple {size_multiple}, got {height}x{width}.")
-        return self.model.dmd_latent_shape(height, width)
+        if self._latent_geometry is None:
+            raise NotImplementedError(f"{type(self).__name__} must override latent_shape() or be constructed with a latent_geometry adapter.")
+        return self._latent_geometry.shape(self.model, height, width)
 
     @staticmethod
     def _target_dimension(meta, key):
@@ -360,7 +371,7 @@ class GenericDistillationCapability(BoundCapability, DistillationCapability):
         if negative_condition is None:
             return self.predict_velocity(latents, sigma, condition)
 
-        if self.model.cfg_on_denoiser_output():
+        if self._guidance_in_denoiser_space:
             denoiser_input = self.model.prepare_denoiser_input(latents)
             positive = self.model.denoise(
                 denoiser_input,

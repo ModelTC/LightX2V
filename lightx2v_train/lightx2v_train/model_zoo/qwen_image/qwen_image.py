@@ -5,6 +5,7 @@ from diffusers import AutoencoderKLQwenImage, QwenImagePipeline, QwenImageTransf
 from diffusers.image_processor import VaeImageProcessor
 
 from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
@@ -37,7 +38,13 @@ class QwenImageModel(BaseModel):
         )
         self.capabilities.register(
             DistillationCapability,
-            GenericDistillationCapability(self),
+            GenericDistillationCapability(
+                self,
+                latent_geometry=SpatialLatentGeometry(
+                    channels_path="vae.config.z_dim",
+                    temporal_size=1,
+                ),
+            ),
         )
         self.capabilities.register(
             ConsistencyCapability,
@@ -154,15 +161,6 @@ class QwenImageModel(BaseModel):
         latent_w = width // self.vae_scale_factor
         shape = (1, self.vae.config.z_dim, 1, latent_h, latent_w)
         return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
-
-    def dmd_latent_shape(self, height, width):
-        return (
-            1,
-            int(self.vae.config.z_dim),
-            1,
-            int(height) // self.vae_scale_factor,
-            int(width) // self.vae_scale_factor,
-        )
 
     def decode_latent(self, latent):
         # Reverse the normalization from encode_to_latent:
