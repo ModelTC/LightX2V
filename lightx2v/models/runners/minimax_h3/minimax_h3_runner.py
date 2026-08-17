@@ -42,7 +42,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
 from lightx2v.utils.input_info import FL2AVInputInfo, I2AVInputInfo, L2AVInputInfo, Ref2AVInputInfo, T2AVInputInfo
-from lightx2v.utils.ltx2_media_io import encode_video
+from lightx2v.utils.ltx2_media_io import AsyncAudioVideoWriter, encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -594,6 +594,16 @@ class MiniMaxH3Runner(DefaultRunner):
         metrics_labels=["MiniMaxH3Runner"],
     )
     def run_vae_decoder(self, video_rows, audio_rows):
+        video_latents, audio_latents = self._prepare_vae_latents(video_rows, audio_rows)
+        with ProfilingContext4DebugL1("Run Video VAE Decoder"):
+            video = self.video_vae.decode(video_latents)
+        audio = None
+        if not self.video_vae.decode_parallel or dist.get_rank() == 0:
+            with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
+                audio = self.audio_vae.decode(audio_latents)
+        return video, audio
+
+    def _prepare_vae_latents(self, video_rows, audio_rows):
         video_rows = video_rows[self.scheduler.num_condition_video_rows :]
         audio_rows = audio_rows[self.scheduler.num_condition_audio_rows :]
         video_latents = unpatchify_video_tokens(
@@ -614,14 +624,7 @@ class MiniMaxH3Runner(DefaultRunner):
             tile_shape = self._vae_decode_tile_shapes.get(resolution, default_tile_shape)
             self.video_vae.set_decode_tile_shape(*tile_shape)
             logger.info(f"MiniMax-H3 Video VAE decode tile shape for {resolution}: {tile_shape[0]}x{tile_shape[1]}")
-
-        with ProfilingContext4DebugL1("Run Video VAE Decoder"):
-            video = self.video_vae.decode(video_latents)
-        audio = None
-        if not self.video_vae.decode_parallel or dist.get_rank() == 0:
-            with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
-                audio = self.audio_vae.decode(audio_latents)
-        return video, audio
+        return video_latents, audio_latents
 
     @staticmethod
     def _video_to_uint8_frames(video):
@@ -666,6 +669,100 @@ class MiniMaxH3Runner(DefaultRunner):
             logger.info(f"MiniMax-H3 output saved to {output_path}")
         return {"video": None, "audio": None}
 
+    def _should_pipeline_vae_decode_and_encode(self) -> bool:
+        return bool(
+            self.config.get("vae_decode_encode_pipeline", False)
+            and self.input_info.save_result_path
+            and not self.input_info.return_result_tensor
+        )
+
+    @ProfilingContext4DebugL1(
+        "Run Pipelined VAE Decoder and AV Encoder",
+        recorder_mode=GET_RECORDER_MODE(),
+    )
+    def run_vae_decoder_and_save(self, video_rows, audio_rows):
+        """Overlap temporal video VAE decoding with background H.264 encoding."""
+
+        video_latents, audio_latents = self._prepare_vae_latents(video_rows, audio_rows)
+        main_process = not dist.is_initialized() or dist.get_rank() == 0
+        output_path = self.input_info.save_result_path
+        writer = None
+        writer_error = None
+
+        # Validate on every rank so a bad request cannot leave peers blocked in
+        # the first spatial-tile collective.
+        if os.path.splitext(output_path)[1].lower() != ".mp4":
+            raise ValueError(f"MiniMax-H3 AV output uses H.264/AAC; save_result_path must end in .mp4, got {output_path!r}")
+
+        if main_process:
+            try:
+                parent = os.path.dirname(os.path.abspath(output_path))
+                os.makedirs(parent, exist_ok=True)
+                writer = AsyncAudioVideoWriter(
+                    output_path=output_path,
+                    fps=int(self.config.get("fps", 24)),
+                    audio_sample_rate=self.audio_vae.sampling_rate,
+                    queue_size=int(self.config.get("video_encode_queue_size", 2)),
+                    video_codec_options=self.config.get("video_codec_options"),
+                )
+                logger.info(f"Pipelining MiniMax-H3 VAE decode and audio-video encoding to {output_path}")
+            except BaseException as exc:
+                writer_error = exc
+
+        video_chunks = self.video_vae.decode_iter(video_latents, return_cpu=False)
+        try:
+            with ProfilingContext4DebugL1("Run Pipelined Video VAE Decoder Producer"):
+                for video_chunk in video_chunks:
+                    if main_process and writer_error is None:
+                        try:
+                            writer.submit_video(self._video_to_uint8_frames(video_chunk))
+                        except BaseException as exc:
+                            writer_error = exc
+                            writer.abort()
+                            writer = None
+        except BaseException:
+            if writer is not None:
+                writer.abort()
+            raise
+        finally:
+            close = getattr(video_chunks, "close", None)
+            if close is not None:
+                close()
+
+        # All distributed ranks have now completed the temporal/spatial VAE
+        # collectives.  Rank 0 can safely finish audio and report writer errors
+        # without stranding a peer inside the decoder.
+        if main_process and writer_error is None:
+            try:
+                with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
+                    audio = self.audio_vae.decode(audio_latents)
+                waveform = audio[0].float().cpu()
+                writer.submit_audio(
+                    Audio(
+                        waveform=waveform,
+                        sampling_rate=self.audio_vae.sampling_rate,
+                    )
+                )
+                with ProfilingContext4DebugL2("Finalize Pipelined Audio-Video Output"):
+                    writer.finish()
+                logger.info(f"MiniMax-H3 output saved to {output_path}")
+            except BaseException as exc:
+                writer_error = exc
+                if writer is not None:
+                    writer.abort()
+                writer = None
+
+        writer_failed = writer_error is not None
+        if dist.is_initialized():
+            failure = torch.tensor([int(writer_failed)], dtype=torch.int32, device=video_latents.device)
+            dist.broadcast(failure, src=0)
+            writer_failed = bool(failure.item())
+        if writer_failed:
+            if writer_error is not None:
+                raise RuntimeError(f"MiniMax-H3 pipelined output failed for {output_path}") from writer_error
+            raise RuntimeError(f"MiniMax-H3 pipelined output failed on rank 0 for {output_path}")
+        return {"video": None, "audio": None}
+
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         should_offload_transformer = self.config.get("cpu_offload", False)
@@ -678,6 +775,9 @@ class MiniMaxH3Runner(DefaultRunner):
                 if should_offload_transformer:
                     self._offload_transformer()
                     transformer_offloaded = True
+
+            if self._should_pipeline_vae_decode_and_encode():
+                return self.run_vae_decoder_and_save(video_rows, audio_rows)
 
             self.gen_video, self.gen_audio = self.run_vae_decoder(video_rows, audio_rows)
             return self.process_images_after_vae_decoder()
