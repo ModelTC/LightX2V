@@ -540,8 +540,7 @@ class HunyuanImage3MoEWeights(WeightModule):
         if self._moe_weights_initialized:
             if self.moe_fc1_weight.device != device or self.moe_fc1_weight.dtype != dtype:
                 raise RuntimeError(
-                    "HunyuanImage3 resident MoE weights cannot be converted after initialization: "
-                    f"resident=({self.moe_fc1_weight.device}, {self.moe_fc1_weight.dtype}), requested=({device}, {dtype})"
+                    f"HunyuanImage3 resident MoE weights cannot be converted after initialization: resident=({self.moe_fc1_weight.device}, {self.moe_fc1_weight.dtype}), requested=({device}, {dtype})"
                 )
             if not self._fused_moe_by_phase:
                 self._build_fused_moe_backends()

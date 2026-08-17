@@ -15,33 +15,21 @@ from lightx2v_platform.registry_factory import PLATFORM_FUSED_MOE_REGISTER
 
 def _load_metax_moe_ops():
     if not torch.cuda.is_available():
-        raise RuntimeError(
-            "metax_mctlass_moe requires an available MetaX CUDA device; "
-            "check the MACA runtime or use moe_backend='torch_expert_loop'"
-        )
+        raise RuntimeError("metax_mctlass_moe requires an available MetaX CUDA device; check the MACA runtime or use moe_backend='torch_expert_loop'")
     try:
         import_module("mcoplib._moe_C")
         mctlass_ex = import_module("mctlassEx")
     except (ImportError, OSError, RuntimeError) as error:
-        raise RuntimeError(
-            "metax_mctlass_moe requires the MetaX mcoplib and mctlassEx extensions; "
-            "install matching MACA/PyTorch packages or use moe_backend='torch_expert_loop'"
-        ) from error
+        raise RuntimeError("metax_mctlass_moe requires the MetaX mcoplib and mctlassEx extensions; install matching MACA/PyTorch packages or use moe_backend='torch_expert_loop'") from error
 
     fused_moe_gemm = getattr(mctlass_ex, "FusedMoeGEMM", None)
     if fused_moe_gemm is None:
-        raise RuntimeError(
-            "metax_mctlass_moe requires mctlassEx.FusedMoeGEMM; "
-            "install a compatible mctlassEx package or use moe_backend='torch_expert_loop'"
-        )
+        raise RuntimeError("metax_mctlass_moe requires mctlassEx.FusedMoeGEMM; install a compatible mctlassEx package or use moe_backend='torch_expert_loop'")
     try:
         align_op = torch.ops._moe_C.moe_align_block_size
         sum_op = torch.ops._moe_C.moe_sum
     except AttributeError as error:
-        raise RuntimeError(
-            "metax_mctlass_moe requires mcoplib _moe_C routing operators; "
-            "install a compatible mcoplib package or use moe_backend='torch_expert_loop'"
-        ) from error
+        raise RuntimeError("metax_mctlass_moe requires mcoplib _moe_C routing operators; install a compatible mcoplib package or use moe_backend='torch_expert_loop'") from error
     return fused_moe_gemm(), align_op, sum_op
 
 
@@ -69,10 +57,7 @@ class MetaxMctlassFusedMoE(FusedMoETemplate):
             fc2_bias,
         )
         if fc1_weight.dtype != torch.bfloat16:
-            raise TypeError(
-                "MetaX MCTlass fused MoE supports only torch.bfloat16 weights; "
-                f"got {fc1_weight.dtype}. Use a BF16 model or moe_backend='torch_expert_loop'"
-            )
+            raise TypeError(f"MetaX MCTlass fused MoE supports only torch.bfloat16 weights; got {fc1_weight.dtype}. Use a BF16 model or moe_backend='torch_expert_loop'")
 
         self.register_parameter("grouped_fc1_weight", fc1_weight.contiguous())
         self.register_parameter("grouped_fc2_weight", fc2_weight.contiguous())
@@ -214,15 +199,9 @@ class MetaxMctlassFusedMoE(FusedMoETemplate):
         if input.shape[1] != self.input_size:
             raise ValueError(f"input hidden size must be {self.input_size}, got {input.shape[1]}")
         if input.device != self.weight_device:
-            raise ValueError(
-                "input and MetaX MCTlass fused MoE weights must be on the same device, "
-                f"got input={input.device} and weights={self.weight_device}"
-            )
+            raise ValueError(f"input and MetaX MCTlass fused MoE weights must be on the same device, got input={input.device} and weights={self.weight_device}")
         if input.dtype != torch.bfloat16:
-            raise TypeError(
-                "MetaX MCTlass fused MoE supports only torch.bfloat16 input; "
-                f"got {input.dtype}. Use a BF16 model or moe_backend='torch_expert_loop'"
-            )
+            raise TypeError(f"MetaX MCTlass fused MoE supports only torch.bfloat16 input; got {input.dtype}. Use a BF16 model or moe_backend='torch_expert_loop'")
 
         top_k = token_selected_experts.shape[1]
         if top_k < 1 or top_k > self.num_experts:

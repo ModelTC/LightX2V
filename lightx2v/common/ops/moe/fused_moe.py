@@ -332,10 +332,7 @@ def _validate_multi_micro_device(device_index: int) -> None:
     capability = torch.cuda.get_device_capability(device_index)
     if capability != (9, 0):
         name = torch.cuda.get_device_name(device_index)
-        raise RuntimeError(
-            f"lightx2v_multi_micro_fused_moe only supports SM90 Hopper GPUs; "
-            f"device cuda:{device_index} is {name!r} with capability {capability}"
-        )
+        raise RuntimeError(f"lightx2v_multi_micro_fused_moe only supports SM90 Hopper GPUs; device cuda:{device_index} is {name!r} with capability {capability}")
 
 
 def _require_multi_micro_tensor(

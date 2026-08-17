@@ -186,9 +186,7 @@ class FlashInferAutotuneController:
         if not self.options.enabled:
             return nullcontext()
         if self.moe_backend not in _FLASHINFER_MOE_BACKENDS:
-            logger.warning(
-                f"flashinfer_autotune_mode is set but moe_backend={self.moe_backend!r} does not use FlashInfer; autotune is disabled for this run."
-            )
+            logger.warning(f"flashinfer_autotune_mode is set but moe_backend={self.moe_backend!r} does not use FlashInfer; autotune is disabled for this run.")
             return nullcontext()
 
         autotune_factory = self._resolve_autotune_factory()

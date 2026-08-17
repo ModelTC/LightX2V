@@ -90,10 +90,7 @@ def normalize_hunyuan_image3_phase_parallel(config, parallel_config):
         logical_tp_size = storage_tensor_p_size * micro_shard_count
         invalid_intermediate = [value for value in intermediate_sizes if value % logical_tp_size or value // logical_tp_size != 768]
         if not intermediate_sizes or invalid_intermediate:
-            raise ValueError(
-                "HunyuanImage3 multi_micro requires moe_intermediate_size / "
-                f"(storage_tensor_p_size * micro_shard_count) = 768, got {intermediate_sizes}."
-            )
+            raise ValueError(f"HunyuanImage3 multi_micro requires moe_intermediate_size / (storage_tensor_p_size * micro_shard_count) = 768, got {intermediate_sizes}.")
 
     divisibility_checks = {
         "num_attention_heads": _config_ints(config.get("num_attention_heads") or config.get("num_heads")),
