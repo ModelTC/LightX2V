@@ -16,23 +16,37 @@ class LTX2PreInfer:
         self.config = config
         self.caption_proj_before_connector = self.config.get("caption_proj_before_connector", False)
         self.cross_attention_adaln = self.config.get("cross_attention_adaln", False)
+        self.use_middle_indices_grid = self.config.get("use_middle_indices_grid", True)
 
         # Video config
         self.num_attention_heads = self.config["num_attention_heads"]
         self.inner_dim = self.config["num_attention_heads"] * config["attention_head_dim"]
-        self.positional_embedding_max_pos = [20, 2048, 2048]
+        self.positional_embedding_max_pos = self.config.get("positional_embedding_max_pos", [20, 2048, 2048])
 
         # Audio config
         self.audio_num_attention_heads = self.config.get("audio_num_attention_heads", 32)
         self.audio_attention_head_dim = self.config.get("audio_attention_head_dim", 64)
         self.audio_inner_dim = self.audio_num_attention_heads * self.audio_attention_head_dim
         self.audio_cross_attention_dim = self.config["audio_cross_attention_dim"]
-        self.audio_positional_embedding_max_pos = [config["audio_pos_embed_max_pos"]]
+        audio_max_pos = self.config.get("audio_positional_embedding_max_pos")
+        if audio_max_pos is None:
+            audio_max_pos = [self.config["audio_pos_embed_max_pos"]]
+        elif not isinstance(audio_max_pos, (list, tuple)):
+            audio_max_pos = [audio_max_pos]
+        self.audio_positional_embedding_max_pos = audio_max_pos
 
         # Common config
         self.timestep_scale_multiplier = self.config["timestep_scale_multiplier"]
-        self.av_ca_timestep_scale_multiplier = self.config["cross_attn_timestep_scale_multiplier"]
-        self.double_precision_rope = self.config.get("double_precision_rope", False)
+        self.av_ca_timestep_scale_multiplier = self.config.get(
+            "cross_attn_timestep_scale_multiplier",
+            self.config.get("av_ca_timestep_scale_multiplier"),
+        )
+        if self.av_ca_timestep_scale_multiplier is None:
+            raise KeyError("LTX2 config requires cross_attn_timestep_scale_multiplier or av_ca_timestep_scale_multiplier")
+        self.double_precision_rope = self.config.get(
+            "double_precision_rope",
+            self.config.get("frequencies_precision") == "float64",
+        )
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -61,6 +75,9 @@ class LTX2PreInfer:
         )
         return pe
 
+    def _project_video_latent(self, weights, latent):
+        return weights.patchify_proj.apply(latent)
+
     def _infer_video(self, weights, inputs, av_ca_factor):
         """Process video modality data."""
         # Get video modality data
@@ -74,7 +91,7 @@ class LTX2PreInfer:
             v_context = inputs["text_encoder_output"]["v_context_n"]
 
         # 1. Patchify projection
-        video_x = weights.patchify_proj.apply(v_latent)
+        video_x = self._project_video_latent(weights, v_latent)
 
         # 2. Timestep embeddings (adaln)
         v_timestep = v_timesteps * self.timestep_scale_multiplier
@@ -95,7 +112,10 @@ class LTX2PreInfer:
         # 3b. Prompt AdaLN timestep (global sigma) for cross-attention AdaLN — matches ltx_core TransformerArgsPreprocessor
         v_prompt_timestep = None
         if self.cross_attention_adaln:
-            sigma = self.scheduler.current_sigma().reshape(1).to(device=v_latent.device, dtype=v_latent.dtype)
+            # ltx-core keeps the global sigma in fp32 until the AdaLN output is
+            # cast to the hidden dtype.  Casting sigma to bf16 first is invisible
+            # at sigma=1 but noticeably changes every later distilled step.
+            sigma = self.scheduler.current_sigma().reshape(1).to(device=v_latent.device)
             p_scaled = sigma * self.timestep_scale_multiplier
             p_proj = get_timestep_embedding(p_scaled.flatten()).to(GET_DTYPE())
             p_e1 = weights.prompt_adaln_single_emb_timestep_embedder_linear_1.apply(p_proj)
@@ -108,7 +128,7 @@ class LTX2PreInfer:
             positions=v_positions.unsqueeze(0),  # No unsqueeze, pass directly
             inner_dim=self.inner_dim,
             max_pos=self.positional_embedding_max_pos,
-            use_middle_indices_grid=True,
+            use_middle_indices_grid=self.use_middle_indices_grid,
             num_attention_heads=self.num_attention_heads,
             x_dtype=v_latent.dtype,
         )
@@ -184,7 +204,7 @@ class LTX2PreInfer:
 
         a_prompt_timestep = None
         if self.cross_attention_adaln:
-            sigma = self.scheduler.current_sigma().reshape(1).to(device=a_latent.device, dtype=a_latent.dtype)
+            sigma = self.scheduler.current_sigma().reshape(1).to(device=a_latent.device)
             p_scaled = sigma * self.timestep_scale_multiplier
             p_proj = get_timestep_embedding(p_scaled.flatten()).to(GET_DTYPE())
             p_e1 = weights.audio_prompt_adaln_single_emb_timestep_embedder_linear_1.apply(p_proj)
@@ -198,7 +218,7 @@ class LTX2PreInfer:
             positions=a_positions,  # Already has batch dim
             inner_dim=self.audio_inner_dim,
             max_pos=self.audio_positional_embedding_max_pos,
-            use_middle_indices_grid=True,
+            use_middle_indices_grid=self.use_middle_indices_grid,
             num_attention_heads=self.audio_num_attention_heads,
             x_dtype=a_latent.dtype,
         )
@@ -254,3 +274,51 @@ class LTX2PreInfer:
             video_args=video_args,
             audio_args=audio_args,
         )
+
+
+class LTX25PreInfer(LTX2PreInfer):
+    """LTX-2.5 preprocessing additions on top of the shared LTX-2 path."""
+
+    def _project_video_latent(self, weights, latent):
+        # Keep the source's leading batch dimension.  For the released BF16
+        # 128 -> 4096 projection, flattening to 2-D selects a different GEMM
+        # accumulation path and changes the result.
+        latent = latent.unsqueeze(0)
+        patchify = weights.patchify_proj
+        output = torch.nn.functional.linear(
+            latent,
+            patchify._get_actual_weight().t(),
+            patchify._get_actual_bias(),
+        )
+        if patchify.has_lora_branch:
+            lora_output = torch.nn.functional.linear(latent, patchify.lora_down)
+            lora_output = torch.nn.functional.linear(lora_output, patchify.lora_up)
+            output = output + patchify.lora_strength * patchify.lora_scale * lora_output
+        return output.squeeze(0)
+
+    def _infer_video(self, weights, inputs, av_ca_factor):
+        video_args = super()._infer_video(weights, inputs, av_ca_factor)
+
+        if not self.config.get("use_keyframes_abs_pos_embedding", False):
+            return video_args
+
+        keyframes_mask = getattr(self.scheduler.video_latent_state, "keyframes_mask", None)
+        if keyframes_mask is None:
+            return video_args
+
+        if keyframes_mask.ndim == 3:
+            if keyframes_mask.shape[0] != 1:
+                raise ValueError(f"LTX-2.5 keyframes_mask only supports batch size 1 in the native path, got {tuple(keyframes_mask.shape)}")
+            keyframes_mask = keyframes_mask.squeeze(0)
+        if keyframes_mask.ndim == 1:
+            keyframes_mask = keyframes_mask.unsqueeze(-1)
+        if keyframes_mask.ndim != 2 or keyframes_mask.shape != (video_args.x.shape[0], 1):
+            raise ValueError(f"LTX-2.5 keyframes_mask must have shape [tokens, 1], got {tuple(keyframes_mask.shape)} for {video_args.x.shape[0]} tokens")
+
+        marker = weights.keyframes_abs_pos_embedding.tensor.to(
+            device=video_args.x.device,
+            dtype=video_args.x.dtype,
+        )
+        mask = (keyframes_mask > 0).to(device=video_args.x.device, dtype=video_args.x.dtype)
+        video_args.x = video_args.x + mask * marker
+        return video_args

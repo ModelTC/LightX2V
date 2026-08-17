@@ -47,6 +47,8 @@ def _ltx2_audio_to_stereo(audio: Audio) -> Audio:
 
 
 def _ltx2_normalize_image_strengths(image_strength, n: int) -> list[float]:
+    if image_strength is None:
+        return [1.0] * n
     if not isinstance(image_strength, list):
         return [float(image_strength)] * n
     if len(image_strength) == 1:
@@ -89,6 +91,14 @@ def _ltx2_resize_video_denoise_mask_for_stage2(mask: torch.Tensor, target_h: int
 class LTX2Runner(DefaultRunner):
     _WARMUP_RESOLUTIONS = ((480, 480), (512, 768))
     _UPSAMPLER_WARMUP_RESOLUTIONS = ((480, 480), (1024, 1536))
+    transformer_model_class = LTX2Model
+    text_encoder_class = LTX2TextEncoder
+    video_vae_class = LTX2VideoVAE
+    audio_vae_class = LTX2AudioVAE
+    text_encoder_checkpoint_key = None
+    text_encoder_root_key = "gemma_original_ckpt"
+    video_vae_checkpoint_key = None
+    audio_vae_checkpoint_key = None
 
     def __init__(self, config):
         super().__init__(config)
@@ -240,11 +250,9 @@ class LTX2Runner(DefaultRunner):
             "config": self.config,
             "device": self.init_device,
         }
+        model = self.transformer_model_class(**ltx2_model_kwargs)
         lora_configs = self.config.get("lora_configs")
-        if not lora_configs:
-            model = LTX2Model(**ltx2_model_kwargs)
-        else:
-            model = LTX2Model(**ltx2_model_kwargs)
+        if lora_configs:
             lora_adapter = LoraAdapter(model, model_prefix="model.diffusion_model.")
             lora_adapter.apply_lora(lora_configs)
         return model
@@ -270,6 +278,14 @@ class LTX2Runner(DefaultRunner):
             return self.config["dit_quantized_ckpt"]
         return os.path.join(self.config["model_path"], "transformer")
 
+    def _checkpoint_path_for(self, config_key):
+        if config_key and self.config.get(config_key) is not None:
+            return self.config[config_key]
+        return self._component_checkpoint_path()
+
+    def _video_vae_extra_kwargs(self):
+        return {}
+
     def load_text_encoder(self):
         # offload config
         text_encoder_offload = self.config.get("gemma_cpu_offload", self.config.get("cpu_offload", False))
@@ -278,14 +294,10 @@ class LTX2Runner(DefaultRunner):
         else:
             text_encoder_device = torch.device(AI_DEVICE)
 
-        ckpt_path = self._component_checkpoint_path()
+        ckpt_path = self._checkpoint_path_for(self.text_encoder_checkpoint_key)
+        gemma_ckpt = self.config.get(self.text_encoder_root_key, self.config["model_path"])
 
-        if "gemma_original_ckpt" in self.config:
-            gemma_ckpt = self.config["gemma_original_ckpt"]
-        else:
-            gemma_ckpt = self.config["model_path"]
-
-        text_encoder = LTX2TextEncoder(
+        text_encoder = self.text_encoder_class(
             checkpoint_path=ckpt_path,
             gemma_root=gemma_ckpt,
             device=text_encoder_device,
@@ -311,20 +323,24 @@ class LTX2Runner(DefaultRunner):
         else:
             vae_device = torch.device(AI_DEVICE)
 
-        ckpt_path = self._component_checkpoint_path()
-
         # Video VAE
-        video_vae = LTX2VideoVAE(
-            checkpoint_path=ckpt_path,
+        video_vae = self.video_vae_class(
+            checkpoint_path=self._checkpoint_path_for(self.video_vae_checkpoint_key),
             device=vae_device,
             dtype=GET_DTYPE(),
             load_encoder=self.config["task"] in ("i2av", "ltx2_s2v", "v2av") or self.config.get("use_upsampler", False),
             use_tiling=self.config.get("use_tiling_vae", False),
             cpu_offload=vae_offload,
+            **self._video_vae_extra_kwargs(),
         )
 
         # Audio VAE
-        audio_vae = LTX2AudioVAE(checkpoint_path=ckpt_path, device=vae_device, dtype=GET_DTYPE(), cpu_offload=vae_offload)
+        audio_vae = self.audio_vae_class(
+            checkpoint_path=self._checkpoint_path_for(self.audio_vae_checkpoint_key),
+            device=vae_device,
+            dtype=GET_DTYPE(),
+            cpu_offload=vae_offload,
+        )
 
         return video_vae, audio_vae
 
@@ -751,6 +767,7 @@ class LTX2Runner(DefaultRunner):
                 width=target_width,
                 dtype=GET_DTYPE(),
                 device=AI_DEVICE,
+                crf=int(self.config.get("image_conditioning_crf", 33)),
             )
 
             with torch.no_grad():
@@ -803,6 +820,7 @@ class LTX2Runner(DefaultRunner):
                 width=tw,
                 dtype=GET_DTYPE(),
                 device=AI_DEVICE,
+                crf=int(self.config.get("image_conditioning_crf", 33)),
             )
             with torch.no_grad():
                 enc = self.video_vae.encode(image).squeeze(0)
@@ -823,6 +841,7 @@ class LTX2Runner(DefaultRunner):
             width=tw,
             dtype=GET_DTYPE(),
             device=AI_DEVICE,
+            crf=int(self.config.get("image_conditioning_crf", 33)),
         )
         with torch.no_grad():
             encoded = self.video_vae.encode(image).squeeze(0)

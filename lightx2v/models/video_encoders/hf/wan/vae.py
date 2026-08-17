@@ -898,8 +898,10 @@ class WanVAE:
         use_lightvae=False,
         use_cache_vae=False,
         dummy_model=False,
+        weight_dtype=None,
     ):
         self.dtype = dtype
+        self.weight_dtype = dtype if weight_dtype is None else weight_dtype
         self.device = device
         self.parallel = parallel
         self.use_tiling = use_tiling
@@ -990,11 +992,19 @@ class WanVAE:
 
         # init model
         self.model = (
-            _video_vae(pretrained_path=vae_path, z_dim=z_dim, cpu_offload=cpu_offload, dtype=dtype, load_from_rank0=load_from_rank0, pruning_rate=pruning_rate, dummy_model=dummy_model)
+            _video_vae(
+                pretrained_path=vae_path,
+                z_dim=z_dim,
+                cpu_offload=cpu_offload,
+                dtype=self.weight_dtype,
+                load_from_rank0=load_from_rank0,
+                pruning_rate=pruning_rate,
+                dummy_model=dummy_model,
+            )
             .eval()
             .requires_grad_(False)
             .to(device)
-            .to(dtype)
+            .to(self.weight_dtype)
         )
 
     def calculate_2d_grid(self, latent_height, latent_width, world_size):

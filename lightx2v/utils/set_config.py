@@ -8,7 +8,7 @@ from torch.distributed.tensor.device_mesh import init_device_mesh
 
 from lightx2v.utils.input_info import ALL_INPUT_INFO_KEYS
 from lightx2v.utils.lockable_dict import LockableDict
-from lightx2v.utils.utils import is_main_process
+from lightx2v.utils.utils import find_torch_model_path, is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -87,6 +87,39 @@ def auto_calc_config(config):
         config.update(config_json)
         if cli_num_iterations is not None:
             config["num_iterations"] = cli_num_iterations
+
+    if config.get("model_cls") == "ltx2_5":
+        # Match Wan's checkpoint lookup contract: an explicit component path
+        # wins; otherwise find the released filename below --model_path.
+        component_files = {
+            "dit_original_ckpt": "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors",
+            "text_encoder_original_ckpt": "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
+            "video_vae_original_ckpt": "vae/ltx-2.5-video-vae-bf16.safetensors",
+            "audio_vae_original_ckpt": "vae/ltx-2.5-audio-vae-bf16.safetensors",
+            "duration_head_original_ckpt": "model_patches/ltx-2.5-duration-head-bf16.safetensors",
+            "upsampler_original_ckpt": "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        }
+        for key, filename in component_files.items():
+            config[key] = find_torch_model_path(config, key, filename, subdir=[])
+
+        # The release root has no config.json; the authoritative transformer
+        # architecture is embedded in the safetensors metadata.  Merge it in
+        # just like the directory-based LTX-2 loader does, while retaining
+        # LightX2V's rope implementation selector.
+        transformer_path = config.get("dit_original_ckpt")
+        if transformer_path and os.path.isfile(transformer_path):
+            try:
+                from safetensors import safe_open
+
+                with safe_open(transformer_path, framework="pt", device="cpu") as f:
+                    metadata = f.metadata() or {}
+                checkpoint_config = json.loads(metadata.get("config", "{}"))
+                transformer_config = dict(checkpoint_config.get("transformer", {}))
+                transformer_config.pop("rope_type", None)
+                config.update(transformer_config)
+                config["ltx_model_version"] = metadata.get("model_version", "")
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Failed to read LTX-2.5 transformer metadata from {transformer_path}: {exc}") from exc
 
     assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
 
@@ -248,7 +281,6 @@ def auto_calc_config(config):
             }.get(config.get("dit_quant_scheme"), config.get("dit_quant_scheme", "Default"))
         config["enable_cfg"] = False
         config["fps"] = 24
-        config["target_fps"] = 24
         config["vae_spatial_scale_factor"] = 16
         config["vae_scale_factor"] = 16
         config.setdefault("video_flow_shift", 12.0)
@@ -258,7 +290,7 @@ def auto_calc_config(config):
         if os.path.exists(os.path.join(config["model_path"], "config.json")):
             with open(os.path.join(config["model_path"], "config.json"), "r") as f:
                 model_config = json.load(f)
-            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
+            if config["model_cls"] in ["ltx2", "ltx2_ar", "ltx2_5"]:
                 # LTX uses rope_type for the layout ("split"), while LightX2V
                 # uses it to select a registered RoPE implementation.
                 model_config.pop("rope_type", None)
@@ -278,7 +310,7 @@ def auto_calc_config(config):
         elif os.path.exists(os.path.join(config["model_path"], "transformer", "config.json")):
             with open(os.path.join(config["model_path"], "transformer", "config.json"), "r") as f:
                 model_config = json.load(f)
-            if config["model_cls"] in ["ltx2", "ltx2_ar"]:
+            if config["model_cls"] in ["ltx2", "ltx2_ar", "ltx2_5"]:
                 # Upstream LTX2 uses rope_type for the layout name ("split"),
                 # while LightX2V uses it as the registered RoPE implementation.
                 model_config.pop("rope_type", None)

@@ -17,10 +17,12 @@ from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import Hunyua
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
+from lightx2v.models.runners.ltx2.ltx25_runner import LTX25Runner  # noqa: F401
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
+from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
@@ -106,6 +108,7 @@ class LightX2VPipeline:
             "wan2.2_audio",
             "wan2.2_moe_distill",
             "wan2.2_animate",
+            "wan22_animate2_distilled",
             "wan2.2_s2v",
         ]:
             self.vae_stride = (4, 8, 8)
@@ -119,7 +122,7 @@ class LightX2VPipeline:
         elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
-        elif self.model_cls in ["ltx2"]:
+        elif self.model_cls in ["ltx2", "ltx2_5"]:
             self.num_channels_latents = 128
             self.audio_mel_bins = 16
         elif self.model_cls in ["cosmos3"]:
@@ -131,7 +134,6 @@ class LightX2VPipeline:
             self.vae_spatial_scale_factor = 16
             self.vae_scale_factor = 16
             self.fps = 24
-            self.target_fps = 24
             self.audio_sampling_rate = 32000
             self.audio_flow_shift = 3.0
         elif self.model_cls in ["lingbot_video", "lingbot-video"]:
@@ -245,14 +247,20 @@ class LightX2VPipeline:
         norm_modulate_backend,
         distilled_sigma_values,
     ):
-        if self.model_cls == "ltx2":
+        if self.model_cls in ["ltx2", "ltx2_5"]:
             self.distilled_sigma_values = distilled_sigma_values
             self.infer_steps = len(distilled_sigma_values) - 1 if distilled_sigma_values is not None else infer_steps
         else:
             self.infer_steps = infer_steps
         self.target_width = width
         self.target_height = height
-        self.target_video_length = num_frames
+        if num_frames is not None:
+            self.target_video_length = num_frames
+        elif self.model_cls == "ltx2_5" and getattr(self, "auto_duration", False):
+            # ``None`` is meaningful for LTX-2.5: ask DurationHead to select
+            # the request length. Preserve fixed JSON lengths for LTX-2/2.3
+            # and for LTX-2.5 profiles with auto duration disabled.
+            self.target_video_length = None
         self.sample_guide_scale = guidance_scale
         self.sample_shift = sample_shift
         if self.sample_guide_scale == 1 or (self.model_cls == "z_image" and self.sample_guide_scale == 0):
@@ -271,11 +279,10 @@ class LightX2VPipeline:
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image", "lingbot_video", "minimax_h3"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3"]:
             self.attn_type = attn_mode
             if self.model_cls == "minimax_h3":
                 self.video_flow_shift = sample_shift
-                self.target_fps = fps
                 self.fps = fps
                 self.audio_sampling_rate = 32000
                 self.audio_flow_shift = getattr(self, "audio_flow_shift", 3.0)
@@ -335,7 +342,7 @@ class LightX2VPipeline:
             self.qwen25vl_quantized = text_encoder_quantized
             self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
             self.qwen25vl_quant_scheme = text_encoder_quant_scheme
-        elif self.model_cls in ["ltx2"]:
+        elif self.model_cls in ["ltx2", "ltx2_5"]:
             self.skip_fp8_block_index = skip_fp8_block_index
         elif self.model_cls == "z_image":
             self.qwen3_quantized = text_encoder_quantized
@@ -372,6 +379,7 @@ class LightX2VPipeline:
             "wan2.2_audio",
             "wan2.2_moe_distill",
             "wan2.2_animate",
+            "wan22_animate2_distilled",
             "wan2.2_s2v",
         ]:
             self.t5_cpu_offload = text_encoder_offload
@@ -383,7 +391,7 @@ class LightX2VPipeline:
             self.byt5_cpu_offload = image_encoder_offload
         elif self.model_cls in ["qwen_image", "longcat_image"]:
             self.qwen25vl_cpu_offload = text_encoder_offload
-        elif self.model_cls == "ltx2":
+        elif self.model_cls in ["ltx2", "ltx2_5"]:
             self.gemma_cpu_offload = text_encoder_offload
         elif self.model_cls == "z_image":
             self.qwen3_cpu_offload = text_encoder_offload
@@ -456,13 +464,17 @@ class LightX2VPipeline:
         src_mask=None,
         return_result_tensor=False,
         target_shape=[],
+        num_frames=None,
         sr_ratio=2.0,
+        prompt_ref="人物动作的参考视频",
     ):
         # Run inference (following LightX2V pattern)
         # Note: image_path supports comma-separated paths for multiple images
         # image_strength can be a scalar (float/int) or a list matching the number of images
         # i2i_denoise_strength controls single-image edit redraw strength when explicitly set
         # image_frame_idx: optional list of pixel frame indices (one per image), or None to evenly space in [0, num_frames-1]
+        if self.model_cls in {"wan22_animate2_distilled", "ltx2", "ltx2_5"} and save_result_path == "lightx2v_gen_result.png":
+            save_result_path = "lightx2v_gen_result.mp4"
         self.seed = seed
         self.image_path = image_path
         self.action_path = action_path
@@ -474,10 +486,18 @@ class LightX2VPipeline:
         self.src_video = src_video
         self.src_mask = src_mask
         self.prompt = prompt
+        self.prompt_ref = prompt_ref
         self.negative_prompt = negative_prompt
         self.save_result_path = save_result_path
         self.return_result_tensor = return_result_tensor
         self.target_shape = target_shape
+        if num_frames is not None:
+            self.target_video_length = num_frames
+        elif self.model_cls == "ltx2_5" and getattr(self, "auto_duration", False):
+            # Let DurationHead choose a length only for an auto-duration
+            # LTX-2.5 request. Keep the profile/create_generator value for
+            # LTX-2/2.3 and fixed-length LTX-2.5 profiles.
+            self.target_video_length = None
         self.image_strength = image_strength
         self.i2i_denoise_strength = i2i_denoise_strength
         self.image_frame_idx = image_frame_idx
@@ -489,6 +509,8 @@ class LightX2VPipeline:
         # Do not merge its T2AV/I2AV/L2AV/FL2AV/Ref2AV schemas here.
         input_support_tasks = [] if self.model_cls == "minimax_h3" else self.support_tasks
         input_info = init_empty_input_info(self.task, input_support_tasks)
+        if self.model_cls == "wan22_animate2_distilled" and (self.seed is None or self.seed < 0):
+            raise ValueError("wan22_animate2_distilled requires a non-negative seed")
         if self.seed is not None:
             seed_all(self.seed)
         update_input_info_from_dict(input_info, self)

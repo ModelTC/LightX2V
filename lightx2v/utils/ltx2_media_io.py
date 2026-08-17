@@ -3,11 +3,12 @@ import math
 from collections.abc import Generator, Iterator, Mapping
 from fractions import Fraction
 from io import BytesIO
+from pathlib import Path
 
 import av
 import numpy as np
 import torch
-from PIL import Image
+from PIL import ExifTags, Image, ImageCms
 from einops import rearrange
 from torch._prims_common import DeviceLikeType
 from tqdm import tqdm
@@ -16,7 +17,20 @@ from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 
 DEFAULT_IMAGE_CRF = 33
 
+_ORIENTATION_EXIF_KEY = next(key for key, value in ExifTags.TAGS.items() if value == "Orientation")
+_ORIENTATION_TO_ROTATION = {3: 180, 6: 270, 8: 90}
+_SRGB_PROFILE = ImageCms.createProfile("sRGB")
+
 logger = logging.getLogger(__name__)
+
+_BT709_RGB_TO_YUV = torch.tensor(
+    [
+        [0.2126, 0.7152, 0.0722],
+        [-0.1146, -0.3854, 0.5],
+        [0.5, -0.4542, -0.0458],
+    ],
+    dtype=torch.float32,
+)
 
 
 def resize_aspect_ratio_preserving(image: torch.Tensor, long_side: int) -> torch.Tensor:
@@ -115,8 +129,35 @@ def load_video_conditioning(video_path: str, height: int, width: int, frame_cap:
 
 
 def decode_image(image_path: str) -> np.ndarray:
-    image = Image.open(image_path).convert("RGB")
-    return np.array(image)
+    """Load an oriented, sRGB, three-channel uint8 image like LTX upstream."""
+    with Image.open(image_path) as source_image:
+        image = source_image
+        orientation = image.getexif().get(_ORIENTATION_EXIF_KEY)
+        if orientation in _ORIENTATION_TO_ROTATION:
+            image = image.rotate(_ORIENTATION_TO_ROTATION[orientation], expand=True)
+
+        icc_profile = image.info.get("icc_profile")
+        if image.mode == "RGBA":
+            image = image.convert("RGB")
+        elif image.mode == "LA":
+            image = image.convert("L")
+
+        if icc_profile:
+            try:
+                source_profile = ImageCms.ImageCmsProfile(BytesIO(icc_profile))
+                destination_profile = ImageCms.ImageCmsProfile(_SRGB_PROFILE)
+                image = ImageCms.profileToProfile(
+                    image,
+                    source_profile,
+                    destination_profile,
+                    outputMode="RGB",
+                )
+            except (ImageCms.PyCMSError, OSError, ValueError) as error:
+                logger.warning("Failed to convert image to sRGB: %s", error)
+                image = image.convert("RGB")
+        else:
+            image = image.convert("RGB")
+        return np.array(image, dtype=np.uint8)
 
 
 def _write_audio(container: av.container.Container, audio_stream: av.audio.AudioStream, audio: Audio) -> None:
@@ -198,6 +239,7 @@ def encode_video(
 
     _, height, width, _ = first_chunk.shape
 
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     container = av.open(output_path, mode="w")
     stream = container.add_stream("libx264", rate=int(fps))
     stream.width = width
@@ -228,6 +270,94 @@ def encode_video(
         _write_audio(container, audio_stream, audio)
 
     container.close()
+    logger.info(f"Video saved to {output_path}")
+
+
+def _ltx25_bt709_yuv420p(frames: torch.Tensor) -> torch.Tensor:
+    """Match LTX-2.5's GPU float-RGB to limited-range BT.709 I420 conversion."""
+    if frames.ndim != 4 or frames.shape[-1] != 3:
+        raise ValueError(f"Expected LTX-2.5 video chunk [F,H,W,3], got {tuple(frames.shape)}")
+    image = frames.movedim(-1, -3)
+    if image.shape[-2] % 2 or image.shape[-1] % 2:
+        raise ValueError(f"LTX-2.5 YUV420 output requires even height and width, got {tuple(frames.shape)}")
+
+    matrix = _BT709_RGB_TO_YUV.to(device=image.device, dtype=image.dtype)
+    yuv = (image.movedim(-3, -1) @ matrix.T).movedim(-1, -3)
+    y = yuv[..., :1, :, :]
+    uv_full = yuv[..., 1:3, :, :].contiguous()
+    leading = uv_full.shape[:-3]
+    uv_flat = uv_full.reshape(-1, 2, uv_full.shape[-2], uv_full.shape[-1])
+    uv = torch.nn.functional.avg_pool2d(uv_flat, kernel_size=2, stride=2)
+    uv = uv.reshape(*leading, 2, uv.shape[-2], uv.shape[-1])
+
+    y.mul_(219).add_(16)
+    uv.mul_(224).add_(128)
+    y_plane = y[..., 0, :, :]
+    uv_packed = uv.reshape(*uv.shape[:-3], uv.shape[-2], uv.shape[-1] * 2)
+    return torch.cat((y_plane, uv_packed), dim=-2).clamp_(0, 255).to(torch.uint8)
+
+
+def encode_video_ltx25(
+    video: torch.Tensor | Iterator[torch.Tensor],
+    fps: int,
+    audio: Audio | None,
+    output_path: str,
+    video_chunks_number: int,
+    *,
+    crf: int = 19,
+    preset: str = "veryfast",
+) -> None:
+    """Encode LTX-2.5 float chunks through the upstream BT.709 SDR sink."""
+    if isinstance(video, torch.Tensor):
+        video = iter((video,))
+
+    first_raw_chunk = next(video, None)
+    if first_raw_chunk is None:
+        raise ValueError("video is empty; expected at least one LTX-2.5 frame chunk")
+    first_chunk = _ltx25_bt709_yuv420p(first_raw_chunk)
+    height = first_chunk.shape[-2] * 2 // 3
+    width = first_chunk.shape[-1]
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    container = av.open(output_path, mode="w")
+    success = False
+    try:
+        stream = container.add_stream(
+            "libx264",
+            rate=int(fps),
+            options={"crf": str(crf), "preset": preset},
+        )
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        stream.codec_context.thread_count = 0
+        stream.codec_context.thread_type = "FRAME"
+        stream.codec_context.colorspace = 1  # AVCOL_SPC_BT709
+        stream.codec_context.color_range = 1  # AVCOL_RANGE_MPEG
+
+        if audio is not None:
+            audio_stream = _prepare_audio_stream(container, audio.sampling_rate)
+
+        def chunks() -> Iterator[torch.Tensor]:
+            yield first_chunk
+            for chunk in video:
+                yield _ltx25_bt709_yuv420p(chunk)
+
+        for video_chunk in tqdm(chunks(), total=video_chunks_number):
+            for frame_array in video_chunk.to("cpu").numpy():
+                frame = av.VideoFrame.from_ndarray(frame_array, format="yuv420p")
+                for packet in stream.encode(frame):
+                    container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+
+        if audio is not None:
+            _write_audio(container, audio_stream, audio)
+        success = True
+    finally:
+        container.close()
+        if not success:
+            Path(output_path).unlink(missing_ok=True)
     logger.info(f"Video saved to {output_path}")
 
 
@@ -380,7 +510,7 @@ def decode_single_frame(video_file: str) -> np.array:
 
 
 def preprocess(image: np.array, crf: float = DEFAULT_IMAGE_CRF) -> np.array:
-    if crf == 0:
+    if crf == 0 or min(image.shape[:2]) < 2:
         return image
 
     with BytesIO() as output_file:

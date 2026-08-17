@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 
 class LTXVGemmaTokenizer:
@@ -23,6 +23,27 @@ class LTXVGemmaTokenizer:
 
         self.max_length = max_length
 
+    @classmethod
+    def from_tokenizer(
+        cls,
+        tokenizer: PreTrainedTokenizerBase,
+        max_length: int = 256,
+    ) -> "LTXVGemmaTokenizer":
+        """Wrap an already constructed tokenizer.
+
+        LTX-2.5 stores its tokenizer inside the text-encoder safetensors file,
+        so there is no directory that can be passed to ``AutoTokenizer``.  The
+        regular path-based constructor remains unchanged for LTX-2/LTX-2.3.
+        """
+        obj = cls.__new__(cls)
+        obj.tokenizer = tokenizer
+        obj.tokenizer.model_max_length = max_length
+        obj.tokenizer.padding_side = "left"
+        if obj.tokenizer.pad_token is None:
+            obj.tokenizer.pad_token = obj.tokenizer.eos_token
+        obj.max_length = max_length
+        return obj
+
     def tokenize_with_weights(self, text: str, return_word_ids: bool = False) -> dict[str, list[tuple[int, int]]]:
         """
         Tokenize the given text and return token IDs and attention weights.
@@ -41,12 +62,27 @@ class LTXVGemmaTokenizer:
             {'gemma': [(1234, 1), (5678, 1), (2, 0), ...]}
         """
         text = text.strip()
+        bos_id = self.tokenizer.bos_token_id
+        if bos_id is None:
+            raise ValueError("Gemma tokenizer is missing bos_token_id")
         encoded = self.tokenizer(
             text,
+            padding=False,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        input_ids = encoded.input_ids[0].tolist()
+        # Gemma 3 tokenizers already add BOS; the packed Gemma 4 tokenizer
+        # does not.  Normalize both families to the source pipeline contract.
+        if not input_ids or input_ids[0] != bos_id:
+            input_ids = [bos_id, *input_ids][: self.max_length]
+        encoded = self.tokenizer.pad(
+            {"input_ids": [input_ids]},
             padding="max_length",
             max_length=self.max_length,
-            truncation=True,
             return_tensors="pt",
+            return_attention_mask=True,
         )
         input_ids = encoded.input_ids
         attention_mask = encoded.attention_mask

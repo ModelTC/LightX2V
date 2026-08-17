@@ -200,6 +200,8 @@ class DefaultRunner(BaseRunner):
     def set_inputs(self, inputs):
         self.input_info.seed = inputs.get("seed", 42)
         self.input_info.prompt = inputs.get("prompt", "")
+        if "prompt_ref" in self.input_info.__dataclass_fields__:
+            self.input_info.prompt_ref = inputs.get("prompt_ref", self.input_info.prompt_ref)
         if self.config["use_prompt_enhancer"]:
             self.input_info.prompt_enhanced = inputs.get("prompt_enhanced", "")
         self.input_info.negative_prompt = inputs.get("negative_prompt", "")
@@ -562,7 +564,11 @@ class DefaultRunner(BaseRunner):
             if self.config.get("task") in ("sr", "animate"):
                 input_video_path = getattr(self.input_info, "video_path", "")
                 if input_video_path:
-                    muxed_path = mux_audio_from_video(input_video_path, out_path)
+                    muxed_path = mux_audio_from_video(
+                        input_video_path,
+                        out_path,
+                        prefer_copy=self.config.get("audio_mux_prefer_copy", True),
+                    )
                     if muxed_path:
                         logger.info(f"Audio muxed from input video: {input_video_path}")
             logger.info(f"✅ Video saved successfully to: {out_path} ✅")
