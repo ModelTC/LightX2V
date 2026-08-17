@@ -132,10 +132,28 @@ ROBOLAB_CONTRACT = EnvContract(
 )
 
 
+ROBODOJO_CONTRACT = EnvContract(
+    name="robodojo",
+    namespace="/robodojo",
+    # RoboDojo publishes 480x640 source RGB.  The scalar image_size is only an
+    # informational source-width hint here; FastWAM resizing is profile-driven.
+    cameras=("head_camera", "left_camera", "right_camera"),
+    policy_input_cameras=("head_camera", "left_camera", "right_camera"),
+    action_dim=14,
+    state_dim=14,
+    image_size=640,
+    policy_profile="robodojo",
+    normalize_mode="zscore",
+    gripper_postprocess=False,
+    description="RoboDojo dual-arm ARX-X5 joint evaluation with the official three-camera FastWAM preprocessing.",
+)
+
+
 CONTRACTS: Dict[str, EnvContract] = {
     LIBERO_CONTRACT.name: LIBERO_CONTRACT,
     ROBOTWIN_CONTRACT.name: ROBOTWIN_CONTRACT,
     ROBOLAB_CONTRACT.name: ROBOLAB_CONTRACT,
+    ROBODOJO_CONTRACT.name: ROBODOJO_CONTRACT,
 }
 
 

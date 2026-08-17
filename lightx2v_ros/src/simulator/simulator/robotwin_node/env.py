@@ -594,7 +594,7 @@ class RoboTwinEnv(BaseSimEnv):
             raise ValueError(f"RoboTwin expects a 14-D qpos or 16-D relative EE action, got {action.size}.")
         obs = self._observation()
         success = bool(getattr(self.env, "eval_success", False)) or bool(self.env.check_success())
-        return obs, success
+        return obs, success, success
 
     def _observation(self) -> Observation:
         raw = self.env.get_obs()

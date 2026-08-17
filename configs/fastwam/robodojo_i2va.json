@@ -1,0 +1,18 @@
+{
+  "adapter_model_path": "REPLACE_WITH_ABSOLUTE_PATH_TO_ROBODOJO_STEP_020000_PT",
+  "dataset_stats_path": "REPLACE_WITH_ABSOLUTE_PATH_TO_ROBODOJO_DATASET_STATS_JSON",
+  "camera_size": 384,
+  "action_chunk_size": 32,
+  "actions_per_plan": 24,
+  "num_steps_wait": 0,
+  "action_infer_steps": 10,
+  "action_sample_shift": 5.0,
+  "action_dim_hidden": 1024,
+  "action_dim": 14,
+  "robot_state_dim": 14,
+  "policy_profile": "robodojo",
+  "normalize_mode": "z-score",
+  "binarize_gripper": false,
+  "gripper_postprocess": false,
+  "default_prompt": "A video recorded from a robot's point of view executing the following instruction: {task_prompt}"
+}

@@ -37,8 +37,12 @@ class BaseSimEnv(ABC):
         """Reset the environment and return the first observation."""
 
     @abstractmethod
-    def step(self, action: np.ndarray) -> Tuple[Observation, bool]:
-        """Apply one action, returning (observation, success)."""
+    def step(self, action: np.ndarray) -> Tuple[Observation, bool, bool]:
+        """Apply one action, returning (observation, success, done).
+
+        ``done`` is explicit because some simulators can terminate an episode as
+        a failure before the generic max-step cap is reached.
+        """
 
     def new_episode(self) -> Observation:
         """Start a fresh episode and return its first observation.
