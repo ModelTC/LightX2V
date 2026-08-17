@@ -22,9 +22,9 @@ class WanAnimate2TailWindowTest(TestCase):
                 "target_height": 720,
             }
             runner.segment_plan = [(0, 81), (80, 109)]
-            runner.reference_image = np.zeros((4, 4, 3), dtype=np.uint8)
-            runner.driving_frames = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(109)]
-            runner.previous_frame = torch.zeros(3, 1, 4, 4)
+            runner.reference_image = np.zeros((16, 16, 3), dtype=np.uint8)
+            runner.driving_frames = [np.zeros((16, 16, 3), dtype=np.uint8) for _ in range(109)]
+            runner.previous_frame = torch.zeros(3, 1, 16, 16)
             runner.generation_reference_latents = torch.zeros(16, 1, 2, 2)
             runner.generation_clip = torch.zeros(1)
             runner.input_info = SimpleNamespace(latent_shape=None)
@@ -33,13 +33,15 @@ class WanAnimate2TailWindowTest(TestCase):
             runner._vae_encode = lambda pixels: torch.zeros(16, 8, 2, 2)
             runner._i2v_mask = lambda latent_t, latent_h, latent_w, mask_len: torch.zeros(4, latent_t, latent_h, latent_w)
             runner.run_image_encoder = lambda image: torch.zeros(1)
-            runner._generation_latent_shape = lambda clip_len, height, width: [16, 9, 2, 2]
             runner._build_reference_cache = lambda reference_latents: object()
 
             runner._build_segment_inputs(segment_idx=1)
 
             self.assertEqual(runner.inputs["animate2"]["clip_len"], 29)
             self.assertEqual(runner.inputs["animate2"]["origin_len"], 29)
+            self.assertEqual(runner.inputs["animate2"]["reference_latents"].shape[1], 8)
+            self.assertEqual(runner.inputs["animate2"]["generation_y"].shape[1], 9)
+            self.assertEqual(runner.input_info.latent_shape, [16, 9, 2, 2])
 
     def test_tail_window_flex_layout_matches_generation_and_reference_grids(self):
         captured = {}
