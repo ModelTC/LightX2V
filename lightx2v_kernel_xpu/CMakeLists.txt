@@ -4,7 +4,7 @@ project(sycl-kernels LANGUAGES CXX)
 option(ENABLE_CUTE_FMHA "Build the CUTLASS-SYCL CUTE FMHA library" ON)
 set(CUTLASS_SYCL_ROOT "$ENV{CUTLASS_SYCL_ROOT}" CACHE PATH
     "Path to the CUTLASS-SYCL/sycl-tla source tree")
-set(XPU_TARGET "ptl-h" CACHE STRING "Intel GPU AOT target (ptl-h or bmg)")
+set(XPU_TARGET "bmg" CACHE STRING "Intel GPU AOT target (bmg or ptl-h)")
 
 find_package(IntelSYCL REQUIRED)
 
@@ -150,10 +150,9 @@ if(ENABLE_CUTE_FMHA)
         ${TORCH_INCLUDE_DIRS})
     target_compile_options(cute_fmha_torch PRIVATE
         -O3
+        -fsycl
         -fsycl-targets=spir64_gen
         -Xsycl-target-backend "-device ${XPU_TARGET}"
-        -Xspirv-translator
-        "-spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate"
         -fno-sycl-instrument-device-code
         -Wno-unknown-pragmas
         -Wno-unused-variable
@@ -164,7 +163,12 @@ if(ENABLE_CUTE_FMHA)
         -Wno-logical-op-parentheses
         -Wno-unused-function
         -Wno-deprecated-copy)
-    add_sycl_to_target(TARGET cute_fmha_torch SOURCES cute/cute_fmha_torch.cpp)
+    target_link_options(cute_fmha_torch PRIVATE
+        -fsycl
+        -fsycl-targets=spir64_gen
+        -Xsycl-target-backend "-device ${XPU_TARGET}"
+        -Xspirv-translator
+        "-spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
     target_link_libraries(cute_fmha_torch PRIVATE
         ${TORCH_LIBRARIES}
         ${TORCH_PYTHON_LIBRARY})

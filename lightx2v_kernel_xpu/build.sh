@@ -7,7 +7,7 @@ cd "$project_dir"
 : "${PYTHON:=python3}"
 : "${CMAKE:=cmake}"
 : "${CXX:=icpx}"
-: "${XPU_TARGET:=ptl-h}"
+: "${XPU_TARGET:=bmg}"
 : "${CUTLASS_SYCL_ROOT:?Set CUTLASS_SYCL_ROOT to the CUTLASS-SYCL/sycl-tla source tree}"
 
 command -v "$PYTHON" >/dev/null || { echo "ERROR: Python not found: $PYTHON" >&2; exit 1; }
