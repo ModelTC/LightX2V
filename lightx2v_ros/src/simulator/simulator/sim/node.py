@@ -10,7 +10,7 @@ Evaluation control plane
 The node is a small state machine driven by JSON commands on
 ``{namespace}/control`` and reporting on ``{namespace}/status``:
 
-    ready ──start──▶ running ──success/step-cap──▶ success | failure
+    ready ──start──▶ running ──success/done/step-cap──▶ success | failure
       ▲                │  ▲                             │
       │              pause resume                    start/restart
       └────set_task────┴──┴─────────────────────────────┘
@@ -224,7 +224,7 @@ class SimulatorNode(Node):
 
         self._in_env_step = True
         try:
-            self.obs, success = self.env.step(action)
+            self.obs, success, done = self.env.step(action)
         finally:
             self._in_env_step = False
         self.step_index += 1
@@ -232,11 +232,12 @@ class SimulatorNode(Node):
         self.success = bool(success)
 
         capped = self.max_episode_steps > 0 and self.episode_step >= self.max_episode_steps
-        if self.success or capped:
+        if self.success or bool(done) or capped:
             self._finish_episode("success" if self.success else "failure")
             return
 
         self.publish_observation()
+        self.publish_status()
 
     def _finish_episode(self, outcome: str):
         self.state = SUCCESS if outcome == "success" else FAILURE

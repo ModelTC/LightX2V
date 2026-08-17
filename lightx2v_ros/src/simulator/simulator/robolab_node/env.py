@@ -148,11 +148,11 @@ class RoboLabEnv(BaseSimEnv):
         action_tensor = torch.as_tensor(action, dtype=torch.float32, device=self._env.device)
         raw_obs, _, terminated, truncated, _ = self._env.step(action_tensor)
         self._raw_obs = raw_obs
-        success = bool(terminated.reshape(-1)[0].item())
-        # A timeout is reported as failure by SimulatorNode's matching step cap.
-        if bool(truncated.reshape(-1)[0].item()) and not success:
-            success = False
-        return self._convert_observation(raw_obs), success
+        terminated = bool(terminated.reshape(-1)[0].item())
+        truncated = bool(truncated.reshape(-1)[0].item())
+        success = terminated
+        done = terminated or truncated
+        return self._convert_observation(raw_obs), success, done
 
     def close(self):
         if self._env is not None:

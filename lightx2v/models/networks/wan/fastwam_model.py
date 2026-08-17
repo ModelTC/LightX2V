@@ -52,8 +52,9 @@ class FastWAMNativeModel(BaseTransformerModel):
         adapter_path = adapter_path.resolve()
         if not adapter_path.exists():
             raise FileNotFoundError(str(adapter_path))
+        checkpoint_mmap = bool(self.config.get("checkpoint_mmap", False))
         logger.info(f"Loading FastWAM native weights from {adapter_path}")
-        payload = torch.load(str(adapter_path), map_location="cpu", weights_only=True)
+        payload = torch.load(str(adapter_path), map_location="cpu", weights_only=True, mmap=checkpoint_mmap)
         if "mot" not in payload:
             raise ValueError(f"FastWAM checkpoint must contain `mot`, got keys={list(payload.keys())}")
         state = dict(payload["mot"])
