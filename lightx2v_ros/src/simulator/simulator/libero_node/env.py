@@ -70,7 +70,8 @@ class LiberoEnv(BaseSimEnv):
 
     def step(self, action):
         _, _, success, _ = self.observer.step(action)
-        return self._observation(), bool(success)
+        success = bool(success)
+        return self._observation(), success, success
 
     def _observation(self) -> Observation:
         obs = self.observer.obs

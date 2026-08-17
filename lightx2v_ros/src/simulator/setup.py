@@ -20,6 +20,7 @@ setup(
         "console_scripts": [
             "libero_node = simulator.libero_node.main:main",
             "robolab_node = simulator.robolab_node.main:main",
+            "robodojo_node = simulator.robodojo_node.main:main",
             "robotwin_node = simulator.robotwin_node.main:main",
         ],
     },

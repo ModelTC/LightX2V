@@ -25,6 +25,19 @@ def resize_rgb(image, width, height):
     return np.asarray(pil.resize((width, height), resample=Image.BILINEAR), dtype=np.uint8)
 
 
+def resize_rgb_area(image, width, height):
+    try:
+        import cv2
+    except ImportError as exc:
+        raise ImportError("RoboDojo FastWAM preprocessing requires OpenCV (`cv2`).") from exc
+
+    array = np.asarray(image, dtype=np.uint8)
+    if array.ndim != 3 or array.shape[2] != 3:
+        raise ValueError(f"expected HWC RGB image with 3 channels, got shape {array.shape}")
+    resized = cv2.resize(array, (width, height), interpolation=cv2.INTER_AREA)
+    return np.ascontiguousarray(resized, dtype=np.uint8)
+
+
 def _canonical_norm_mode(mode):
     compact = str(mode).strip().lower().replace("-", "").replace("_", "").replace("/", "")
     if compact == "minmax":
@@ -144,6 +157,8 @@ class FastWAMPolicy:
         self.default_prompt = str(default_prompt)
         self.policy_profile = str(policy_profile).strip().lower()
         self.normalize_mode = _canonical_norm_mode(normalize_mode)
+        self.t5_cpu_offload = bool(config.get("t5_cpu_offload", False))
+        self.vae_cpu_offload = bool(config.get("vae_cpu_offload", False))
         # LIBERO post-processes the single gripper channel; RoboTwin (dual-arm qpos) does not.
         self.gripper_postprocess = (self.policy_profile == "libero") if gripper_postprocess is None else bool(gripper_postprocess)
         self.config = config
@@ -200,23 +215,25 @@ class FastWAMPolicy:
     def _load_text_encoder(self):
         t5_path = self._find_model_file("models_t5_umt5-xxl-enc-bf16.pth")
         tokenizer_path = self._find_model_dir("google/umt5-xxl")
+        t5_device = torch.device("cpu") if self.t5_cpu_offload else self.device
         return T5EncoderModel(
             text_len=128,
             dtype=GET_DTYPE(),
-            device=self.device,
+            device=t5_device,
             checkpoint_path=t5_path,
             tokenizer_path=str(tokenizer_path),
-            cpu_offload=False,
+            cpu_offload=self.t5_cpu_offload,
         )
 
     def _load_vae(self):
         vae_path = self._find_model_file("Wan2.2_VAE.pth")
+        vae_device = torch.device("cpu") if self.vae_cpu_offload else self.device
         return Wan2_2_VAE(
             vae_path=vae_path,
-            device=self.device,
+            device=vae_device,
             dtype=GET_DTYPE(),
             vae_type="wan2.2",
-            cpu_offload=False,
+            cpu_offload=self.vae_cpu_offload,
         )
 
     def _find_model_file(self, filename):
@@ -294,6 +311,9 @@ class FastWAMPolicy:
           - LIBERO   : [agentview | wrist] side-by-side, each camera_size x camera_size.
           - RoboTwin : head (320x256) on top, [left | right] (each 160x128) below,
                        i.e. final [384, 320, 3]; matches deploy_policy.py.
+          - RoboDojo : first normalizes each source RGB to 320x240 with OpenCV
+                       INTER_AREA, then applies the official RoboDojo FastWAM
+                       384x320 three-camera layout.
         """
         rgb = self._compose_rgb(images)
         tensor = torch.from_numpy(rgb).permute(2, 0, 1).to(device=self.device, dtype=GET_DTYPE())
@@ -311,6 +331,22 @@ class FastWAMPolicy:
             right = resize_rgb(_get("right_camera"), 160, 128)
             bottom = np.concatenate([left, right], axis=1)
             return np.concatenate([head, bottom], axis=0)
+
+        if self.policy_profile == "robodojo":
+            head_src = resize_rgb_area(_get("head_camera"), 320, 240)
+            left_src = resize_rgb_area(_get("left_camera"), 320, 240)
+            right_src = resize_rgb_area(_get("right_camera"), 320, 240)
+            head = resize_rgb(head_src, 320, 256)
+            left = resize_rgb(left_src, 160, 128)
+            right = resize_rgb(right_src, 160, 128)
+            bottom = np.concatenate([left, right], axis=1)
+            image = np.concatenate([head, bottom], axis=0)
+            if image.shape != (384, 320, 3):
+                raise RuntimeError(f"RoboDojo FastWAM image must be (384, 320, 3), got {image.shape}")
+            return image
+
+        if self.policy_profile != "libero":
+            raise ValueError(f"unsupported FastWAM policy_profile: {self.policy_profile!r}")
 
         primary = resize_rgb(_get("agentview"), self.camera_size, self.camera_size)
         wrist = resize_rgb(_get("wrist"), self.camera_size, self.camera_size)
