@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import torch
@@ -9,10 +9,34 @@ import lightx2v.models.runners.wan.wan_animate2_runner as runner_module
 import lightx2v.common.ops.attn.flex_attn as flex_attn_module
 from lightx2v.common.ops.attn.flex_attn import _FlexMaskCache
 from lightx2v.models.networks.wan.infer.animate2.transformer_infer import WanAnimate2TransformerInfer
-from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner
+from lightx2v.models.runners.wan.wan_animate2_runner import _Animate2VideoRecorder, WanAnimate2Runner
 
 
 class WanAnimate2TailWindowTest(TestCase):
+    def test_odd_output_is_padded_for_yuv420p_browser_compatibility(self):
+        recorder = _Animate2VideoRecorder.__new__(_Animate2VideoRecorder)
+        recorder.width = 711
+        recorder.height = 1264
+        recorder.fps = 24
+        recorder.video_port = 12345
+        recorder.livestream_url = "/tmp/output.mp4"
+        recorder.ffmpeg_log_level = "error"
+        recorder.video_queue = None
+        recorder.video_conn = None
+        recorder.video_socket = None
+        recorder.video_thread = None
+        recorder.stoppable_t = None
+        recorder.returncode = None
+
+        with patch("subprocess.Popen", return_value=Mock(pid=1)) as popen:
+            recorder.start_ffmpeg_process_local()
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("-pix_fmt") + 1], "rgb24")
+        self.assertEqual(command[command.index("-vf") + 1], "pad=ceil(iw/2)*2:ceil(ih/2)*2")
+        output_pix_fmt_index = len(command) - 1 - command[::-1].index("-pix_fmt")
+        self.assertEqual(command[output_pix_fmt_index + 1], "yuv420p")
+
     def test_tail_window_uses_its_actual_length_for_attention_geometry(self):
         with patch.object(runner_module, "AI_DEVICE", "cpu"), patch.object(runner_module, "GET_DTYPE", return_value=torch.float32):
             runner = WanAnimate2Runner.__new__(WanAnimate2Runner)
