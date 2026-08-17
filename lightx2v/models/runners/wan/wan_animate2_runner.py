@@ -633,7 +633,7 @@ class WanAnimate2Runner(WanRunner):
             "generation_y": generation_y,
             "generation_clip": self.generation_clip,
             "reference_kv_cache": self._build_reference_cache(reference_latents),
-            "origin_len": int(self.config["target_video_length"]),
+            "origin_len": clip_len,
             "origin_area": [int(self.config["target_width"]), int(self.config["target_height"])],
             "clip_len": clip_len,
         }
