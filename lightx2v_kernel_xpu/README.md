@@ -224,3 +224,21 @@ lightx2v_kernel_xpu\
 ├── build.bat                # Original full build script
 ├── build.sh                 # Linux full build script
 ```
+# CUTE FMHA
+
+The Linux wheel also builds the generic CUTLASS-SYCL CUTE self-attention
+kernel for `[B, L, H, 128]` FP16/BF16 tensors. Set `CUTLASS_SYCL_ROOT` to a
+sycl-tla/CUTLASS-SYCL checkout containing `include/`, `tools/util/include/`,
+`examples/common/`, and `applications/` before building:
+
+```bash
+git clone https://github.com/intel/sycl-tla.git /path/to/sycl-tla
+git -C /path/to/sycl-tla checkout 2fc09973bfdf15755090fcb0e3b6ad236408a992
+export CUTLASS_SYCL_ROOT=/path/to/sycl-tla
+XPU_TARGET=ptl-h ./build.sh
+```
+
+Use `XPU_TARGET=bmg` for Battlemage. The Python API is
+`sycl_kernels.cute_sdp(q, k, v)`. It supports non-causal self-attention with
+batch size 1, equal Q/K/V sequence lengths, head dimension 128, and contiguous
+or materializable BLHD inputs.

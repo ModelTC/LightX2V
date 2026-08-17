@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.22 FATAL_ERROR)
 project(sycl-kernels LANGUAGES CXX)
 
+option(ENABLE_CUTE_FMHA "Build the CUTLASS-SYCL CUTE FMHA library" ON)
+set(CUTLASS_SYCL_ROOT "$ENV{CUTLASS_SYCL_ROOT}" CACHE PATH
+    "Path to the CUTLASS-SYCL/sycl-tla source tree")
+set(XPU_TARGET "ptl-h" CACHE STRING "Intel GPU AOT target (ptl-h or bmg)")
+
 find_package(IntelSYCL REQUIRED)
 
 # Python (scikit-build-core injects paths; this finds Interpreter + Development.Module)
@@ -23,6 +28,14 @@ endif()
 message(STATUS "ur_api.h shim → ${SYCL_INCLUDE_DIR}/ur_api.h")
 
 find_package(Torch REQUIRED)
+
+if(XPU_TARGET STREQUAL "ptl-h")
+    set(XPU_ARCH_DEFINE OMNI_XPU_ARCH_PTL_H=1)
+elseif(XPU_TARGET STREQUAL "bmg")
+    set(XPU_ARCH_DEFINE OMNI_XPU_ARCH_BMG=1)
+else()
+    message(FATAL_ERROR "Unsupported XPU_TARGET=${XPU_TARGET}; use ptl-h or bmg")
+endif()
 
 # Extension target: _ext (imported as sycl_kernels._ext)
 set(MODULE_NAME _ext)
@@ -106,7 +119,61 @@ target_link_libraries(${MODULE_NAME} PRIVATE
     esimd_lgrf_lib
 )
 
+if(ENABLE_CUTE_FMHA)
+    if(WIN32)
+        message(FATAL_ERROR "CUTE FMHA is currently supported on Linux only")
+    endif()
+    foreach(required_dir include tools/util/include examples/common applications)
+        if(NOT IS_DIRECTORY "${CUTLASS_SYCL_ROOT}/${required_dir}")
+            message(FATAL_ERROR
+                "CUTE FMHA requires CUTLASS_SYCL_ROOT with ${required_dir}; "
+                "got '${CUTLASS_SYCL_ROOT}'")
+        endif()
+    endforeach()
+
+    add_library(cute_fmha_torch SHARED cute/cute_fmha_torch.cpp)
+    set_target_properties(cute_fmha_torch PROPERTIES
+        PREFIX ""
+        BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+        INSTALL_RPATH "\$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+    target_compile_features(cute_fmha_torch PRIVATE cxx_std_17)
+    target_compile_definitions(cute_fmha_torch PRIVATE
+        CUTLASS_ENABLE_SYCL
+        SYCL_INTEL_TARGET
+        ${XPU_ARCH_DEFINE})
+    target_include_directories(cute_fmha_torch PRIVATE
+        "${CUTLASS_SYCL_ROOT}/include"
+        "${CUTLASS_SYCL_ROOT}/tools/util/include"
+        "${CUTLASS_SYCL_ROOT}/examples/common"
+        "${CUTLASS_SYCL_ROOT}/applications"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cute"
+        ${TORCH_INCLUDE_DIRS})
+    target_compile_options(cute_fmha_torch PRIVATE
+        -O3
+        -fsycl-targets=spir64_gen
+        -Xsycl-target-backend "-device ${XPU_TARGET}"
+        -Xspirv-translator
+        "-spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate"
+        -fno-sycl-instrument-device-code
+        -Wno-unknown-pragmas
+        -Wno-unused-variable
+        -Wno-unused-but-set-variable
+        -Wno-unused-local-typedef
+        -Wno-uninitialized
+        -Wno-reorder-ctor
+        -Wno-logical-op-parentheses
+        -Wno-unused-function
+        -Wno-deprecated-copy)
+    add_sycl_to_target(TARGET cute_fmha_torch SOURCES cute/cute_fmha_torch.cpp)
+    target_link_libraries(cute_fmha_torch PRIVATE
+        ${TORCH_LIBRARIES}
+        ${TORCH_PYTHON_LIBRARY})
+endif()
+
 # ── Install targets for wheel assembly ────────────────────────────────────────
 # scikit-build-core collects install() outputs into the wheel platlib
 install(TARGETS ${MODULE_NAME} LIBRARY DESTINATION sycl_kernels)
 install(FILES "${ESIMD_RUNTIME}" DESTINATION sycl_kernels)
+if(ENABLE_CUTE_FMHA)
+    install(TARGETS cute_fmha_torch LIBRARY DESTINATION sycl_kernels)
+endif()

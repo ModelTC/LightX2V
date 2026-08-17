@@ -7,20 +7,20 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 
 try:
-    from omni_xpu_kernel import cute
+    from sycl_kernels import cute_sdp
 except ImportError as exc:
-    cute = None
+    cute_sdp = None
     _IMPORT_ERROR = exc
 else:
     _IMPORT_ERROR = None
 
 
 def _cute_sdp(q, k, v):
-    if cute is None:
+    if cute_sdp is None:
         raise RuntimeError(
-            "intel_xpu_cute_attn requires omni-xpu-kernel"
+            "intel_xpu_cute_attn requires sycl-kernels built with CUTE FMHA"
         ) from _IMPORT_ERROR
-    return cute.sdp(q, k, v)
+    return cute_sdp(q, k, v)
 
 
 @ATTN_WEIGHT_REGISTER("intel_xpu_cute_attn")
@@ -49,14 +49,9 @@ class IntelXpuCuteAttnWeight(AttnWeightTemplate):
             batch_size = 1
 
         if not self._logged_backend:
-            h3_route = (
-                q.dtype == torch.bfloat16
-                and q.shape[0] >= 38208
-                and q.shape[1:] == (7, 128)
-            )
             logger.info(
                 "intel_xpu_cute_attn: backend={}, shape={}, dtype={}",
-                "cute_h3_bf16.sdp" if h3_route else "cute_fmha.sdp",
+                "sycl_kernels_cute.sdp",
                 (1, *q.shape),
                 q.dtype,
             )
