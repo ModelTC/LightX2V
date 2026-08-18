@@ -20,9 +20,7 @@ class IntelXpuRMSWeight(RMSWeightTemplate):
     def apply(self, input_tensor):
         weight = getattr(self, "weight", None)
         if weight is None:
-            return torch.nn.functional.rms_norm(
-                input_tensor, (input_tensor.shape[-1],), eps=self.eps
-            )
+            return torch.nn.functional.rms_norm(input_tensor, (input_tensor.shape[-1],), eps=self.eps)
 
         hidden_size = input_tensor.shape[-1]
         use_esimd = (

@@ -1,7 +1,6 @@
 import pytest
-import torch
-
 import sycl_kernels
+import torch
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
@@ -13,9 +12,7 @@ def test_rms_norm_matches_torch(dtype, shape):
     x = torch.randn(shape, device="xpu", dtype=dtype)
     weight = torch.randn(shape[-1], device="xpu", dtype=dtype)
     actual = sycl_kernels.rms_norm(weight, x, 1e-6)
-    expected = torch.nn.functional.rms_norm(
-        x.float(), (shape[-1],), weight=weight.float(), eps=1e-6
-    ).to(dtype)
+    expected = torch.nn.functional.rms_norm(x.float(), (shape[-1],), weight=weight.float(), eps=1e-6).to(dtype)
     torch.xpu.synchronize()
     atol = 2e-2 if dtype != torch.float32 else 2e-5
     rtol = 2e-2 if dtype != torch.float32 else 2e-5
