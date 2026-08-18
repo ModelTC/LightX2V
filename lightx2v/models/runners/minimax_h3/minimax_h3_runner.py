@@ -223,9 +223,9 @@ class MiniMaxH3Runner(DefaultRunner):
             world_size = dist.get_world_size() if dist.is_initialized() else 1
             if world_size > 1:
                 video_vae.enable_decode_parallel()
-                logger.info(f"MiniMax-H3 spatial-tile VAE decode parallel enabled over {world_size} ranks")
+                logger.info(f"MiniMax-H3 VAE spatiotemporal tile parallelism enabled over {world_size} ranks")
             else:
-                logger.info("MiniMax-H3 spatial-tile VAE decode parallel disabled for single-rank inference")
+                logger.info("MiniMax-H3 VAE spatiotemporal tile parallelism disabled for single-rank inference")
         audio_vae = MiniMaxH3AudioVAE.from_pretrained(self.config["model_path"], device=AI_DEVICE, cpu_offload=cpu_offload)
         configured_sample_rate = int(self.config.get("audio_sampling_rate", audio_vae.sampling_rate))
         if configured_sample_rate != audio_vae.sampling_rate:
