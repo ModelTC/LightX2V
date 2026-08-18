@@ -243,6 +243,7 @@ class AsyncAudioVideoWriter:
     """
 
     _FINISH = object()
+    QUEUE_SIZE = 1
 
     def __init__(
         self,
@@ -250,17 +251,14 @@ class AsyncAudioVideoWriter:
         output_path: str,
         fps: int,
         audio_sample_rate: int | None,
-        queue_size: int = 2,
         video_codec_options: Mapping[str, str] | None = None,
         timeline_origin: float | None = None,
     ) -> None:
-        if queue_size <= 0:
-            raise ValueError(f"queue_size must be positive, got {queue_size}")
         self.output_path = os.fspath(output_path)
         self.fps = int(fps)
         self.audio_sample_rate = int(audio_sample_rate) if audio_sample_rate is not None else None
         self.video_codec_options = dict(video_codec_options) if video_codec_options else None
-        self._queue: queue.Queue[object] = queue.Queue(maxsize=queue_size)
+        self._queue: queue.Queue[object] = queue.Queue(maxsize=self.QUEUE_SIZE)
         self._error: BaseException | None = None
         self._cancelled = threading.Event()
         self._done = threading.Event()

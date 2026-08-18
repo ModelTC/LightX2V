@@ -92,7 +92,6 @@ class AsyncAudioVideoWriterTest(unittest.TestCase):
                 output_path=output_path,
                 fps=4,
                 audio_sample_rate=32000,
-                queue_size=1,
                 video_codec_options={"preset": "ultrafast"},
             )
             writer.submit_video(torch.zeros((2, 16, 16, 3), dtype=torch.uint8))

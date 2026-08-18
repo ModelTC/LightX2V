@@ -612,11 +612,7 @@ class MiniMaxH3Runner(DefaultRunner):
         return {"video": None, "audio": None}
 
     def _should_pipeline_vae_decode_and_encode(self) -> bool:
-        return bool(
-            self.config.get("vae_decode_encode_pipeline", False)
-            and self.input_info.save_result_path
-            and not self.input_info.return_result_tensor
-        )
+        return bool(self.input_info.save_result_path and not self.input_info.return_result_tensor)
 
     @ProfilingContext4DebugL1(
         "Run Pipelined VAE Decoder and AV Encoder",
@@ -652,14 +648,13 @@ class MiniMaxH3Runner(DefaultRunner):
                     output_path=output_path,
                     fps=int(self.config.get("fps", 24)),
                     audio_sample_rate=self.audio_vae.sampling_rate,
-                    queue_size=int(self.config.get("video_encode_queue_size", 2)),
                     video_codec_options=self.config.get("video_codec_options"),
                     timeline_origin=pipeline_started_at,
                 )
                 logger.info(
                     "[MiniMax-H3 Pipeline][start] "
                     f"output={output_path} fps={int(self.config.get('fps', 24))} "
-                    f"queue_size={int(self.config.get('video_encode_queue_size', 2))}"
+                    f"queue_size={AsyncAudioVideoWriter.QUEUE_SIZE}"
                 )
             except BaseException as exc:
                 writer_error = exc
