@@ -26,9 +26,9 @@ elif PLATFORM == "enflame_gcu":
 elif PLATFORM == "intel_xpu":
     # Register platform RMSNorm before the attention modules import the
     # framework registry and snapshot all PLATFORM_* registries.
+    from .norm.intel_xpu import *
     from .attn.intel_xpu import *
     from .mm.intel_xpu import *
-    from .norm.intel_xpu import *
 elif PLATFORM == "iluvatar_cuda":
     from .attn.iluvatar_cuda import *
     from .mm.iluvatar_cuda import *

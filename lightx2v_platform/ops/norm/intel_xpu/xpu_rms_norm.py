@@ -3,14 +3,22 @@ import torch
 from lightx2v_platform.ops.norm.norm_template import RMSWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_RMS_WEIGHT_REGISTER
 
-try:
-    import sycl_kernels as _sycl_kernels
+_rms_norm_checked = False
+_rms_norm = None
 
-    _rms_norm = _sycl_kernels.rms_norm
-    _has_rms_norm = _sycl_kernels.has_rms_norm()
-except (ImportError, RuntimeError):
-    _has_rms_norm = False
-    _rms_norm = None
+
+def _get_rms_norm():
+    global _rms_norm_checked, _rms_norm
+    if not _rms_norm_checked:
+        try:
+            import sycl_kernels
+
+            if sycl_kernels.has_rms_norm():
+                _rms_norm = sycl_kernels.rms_norm
+        except (AttributeError, ImportError, OSError, RuntimeError):
+            pass
+        _rms_norm_checked = True
+    return _rms_norm
 
 
 @PLATFORM_RMS_WEIGHT_REGISTER("intel_xpu")
@@ -23,9 +31,9 @@ class IntelXpuRMSWeight(RMSWeightTemplate):
             return torch.nn.functional.rms_norm(input_tensor, (input_tensor.shape[-1],), eps=self.eps)
 
         hidden_size = input_tensor.shape[-1]
+        rms_norm = _get_rms_norm()
         use_esimd = (
-            _has_rms_norm
-            and _rms_norm is not None
+            rms_norm is not None
             and input_tensor.device.type == "xpu"
             and weight.device == input_tensor.device
             and input_tensor.dtype == weight.dtype
@@ -37,7 +45,7 @@ class IntelXpuRMSWeight(RMSWeightTemplate):
         if use_esimd:
             original_shape = input_tensor.shape
             flat_input = input_tensor.contiguous().view(-1, hidden_size)
-            return _rms_norm(weight.contiguous(), flat_input, self.eps).view(original_shape)
+            return rms_norm(weight.contiguous(), flat_input, self.eps).view(original_shape)
 
         compute_input = input_tensor
         compute_weight = weight
