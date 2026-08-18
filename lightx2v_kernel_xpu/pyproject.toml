@@ -26,6 +26,7 @@ wheel.packages = ["python/sycl_kernels"]
 
 [tool.scikit-build.metadata.version]
 provider = "build_version"
+provider-path = "."
 
 [tool.scikit-build.cmake.define]
 CMAKE_CXX_COMPILER = "icx"

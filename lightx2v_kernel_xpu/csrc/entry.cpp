@@ -38,6 +38,12 @@ torch::Tensor sdp_torch(
     torch::Tensor V
 );
 
+torch::Tensor rms_norm_xpu(
+    torch::Tensor weight,
+    torch::Tensor input,
+    double eps
+);
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("onednn_w4a16", &onednn_w4a16, "onednn w4a16 gemm");
     m.def("onednn_w8a16_fp8", &onednn_w8a16_fp8,
@@ -47,4 +53,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("sdp", &sdp_torch,
           "ESIMD Flash Attention SDP [B,L,H,128] PTL-H (fp16/bf16)",
           py::arg("Q"), py::arg("K"), py::arg("V"));
+    m.def("rms_norm", &rms_norm_xpu,
+          "ESIMD RMSNorm for contiguous [rows, hidden_size] XPU tensors",
+          py::arg("weight"), py::arg("input"), py::arg("eps") = 1e-6);
 }

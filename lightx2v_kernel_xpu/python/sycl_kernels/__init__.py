@@ -37,6 +37,7 @@ try:
     from sycl_kernels._ext import (  # noqa: E402, F401
         onednn_w4a16,
         onednn_w8a16_fp8,
+        rms_norm,
         sdp,
     )
 except ImportError as _legacy_import_error:
@@ -46,6 +47,7 @@ except ImportError as _legacy_import_error:
 
     onednn_w4a16 = _legacy_extension_unavailable
     onednn_w8a16_fp8 = _legacy_extension_unavailable
+    rms_norm = _legacy_extension_unavailable
     sdp = _legacy_extension_unavailable
 from sycl_kernels.version import __version__  # noqa: E402, F401
 
