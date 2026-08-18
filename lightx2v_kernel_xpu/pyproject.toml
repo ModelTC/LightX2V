@@ -8,13 +8,14 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "sycl-kernels"
-version = "0.0.1"
+dynamic = ["version"]
 description = "SYCL ESIMD Flash Attention and GEMM kernels for Intel XPU (PTL-H)"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = []
 
 [tool.scikit-build]
+experimental = true
 cmake.build-type = "Release"
 cmake.args = ["-GNinja"]
 minimum-version = "build-system.requires"
@@ -22,6 +23,9 @@ minimum-version = "build-system.requires"
 wheel.py-api = "cp311"
 wheel.license-files = []
 wheel.packages = ["python/sycl_kernels"]
+
+[tool.scikit-build.metadata.version]
+provider = "build_version"
 
 [tool.scikit-build.cmake.define]
 CMAKE_CXX_COMPILER = "icx"

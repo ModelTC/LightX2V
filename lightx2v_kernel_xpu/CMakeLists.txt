@@ -8,7 +8,11 @@ set(ENABLE_CUTE_FMHA_DEFAULT OFF)
 option(ENABLE_CUTE_FMHA "Build the Linux-only CUTLASS-SYCL CUTE FMHA library"
     ${ENABLE_CUTE_FMHA_DEFAULT})
 set(CUTLASS_SYCL_ROOT "$ENV{CUTLASS_SYCL_ROOT}" CACHE PATH
-    "Path to the CUTLASS-SYCL/sycl-tla source tree")
+    "Optional path to a local CUTLASS-SYCL/sycl-tla source tree")
+set(SYCL_TLA_GIT_REPOSITORY "https://github.com/intel/sycl-tla.git" CACHE STRING
+    "sycl-tla repository used when CUTLASS_SYCL_ROOT is not set")
+set(SYCL_TLA_GIT_REVISION "2fc09973bfdf15755090fcb0e3b6ad236408a992" CACHE STRING
+    "Pinned sycl-tla revision used for CUTE FMHA")
 set(XPU_TARGET "bmg" CACHE STRING "Intel GPU AOT target (bmg or ptl-h)")
 
 find_package(IntelSYCL REQUIRED)
@@ -128,6 +132,23 @@ if(ENABLE_CUTE_FMHA)
     if(WIN32)
         message(FATAL_ERROR
             "CUTE FMHA is disabled on Windows because sycl-tla produces incorrect results")
+    endif()
+    if(NOT CUTLASS_SYCL_ROOT)
+        include(FetchContent)
+        message(STATUS
+            "CUTLASS_SYCL_ROOT is not set; fetching sycl-tla ${SYCL_TLA_GIT_REVISION}")
+        FetchContent_Declare(sycl_tla
+            GIT_REPOSITORY ${SYCL_TLA_GIT_REPOSITORY}
+            GIT_TAG ${SYCL_TLA_GIT_REVISION}
+            GIT_PROGRESS TRUE
+            GIT_SHALLOW FALSE)
+        FetchContent_GetProperties(sycl_tla)
+        if(NOT sycl_tla_POPULATED)
+            FetchContent_Populate(sycl_tla)
+        endif()
+        set(CUTLASS_SYCL_ROOT "${sycl_tla_SOURCE_DIR}")
+    else()
+        message(STATUS "Using local sycl-tla source: ${CUTLASS_SYCL_ROOT}")
     endif()
     foreach(required_dir include tools/util/include examples/common applications)
         if(NOT IS_DIRECTORY "${CUTLASS_SYCL_ROOT}/${required_dir}")

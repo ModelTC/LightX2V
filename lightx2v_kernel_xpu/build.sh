@@ -8,7 +8,6 @@ cd "$project_dir"
 : "${CMAKE:=cmake}"
 : "${CXX:=icpx}"
 : "${XPU_TARGET:=bmg}"
-: "${CUTLASS_SYCL_ROOT:?Set CUTLASS_SYCL_ROOT to the CUTLASS-SYCL/sycl-tla source tree}"
 
 command -v "$PYTHON" >/dev/null || { echo "ERROR: Python not found: $PYTHON" >&2; exit 1; }
 command -v "$CMAKE" >/dev/null || { echo "ERROR: CMake not found: $CMAKE" >&2; exit 1; }
@@ -33,7 +32,6 @@ echo "=== Step 2: Build Python extension ==="
     -DCMAKE_PREFIX_PATH="$torch_root" \
     -DPython_EXECUTABLE="$PYTHON" \
     -DENABLE_CUTE_FMHA=ON \
-    -DCUTLASS_SYCL_ROOT="$CUTLASS_SYCL_ROOT" \
     -DXPU_TARGET="$XPU_TARGET" \
     -B _cmake_build -S .
 "$CMAKE" --build _cmake_build --parallel
@@ -52,7 +50,7 @@ fi
 
 echo "=== Step 5: Build wheel ==="
 mkdir -p dist
-CMAKE_ARGS="-DCMAKE_CXX_COMPILER=$CXX -DENABLE_CUTE_FMHA=ON -DCUTLASS_SYCL_ROOT=$CUTLASS_SYCL_ROOT -DXPU_TARGET=$XPU_TARGET" \
+CMAKE_ARGS="-DCMAKE_CXX_COMPILER=$CXX -DENABLE_CUTE_FMHA=ON -DXPU_TARGET=$XPU_TARGET" \
     "$PYTHON" -m pip wheel . \
     --no-build-isolation --no-deps -w dist
 

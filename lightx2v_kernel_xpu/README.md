@@ -226,23 +226,26 @@ lightx2v_kernel_xpu\
 ```
 # CUTE FMHA
 
-The Linux wheel also builds the generic CUTLASS-SYCL CUTE self-attention
-kernel for `[B, L, H, 128]` FP16/BF16 tensors. Set `CUTLASS_SYCL_ROOT` to a
-sycl-tla/CUTLASS-SYCL checkout containing `include/`, `tools/util/include/`,
-`examples/common/`, and `applications/` before building:
+The Linux build script also builds the generic CUTLASS-SYCL CUTE self-attention
+kernel for `[B, L, H, 128]` FP16/BF16 tensors. CMake automatically downloads
+the pinned sycl-tla revision when CUTE FMHA is enabled:
 
 ```bash
-git clone https://github.com/intel/sycl-tla.git /path/to/sycl-tla
-git -C /path/to/sycl-tla checkout 2fc09973bfdf15755090fcb0e3b6ad236408a992
-export CUTLASS_SYCL_ROOT=/path/to/sycl-tla
 XPU_TARGET=bmg ./build.sh
 ```
+
+For offline builds or local sycl-tla development, set `CUTLASS_SYCL_ROOT` to
+an existing checkout before configuring or running `build.sh`.
 
 The default target is `bmg` for Battlemage GPUs such as Intel B60; use
 `XPU_TARGET=ptl-h` only for PTL-H. The Python API is
 `sycl_kernels.cute_sdp(q, k, v)`. It supports non-causal self-attention with
 batch size 1, equal Q/K/V sequence lengths, head dimension 128, and contiguous
 or materializable BLHD inputs.
+
+On Linux, the wheel version records its build target: BMG builds use
+`0.0.1+bmg`, while PTL-H builds use `0.0.1+ptlh`. Windows builds use the base
+version `0.0.1` because CUTE FMHA is disabled there.
 
 CUTE FMHA is disabled on Windows because the current sycl-tla kernel produces
 incorrect attention results there. `build.bat` builds only the existing
