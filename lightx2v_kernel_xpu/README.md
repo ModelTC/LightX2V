@@ -4,6 +4,12 @@ SYCL/ESIMD custom kernels for LightX2V inference on Intel Arc GPU (Xe2 / PTL-H).
 
 Exposed as the Python package `sycl_kernels`:
 
+- `sycl_kernels.rms_norm(weight, input, eps)` provides ESIMD RMSNorm for
+  contiguous FP32/FP16/BF16 XPU tensors with hidden size up to 8192 and
+  divisible by 32. In LightX2V select it with `"rms_norm_type": "intel_xpu"`;
+  For MiniMax-H3, select it with `"rms_type": "intel_xpu"`.
+  unsupported contracts use the torch fallback.
+
 | Function | Description |
 |----------|-------------|
 | `sdp(Q, K, V)` | ESIMD Flash Attention — `[B, L, H, 128]` fp16/bf16, PTL-H doubleGRF |
@@ -224,3 +230,29 @@ lightx2v_kernel_xpu\
 ├── build.bat                # Original full build script
 ├── build.sh                 # Linux full build script
 ```
+# CUTE FMHA
+
+The Linux build script also builds the generic CUTLASS-SYCL CUTE self-attention
+kernel for `[B, L, H, 128]` FP16/BF16 tensors. CMake automatically downloads
+the pinned sycl-tla revision when CUTE FMHA is enabled:
+
+```bash
+XPU_TARGET=bmg ./build.sh
+```
+
+For offline builds or local sycl-tla development, set `CUTLASS_SYCL_ROOT` to
+an existing checkout before configuring or running `build.sh`.
+
+The default target is `bmg` for Battlemage GPUs such as Intel B60; use
+`XPU_TARGET=ptl-h` only for PTL-H. The Python API is
+`sycl_kernels.cute_sdp(q, k, v)`. It supports non-causal self-attention with
+batch size 1, equal Q/K/V sequence lengths, head dimension 128, and contiguous
+or materializable BLHD inputs.
+
+On Linux, the wheel version records its build target: BMG builds use
+`0.0.1+bmg`, while PTL-H builds use `0.0.1+ptlh`. Windows builds use the base
+version `0.0.1` because CUTE FMHA is disabled there.
+
+CUTE FMHA is disabled on Windows because the current sycl-tla kernel produces
+incorrect attention results there. `build.bat` builds only the existing
+ESIMD/oneDNN extension, and `sycl_kernels.has_cute_fmha()` returns `False`.

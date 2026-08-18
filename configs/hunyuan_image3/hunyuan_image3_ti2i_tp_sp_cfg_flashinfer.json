@@ -4,7 +4,7 @@
     "flow_shift": 1.0,
     "image_size": "auto",
     "feature_caching": "NoCaching",
-    "moe_impl": "flashinfer",
+    "moe_backend": "flashinfer",
     "attn_impl": "torch_sdpa",
     "flashinfer_autotune_mode": "auto",
     "flashinfer_autotune_cache": "save_results/hunyuan_image3_flashinfer_autotune_ti2i_tp2_sp2_cfg2.json",

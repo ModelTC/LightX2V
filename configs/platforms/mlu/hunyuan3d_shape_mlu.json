@@ -8,5 +8,6 @@
     "num_chunks": 8000,
     "octree_resolution": 384,
     "attn_type": "torch_sdpa",
+    "moe_backend": "torch_expert_loop",
     "rms_norm_type": "torch"
 }

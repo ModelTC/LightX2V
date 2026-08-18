@@ -7,6 +7,7 @@
     "enable_cfg": true,
     "vae_dtype": "fp32",
     "attn_type": "flash_attn3",
+    "moe_backend": "torch_grouped_mm",
     "cpu_offload": false,
     "use_image_encoder": false,
     "use_compile": true

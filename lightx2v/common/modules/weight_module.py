@@ -66,7 +66,7 @@ class WeightModule:
         if destination is None:
             destination = {}
         for _, param in self._parameters.items():
-            if param is not None:
+            if param is not None and hasattr(param, "state_dict"):
                 param.state_dict(destination)
         for _, module in self._modules.items():
             if module is not None:
@@ -77,7 +77,7 @@ class WeightModule:
         if destination is None:
             destination = {}
         for _, param in self._parameters.items():
-            if param is not None:
+            if param is not None and hasattr(param, "load_state_dict"):
                 param.load_state_dict(destination, block_index, adapter_block_index)
         for _, module in self._modules.items():
             if module is not None:
@@ -86,7 +86,7 @@ class WeightModule:
 
     def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
         for _, param in self._parameters.items():
-            if param is not None:
+            if param is not None and hasattr(param, "load_state_dict_from_disk"):
                 param.load_state_dict_from_disk(block_index, adapter_block_index)
         for _, module in self._modules.items():
             if module is not None:
@@ -104,7 +104,7 @@ class WeightModule:
         for name, param in self._parameters.items():
             if param is not None:
                 if hasattr(param, "cpu"):
-                    self._parameters[name] = param.cpu()
+                    self._parameters[name] = param.to("cpu", non_blocking=non_blocking)
                     setattr(self, name, self._parameters[name])
                 elif hasattr(param, "to_cpu"):
                     self._parameters[name].to_cpu()
@@ -148,7 +148,7 @@ class WeightModule:
         for name, param in self._parameters.items():
             if param is not None:
                 if hasattr(param, "cpu"):
-                    self._parameters[name] = param.cpu(non_blocking=True)
+                    self._parameters[name] = param.to("cpu", non_blocking=non_blocking)
                     setattr(self, name, self._parameters[name])
                 elif hasattr(param, "to_cpu"):
                     self._parameters[name].to_cpu(non_blocking=True)

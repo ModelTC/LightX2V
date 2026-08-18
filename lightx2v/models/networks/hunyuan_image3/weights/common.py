@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 import lightx2v.common.ops  # noqa: F401
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.moe import FlashInferMoEWeightShard, FusedMoETemplate
 from lightx2v.models.networks.hunyuan_image3.weights.hybrid_tp import (
     FUSED_GATE_UP_LAYOUT,
     GROUPED_QKV_LAYOUT,
@@ -13,7 +14,7 @@ from lightx2v.models.networks.hunyuan_image3.weights.hybrid_tp import (
     resolve_micro_shard_count,
     resolve_storage_tp,
 )
-from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import FUSED_MOE_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -378,6 +379,40 @@ class HunyuanImage3DenseMLPWeights(WeightModule):
         )
 
 
+class _MicroRouteFusedMoE(FusedMoETemplate):
+    def __init__(self, fused_moe, num_experts, micro_shard_count):
+        super().__init__()
+        self.add_module("fused_moe", fused_moe)
+        self.num_experts = int(num_experts)
+        self.micro_shard_count = int(micro_shard_count)
+
+    def apply(
+        self,
+        input,
+        token_selected_experts,
+        token_final_scales,
+        output=None,
+    ):
+        micro_offsets = torch.arange(
+            self.micro_shard_count,
+            device=token_selected_experts.device,
+            dtype=torch.int64,
+        )
+        micro_offsets.mul_(self.num_experts)
+        expanded_experts = token_selected_experts.to(torch.int64).unsqueeze(-1) + micro_offsets
+        expanded_scales = token_final_scales.unsqueeze(-1).expand(
+            *token_final_scales.shape,
+            self.micro_shard_count,
+        )
+        expanded_top_k = token_selected_experts.shape[1] * self.micro_shard_count
+        return self.fused_moe.apply(
+            input,
+            expanded_experts.reshape(input.shape[0], expanded_top_k),
+            expanded_scales.reshape(input.shape[0], expanded_top_k),
+            output,
+        )
+
+
 class HunyuanImage3MoEWeights(WeightModule):
     def __init__(
         self,
@@ -394,15 +429,18 @@ class HunyuanImage3MoEWeights(WeightModule):
         super().__init__()
         self.num_experts = int(_moe_value(config, "num_experts", block_index, 1))
         self.moe_topk = int(_moe_value(config, "moe_topk", block_index, 1))
-        self.moe_impl = config.get("moe_impl", "eager")
+        self.moe_backend = config["moe_backend"]
+        assert self.moe_backend in {"flashinfer", "multi_micro", "torch_grouped_mm"}
         self.parallel_context, _, self.storage_tp_rank, self.storage_tp_size = resolve_storage_tp(config)
         self.micro_shard_count = resolve_micro_shard_count(config, self.storage_tp_size) if self.parallel_context is not None else 1
-        self.flashinfer_logical_tp_size = self.storage_tp_size * self.micro_shard_count
-        self.moe_weight = None
-        self.moe_weight_2 = None
-        self._flashinfer_weights_initialized = False
-        self._flashinfer_weight_device = None
-        self._flashinfer_weight_dtype = None
+        self.logical_tp_size = self.storage_tp_size * self.micro_shard_count
+        self.tune_max_num_tokens = int(config.get("flashinfer_tune_max_num_tokens", 8192))
+        if self.moe_backend == "multi_micro" and (self.parallel_context is None or self.micro_shard_count != 2):
+            raise ValueError("HunyuanImage3 multi_micro requires phase-aware parallelism with exactly two micro shards")
+        self.moe_fc1_weight = None
+        self.moe_fc2_weight = None
+        self._moe_weights_initialized = False
+        self._fused_moe_by_phase = {}
         self.add_module(
             "gate",
             MM_WEIGHT_REGISTER["Default-ForceFp32"](
@@ -465,34 +503,25 @@ class HunyuanImage3MoEWeights(WeightModule):
             current = current._mm
         return current
 
-    def _linear_weight_for_flashinfer(self, linear, device, dtype):
-        if getattr(linear, "has_lora_branch", False):
-            raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' does not support dynamic LoRA branches.")
-        if hasattr(linear, "weight_diff"):
-            raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' does not support runtime diff weights.")
+    def _linear_weight_for_moe(self, linear, device, dtype):
+        concrete = self._unwrap_linear_weight(linear)
+        for candidate in (linear, concrete):
+            if getattr(candidate, "has_lora_branch", False):
+                raise RuntimeError("HunyuanImage3 fused MoE backends do not support routed-expert LoRA")
+            if getattr(candidate, "has_diff", False) or hasattr(candidate, "weight_diff") or hasattr(candidate, "bias_diff"):
+                raise RuntimeError("HunyuanImage3 fused MoE backends do not support routed-expert diff weights")
+            for attr in ("bias", "pin_bias", "_row_split_bias"):
+                bias = getattr(candidate, attr, None)
+                if bias is not None and bias.numel() > 0:
+                    raise RuntimeError("HunyuanImage3 fused MoE backends require bias-free routed experts")
 
-        linear = self._unwrap_linear_weight(linear)
-        if getattr(linear, "has_lora_branch", False):
-            raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' does not support dynamic LoRA branches.")
-        if hasattr(linear, "weight_diff"):
-            raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' does not support runtime diff weights.")
-
-        weight = getattr(linear, "weight", None)
+        weight = getattr(concrete, "weight", None)
         if weight is None:
-            weight = getattr(linear, "pin_weight", None)
+            weight = getattr(concrete, "pin_weight", None)
         if weight is None or weight.numel() == 0:
-            raise RuntimeError("HunyuanImage3 FlashInfer MoE weights were already released and cannot be rebuilt.")
-
-        bias = getattr(linear, "bias", None)
-        pin_bias = getattr(linear, "pin_bias", None)
-        if (bias is not None and bias.numel() > 0) or (pin_bias is not None and pin_bias.numel() > 0):
-            raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' expects bias-free expert MLP weights.")
+            raise RuntimeError("HunyuanImage3 routed-expert weights were already released and cannot be rebuilt")
 
         # LightX2V MM weights are stored as [in, out] for torch.mm(input, weight).
-        # FlashInfer follows torch.nn.Linear/checkpoint layout [out, in].  For
-        # the default loader the transpose is already a contiguous view of the
-        # checkpoint tensor, so this does not allocate unless device/dtype
-        # conversion is genuinely required during one-time initialization.
         return weight.t().to(device=device, dtype=dtype).contiguous()
 
     @classmethod
@@ -503,41 +532,33 @@ class HunyuanImage3MoEWeights(WeightModule):
             if hasattr(linear, attr):
                 setattr(linear, attr, empty)
 
-    def ensure_flashinfer_weights(self, device, dtype):
-        """Build the single phase-neutral ``[micro, expert, ...]`` pack.
-
-        AR selects one leading-axis view.  Denoising selects both views and
-        sums their partial outputs before its storage-TP all-reduce.  The pack
-        is never rebuilt or converted when the active phase changes.
-        """
-
+    def ensure_moe_weights(self, device, dtype):
         device = torch.device(device)
         if dtype not in (torch.float16, torch.bfloat16):
             dtype = torch.bfloat16
 
-        if self._flashinfer_weights_initialized:
-            if self.moe_weight.device != device or self.moe_weight.dtype != dtype:
+        if self._moe_weights_initialized:
+            if self.moe_fc1_weight.device != device or self.moe_fc1_weight.dtype != dtype:
                 raise RuntimeError(
-                    "HunyuanImage3 phase-neutral FlashInfer weights cannot be converted after initialization: "
-                    f"resident=({self.moe_weight.device}, {self.moe_weight.dtype}), requested=({device}, {dtype})."
+                    f"HunyuanImage3 resident MoE weights cannot be converted after initialization: resident=({self.moe_fc1_weight.device}, {self.moe_fc1_weight.dtype}), requested=({device}, {dtype})"
                 )
-            if self.parallel_context is None:
-                return self.moe_weight[0], self.moe_weight_2[0]
-            return self.moe_weight, self.moe_weight_2
+            if not self._fused_moe_by_phase:
+                self._build_fused_moe_backends()
+            return
 
-        first_gate_up = self._linear_weight_for_flashinfer(self.experts[0].gate_and_up_proj, device, dtype)
-        first_down = self._linear_weight_for_flashinfer(self.experts[0].down_proj, device, dtype)
+        first_gate_up = self._linear_weight_for_moe(self.experts[0].gate_and_up_proj, device, dtype)
+        first_down = self._linear_weight_for_moe(self.experts[0].down_proj, device, dtype)
         if first_gate_up.ndim != 2 or first_gate_up.shape[0] % (2 * self.micro_shard_count):
-            raise RuntimeError(f"Invalid HunyuanImage3 FlashInfer gate/up resident shape {tuple(first_gate_up.shape)} for {self.micro_shard_count} micro shards.")
+            raise RuntimeError(f"Invalid HunyuanImage3 gate/up resident shape {tuple(first_gate_up.shape)} for {self.micro_shard_count} micro shards")
         micro_intermediate = first_gate_up.shape[0] // (2 * self.micro_shard_count)
         hidden_size = first_gate_up.shape[1]
         if first_down.shape != (hidden_size, self.micro_shard_count * micro_intermediate):
-            raise RuntimeError(f"HunyuanImage3 FlashInfer down weight does not match gate/up micro shards: gate_up={tuple(first_gate_up.shape)}, down={tuple(first_down.shape)}.")
+            raise RuntimeError(f"HunyuanImage3 down weight does not match gate/up micro shards: gate_up={tuple(first_gate_up.shape)}, down={tuple(first_down.shape)}")
 
         # Allocate the final resident pack once and copy experts into it
         # directly. This avoids retaining a second list of expert tensors;
         # sources are released together after the full pack is validated.
-        self.moe_weight = torch.empty(
+        self.moe_fc1_weight = torch.empty(
             self.micro_shard_count,
             self.num_experts,
             2 * micro_intermediate,
@@ -545,7 +566,7 @@ class HunyuanImage3MoEWeights(WeightModule):
             device=device,
             dtype=dtype,
         )
-        self.moe_weight_2 = torch.empty(
+        self.moe_fc2_weight = torch.empty(
             self.micro_shard_count,
             self.num_experts,
             hidden_size,
@@ -559,87 +580,113 @@ class HunyuanImage3MoEWeights(WeightModule):
                 gate_up = first_gate_up
                 down = first_down
             else:
-                gate_up = self._linear_weight_for_flashinfer(expert.gate_and_up_proj, device, dtype)
-                down = self._linear_weight_for_flashinfer(expert.down_proj, device, dtype)
+                gate_up = self._linear_weight_for_moe(expert.gate_and_up_proj, device, dtype)
+                down = self._linear_weight_for_moe(expert.down_proj, device, dtype)
             if gate_up.shape != first_gate_up.shape or down.shape != first_down.shape:
-                raise RuntimeError(f"HunyuanImage3 expert {expert_index} shape differs while building the universal FlashInfer pack: gate_up={tuple(gate_up.shape)}, down={tuple(down.shape)}.")
+                raise RuntimeError(f"HunyuanImage3 expert {expert_index} shape differs while building the resident MoE pack: gate_up={tuple(gate_up.shape)}, down={tuple(down.shape)}")
 
             # gate_up was organized by the checkpoint loader as
             # [g_micro0,u_micro0,g_micro1,u_micro1,...].  Down remains
             # [hidden, intermediate_micro0, intermediate_micro1,...].
             gate_up_micro = gate_up.reshape(self.micro_shard_count, 2 * micro_intermediate, hidden_size)
             down_micro = down.reshape(hidden_size, self.micro_shard_count, micro_intermediate).permute(1, 0, 2)
-            self.moe_weight[:, expert_index].copy_(gate_up_micro)
-            self.moe_weight_2[:, expert_index].copy_(down_micro)
+            self.moe_fc1_weight[:, expert_index].copy_(gate_up_micro)
+            self.moe_fc2_weight[:, expert_index].copy_(down_micro)
 
-        if not all(self.moe_weight[index].is_contiguous() and self.moe_weight_2[index].is_contiguous() for index in range(self.micro_shard_count)):
-            raise RuntimeError("HunyuanImage3 FlashInfer micro-shard views must be contiguous.")
+        if not all(self.moe_fc1_weight[index].is_contiguous() and self.moe_fc2_weight[index].is_contiguous() for index in range(self.micro_shard_count)):
+            raise RuntimeError("HunyuanImage3 MoE micro-shard views must be contiguous")
 
         # Release source tensors only after every expert has been validated and
         # copied. A malformed checkpoint therefore cannot leave a half-built,
         # non-retryable pack behind.
         for expert in self.experts:
-            self._release_linear_weight(expert.gate_and_up_proj, self.moe_weight.device, self.moe_weight.dtype)
-            self._release_linear_weight(expert.down_proj, self.moe_weight_2.device, self.moe_weight_2.dtype)
+            self._release_linear_weight(expert.gate_and_up_proj, self.moe_fc1_weight.device, self.moe_fc1_weight.dtype)
+            self._release_linear_weight(expert.down_proj, self.moe_fc2_weight.device, self.moe_fc2_weight.dtype)
 
-        self._flashinfer_weights_initialized = True
-        self._flashinfer_weight_device = self.moe_weight.device
-        self._flashinfer_weight_dtype = self.moe_weight.dtype
-        if self.parallel_context is None:
-            return self.moe_weight[0], self.moe_weight_2[0]
-        return self.moe_weight, self.moe_weight_2
+        self._moe_weights_initialized = True
+        self._build_fused_moe_backends()
 
-    def _active_flashinfer_micro_shard_ids(self):
-        if self.parallel_context is None or self.micro_shard_count == 1:
-            return (0,)
-        active_tp_size = int(getattr(self.parallel_context, "active_tp_size", getattr(self.parallel_context, "tp_size", self.storage_tp_size)))
-        if active_tp_size == self.storage_tp_size:
-            return tuple(range(self.micro_shard_count))
-        if active_tp_size == self.flashinfer_logical_tp_size:
-            micro_id = int(getattr(self.parallel_context, "local_micro_shard_id"))
-            if not 0 <= micro_id < self.micro_shard_count:
-                raise RuntimeError(f"Invalid HunyuanImage3 local FlashInfer micro shard id {micro_id}.")
-            return (micro_id,)
-        raise RuntimeError(f"HunyuanImage3 FlashInfer active TP size must be {self.storage_tp_size} or {self.flashinfer_logical_tp_size}; got {active_tp_size}.")
-
-    def canonical_flashinfer_tp_rank(self, micro_shard_id):
+    def _canonical_tp_rank(self, micro_shard_id):
         micro_shard_id = int(micro_shard_id)
         if not 0 <= micro_shard_id < self.micro_shard_count:
-            raise ValueError(f"Invalid HunyuanImage3 FlashInfer micro shard id {micro_shard_id}.")
+            raise ValueError(f"Invalid HunyuanImage3 micro shard id {micro_shard_id}")
         return self.storage_tp_rank * self.micro_shard_count + micro_shard_id
 
-    def active_flashinfer_weight_shards(self, device, dtype):
-        """Return active zero-copy FI views as ``(micro, tp_rank, w1, w2)``."""
-
-        self.ensure_flashinfer_weights(device, dtype)
-        return tuple(
-            (
-                micro_id,
-                self.canonical_flashinfer_tp_rank(micro_id),
-                self.moe_weight[micro_id],
-                self.moe_weight_2[micro_id],
-            )
-            for micro_id in self._active_flashinfer_micro_shard_ids()
+    def _flashinfer_backend_shard(self, micro_shard_id):
+        micro_shard_id = int(micro_shard_id)
+        return FlashInferMoEWeightShard(
+            self.moe_fc1_weight[micro_shard_id],
+            self.moe_fc2_weight[micro_shard_id],
+            tp_rank=self._canonical_tp_rank(micro_shard_id),
         )
 
-    def active_flashinfer_multi_micro_weights(self, device, dtype):
-        """Return the resident multi-micro packs without copying or reordering.
+    def _build_flashinfer_backend(self, micro_shard_ids):
+        shards = tuple(self._flashinfer_backend_shard(micro_id) for micro_id in micro_shard_ids)
+        return FUSED_MOE_REGISTER["flashinfer"](
+            shards,
+            "swiglu",
+            tp_size=self.logical_tp_size,
+            tune_max_num_tokens=self.tune_max_num_tokens,
+        )
 
-        The multi-micro MoE path is valid only when every resident micro shard
-        is active (the denoising TP2 phase in the phase-aware topology).  AR
-        continues to select one zero-copy leading-axis view through
-        :meth:`active_flashinfer_weight_shards` and uses the official
-        FlashInfer operator.
-        """
+    def _build_torch_grouped_backend(self, fc1_weight, fc2_weight):
+        # torch_grouped_mm replaces the original eager per-expert MoE path.
+        return FUSED_MOE_REGISTER["torch_grouped_mm"](fc1_weight, fc2_weight, "swiglu")
 
-        if self.micro_shard_count != 2:
-            raise RuntimeError(f"HunyuanImage3 multi-micro MoE requires exactly two resident micro shards; got {self.micro_shard_count}.")
-        self.ensure_flashinfer_weights(device, dtype)
-        active_micro_ids = self._active_flashinfer_micro_shard_ids()
-        expected_micro_ids = tuple(range(self.micro_shard_count))
-        if active_micro_ids != expected_micro_ids:
-            raise RuntimeError(f"HunyuanImage3 multi-micro FlashInfer weights require all resident micro shards to be active: active={active_micro_ids}, resident={expected_micro_ids}.")
-        return self.moe_weight, self.moe_weight_2
+    def _build_fused_moe_backends(self):
+        if not self._moe_weights_initialized:
+            raise RuntimeError("HunyuanImage3 fused MoE backends require initialized resident weights")
+
+        if self.parallel_context is None:
+            if self.moe_backend == "torch_grouped_mm":
+                backend = self._build_torch_grouped_backend(self.moe_fc1_weight[0], self.moe_fc2_weight[0])
+            else:
+                backend = self._build_flashinfer_backend((0,))
+            self._fused_moe_by_phase = {"default": backend}
+            return
+
+        local_micro_shard_id = int(getattr(self.parallel_context, "local_micro_shard_id"))
+        if not 0 <= local_micro_shard_id < self.micro_shard_count:
+            raise RuntimeError(f"Invalid HunyuanImage3 local micro shard id {local_micro_shard_id}")
+
+        if self.moe_backend == "torch_grouped_mm":
+            ar_backend = self._build_torch_grouped_backend(
+                self.moe_fc1_weight[local_micro_shard_id],
+                self.moe_fc2_weight[local_micro_shard_id],
+            )
+            denoise_backend = _MicroRouteFusedMoE(
+                self._build_torch_grouped_backend(
+                    self.moe_fc1_weight.flatten(0, 1),
+                    self.moe_fc2_weight.flatten(0, 1),
+                ),
+                self.num_experts,
+                self.micro_shard_count,
+            )
+        elif self.moe_backend == "multi_micro":
+            ar_backend = self._build_flashinfer_backend((local_micro_shard_id,))
+            denoise_backend = FUSED_MOE_REGISTER["multi_micro"](
+                self.moe_fc1_weight,
+                self.moe_fc2_weight,
+                "swiglu",
+                "grouped_mm",
+            )
+        else:
+            ar_backend = self._build_flashinfer_backend((local_micro_shard_id,))
+            denoise_backend = self._build_flashinfer_backend(range(self.micro_shard_count))
+
+        self._fused_moe_by_phase = {"ar": ar_backend, "denoise": denoise_backend}
+
+    def get_fused_moe(self, phase, device, dtype):
+        self.ensure_moe_weights(device, dtype)
+        if self.parallel_context is None:
+            return self._fused_moe_by_phase["default"]
+
+        normalized_phase = str(phase).strip().lower()
+        normalized_phase = {"autoregressive": "ar", "diffusion": "denoise"}.get(normalized_phase, normalized_phase)
+        try:
+            return self._fused_moe_by_phase[normalized_phase]
+        except KeyError as exc:
+            raise ValueError(f"HunyuanImage3 fused MoE does not support phase {phase!r}; expected 'ar' or 'denoise'") from exc
 
 
 class HunyuanImage3AttentionWeights(WeightModule):

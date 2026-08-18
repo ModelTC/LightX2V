@@ -37,7 +37,7 @@ class MoeFiAutotune(FlashInferAutotune):
     def from_hunyuan3d_config(cls, config) -> "MoeFiAutotune":
         fi_cfg = config.get("moe_flashinfer_setting") or {}
         tune_max = int(fi_cfg.get("tune_max_num_tokens", 8192))
-        if str(config.get("moe_backend", "pytorch")).strip().lower() != "flashinfer":
+        if config["moe_backend"] != "flashinfer":
             return cls(tune_max_num_tokens=tune_max)
         if not fi_cfg.get("autotune", False):
             return cls(tune_max_num_tokens=tune_max)
