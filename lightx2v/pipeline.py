@@ -108,7 +108,7 @@ class LightX2VPipeline:
             "wan2.2_audio",
             "wan2.2_moe_distill",
             "wan2.2_animate",
-            "wan22_animate2_distilled",
+            "wan2.2_animate2_distilled",
             "wan2.2_s2v",
         ]:
             self.vae_stride = (4, 8, 8)
@@ -379,7 +379,7 @@ class LightX2VPipeline:
             "wan2.2_audio",
             "wan2.2_moe_distill",
             "wan2.2_animate",
-            "wan22_animate2_distilled",
+            "wan2.2_animate2_distilled",
             "wan2.2_s2v",
         ]:
             self.t5_cpu_offload = text_encoder_offload
@@ -473,7 +473,7 @@ class LightX2VPipeline:
         # image_strength can be a scalar (float/int) or a list matching the number of images
         # i2i_denoise_strength controls single-image edit redraw strength when explicitly set
         # image_frame_idx: optional list of pixel frame indices (one per image), or None to evenly space in [0, num_frames-1]
-        if self.model_cls in {"wan22_animate2_distilled", "ltx2", "ltx2_5"} and save_result_path == "lightx2v_gen_result.png":
+        if self.model_cls in {"wan2.2_animate2_distilled", "ltx2", "ltx2_5"} and save_result_path == "lightx2v_gen_result.png":
             save_result_path = "lightx2v_gen_result.mp4"
         self.seed = seed
         self.image_path = image_path
@@ -509,8 +509,8 @@ class LightX2VPipeline:
         # Do not merge its T2AV/I2AV/L2AV/FL2AV/Ref2AV schemas here.
         input_support_tasks = [] if self.model_cls == "minimax_h3" else self.support_tasks
         input_info = init_empty_input_info(self.task, input_support_tasks)
-        if self.model_cls == "wan22_animate2_distilled" and (self.seed is None or self.seed < 0):
-            raise ValueError("wan22_animate2_distilled requires a non-negative seed")
+        if self.model_cls == "wan2.2_animate2_distilled" and (self.seed is None or self.seed < 0):
+            raise ValueError("Wan-Animate-2 requires a non-negative seed")
         if self.seed is not None:
             seed_all(self.seed)
         update_input_info_from_dict(input_info, self)

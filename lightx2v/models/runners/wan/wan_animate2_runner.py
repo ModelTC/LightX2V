@@ -167,7 +167,7 @@ class _Animate2VideoRecorder(VideoRecorder):
         return self.returncode
 
 
-@RUNNER_REGISTER("wan22_animate2_distilled")
+@RUNNER_REGISTER("wan2.2_animate2_distilled")
 class WanAnimate2Runner(WanRunner):
     """Native LightX2V runner for Wan-Animate-2.
 
@@ -188,7 +188,7 @@ class WanAnimate2Runner(WanRunner):
         if self.config.get("enable_reuse", False):
             raise NotImplementedError("Wan-Animate-2 request reuse is not implemented for autoregressive inputs.")
         if self.config["task"] != "animate":
-            raise ValueError("wan22_animate2_distilled requires task='animate'.")
+            raise ValueError("wan2.2_animate2_distilled requires task='animate'.")
         if self.config.get("use_stream_vae", False):
             raise NotImplementedError("Wan-Animate-2 must drop its leading latent before Wan VAE decode; use_stream_vae is not supported.")
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
