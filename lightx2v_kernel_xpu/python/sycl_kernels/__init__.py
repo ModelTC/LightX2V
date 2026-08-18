@@ -5,6 +5,7 @@ import os
 
 _pkg_dir = os.path.dirname(os.path.abspath(__file__))
 _cute_fmha_loaded = False
+_rms_norm_loaded = False
 
 if os.name == "nt":
     os.add_dll_directory(_pkg_dir)
@@ -48,6 +49,40 @@ except ImportError as _legacy_import_error:
     onednn_w8a16_fp8 = _legacy_extension_unavailable
     sdp = _legacy_extension_unavailable
 from sycl_kernels.version import __version__  # noqa: E402, F401
+
+
+def _load_rms_norm():
+    global _rms_norm_loaded
+    if _rms_norm_loaded:
+        return
+    import torch
+
+    suffix = "*.pyd" if os.name == "nt" else "*.so"
+    candidates = sorted(glob.glob(os.path.join(_pkg_dir, "rms_norm_torch" + suffix)))
+    if not candidates:
+        raise ImportError(f"rms_norm_torch library not found in {_pkg_dir}")
+    torch.ops.load_library(candidates[0])
+    _rms_norm_loaded = True
+
+
+def rms_norm(weight, input, eps=1e-6):
+    """Run ESIMD RMSNorm on contiguous [rows, hidden_size] XPU tensors."""
+    import torch
+
+    try:
+        op = torch.ops.sycl_kernels_rms.rms_norm
+    except AttributeError:
+        _load_rms_norm()
+        op = torch.ops.sycl_kernels_rms.rms_norm
+    return op(weight, input, eps)
+
+
+def has_rms_norm():
+    try:
+        _load_rms_norm()
+        return True
+    except (ImportError, OSError, RuntimeError):
+        return False
 
 
 def _load_cute_fmha():

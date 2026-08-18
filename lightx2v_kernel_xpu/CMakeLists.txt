@@ -128,6 +128,22 @@ target_link_libraries(${MODULE_NAME} PRIVATE
     esimd_lgrf_lib
 )
 
+# Keep RMSNorm independent from the legacy extension and its oneDNN ABI. This
+# sidecar only links PyTorch/SYCL and is loaded lazily through torch.ops.
+add_library(rms_norm_torch SHARED csrc/rms_norm.cpp)
+set_target_properties(rms_norm_torch PROPERTIES
+    PREFIX ""
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    INSTALL_RPATH "\$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+target_compile_features(rms_norm_torch PRIVATE cxx_std_17)
+target_include_directories(rms_norm_torch PRIVATE
+    ${Python_INCLUDE_DIRS}
+    ${TORCH_INCLUDE_DIRS})
+add_sycl_to_target(TARGET rms_norm_torch SOURCES csrc/rms_norm.cpp)
+target_link_libraries(rms_norm_torch PRIVATE
+    ${TORCH_LIBRARIES}
+    ${TORCH_PYTHON_LIBRARY})
+
 if(ENABLE_CUTE_FMHA)
     if(WIN32)
         message(FATAL_ERROR
@@ -204,6 +220,7 @@ endif()
 # ── Install targets for wheel assembly ────────────────────────────────────────
 # scikit-build-core collects install() outputs into the wheel platlib
 install(TARGETS ${MODULE_NAME} LIBRARY DESTINATION sycl_kernels)
+install(TARGETS rms_norm_torch LIBRARY DESTINATION sycl_kernels)
 install(FILES "${ESIMD_RUNTIME}" DESTINATION sycl_kernels)
 if(ENABLE_CUTE_FMHA)
     install(TARGETS cute_fmha_torch LIBRARY DESTINATION sycl_kernels)
