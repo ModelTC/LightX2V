@@ -12,7 +12,7 @@
     "hunyuan_image3_pipeline_layout": "interleaved",
     "enable_cfg": true,
     "hunyuan_cfg_mode": "parallel",
-    "moe_impl": "flashinfer",
+    "moe_backend": "flashinfer",
     "attn_impl": "sdpa",
     "flashinfer_autotune_mode": "tune",
     "flashinfer_autotune_cache": "save_results/hunyuan_image3_flashinfer_ulysses_cfg2_sp2_t2i.json",

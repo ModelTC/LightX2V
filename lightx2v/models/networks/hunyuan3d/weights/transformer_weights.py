@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.moe.fused_moe import create_local_fused_moe
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
@@ -52,9 +53,10 @@ class Hunyuan3DMoEWeights(WeightModule):
         moe_mm_type = "Default" if str(mm_type).startswith("fp8") else mm_type
         self.num_experts = num_experts
         self.moe_top_k = config.get("moe_top_k", 2)
-        self.moe_backend = str(config.get("moe_backend", "pytorch")).strip().lower()
-        if self.moe_backend not in ("pytorch", "flashinfer"):
-            raise ValueError(f"Invalid Hunyuan3D moe_backend={self.moe_backend!r}, expected 'pytorch' or 'flashinfer'")
+
+        self.moe_backend = config["moe_backend"]
+        assert self.moe_backend in {"torch_expert_loop", "flashinfer", "npu_grouped_mm", "metax_mctlass_moe"}
+
         fi_cfg = config.get("moe_flashinfer_setting") or {}
         if fi_cfg.get("autotune") and self.moe_backend != "flashinfer":
             raise ValueError("moe_flashinfer_setting.autotune=true requires moe_backend='flashinfer'")
@@ -76,8 +78,7 @@ class Hunyuan3DMoEWeights(WeightModule):
     def load(self, weight_dict):
         super().load(weight_dict)
         self._validate_no_fp8_moe_weights()
-        if self.moe_backend == "flashinfer" and self.experts[0].fc1._get_actual_weight() is not None:
-            self._build_flashinfer_weights()
+        self._build_fused_moe()
 
     @staticmethod
     def _is_fp8_tensor(tensor):
@@ -97,39 +98,72 @@ class Hunyuan3DMoEWeights(WeightModule):
                 if self._is_fp8_tensor(getattr(module, attr, None)):
                     raise ValueError(f"Hunyuan3D MoE FP8 is not supported yet, but {name}.{attr} is FP8. Regenerate the checkpoint so .moe. weights stay BF16.")
 
-    def to_cuda(self, non_blocking=False):
-        super().to_cuda(non_blocking=non_blocking)
-        if self.moe_backend == "flashinfer":
-            self._build_flashinfer_weights()
-
-    def to_cpu(self, non_blocking=False):
-        super().to_cpu(non_blocking=non_blocking)
-        for attr in ("_fi_fc1_weight", "_fi_fc2_weight", "_fi_fc1_bias", "_fi_fc2_bias"):
-            if hasattr(self, attr):
-                delattr(self, attr)
-
     @staticmethod
-    def _stack_optional_biases(biases):
+    def _optional_biases(biases):
         if all(bias is None for bias in biases):
             return None
         if any(bias is None for bias in biases):
-            raise ValueError("FlashInfer Hunyuan3D MoE requires either all expert biases or no expert biases")
-        return torch.stack([bias.contiguous() for bias in biases], dim=0)
+            raise ValueError("Hunyuan3D MoE requires either all expert biases or no expert biases")
+        return tuple(biases)
 
-    def _build_flashinfer_weights(self):
-        if self.experts[0].fc1._get_actual_weight() is None:
-            return
-        fc1_list, fc2_list = [], []
+    @staticmethod
+    def _loaded_weight(module, name):
+        if getattr(module, "weight", None) is not None:
+            return module._get_actual_weight()
+        if getattr(module, "pin_weight", None) is not None:
+            return module.pin_weight
+        raise RuntimeError(f"Hunyuan3D MoE weight {name} is not loaded")
+
+    @staticmethod
+    def _loaded_bias(module):
+        if getattr(module, "bias", None) is not None:
+            return module._get_actual_bias()
+        return getattr(module, "pin_bias", None)
+
+    def _collect_expert_tensors(self):
+        fc1_weights, fc2_weights = [], []
         fc1_biases, fc2_biases = [], []
-        for expert_w in self.experts:
-            fc1_list.append(expert_w.fc1._get_actual_weight().t().contiguous())
-            fc2_list.append(expert_w.fc2._get_actual_weight().t().contiguous())
-            fc1_biases.append(expert_w.fc1._get_actual_bias())
-            fc2_biases.append(expert_w.fc2._get_actual_bias())
-        self._fi_fc1_weight = torch.stack(fc1_list, dim=0)
-        self._fi_fc2_weight = torch.stack(fc2_list, dim=0)
-        self._fi_fc1_bias = self._stack_optional_biases(fc1_biases)
-        self._fi_fc2_bias = self._stack_optional_biases(fc2_biases)
+        for expert_idx, expert in enumerate(self.experts):
+            if expert.fc1.has_lora_branch or expert.fc2.has_lora_branch:
+                raise NotImplementedError("Hunyuan3D common fused MoE backends do not support routed-expert LoRA")
+            fc1_weights.append(self._loaded_weight(expert.fc1, f"experts.{expert_idx}.fc1").t())
+            fc2_weights.append(self._loaded_weight(expert.fc2, f"experts.{expert_idx}.fc2").t())
+            fc1_biases.append(self._loaded_bias(expert.fc1))
+            fc2_biases.append(self._loaded_bias(expert.fc2))
+        return (
+            tuple(fc1_weights),
+            tuple(fc2_weights),
+            self._optional_biases(fc1_biases),
+            self._optional_biases(fc2_biases),
+        )
+
+    @staticmethod
+    def _release_mm_tensors(module):
+        for _, attr_name, _ in module.base_attrs:
+            for tensor_attr in (attr_name, f"pin_{attr_name}", f"{attr_name}_cuda_buffer"):
+                if hasattr(module, tensor_attr):
+                    setattr(module, tensor_attr, None)
+
+    def _release_expert_tensors(self):
+        for expert in self.experts:
+            self._release_mm_tensors(expert.fc1)
+            self._release_mm_tensors(expert.fc2)
+
+    def _build_fused_moe(self):
+        fc1_weights, fc2_weights, fc1_biases, fc2_biases = self._collect_expert_tensors()
+        self.add_module(
+            "fused_moe",
+            create_local_fused_moe(
+                self.moe_backend,
+                fc1_weights,
+                fc2_weights,
+                "gelu",
+                fc1_biases,
+                fc2_biases,
+                self.moe_flashinfer_tune_max_num_tokens,
+            ),
+        )
+        self._release_expert_tensors()
 
 
 class Hunyuan3DSelfAttentionWeights(WeightModule):

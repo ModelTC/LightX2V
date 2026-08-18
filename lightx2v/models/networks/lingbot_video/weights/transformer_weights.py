@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.moe.fused_moe import create_local_fused_moe
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER, TENSOR_REGISTER
 
 
@@ -65,6 +66,7 @@ class LingBotVideoFFNWeights(WeightModule):
     def __init__(self, prefix, block_index, config):
         super().__init__()
         num_experts = int(config.get("num_experts", 0))
+        self.moe_backend = config.get("moe_backend", "torch_grouped_mm")
         decoder_sparse_step = int(config.get("decoder_sparse_step", 1))
         mlp_only_layers = tuple(config.get("mlp_only_layers", ()))
         use_moe = block_index not in mlp_only_layers and num_experts > 0 and (block_index + 1) % decoder_sparse_step == 0
@@ -78,6 +80,40 @@ class LingBotVideoFFNWeights(WeightModule):
                 self.shared_experts = None
         else:
             self.add_module("dense", LingBotVideoDenseMLPWeights(f"{prefix}.ffn"))
+
+    def load(self, weight_dict):
+        super().load(weight_dict)
+        self._build_fused_moe()
+
+    @staticmethod
+    def _loaded_tensor(module, name):
+        tensor = getattr(module, "tensor", None)
+        if tensor is not None:
+            return tensor
+        tensor = getattr(module, "pin_tensor", None)
+        if tensor is not None:
+            return tensor
+        raise RuntimeError(f"LingBot-Video MoE weight {name} is not loaded")
+
+    def _build_fused_moe(self):
+        if not self.use_moe:
+            return
+
+        w1 = self._loaded_tensor(self.experts.w1, "w1")
+        w2 = self._loaded_tensor(self.experts.w2, "w2")
+        w3 = self._loaded_tensor(self.experts.w3, "w3")
+        self.add_module(
+            "fused_moe",
+            create_local_fused_moe(
+                self.moe_backend,
+                w3,
+                w2,
+                "swiglu",
+                fc1_gate_weight=w1,
+            ),
+        )
+        self._modules.pop("experts")
+        del self.experts
 
 
 class LingBotVideoRouterWeights(WeightModule):

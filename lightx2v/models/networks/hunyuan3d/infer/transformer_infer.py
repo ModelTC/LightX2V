@@ -12,7 +12,6 @@ from lightx2v.models.networks.hunyuan3d.infer.moe_fi_autotune import (
     MOE_FI_FORCE_RETUNE_ENV,
     MoeFiAutotune,
 )
-from lightx2v.models.networks.hunyuan3d.infer.moe_infer import infer_moe_block
 
 
 class Hunyuan3DTransformerInfer(BaseTransformerInfer):
@@ -205,6 +204,23 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         flat = block_weights.mlp.fc2.apply(flat)
         return flat.reshape(batch_size, seq_len, hidden_dim)
 
+    @torch.no_grad()
+    def _infer_moe_ffn(self, ffn_weights, hidden_states):
+        out = ffn_weights.fc1.apply(hidden_states)
+        out = F.gelu(out)
+        return ffn_weights.fc2.apply(out)
+
+    @torch.no_grad()
+    def _infer_moe_block(self, moe_weights, hidden_states):
+        batch_size, seq_len, hidden_dim = hidden_states.shape
+        flat = hidden_states.reshape(-1, hidden_dim)
+        logits = moe_weights.gate.apply(flat)
+        scores = logits.softmax(dim=-1)
+        topk_weight, topk_idx = torch.topk(scores, k=moe_weights.moe_top_k, dim=-1, sorted=False)
+        routed = moe_weights.fused_moe.apply(flat, topk_idx, topk_weight).view(batch_size, seq_len, hidden_dim)
+        shared = self._infer_moe_ffn(moe_weights.shared_experts, flat).view(batch_size, seq_len, hidden_dim)
+        return routed + shared
+
     def infer_block(self, block_weights, hidden_states, cond, skip_value=None):
         if block_weights.skip_linear is not None:
             cat = torch.cat([skip_value, hidden_states], dim=-1)
@@ -216,7 +232,7 @@ class Hunyuan3DTransformerInfer(BaseTransformerInfer):
         hidden_states = hidden_states + self._infer_cross_attention(block_weights, hidden_states, cond)
         norm_hidden = self._flatten_norm(block_weights.norm3, hidden_states)
         if block_weights.moe is not None:
-            hidden_states = hidden_states + infer_moe_block(block_weights.moe, norm_hidden)
+            hidden_states = hidden_states + self._infer_moe_block(block_weights.moe, norm_hidden)
         else:
             hidden_states = hidden_states + self._infer_mlp(block_weights, norm_hidden)
 

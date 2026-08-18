@@ -1,5 +1,3 @@
-import inspect
-
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -7,20 +5,9 @@ from loguru import logger
 
 from lightx2v.common.ops.attn import *  # noqa: F403,F401 - registers LightX2V attention kernels
 from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
-from lightx2v.common.ops.moe import lightx2v_multi_micro_fused_moe
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.hunyuan_image3.infer.utils import apply_linear, apply_mlp, apply_rotary_pos_emb, first_weight_device, repeat_kv, to_device
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-
-try:
-    from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
-except Exception:
-    try:
-        import flashinfer
-
-        flashinfer_cutlass_fused_moe = flashinfer.fused_moe.cutlass_fused_moe
-    except Exception:
-        flashinfer_cutlass_fused_moe = None
 
 
 class HunyuanImage3TransformerInfer(BaseTransformerInfer):
@@ -56,9 +43,6 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         self.num_heads = self.global_num_heads // self.tp_size
         self.num_key_value_heads = self.global_num_key_value_heads // self.tp_size
         self.hidden_act = config.get("hidden_act", "silu")
-        self.flashinfer_tune_max_num_tokens = int(config.get("flashinfer_tune_max_num_tokens", 8192))
-        self.flashinfer_multi_micro = bool(config.get("flashinfer_multi_micro", False))
-        self.flashinfer_multi_micro_backend = str(config.get("flashinfer_multi_micro_backend", "grouped_mm")).strip().lower()
         self.attn_impl = self._normalize_attention_impl(config.get("attn_impl", "torch_sdpa"))
         self.attn_kernel = None if self.attn_impl == "torch_sdpa" else self._build_attention_kernel(self.attn_impl)
         self._attn_cu_seqlens_cache = {}
@@ -666,13 +650,20 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             return self._apply_phase_mlp(phase.gate_and_up_proj, phase.down_proj, hidden_states)
 
         moe = phase.moe
-        moe_impl = getattr(moe, "moe_impl", self.config.get("moe_impl", "eager"))
-        if moe_impl == "flashinfer":
-            output = self._infer_mlp_flashinfer(moe, hidden_states)
-        elif moe_impl == "eager":
-            output = self._infer_mlp_eager(moe, hidden_states)
-        else:
-            raise ValueError(f"Unsupported HunyuanImage3 moe_impl={moe_impl!r}. Expected 'eager' or 'flashinfer'.")
+        original_dtype = hidden_states.dtype
+        compute_dtype = original_dtype if original_dtype in (torch.float16, torch.bfloat16) else torch.bfloat16
+        active_phase = self._active_phase().strip().lower()
+        if moe.moe_backend == "multi_micro" and active_phase == "denoise" and compute_dtype != torch.bfloat16:
+            raise TypeError(f"HunyuanImage3 multi_micro requires BF16 inference; got compute dtype {compute_dtype}.")
+
+        flat, topk_weight, topk_idx = self._moe_topk(moe, hidden_states)
+        fused_input = flat.to(dtype=compute_dtype).contiguous()
+        fused_moe = moe.get_fused_moe(active_phase, fused_input.device, compute_dtype)
+        output = fused_moe.apply(fused_input, topk_idx, topk_weight).reshape_as(hidden_states).to(original_dtype)
+
+        if getattr(moe, "shared_mlp", None) is not None:
+            shared_out = self._apply_phase_mlp(moe.shared_mlp.gate_and_up_proj, moe.shared_mlp.down_proj, hidden_states)
+            output = output + shared_out.to(output.dtype)
 
         tp_group, _, tp_size, _ = self._active_tp_state()
         if tp_size > 1:
@@ -681,170 +672,9 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             dist.all_reduce(output, op=dist.ReduceOp.SUM, group=tp_group)
         return output
 
-    def _moe_easy_topk(self, moe, hidden_states):
+    def _moe_topk(self, moe, hidden_states):
         flat = hidden_states.reshape(-1, hidden_states.shape[-1])
         logits = apply_linear(moe.gate, flat)
         topk_weight, topk_idx = torch.topk(torch.softmax(logits, dim=-1), moe.moe_topk, dim=-1)
         topk_weight = topk_weight / torch.clamp(topk_weight.sum(dim=-1, keepdim=True), min=1e-8)
         return flat, topk_weight, topk_idx
-
-    def _infer_mlp_eager(self, moe, hidden_states):
-        flat, topk_weight, topk_idx = self._moe_easy_topk(moe, hidden_states)
-        repeated = flat.repeat_interleave(moe.moe_topk, dim=0)
-        expert_outputs = torch.zeros_like(repeated)
-        flat_topk_idx = topk_idx.reshape(-1)
-        for expert_idx, expert in enumerate(moe.experts):
-            mask = flat_topk_idx == expert_idx
-            if not torch.any(mask):
-                continue
-            expert_out = self._apply_phase_mlp(expert.gate_and_up_proj, expert.down_proj, repeated[mask])
-            expert_outputs[mask] = expert_out.to(expert_outputs.dtype)
-        combined = (expert_outputs.reshape(flat.shape[0], moe.moe_topk, -1) * topk_weight.to(expert_outputs.dtype).unsqueeze(-1)).sum(dim=1)
-        output = combined.reshape_as(hidden_states)
-        if getattr(moe, "shared_mlp", None) is not None:
-            shared_out = self._apply_phase_mlp(moe.shared_mlp.gate_and_up_proj, moe.shared_mlp.down_proj, hidden_states)
-            output = output + shared_out.to(output.dtype)
-        return output
-
-    @staticmethod
-    def _call_phase_weight_method(method, *args):
-        try:
-            signature = inspect.signature(method)
-        except (TypeError, ValueError):
-            return method(*args)
-        parameters = list(signature.parameters.values())
-        if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
-            return method(*args)
-        positional = [parameter for parameter in parameters if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-        return method(*args[: len(positional)])
-
-    @staticmethod
-    def _normalize_flashinfer_weight_shards(shards):
-        if not isinstance(shards, (tuple, list)) or not shards:
-            raise RuntimeError("HunyuanImage3 phase-aware FlashInfer weights must be a non-empty tuple/list.")
-        if len(shards) == 4 and torch.is_tensor(shards[2]) and torch.is_tensor(shards[3]):
-            shards = (shards,)
-
-        normalized = []
-        for shard in shards:
-            if not isinstance(shard, (tuple, list)) or len(shard) != 4:
-                raise RuntimeError("Each HunyuanImage3 FlashInfer shard must be (micro_id, canonical_tp_rank, w1, w2).")
-            micro_id, canonical_tp_rank, weight_1, weight_2 = shard
-            if not torch.is_tensor(weight_1) or not torch.is_tensor(weight_2):
-                raise RuntimeError("HunyuanImage3 FlashInfer shard weights must be tensors.")
-            normalized.append((int(micro_id), int(canonical_tp_rank), weight_1, weight_2))
-        return tuple(normalized)
-
-    def _active_flashinfer_weight_shards(self, moe, device, dtype):
-        active_shards = getattr(moe, "active_flashinfer_weight_shards", None)
-        ensure_weights = getattr(moe, "ensure_flashinfer_weights", None)
-        if callable(active_shards):
-            shards = self._call_phase_weight_method(active_shards, device, dtype)
-            return self._normalize_flashinfer_weight_shards(shards)
-
-        if not callable(ensure_weights):
-            raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' requires phase-aware weights or ensure_flashinfer_weights().")
-        weight_1, weight_2 = ensure_weights(device, dtype)
-        _, _, _, logical_tp_rank = self._active_tp_state()
-        return ((0, logical_tp_rank, weight_1, weight_2),)
-
-    def _active_flashinfer_multi_micro_weights(self, moe, device, dtype):
-        active_weights = getattr(moe, "active_flashinfer_multi_micro_weights", None)
-        if not callable(active_weights):
-            raise RuntimeError("HunyuanImage3 flashinfer_multi_micro requires active_flashinfer_multi_micro_weights(device, dtype).")
-        weights = self._call_phase_weight_method(active_weights, device, dtype)
-        if not isinstance(weights, (tuple, list)) or len(weights) != 2:
-            raise RuntimeError("HunyuanImage3 multi-micro weights must be a (w1_pack, w2_pack) pair.")
-        weight_1, weight_2 = weights
-        if not torch.is_tensor(weight_1) or not torch.is_tensor(weight_2):
-            raise RuntimeError("HunyuanImage3 multi-micro weight packs must be tensors.")
-        return weight_1, weight_2
-
-    def _flashinfer_micro_tp_size(self, moe, shard_count, active_tp_size):
-        configured_size = self._parallel_context_value(self.parallel_context, "ar_tp_size", "logical_tp_size")
-        if configured_size is None:
-            configured_size = getattr(moe, "flashinfer_logical_tp_size", getattr(moe, "micro_tp_size", None))
-        if configured_size is None:
-            configured_size = active_tp_size * shard_count
-        configured_size = int(configured_size)
-        if configured_size < 1:
-            raise ValueError(f"HunyuanImage3 FlashInfer micro TP size must be positive, got {configured_size}.")
-        return configured_size
-
-    def _infer_mlp_flashinfer(self, moe, hidden_states):
-        if self.hidden_act != "silu":
-            raise NotImplementedError("HunyuanImage3 moe_impl='flashinfer' currently supports only silu/SwiGLU experts.")
-        if not any(
-            hasattr(moe, name)
-            for name in (
-                "ensure_flashinfer_weights",
-                "active_flashinfer_weight_shards",
-                "active_flashinfer_multi_micro_weights",
-            )
-        ):
-            raise RuntimeError("HunyuanImage3 moe_impl='flashinfer' requires HunyuanImage3MoEWeights.")
-
-        if hidden_states.device.type == "cuda" and hidden_states.device.index is not None:
-            torch.cuda.set_device(hidden_states.device.index)
-
-        original_dtype = hidden_states.dtype
-        compute_dtype = original_dtype if original_dtype in (torch.float16, torch.bfloat16) else torch.bfloat16
-        if self.flashinfer_multi_micro and compute_dtype != torch.bfloat16:
-            raise TypeError(f"HunyuanImage3 flashinfer_multi_micro requires BF16 inference; got compute dtype {compute_dtype}.")
-        flat, topk_weight, topk_idx = self._moe_easy_topk(moe, hidden_states)
-        fused_input = flat.to(dtype=compute_dtype).contiguous()
-        topk_idx = topk_idx.to(torch.int32).contiguous()
-        topk_weight = topk_weight.to(torch.float32).contiguous()
-
-        use_multi_micro = self.flashinfer_multi_micro and self._active_phase().strip().lower() == "denoise"
-
-        if use_multi_micro:
-            moe_weight, moe_weight_2 = self._active_flashinfer_multi_micro_weights(
-                moe,
-                fused_input.device,
-                compute_dtype,
-            )
-            combined_output = torch.empty_like(fused_input)
-            combined_output = lightx2v_multi_micro_fused_moe(
-                fused_input,
-                topk_idx,
-                topk_weight,
-                moe_weight,
-                moe_weight_2,
-                output=combined_output,
-                backend=self.flashinfer_multi_micro_backend,
-            )
-        else:
-            shards = self._active_flashinfer_weight_shards(moe, fused_input.device, compute_dtype)
-            if flashinfer_cutlass_fused_moe is None:
-                raise ImportError("HunyuanImage3 moe_impl='flashinfer' requires flashinfer.fused_moe.cutlass_fused_moe.")
-            _, _, active_tp_size, _ = self._active_tp_state()
-            micro_tp_size = self._flashinfer_micro_tp_size(moe, len(shards), active_tp_size)
-            combined_output = None
-            for _, canonical_tp_rank, moe_weight, moe_weight_2 in shards:
-                if canonical_tp_rank < 0 or canonical_tp_rank >= micro_tp_size:
-                    raise ValueError(f"HunyuanImage3 FlashInfer canonical TP rank {canonical_tp_rank} is outside micro TP size {micro_tp_size}.")
-                shard_output = torch.zeros_like(fused_input)
-                flashinfer_cutlass_fused_moe(
-                    fused_input,
-                    topk_idx,
-                    topk_weight,
-                    moe_weight,
-                    moe_weight_2,
-                    compute_dtype,
-                    output=shard_output,
-                    quant_scales=None,
-                    tp_size=micro_tp_size,
-                    tp_rank=canonical_tp_rank,
-                    tune_max_num_tokens=self.flashinfer_tune_max_num_tokens,
-                )
-                if combined_output is None:
-                    combined_output = shard_output
-                else:
-                    combined_output.add_(shard_output)
-            assert combined_output is not None
-        output = combined_output.reshape_as(hidden_states).to(original_dtype)
-        if getattr(moe, "shared_mlp", None) is not None:
-            shared_out = self._apply_phase_mlp(moe.shared_mlp.gate_and_up_proj, moe.shared_mlp.down_proj, hidden_states)
-            output = output + shared_out.to(output.dtype)
-        return output

@@ -8,6 +8,6 @@
     "num_chunks": 8000,
     "octree_resolution": 384,
     "attn_type": "flash_attn2",
-    "moe_backend": "torch_expert_loop",
+    "moe_backend": "metax_mctlass_moe",
     "rms_norm_type": "torch"
 }

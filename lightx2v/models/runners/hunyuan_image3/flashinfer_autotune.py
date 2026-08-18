@@ -23,6 +23,7 @@ AutotuneFactory = Callable[..., AbstractContextManager]
 TunerProvider = Callable[[], Any]
 StatusDeviceResolver = Callable[[], torch.device]
 LIGHTX2V_ROOT = Path(__file__).resolve().parents[4]
+_FLASHINFER_MOE_BACKENDS = frozenset(("flashinfer", "multi_micro"))
 
 
 @dataclass(frozen=True)
@@ -147,14 +148,14 @@ class FlashInferAutotuneController:
         self,
         options: FlashInferAutotuneOptions,
         distributed_context: DistributedAutotuneContext,
-        moe_impl: str,
+        moe_backend: str,
         *,
         autotune_factory: AutotuneFactory | None = None,
         tuner_provider: TunerProvider | None = None,
     ):
         self.options = options
         self.distributed_context = distributed_context
-        self.moe_impl = moe_impl
+        self.moe_backend = moe_backend
         self._autotune_factory = autotune_factory
         self._tuner_provider = tuner_provider
 
@@ -168,15 +169,15 @@ class FlashInferAutotuneController:
         tuner_provider: TunerProvider | None = None,
     ) -> FlashInferAutotuneController:
         """Build a controller without validating inactive autotune settings."""
-        moe_impl = config.get("moe_impl", "eager")
+        moe_backend = config["moe_backend"]
         mode = FlashInferAutotuneOptions.resolve_mode(config)
         options = FlashInferAutotuneOptions(mode=mode)
-        if mode != "off" and moe_impl == "flashinfer":
+        if mode != "off" and moe_backend in _FLASHINFER_MOE_BACKENDS:
             options = FlashInferAutotuneOptions.from_config(config)
         return cls(
             options=options,
             distributed_context=distributed_context,
-            moe_impl=moe_impl,
+            moe_backend=moe_backend,
             autotune_factory=autotune_factory,
             tuner_provider=tuner_provider,
         )
@@ -184,8 +185,8 @@ class FlashInferAutotuneController:
     def context(self) -> AbstractContextManager:
         if not self.options.enabled:
             return nullcontext()
-        if self.moe_impl != "flashinfer":
-            logger.warning("flashinfer_autotune_mode is set but moe_impl is not 'flashinfer'; autotune is disabled for this run.")
+        if self.moe_backend not in _FLASHINFER_MOE_BACKENDS:
+            logger.warning(f"flashinfer_autotune_mode is set but moe_backend={self.moe_backend!r} does not use FlashInfer; autotune is disabled for this run.")
             return nullcontext()
 
         autotune_factory = self._resolve_autotune_factory()
