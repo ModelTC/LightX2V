@@ -29,10 +29,7 @@ except ImportError:
         _install_instructions = f"    call build.bat\n    pip install dist\\sycl_kernels-{_wheel_version}-cp311-abi3-win_amd64.whl --force-reinstall --no-deps\n"
         _target_instructions = ""
     else:
-        _target_instructions = (
-            "  Select XPU_TARGET for your device: bmg for Battlemage, "
-            "ptl-h for Panther Lake.\n"
-        )
+        _target_instructions = "  Select XPU_TARGET for your device: bmg for Battlemage, ptl-h for Panther Lake.\n"
         _install_instructions = (
             "    # Battlemage:\n"
             "    XPU_TARGET=bmg ./build.sh\n"

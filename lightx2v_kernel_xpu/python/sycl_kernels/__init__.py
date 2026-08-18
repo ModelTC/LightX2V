@@ -40,13 +40,9 @@ try:
         sdp,
     )
 except ImportError as _legacy_import_error:
-    def _legacy_extension_unavailable(
-        *args, _error=_legacy_import_error, **kwargs
-    ):
-        raise RuntimeError(
-            "sycl_kernels legacy ESIMD/oneDNN extension could not be loaded; "
-            "check that the oneDNN headers and libdnnl runtime have matching versions"
-        ) from _error
+
+    def _legacy_extension_unavailable(*args, _error=_legacy_import_error, **kwargs):
+        raise RuntimeError("sycl_kernels legacy ESIMD/oneDNN extension could not be loaded; check that the oneDNN headers and libdnnl runtime have matching versions") from _error
 
     onednn_w4a16 = _legacy_extension_unavailable
     onednn_w8a16_fp8 = _legacy_extension_unavailable
@@ -60,9 +56,7 @@ def _load_cute_fmha():
     if os.name == "nt":
         # The current sycl-tla FMHA kernel builds on Windows but produces
         # incorrect attention results, so do not allow it to be loaded.
-        raise RuntimeError(
-            "CUTE FMHA is disabled on Windows because sycl-tla produces incorrect results"
-        )
+        raise RuntimeError("CUTE FMHA is disabled on Windows because sycl-tla produces incorrect results")
     if _cute_fmha_loaded:
         return
     import torch

@@ -17,9 +17,7 @@ else:
 
 def _cute_sdp(q, k, v):
     if cute_sdp is None:
-        raise RuntimeError(
-            "intel_xpu_cute_attn requires sycl-kernels built with CUTE FMHA"
-        ) from _IMPORT_ERROR
+        raise RuntimeError("intel_xpu_cute_attn requires sycl-kernels built with CUTE FMHA") from _IMPORT_ERROR
     return cute_sdp(q, k, v)
 
 

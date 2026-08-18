@@ -4,7 +4,6 @@ import os
 import re
 import sys
 
-
 BASE_VERSION = "0.0.1"
 TARGET_VERSION_SUFFIX = {
     "bmg": "bmg",

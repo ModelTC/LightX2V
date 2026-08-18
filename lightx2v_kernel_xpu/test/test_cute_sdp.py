@@ -1,9 +1,8 @@
 import math
 
 import pytest
-import torch
-
 import sycl_kernels
+import torch
 
 
 @pytest.mark.skipif(not torch.xpu.is_available(), reason="XPU is unavailable")
