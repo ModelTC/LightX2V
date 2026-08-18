@@ -20,6 +20,7 @@
   "sol_attn_setting": {
     "tau": 1.5,
     "thresh_type": "diag",
+    "compile_mode": "sm120_compile_once",
     "kv_splits": "auto",
     "reorder": "none",
     "dense_steps": 1,
@@ -30,7 +31,7 @@
   "rms_type": "sgl-kernel",
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
-  "use_compile": true,
+  "use_compile": false,
   "vae_use_compile": true,
   "vae_attn_type": "sage_attn2",
   "video_flow_shift": 6.0,
