@@ -6,7 +6,10 @@ from typing import (
     Optional,
 )
 
+import torch
+
 from lightx2v_train.utils.image_size_buckets import parse_image_size_buckets
+from lightx2v_train.utils.utils import get_running_dtype
 
 
 def _lora_config(
@@ -46,6 +49,7 @@ class DmdConfig:
     random_schedule_sigma_min: float
     random_schedule_sigma_max: float
     random_schedule_sampling_method: str
+    latent_dtype: torch.dtype | None
 
     @classmethod
     def from_mapping(
@@ -72,6 +76,9 @@ class DmdConfig:
         negative_prompt = default_negative_prompt if default_negative_prompt is not None else configured_negative_prompt
 
         random_schedule = dmd.get("random_schedule", {})
+        latent_dtype = dmd.get("latent_dtype")
+        if latent_dtype is not None:
+            latent_dtype = get_running_dtype(str(latent_dtype).lower())
         image_sizes = dmd.get("image_sizes", [])
         parse_image_size_buckets(image_sizes)
         return cls(
@@ -114,6 +121,7 @@ class DmdConfig:
                 "sampling_method",
                 "stratified",
             ),
+            latent_dtype=latent_dtype,
         )
 
 

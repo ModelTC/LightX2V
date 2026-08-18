@@ -56,7 +56,7 @@ class AutoregressiveDmdTrainer(DmdTrainer):
                 denoising_steps=self.denoising_steps,
                 denoising_scheduler=self.denoising_scheduler,
                 trajectory_scheduler=self.scheduler,
-                running_dtype=self.running_dtype,
+                running_dtype=self.latent_dtype,
                 frames_per_chunk=self.num_frame_per_chunk,
                 same_step_across_blocks=self.same_step_across_blocks,
                 context_noise=self.context_noise,

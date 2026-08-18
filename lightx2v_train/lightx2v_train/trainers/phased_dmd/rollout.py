@@ -58,7 +58,7 @@ class PhasedRolloutEngine:
             sigma = self.scheduler.sigma_at(
                 step_index,
                 device=self.student.device,
-                dtype=self.running_dtype,
+                dtype=self.latent_dtype,
             )
             keep_gradient = grad_enabled and step_index == gradient_step_index
             context = torch.enable_grad if keep_gradient else torch.no_grad
@@ -85,7 +85,7 @@ class PhasedRolloutEngine:
         )
         if region == "high":
             sigma_s = self._phase_sigma(
-                dtype=self.running_dtype,
+                dtype=self.latent_dtype,
             )
             anchor = self._euler_step(
                 xt,
@@ -98,8 +98,8 @@ class PhasedRolloutEngine:
             anchor = student_x0
         raw_gradient_timestep = self._raw_timestep_from_warped_step(self.denoising_steps[gradient_step_index])
         return (
-            anchor.to(dtype=self.running_dtype),
-            student_x0.to(dtype=self.running_dtype),
+            anchor.to(dtype=self.latent_dtype),
+            student_x0.to(dtype=self.latent_dtype),
             sigma_s,
             raw_gradient_timestep,
         )
@@ -127,7 +127,7 @@ class PhasedRolloutEngine:
             sigma = self.scheduler.sigma_at(
                 step_index,
                 device=self.student.device,
-                dtype=self.running_dtype,
+                dtype=self.latent_dtype,
             )
             velocity = self._predict_velocity(
                 active_model,
@@ -145,8 +145,8 @@ class PhasedRolloutEngine:
         if x_bound is None:
             raise RuntimeError("Full phased rollout did not reach the phase boundary.")
         return (
-            x_bound.to(dtype=self.running_dtype),
-            xt.detach().to(dtype=self.running_dtype),
+            x_bound.to(dtype=self.latent_dtype),
+            xt.detach().to(dtype=self.latent_dtype),
         )
 
     def _teacher_velocity(
@@ -200,7 +200,7 @@ class PhasedRolloutEngine:
             raw_min,
             raw_max,
             anchor.device,
-            self.running_dtype,
+            self.latent_dtype,
         )
         noise = broadcast_sequence_parallel_value(torch.randn_like(anchor, dtype=torch.float32))
         fake_model = self._fake_model_for_dmd(
@@ -269,7 +269,7 @@ class PhasedRolloutEngine:
             raw_min,
             raw_max,
             anchor.device,
-            self.running_dtype,
+            self.latent_dtype,
         )
         noise = broadcast_sequence_parallel_value(torch.randn_like(anchor, dtype=torch.float32))
         with torch.no_grad():
@@ -302,7 +302,7 @@ class PhasedRolloutEngine:
         if region == "high":
             anchor = x_bound
             sigma_s = self._phase_sigma(
-                dtype=self.running_dtype,
+                dtype=self.latent_dtype,
             )
             fake_model = self.fake
             raw_min = self.match_timestep + self.score_timestep_margin
@@ -312,7 +312,7 @@ class PhasedRolloutEngine:
             sigma_s = torch.zeros(
                 1,
                 device=x0.device,
-                dtype=self.running_dtype,
+                dtype=self.latent_dtype,
             )
             fake_model = self.fake_2
             raw_min = 1
@@ -336,7 +336,7 @@ class PhasedRolloutEngine:
                     torch.zeros(
                         1,
                         device=x0.device,
-                        dtype=self.running_dtype,
+                        dtype=self.latent_dtype,
                     ),
                     (self.match_timestep + self.score_timestep_margin),
                     self.num_train_timestep,
@@ -347,7 +347,7 @@ class PhasedRolloutEngine:
     def _extract_real_latents(self, sample):
         return self.student.extract_real_latents(
             sample,
-            self.running_dtype,
+            self.latent_dtype,
             broadcast_sequence_parallel_value,
         )
 
@@ -396,7 +396,7 @@ class PhasedRolloutEngine:
             negative_condition=conditions[1],
             latent_hw=initial_noise.shape[-2:],
             device=self.student.device,
-            dtype=self.running_dtype,
+            dtype=self.latent_dtype,
             predict_teacher_velocity=partial(
                 self._teacher_velocity,
                 self.teacher,
@@ -431,7 +431,7 @@ class PhasedRolloutEngine:
             condition=conditions[0],
             negative_condition=conditions[1],
             device=self.student.device,
-            dtype=self.running_dtype,
+            dtype=self.latent_dtype,
             extract_real_latents=self._extract_real_latents,
             sample_synced_int=self._sample_synced_int,
             broadcast_noise=broadcast_sequence_parallel_value,

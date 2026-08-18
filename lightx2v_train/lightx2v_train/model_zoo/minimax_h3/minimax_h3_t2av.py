@@ -1,5 +1,6 @@
 """LightX2V-Train wrapper for the trainable MiniMax-H3 T2AV DiT."""
 
+from collections.abc import Mapping
 from contextlib import nullcontext
 
 import torch
@@ -22,9 +23,15 @@ class MiniMaxH3T2AVModel(BaseModel):
 
     def register_capabilities(self):
         super().register_capabilities()
+        capability_config = self.config["model"].get("capabilities", {})
+        if not isinstance(capability_config, Mapping):
+            raise ValueError("model.capabilities must be a mapping.")
         self.capabilities.register(
             DistillationCapability,
-            MiniMaxH3DistillationCapability(self),
+            MiniMaxH3DistillationCapability(
+                self,
+                capability_config.get("distillation"),
+            ),
         )
         self.capabilities.register(
             ConsistencyCapability,

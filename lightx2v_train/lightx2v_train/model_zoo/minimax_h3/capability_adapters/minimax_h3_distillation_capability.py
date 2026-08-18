@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+
 import torch
 import torch.nn.functional as F
 
+from lightx2v_train.model_capabilities import DistillationProfile
 from lightx2v_train.model_zoo.capability_adapters.common import (
     GenericDistillationCapability,
     _require_single_prompt,
@@ -18,6 +22,34 @@ from lightx2v_train.model_zoo.native.minimax_h3 import (
 )
 
 from .common import MiniMaxH3JointLatents, MiniMaxH3LatentShape
+
+
+@dataclass(frozen=True)
+class MiniMaxH3DistillationOptions:
+    video_loss_weight: float = 1.0
+    audio_loss_weight: float = 1.0
+    video_flow_shift: float = 12.0
+    audio_flow_shift: float = 3.0
+
+    @classmethod
+    def from_mapping(cls, config: Mapping | None) -> "MiniMaxH3DistillationOptions":
+        if config is None:
+            config = {}
+        if not isinstance(config, Mapping):
+            raise ValueError("model.capabilities.distillation must be a mapping.")
+        options = cls(
+            video_loss_weight=float(config.get("video_loss_weight", 1.0)),
+            audio_loss_weight=float(config.get("audio_loss_weight", 1.0)),
+            video_flow_shift=float(config.get("video_flow_shift", 12.0)),
+            audio_flow_shift=float(config.get("audio_flow_shift", 3.0)),
+        )
+        if options.video_flow_shift <= 0 or options.audio_flow_shift <= 0:
+            raise ValueError("MiniMax-H3 video_flow_shift and audio_flow_shift must be positive.")
+        if options.video_loss_weight < 0 or options.audio_loss_weight < 0:
+            raise ValueError("MiniMax-H3 video_loss_weight and audio_loss_weight cannot be negative.")
+        if options.video_loss_weight == 0 and options.audio_loss_weight == 0:
+            raise ValueError("At least one MiniMax-H3 modality loss weight must be non-zero.")
+        return options
 
 
 def _shift_sigma(sigma: torch.Tensor, shift: float) -> torch.Tensor:
@@ -49,21 +81,28 @@ class MiniMaxH3DistillationCapability(GenericDistillationCapability):
         "ff.net.0.proj",
         "ff.net.2",
     )
+    _PROFILE = DistillationProfile(
+        supports_guidance=False,
+        supports_cdm=False,
+        supports_ida=False,
+        supports_diversity=False,
+        supports_real_data_fake=False,
+        supports_warped_denoising_schedule=False,
+        default_latent_dtype=torch.float32,
+    )
 
-    def __init__(self, model) -> None:
+    def __init__(self, model, options: Mapping | None = None) -> None:
         super().__init__(model)
-        config = model.config["training"].get("minimax_h3", {})
-        self.video_weight = float(config.get("video_loss_weight", 1.0))
-        self.audio_weight = float(config.get("audio_loss_weight", 1.0))
-        self.video_shift = float(config.get("video_flow_shift", 12.0))
-        self.audio_shift = float(config.get("audio_flow_shift", 3.0))
-        if self.video_shift <= 0 or self.audio_shift <= 0:
-            raise ValueError("MiniMax-H3 video_flow_shift and audio_flow_shift must be positive.")
-        if self.video_weight < 0 or self.audio_weight < 0:
-            raise ValueError("MiniMax-H3 video_loss_weight and audio_loss_weight cannot be negative.")
-        if self.video_weight == 0 and self.audio_weight == 0:
-            raise ValueError("At least one MiniMax-H3 modality loss weight must be non-zero.")
+        options = MiniMaxH3DistillationOptions.from_mapping(options)
+        self.video_weight = options.video_loss_weight
+        self.audio_weight = options.audio_loss_weight
+        self.video_shift = options.video_flow_shift
+        self.audio_shift = options.audio_flow_shift
         self._layout_cache = {}
+
+    @property
+    def profile(self) -> DistillationProfile:
+        return self._PROFILE
 
     @property
     def default_negative_prompt(self):

@@ -96,8 +96,25 @@ class ConsistencyCapability(ModelCapability):
         """Return the module owned by this capability."""
 
 
+@dataclass(frozen=True)
+class DistillationProfile:
+    """Feature and precision constraints published by a distillation adapter."""
+
+    supports_guidance: bool = True
+    supports_cdm: bool = True
+    supports_ida: bool = True
+    supports_diversity: bool = True
+    supports_real_data_fake: bool = True
+    supports_warped_denoising_schedule: bool = True
+    default_latent_dtype: torch.dtype | None = None
+
+
 class DistillationCapability(ModelCapability):
     """Model operations required by distribution-matching algorithms."""
+
+    @property
+    def profile(self) -> DistillationProfile:
+        return DistillationProfile()
 
     @property
     @abstractmethod

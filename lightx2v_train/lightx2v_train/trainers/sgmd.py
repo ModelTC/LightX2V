@@ -102,7 +102,7 @@ class SgmdTrainer(DmdTrainer):
             denoised_timestep_from=denoised_timestep_from,
             denoised_timestep_to=denoised_timestep_to,
             device=self.student.device,
-            dtype=self.running_dtype,
+            dtype=self.latent_dtype,
         )
         noise = broadcast_sequence_parallel_value(
             torch.randn(

@@ -99,10 +99,16 @@ class _DmdRuntime(BaseTrainer):
         self.random_schedule_sigma_min = parsed.random_schedule_sigma_min
         self.random_schedule_sigma_max = parsed.random_schedule_sigma_max
         self.random_schedule_sampling_method = parsed.random_schedule_sampling_method
+        self._configured_latent_dtype = parsed.latent_dtype
+        self.latent_dtype = parsed.latent_dtype or self.running_dtype
 
     def set_model(self, model):
         super().set_model(model)
         self.student = model.capabilities.require(DistillationCapability)
+        profile = self.student.profile
+        if self._configured_latent_dtype is None and profile.default_latent_dtype is not None:
+            self.latent_dtype = profile.default_latent_dtype
+        self._validate_distillation_profile(profile)
         if self.negative_prompt is None:
             self.negative_prompt = self.student.default_negative_prompt
         for lora_config in (
@@ -111,6 +117,24 @@ class _DmdRuntime(BaseTrainer):
         ):
             if lora_config is not None and "target_modules" not in lora_config and self.student.default_lora_target_modules is not None:
                 lora_config["target_modules"] = list(self.student.default_lora_target_modules)
+
+        logger.info("[train] dmd latent_dtype={}", self.latent_dtype)
+
+    def _validate_distillation_profile(self, profile):
+        model_name = self.model_config.get("name", type(self.model).__name__)
+        requested_features = (
+            (self.cdm_trick.enabled, profile.supports_cdm, "CDM"),
+            (self.ida_trick.enabled, profile.supports_ida, "IDA"),
+            (getattr(getattr(self, "diversity_trick", None), "enabled", False), profile.supports_diversity, "diversity loss"),
+            (getattr(getattr(self, "real_data_fake_trick", None), "enabled", False), profile.supports_real_data_fake, "real-data fake loss"),
+        )
+        unsupported = [name for enabled, supported, name in requested_features if enabled and not supported]
+        if unsupported:
+            raise ValueError(f"model={model_name!r} does not support DMD features: {', '.join(unsupported)}.")
+        if not profile.supports_guidance and self.guidance_scale != 1.0:
+            raise ValueError(f"model={model_name!r} has no unconditional branch; training.teacher.guidance_scale must be 1.0.")
+        if getattr(self, "warp_denoising_step", False) and not profile.supports_warped_denoising_schedule:
+            raise ValueError(f"model={model_name!r} requires an unwarped base denoising schedule; set training.dmd.warp_denoising_step=false.")
 
     @property
     def cdm_enabled(self):
@@ -353,7 +377,7 @@ class _DmdRuntime(BaseTrainer):
     def sample_initial_latents(self, latent_shape):
         return self.student.initial_latents(
             latent_shape,
-            self.running_dtype,
+            self.latent_dtype,
             broadcast_sequence_parallel_value,
         )
 
@@ -378,7 +402,7 @@ class _DmdRuntime(BaseTrainer):
             condition=condition,
             current_iteration=current_iter,
             device=self.student.device,
-            dtype=self.running_dtype,
+            dtype=self.latent_dtype,
             scheduler=self.scheduler,
             predict_student_velocity=lambda latent, sigma, cond: self._predict_velocity(
                 self.student,

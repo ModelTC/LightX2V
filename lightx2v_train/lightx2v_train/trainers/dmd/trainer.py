@@ -39,6 +39,7 @@ from lightx2v_train.utils.registry import TRAINER_REGISTER
 
 from .config import DmdScheduleConfig
 from .runtime import _DmdRuntime
+from .score_sampling import ScoreSigmaContext, build_score_sigma_sampler
 
 
 @TRAINER_REGISTER("dmd")
@@ -71,6 +72,15 @@ class DmdTrainer(_DmdRuntime):
         self.min_score_timestep = parsed.min_score_timestep
         self.student_checkpoint_path = parsed.student_checkpoint_path
         self.student_checkpoint_strict = parsed.student_checkpoint_strict
+        self.score_sigma_sampler = build_score_sigma_sampler(
+            self.dmd_config.get("score_sampling"),
+            sample_min_timestep=self.min_score_timestep,
+            clamp_min_timestep=self.min_step,
+            clamp_max_timestep=self.max_step,
+            timestep_shift=self.score_timestep_shift,
+            use_rollout_min=self.ts_schedule,
+            use_rollout_max=self.ts_schedule_max,
+        )
 
         self.diversity_trick = DiversityTrick.from_mapping(self.dmd_config.get("div_loss", {}))
         self.diversity_trick.validate_trainer(
@@ -489,7 +499,7 @@ class DmdTrainer(_DmdRuntime):
     def _extract_real_latents(self, sample):
         return self.student.extract_real_latents(
             sample,
-            self.running_dtype,
+            self.latent_dtype,
             broadcast_sequence_parallel_value,
         )
 
@@ -536,7 +546,7 @@ class DmdTrainer(_DmdRuntime):
             negative_condition=conditions[1],
             latent_hw=initial_noise.shape[-2:],
             device=self.student.device,
-            dtype=self.running_dtype,
+            dtype=self.latent_dtype,
             predict_teacher_velocity=self._predict_teacher_velocity,
             predict_student_velocity=partial(
                 self._predict_velocity,
@@ -583,7 +593,7 @@ class DmdTrainer(_DmdRuntime):
             condition=conditions[0],
             negative_condition=conditions[1],
             device=self.student.device,
-            dtype=self.running_dtype,
+            dtype=self.latent_dtype,
             extract_real_latents=self._extract_real_latents,
             sample_synced_int=self._sample_synced_int,
             broadcast_noise=broadcast_sequence_parallel_value,
@@ -625,7 +635,7 @@ class DmdTrainer(_DmdRuntime):
             denoised_timestep_from=denoised_timestep_from,
             denoised_timestep_to=denoised_timestep_to,
             device=self.student.device,
-            dtype=self.running_dtype,
+            dtype=self.latent_dtype,
         )
         noise = self.student.random_noise_like(
             generated,
@@ -753,7 +763,7 @@ class DmdTrainer(_DmdRuntime):
             sigma = self.scheduler.sigma_at(
                 idx,
                 device=self.student.device,
-                dtype=self.running_dtype,
+                dtype=self.latent_dtype,
             )
             context = torch.enable_grad if (grad_enabled and idx == end_step_idx) else torch.no_grad
             with context():
@@ -782,23 +792,19 @@ class DmdTrainer(_DmdRuntime):
 
         return self.student.to_dtype(
             x0,
-            self.running_dtype,
+            self.latent_dtype,
         ), *self._denoised_timestep_window(end_step_idx)
 
     def _sample_score_sigma(self, denoised_timestep_from, denoised_timestep_to, device, dtype):
-        min_timestep = denoised_timestep_to if self.ts_schedule and denoised_timestep_to is not None else self.min_score_timestep
-        max_timestep = denoised_timestep_from if self.ts_schedule_max and denoised_timestep_from is not None else self.num_train_timestep
-        min_timestep = max(0, int(min_timestep))
-        max_timestep = min(self.num_train_timestep, int(max_timestep))
-        if max_timestep <= min_timestep:
-            max_timestep = min(self.num_train_timestep, min_timestep + 1)
-
-        timestep = torch.randint(min_timestep, max_timestep, (1,), device=device, dtype=torch.long).float()
-        if self.score_timestep_shift > 1:
-            t = timestep / self.num_train_timestep
-            timestep = self.score_timestep_shift * t / (1 + (self.score_timestep_shift - 1) * t) * self.num_train_timestep
-        timestep = timestep.clamp(self.min_step, self.max_step)
-        return broadcast_sequence_parallel_value((timestep / self.num_train_timestep).to(dtype=dtype))
+        sigma = self.score_sigma_sampler.sample(
+            ScoreSigmaContext(
+                denoised_timestep_from=denoised_timestep_from,
+                denoised_timestep_to=denoised_timestep_to,
+                num_train_timesteps=self.num_train_timestep,
+                device=device,
+            )
+        )
+        return broadcast_sequence_parallel_value(sigma).to(dtype=dtype)
 
     def _denoised_timestep_window(self, exit_idx):
         exit_idx = int(exit_idx)

@@ -96,7 +96,6 @@ _TRAINER_MODULES = {
     "dmd": "lightx2v_train.trainers.dmd.trainer",
     "dopsd": "lightx2v_train.trainers.dopsd",
     "flow_matching": "lightx2v_train.trainers.flow_matching",
-    "minimax_h3_t2av_dmd": "lightx2v_train.trainers.dmd.minimax_h3_trainer",
     "phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
     "sgmd": "lightx2v_train.trainers.sgmd",
     "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",
