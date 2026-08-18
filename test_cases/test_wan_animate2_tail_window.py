@@ -8,11 +8,28 @@ import torch
 import lightx2v.models.runners.wan.wan_animate2_runner as runner_module
 import lightx2v.common.ops.attn.flex_attn as flex_attn_module
 from lightx2v.common.ops.attn.flex_attn import _FlexMaskCache
+from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.infer.animate2.transformer_infer import WanAnimate2TransformerInfer
 from lightx2v.models.runners.wan.wan_animate2_runner import _Animate2VideoRecorder, WanAnimate2Runner
+from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
 class WanAnimate2TailWindowTest(TestCase):
+    def test_only_canonical_animate2_internal_name_skips_legacy_pose_weights(self):
+        model_cls = "wan2.2_animate2_distilled"
+        weights = WanPreWeights(
+            {
+                "in_dim": 36,
+                "dim": 5120,
+                "task": "animate",
+                "model_cls": model_cls,
+                "use_image_encoder": True,
+                "layer_norm_type": "torch",
+            }
+        )
+        self.assertNotIn("pose_patch_embedding", weights._modules)
+        self.assertIn(model_cls, RUNNER_REGISTER)
+
     def test_odd_output_is_padded_for_yuv420p_browser_compatibility(self):
         recorder = _Animate2VideoRecorder.__new__(_Animate2VideoRecorder)
         recorder.width = 711
