@@ -17,6 +17,7 @@ from lightx2v.models.networks.wan.s2v_utils import get_size_less_than_area
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.s2v.s2v_scheduler import WanS2VScheduler
 from lightx2v.server.metrics import monitor_cli
+from lightx2v.utils.audio_mux import MP4_AAC_BITRATE, mp4_audio_codec_args
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -31,6 +32,7 @@ except ImportError:
 
 def merge_video_audio(video_path: str, audio_path: str):
     tmp_path = video_path + ".tmp.mp4"
+    audio_args = mp4_audio_codec_args(audio_path, "ffmpeg")
     cmd = [
         "ffmpeg",
         "-y",
@@ -40,16 +42,31 @@ def merge_video_audio(video_path: str, audio_path: str):
         audio_path,
         "-c:v",
         "copy",
-        "-c:a",
-        "copy",
+        *audio_args,
         "-shortest",
         tmp_path,
     ]
     res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if res.returncode != 0:
-        # Fallback to aac re-encoding if stream copy fails (e.g., for WAV inputs)
-        cmd[9] = "aac"
+    if res.returncode != 0 and audio_args == ["-c:a", "copy"]:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-i",
+            audio_path,
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            MP4_AAC_BITRATE,
+            "-shortest",
+            tmp_path,
+        ]
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif res.returncode != 0:
+        res.check_returncode()
     os.replace(tmp_path, video_path)
 
 
