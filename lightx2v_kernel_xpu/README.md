@@ -244,5 +244,6 @@ The default target is `bmg` for Battlemage GPUs such as Intel B60; use
 batch size 1, equal Q/K/V sequence lengths, head dimension 128, and contiguous
 or materializable BLHD inputs.
 
-CUTE FMHA is disabled on Windows. `build.bat` builds only the existing
+CUTE FMHA is disabled on Windows because the current sycl-tla kernel produces
+incorrect attention results there. `build.bat` builds only the existing
 ESIMD/oneDNN extension, and `sycl_kernels.has_cute_fmha()` returns `False`.

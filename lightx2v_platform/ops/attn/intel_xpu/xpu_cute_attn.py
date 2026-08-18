@@ -42,11 +42,15 @@ class IntelXpuCuteAttnWeight(AttnWeightTemplate):
     ):
         if q.ndim == 4:
             batch_size = q.shape[0]
+            q_sequence_length = q.shape[1]
+            kv_sequence_length = k.shape[1]
             q = q.reshape(-1, q.shape[-2], q.shape[-1])
             k = k.reshape(-1, k.shape[-2], k.shape[-1])
             v = v.reshape(-1, v.shape[-2], v.shape[-1])
         else:
             batch_size = 1
+            q_sequence_length = q.shape[0]
+            kv_sequence_length = k.shape[0]
 
         if not self._logged_backend:
             logger.info(
@@ -56,6 +60,21 @@ class IntelXpuCuteAttnWeight(AttnWeightTemplate):
                 q.dtype,
             )
             self._logged_backend = True
+
+        if cu_seqlens_q is None and batch_size > 1:
+            # A flattened [B, S, H, D] tensor must not be treated as one long
+            # sequence, otherwise tokens can attend across batch boundaries.
+            outputs = []
+            for index in range(batch_size):
+                q_start = index * q_sequence_length
+                kv_start = index * kv_sequence_length
+                output = _cute_sdp(
+                    q[q_start : q_start + q_sequence_length].unsqueeze(0),
+                    k[kv_start : kv_start + kv_sequence_length].unsqueeze(0),
+                    v[kv_start : kv_start + kv_sequence_length].unsqueeze(0),
+                )
+                outputs.append(output.squeeze(0).reshape(q_sequence_length, -1))
+            return torch.cat(outputs, dim=0)
 
         if cu_seqlens_q is None or batch_size == 1:
             output = _cute_sdp(q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0))

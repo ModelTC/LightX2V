@@ -58,7 +58,11 @@ def _load_cute_fmha():
     global _cute_fmha_loaded
 
     if os.name == "nt":
-        raise RuntimeError("CUTE FMHA is supported on Linux only")
+        # The current sycl-tla FMHA kernel builds on Windows but produces
+        # incorrect attention results, so do not allow it to be loaded.
+        raise RuntimeError(
+            "CUTE FMHA is disabled on Windows because sycl-tla produces incorrect results"
+        )
     if _cute_fmha_loaded:
         return
     import torch

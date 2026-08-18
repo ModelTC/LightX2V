@@ -1,11 +1,10 @@
 cmake_minimum_required(VERSION 3.22 FATAL_ERROR)
 project(sycl-kernels LANGUAGES CXX)
 
-if(WIN32)
-    set(ENABLE_CUTE_FMHA_DEFAULT OFF)
-else()
-    set(ENABLE_CUTE_FMHA_DEFAULT ON)
-endif()
+# Keep this opt-in because it requires an external CUTLASS-SYCL/sycl-tla tree.
+# It must remain disabled on Windows: the current sycl-tla FMHA kernel builds
+# there, but produces incorrect attention results.
+set(ENABLE_CUTE_FMHA_DEFAULT OFF)
 option(ENABLE_CUTE_FMHA "Build the Linux-only CUTLASS-SYCL CUTE FMHA library"
     ${ENABLE_CUTE_FMHA_DEFAULT})
 set(CUTLASS_SYCL_ROOT "$ENV{CUTLASS_SYCL_ROOT}" CACHE PATH
@@ -127,7 +126,8 @@ target_link_libraries(${MODULE_NAME} PRIVATE
 
 if(ENABLE_CUTE_FMHA)
     if(WIN32)
-        message(FATAL_ERROR "CUTE FMHA is currently supported on Linux only")
+        message(FATAL_ERROR
+            "CUTE FMHA is disabled on Windows because sycl-tla produces incorrect results")
     endif()
     foreach(required_dir include tools/util/include examples/common applications)
         if(NOT IS_DIRECTORY "${CUTLASS_SYCL_ROOT}/${required_dir}")
