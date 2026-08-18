@@ -1,4 +1,5 @@
 import os
+import time
 from contextlib import suppress
 
 import numpy as np
@@ -624,11 +625,19 @@ class MiniMaxH3Runner(DefaultRunner):
     def run_vae_decoder_and_save(self, video_rows, audio_rows):
         """Overlap temporal video VAE decoding with background H.264 encoding."""
 
+        pipeline_started_at = time.perf_counter()
         video_latents, audio_latents = self._prepare_vae_latents(video_rows, audio_rows)
         main_process = not dist.is_initialized() or dist.get_rank() == 0
         output_path = self.input_info.save_result_path
         writer = None
         writer_error = None
+        video_chunk_count = 0
+        video_frame_count = 0
+        video_decode_seconds = 0.0
+        video_convert_seconds = 0.0
+        enqueue_wait_seconds = 0.0
+        max_enqueue_wait_seconds = 0.0
+        first_chunk_ready_seconds = None
 
         # Validate on every rank so a bad request cannot leave peers blocked in
         # the first spatial-tile collective.
@@ -645,22 +654,60 @@ class MiniMaxH3Runner(DefaultRunner):
                     audio_sample_rate=self.audio_vae.sampling_rate,
                     queue_size=int(self.config.get("video_encode_queue_size", 2)),
                     video_codec_options=self.config.get("video_codec_options"),
+                    timeline_origin=pipeline_started_at,
                 )
-                logger.info(f"Pipelining MiniMax-H3 VAE decode and audio-video encoding to {output_path}")
+                logger.info(
+                    "[MiniMax-H3 Pipeline][start] "
+                    f"output={output_path} fps={int(self.config.get('fps', 24))} "
+                    f"queue_size={int(self.config.get('video_encode_queue_size', 2))}"
+                )
             except BaseException as exc:
                 writer_error = exc
 
         video_chunks = self.video_vae.decode_iter(video_latents, return_cpu=False)
         try:
             with ProfilingContext4DebugL1("Run Pipelined Video VAE Decoder Producer"):
-                for video_chunk in video_chunks:
+                while True:
+                    decode_started_at = time.perf_counter()
+                    try:
+                        video_chunk = next(video_chunks)
+                    except StopIteration:
+                        break
+                    decode_seconds = time.perf_counter() - decode_started_at
+                    video_decode_seconds += decode_seconds
+                    chunk_frames = int(video_chunk.shape[2])
+                    video_frame_count += chunk_frames
+
                     if main_process and writer_error is None:
                         try:
-                            writer.submit_video(self._video_to_uint8_frames(video_chunk))
+                            convert_started_at = time.perf_counter()
+                            frames = self._video_to_uint8_frames(video_chunk)
+                            convert_seconds = time.perf_counter() - convert_started_at
+                            video_convert_seconds += convert_seconds
+                            if first_chunk_ready_seconds is None:
+                                first_chunk_ready_seconds = time.perf_counter() - pipeline_started_at
+                            cpu_ready_seconds = time.perf_counter() - pipeline_started_at
+
+                            enqueue_started_at = time.perf_counter()
+                            writer.submit_video(frames)
+                            chunk_enqueue_wait_seconds = time.perf_counter() - enqueue_started_at
+                            enqueue_wait_seconds += chunk_enqueue_wait_seconds
+                            max_enqueue_wait_seconds = max(max_enqueue_wait_seconds, chunk_enqueue_wait_seconds)
+                            logger.info(
+                                "[MiniMax-H3 Pipeline][producer] "
+                                f"chunk={video_chunk_count} frames={chunk_frames} "
+                                f"decode_submit_ms={decode_seconds * 1000:.1f} "
+                                f"cpu_convert_sync_ms={convert_seconds * 1000:.1f} "
+                                f"enqueue_wait_ms={chunk_enqueue_wait_seconds * 1000:.1f} "
+                                f"decode_started_at_ms={(decode_started_at - pipeline_started_at) * 1000:.1f} "
+                                f"cpu_ready_at_ms={cpu_ready_seconds * 1000:.1f} "
+                                f"enqueued_at_ms={(time.perf_counter() - pipeline_started_at) * 1000:.1f}"
+                            )
                         except BaseException as exc:
                             writer_error = exc
                             writer.abort()
                             writer = None
+                    video_chunk_count += 1
         except BaseException:
             if writer is not None:
                 writer.abort()
@@ -670,22 +717,55 @@ class MiniMaxH3Runner(DefaultRunner):
             if close is not None:
                 close()
 
+        video_producer_seconds = time.perf_counter() - pipeline_started_at
+        if main_process:
+            logger.info(
+                "[MiniMax-H3 Pipeline][producer-summary] "
+                f"chunks={video_chunk_count} frames={video_frame_count} "
+                f"wall_s={video_producer_seconds:.3f} "
+                f"first_chunk_ready_s={first_chunk_ready_seconds if first_chunk_ready_seconds is not None else -1.0:.3f} "
+                f"decode_submit_s={video_decode_seconds:.3f} "
+                f"cpu_convert_sync_s={video_convert_seconds:.3f} "
+                f"enqueue_wait_s={enqueue_wait_seconds:.3f} "
+                f"max_enqueue_wait_ms={max_enqueue_wait_seconds * 1000:.1f}"
+            )
+
         # All distributed ranks have now completed the temporal/spatial VAE
         # collectives.  Rank 0 can safely finish audio and report writer errors
         # without stranding a peer inside the decoder.
+        audio_decode_seconds = 0.0
+        finalize_wait_seconds = 0.0
         if main_process and writer_error is None:
             try:
+                audio_decode_started_at = time.perf_counter()
                 with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
                     audio = self.audio_vae.decode(audio_latents)
                 waveform = audio[0].float().cpu()
+                audio_decode_seconds = time.perf_counter() - audio_decode_started_at
+                logger.info(
+                    "[MiniMax-H3 Pipeline][audio-producer] "
+                    f"samples={waveform.shape[-1]} channels={1 if waveform.ndim == 1 else waveform.shape[0]} "
+                    f"decode_sync_s={audio_decode_seconds:.3f} "
+                    f"ready_at_s={time.perf_counter() - pipeline_started_at:.3f}"
+                )
                 writer.submit_audio(
                     Audio(
                         waveform=waveform,
                         sampling_rate=self.audio_vae.sampling_rate,
                     )
                 )
+                finalize_started_at = time.perf_counter()
                 with ProfilingContext4DebugL2("Finalize Pipelined Audio-Video Output"):
                     writer.finish()
+                finalize_wait_seconds = time.perf_counter() - finalize_started_at
+                logger.info(
+                    "[MiniMax-H3 Pipeline][summary] "
+                    f"total_s={time.perf_counter() - pipeline_started_at:.3f} "
+                    f"video_producer_s={video_producer_seconds:.3f} "
+                    f"audio_decode_sync_s={audio_decode_seconds:.3f} "
+                    f"finalize_wait_s={finalize_wait_seconds:.3f} "
+                    f"enqueue_wait_s={enqueue_wait_seconds:.3f}"
+                )
                 logger.info(f"MiniMax-H3 output saved to {output_path}")
             except BaseException as exc:
                 writer_error = exc
