@@ -4,8 +4,12 @@ from lightx2v_platform.ops.norm.norm_template import RMSWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_RMS_WEIGHT_REGISTER
 
 try:
-    from sycl_kernels import rms_norm as _rms_norm
+    import sycl_kernels as _sycl_kernels
+
+    _rms_norm = _sycl_kernels.rms_norm
+    _has_rms_norm = _sycl_kernels.has_rms_norm()
 except (ImportError, RuntimeError):
+    _has_rms_norm = False
     _rms_norm = None
 
 
@@ -22,7 +26,8 @@ class IntelXpuRMSWeight(RMSWeightTemplate):
 
         hidden_size = input_tensor.shape[-1]
         use_esimd = (
-            _rms_norm is not None
+            _has_rms_norm
+            and _rms_norm is not None
             and input_tensor.device.type == "xpu"
             and weight.device == input_tensor.device
             and input_tensor.dtype == weight.dtype

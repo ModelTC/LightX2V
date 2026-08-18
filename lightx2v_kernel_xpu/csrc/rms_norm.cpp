@@ -139,3 +139,11 @@ torch::Tensor rms_norm_xpu(torch::Tensor weight, torch::Tensor input,
     }
     return output;
 }
+
+TORCH_LIBRARY(sycl_kernels_rms, m) {
+    m.def("rms_norm(Tensor weight, Tensor input, float eps=0.000001) -> Tensor");
+}
+
+TORCH_LIBRARY_IMPL(sycl_kernels_rms, XPU, m) {
+    m.impl("rms_norm", &rms_norm_xpu);
+}
