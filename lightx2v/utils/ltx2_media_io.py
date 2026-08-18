@@ -4,6 +4,7 @@ import os
 import queue
 import tempfile
 import threading
+import time
 from collections.abc import Generator, Iterator, Mapping
 from fractions import Fraction
 from io import BytesIO
@@ -384,6 +385,7 @@ class AsyncAudioVideoWriter:
         audio_sample_rate: int | None,
         queue_size: int = 2,
         video_codec_options: Mapping[str, str] | None = None,
+        timeline_origin: float | None = None,
     ) -> None:
         if queue_size <= 0:
             raise ValueError(f"queue_size must be positive, got {queue_size}")
@@ -396,6 +398,8 @@ class AsyncAudioVideoWriter:
         self._cancelled = threading.Event()
         self._done = threading.Event()
         self._closed = False
+        self._started_at = time.perf_counter()
+        self._timeline_origin = self._started_at if timeline_origin is None else timeline_origin
 
         output_dir = os.path.dirname(os.path.abspath(self.output_path))
         os.makedirs(output_dir, exist_ok=True)
@@ -422,6 +426,21 @@ class AsyncAudioVideoWriter:
                     self._raise_if_failed()
                     raise RuntimeError("Audio-video writer stopped before accepting all data")
 
+    def _put_payload(self, kind: str, payload: object) -> None:
+        """Enqueue a timestamped payload without counting backpressure as queue wait."""
+
+        if self._closed:
+            raise RuntimeError("Cannot submit data to a closed audio-video writer")
+        while True:
+            self._raise_if_failed()
+            try:
+                self._queue.put_nowait((kind, payload, time.perf_counter()))
+                return
+            except queue.Full:
+                if self._done.wait(timeout=0.01):
+                    self._raise_if_failed()
+                    raise RuntimeError("Audio-video writer stopped before accepting all data")
+
     def submit_video(self, frames: torch.Tensor) -> None:
         """Submit one CPU ``[F,H,W,3]`` RGB uint8 chunk."""
 
@@ -433,7 +452,7 @@ class AsyncAudioVideoWriter:
             raise TypeError(f"video chunk must use torch.uint8, got {frames.dtype}")
         if frames.device.type != "cpu":
             raise ValueError(f"video chunk must be on CPU, got {frames.device}")
-        self._put(("video", frames.contiguous()))
+        self._put_payload("video", frames.contiguous())
 
     def submit_audio(self, audio: Audio) -> None:
         """Submit the final audio waveform after the video producer is done."""
@@ -442,7 +461,7 @@ class AsyncAudioVideoWriter:
             raise RuntimeError("This writer was created without an audio stream")
         if int(audio.sampling_rate) != self.audio_sample_rate:
             raise ValueError(f"audio sampling rate mismatch: writer={self.audio_sample_rate}, payload={audio.sampling_rate}")
-        self._put(("audio", audio))
+        self._put_payload("audio", audio)
 
     def finish(self) -> None:
         """Drain queued chunks, finalize the MP4, and atomically publish it."""
@@ -480,6 +499,13 @@ class AsyncAudioVideoWriter:
         audio_stream = None
         audio_payload = None
         success = False
+        video_chunk_count = 0
+        video_frame_count = 0
+        video_encode_seconds = 0.0
+        max_queue_wait_seconds = 0.0
+        video_flush_seconds = 0.0
+        audio_encode_seconds = 0.0
+        finalize_seconds = 0.0
         try:
             while True:
                 item = self._queue.get()
@@ -488,9 +514,12 @@ class AsyncAudioVideoWriter:
                 if self._cancelled.is_set():
                     continue
 
-                kind, payload = item
+                kind, payload, submitted_at = item
+                queue_wait_seconds = time.perf_counter() - submitted_at
+                max_queue_wait_seconds = max(max_queue_wait_seconds, queue_wait_seconds)
                 if kind == "video":
                     frames = payload
+                    encode_started_at = time.perf_counter()
                     if container is None:
                         _, height, width, _ = frames.shape
                         container = av.open(self._temporary_path, mode="w")
@@ -511,10 +540,30 @@ class AsyncAudioVideoWriter:
                         frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
                         for packet in video_stream.encode(frame):
                             container.mux(packet)
+                    encode_seconds = time.perf_counter() - encode_started_at
+                    video_encode_seconds += encode_seconds
+                    video_chunk_count += 1
+                    video_frame_count += int(frames.shape[0])
+                    logger.info(
+                        "[MiniMax-H3 Pipeline][consumer] "
+                        f"chunk={video_chunk_count - 1} frames={frames.shape[0]} "
+                        f"queue_wait_ms={queue_wait_seconds * 1000:.1f} "
+                        f"encode_ms={encode_seconds * 1000:.1f} "
+                        f"queue_depth={self._queue.qsize()} "
+                        f"encode_started_at_ms={(encode_started_at - self._timeline_origin) * 1000:.1f} "
+                        f"encoded_at_ms={(time.perf_counter() - self._timeline_origin) * 1000:.1f}"
+                    )
                 elif kind == "audio":
                     if audio_payload is not None:
                         raise RuntimeError("Audio was submitted more than once")
                     audio_payload = payload
+                    waveform = audio_payload.waveform
+                    logger.info(
+                        "[MiniMax-H3 Pipeline][consumer-audio] "
+                        f"samples={waveform.shape[-1]} channels={1 if waveform.ndim == 1 else waveform.shape[0]} "
+                        f"queue_wait_ms={queue_wait_seconds * 1000:.1f} "
+                        f"received_at_ms={(time.perf_counter() - self._timeline_origin) * 1000:.1f}"
+                    )
                 else:
                     raise RuntimeError(f"Unknown audio-video writer message: {kind!r}")
 
@@ -522,16 +571,32 @@ class AsyncAudioVideoWriter:
                 return
             if container is None or video_stream is None:
                 raise RuntimeError("No video frames were submitted")
+            flush_started_at = time.perf_counter()
             for packet in video_stream.encode():
                 container.mux(packet)
+            video_flush_seconds = time.perf_counter() - flush_started_at
             if self.audio_sample_rate is not None:
                 if audio_payload is None or audio_stream is None:
                     raise RuntimeError("No audio waveform was submitted")
+                audio_started_at = time.perf_counter()
                 _write_audio(container, audio_stream, audio_payload)
+                audio_encode_seconds = time.perf_counter() - audio_started_at
+            finalize_started_at = time.perf_counter()
             container.close()
             container = None
             os.replace(self._temporary_path, self.output_path)
+            finalize_seconds = time.perf_counter() - finalize_started_at
             success = True
+            logger.info(
+                "[MiniMax-H3 Pipeline][consumer-summary] "
+                f"chunks={video_chunk_count} frames={video_frame_count} "
+                f"wall_s={time.perf_counter() - self._started_at:.3f} "
+                f"video_encode_s={video_encode_seconds:.3f} "
+                f"video_flush_s={video_flush_seconds:.3f} "
+                f"audio_encode_s={audio_encode_seconds:.3f} "
+                f"finalize_s={finalize_seconds:.3f} "
+                f"max_queue_wait_ms={max_queue_wait_seconds * 1000:.1f}"
+            )
             logger.info(f"Video saved to {self.output_path}")
         except BaseException as exc:
             self._error = exc
