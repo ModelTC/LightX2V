@@ -50,6 +50,7 @@ echo "=== Step 3: Copy artifacts ==="
 mkdir -p python/sycl_kernels
 find _cmake_build -maxdepth 1 -type f -name '_ext*.so' -exec cp -f {} python/sycl_kernels/ \;
 find _cmake_build -maxdepth 1 -type f -name 'rms_norm_torch*.so' -exec cp -f {} python/sycl_kernels/ \;
+find _cmake_build -maxdepth 1 -type f -name 'minimax_h3_rope_torch*.so' -exec cp -f {} python/sycl_kernels/ \;
 find _cmake_build -maxdepth 1 -type f -name 'cute_fmha_torch*.so' -exec cp -f {} python/sycl_kernels/ \;
 cp -f lgrf_uni/libesimd.unify.lgrf.so python/sycl_kernels/
 

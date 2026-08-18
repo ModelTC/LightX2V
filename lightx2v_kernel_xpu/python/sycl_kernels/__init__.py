@@ -6,6 +6,7 @@ import os
 _pkg_dir = os.path.dirname(os.path.abspath(__file__))
 _cute_fmha_loaded = False
 _rms_norm_loaded = False
+_minimax_h3_rope_loaded = False
 
 if os.name == "nt":
     os.add_dll_directory(_pkg_dir)
@@ -80,6 +81,52 @@ def rms_norm(weight, input, eps=1e-6):
 def has_rms_norm():
     try:
         _load_rms_norm()
+        return True
+    except (ImportError, OSError, RuntimeError):
+        return False
+
+
+def _load_minimax_h3_rope():
+    global _minimax_h3_rope_loaded
+    if _minimax_h3_rope_loaded:
+        return
+    import torch
+
+    suffix = "*.pyd" if os.name == "nt" else "*.so"
+    candidates = sorted(glob.glob(os.path.join(_pkg_dir, "minimax_h3_rope_torch" + suffix)))
+    if not candidates:
+        raise ImportError(f"minimax_h3_rope_torch library not found in {_pkg_dir}")
+    torch.ops.load_library(candidates[0])
+    _minimax_h3_rope_loaded = True
+
+
+def minimax_h3_rope(input, freqs):
+    """Apply MiniMax-H3 partial split-half RoPE to BF16 [rows, heads, 128]."""
+    import torch
+
+    try:
+        op = torch.ops.sycl_kernels_minimax_h3.rope
+    except AttributeError:
+        _load_minimax_h3_rope()
+        op = torch.ops.sycl_kernels_minimax_h3.rope
+    return op(input, freqs)
+
+
+def minimax_h3_rope_cached(input, cos, sin):
+    """Apply MiniMax-H3 RoPE using precomputed FP32 cosine and sine caches."""
+    import torch
+
+    try:
+        op = torch.ops.sycl_kernels_minimax_h3.rope_cached
+    except AttributeError:
+        _load_minimax_h3_rope()
+        op = torch.ops.sycl_kernels_minimax_h3.rope_cached
+    return op(input, cos, sin)
+
+
+def has_minimax_h3_rope():
+    try:
+        _load_minimax_h3_rope()
         return True
     except (ImportError, OSError, RuntimeError):
         return False

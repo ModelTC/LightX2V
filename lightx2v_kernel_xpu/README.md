@@ -6,9 +6,14 @@ Exposed as the Python package `sycl_kernels`:
 
 - `sycl_kernels.rms_norm(weight, input, eps)` provides ESIMD RMSNorm for
   contiguous FP32/FP16/BF16 XPU tensors with hidden size up to 8192 and
-  divisible by 32. In LightX2V select it with `"rms_norm_type": "intel_xpu"`;
-  For MiniMax-H3, select it with `"rms_type": "intel_xpu"`.
+  divisible by 32. For MiniMax-H3, select it with `"rms_type": "intel_xpu"`;
   unsupported contracts use the torch fallback.
+- `sycl_kernels.minimax_h3_rope(input, freqs)` provides MiniMax-H3 partial
+  split-half RoPE for contiguous BF16 `[rows, heads, 128]` input and FP32
+  `[rows, 96]` frequencies. It rotates the first 96 head dimensions and
+  passes the remaining 32 dimensions through.
+- `sycl_kernels.minimax_h3_rope_cached(input, cos, sin)` applies the same
+  operation with the FP32 cosine/sine caches produced by LightX2V.
 
 | Function | Description |
 |----------|-------------|

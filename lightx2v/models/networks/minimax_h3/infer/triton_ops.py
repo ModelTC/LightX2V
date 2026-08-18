@@ -45,6 +45,55 @@ class MiniMaxH3TritonRope(RopeTemplate):
         return self.torch_rope.apply_single(x, freqs, rotary_dim=rotary_dim, **kwargs)
 
 
+@ROPE_REGISTER("minimax_h3_xpu_rope")
+class MiniMaxH3XpuRope(RopeTemplate):
+    """MiniMax-H3 partial split-half RoPE backed by lightx2v_kernel_xpu."""
+
+    def __init__(self, layout="split_half", compute_dtype=torch.float32):
+        super().__init__(layout=layout, compute_dtype=compute_dtype)
+        if layout != "split_half":
+            raise ValueError("MiniMaxH3XpuRope only supports split_half layout")
+        self.torch_rope = TorchRealRope(layout=layout, compute_dtype=compute_dtype)
+
+    @staticmethod
+    def _can_use_xpu_kernel(x, cos, sin, rotary_dim):
+        if not (
+            x.device.type == "xpu"
+            and x.dtype == torch.bfloat16
+            and x.ndim == 3
+            and x.shape[-1] == 128
+            and rotary_dim == 96
+            and cos.dtype == torch.float32
+            and sin.dtype == torch.float32
+        ):
+            return False
+        try:
+            import sycl_kernels
+
+            return sycl_kernels.has_minimax_h3_rope()
+        except (ImportError, OSError, RuntimeError):
+            return False
+
+    def apply_single(self, x, freqs, rotary_dim=None, **kwargs):
+        cos, sin = freqs
+        rotary_dim = cos.shape[-1] if rotary_dim is None else rotary_dim
+        if self._can_use_xpu_kernel(x, cos, sin, rotary_dim):
+            import sycl_kernels
+
+            return sycl_kernels.minimax_h3_rope_cached(
+                x.contiguous(), cos.contiguous(), sin.contiguous()
+            )
+        return self.torch_rope.apply_single(
+            x, freqs, rotary_dim=rotary_dim, **kwargs
+        )
+
+    def apply(self, query, key, freqs, rotary_dim=None, **kwargs):
+        return (
+            self.apply_single(query, freqs, rotary_dim=rotary_dim, **kwargs),
+            self.apply_single(key, freqs, rotary_dim=rotary_dim, **kwargs),
+        )
+
+
 if triton is not None:
 
     @triton.jit
