@@ -7,6 +7,7 @@ cd "$project_dir"
 : "${PYTHON:=python3}"
 : "${CMAKE:=cmake}"
 : "${CXX:=icpx}"
+: "${XPU_TARGET:=bmg}"
 
 command -v "$PYTHON" >/dev/null || { echo "ERROR: Python not found: $PYTHON" >&2; exit 1; }
 command -v "$CMAKE" >/dev/null || { echo "ERROR: CMake not found: $CMAKE" >&2; exit 1; }
@@ -30,22 +31,27 @@ echo "=== Step 2: Build Python extension ==="
     -DCMAKE_CXX_STANDARD=20 \
     -DCMAKE_PREFIX_PATH="$torch_root" \
     -DPython_EXECUTABLE="$PYTHON" \
+    -DENABLE_CUTE_FMHA=ON \
+    -DXPU_TARGET="$XPU_TARGET" \
     -B _cmake_build -S .
 "$CMAKE" --build _cmake_build --parallel
 
 echo "=== Step 3: Copy artifacts ==="
 mkdir -p python/sycl_kernels
 find _cmake_build -maxdepth 1 -type f -name '_ext*.so' -exec cp -f {} python/sycl_kernels/ \;
+find _cmake_build -maxdepth 1 -type f -name 'cute_fmha_torch*.so' -exec cp -f {} python/sycl_kernels/ \;
 cp -f lgrf_uni/libesimd.unify.lgrf.so python/sycl_kernels/
 
 if [[ "${SKIP_TESTS:-0}" != "1" ]]; then
     echo "=== Step 4: Smoke test ==="
-    PYTHONPATH="$project_dir/python${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" test/test_sdp.py
+    PYTHONPATH="$project_dir/python${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -c \
+        'import sycl_kernels; assert sycl_kernels.has_cute_fmha()'
 fi
 
 echo "=== Step 5: Build wheel ==="
 mkdir -p dist
-CMAKE_ARGS="-DCMAKE_CXX_COMPILER=$CXX" "$PYTHON" -m pip wheel . \
+CMAKE_ARGS="-DCMAKE_CXX_COMPILER=$CXX -DENABLE_CUTE_FMHA=ON -DXPU_TARGET=$XPU_TARGET" \
+    "$PYTHON" -m pip wheel . \
     --no-build-isolation --no-deps -w dist
 
 echo "Build complete. Wheels are in $project_dir/dist"

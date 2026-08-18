@@ -25,15 +25,27 @@ try:
     _sdp_fn = _sycl_mod.sdp
 except ImportError:
     if os.name == "nt":
-        _install_instructions = "    call build.bat\n    pip install dist\\sycl_kernels-0.0.1-cp311-abi3-win_amd64.whl --force-reinstall --no-deps\n"
+        _wheel_version = "0.0.1"
+        _install_instructions = f"    call build.bat\n    pip install dist\\sycl_kernels-{_wheel_version}-cp311-abi3-win_amd64.whl --force-reinstall --no-deps\n"
+        _target_instructions = ""
     else:
-        _install_instructions = "    ./build.sh\n    pip install dist/sycl_kernels-0.0.1-cp311-abi3-linux_x86_64.whl --force-reinstall --no-deps\n"
+        _target_instructions = "  Select XPU_TARGET for your device: bmg for Battlemage, ptl-h for Panther Lake.\n"
+        _install_instructions = (
+            "    # Battlemage:\n"
+            "    XPU_TARGET=bmg ./build.sh\n"
+            "    pip install dist/sycl_kernels-0.0.1+bmg-cp311-abi3-linux_x86_64.whl --force-reinstall --no-deps\n"
+            "    # Panther Lake:\n"
+            "    XPU_TARGET=ptl-h ./build.sh\n"
+            "    pip install dist/sycl_kernels-0.0.1+ptlh-cp311-abi3-linux_x86_64.whl --force-reinstall --no-deps\n"
+        )
     warnings.warn(
         "\n"
         "[intel_xpu_flash_attn] sycl_kernels not found — falling back to torch SDPA.\n"
         "  For best performance on Intel Arc GPU, build and install the ESIMD kernel:\n"
-        "    cd lightx2v_kernel_xpu\n"
-        "    conda activate lightx2v_kernel\n" + _install_instructions,
+        + _target_instructions
+        + "    cd lightx2v_kernel_xpu\n"
+        + "    conda activate lightx2v_kernel\n"
+        + _install_instructions,
         stacklevel=2,
     )
     _sycl_mod = None
