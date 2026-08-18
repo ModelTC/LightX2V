@@ -27,7 +27,5 @@
     "preset": "ultrafast",
     "crf": "18"
   },
-  "vae_decode_encode_pipeline": true,
-  "video_encode_queue_size": 2,
   "keep_latents_dtype_in_scheduler": true
 }
