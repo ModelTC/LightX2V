@@ -15,7 +15,7 @@ model:
     # Full SDPA is impractical at H3 sequence lengths; this matches run_h3.py.
     attention_backend: _flash_3_hub
     capabilities:
-        distillation:
+        distribution_matching:
             # The H3 denoiser applies separate shifts to one shared base sigma.
             video_flow_shift: 6.0
             audio_flow_shift: 3.0

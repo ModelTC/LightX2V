@@ -93,7 +93,7 @@ class DenoiserRequest:
 
 
 class CapabilityDenoiser:
-    """Adapt a consistency capability to the objective interface."""
+    """Adapt a consistency-model capability to the objective interface."""
 
     def __init__(self, capability, path: RectifiedFlowPath):
         self.capability = capability

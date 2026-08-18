@@ -1,12 +1,12 @@
-"""Consistency capability for LongCat-Image."""
+"""Consistency-model capability for LongCat-Image."""
 
-from lightx2v_train.model_zoo.capability_adapters.consistency import (
+from lightx2v_train.model_zoo.capability_adapters.consistency_model import (
     ProjectedTimeEmbeddingAdapter,
-    TimeConditionedConsistencyCapability,
+    TimeConditionedConsistencyModelCapability,
 )
 
 
-class LongCatImageConsistencyCapability(TimeConditionedConsistencyCapability):
+class LongCatImageConsistencyModelCapability(TimeConditionedConsistencyModelCapability):
     """Bind generic consistency extensions to LongCat's time embedding."""
 
     def __init__(self, model) -> None:

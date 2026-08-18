@@ -1,4 +1,4 @@
-"""Autoregressive distillation capability for LTX models."""
+"""Autoregressive distribution-matching capability for LTX models."""
 
 from __future__ import annotations
 
@@ -7,25 +7,25 @@ import math
 import torch
 
 from lightx2v_train.model_capabilities import (
-    AutoregressiveDistillationCapability,
+    AutoregressiveDistributionMatchingCapability,
     AutoregressiveRolloutContext,
     BoundCapability,
 )
 from lightx2v_train.model_zoo.native.ltx2 import Modality
 
 from .common import LTXJointLatents
-from .ltx_distillation_capability import LTXDistillationCapability
+from .ltx_distribution_matching_capability import LTXDistributionMatchingCapability
 
 
-class LTXAutoregressiveDistillationCapability(
+class LTXAutoregressiveDistributionMatchingCapability(
     BoundCapability,
-    AutoregressiveDistillationCapability,
+    AutoregressiveDistributionMatchingCapability,
 ):
     """Cached chunk-wise rollout for LTX joint video/audio states."""
 
     def __init__(self, model) -> None:
         super().__init__(model)
-        self.distillation = LTXDistillationCapability(model)
+        self.distribution_matching = LTXDistributionMatchingCapability(model)
 
     def rollout(
         self,
@@ -56,8 +56,8 @@ class LTXAutoregressiveDistillationCapability(
             len(context.denoising_steps),
             latents.video.device,
         )
-        video_positions = self.distillation._video_token_positions(latent_shape)
-        audio_positions = self.distillation._audio_token_positions(latent_shape)
+        video_positions = self.distribution_matching._video_token_positions(latent_shape)
+        audio_positions = self.distribution_matching._audio_token_positions(latent_shape)
         cache = self._new_caches(
             dtype=latents.video.dtype,
             device=latents.video.device,
@@ -110,7 +110,7 @@ class LTXAutoregressiveDistillationCapability(
                         video_start,
                         audio_start,
                     )
-                    x0 = self.distillation.x0_from_velocity(
+                    x0 = self.distribution_matching.x0_from_velocity(
                         block,
                         velocity,
                         sigma,
@@ -122,12 +122,12 @@ class LTXAutoregressiveDistillationCapability(
                         dtype=context.running_dtype,
                     )
                     with torch.no_grad():
-                        noise = self.distillation.random_noise_like(
+                        noise = self.distribution_matching.random_noise_like(
                             x0,
                             x0.video.dtype,
                             lambda value: value,
                         )
-                        block = self.distillation.add_noise(
+                        block = self.distribution_matching.add_noise(
                             context.trajectory_scheduler,
                             x0,
                             noise,
@@ -136,7 +136,7 @@ class LTXAutoregressiveDistillationCapability(
 
             video_chunks.append(x0.video)
             audio_chunks.append(x0.audio)
-            cache_latents = self.distillation.detach(x0)
+            cache_latents = self.distribution_matching.detach(x0)
             cache_sigma = torch.full(
                 (1,),
                 context.context_noise,
@@ -144,10 +144,10 @@ class LTXAutoregressiveDistillationCapability(
                 dtype=context.running_dtype,
             )
             if context.context_noise > 0:
-                cache_latents = self.distillation.add_noise(
+                cache_latents = self.distribution_matching.add_noise(
                     context.trajectory_scheduler,
                     cache_latents,
-                    self.distillation.random_noise_like(
+                    self.distribution_matching.random_noise_like(
                         cache_latents,
                         cache_latents.video.dtype,
                         lambda value: value,

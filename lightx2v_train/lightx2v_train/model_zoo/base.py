@@ -133,7 +133,7 @@ class BaseModel(CapabilityProvider):
 
         LightX2V's current diffusion backbones are trained as rectified-flow
         velocity predictors.  Keeping this declaration on the model avoids
-        baking that assumption into distillation objectives and leaves room
+        baking that assumption into training objectives and leaves room
         for models that predict x0, noise, or another parameterization.
         """
         return "velocity"

@@ -8,9 +8,9 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
-from lightx2v_train.model_capabilities import DistillationProfile
+from lightx2v_train.model_capabilities import DistributionMatchingProfile
 from lightx2v_train.model_zoo.capability_adapters.common import (
-    GenericDistillationCapability,
+    GenericDistributionMatchingCapability,
     _require_single_prompt,
     _require_singleton_tensor,
 )
@@ -25,18 +25,18 @@ from .common import MiniMaxH3JointLatents, MiniMaxH3LatentShape
 
 
 @dataclass(frozen=True)
-class MiniMaxH3DistillationOptions:
+class MiniMaxH3DistributionMatchingOptions:
     video_loss_weight: float = 1.0
     audio_loss_weight: float = 1.0
     video_flow_shift: float = 12.0
     audio_flow_shift: float = 3.0
 
     @classmethod
-    def from_mapping(cls, config: Mapping | None) -> "MiniMaxH3DistillationOptions":
+    def from_mapping(cls, config: Mapping | None) -> "MiniMaxH3DistributionMatchingOptions":
         if config is None:
             config = {}
         if not isinstance(config, Mapping):
-            raise ValueError("model.capabilities.distillation must be a mapping.")
+            raise ValueError("model.capabilities.distribution_matching must be a mapping.")
         options = cls(
             video_loss_weight=float(config.get("video_loss_weight", 1.0)),
             audio_loss_weight=float(config.get("audio_loss_weight", 1.0)),
@@ -64,7 +64,7 @@ def _expand_sigma(sigma: torch.Tensor, ndim: int) -> torch.Tensor:
     return sigma.reshape(sigma.shape[0], *([1] * (ndim - 1)))
 
 
-class MiniMaxH3DistillationCapability(GenericDistillationCapability):
+class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapability):
     """H3-specific operations consumed by the framework's generic DMD loop.
 
     H3 jointly denoises packed video and stereo-audio tokens. It also uses a
@@ -81,7 +81,7 @@ class MiniMaxH3DistillationCapability(GenericDistillationCapability):
         "ff.net.0.proj",
         "ff.net.2",
     )
-    _PROFILE = DistillationProfile(
+    _PROFILE = DistributionMatchingProfile(
         supports_guidance=False,
         supports_cdm=False,
         supports_ida=False,
@@ -93,7 +93,7 @@ class MiniMaxH3DistillationCapability(GenericDistillationCapability):
 
     def __init__(self, model, options: Mapping | None = None) -> None:
         super().__init__(model)
-        options = MiniMaxH3DistillationOptions.from_mapping(options)
+        options = MiniMaxH3DistributionMatchingOptions.from_mapping(options)
         self.video_weight = options.video_loss_weight
         self.audio_weight = options.audio_loss_weight
         self.video_shift = options.video_flow_shift
@@ -101,7 +101,7 @@ class MiniMaxH3DistillationCapability(GenericDistillationCapability):
         self._layout_cache = {}
 
     @property
-    def profile(self) -> DistillationProfile:
+    def profile(self) -> DistributionMatchingProfile:
         return self._PROFILE
 
     @property

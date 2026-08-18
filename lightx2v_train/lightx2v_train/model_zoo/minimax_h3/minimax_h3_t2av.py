@@ -6,8 +6,8 @@ from contextlib import nullcontext
 import torch
 from peft import LoraConfig, inject_adapter_in_model
 
-from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability
-from lightx2v_train.model_zoo.minimax_h3.capability_adapters import MiniMaxH3ConsistencyCapability, MiniMaxH3DistillationCapability
+from lightx2v_train.model_capabilities import ConsistencyModelCapability, DistributionMatchingCapability
+from lightx2v_train.model_zoo.minimax_h3.capability_adapters import MiniMaxH3ConsistencyModelCapability, MiniMaxH3DistributionMatchingCapability
 from lightx2v_train.model_zoo.native.minimax_h3 import load_minimax_h3_transformer
 from lightx2v_train.utils.registry import MODEL_REGISTER
 from lightx2v_train.utils.utils import get_running_dtype
@@ -26,16 +26,18 @@ class MiniMaxH3T2AVModel(BaseModel):
         capability_config = self.config["model"].get("capabilities", {})
         if not isinstance(capability_config, Mapping):
             raise ValueError("model.capabilities must be a mapping.")
+        if "distillation" in capability_config:
+            raise ValueError("model.capabilities.distillation was renamed to model.capabilities.distribution_matching.")
         self.capabilities.register(
-            DistillationCapability,
-            MiniMaxH3DistillationCapability(
+            DistributionMatchingCapability,
+            MiniMaxH3DistributionMatchingCapability(
                 self,
-                capability_config.get("distillation"),
+                capability_config.get("distribution_matching"),
             ),
         )
         self.capabilities.register(
-            ConsistencyCapability,
-            MiniMaxH3ConsistencyCapability(self),
+            ConsistencyModelCapability,
+            MiniMaxH3ConsistencyModelCapability(self),
         )
 
     def load_components(self, transformer_only=False, reference_model=None):
@@ -70,7 +72,7 @@ class MiniMaxH3T2AVModel(BaseModel):
 
     def add_lora(self, rank, alpha, target_modules):
         if not target_modules:
-            target_modules = MiniMaxH3DistillationCapability._DEFAULT_LORA_TARGETS
+            target_modules = MiniMaxH3DistributionMatchingCapability._DEFAULT_LORA_TARGETS
         lora_config = LoraConfig(
             r=rank,
             lora_alpha=alpha,

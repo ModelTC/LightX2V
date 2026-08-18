@@ -3,7 +3,7 @@
 import torch
 
 from lightx2v_train.model_zoo.capability_adapters.common import (
-    GenericDistillationCapability,
+    GenericDistributionMatchingCapability,
     _negative_prompt,
     _require_single_prompt,
     _require_singleton_tensor,
@@ -14,7 +14,7 @@ from lightx2v_train.utils.constants import (
 )
 
 
-class WanDistillationCapability(GenericDistillationCapability):
+class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
     """Distribution-matching operations for Wan-family video models."""
 
     @property
@@ -107,7 +107,7 @@ class WanDistillationCapability(GenericDistillationCapability):
         return {"prompt_embed": prompt_embed}
 
 
-class LingBotDistillationCapability(WanDistillationCapability):
+class LingBotDistributionMatchingCapability(WanDistributionMatchingCapability):
     @property
     def default_negative_prompt(self):
         return LINGBOT_VIDEO_NEGATIVE_PROMPT

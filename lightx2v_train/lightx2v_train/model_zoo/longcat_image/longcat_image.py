@@ -6,10 +6,10 @@ from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.transformers import LongCatImageTransformer2DModel
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import prepare_pos_ids
 
-from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_capabilities import ConsistencyModelCapability, DistributionMatchingCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
-from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
-from lightx2v_train.model_zoo.longcat_image.capability_adapters import LongCatImageConsistencyCapability
+from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.longcat_image.capability_adapters import LongCatImageConsistencyModelCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from ..base import BaseModel
@@ -34,8 +34,8 @@ class LongCatImageModel(BaseModel):
             GenericFlowMatchingCapability(self),
         )
         self.capabilities.register(
-            DistillationCapability,
-            GenericDistillationCapability(
+            DistributionMatchingCapability,
+            GenericDistributionMatchingCapability(
                 self,
                 latent_geometry=SpatialLatentGeometry(
                     channels_path="vae.config.latent_channels",
@@ -44,8 +44,8 @@ class LongCatImageModel(BaseModel):
             ),
         )
         self.capabilities.register(
-            ConsistencyCapability,
-            LongCatImageConsistencyCapability(self),
+            ConsistencyModelCapability,
+            LongCatImageConsistencyModelCapability(self),
         )
 
     def load_components(self, transformer_only=False, reference_model=None):

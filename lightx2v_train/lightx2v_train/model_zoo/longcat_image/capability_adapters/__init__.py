@@ -1,5 +1,5 @@
 """Capabilities implemented specifically by LongCat-Image."""
 
-from .longcat_image_consistency_capability import LongCatImageConsistencyCapability
+from .longcat_image_consistency_model_capability import LongCatImageConsistencyModelCapability
 
-__all__ = ["LongCatImageConsistencyCapability"]
+__all__ = ["LongCatImageConsistencyModelCapability"]

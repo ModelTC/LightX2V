@@ -1,13 +1,13 @@
-"""Consistency capabilities for Wan-family video backbones."""
+"""Consistency-model capabilities for Wan-family video backbones."""
 
-from lightx2v_train.model_zoo.capability_adapters.consistency import (
+from lightx2v_train.model_zoo.capability_adapters.consistency_model import (
     ProjectedTimeEmbeddingAdapter,
     SinusoidalTimeEmbeddingAdapter,
-    TimeConditionedConsistencyCapability,
+    TimeConditionedConsistencyModelCapability,
 )
 
 
-class WanConsistencyCapability(TimeConditionedConsistencyCapability):
+class WanConsistencyModelCapability(TimeConditionedConsistencyModelCapability):
     """Bind generic consistency extensions to Wan's sinusoidal time MLP."""
 
     def __init__(self, model) -> None:
@@ -22,7 +22,7 @@ class WanConsistencyCapability(TimeConditionedConsistencyCapability):
         )
 
 
-class LingBotConsistencyCapability(TimeConditionedConsistencyCapability):
+class LingBotConsistencyModelCapability(TimeConditionedConsistencyModelCapability):
     """Bind generic consistency extensions to LingBot's time embedding."""
 
     def __init__(self, model) -> None:

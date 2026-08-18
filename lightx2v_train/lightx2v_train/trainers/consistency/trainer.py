@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 from lightx2v_train.model_capabilities import (
-    ConsistencyCapability,
+    ConsistencyModelCapability,
     LossResult,
     ParallelCapability,
     TrainableModelCapability,
@@ -40,7 +40,7 @@ class ConsistencyTrainer(FlowMatchingTrainer):
     trainer_name = "consistency"
     required_capabilities = (
         *BaseTrainer.required_capabilities,
-        ConsistencyCapability,
+        ConsistencyModelCapability,
     )
 
     def __init__(self, config):
@@ -55,20 +55,20 @@ class ConsistencyTrainer(FlowMatchingTrainer):
 
     def set_model(self, model):
         BaseTrainer.set_model(self, model)
-        self.consistency = model.capabilities.require(ConsistencyCapability)
+        self.consistency_model = model.capabilities.require(ConsistencyModelCapability)
 
     def setup(self, resume_ckpt_path=None):
         self._setup_resume_checkpoint = resume_ckpt_path
         super().setup(resume_ckpt_path=resume_ckpt_path)
         self.student_denoiser = CapabilityDenoiser(
-            self.consistency,
+            self.consistency_model,
             self.path,
         )
 
         if self.objective.requires_teacher:
             self.teacher_model = self._build_frozen_teacher()
             self.teacher_denoiser = CapabilityDenoiser(
-                self.teacher_consistency,
+                self.teacher_consistency_model,
                 self.path,
             )
 
@@ -88,7 +88,7 @@ class ConsistencyTrainer(FlowMatchingTrainer):
         )
 
     def _setup_trainable_model(self, model):
-        capability = model.ensure_capabilities().require(ConsistencyCapability)
+        capability = model.ensure_capabilities().require(ConsistencyModelCapability)
         capability.configure(self.objective.model_capabilities)
         super()._setup_trainable_model(model)
         capability.restore_trainable_auxiliary()
@@ -102,7 +102,7 @@ class ConsistencyTrainer(FlowMatchingTrainer):
 
     def _restore_trainable_model(self, model):
         super()._restore_trainable_model(model)
-        model.ensure_capabilities().require(ConsistencyCapability).restore_trainable_auxiliary()
+        model.ensure_capabilities().require(ConsistencyModelCapability).restore_trainable_auxiliary()
 
     def _load_initial_model_weights(self, model, checkpoint, *, role="student"):
         if not os.path.isdir(checkpoint):
@@ -137,10 +137,10 @@ class ConsistencyTrainer(FlowMatchingTrainer):
             transformer_only=True,
             reference_model=self.model,
         )
-        self.teacher_consistency = teacher_model.capabilities.require(ConsistencyCapability)
-        self.teacher_consistency.set_frozen()
+        self.teacher_consistency_model = teacher_model.capabilities.require(ConsistencyModelCapability)
+        self.teacher_consistency_model.set_frozen()
         teacher_model.capabilities.require(ParallelCapability).apply(self.config)
-        self.teacher_consistency.set_frozen()
+        self.teacher_consistency_model.set_frozen()
         logger.info(
             "[train] consistency teacher model={} path={}",
             teacher_config["model"]["name"],
@@ -175,7 +175,7 @@ class ConsistencyTrainer(FlowMatchingTrainer):
             transformer_only=True,
             reference_model=self.model,
         )
-        capability = reference_model.capabilities.require(ConsistencyCapability)
+        capability = reference_model.capabilities.require(ConsistencyModelCapability)
         if self.train_type == "lora":
             reference_model.capabilities.require(TrainableModelCapability).configure(
                 "lora",
@@ -202,9 +202,9 @@ class ConsistencyTrainer(FlowMatchingTrainer):
 
     def compute_loss_on_sample(self, sample):
         with torch.no_grad():
-            clean = self.consistency.encode_latent(sample)
+            clean = self.consistency_model.encode_latent(sample)
             clean = broadcast_sequence_parallel_value(clean)
-            condition = self.consistency.encode_condition(sample)
+            condition = self.consistency_model.encode_condition(sample)
             condition = broadcast_sequence_parallel_value(condition)
 
             negative_condition = None
@@ -215,7 +215,7 @@ class ConsistencyTrainer(FlowMatchingTrainer):
             context = ConsistencyStepContext(
                 iteration=int(getattr(self, "current_train_iteration", 0)),
                 global_batch_size=(clean.shape[0] * get_data_parallel_world_size() * self.gradient_accumulation_iters),
-                latent_hw=self.consistency.sampling_latent_hw(sample, clean),
+                latent_hw=self.consistency_model.sampling_latent_hw(sample, clean),
             )
             training_state = self.objective.sample_training_state(
                 clean,
@@ -263,4 +263,4 @@ class ConsistencyTrainer(FlowMatchingTrainer):
         else:
             negative_sample["conditioning"]["positive"] = cached_negative
         negative_sample["conditioning"]["prompt"] = encoded_prompt
-        return self.consistency.encode_condition(negative_sample)
+        return self.consistency_model.encode_condition(negative_sample)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 
 from lightx2v_train.model_zoo.capability_adapters.common import (
-    GenericDistillationCapability,
+    GenericDistributionMatchingCapability,
     _negative_prompt,
     _require_single_prompt,
     _require_singleton_tensor,
@@ -24,7 +24,7 @@ from lightx2v_train.utils.constants import LTX2_NEGATIVE_PROMPT
 from .common import LTXJointLatentShape, LTXJointLatents
 
 
-class LTXDistillationCapability(GenericDistillationCapability):
+class LTXDistributionMatchingCapability(GenericDistributionMatchingCapability):
     """Distribution-matching operations for joint LTX video/audio states."""
 
     def __init__(self, model) -> None:

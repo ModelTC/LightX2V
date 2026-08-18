@@ -12,7 +12,7 @@ from torch.distributed.checkpoint.state_dict import (
 )
 
 from lightx2v_train.model_capabilities import (
-    DistillationCapability,
+    DistributionMatchingCapability,
     ParallelCapability,
     TrainableModelCapability,
 )
@@ -173,7 +173,7 @@ class DmdTrainer(_DmdRuntime):
             transformer_only=True,
             reference_model=self.model,
         )
-        self.fake_real = self.fake_real_model.capabilities.require(DistillationCapability)
+        self.fake_real = self.fake_real_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(
             self.fake_real_model,
             role="fake_real",

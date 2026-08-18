@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 import torch
 from torch import Tensor, nn
 
-from .common import GenericConsistencyCapability
+from .common import GenericConsistencyModelCapability
 
 
 def _resolve_attribute(root, path: str):
@@ -163,7 +163,7 @@ class SinusoidalTimeEmbeddingAdapter(TimeEmbeddingAdapter):
         return torch.cat((torch.cos(phases), torch.sin(phases)), dim=1)
 
 
-class TimeConditionedConsistencyCapability(GenericConsistencyCapability):
+class TimeConditionedConsistencyModelCapability(GenericConsistencyModelCapability):
     """Generic CM adapter with optional endpoint conditioning and loss variance.
 
     The capability owns objective-specific state and modules. The model wrapper

@@ -1,12 +1,12 @@
 """Consistency-model capability for Qwen-Image backbones."""
 
-from lightx2v_train.model_zoo.capability_adapters.consistency import (
+from lightx2v_train.model_zoo.capability_adapters.consistency_model import (
     ProjectedTimeEmbeddingAdapter,
-    TimeConditionedConsistencyCapability,
+    TimeConditionedConsistencyModelCapability,
 )
 
 
-class QwenImageConsistencyCapability(TimeConditionedConsistencyCapability):
+class QwenImageConsistencyModelCapability(TimeConditionedConsistencyModelCapability):
     """Bind the generic consistency extensions to Qwen's time embedding."""
 
     def __init__(self, model) -> None:

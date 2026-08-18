@@ -6,7 +6,7 @@ from loguru import logger
 
 from lightx2v_train.model_capabilities import (
     CheckpointCapability,
-    DistillationCapability,
+    DistributionMatchingCapability,
     ParallelCapability,
     TrainableModelCapability,
 )
@@ -41,7 +41,7 @@ class _DmdRuntime(BaseTrainer):
     trainer_name = "dmd"
     required_capabilities = (
         *BaseTrainer.required_capabilities,
-        DistillationCapability,
+        DistributionMatchingCapability,
     )
     default_negative_prompt = None
     supports_cdm = True
@@ -104,11 +104,11 @@ class _DmdRuntime(BaseTrainer):
 
     def set_model(self, model):
         super().set_model(model)
-        self.student = model.capabilities.require(DistillationCapability)
+        self.student = model.capabilities.require(DistributionMatchingCapability)
         profile = self.student.profile
         if self._configured_latent_dtype is None and profile.default_latent_dtype is not None:
             self.latent_dtype = profile.default_latent_dtype
-        self._validate_distillation_profile(profile)
+        self._validate_distribution_matching_profile(profile)
         if self.negative_prompt is None:
             self.negative_prompt = self.student.default_negative_prompt
         for lora_config in (
@@ -120,7 +120,7 @@ class _DmdRuntime(BaseTrainer):
 
         logger.info("[train] dmd latent_dtype={}", self.latent_dtype)
 
-    def _validate_distillation_profile(self, profile):
+    def _validate_distribution_matching_profile(self, profile):
         model_name = self.model_config.get("name", type(self.model).__name__)
         requested_features = (
             (self.cdm_trick.enabled, profile.supports_cdm, "CDM"),
@@ -203,7 +203,7 @@ class _DmdRuntime(BaseTrainer):
             transformer_only=True,
             reference_model=self.model,
         )
-        self.fake = self.fake_model.capabilities.require(DistillationCapability)
+        self.fake = self.fake_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(self.fake_model, role="fake")
         self.fake_model.capabilities.require(ParallelCapability).apply(self.config)
         if self.gradient_checkpointing:
@@ -220,7 +220,7 @@ class _DmdRuntime(BaseTrainer):
             transformer_only=True,
             reference_model=self.model,
         )
-        self.teacher = self.teacher_model.capabilities.require(DistillationCapability)
+        self.teacher = self.teacher_model.capabilities.require(DistributionMatchingCapability)
         self.teacher.denoiser().requires_grad_(False)
         self.teacher.set_training(False)
         self.teacher_model.capabilities.require(ParallelCapability).apply(self.config)

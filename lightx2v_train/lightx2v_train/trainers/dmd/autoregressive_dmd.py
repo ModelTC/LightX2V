@@ -1,5 +1,5 @@
 from lightx2v_train.model_capabilities import (
-    AutoregressiveDistillationCapability,
+    AutoregressiveDistributionMatchingCapability,
     AutoregressiveRolloutContext,
 )
 from lightx2v_train.utils.registry import TRAINER_REGISTER
@@ -12,7 +12,7 @@ class AutoregressiveDmdTrainer(DmdTrainer):
     trainer_name = "autoregressive_dmd"
     required_capabilities = (
         *DmdTrainer.required_capabilities,
-        AutoregressiveDistillationCapability,
+        AutoregressiveDistributionMatchingCapability,
     )
     supports_diversity_loss = False
     supports_real_data_fake = False
@@ -31,7 +31,7 @@ class AutoregressiveDmdTrainer(DmdTrainer):
 
     def set_model(self, model):
         super().set_model(model)
-        self.autoregressive = model.capabilities.require(AutoregressiveDistillationCapability)
+        self.autoregressive = model.capabilities.require(AutoregressiveDistributionMatchingCapability)
 
     def run_back_simulation(
         self,

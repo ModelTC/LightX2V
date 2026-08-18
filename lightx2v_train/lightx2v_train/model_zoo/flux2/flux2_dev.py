@@ -4,10 +4,10 @@ import torch
 from diffusers import AutoencoderKLFlux2, Flux2Pipeline, Flux2Transformer2DModel
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
-from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_capabilities import ConsistencyModelCapability, DistributionMatchingCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
-from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
-from lightx2v_train.model_zoo.flux2.capability_adapters import Flux2ConsistencyCapability
+from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.flux2.capability_adapters import Flux2ConsistencyModelCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from ..base import BaseModel
@@ -32,8 +32,8 @@ class Flux2DevModel(BaseModel):
             GenericFlowMatchingCapability(self),
         )
         self.capabilities.register(
-            DistillationCapability,
-            GenericDistillationCapability(
+            DistributionMatchingCapability,
+            GenericDistributionMatchingCapability(
                 self,
                 latent_geometry=SpatialLatentGeometry(
                     channels_path="transformer.config.in_channels",
@@ -43,8 +43,8 @@ class Flux2DevModel(BaseModel):
             ),
         )
         self.capabilities.register(
-            ConsistencyCapability,
-            Flux2ConsistencyCapability(self),
+            ConsistencyModelCapability,
+            Flux2ConsistencyModelCapability(self),
         )
 
     def load_components(self, transformer_only=False, reference_model=None):

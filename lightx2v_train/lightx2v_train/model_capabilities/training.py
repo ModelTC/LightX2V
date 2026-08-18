@@ -54,7 +54,7 @@ class TeacherForcingCapability(ModelCapability):
         """Compute a differentiable teacher-forcing loss."""
 
 
-class ConsistencyCapability(ModelCapability):
+class ConsistencyModelCapability(ModelCapability):
     @abstractmethod
     def configure(self, features: Collection[str]) -> None:
         """Install model structure required by the selected objective."""
@@ -97,8 +97,8 @@ class ConsistencyCapability(ModelCapability):
 
 
 @dataclass(frozen=True)
-class DistillationProfile:
-    """Feature and precision constraints published by a distillation adapter."""
+class DistributionMatchingProfile:
+    """Feature and precision constraints published by a distribution-matching adapter."""
 
     supports_guidance: bool = True
     supports_cdm: bool = True
@@ -109,12 +109,12 @@ class DistillationProfile:
     default_latent_dtype: torch.dtype | None = None
 
 
-class DistillationCapability(ModelCapability):
+class DistributionMatchingCapability(ModelCapability):
     """Model operations required by distribution-matching algorithms."""
 
     @property
-    def profile(self) -> DistillationProfile:
-        return DistillationProfile()
+    def profile(self) -> DistributionMatchingProfile:
+        return DistributionMatchingProfile()
 
     @property
     @abstractmethod
@@ -237,7 +237,7 @@ class AutoregressiveRolloutContext:
     grad_enabled: bool
 
 
-class AutoregressiveDistillationCapability(ModelCapability):
+class AutoregressiveDistributionMatchingCapability(ModelCapability):
     @abstractmethod
     def rollout(
         self,

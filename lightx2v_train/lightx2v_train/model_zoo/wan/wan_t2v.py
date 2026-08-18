@@ -12,19 +12,19 @@ from peft.utils import set_peft_model_state_dict
 from safetensors.torch import load_file
 
 from lightx2v_train.model_capabilities import (
-    AutoregressiveDistillationCapability,
-    ConsistencyCapability,
-    DistillationCapability,
+    AutoregressiveDistributionMatchingCapability,
+    ConsistencyModelCapability,
+    DistributionMatchingCapability,
     FlowMatchingSFTCapability,
     TeacherForcingCapability,
 )
 from lightx2v_train.model_zoo.capability_adapters.common import GenericFlowMatchingCapability
-from lightx2v_train.model_zoo.wan.capability_adapters.wan_autoregressive_distillation_capability import (
-    WanAutoregressiveDistillationCapability,
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_autoregressive_distribution_matching_capability import (
+    WanAutoregressiveDistributionMatchingCapability,
 )
-from lightx2v_train.model_zoo.wan.capability_adapters.wan_consistency_capability import WanConsistencyCapability
-from lightx2v_train.model_zoo.wan.capability_adapters.wan_distillation_capability import (
-    WanDistillationCapability,
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_consistency_model_capability import WanConsistencyModelCapability
+from lightx2v_train.model_zoo.wan.capability_adapters.wan_distribution_matching_capability import (
+    WanDistributionMatchingCapability,
 )
 from lightx2v_train.model_zoo.wan.capability_adapters.wan_teacher_forcing_capability import (
     WanTeacherForcingCapability,
@@ -59,17 +59,17 @@ class WanT2VModel(BaseModel):
             GenericFlowMatchingCapability(self),
         )
         self.capabilities.register(
-            DistillationCapability,
-            WanDistillationCapability(self),
+            DistributionMatchingCapability,
+            WanDistributionMatchingCapability(self),
         )
         self.capabilities.register(
-            ConsistencyCapability,
-            WanConsistencyCapability(self),
+            ConsistencyModelCapability,
+            WanConsistencyModelCapability(self),
         )
         if self.use_causal_transformer:
             self.capabilities.register(
-                AutoregressiveDistillationCapability,
-                WanAutoregressiveDistillationCapability(self),
+                AutoregressiveDistributionMatchingCapability,
+                WanAutoregressiveDistributionMatchingCapability(self),
             )
             self.capabilities.register(
                 TeacherForcingCapability,

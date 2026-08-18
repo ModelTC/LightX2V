@@ -3,7 +3,7 @@ import copy
 from loguru import logger
 
 from lightx2v_train.model_capabilities import (
-    DistillationCapability,
+    DistributionMatchingCapability,
     ParallelCapability,
     TrainableModelCapability,
 )
@@ -248,7 +248,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             transformer_only=True,
             reference_model=self.model,
         )
-        self.student_2 = self.student_2_model.capabilities.require(DistillationCapability)
+        self.student_2 = self.student_2_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(
             self.student_2_model,
             role="student_2",
@@ -263,7 +263,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             transformer_only=True,
             reference_model=self.model,
         )
-        self.fake_2 = self.fake_2_model.capabilities.require(DistillationCapability)
+        self.fake_2 = self.fake_2_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(self.fake_2_model, role="fake_2")
         self.fake_2_model.capabilities.require(ParallelCapability).apply(self.config)
         if self.gradient_checkpointing:
@@ -280,7 +280,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
                 reference_model=self.model,
             )
             fake_low_high_model_path = fake_low_high_model_config["model"]["pretrained_model_name_or_path"]
-            self.fake_low_high = self.fake_low_high_model.capabilities.require(DistillationCapability)
+            self.fake_low_high = self.fake_low_high_model.capabilities.require(DistributionMatchingCapability)
             self._setup_trainable_model(
                 self.fake_low_high_model,
                 role="fake_low_high",
@@ -308,7 +308,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             if self.gradient_checkpointing:
                 model.capabilities.require(TrainableModelCapability).enable_gradient_checkpointing()
             setattr(self, f"{role}_model", model)
-            capability = model.capabilities.require(DistillationCapability)
+            capability = model.capabilities.require(DistributionMatchingCapability)
             setattr(self, role, capability)
             logger.info(
                 "[train] phased_dmd independent {} path={} train_type={}",
@@ -336,7 +336,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
                 transformer_only=True,
                 reference_model=self.model,
             )
-            self.teacher_2 = self.teacher_2_model.capabilities.require(DistillationCapability)
+            self.teacher_2 = self.teacher_2_model.capabilities.require(DistributionMatchingCapability)
             self.teacher_2.denoiser().requires_grad_(False)
             self.teacher_2.set_training(False)
             self.teacher_2_model.capabilities.require(ParallelCapability).apply(self.config)

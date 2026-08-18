@@ -10,17 +10,17 @@ from safetensors import safe_open
 from safetensors.torch import load_file
 
 from lightx2v_train.model_capabilities import (
-    AutoregressiveDistillationCapability,
-    ConsistencyCapability,
-    DistillationCapability,
+    AutoregressiveDistributionMatchingCapability,
+    ConsistencyModelCapability,
+    DistributionMatchingCapability,
     FlowMatchingSFTCapability,
     TeacherForcingCapability,
 )
-from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_autoregressive_distillation_capability import (
-    LTXAutoregressiveDistillationCapability,
+from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_autoregressive_distribution_matching_capability import (
+    LTXAutoregressiveDistributionMatchingCapability,
 )
-from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_consistency_capability import LTXConsistencyCapability
-from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_distillation_capability import LTXDistillationCapability
+from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_consistency_model_capability import LTXConsistencyModelCapability
+from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_distribution_matching_capability import LTXDistributionMatchingCapability
 from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_flow_matching_capability import LTXFlowMatchingCapability
 from lightx2v_train.model_zoo.ltx.capability_adapters.ltx_teacher_forcing_capability import LTXTeacherForcingCapability
 from lightx2v_train.model_zoo.native.ltx2 import (
@@ -54,17 +54,17 @@ class LTX2T2AVModel(BaseModel):
             LTXFlowMatchingCapability(self),
         )
         self.capabilities.register(
-            DistillationCapability,
-            LTXDistillationCapability(self),
+            DistributionMatchingCapability,
+            LTXDistributionMatchingCapability(self),
         )
         self.capabilities.register(
-            ConsistencyCapability,
-            LTXConsistencyCapability(self),
+            ConsistencyModelCapability,
+            LTXConsistencyModelCapability(self),
         )
         if self.config["model"]["name"] == "ltx_t2av_ar":
             self.capabilities.register(
-                AutoregressiveDistillationCapability,
-                LTXAutoregressiveDistillationCapability(self),
+                AutoregressiveDistributionMatchingCapability,
+                LTXAutoregressiveDistributionMatchingCapability(self),
             )
         self.capabilities.register(
             TeacherForcingCapability,

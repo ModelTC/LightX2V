@@ -4,10 +4,10 @@ import torch
 from diffusers import AutoencoderKLQwenImage, QwenImagePipeline, QwenImageTransformer2DModel
 from diffusers.image_processor import VaeImageProcessor
 
-from lightx2v_train.model_capabilities import ConsistencyCapability, DistillationCapability, FlowMatchingSFTCapability
+from lightx2v_train.model_capabilities import ConsistencyModelCapability, DistributionMatchingCapability, FlowMatchingSFTCapability
 from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
-from lightx2v_train.model_zoo.capability_adapters.common import GenericDistillationCapability, GenericFlowMatchingCapability
-from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyCapability
+from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyModelCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from ..base import BaseModel
@@ -37,8 +37,8 @@ class QwenImageModel(BaseModel):
             GenericFlowMatchingCapability(self),
         )
         self.capabilities.register(
-            DistillationCapability,
-            GenericDistillationCapability(
+            DistributionMatchingCapability,
+            GenericDistributionMatchingCapability(
                 self,
                 latent_geometry=SpatialLatentGeometry(
                     channels_path="vae.config.z_dim",
@@ -47,8 +47,8 @@ class QwenImageModel(BaseModel):
             ),
         )
         self.capabilities.register(
-            ConsistencyCapability,
-            QwenImageConsistencyCapability(self),
+            ConsistencyModelCapability,
+            QwenImageConsistencyModelCapability(self),
         )
 
     def load_components(self, transformer_only=False, reference_model=None):

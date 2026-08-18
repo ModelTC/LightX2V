@@ -1,5 +1,5 @@
 """Capability adapters for Qwen-Image models."""
 
-from .qwen_image_consistency_capability import QwenImageConsistencyCapability
+from .qwen_image_consistency_model_capability import QwenImageConsistencyModelCapability
 
-__all__ = ["QwenImageConsistencyCapability"]
+__all__ = ["QwenImageConsistencyModelCapability"]

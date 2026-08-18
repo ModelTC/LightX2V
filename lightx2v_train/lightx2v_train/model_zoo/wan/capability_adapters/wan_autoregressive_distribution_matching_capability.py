@@ -1,4 +1,4 @@
-"""Autoregressive distillation capability for causal Wan models."""
+"""Autoregressive distribution-matching capability for causal Wan models."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v_train.model_capabilities import (
-    AutoregressiveDistillationCapability,
+    AutoregressiveDistributionMatchingCapability,
     AutoregressiveRolloutContext,
     BoundCapability,
 )
@@ -18,9 +18,9 @@ from lightx2v_train.runtime.distributed import (
 from lightx2v_train.runtime.sequence_parallel import all_gather_sequence
 
 
-class WanAutoregressiveDistillationCapability(
+class WanAutoregressiveDistributionMatchingCapability(
     BoundCapability,
-    AutoregressiveDistillationCapability,
+    AutoregressiveDistributionMatchingCapability,
 ):
     """Cached chunk-wise rollout for causal Wan transformers."""
 

@@ -7,8 +7,8 @@ import math
 import torch
 from torch import Tensor, nn
 
-from lightx2v_train.model_zoo.capability_adapters.consistency import (
-    TimeConditionedConsistencyCapability,
+from lightx2v_train.model_zoo.capability_adapters.consistency_model import (
+    TimeConditionedConsistencyModelCapability,
     TimeEmbeddingAdapter,
 )
 from lightx2v_train.model_zoo.native.minimax_h3 import MiniMaxH3PackedSequence, build_packed_sequence
@@ -38,7 +38,7 @@ class MiniMaxH3TimeEmbeddingAdapter(TimeEmbeddingAdapter):
         return embedder(projected.to(device=parameter.device, dtype=parameter.dtype))
 
 
-class MiniMaxH3ConsistencyCapability(TimeConditionedConsistencyCapability):
+class MiniMaxH3ConsistencyModelCapability(TimeConditionedConsistencyModelCapability):
     """Expose H3's packed joint denoiser through the consistency tensor API."""
 
     def __init__(self, model) -> None:

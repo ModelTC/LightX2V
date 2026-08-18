@@ -10,8 +10,8 @@ import torch.nn.functional as F
 from lightx2v_train.model_capabilities import (
     BoundCapability,
     CheckpointCapability,
-    ConsistencyCapability,
-    DistillationCapability,
+    ConsistencyModelCapability,
+    DistributionMatchingCapability,
     FlowMatchingSFTCapability,
     LossResult,
     ParallelCapability,
@@ -113,20 +113,20 @@ class CommonParallelCapability(BoundCapability, ParallelCapability):
 
 
 class CommonCheckpointCapability(BoundCapability, CheckpointCapability):
-    _CONSISTENCY_AUXILIARY_WEIGHTS_NAME = "consistency_auxiliary.safetensors"
+    _CONSISTENCY_MODEL_AUXILIARY_WEIGHTS_NAME = "consistency_auxiliary.safetensors"
 
-    def _consistency_auxiliary_parameter_names(self) -> tuple[str, ...]:
+    def _consistency_model_auxiliary_parameter_names(self) -> tuple[str, ...]:
         capabilities = self.model.ensure_capabilities()
-        if not capabilities.supports(ConsistencyCapability):
+        if not capabilities.supports(ConsistencyModelCapability):
             return ()
-        return capabilities.require(ConsistencyCapability).auxiliary_parameter_names()
+        return capabilities.require(ConsistencyModelCapability).auxiliary_parameter_names()
 
     def save_weights(self, save_dir, train_type) -> None:
         if train_type == "lora":
             self.model.save_lora_weights(
                 save_dir,
-                auxiliary_parameter_names=self._consistency_auxiliary_parameter_names(),
-                auxiliary_weights_name=self._CONSISTENCY_AUXILIARY_WEIGHTS_NAME,
+                auxiliary_parameter_names=self._consistency_model_auxiliary_parameter_names(),
+                auxiliary_weights_name=self._CONSISTENCY_MODEL_AUXILIARY_WEIGHTS_NAME,
             )
         elif is_main_process():
             torch.save(
@@ -139,8 +139,8 @@ class CommonCheckpointCapability(BoundCapability, CheckpointCapability):
             self.model.load_lora_weights_for_resume(save_dir)
             self.model.load_auxiliary_weights(
                 save_dir,
-                self._consistency_auxiliary_parameter_names(),
-                weights_name=self._CONSISTENCY_AUXILIARY_WEIGHTS_NAME,
+                self._consistency_model_auxiliary_parameter_names(),
+                weights_name=self._CONSISTENCY_MODEL_AUXILIARY_WEIGHTS_NAME,
             )
             return
         path = os.path.join(save_dir, "model_state.pt")
@@ -198,7 +198,7 @@ class GenericFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
         return LossResult(loss=loss)
 
 
-class GenericConsistencyCapability(BoundCapability, ConsistencyCapability):
+class GenericConsistencyModelCapability(BoundCapability, ConsistencyModelCapability):
     def configure(self, features: Collection[str]) -> None:
         features = frozenset(features)
         if features:
@@ -252,7 +252,7 @@ class GenericConsistencyCapability(BoundCapability, ConsistencyCapability):
         return self.model.denoiser_module()
 
 
-class GenericDistillationCapability(BoundCapability, DistillationCapability):
+class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchingCapability):
     """Distribution-matching operations shared by image flow models."""
 
     def __init__(

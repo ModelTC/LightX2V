@@ -1,8 +1,8 @@
 """Capabilities implemented specifically by Wan-family models."""
 
-from .wan_consistency_capability import LingBotConsistencyCapability, WanConsistencyCapability
+from .wan_consistency_model_capability import LingBotConsistencyModelCapability, WanConsistencyModelCapability
 
 __all__ = [
-    "LingBotConsistencyCapability",
-    "WanConsistencyCapability",
+    "LingBotConsistencyModelCapability",
+    "WanConsistencyModelCapability",
 ]

@@ -7,8 +7,8 @@ import copy
 import torch
 from torch import Tensor, nn
 
-from lightx2v_train.model_zoo.capability_adapters.consistency import (
-    TimeConditionedConsistencyCapability,
+from lightx2v_train.model_zoo.capability_adapters.consistency_model import (
+    TimeConditionedConsistencyModelCapability,
     TimeEmbeddingAdapter,
 )
 from lightx2v_train.model_zoo.native.ltx2 import Modality
@@ -82,7 +82,7 @@ class LTXTimeEmbeddingAdapter(TimeEmbeddingAdapter):
         return value + endpoint.to(device=value.device, dtype=value.dtype)
 
 
-class LTXConsistencyCapability(TimeConditionedConsistencyCapability):
+class LTXConsistencyModelCapability(TimeConditionedConsistencyModelCapability):
     """Expose joint LTX audio/video denoising through the tensor CM boundary."""
 
     def __init__(self, model) -> None:

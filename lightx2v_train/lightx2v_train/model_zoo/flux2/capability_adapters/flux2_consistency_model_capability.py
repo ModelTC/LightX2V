@@ -1,12 +1,12 @@
-"""Consistency capability for Flux2 backbones."""
+"""Consistency-model capability for Flux2 backbones."""
 
-from lightx2v_train.model_zoo.capability_adapters.consistency import (
+from lightx2v_train.model_zoo.capability_adapters.consistency_model import (
     ProjectedTimeEmbeddingAdapter,
-    TimeConditionedConsistencyCapability,
+    TimeConditionedConsistencyModelCapability,
 )
 
 
-class Flux2ConsistencyCapability(TimeConditionedConsistencyCapability):
+class Flux2ConsistencyModelCapability(TimeConditionedConsistencyModelCapability):
     """Bind generic consistency extensions to Flux2 timestep conditioning."""
 
     def __init__(self, model) -> None:
