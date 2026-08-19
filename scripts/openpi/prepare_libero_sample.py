@@ -14,8 +14,7 @@ import numpy as np
 from PIL import Image
 
 DEFAULT_SOURCE = Path(
-    "/data/liuhongda/openpi_data/raw/huggingface/yifengzhu-hf/LIBERO-datasets/"
-    "libero_spatial/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate_demo.hdf5"
+    "/data/liuhongda/openpi_data/raw/huggingface/yifengzhu-hf/LIBERO-datasets/libero_spatial/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate_demo.hdf5"
 )
 DEFAULT_OUTPUT = Path("/data/liuhongda/openpi_data/examples/pi05_libero/libero_spatial_task0_demo0_step0")
 DEFAULT_PROMPT = "pick up the black bowl between the plate and the ramekin and place it on the plate"
@@ -39,9 +38,7 @@ def main() -> None:
         step = int(args.step)
         agentview = np.asarray(demo["obs/agentview_rgb"][step], dtype=np.uint8)
         wrist = np.asarray(demo["obs/eye_in_hand_rgb"][step], dtype=np.uint8)
-        state = np.concatenate(
-            [demo["obs/ee_pos"][step], demo["obs/ee_ori"][step], demo["obs/gripper_states"][step]]
-        ).astype(np.float32)
+        state = np.concatenate([demo["obs/ee_pos"][step], demo["obs/ee_ori"][step], demo["obs/gripper_states"][step]]).astype(np.float32)
         reference_actions = np.asarray(demo["actions"][step : step + 10], dtype=np.float32)
 
     if state.shape != (8,):

@@ -156,10 +156,7 @@ class OpenPINode(Node):
 
         if self.episode_observation_count < self.num_steps_wait:
             action = self.dummy_action.copy()
-            self.get_logger().info(
-                f"observation {observation_index}: publishing LIBERO warmup action "
-                f"({self.episode_observation_count + 1}/{self.num_steps_wait})"
-            )
+            self.get_logger().info(f"observation {observation_index}: publishing LIBERO warmup action ({self.episode_observation_count + 1}/{self.num_steps_wait})")
         else:
             self.get_logger().info(f"observation {observation_index}: running/consuming OpenPI action chunk")
             action = self.policy.next_action(
