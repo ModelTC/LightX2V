@@ -29,13 +29,28 @@ _LIB = torch.library.Library("neopp", "FRAGMENT")
 _LIB.define("kv_update(Tensor kv_buf, int layer_idx, Tensor key_states, Tensor value_states) -> (Tensor, Tensor)")
 
 
-@torch.library.impl(_LIB, "kv_update", "CUDA")
-def _kv_update_impl(kv_buf, layer_idx, key_states, value_states):
+def _kv_update_eager(kv_buf, layer_idx, key_states, value_states):
     past_seq = kv_buf.shape[2] - key_states.shape[0]
     end = past_seq + key_states.shape[0]
     kv_buf[layer_idx, 0, past_seq:end] = key_states
     kv_buf[layer_idx, 1, past_seq:end] = value_states
     return kv_buf[layer_idx, 0, :end], kv_buf[layer_idx, 1, :end]
+
+
+@torch.library.impl(_LIB, "kv_update", "CUDA")
+def _kv_update_cuda(kv_buf, layer_idx, key_states, value_states):
+    return _kv_update_eager(kv_buf, layer_idx, key_states, value_states)
+
+
+@torch.library.impl(_LIB, "kv_update", "CompositeExplicitAutograd")
+def _kv_update_composite(kv_buf, layer_idx, key_states, value_states):
+    """Portable correctness implementation used by Ascend/PrivateUse1 and CPU.
+
+    CUDA keeps its dedicated dispatch entry above.  The composite implementation
+    only uses ordinary PyTorch indexing/copy operations, which torch_npu lowers
+    for NPU tensors without requiring a CUDA-only custom kernel.
+    """
+    return _kv_update_eager(kv_buf, layer_idx, key_states, value_states)
 
 
 @torch.library.register_fake("neopp::kv_update")
