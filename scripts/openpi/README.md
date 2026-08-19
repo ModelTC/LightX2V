@@ -155,6 +155,10 @@ OPENPI_SAVE_ACTION_PATH=/absolute/path/to/actions.npy \
 bash scripts/openpi/run_libero_i2va.sh
 ```
 
+This mode uses the OpenPI-owned `single_observation` module directly. The
+shared `lightx2v.infer` entry remains identical to the ModelTC upstream layout
+and does not contain OpenPI-specific dependency branching.
+
 The result is a float32 NumPy array with shape `(10, 7)` at the exact
 `OPENPI_SAVE_ACTION_PATH`.
 

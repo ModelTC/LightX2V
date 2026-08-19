@@ -101,9 +101,7 @@ class OpenPIModel(nn.Module):
         device = torch.device(values.get("device", "cuda"))
         if device.type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("OpenPI config requests CUDA, but torch.cuda.is_available() is false")
-        num_steps = int(
-            values.get("num_inference_steps", values.get("num_flow_steps", values.get("num_steps", 10)))
-        )
+        num_steps = int(values.get("num_inference_steps", values.get("num_flow_steps", values.get("num_steps", 10))))
         output_action_dim = int(values.get("output_action_dim", 7))
         if output_action_dim != 7:
             raise ValueError("The released pi05_libero policy must output 7-D LIBERO actions")

@@ -5,13 +5,12 @@ import logging
 import math
 
 import torch
-from torch import Tensor
-from torch import nn
 import torch.nn.functional as F  # noqa: N812
+from torch import Tensor, nn
 
 from . import config as _gemma
-from .gemma import PaliGemmaWithExpertModel
 from . import preprocessing as _preprocessing
+from .gemma import PaliGemmaWithExpertModel
 
 
 def get_safe_dtype(target_dtype, device_type):
@@ -25,9 +24,7 @@ def get_safe_dtype(target_dtype, device_type):
     return target_dtype
 
 
-def create_sinusoidal_pos_embedding(
-    time: torch.tensor, dimension: int, min_period: float, max_period: float, device="cpu"
-) -> Tensor:
+def create_sinusoidal_pos_embedding(time: torch.tensor, dimension: int, min_period: float, max_period: float, device="cpu") -> Tensor:
     """Computes sine-cosine positional embedding vectors for scalar positions."""
     if dimension % 2 != 0:
         raise ValueError(f"dimension ({dimension}) must be divisible by 2")
@@ -152,9 +149,7 @@ class PI0Pytorch(nn.Module):
     def _apply_checkpoint(self, func, *args, **kwargs):
         """Helper method to apply gradient checkpointing if enabled."""
         if self.gradient_checkpointing_enabled and self.training:
-            return torch.utils.checkpoint.checkpoint(
-                func, *args, use_reentrant=False, preserve_rng_state=False, **kwargs
-            )
+            return torch.utils.checkpoint.checkpoint(func, *args, use_reentrant=False, preserve_rng_state=False, **kwargs)
         return func(*args, **kwargs)
 
     def _prepare_attention_masks_4d(self, att_2d_masks):
@@ -187,9 +182,7 @@ class PI0Pytorch(nn.Module):
         time = time_beta * 0.999 + 0.001
         return time.to(dtype=torch.float32, device=device)
 
-    def embed_prefix(
-        self, images, img_masks, lang_tokens, lang_masks
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def embed_prefix(self, images, img_masks, lang_tokens, lang_masks) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Embed images with SigLIP and language tokens with embedding layer to prepare
         for PaliGemma transformer processing.
         """
@@ -265,9 +258,7 @@ class PI0Pytorch(nn.Module):
             att_masks += [1]
 
         # Embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
-        time_emb = create_sinusoidal_pos_embedding(
-            timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0, device=timestep.device
-        )
+        time_emb = create_sinusoidal_pos_embedding(timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0, device=timestep.device)
         time_emb = time_emb.type(dtype=timestep.dtype)
 
         # Fuse timestep + action information using an MLP
@@ -333,10 +324,7 @@ class PI0Pytorch(nn.Module):
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, time)
-        if (
-            self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
-            == torch.bfloat16
-        ):
+        if self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype == torch.bfloat16:
             suffix_embs = suffix_embs.to(dtype=torch.bfloat16)
             prefix_embs = prefix_embs.to(dtype=torch.bfloat16)
 
@@ -361,9 +349,7 @@ class PI0Pytorch(nn.Module):
             )
             return suffix_out
 
-        suffix_out = self._apply_checkpoint(
-            forward_func, prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond
-        )
+        suffix_out = self._apply_checkpoint(forward_func, prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond)
 
         suffix_out = suffix_out[:, -self.config.action_horizon :]
         suffix_out = suffix_out.to(dtype=torch.float32)

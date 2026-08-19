@@ -133,8 +133,9 @@ OpenPI 启动脚本只在该进程的 `PYTHONPATH` 前置：
 
 其中包含 `transformers 4.53.2`、`huggingface-hub 0.32.3`、
 `tokenizers 0.21.1` 和官方五个 Transformers replacement 文件。通用
-`lightx2v.infer` 在 OpenPI 模式只注册 OpenPI runner，避免 eager import 需要
-Transformers 5.x 的无关模型；其它模型的入口保持原行为。
+OpenPI 不修改通用 `lightx2v.infer` 入口。静态单观测推理直接调用 OpenPI 自己的
+`lightx2v.models.runners.openpi.single_observation`，避免隔离的 Transformers
+4.53.2 eager import 需要更新 Transformers API 的无关模型。
 
 两个启动脚本还设置 `USE_FLAX=0`，防止 Transformers 因 base 中存在 Flax 而
 自动加载 JAX。实测导入 patched Transformers/SigLIP 后 `jax_loaded=False`、

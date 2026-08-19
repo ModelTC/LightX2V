@@ -5,8 +5,7 @@ from typing import Literal
 
 import torch
 from torch import nn
-from transformers import GemmaForCausalLM
-from transformers import PaliGemmaForConditionalGeneration
+from transformers import GemmaForCausalLM, PaliGemmaForConditionalGeneration
 from transformers.models.auto import CONFIG_MAPPING
 from transformers.models.gemma import modeling_gemma
 
@@ -130,11 +129,9 @@ class PaliGemmaWithExpertModel(nn.Module):
             num_layers = self.paligemma.config.text_config.num_hidden_layers
 
             # Check if gradient checkpointing is enabled for any of the models
-            use_gradient_checkpointing = (
-                hasattr(self.gemma_expert.model, "gradient_checkpointing")
-                and self.gemma_expert.model.gradient_checkpointing
-                and self.training
-            ) or (hasattr(self, "gradient_checkpointing") and self.gradient_checkpointing and self.training)
+            use_gradient_checkpointing = (hasattr(self.gemma_expert.model, "gradient_checkpointing") and self.gemma_expert.model.gradient_checkpointing and self.training) or (
+                hasattr(self, "gradient_checkpointing") and self.gradient_checkpointing and self.training
+            )
 
             # Force enable gradient checkpointing if we're in training mode and the model supports it
             if self.training and hasattr(self.gemma_expert.model, "gradient_checkpointing"):
@@ -147,13 +144,9 @@ class PaliGemmaWithExpertModel(nn.Module):
             if hasattr(self, "_debug_gc_printed") and not self._debug_gc_printed:
                 print(f"Gemma expert model gradient checkpointing: {use_gradient_checkpointing}")
                 print(f"Model training mode: {self.training}")
-                print(
-                    f"Gemma expert model has gradient_checkpointing attr: {hasattr(self.gemma_expert.model, 'gradient_checkpointing')}"
-                )
+                print(f"Gemma expert model has gradient_checkpointing attr: {hasattr(self.gemma_expert.model, 'gradient_checkpointing')}")
                 if hasattr(self.gemma_expert.model, "gradient_checkpointing"):
-                    print(
-                        f"Gemma expert model gradient_checkpointing value: {self.gemma_expert.model.gradient_checkpointing}"
-                    )
+                    print(f"Gemma expert model gradient_checkpointing value: {self.gemma_expert.model.gradient_checkpointing}")
                 self._debug_gc_printed = True
 
             # Define the complete layer computation function for gradient checkpointing
@@ -192,9 +185,7 @@ class PaliGemmaWithExpertModel(nn.Module):
                     dtype=query_states.dtype,
                 )
                 cos, sin = self.paligemma.model.language_model.rotary_emb(dummy_tensor, position_ids)
-                query_states, key_states = modeling_gemma.apply_rotary_pos_emb(
-                    query_states, key_states, cos, sin, unsqueeze_dim=1
-                )
+                query_states, key_states = modeling_gemma.apply_rotary_pos_emb(query_states, key_states, cos, sin, unsqueeze_dim=1)
 
                 batch_size = query_states.shape[0]
                 scaling = self.paligemma.language_model.layers[layer_idx].self_attn.scaling
@@ -253,9 +244,7 @@ class PaliGemmaWithExpertModel(nn.Module):
                         preserve_rng_state=False,
                     )
                 else:
-                    inputs_embeds = compute_layer_complete(
-                        layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond
-                    )
+                    inputs_embeds = compute_layer_complete(layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond)
 
                 # Old code removed - now using compute_layer_complete function above
 
@@ -270,9 +259,7 @@ class PaliGemmaWithExpertModel(nn.Module):
 
             # Apply gradient checkpointing to final norm if enabled
             if use_gradient_checkpointing:
-                outputs_embeds = torch.utils.checkpoint.checkpoint(
-                    compute_final_norms, inputs_embeds, adarms_cond, use_reentrant=False, preserve_rng_state=False
-                )
+                outputs_embeds = torch.utils.checkpoint.checkpoint(compute_final_norms, inputs_embeds, adarms_cond, use_reentrant=False, preserve_rng_state=False)
             else:
                 outputs_embeds = compute_final_norms(inputs_embeds, adarms_cond)
 
