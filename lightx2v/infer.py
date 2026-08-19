@@ -26,6 +26,7 @@ from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
+from lightx2v.models.runners.swiftvr.swiftvr_runner import SwiftVRRunner  # noqa: F401
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
@@ -133,6 +134,7 @@ def main():
             "bagel",
             "sensenova_vision",
             "seedvr2",
+            "swiftvr",
             "neopp",
             "motus",
             "lingbot_world_fast",
