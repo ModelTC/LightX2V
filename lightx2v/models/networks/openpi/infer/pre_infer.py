@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image
 import sentencepiece
 import torch
+from PIL import Image
 
 from ..observation import Observation
 
@@ -145,10 +145,7 @@ class OpenPIPreInfer:
             "right_wrist_0_rgb": right_wrist,
         }
         data = {
-            "image": {
-                key: torch.from_numpy(value).unsqueeze(0).to(self.device)
-                for key, value in image_arrays.items()
-            },
+            "image": {key: torch.from_numpy(value).unsqueeze(0).to(self.device) for key, value in image_arrays.items()},
             "image_mask": {
                 "base_0_rgb": torch.ones(1, dtype=torch.bool, device=self.device),
                 "left_wrist_0_rgb": torch.ones(1, dtype=torch.bool, device=self.device),

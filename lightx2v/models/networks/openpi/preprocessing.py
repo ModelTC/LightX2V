@@ -1,8 +1,8 @@
 # Adapted from Physical Intelligence OpenPI (Apache-2.0), commit 15a9616.
 # Localized for the LightX2V OpenPI backend.
 
-from collections.abc import Sequence
 import logging
+from collections.abc import Sequence
 
 import torch
 

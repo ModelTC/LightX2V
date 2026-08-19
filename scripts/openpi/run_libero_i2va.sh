@@ -79,16 +79,14 @@ case "${run_mode}" in
     if [[ -z "${task_description}" ]]; then
       task_description="pick up the black bowl between the plate and the ramekin and place it on the plate"
     fi
-    "${python_bin}" -m lightx2v.infer \
-      --model_cls openpi \
-      --task i2va \
-      --model_path "${model_path}" \
-      --config_json "${config_json}" \
+    "${python_bin}" -m lightx2v.models.runners.openpi.single_observation \
+      --model-path "${model_path}" \
+      --config-json "${config_json}" \
       --seed "${OPENPI_SEED:-0}" \
-      --prompt "${task_description}" \
-      --image_path "${image_path}" \
-      --state_path "${state_path}" \
-      --save_action_path "${save_action_path}"
+      --task-description "${task_description}" \
+      --image-path "${image_path}" \
+      --state-path "${state_path}" \
+      --save-action-path "${save_action_path}"
     ;;
   *)
     echo "Unsupported OPENPI_RUN_MODE=${run_mode}; expected rollout or single_observation." >&2

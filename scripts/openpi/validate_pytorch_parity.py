@@ -10,9 +10,9 @@ import argparse
 import dataclasses
 import gc
 import json
-from pathlib import Path
 import sys
 import types
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -24,9 +24,7 @@ def load_sample(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         demo = handle["data/demo_0"]
         image = np.asarray(demo["obs/agentview_rgb"][0], dtype=np.uint8)
         wrist = np.asarray(demo["obs/eye_in_hand_rgb"][0], dtype=np.uint8)
-        state = np.concatenate(
-            [demo["obs/ee_pos"][0], demo["obs/ee_ori"][0], demo["obs/gripper_states"][0]]
-        ).astype(np.float32)
+        state = np.concatenate([demo["obs/ee_pos"][0], demo["obs/ee_ori"][0], demo["obs/gripper_states"][0]]).astype(np.float32)
     return image, wrist, state
 
 
@@ -46,8 +44,7 @@ def main() -> None:
         "--sample",
         type=Path,
         default=Path(
-            "/data/liuhongda/openpi_data/raw/huggingface/yifengzhu-hf/LIBERO-datasets/"
-            "libero_spatial/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate_demo.hdf5"
+            "/data/liuhongda/openpi_data/raw/huggingface/yifengzhu-hf/LIBERO-datasets/libero_spatial/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate_demo.hdf5"
         ),
     )
     parser.add_argument(
