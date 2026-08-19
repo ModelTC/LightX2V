@@ -19,22 +19,11 @@ import torch.nn.functional as F
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 
-_sdp_fn = None
-_load_attempted = False
+try:
+    import sycl_kernels as _sycl_mod
 
-
-def _load_sdp():
-    global _sdp_fn, _load_attempted
-    if _load_attempted:
-        return _sdp_fn
-    _load_attempted = True
-    try:
-        import sycl_kernels
-
-        _sdp_fn = sycl_kernels.sdp
-        return _sdp_fn
-    except (AttributeError, ImportError, OSError, RuntimeError):
-        pass
+    _sdp_fn = _sycl_mod.sdp
+except ImportError:
     if os.name == "nt":
         _wheel_version = "0.0.1"
         _install_instructions = f"    call build.bat\n    pip install dist\\sycl_kernels-{_wheel_version}-cp311-abi3-win_amd64.whl --force-reinstall --no-deps\n"
@@ -59,7 +48,8 @@ def _load_sdp():
         + _install_instructions,
         stacklevel=2,
     )
-    return None
+    _sycl_mod = None
+    _sdp_fn = None
 
 
 def _sdp(q4d, k4d, v4d):
@@ -70,9 +60,8 @@ def _sdp(q4d, k4d, v4d):
     - fallback                → torch scaled_dot_product_attention
                                 (requires layout permute: [B,L,H,D] ↔ [B,H,L,D])
     """
-    sdp_fn = _load_sdp()
-    if sdp_fn is not None:
-        return sdp_fn(q4d, k4d, v4d)
+    if _sdp_fn is not None:
+        return _sdp_fn(q4d, k4d, v4d)
 
     # torch SDPA expects [B, H, L, D]
     q_t = q4d.permute(0, 2, 1, 3).contiguous()

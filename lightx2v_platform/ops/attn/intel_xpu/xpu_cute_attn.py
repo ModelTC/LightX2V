@@ -6,28 +6,18 @@ from loguru import logger
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
 
-_cute_sdp_fn = None
-_import_error = None
-_load_attempted = False
-
-
-def _load_cute_sdp():
-    global _cute_sdp_fn, _import_error, _load_attempted
-    if not _load_attempted:
-        try:
-            from sycl_kernels import cute_sdp
-
-            _cute_sdp_fn = cute_sdp
-        except (ImportError, OSError, RuntimeError) as exc:
-            _import_error = exc
-        _load_attempted = True
-    return _cute_sdp_fn
+try:
+    from sycl_kernels import cute_sdp
+except ImportError as exc:
+    cute_sdp = None
+    _IMPORT_ERROR = exc
+else:
+    _IMPORT_ERROR = None
 
 
 def _cute_sdp(q, k, v):
-    cute_sdp = _load_cute_sdp()
     if cute_sdp is None:
-        raise RuntimeError("intel_xpu_cute_attn requires sycl-kernels built with CUTE FMHA") from _import_error
+        raise RuntimeError("intel_xpu_cute_attn requires sycl-kernels built with CUTE FMHA") from _IMPORT_ERROR
     return cute_sdp(q, k, v)
 
 
