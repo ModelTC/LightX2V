@@ -11,6 +11,10 @@
   "text_encoder_offload_granularity": "block",
   "vae_cpu_offload": false,
   "vae_decode_parallel": true,
+  "vae_decode_tile_shape": {
+    "768x1344": [304, 320],
+    "544x960": [288, 304]
+  },
   "vae_sensitive_layer_dtype": "fp32",
   "lazy_load": false,
   "unload_modules": false,
