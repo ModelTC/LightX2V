@@ -21,8 +21,6 @@ libero_config_dir="${OPENPI_LIBERO_CONFIG_DIR:-/data/liuhongda/openpi_data/runti
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export PYTHONPATH="${PYTHONPATH:-}"
-# Transformers 4.53.2 auto-detects the base environment's Flax installation;
-# disable that optional backend so this converted policy stays PyTorch-only.
 export USE_FLAX=0
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
@@ -40,56 +38,46 @@ done
 
 source "${lightx2v_path}/scripts/base/base.sh"
 
-# Use the isolated Transformers 4.53.2 + OpenPI patches without changing the
-# packages installed in the user's base environment.
-export PYTHONPATH="${transformers_runtime_path}:${lightx2v_path}${PYTHONPATH:+:${PYTHONPATH}}"
+# The common LightX2V process stays on the base environment. OpenPIRunner adds
+# the isolated patched Transformers runtime only to its local worker process.
+export PYTHONPATH="${lightx2v_path}${PYTHONPATH:+:${PYTHONPATH}}"
+export OPENPI_PYTHON="${python_bin}"
+export OPENPI_RUN_MODE="${run_mode}"
+export OPENPI_TRANSFORMERS_RUNTIME_PATH="${transformers_runtime_path}"
+export OPENPI_LIBERO_ROOT="${libero_root}"
+export OPENPI_LIBERO_CONFIG_DIR="${libero_config_dir}"
+export OPENPI_SAVE_METRICS_PATH="${save_metrics_path}"
+unset OPENPI_WORKER_PROCESS
 
 case "${run_mode}" in
   rollout)
+    seed="${OPENPI_SEED:-7}"
     if [[ ! -d "${libero_root}/libero/libero/bddl_files" ]]; then
       echo "LIBERO checkout is incomplete: ${libero_root}" >&2
       exit 1
     fi
-    rollout_args=(
-      --model-path "${model_path}"
-      --config-json "${config_json}"
-      --libero-root "${libero_root}"
-      --libero-config-dir "${libero_config_dir}"
-      --benchmark "${LIBERO_BENCHMARK:-libero_spatial}"
-      --task-id "${LIBERO_TASK_ID:-0}"
-      --init-state-id "${LIBERO_INIT_STATE_ID:-0}"
-      --seed "${OPENPI_SEED:-7}"
-      --actions-per-plan "${OPENPI_ACTIONS_PER_PLAN:-5}"
-      --num-steps-wait "${OPENPI_NUM_STEPS_WAIT:-10}"
-      --render-size "${OPENPI_RENDER_SIZE:-256}"
-      --fps "${OPENPI_VIDEO_FPS:-10}"
-      --save-video-path "${save_video_path}"
-      --save-action-path "${save_action_path}"
-      --save-metrics-path "${save_metrics_path}"
-    )
-    if [[ -n "${task_description}" ]]; then
-      rollout_args+=(--task-description "${task_description}")
-    fi
-    if [[ -n "${OPENPI_MAX_STEPS:-}" ]]; then
-      rollout_args+=(--max-steps "${OPENPI_MAX_STEPS}")
-    fi
-    "${python_bin}" -m lightx2v.models.runners.openpi.libero_rollout "${rollout_args[@]}"
     ;;
   single_observation)
+    seed="${OPENPI_SEED:-0}"
     if [[ -z "${task_description}" ]]; then
       task_description="pick up the black bowl between the plate and the ramekin and place it on the plate"
     fi
-    "${python_bin}" -m lightx2v.models.runners.openpi.single_observation \
-      --model-path "${model_path}" \
-      --config-json "${config_json}" \
-      --seed "${OPENPI_SEED:-0}" \
-      --task-description "${task_description}" \
-      --image-path "${image_path}" \
-      --state-path "${state_path}" \
-      --save-action-path "${save_action_path}"
     ;;
   *)
     echo "Unsupported OPENPI_RUN_MODE=${run_mode}; expected rollout or single_observation." >&2
     exit 2
     ;;
 esac
+
+echo "OpenPI call chain: lightx2v.infer -> OpenPIRunner -> local ${run_mode} worker"
+"${python_bin}" -m lightx2v.infer \
+  --model_cls openpi \
+  --task i2va \
+  --model_path "${model_path}" \
+  --config_json "${config_json}" \
+  --seed "${seed}" \
+  --prompt "${task_description}" \
+  --image_path "${image_path}" \
+  --state_path "${state_path}" \
+  --save_result_path "${save_video_path}" \
+  --save_action_path "${save_action_path}"
