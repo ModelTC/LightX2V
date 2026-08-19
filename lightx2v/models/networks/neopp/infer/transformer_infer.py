@@ -86,13 +86,12 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             moe_backend = config.get("moe_backend", "flashinfer")
             logger.info(f"NeoPP MoE backend: {moe_backend}")
             self._mlp_forward = self._sparse_moe
-            if moe_backend == "flashinfer" and self.fi_moe_autotune.enabled:
+            if self.fi_moe_autotune.enabled:
                 if flashinfer_autotune is None:
                     raise RuntimeError("moe_flashinfer_setting.autotune=true but flashinfer MoE autotuner is not available")
                 logger.info(
                     f"NeoPP flashinfer MoE autotune enabled "
                     f"(cache={self.fi_moe_autotune.cache_path}, "
-                    f"tune_mode=auto (cache-only if present, else lazy rebuild), "
                     f"tune_max_num_tokens={self.fi_moe_autotune.tune_max_num_tokens}, "
                     f"{MOE_FI_FORCE_RETUNE_ENV}={os.environ.get(MOE_FI_FORCE_RETUNE_ENV, '0')})"
                 )
@@ -341,8 +340,8 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
     def _moe_route(self, moe_w, hidden_states):
         router_logits = moe_w.gate.apply(hidden_states)
         if self.norm_topk_prob:
-            _, selected_experts = torch.topk(router_logits, self.num_experts_per_tok, dim=-1, sorted=False)
-            routing_weights = F.softmax(router_logits.gather(1, selected_experts).float(), dim=-1)
+            routing_weights, selected_experts = torch.topk(router_logits, self.num_experts_per_tok, dim=-1, sorted=False)
+            routing_weights = F.softmax(routing_weights.float(), dim=-1)
         else:
             routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
             routing_weights, selected_experts = torch.topk(routing_weights, self.num_experts_per_tok, dim=-1)

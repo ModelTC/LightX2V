@@ -43,6 +43,23 @@ class NeoppTransformerWeights(WeightModule):
             NeoppFmHeadWeights(self.mm_type, config=self.config),
         )
 
+    @staticmethod
+    def _reject_routed_expert_adapter(weight_dict):
+        if any(".mlp_mot_gen.experts." in key for key in weight_dict):
+            raise NotImplementedError("NeoPP common fused MoE backends do not support routed-expert LoRA/diff adapters")
+
+    def register_lora(self, weight_dict, strength):
+        self._reject_routed_expert_adapter(weight_dict)
+        super().register_lora(weight_dict, strength)
+
+    def update_lora(self, weight_dict, strength):
+        self._reject_routed_expert_adapter(weight_dict)
+        super().update_lora(weight_dict, strength)
+
+    def register_diff(self, weight_dict):
+        self._reject_routed_expert_adapter(weight_dict)
+        super().register_diff(weight_dict)
+
 
 class NeoppDecoderLayerWeights(WeightModule):
     def __init__(self, block_index, config, mm_type, attn_type="flash_attn2", lora_path=None):
@@ -80,7 +97,6 @@ class NeoppDecoderLayerWeights(WeightModule):
             mlp_mot_gen = NeoppSparseMoeWeights(
                 block_index,
                 mm_type,
-                "mlp_mot_gen",
                 gen_num_experts,
                 moe_backend=moe_backend,
                 tune_max_num_tokens=tune_max_num_tokens,
@@ -147,60 +163,29 @@ class NeoppAttentionWeights(WeightModule):
 
 
 class NeoppSparseMoeWeights(WeightModule):
-    def __init__(self, block_index, mm_type, subname, num_experts, moe_backend, tune_max_num_tokens=8192, lora_path=None):
+    def __init__(self, block_index, mm_type, num_experts, moe_backend, tune_max_num_tokens, lora_path=None):
         super().__init__()
-        prefix = f"language_model.model.layers.{block_index}.{subname}"
+        prefix = f"language_model.model.layers.{block_index}.mlp_mot_gen"
         lora_prefix = "language_model"
 
         self.moe_backend = moe_backend
-        self.tune_max_num_tokens = int(tune_max_num_tokens)
+        self.tune_max_num_tokens = tune_max_num_tokens
         self.add_module("gate", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate.weight", None, lora_prefix=lora_prefix, lora_path=lora_path))
 
-        self.num_experts = num_experts
-        experts = WeightModuleList(NeoppMoeSingleExpertWeights(block_index, mm_type, subname, j, lora_path=lora_path) for j in range(num_experts))
+        experts = WeightModuleList(NeoppMoeSingleExpertWeights(block_index, mm_type, j, lora_path=lora_path) for j in range(num_experts))
         self.add_module("experts", experts)
 
     def load(self, weight_dict):
         super().load(weight_dict)
-        self._build_fused_moe()
 
-    @staticmethod
-    def _loaded_weight(module, name):
-        if getattr(module, "weight", None) is not None:
-            return module._get_actual_weight()
-        if getattr(module, "pin_weight", None) is not None:
-            return module.pin_weight
-        raise RuntimeError(f"NeoPP MoE weight {name} is not loaded")
-
-    def _collect_expert_tensors(self):
         fc1_weights, fc2_weights = [], []
         for expert_idx, expert in enumerate(self.experts):
-            projections = (expert.gate_proj, expert.up_proj, expert.down_proj)
-            if any(projection.has_lora_branch or projection.has_diff for projection in projections):
-                raise NotImplementedError("NeoPP common fused MoE backends do not support routed-expert LoRA/diff adapters")
-
             up_weight = self._loaded_weight(expert.up_proj, f"experts.{expert_idx}.up_proj").t()
             gate_weight = self._loaded_weight(expert.gate_proj, f"experts.{expert_idx}.gate_proj").t()
             down_weight = self._loaded_weight(expert.down_proj, f"experts.{expert_idx}.down_proj").t()
             fc1_weights.append(torch.cat([up_weight, gate_weight], dim=0))
             fc2_weights.append(down_weight)
-        return tuple(fc1_weights), tuple(fc2_weights)
 
-    @staticmethod
-    def _release_mm_tensors(module):
-        for _, attr_name, _ in module.base_attrs:
-            for tensor_attr in (attr_name, f"pin_{attr_name}", f"{attr_name}_cuda_buffer"):
-                if hasattr(module, tensor_attr):
-                    setattr(module, tensor_attr, None)
-
-    def _release_expert_tensors(self):
-        for expert in self.experts:
-            self._release_mm_tensors(expert.gate_proj)
-            self._release_mm_tensors(expert.up_proj)
-            self._release_mm_tensors(expert.down_proj)
-
-    def _build_fused_moe(self):
-        fc1_weights, fc2_weights = self._collect_expert_tensors()
         self.add_module(
             "fused_moe",
             create_local_fused_moe(
@@ -211,36 +196,25 @@ class NeoppSparseMoeWeights(WeightModule):
                 tune_max_num_tokens=self.tune_max_num_tokens,
             ),
         )
-        self._release_expert_tensors()
 
-    def _reject_routed_expert_adapter(self, weight_dict):
-        adapter_name_attrs = ("lora_down_name", "lora_up_name", "lora_alpha_name", "weight_diff_name", "bias_diff_name")
-        for expert_idx, expert in enumerate(self.experts):
-            for projection_name in ("gate_proj", "up_proj", "down_proj"):
-                projection = getattr(expert, projection_name)
-                if any(getattr(projection, name_attr) in weight_dict for name_attr in adapter_name_attrs):
-                    raise NotImplementedError(
-                        f"NeoPP common fused MoE backends do not support routed-expert LoRA/diff adapters; "
-                        f"found experts.{expert_idx}.{projection_name}"
-                    )
+        for expert in self.experts:
+            for projection in (expert.gate_proj, expert.up_proj, expert.down_proj):
+                projection.weight = None
+                projection.pin_weight = None
 
-    def register_lora(self, weight_dict, strength):
-        self._reject_routed_expert_adapter(weight_dict)
-        super().register_lora(weight_dict, strength)
-
-    def update_lora(self, weight_dict, strength):
-        self._reject_routed_expert_adapter(weight_dict)
-        super().update_lora(weight_dict, strength)
-
-    def register_diff(self, weight_dict):
-        self._reject_routed_expert_adapter(weight_dict)
-        super().register_diff(weight_dict)
+    @staticmethod
+    def _loaded_weight(module, name):
+        if module.weight is not None:
+            return module._get_actual_weight()
+        if module.pin_weight is not None:
+            return module.pin_weight
+        raise RuntimeError(f"NeoPP MoE weight {name} is not loaded")
 
 
 class NeoppMoeSingleExpertWeights(WeightModule):
-    def __init__(self, block_index, mm_type, subname, expert_index, lora_path=None):
+    def __init__(self, block_index, mm_type, expert_index, lora_path=None):
         super().__init__()
-        prefix = f"language_model.model.layers.{block_index}.{subname}.experts.{expert_index}"
+        prefix = f"language_model.model.layers.{block_index}.mlp_mot_gen.experts.{expert_index}"
         lora_prefix = "language_model"
         self.add_module("gate_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate_proj.weight", None, lora_prefix=lora_prefix, lora_path=lora_path))
         self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.up_proj.weight", None, lora_prefix=lora_prefix, lora_path=lora_path))
