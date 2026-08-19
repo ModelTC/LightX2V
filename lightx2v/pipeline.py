@@ -22,6 +22,7 @@ from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
+from lightx2v.models.runners.swiftvr.swiftvr_runner import SwiftVRRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
@@ -473,7 +474,7 @@ class LightX2VPipeline:
         # image_strength can be a scalar (float/int) or a list matching the number of images
         # i2i_denoise_strength controls single-image edit redraw strength when explicitly set
         # image_frame_idx: optional list of pixel frame indices (one per image), or None to evenly space in [0, num_frames-1]
-        if self.model_cls in {"wan22_animate2_distilled", "ltx2", "ltx2_5"} and save_result_path == "lightx2v_gen_result.png":
+        if self.model_cls in {"wan22_animate2_distilled", "ltx2", "ltx2_5", "swiftvr"} and save_result_path == "lightx2v_gen_result.png":
             save_result_path = "lightx2v_gen_result.mp4"
         self.seed = seed
         self.image_path = image_path

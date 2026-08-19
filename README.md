@@ -224,6 +224,7 @@ pipe.generate(
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B)
+- ✅ [SwiftVR](https://huggingface.co/H-oliday/SwiftVR); convert the checkpoint with [convert_swiftvr.py](tools/convert/examples/convert_swiftvr.py), then run the [SR script](scripts/swiftvr/run_swiftvr_sr.sh).
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
 - ✅ [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)

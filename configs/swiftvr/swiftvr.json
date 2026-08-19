@@ -1,0 +1,8 @@
+{
+  "attention_backend": "sdpa",
+  "clip_len": 24,
+  "dit_overlap": 0,
+  "fps": null,
+  "quality": 60,
+  "queue_size": 3
+}
