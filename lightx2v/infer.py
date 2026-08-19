@@ -1,51 +1,67 @@
 import argparse
 import os
+import sys
 
 import torch
 import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.common.ops import *
-from lightx2v.models.networks.bagel.sensenova_tasks import OMNI_VISION_SUBTASK_CHOICES
-from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
-from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner  # noqa: F401
-from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: F401
-from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
-from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
-from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
-from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
-from lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner import HunyuanImage3Runner  # noqa: F401
-from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
-from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
-from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
-from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
-from lightx2v.models.runners.ltx2.ltx2_runner import LTX2ARRunner, LTX2Runner  # noqa: F401
-from lightx2v.models.runners.ltx2.ltx25_runner import LTX25Runner  # noqa: F401
-from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner  # noqa: F401
-from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
-from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
-from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
-from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
-from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  # noqa: F401
-from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_dancer_runner import WanDancerRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_dreamzero_runner import WanDreamZeroRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_infinitetalk_runner import InfiniteTalkRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVARunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
-from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
-from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_s2v_runner import WanS2VRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_vace_runner import Wan22MoeVaceRunner, WanVaceRunner  # noqa: F401
-from lightx2v.models.runners.worldmirror.worldmirror_runner import WorldMirrorRunner  # noqa: F401
-from lightx2v.models.runners.worldplay.worldplay_ar_runner import WorldPlayARRunner  # noqa: F401
-from lightx2v.models.runners.worldplay.worldplay_bi_runner import WorldPlayBIRunner  # noqa: F401
-from lightx2v.models.runners.worldplay.worldplay_distill_runner import WorldPlayDistillRunner  # noqa: F401
-from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: F401
+
+# OpenPI pins a patched Transformers 4.53.2. Several unrelated runners need
+# newer Transformers APIs, so an OpenPI invocation must not eagerly import
+# every other model family before argparse selects its runner. It still uses
+# this shared LightX2V entry point and the regular runner registry.
+_OPENPI_INVOCATION = any(
+    argument == "--model_cls=openpi"
+    or (argument == "--model_cls" and index + 1 < len(sys.argv) and sys.argv[index + 1] == "openpi")
+    for index, argument in enumerate(sys.argv)
+)
+if _OPENPI_INVOCATION:
+    OMNI_VISION_SUBTASK_CHOICES = ()
+else:
+    from lightx2v.models.networks.bagel.sensenova_tasks import OMNI_VISION_SUBTASK_CHOICES  # noqa: E402
+    from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: E402, F401
+    from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner  # noqa: E402, F401
+    from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: E402, F401
+    from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: E402, F401
+    from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: E402, F401
+    from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: E402, F401
+    from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: E402, F401
+    from lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner import HunyuanImage3Runner  # noqa: E402, F401
+    from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: E402, F401
+    from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: E402, F401
+    from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: E402, F401
+    from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: E402, F401
+    from lightx2v.models.runners.ltx2.ltx2_runner import LTX2ARRunner, LTX2Runner  # noqa: E402, F401
+    from lightx2v.models.runners.ltx2.ltx25_runner import LTX25Runner  # noqa: E402, F401
+    from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner  # noqa: E402, F401
+    from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: E402, F401
+    from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: E402, F401
+    from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: E402, F401
+    from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_dancer_runner import WanDancerRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_dreamzero_runner import WanDreamZeroRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_infinitetalk_runner import InfiniteTalkRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVARunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_s2v_runner import WanS2VRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner  # noqa: E402, F401
+    from lightx2v.models.runners.wan.wan_vace_runner import Wan22MoeVaceRunner, WanVaceRunner  # noqa: E402, F401
+    from lightx2v.models.runners.worldmirror.worldmirror_runner import WorldMirrorRunner  # noqa: E402, F401
+    from lightx2v.models.runners.worldplay.worldplay_ar_runner import WorldPlayARRunner  # noqa: E402, F401
+    from lightx2v.models.runners.worldplay.worldplay_bi_runner import WorldPlayBIRunner  # noqa: E402, F401
+    from lightx2v.models.runners.worldplay.worldplay_distill_runner import WorldPlayDistillRunner  # noqa: E402, F401
+    from lightx2v.models.runners.z_image.z_image_runner import ZImageRunner  # noqa: E402, F401
+
+from lightx2v.models.runners.openpi.openpi_runner import OpenPIRunner  # noqa: E402, F401
 from lightx2v.utils.envs import *
 from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.profiler import *
@@ -141,6 +157,7 @@ def main():
             "dreamzero",
             "infinitetalk",
             "fastwam",
+            "openpi",
             "lingbot_video",
         ],
         default="wan2.1",
@@ -304,7 +321,12 @@ def main():
     parser.add_argument("--wm_ckpt_path", type=str, default=None, help="(worldmirror/recon) Optional .ckpt/.safetensors (pair with --wm_config_path).")
 
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
-    parser.add_argument("--save_action_path", type=str, default=None, help="The path to save action predictions for Motus, LingBot-VA, or DreamZero.")
+    parser.add_argument(
+        "--save_action_path",
+        type=str,
+        default=None,
+        help="The path to save action predictions for Motus, LingBot-VA, DreamZero, FastWAM, or OpenPI.",
+    )
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--target_shape", type=int, nargs="+", default=[], help="Set return video or image shape")
     parser.add_argument("--aspect_ratio", type=str, default="")
