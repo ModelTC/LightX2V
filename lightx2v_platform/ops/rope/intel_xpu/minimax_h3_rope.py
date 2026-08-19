@@ -15,15 +15,7 @@ class MiniMaxH3XpuRope(RopeTemplate):
 
     @staticmethod
     def _can_use_xpu_kernel(x, cos, sin, rotary_dim):
-        if not (
-            x.device.type == "xpu"
-            and x.dtype == torch.bfloat16
-            and x.ndim == 3
-            and x.shape[-1] == 128
-            and rotary_dim == 96
-            and cos.dtype == torch.float32
-            and sin.dtype == torch.float32
-        ):
+        if not (x.device.type == "xpu" and x.dtype == torch.bfloat16 and x.ndim == 3 and x.shape[-1] == 128 and rotary_dim == 96 and cos.dtype == torch.float32 and sin.dtype == torch.float32):
             return False
         try:
             import sycl_kernels
@@ -34,15 +26,9 @@ class MiniMaxH3XpuRope(RopeTemplate):
 
     def _torch_apply_single(self, x, cos, sin, rotary_dim):
         if rotary_dim <= 0 or rotary_dim > x.shape[-1] or rotary_dim % 2:
-            raise ValueError(
-                "rotary_dim must be positive, even, and <= head_size; "
-                f"got rotary_dim={rotary_dim}, head_size={x.shape[-1]}"
-            )
+            raise ValueError(f"rotary_dim must be positive, even, and <= head_size; got rotary_dim={rotary_dim}, head_size={x.shape[-1]}")
         if cos.shape != sin.shape or cos.shape[-1] != rotary_dim:
-            raise ValueError(
-                f"cos and sin must have matching width {rotary_dim}, "
-                f"got {tuple(cos.shape)} and {tuple(sin.shape)}"
-            )
+            raise ValueError(f"cos and sin must have matching width {rotary_dim}, got {tuple(cos.shape)} and {tuple(sin.shape)}")
 
         x_rot, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
         first, second = x_rot.to(self.compute_dtype).chunk(2, dim=-1)
@@ -61,9 +47,7 @@ class MiniMaxH3XpuRope(RopeTemplate):
         if self._can_use_xpu_kernel(x, cos, sin, rotary_dim):
             import sycl_kernels
 
-            return sycl_kernels.minimax_h3_rope_cached(
-                x.contiguous(), cos.contiguous(), sin.contiguous()
-            )
+            return sycl_kernels.minimax_h3_rope_cached(x.contiguous(), cos.contiguous(), sin.contiguous())
         return self._torch_apply_single(x, cos, sin, rotary_dim)
 
     def apply(self, query, key, freqs, rotary_dim=None, **kwargs):

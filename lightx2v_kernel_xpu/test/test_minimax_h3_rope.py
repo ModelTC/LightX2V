@@ -44,9 +44,7 @@ def test_minimax_h3_rope_cached_matches_torch():
         pytest.skip("XPU is not available")
     input_tensor = torch.randn((5, 4, 128), device="xpu", dtype=torch.bfloat16)
     freqs = torch.randn((5, 96), device="xpu", dtype=torch.float32)
-    actual = sycl_kernels.minimax_h3_rope_cached(
-        input_tensor, freqs.cos(), freqs.sin()
-    )
+    actual = sycl_kernels.minimax_h3_rope_cached(input_tensor, freqs.cos(), freqs.sin())
     expected = _reference(input_tensor, freqs)
     torch.xpu.synchronize()
     torch.testing.assert_close(actual, expected, atol=2e-2, rtol=2e-2)
