@@ -30,8 +30,16 @@ bash scripts/openpi/setup_pytorch_runtime.sh
 This creates
 `/data/liuhongda/openpi_data/python_deps/openpi_pytorch_runtime` with patched
 Transformers 4.53.2. It does not change packages installed in the base
-environment. The launchers set `USE_FLAX=0`, so Transformers does not
-auto-import the base environment's JAX/Flax packages.
+environment. The shared `lightx2v.infer` process continues to use the base
+Transformers 5.14.1 installation. Only the synchronous OpenPI worker prepends
+the private runtime to its `PYTHONPATH`; that worker also sets `USE_FLAX=0` so
+Transformers does not auto-import the base environment's JAX/Flax packages.
+
+The split is required because the official OpenPI PyTorch implementation uses
+five replacement files tied to Transformers 4.53.2, while other LightX2V
+runners imported by the shared entry require newer Transformers APIs such as
+Qwen3-VL. The two versions are therefore never imported into the same Python
+process.
 
 ## 3. Local closed-loop LIBERO rollout video
 
@@ -43,6 +51,23 @@ agent-view rollout:
 cd /data/liuhongda/LightX2V
 bash scripts/openpi/run_libero_i2va.sh
 ```
+
+The launcher follows the same public inference entry used by other LightX2V
+models:
+
+```text
+scripts/openpi/run_libero_i2va.sh
+  -> python -m lightx2v.infer
+  -> RUNNER_REGISTER["openpi"]
+  -> OpenPIRunner
+  -> synchronous local OpenPI/LIBERO worker
+  -> MP4 + executed actions + metrics
+```
+
+The shared entry and registry run in the base environment. `OpenPIRunner`
+waits for the local worker and propagates a worker failure back to the command.
+The worker is dependency isolation only: it is not a policy server, web
+service, viewer, or asynchronous background process.
 
 Default outputs:
 
@@ -155,9 +180,10 @@ OPENPI_SAVE_ACTION_PATH=/absolute/path/to/actions.npy \
 bash scripts/openpi/run_libero_i2va.sh
 ```
 
-This mode uses the OpenPI-owned `single_observation` module directly. The
-shared `lightx2v.infer` entry remains identical to the ModelTC upstream layout
-and does not contain OpenPI-specific dependency branching.
+This mode also enters through `python -m lightx2v.infer`, resolves
+`OpenPIRunner` through the shared registry, and then runs the synchronous local
+worker under the private Transformers 4.53.2 dependency layer. There is no
+OpenPI-specific `sys.argv` branch in `lightx2v.infer`.
 
 The result is a float32 NumPy array with shape `(10, 7)` at the exact
 `OPENPI_SAVE_ACTION_PATH`.

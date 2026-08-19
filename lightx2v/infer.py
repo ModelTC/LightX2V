@@ -24,6 +24,7 @@ from lightx2v.models.runners.ltx2.ltx25_runner import LTX25Runner  # noqa: F401
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner  # noqa: F401
 from lightx2v.models.runners.motus.motus_runner import MotusRunner  # noqa: F401
 from lightx2v.models.runners.neopp.neopp_runner import NeoppRunner  # noqa: F401
+from lightx2v.models.runners.openpi.openpi_runner import OpenPIRunner  # noqa: F401
 from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner  # noqa: F401
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMRunner  # noqa: F401
@@ -142,6 +143,7 @@ def main():
             "infinitetalk",
             "fastwam",
             "lingbot_video",
+            "openpi",
         ],
         default="wan2.1",
     )

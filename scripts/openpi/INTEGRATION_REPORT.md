@@ -9,12 +9,17 @@
   -> 官方 convert_jax_model_to_pytorch.py
   -> model.safetensors
   -> LightX2V 原生 PyTorch network
-  -> OpenPI runner
-  -> 离线 i2va 或 ROS LIBERO 闭环
+  -> python -m lightx2v.infer
+  -> registry OpenPIRunner
+  -> 同步本地隔离 worker
+  -> 非 ROS 本地 LIBERO 闭环或静态 i2va
 ```
 
-LightX2V 运行时不 import `/data/liuhongda/openpi`、JAX、Flax 或 Orbax，也不启动
-OpenPI server、网页或 viewer。
+LightX2V policy/network 运行时不 import OpenPI 的模型代码、JAX、Flax 或 Orbax；
+本地闭环只使用 `/data/liuhongda/openpi/third_party/libero` 中的 LIBERO simulator。
+整个调用链不启动 OpenPI server、网页或 viewer。这里的 worker 只是由
+`OpenPIRunner` 同步等待的本地进程，用于隔离 Python 依赖，不是常驻服务或异步
+推理后端。ROS 闭环仍走后文所述的 `openpi_node` 链路。
 
 ## 权重转换结果
 
@@ -87,6 +92,7 @@ lightx2v/models/networks/openpi/
 └── transformers_replace/...
 lightx2v/models/runners/openpi/openpi_runner.py
 lightx2v/models/runners/openpi/libero_rollout.py
+lightx2v/models/runners/openpi/single_observation.py
 lightx2v_ros/src/inference/inference/openpi_node/main.py
 scripts/openpi/
 ├── convert_pi05_libero_to_pytorch.sh
@@ -94,6 +100,7 @@ scripts/openpi/
 ├── prepare_libero_sample.py
 ├── validate_pytorch_parity.py
 ├── run_libero_i2va.sh
+├── run_libero_task_i2va.sh
 └── run_libero_ros_i2va.sh
 ```
 
@@ -125,21 +132,38 @@ torch 2.8.0+cu128
 transformers 5.14.1
 ```
 
-OpenPI 启动脚本只在该进程的 `PYTHONPATH` 前置：
+`run_libero_i2va.sh` 首先使用这个 base 环境进入公共入口：
+
+```text
+python -m lightx2v.infer
+  -> RUNNER_REGISTER["openpi"]
+  -> OpenPIRunner
+```
+
+公共入口会 eager import 其他 LightX2V runner，其中 Motus、HiDream 等模型需要
+Transformers 5.14.1 提供的 Qwen3-VL API。另一方面，OpenPI 官方 PyTorch 实现和
+五个 replacement 文件严格绑定 Transformers 4.53.2。因此不能在启动公共入口前
+把 OpenPI 的 4.53.2 放到全局 `PYTHONPATH`，也不能在同一个 Python 进程里动态
+替换已经 import 的 Transformers。
+
+`OpenPIRunner` 在 registry 正常完成选择后，才同步启动本地 worker。只有 worker
+进程的 `PYTHONPATH` 前置：
 
 ```text
 /data/liuhongda/openpi_data/python_deps/openpi_pytorch_runtime
 ```
 
 其中包含 `transformers 4.53.2`、`huggingface-hub 0.32.3`、
-`tokenizers 0.21.1` 和官方五个 Transformers replacement 文件。通用
-OpenPI 不修改通用 `lightx2v.infer` 入口。静态单观测推理直接调用 OpenPI 自己的
-`lightx2v.models.runners.openpi.single_observation`，避免隔离的 Transformers
-4.53.2 eager import 需要更新 Transformers API 的无关模型。
+`tokenizers 0.21.1` 和官方五个 Transformers replacement 文件。闭环 rollout 和
+静态单观测模式都从 `lightx2v.infer` 进入 `OpenPIRunner`；隔离 worker 内部再分别
+执行对应的 OpenPI 本地逻辑。`lightx2v.infer` 仅按已有模型风格增加 runner import
+和 `model_cls` choice，没有基于 `sys.argv` 的 OpenPI 特殊分支。
 
-两个启动脚本还设置 `USE_FLAX=0`，防止 Transformers 因 base 中存在 Flax 而
-自动加载 JAX。实测导入 patched Transformers/SigLIP 后 `jax_loaded=False`、
-`flax_loaded=False`。
+worker 设置 `USE_FLAX=0`，防止私有 Transformers 因 base 中存在 Flax 而自动
+加载 JAX。实测导入 patched Transformers/SigLIP 后 `jax_loaded=False`、
+`flax_loaded=False`。公共进程不会 import OpenPI network，worker 退出码会由
+`OpenPIRunner` 检查；worker 失败会使公共推理命令失败，所以脚本仍然是同步、
+可失败感知的单条本地调用链。
 
 ## 启动方式
 
@@ -155,6 +179,16 @@ bash scripts/openpi/setup_pytorch_runtime.sh
 
 ```bash
 bash scripts/openpi/run_libero_i2va.sh
+```
+
+该脚本的公共调用链为：
+
+```text
+run_libero_i2va.sh
+  -> python -m lightx2v.infer --model_cls openpi --task i2va ...
+  -> RUNNER_REGISTER["openpi"]
+  -> OpenPIRunner
+  -> 同步本地隔离 worker
 ```
 
 默认输出 MP4、实际执行动作轨迹和成功指标。切换任务：
