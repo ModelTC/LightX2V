@@ -28,9 +28,8 @@ class MiniMaxH3OffloadTransformerInfer(MiniMaxH3TransformerInfer):
 
     def infer_with_blocks_offload(self, blocks, hidden_states, pre_infer_out):
         num_blocks = len(blocks)
-        if AI_DEVICE != "xpu":
-            current_stream = torch_device_module.current_stream()
-            self.offload_manager.compute_stream.wait_stream(current_stream)
+        current_stream = torch_device_module.current_stream()
+        self.offload_manager.compute_stream.wait_stream(current_stream)
 
         for block_index in range(num_blocks):
             if self.offload_manager.need_init_first_buffer:
