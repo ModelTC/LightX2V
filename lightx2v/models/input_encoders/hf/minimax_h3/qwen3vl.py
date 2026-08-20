@@ -666,6 +666,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
         if self.offload_granularity == "block" and not self.cpu_offload:
             raise ValueError("text_encoder_offload_granularity='block' requires text_encoder_cpu_offload=true")
         self.block_offload = self.cpu_offload and self.offload_granularity == "block"
+        self.release_block_offload_buffers = bool(config.get("text_encoder_release_block_offload_buffers", False))
         self.local_files_only = config.get("local_files_only", True)
         self.text_encoder = None
         self.vision_encoder = None
@@ -1229,8 +1230,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
             if self.cpu_offload and not self.block_offload:
                 self.text_encoder.to_cuda()
             elif self.block_offload:
-                # A previous request releases the transient device slots after
-                # encoding so DiT has the full device-memory budget.
+                # Recreate transient device slots if the previous request was
+                # configured to release them after text encoding.
                 self.text_encoder.init_block_offload()
             device = self.text_encoder.device
             input_ids = input_ids.to(device)
@@ -1251,8 +1252,9 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 "text_token_tags": token_tags.to(prompt_embeds.device),
             }
         finally:
-            if self.block_offload and self.text_encoder is not None:
-                self.text_encoder.release_block_offload_buffers()
+            if self.block_offload:
+                if self.release_block_offload_buffers and self.text_encoder is not None:
+                    self.text_encoder.release_block_offload_buffers()
             elif self.cpu_offload and self.text_encoder is not None:
                 try:
                     self.text_encoder.to_cpu()
