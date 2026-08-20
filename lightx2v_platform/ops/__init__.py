@@ -7,6 +7,7 @@ if PLATFORM == "cambricon_mlu":
     from .attn.cambricon_mlu import *
     from .mm.cambricon_mlu import *
     from .norm.cambricon_mlu import *
+    from .rope.cambricon_mlu import *
 elif PLATFORM == "hygon_dcu":
     from .attn.hygon_dcu import *
     from .mm.hygon_dcu import *
