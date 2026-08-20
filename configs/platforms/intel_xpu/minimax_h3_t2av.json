@@ -7,15 +7,15 @@
   "target_fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
-  "offload_granularity": "model",
+  "offload_granularity": "block",
   "text_encoder_cpu_offload": true,
-  "text_encoder_tensor_parallel": true,
+  "text_encoder_offload_granularity": "block",
+  "text_encoder_release_block_offload_buffers": true,
   "vae_cpu_offload": true,
   "lazy_load": false,
   "unload_modules": false,
   "attn_type": "intel_xpu_cute_attn",
   "rms_type": "intel_xpu",
-  "tp_mm_type": "IntelTensorParallel",
   "rope_type": "minimax_h3_xpu_rope",
   "feature_caching": "NoCaching",
   "use_compile": false,
@@ -25,11 +25,5 @@
   "audio_sampling_rate": 32000,
   "audio_latents_per_second": 40,
   "audio_channels": 2,
-  "keep_latents_dtype_in_scheduler": true,
-  "parallel": {
-    "seq_p_size": 2,
-    "seq_p_attn_type": "ulysses",
-    "seq_p_a2a_backend": "torch",
-    "tensor_p_size": 4
-  }
+  "keep_latents_dtype_in_scheduler": true
 }

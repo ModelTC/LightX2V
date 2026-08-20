@@ -483,6 +483,17 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
             allocated_bytes / (1024**3),
         )
 
+    def release_block_offload_buffers(self):
+        """Release transient device slots while retaining CPU checkpoint views."""
+        if self.offload_manager is None:
+            return
+        torch_device_module.synchronize()
+        self.offload_manager = None
+        self.offload_cuda_buffers = None
+        self._offload_completion_event = None
+        _empty_device_cache()
+        logger.info("MiniMax-H3 Qwen3-VL released its two block-offload device buffers")
+
     def named_weight_modules(self):
         return self._weight_modules.items()
 
@@ -655,6 +666,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
         if self.offload_granularity == "block" and not self.cpu_offload:
             raise ValueError("text_encoder_offload_granularity='block' requires text_encoder_cpu_offload=true")
         self.block_offload = self.cpu_offload and self.offload_granularity == "block"
+        self.release_block_offload_buffers = bool(config.get("text_encoder_release_block_offload_buffers", False))
         self.local_files_only = config.get("local_files_only", True)
         self.text_encoder = None
         self.vision_encoder = None
@@ -806,6 +818,25 @@ class MiniMaxH3Qwen3VLTextEncoder:
                     weight_map[name] = checkpoint_path.name
         return weight_map
 
+    @staticmethod
+    def _adopt_pageable_weight(module, name, tensor):
+        """Keep a checkpoint-backed CPU tensor without making a pinned copy.
+
+        MiniMax-H3 block offload only needs an immutable CPU source for each
+        device-buffer copy.  Retaining the safetensors-backed storage keeps
+        those pages reclaimable by the OS; the generic loader would instead
+        copy every tensor into unswappable pinned memory.
+        """
+        storage = unwrap_tp_linear(module)
+        matches = [entry for entry in storage.base_attrs if entry[0] == name]
+        if len(matches) != 1:
+            raise RuntimeError(f"Cannot bind checkpoint-backed tensor {name}: matching base attrs={matches}")
+        _, attr_name, transpose = matches[0]
+        if transpose:
+            tensor = tensor.t()
+        setattr(storage, f"pin_{attr_name}", tensor)
+        setattr(storage, attr_name, None)
+
     @classmethod
     def _load_native_weights(cls, backbone, text_encoder_path, text_config):
         modules = dict(backbone.named_weight_modules())
@@ -873,6 +904,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
                         # remain the same common-op path, only the transfer is
                         # synchronous when pinning is unavailable.
                         module.pin_weight = one_tensor.pop(name)
+                    elif backbone.block_offload:
+                        cls._adopt_pageable_weight(module, name, one_tensor.pop(name))
                     else:
                         module.load(one_tensor)
                     if one_tensor:
@@ -1196,6 +1229,10 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 vision_mask, vision_embeds, deepstack = self._encode_vision(input_ids, pixel_values, image_grid_thw, pixel_values_videos, video_grid_thw)
             if self.cpu_offload and not self.block_offload:
                 self.text_encoder.to_cuda()
+            elif self.block_offload:
+                # Recreate transient device slots if the previous request was
+                # configured to release them after text encoding.
+                self.text_encoder.init_block_offload()
             device = self.text_encoder.device
             input_ids = input_ids.to(device)
             prompt_embeds = self.text_encoder.forward(
@@ -1215,7 +1252,10 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 "text_token_tags": token_tags.to(prompt_embeds.device),
             }
         finally:
-            if self.cpu_offload and not self.block_offload and self.text_encoder is not None:
+            if self.block_offload:
+                if self.release_block_offload_buffers and self.text_encoder is not None:
+                    self.text_encoder.release_block_offload_buffers()
+            elif self.cpu_offload and self.text_encoder is not None:
                 try:
                     self.text_encoder.to_cpu()
                 except Exception as error:
