@@ -488,11 +488,9 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
         if self.offload_manager is None:
             return
         torch_device_module.synchronize()
-        self.offload_manager.reset_slots()
         self.offload_manager = None
         self.offload_cuda_buffers = None
         self._offload_completion_event = None
-        gc.collect()
         _empty_device_cache()
         logger.info("MiniMax-H3 Qwen3-VL released its two block-offload device buffers")
 
@@ -884,11 +882,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
             MINIMAX_H3_TEXT_ENCODER_LAYER - 1,
             len(by_shard),
         )
-        if backbone.block_offload:
-            logger.info(
-                "MiniMax-H3 text block offload keeps checkpoint-backed pageable CPU weights "
-                "to avoid a second pinned host-memory copy"
-            )
         for shard_index, shard_name in enumerate(sorted(by_shard), start=1):
             shard_path = root / shard_name
             logger.info(
