@@ -42,7 +42,7 @@
   "lora_dynamic_apply": true,
   "lora_configs": [
     {
-      "path": "lightx2v/Minimax-h3-Turbo/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
+      "path": "lightx2v/Minimax-h3-Turbo-SLA/minimax_h3_fl2v_turbo_4step_v0.1_768p_sla_bf16.safetensors",
       "strength": 1.0,
       "alpha": 128
     }
