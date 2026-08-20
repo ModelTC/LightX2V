@@ -25,14 +25,14 @@ def normalize_swiftvr_config(config):
 
     config.update(
         {
-            "dim": int(config["num_attention_heads"]) * int(config["attention_head_dim"]),
-            "num_heads": int(config["num_attention_heads"]),
-            "in_dim": int(config["in_channels"]),
-            "out_dim": int(config["out_channels"]),
+            "dim": config["num_attention_heads"] * config["attention_head_dim"],
+            "num_heads": config["num_attention_heads"],
+            "in_dim": config["in_channels"],
+            "out_dim": config["out_channels"],
             "self_attn_1_type": "swiftvr_mfswa",
             "cross_attn_1_type": config.get("cross_attention_backend", "torch_sdpa"),
             "cross_attn_2_type": config.get("cross_attention_backend", "torch_sdpa"),
-            "rope_type": "torch_complex_rope",
+            "rope_type": config.get("rope_type", "torch_real_rope"),
             "rms_norm_type": "torch",
             "layer_norm_type": "torch",
             "modulate_type": "torch",
@@ -100,8 +100,8 @@ class SwiftVRPreInfer(WanPreInfer):
                 horizontal[:width].view(1, 1, width, -1).expand(frames, height, width, -1),
             ],
             dim=-1,
-        ).reshape(frames * height * width, 1, -1)
-        return self.prepare_rope_cache(frequencies)
+        ).reshape(frames * height * width, -1)
+        return self.prepare_rope_cache((frequencies.real, frequencies.imag))
 
     @torch.no_grad()
     def infer(self, weights, latents: torch.Tensor, condition: SwiftVRCondition, temporal_offset: int):

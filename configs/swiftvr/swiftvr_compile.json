@@ -1,5 +1,6 @@
 {
-  "attention_backend": "torch_sdpa",
+  "attention_backend": "flash_attn3",
+  "cross_attention_backend": "flash_attn3",
   "rope_type": "torch_real_rope",
   "clip_len": 24,
   "dit_overlap": 0,
@@ -7,5 +8,6 @@
   "fps": null,
   "quality": 60,
   "ffmpeg_preset": "ultrafast",
-  "queue_size": 3
+  "queue_size": 3,
+  "use_compile": true
 }

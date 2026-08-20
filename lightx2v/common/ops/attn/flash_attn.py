@@ -23,8 +23,8 @@ except ImportError:
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
     from flash_attn.cute.block_sparsity import BlockSparseTensorsTorch
-except ImportError:
-    logger.info("flash_attn.cute not found, please install flashattention4 first")
+except (ImportError, AttributeError) as exc:
+    logger.info(f"FlashAttention 4 is unavailable: {exc}")
     flash_attn_func_v4 = None
     BlockSparseTensorsTorch = None
 
