@@ -85,11 +85,9 @@ class NeoppDecoderLayerWeights(WeightModule):
                 raise NotImplementedError(f"NeoPP common fused MoE backends support only mm_type='Default', got {mm_type!r}")
             gen_num_experts = int(config["llm_config"]["gen_num_experts"])
             moe_backend = config.get("moe_backend", "flashinfer")
-            if moe_backend == "pytorch":
-                moe_backend = "torch_grouped_mm"
             supported_moe_backends = {"flashinfer", "torch_grouped_mm", "torch_expert_loop"}
             if moe_backend not in supported_moe_backends:
-                raise ValueError(f"Invalid moe_backend={moe_backend!r}, expected one of {sorted(supported_moe_backends)} (legacy alias: 'pytorch')")
+                raise ValueError(f"Invalid moe_backend={moe_backend!r}, expected one of {sorted(supported_moe_backends)}")
             fi_cfg = config.get("moe_flashinfer_setting") or {}
             if fi_cfg.get("autotune") and moe_backend != "flashinfer":
                 raise ValueError("moe_flashinfer_setting.autotune=true requires moe_backend='flashinfer'")
