@@ -48,6 +48,7 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [Tyr0727](https://github.com/Tyr0727)
 - [hufangjian2017](https://github.com/hufangjian2017)
 - [Fatemanx](https://github.com/Fatemanx)
+- [qiuxin2012](https://github.com/qiuxin2012)
 
 ## :fire: Latest News
 
