@@ -8,14 +8,7 @@ from lightx2v.common.ops import attn as _attention_ops  # noqa: F401
 from lightx2v.common.ops.attn.template import AttnWeightTemplate
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
-_BACKENDS = {
-    "sdpa": "torch_sdpa",
-    "torch_sdpa": "torch_sdpa",
-    "flash_attn_2": "flash_attn2",
-    "flash_attn2": "flash_attn2",
-    "flash_attn_3": "flash_attn3",
-    "flash_attn3": "flash_attn3",
-}
+ATTENTION_BACKENDS = ("torch_sdpa", "flash_attn2", "flash_attn3", "sage_attn2")
 
 
 def axis_window_starts(size: int, window: int, shifted: bool, device: torch.device) -> torch.Tensor:
@@ -76,11 +69,10 @@ class SwiftVRShiftedWindowAttention(AttnWeightTemplate):
 
     @classmethod
     def configure(cls, window_size=(16, 16), backend="torch_sdpa"):
-        cls.window_size = tuple(map(int, window_size))
-        try:
-            cls.backend = _BACKENDS[backend]
-        except KeyError as error:
-            raise ValueError(f"Unsupported SwiftVR attention backend: {backend}") from error
+        cls.window_size = tuple(window_size)
+        if backend not in ATTENTION_BACKENDS:
+            raise ValueError(f"Unsupported SwiftVR attention backend: {backend}")
+        cls.backend = backend
         WindowLayout.clear()
 
     def __init__(self):
@@ -88,7 +80,7 @@ class SwiftVRShiftedWindowAttention(AttnWeightTemplate):
         self.dense_attention = ATTN_WEIGHT_REGISTER[self.backend]()
 
     def apply(self, q, k, v, grid_sizes=None, block_idx=0, **kwargs):
-        frames, height, width = map(int, grid_sizes)
+        frames, height, width = grid_sizes
         window = min(self.window_size[0], height), min(self.window_size[1], width)
         indices, owner, window_count, window_length = WindowLayout.get(
             frames,

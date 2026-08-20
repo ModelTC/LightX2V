@@ -227,7 +227,7 @@ class RMSWeight(RMSWeightTemplate):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
 
     def apply(self, input_tensor):
-        if GET_SENSITIVE_DTYPE() != GET_DTYPE():
+        if self.sensitive_layer_dtype != self.infer_dtype:
             output = self._norm(input_tensor).type_as(input_tensor)
         else:
             output = self._norm(input_tensor.float()).type_as(input_tensor)

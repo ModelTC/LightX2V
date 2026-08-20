@@ -54,6 +54,17 @@ def run_frame_batches(function, hidden_states: torch.Tensor, frame_batch_size: i
     return output
 
 
+def run_frame_layers(layers, hidden_states: torch.Tensor, frame_batch_size: int) -> torch.Tensor:
+    """Run consecutive frame-independent layers without full-size intermediate buffers."""
+
+    def apply_layers(frames):
+        for layer in layers:
+            frames = layer(frames)
+        return frames
+
+    return run_frame_batches(apply_layers, hidden_states, frame_batch_size)
+
+
 class TemporalPool(nn.Module):
     def __init__(self, channels: int, stride: int):
         super().__init__()
@@ -184,26 +195,15 @@ def run_causal_layers(
     index = 0
     while index < len(layers):
         layer = layers[index]
-        next_layer = layers[index + 1] if index + 1 < len(layers) else None
-        if frame_batch_size and isinstance(layer, TemporalGrow) and isinstance(next_layer, nn.Conv2d):
-            projection = next_layer
-
-            def grow_and_project(frames):
-                return projection(layer(frames))
-
-            hidden_states = run_frame_batches(grow_and_project, hidden_states, frame_batch_size)
-            index += 2
-            continue
-        if isinstance(layer, TemporalGrow):
-            hidden_states = layer(hidden_states, frame_batch_size)
-            index += 1
+        if frame_batch_size and not isinstance(layer, (MemoryBlock, TemporalPool)):
+            frame_layers = []
+            while index < len(layers) and not isinstance(layers[index], (MemoryBlock, TemporalPool)):
+                frame_layers.append(layers[index])
+                index += 1
+            hidden_states = run_frame_layers(frame_layers, hidden_states, frame_batch_size)
             continue
         if isinstance(layer, TemporalPool):
             hidden_states = layer(hidden_states, frame_batch_size)
-            index += 1
-            continue
-        if frame_batch_size and isinstance(layer, nn.Conv2d):
-            hidden_states = run_frame_batches(layer, hidden_states, frame_batch_size)
             index += 1
             continue
         if not isinstance(layer, MemoryBlock):
