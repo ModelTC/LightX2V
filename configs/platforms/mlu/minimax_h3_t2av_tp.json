@@ -27,8 +27,8 @@
   "audio_channels": 2,
   "keep_latents_dtype_in_scheduler": true,
   "parallel": {
-    "tensor_p_size": 4,
-    "seq_p_size": 2,
+    "tensor_p_size": 2,
+    "seq_p_size": 4,
     "seq_p_attn_type": "ulysses"
   },
   "video_codec_options": {
