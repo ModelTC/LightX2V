@@ -31,3 +31,5 @@ elif PLATFORM == "iluvatar_cuda":
     from .mm.iluvatar_cuda import *
     from .norm.iluvatar_cuda import *
     from .rope.iluvatar_cuda import *
+elif PLATFORM == "musa":
+    from .mm.mthreads_musa import *
