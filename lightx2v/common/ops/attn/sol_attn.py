@@ -14,10 +14,65 @@ from .template import AttnWeightTemplate
 HEAD_DIM = 128
 _VALID_KV_SPLITS = (1, 2, 4)
 _VALID_DENSE_BACKENDS = ("flash_attn3", "sage_attn2", "torch_sdpa")
+_VALID_COMPILE_MODES = ("default", "sm120_compile_once")
 _FALLBACK_WARNINGS = set()
 _KERNEL_LOGS = set()
 _DENSE_GUARD_LOGS = set()
 _DENSE_BACKEND_WARNINGS = set()
+
+
+class _CompiledSolAttnWithKeywordStream:
+    """Adapt CuTe's positional TVM-FFI stream argument to upstream calls."""
+
+    def __init__(self, compiled):
+        self.compiled = compiled
+
+    def __call__(self, *args, **kwargs):
+        stream = kwargs.pop("stream", None)
+        if kwargs:
+            return self.compiled(*args, **kwargs)
+        if stream is not None:
+            args = (*args, stream)
+        return self.compiled(*args)
+
+    def __getattr__(self, name):
+        return getattr(self.compiled, name)
+
+
+def _torch_stream_handle(stream):
+    """Return a CUDA stream handle from legacy or unified PyTorch streams."""
+
+    handle = getattr(stream, "cuda_stream", None)
+    if handle is None:
+        handle = stream.native_handle
+        if callable(handle):
+            handle = handle()
+    return handle
+
+
+def _install_sol_attn_runtime_compat(interface):
+    """Install LightX2V compatibility for the pinned upstream SM120 backend."""
+
+    if getattr(interface, "_lightx2v_runtime_compat", False):
+        return
+
+    def current_stream(device):
+        import cuda.bindings.driver as cuda
+
+        return cuda.CUstream(_torch_stream_handle(torch.cuda.current_stream(device)))
+
+    interface._stream = current_stream
+    original_compile_sm120 = getattr(interface, "_compile_sm120", None)
+    if original_compile_sm120 is not None:
+
+        def compile_sm120(key, *args, **kwargs):
+            compiled, call_args = original_compile_sm120(key, *args, **kwargs)
+            compiled = _CompiledSolAttnWithKeywordStream(compiled)
+            interface._compiled[key] = compiled
+            return compiled, call_args
+
+        interface._compile_sm120 = compile_sm120
+    interface._lightx2v_runtime_compat = True
 
 
 def _parse_dense_layers(value):
@@ -67,7 +122,48 @@ def _load_sol_attn():
         module = importlib.import_module("sol_attn")
     except ImportError as exc:
         raise ImportError("Sol-Attn is not installed. Run scripts/install_sol_attn.sh, then restart the LightX2V process.") from exc
+    interface = importlib.import_module("sol_attn.interface")
+    _install_sol_attn_runtime_compat(interface)
     return module.sol_attn
+
+
+@torch.compiler.disable
+def _run_sol_attn(q, k, v, *, scale, tau, thresh_type, kv_splits, sink_tokens, sink_start):
+    """Keep CuTe DSL and TVM FFI calls outside TorchDynamo graphs."""
+
+    return _load_sol_attn()(
+        q,
+        k,
+        v,
+        scale=scale,
+        tau=tau,
+        thresh_type=thresh_type,
+        kv_splits=kv_splits,
+        sink_tokens=sink_tokens,
+        sink_start=sink_start,
+    )
+
+
+@torch.compiler.disable
+def _run_sol_attn_sm120_compile_once(q, k, v, *, scale, tau, thresh_type, kv_splits, sink_tokens, sink_start):
+    """Run the shape-polymorphic SM120 kernel with fixed Triton launch metadata."""
+
+    # Importing the public backend first installs the PyTorch/CuTe stream
+    # compatibility shim used by the pinned SM120 package.
+    _load_sol_attn()
+    from .sol_attn_sm120_compile_once import sol_attn_sm120_compile_once
+
+    return sol_attn_sm120_compile_once(
+        q,
+        k,
+        v,
+        scale=scale,
+        tau=tau,
+        thresh_type=thresh_type,
+        kv_splits=kv_splits,
+        sink_tokens=sink_tokens,
+        sink_start=sink_start,
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -172,6 +268,7 @@ class SolAttnWeight(AttnWeightTemplate):
         self.sink_tokens = int(self.config.get("sink_tokens", 0))
         self.sink_start = self.config.get("sink_start")
         self.reorder = str(self.config.get("reorder", "none")).lower()
+        self.compile_mode = str(self.config.get("compile_mode", "default")).lower()
         self.strict = bool(self.config.get("strict", False))
         self.dense_steps = int(self.config.get("dense_steps", 0))
         self.dense_layers = _parse_dense_layers(self.config.get("dense_layers", ()))
@@ -198,6 +295,12 @@ class SolAttnWeight(AttnWeightTemplate):
                 raise ValueError("sol_attn_setting.sink_start must be non-negative or null.")
         if self.reorder not in ("none", "morton3d"):
             raise ValueError("sol_attn_setting.reorder must be 'none' or 'morton3d'.")
+        if self.compile_mode not in _VALID_COMPILE_MODES:
+            raise ValueError(f"sol_attn_setting.compile_mode must be one of {_VALID_COMPILE_MODES}, got {self.compile_mode!r}.")
+        if self.compile_mode == "sm120_compile_once" and self.thresh_type != "diag":
+            raise ValueError("sol_attn_setting.compile_mode='sm120_compile_once' requires thresh_type='diag'.")
+        if self.compile_mode == "sm120_compile_once" and self.kv_splits not in ("auto", 1):
+            raise ValueError("sol_attn_setting.compile_mode='sm120_compile_once' requires kv_splits='auto' or 1.")
         if self.dense_steps < 0:
             raise ValueError("sol_attn_setting.dense_steps must be non-negative.")
 
@@ -419,8 +522,8 @@ class SolAttnWeight(AttnWeightTemplate):
             v = v.index_select(1, permutation)
 
         try:
-            kernel = _load_sol_attn()
-            out = kernel(
+            run_kernel = _run_sol_attn_sm120_compile_once if self.compile_mode == "sm120_compile_once" else _run_sol_attn
+            out = run_kernel(
                 q,
                 k,
                 v,
@@ -444,16 +547,17 @@ class SolAttnWeight(AttnWeightTemplate):
             out = out.index_select(1, inverse)
         arch = torch.cuda.get_device_capability(q.device)
         reorder_mode = "morton3d_global" if globally_reordered else self.reorder
-        kernel_log_key = (arch, self.tau, self.thresh_type, self._resolve_kv_splits(q, self.kv_splits), reorder_mode)
+        kernel_log_key = (arch, self.tau, self.thresh_type, self._resolve_kv_splits(q, self.kv_splits), reorder_mode, self.compile_mode)
         if kernel_log_key not in _KERNEL_LOGS:
             logger.info(
-                "Sol-Attn active: SM{}{}, tau={}, thresh_type={}, kv_splits={}, reorder={}.",
+                "Sol-Attn active: SM{}{}, tau={}, thresh_type={}, kv_splits={}, reorder={}, compile_mode={}.",
                 arch[0],
                 arch[1],
                 self.tau,
                 self.thresh_type,
                 self._resolve_kv_splits(q, self.kv_splits),
                 reorder_mode,
+                self.compile_mode,
             )
             _KERNEL_LOGS.add(kernel_log_key)
         out = out.reshape(out.shape[0], out.shape[1], -1)
