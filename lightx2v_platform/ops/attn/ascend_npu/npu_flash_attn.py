@@ -50,10 +50,7 @@ class NpuFlashAttnWeight(AttnWeightTemplate):
         q_heads = q.shape[-2]
         kv_heads = k.shape[-2]
         if kv_heads == 0 or q_heads % kv_heads != 0:
-            raise ValueError(
-                "npu_flash_attn requires Q heads to be an integer multiple of KV heads "
-                f"for MHA/GQA, but got Q={q_heads}, KV={kv_heads}."
-            )
+            raise ValueError(f"npu_flash_attn requires Q heads to be an integer multiple of KV heads for MHA/GQA, but got Q={q_heads}, KV={kv_heads}.")
 
         if q.ndim == 3:
             bs = 1
