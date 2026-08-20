@@ -56,17 +56,11 @@ class MMWeightWfp8channelAfp8tokendynamicMusa(MMWeightQuantTemplate):
 
     def apply(self, input_tensor):
         if input_tensor.ndim < 2:
-            raise ValueError(
-                f"input_tensor must have at least 2 dimensions, got {tuple(input_tensor.shape)}"
-            )
+            raise ValueError(f"input_tensor must have at least 2 dimensions, got {tuple(input_tensor.shape)}")
 
         input_2d = input_tensor.reshape(-1, input_tensor.shape[-1])
         input_quant, input_scale = self.act_quant_func(input_2d)
-        output_dtype = (
-            input_tensor.dtype
-            if input_tensor.dtype in (torch.bfloat16, torch.float16)
-            else self.infer_dtype
-        )
+        output_dtype = input_tensor.dtype if input_tensor.dtype in (torch.bfloat16, torch.float16) else self.infer_dtype
         bias = self.bias if hasattr(self, "bias") else None
         output_2d = fp8_scaled_mm(
             input_quant,

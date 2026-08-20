@@ -30,19 +30,13 @@ def _check_2d(name: str, tensor: torch.Tensor) -> None:
 
 def _normalize_token_scale(scale: torch.Tensor, rows: int) -> torch.Tensor:
     if scale.numel() != rows:
-        raise ValueError(
-            f"activation scale must contain one value per token ({rows}), "
-            f"got shape {tuple(scale.shape)}"
-        )
+        raise ValueError(f"activation scale must contain one value per token ({rows}), got shape {tuple(scale.shape)}")
     return scale.reshape(rows, 1)
 
 
 def _normalize_channel_scale(scale: torch.Tensor, columns: int) -> torch.Tensor:
     if scale.numel() != columns:
-        raise ValueError(
-            f"weight scale must contain one value per output channel ({columns}), "
-            f"got shape {tuple(scale.shape)}"
-        )
+        raise ValueError(f"weight scale must contain one value per output channel ({columns}), got shape {tuple(scale.shape)}")
     return scale.reshape(1, columns)
 
 
@@ -71,15 +65,9 @@ def per_token_quant_fp8(
 
     if output is not None:
         if output.shape != input_tensor.shape:
-            raise ValueError(
-                f"output shape {tuple(output.shape)} does not match input shape "
-                f"{tuple(input_tensor.shape)}"
-            )
+            raise ValueError(f"output shape {tuple(output.shape)} does not match input shape {tuple(input_tensor.shape)}")
         if output.dtype != FP8_DTYPE or output.device != input_tensor.device:
-            raise ValueError(
-                f"output must use {FP8_DTYPE} on {input_tensor.device}, "
-                f"got {output.dtype} on {output.device}"
-            )
+            raise ValueError(f"output must use {FP8_DTYPE} on {input_tensor.device}, got {output.dtype} on {output.device}")
 
     if vllm_ops is not None:
         quantized, scale = vllm_ops.scaled_fp8_quant(
@@ -121,16 +109,11 @@ def fp8_scaled_mm(
     _check_2d("mat_a", mat_a)
     _check_2d("mat_b", mat_b)
     if mat_a.shape[1] != mat_b.shape[0]:
-        raise ValueError(
-            f"incompatible matrix shapes: {tuple(mat_a.shape)} and {tuple(mat_b.shape)}"
-        )
+        raise ValueError(f"incompatible matrix shapes: {tuple(mat_a.shape)} and {tuple(mat_b.shape)}")
     if mat_a.dtype != FP8_DTYPE or mat_b.dtype != FP8_DTYPE:
         raise TypeError(f"mat_a and mat_b must both use {FP8_DTYPE}")
     if mat_a.device != mat_b.device or mat_a.device.type != "musa":
-        raise ValueError(
-            f"mat_a and mat_b must be on the same MUSA device, got "
-            f"{mat_a.device} and {mat_b.device}"
-        )
+        raise ValueError(f"mat_a and mat_b must be on the same MUSA device, got {mat_a.device} and {mat_b.device}")
     if scale_a.dtype != torch.float32 or scale_b.dtype != torch.float32:
         raise TypeError("scale_a and scale_b must use torch.float32")
     if scale_a.device != mat_a.device or scale_b.device != mat_a.device:
@@ -182,19 +165,12 @@ def fp8_linear(
     """
 
     if input_tensor.ndim < 2:
-        raise ValueError(
-            f"input_tensor must have at least 2 dimensions, got {tuple(input_tensor.shape)}"
-        )
+        raise ValueError(f"input_tensor must have at least 2 dimensions, got {tuple(input_tensor.shape)}")
     _check_2d("weight", weight)
     if input_tensor.shape[-1] != weight.shape[1]:
-        raise ValueError(
-            f"input hidden size {input_tensor.shape[-1]} does not match "
-            f"weight hidden size {weight.shape[1]}"
-        )
+        raise ValueError(f"input hidden size {input_tensor.shape[-1]} does not match weight hidden size {weight.shape[1]}")
 
-    output_dtype = out_dtype or (
-        input_tensor.dtype if input_tensor.dtype in _OUTPUT_DTYPES else torch.bfloat16
-    )
+    output_dtype = out_dtype or (input_tensor.dtype if input_tensor.dtype in _OUTPUT_DTYPES else torch.bfloat16)
     input_2d = input_tensor.reshape(-1, input_tensor.shape[-1])
     input_quant, input_scale = per_token_quant_fp8(input_2d)
     output_2d = fp8_scaled_mm(
@@ -210,4 +186,3 @@ def fp8_linear(
 
 
 __all__ = ["FP8_DTYPE", "fp8_linear", "fp8_scaled_mm", "per_token_quant_fp8"]
-
