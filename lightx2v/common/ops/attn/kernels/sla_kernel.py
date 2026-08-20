@@ -40,17 +40,25 @@ def _attn_fwd(
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     o_s = tl.zeros([BLOCK_M, D], dtype=tl.float32)
 
-    q = tl.load(Q_ptrs, mask=offs_m[:, None] < L)
+    q = tl.load(Q_ptrs, mask=offs_m[:, None] < L, other=0.0)
     for block_idx in tl.range(topk):
         idx_n = tl.load(LUT_ptr + block_idx)
         n_mask = offs_n < L - idx_n * BLOCK_N
 
-        k = tl.load(K_ptrs + idx_n * BLOCK_N * D, mask=n_mask[None, :])
+        k = tl.load(
+            K_ptrs + idx_n * BLOCK_N * D,
+            mask=n_mask[None, :],
+            other=0.0,
+        )
         qk = tl.dot(q, k) * (qk_scale * 1.4426950408889634)  # = 1 / ln(2)
         if L - idx_n * BLOCK_N < BLOCK_N:
             qk = tl.where(n_mask[None, :], qk, float("-inf"))
 
-        v = tl.load(V_ptrs + idx_n * BLOCK_N * D, mask=n_mask[:, None])
+        v = tl.load(
+            V_ptrs + idx_n * BLOCK_N * D,
+            mask=n_mask[:, None],
+            other=0.0,
+        )
         local_m = tl.max(qk, 1)
         new_m = tl.maximum(m_i, local_m)
         qk = qk - new_m[:, None]
