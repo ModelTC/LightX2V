@@ -15,7 +15,7 @@ class MiniMaxH3PostWeights(WeightModule):
         )
         self.add_module(
             "norm_out_linear",
-            MM_WEIGHT_REGISTER["Default"]("norm_out.linear.weight", "norm_out.linear.bias"),
+            MM_WEIGHT_REGISTER["Default-ForceFp32" if config.get("h3_adaln_curve", False) else "Default"]("norm_out.linear.weight", "norm_out.linear.bias"),
         )
         self.add_module(
             "proj_out",
