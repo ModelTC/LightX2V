@@ -1,0 +1,4 @@
+interface:
+  display_name: "去 AI 味代码审查"
+  short_description: "删掉过度防御、冗余校验和模板化代码，保留真实边界约束"
+  default_prompt: "使用 $remove-ai-code-smell 审查这段代码，删掉过度防御并保留真实边界。"

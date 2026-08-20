@@ -1,0 +1,4 @@
+interface:
+  display_name: "Remove AI Code Smells"
+  short_description: "Remove over-defensive code while preserving real safety checks"
+  default_prompt: "Use $remove-ai-code-smell to simplify this code while preserving real algorithmic and safety boundaries."
