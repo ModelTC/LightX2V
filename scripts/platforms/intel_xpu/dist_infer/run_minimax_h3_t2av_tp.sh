@@ -16,7 +16,7 @@ export PYTHONPATH=${PYTHONPATH:-}
 
 source "${lightx2v_path}/scripts/base/base.sh"
 export DTYPE=BF16
-export SENSITIVE_LAYER_DTYPE=FP32
+export SENSITIVE_LAYER_DTYPE=BF16
 mkdir -p "$(dirname -- "${output_path}")"
 
 torchrun --standalone --nproc_per_node=4 -m lightx2v.infer \
