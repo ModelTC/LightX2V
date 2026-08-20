@@ -1229,7 +1229,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
             if self.cpu_offload and not self.block_offload:
                 self.text_encoder.to_cuda()
             elif self.block_offload:
-                # A previous request releases the transient XPU slots after
+                # A previous request releases the transient device slots after
                 # encoding so DiT has the full device-memory budget.
                 self.text_encoder.init_block_offload()
             device = self.text_encoder.device
