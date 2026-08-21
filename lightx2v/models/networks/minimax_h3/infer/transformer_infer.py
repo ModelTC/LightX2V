@@ -35,6 +35,10 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         else:
             self.seq_p_group = None
         self.infer_func = self.infer_without_offload
+        self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
+        self._adaln_cache = {}
+        self._current_adaln_tables = None
+        self._adaln_cache_hit = False
         self.init_compile(config)
 
     def _gather_tp_last_dim(self, tensor):
@@ -103,12 +107,10 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
         return weights.out_proj.apply(value * F.silu(gate))
 
-    def infer_block(self, weights, hidden_states, pre_infer_out):
-        # Activation is evaluated in fp32, then cast to the inference dtype
-        # immediately before the (possibly quantized) AdaLN projection.
-        modulation = weights.adaln.apply(F.silu(pre_infer_out.temb).to(self.infer_dtype))
-        modulation = self._gather_tp_last_dim(modulation)
-        modulation = modulation.view(-1, 6 * self.hidden_size)
+    def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None):
+        # Keep the Python cache lookup outside the compiled block.
+        if modulation is None:
+            modulation = self._compute_adaln_table(weights, pre_infer_out)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = modulation.chunk(6, dim=-1)
         indices = pre_infer_out.adaln_indices
 
@@ -125,6 +127,42 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         hidden_states = residual + gate_mlp.index_select(0, indices) * self._ff(weights.ff, normed)
         return hidden_states
 
+    def _compute_adaln_table(self, weights, pre_infer_out):
+        # Activation is evaluated in fp32, then cast to the inference dtype
+        # immediately before the (possibly quantized) AdaLN projection.
+        modulation = weights.adaln.apply(F.silu(pre_infer_out.temb).to(self.infer_dtype))
+        modulation = self._gather_tp_last_dim(modulation)
+        return modulation.view(-1, 6 * self.hidden_size)
+
+    def _clear_adaln_cache(self):
+        self._adaln_cache.clear()
+        self._current_adaln_tables = None
+        self._adaln_cache_hit = False
+
+    def _prepare_adaln_cache(self):
+        current_timesteps = tuple(self.scheduler.unique_timesteps_cpu.tolist())
+        cached_tables = self._adaln_cache.get(current_timesteps)
+        if cached_tables is not None:
+            self._current_adaln_tables = cached_tables
+            self._adaln_cache_hit = True
+        else:
+            self._current_adaln_tables = []
+            self._adaln_cache[current_timesteps] = self._current_adaln_tables
+            self._adaln_cache_hit = False
+
+    def _get_or_build_adaln(self, block_index, weights, pre_infer_out):
+        if self._adaln_cache_hit:
+            return self._current_adaln_tables[block_index]
+        adaln_table = self._compute_adaln_table(weights, pre_infer_out)
+        self._current_adaln_tables.append(adaln_table)
+        return adaln_table
+
+    def run_block(self, block_idx, block, hidden_states, pre_infer_out):
+        if self.use_adaln_cache:
+            adaln_table = self._get_or_build_adaln(block_idx, block, pre_infer_out)
+            return super().run_block(block_idx, block, hidden_states, pre_infer_out, adaln_table)
+        return super().run_block(block_idx, block, hidden_states, pre_infer_out)
+
     def infer_without_offload(self, blocks, hidden_states, pre_infer_out):
         for block_index, block in enumerate(blocks):
             self.block_idx = block_index
@@ -132,4 +170,6 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return hidden_states
 
     def infer(self, block_weights, pre_infer_out):
+        if self.use_adaln_cache:
+            self._prepare_adaln_cache()
         return self.infer_func(block_weights.blocks, pre_infer_out.hidden_states, pre_infer_out)

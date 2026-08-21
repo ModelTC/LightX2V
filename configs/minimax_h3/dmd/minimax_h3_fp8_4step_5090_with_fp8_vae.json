@@ -19,6 +19,7 @@
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
   "use_compile": true,
+  "use_adaln_cache": true,
   "vae_use_compile": true,
   "vae_attn_type": "sage_attn2",
   "video_flow_shift": 6.0,
