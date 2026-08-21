@@ -1,3 +1,5 @@
+import weakref
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -44,8 +46,18 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         self.num_key_value_heads = self.global_num_key_value_heads // self.tp_size
         self.hidden_act = config.get("hidden_act", "silu")
         self.attn_impl = self._normalize_attention_impl(config.get("attn_impl", "torch_sdpa"))
-        self.attn_kernel = None if self.attn_impl == "torch_sdpa" else self._build_attention_kernel(self.attn_impl)
+        self.ar_attn_impl = self._normalize_attention_impl(config.get("ar_attn_impl", self.attn_impl))
+        self.denoise_attn_impl = self._normalize_attention_impl(config.get("denoise_attn_impl", self.attn_impl))
+        self._attn_kernels = {impl: None if impl == "torch_sdpa" else self._build_attention_kernel(impl) for impl in {self.attn_impl, self.ar_attn_impl, self.denoise_attn_impl}}
+        self.attn_kernel = self._attn_kernels[self.attn_impl]
+        self.ar_decode_attn_impl = str(config.get("ar_decode_attn_impl", "disabled") or "disabled").strip().lower()
+        if self.ar_decode_attn_impl in ("none", "off", "false"):
+            self.ar_decode_attn_impl = "disabled"
+        if self.ar_decode_attn_impl not in ("disabled", "flash_attn3_paged"):
+            raise ValueError(f"Unsupported HunyuanImage3 ar_decode_attn_impl={self.ar_decode_attn_impl!r}; expected 'disabled' or 'flash_attn3_paged'.")
+        self.ar_decode_attn_kernel = None if self.ar_decode_attn_impl == "disabled" else self._build_attention_kernel(self.ar_decode_attn_impl)
         self._attn_cu_seqlens_cache = {}
+        self._attn_segment_specs_cache = {}
         self._attn_fallback_warnings = set()
         self._sp_gather_buffers = {}
         self._pre_infer_device_cache = {}
@@ -76,6 +88,18 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
 
     def _active_phase(self):
         return str(self._parallel_context_value(self.parallel_context, "phase", default="legacy"))
+
+    def _active_attention_impl(self):
+        phase = self._active_phase().strip().lower()
+        if phase == "ar":
+            return self.ar_attn_impl
+        if phase == "denoise":
+            return self.denoise_attn_impl
+        return self.attn_impl
+
+    def _active_attention_kernel(self, attn_impl=None):
+        attn_impl = self._active_attention_impl() if attn_impl is None else attn_impl
+        return self._attn_kernels.get(attn_impl)
 
     def _active_tp_state(self):
         group = self._parallel_context_value(self.parallel_context, "active_tp_group", "tp_group", default=self.tp_group)
@@ -128,6 +152,10 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
 
             if flash_attn_func_v3 is None or flash_attn_varlen_func_v3 is None:
                 raise ImportError("HunyuanImage3 attn_impl='flash_attn3' requires flash-attn v3 / flash_attn_interface.")
+        elif attn_impl == "flash_attn3_paged":
+            from lightx2v.common.ops.attn.paged_flash_attn import require_paged_flash_attn3
+
+            require_paged_flash_attn3()
         elif attn_impl == "sage_attn2":
             from lightx2v.common.ops.attn.sage_attn import sageattn
 
@@ -149,12 +177,12 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             return tensor.to(torch.bfloat16)
         return tensor.to(torch.float32)
 
-    def _get_cu_seqlens(self, name, batch, seq_len, device):
-        key = (name, batch, seq_len, device.type, device.index)
+    def _get_cu_seqlens(self, name, batch, seq_len, device, attn_impl):
+        key = (attn_impl, name, batch, seq_len, device.type, device.index)
         cu_seqlens = self._attn_cu_seqlens_cache.get(key)
         if cu_seqlens is None:
             cu_seqlens = torch.arange(0, batch * seq_len + 1, seq_len, dtype=torch.int32)
-            if self.attn_impl in ("flash_attn2", "flash_attn3"):
+            if attn_impl in ("flash_attn2", "flash_attn3"):
                 cu_seqlens = cu_seqlens.to(device, non_blocking=True)
             self._attn_cu_seqlens_cache[key] = cu_seqlens
         return cu_seqlens
@@ -178,34 +206,39 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
                 return "causal"
         return "custom"
 
-    def _warn_attention_fallback_once(self, mask_mode):
-        key = (self.attn_impl, mask_mode)
+    def _warn_attention_fallback_once(self, attn_impl, mask_mode):
+        key = (attn_impl, mask_mode)
         if key in self._attn_fallback_warnings:
             return
         self._attn_fallback_warnings.add(key)
         logger.warning(
             "HunyuanImage3 attn_impl='{}' does not support {} attention masks in the low-intrusion path; falling back to PyTorch SDPA for this attention call.",
-            self.attn_impl,
+            attn_impl,
             mask_mode,
         )
 
     def _sdpa_attention(self, query_states, key_states, value_states, attention_mask):
+        if query_states.shape[1] != key_states.shape[1]:
+            if query_states.shape[1] % key_states.shape[1]:
+                raise ValueError(f"HunyuanImage3 SDPA fallback requires Q heads to be divisible by KV heads; got Q={query_states.shape[1]}, KV={key_states.shape[1]}.")
+            repeat_groups = query_states.shape[1] // key_states.shape[1]
+            key_states = repeat_kv(key_states, repeat_groups)
+            value_states = repeat_kv(value_states, repeat_groups)
         if query_states.device.type == "cuda" and attention_mask is not None:
             query_states = query_states.contiguous()
             key_states = key_states.contiguous()
             value_states = value_states.contiguous()
         return F.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask=attention_mask, dropout_p=0.0)
 
-    def _apply_registered_attention_kernel(self, query_states, key_states, value_states, causal):
-        batch, query_heads, q_len, _ = query_states.shape
-        kv_len = key_states.shape[2]
-        original_dtype = query_states.dtype
-        q = self._normalize_attention_dtype(query_states.transpose(1, 2)).contiguous()
-        k = self._normalize_attention_dtype(key_states.transpose(1, 2)).contiguous()
-        v = self._normalize_attention_dtype(value_states.transpose(1, 2)).contiguous()
-        cu_seqlens_q = self._get_cu_seqlens("q", batch, q_len, q.device)
-        cu_seqlens_kv = self._get_cu_seqlens("kv", batch, kv_len, k.device)
-        attn_output = self.attn_kernel.apply(
+    def _apply_registered_attention_kernel_bshd(self, q, k, v, causal, attn_impl):
+        batch, q_len, query_heads, _ = q.shape
+        kv_len = k.shape[1]
+        attn_kernel = self._active_attention_kernel(attn_impl)
+        if attn_kernel is None:
+            raise RuntimeError(f"HunyuanImage3 attn_impl={attn_impl!r} has no registered attention kernel.")
+        cu_seqlens_q = self._get_cu_seqlens("q", batch, q_len, q.device, attn_impl)
+        cu_seqlens_kv = self._get_cu_seqlens("kv", batch, kv_len, k.device, attn_impl)
+        attn_output = attn_kernel.apply(
             q=q,
             k=k,
             v=v,
@@ -220,7 +253,15 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         elif attn_output.dim() == 3:
             attn_output = attn_output.reshape(batch, q_len, query_heads, self.head_dim)
         else:
-            raise RuntimeError(f"HunyuanImage3 attn_impl={self.attn_impl!r} returned unexpected shape {tuple(attn_output.shape)}.")
+            raise RuntimeError(f"HunyuanImage3 attn_impl={attn_impl!r} returned unexpected shape {tuple(attn_output.shape)}.")
+        return attn_output
+
+    def _apply_registered_attention_kernel(self, query_states, key_states, value_states, causal, attn_impl):
+        original_dtype = query_states.dtype
+        q = self._normalize_attention_dtype(query_states.transpose(1, 2)).contiguous()
+        k = self._normalize_attention_dtype(key_states.transpose(1, 2)).contiguous()
+        v = self._normalize_attention_dtype(value_states.transpose(1, 2)).contiguous()
+        attn_output = self._apply_registered_attention_kernel_bshd(q, k, v, causal, attn_impl)
         return attn_output.to(original_dtype).transpose(1, 2)
 
     def _normalize_full_attn_slices(self, full_attn_slices, batch):
@@ -297,7 +338,53 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             local_start = local_end
         return segments
 
-    def _segmented_flash_attention(self, query_states, key_states, value_states, position_ids, full_attn_slices, segment_specs=None):
+    def _segment_specs_cache_key(self, position_ids, batch_full_slices, kv_len):
+        if not torch.is_tensor(position_ids):
+            return None
+        return (
+            id(position_ids),
+            tuple(position_ids.shape),
+            tuple(position_ids.stride()),
+            int(position_ids.storage_offset()),
+            int(getattr(position_ids, "_version", 0)),
+            int(kv_len),
+            tuple(tuple(sample_slices) for sample_slices in batch_full_slices),
+        )
+
+    def _lookup_segment_specs_cache(self, key, position_ids):
+        if key is None:
+            return None
+        entry = self._attn_segment_specs_cache.get(key)
+        if entry is None:
+            return None
+        tensor_ref, segment_specs = entry
+        if tensor_ref() is position_ids:
+            return segment_specs
+        self._attn_segment_specs_cache.pop(key, None)
+        return None
+
+    def _store_segment_specs_cache(self, key, position_ids, segment_specs):
+        if key is None:
+            return
+        if len(self._attn_segment_specs_cache) >= 32:
+            stale_keys = [cache_key for cache_key, (tensor_ref, _) in self._attn_segment_specs_cache.items() if tensor_ref() is None]
+            for cache_key in stale_keys:
+                self._attn_segment_specs_cache.pop(cache_key, None)
+            if len(self._attn_segment_specs_cache) >= 32:
+                self._attn_segment_specs_cache.pop(next(iter(self._attn_segment_specs_cache)))
+        self._attn_segment_specs_cache[key] = (weakref.ref(position_ids), segment_specs)
+
+    def _segmented_flash_attention(
+        self,
+        query_states,
+        key_states,
+        value_states,
+        position_ids,
+        full_attn_slices,
+        segment_specs=None,
+        attn_impl=None,
+    ):
+        attn_impl = self._active_attention_impl() if attn_impl is None else attn_impl
         if position_ids is None:
             return None
         batch, _, q_len, _ = query_states.shape
@@ -315,17 +402,22 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         if len(segment_specs) != batch or any(specs is None for specs in segment_specs):
             return None
 
-        output = torch.empty_like(query_states)
+        original_dtype = query_states.dtype
+        q = self._normalize_attention_dtype(query_states.transpose(1, 2)).contiguous()
+        k = self._normalize_attention_dtype(key_states.transpose(1, 2)).contiguous()
+        v = self._normalize_attention_dtype(value_states.transpose(1, 2)).contiguous()
+        output = torch.empty_like(q)
         for batch_idx in range(batch):
             for q_start, q_stop, kv_stop, causal in segment_specs[batch_idx]:
-                segment_output = self._apply_registered_attention_kernel(
-                    query_states[batch_idx : batch_idx + 1, :, q_start:q_stop],
-                    key_states[batch_idx : batch_idx + 1, :, :kv_stop],
-                    value_states[batch_idx : batch_idx + 1, :, :kv_stop],
+                segment_output = self._apply_registered_attention_kernel_bshd(
+                    q[batch_idx : batch_idx + 1, q_start:q_stop],
+                    k[batch_idx : batch_idx + 1, :kv_stop],
+                    v[batch_idx : batch_idx + 1, :kv_stop],
                     causal=causal,
+                    attn_impl=attn_impl,
                 )
-                output[batch_idx : batch_idx + 1, :, q_start:q_stop] = segment_output
-        return output
+                output[batch_idx : batch_idx + 1, q_start:q_stop] = segment_output
+        return output.to(original_dtype).transpose(1, 2)
 
     def _registered_attention(
         self,
@@ -337,7 +429,8 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         full_attn_slices=None,
         segment_specs=None,
     ):
-        if self.attn_impl in ("flash_attn2", "flash_attn3") and segment_specs is not None:
+        attn_impl = self._active_attention_impl()
+        if attn_impl in ("flash_attn2", "flash_attn3") and segment_specs is not None:
             segmented_output = self._segmented_flash_attention(
                 query_states,
                 key_states,
@@ -345,6 +438,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
                 position_ids,
                 full_attn_slices,
                 segment_specs=segment_specs,
+                attn_impl=attn_impl,
             )
             if segmented_output is not None:
                 return segmented_output
@@ -354,9 +448,9 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         kv_len = key_states.shape[2]
         mask_mode = self._attention_mask_mode(attention_mask, q_len, kv_len)
 
-        if self.attn_impl == "torch_sdpa":
+        if attn_impl == "torch_sdpa":
             return self._sdpa_attention(query_states, key_states, value_states, attention_mask)
-        if self.attn_impl in ("flash_attn2", "flash_attn3"):
+        if attn_impl in ("flash_attn2", "flash_attn3"):
             if mask_mode not in ("none", "full", "causal"):
                 segmented_output = self._segmented_flash_attention(
                     query_states,
@@ -365,21 +459,28 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
                     position_ids,
                     full_attn_slices,
                     segment_specs=segment_specs,
+                    attn_impl=attn_impl,
                 )
                 if segmented_output is not None:
                     return segmented_output
-                self._warn_attention_fallback_once(mask_mode)
+                self._warn_attention_fallback_once(attn_impl, mask_mode)
                 return self._sdpa_attention(query_states, key_states, value_states, attention_mask)
             causal = mask_mode == "causal"
-        elif self.attn_impl in ("sage_attn2", "sage_attn3"):
+        elif attn_impl in ("sage_attn2", "sage_attn3"):
             if mask_mode not in ("none", "full"):
-                self._warn_attention_fallback_once(mask_mode)
+                self._warn_attention_fallback_once(attn_impl, mask_mode)
                 return self._sdpa_attention(query_states, key_states, value_states, attention_mask)
             causal = False
         else:
-            raise ValueError(f"Unsupported HunyuanImage3 normalized attn_impl={self.attn_impl!r}.")
+            raise ValueError(f"Unsupported HunyuanImage3 normalized attn_impl={attn_impl!r}.")
 
-        return self._apply_registered_attention_kernel(query_states, key_states, value_states, causal=causal)
+        return self._apply_registered_attention_kernel(
+            query_states,
+            key_states,
+            value_states,
+            causal=causal,
+            attn_impl=attn_impl,
+        )
 
     @torch.no_grad()
     def infer(self, weights, pre_infer_out):
@@ -397,7 +498,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         if device is not None and device.type == "cuda" and device.index is not None:
             torch.cuda.set_device(device.index)
         hidden_states = to_device(hidden_states, device)
-        use_segment_specs = self.attn_impl in ("flash_attn2", "flash_attn3") and pre_infer_out.attention_segment_specs is not None
+        use_segment_specs = self._active_attention_impl() in ("flash_attn2", "flash_attn3") and pre_infer_out.attention_segment_specs is not None
         attention_mask = None if use_segment_specs else self._cached_pre_infer_to_device("attention_mask", pre_infer_out.attention_mask, device)
         position_ids = self._cached_pre_infer_to_device("position_ids", pre_infer_out.position_ids, device)
         custom_pos_emb = self._cached_pre_infer_to_device("custom_pos_emb", pre_infer_out.custom_pos_emb, device)
@@ -437,6 +538,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         segment_specs=None,
     ):
         batch, q_len, _ = hidden_states.shape
+        attn_impl = self._active_attention_impl()
         _, _, active_tp_size, _ = self._active_tp_state()
         if self.global_num_heads % active_tp_size or self.global_num_key_value_heads % active_tp_size:
             raise ValueError(f"HunyuanImage3 active TP size must divide Q and KV heads: Q={self.global_num_heads}, KV={self.global_num_key_value_heads}, active_tp_size={active_tp_size}.")
@@ -492,7 +594,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
                     key_states.device,
                 )
                 position_ids = cache_position_ids
-                if not (self.attn_impl in ("flash_attn2", "flash_attn3") and segment_specs is not None):
+                if not (attn_impl in ("flash_attn2", "flash_attn3") and segment_specs is not None):
                     attention_mask = self._cached_pre_infer_to_device(
                         "sp_global_attention_mask",
                         sequence_parallel_state.global_attention_mask,
@@ -501,15 +603,40 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             else:
                 raise ValueError(f"Unsupported HunyuanImage3 sequence parallel attention type: {sequence_parallel_state.attn_type!r}.")
 
-        if past_key_values is not None:
+        paged_decode = (
+            past_key_values is not None and bool(getattr(past_key_values, "paged", False)) and self._active_phase().strip().lower() == "ar" and q_len == 1 and self.ar_decode_attn_kernel is not None
+        )
+
+        if paged_decode:
+            if sequence_parallel_state is not None:
+                raise RuntimeError("HunyuanImage3 paged AR decode does not support sequence parallel attention.")
+            if past_key_values.page_table is None or past_key_values.cache_seqlens is None or past_key_values.scheduler_metadata is None:
+                raise RuntimeError("HunyuanImage3 paged AR decode metadata must be prepared before model execution.")
+            key_cache, value_cache = past_key_values.get_paged_layer(block_idx)
+            query_states = query_states.to(key_cache.dtype)
+            key_states = key_states.to(key_cache.dtype)
+            value_states = value_states.to(value_cache.dtype)
+            attn_output = self.ar_decode_attn_kernel.apply_decode(
+                query_states,
+                key_states,
+                value_states,
+                k_cache=key_cache,
+                v_cache=value_cache,
+                page_table=past_key_values.page_table,
+                cache_seqlens=past_key_values.cache_seqlens,
+                scheduler_metadata=past_key_values.scheduler_metadata,
+                max_num_splits=int(self.config.get("ar_flash_attn_max_num_splits", 32)),
+            )
+        elif past_key_values is not None:
             if cache_position_ids is None:
                 raise ValueError("HunyuanImage3 KV cache requires position_ids.")
             key_states, value_states = past_key_values.update(key_states, value_states, block_idx, cache_position_ids)
             query_states = query_states.to(key_states.dtype)
 
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
-        if sequence_parallel_state is not None and sequence_parallel_state.attn_type == "kv_all_gather":
+        if not paged_decode and attn_impl not in ("flash_attn2", "flash_attn3"):
+            key_states = repeat_kv(key_states, self.num_key_value_groups)
+            value_states = repeat_kv(value_states, self.num_key_value_groups)
+        if not paged_decode and sequence_parallel_state is not None and sequence_parallel_state.attn_type == "kv_all_gather":
             valid_q_len = sequence_parallel_state.valid_local_seq_len
             attn_output = torch.zeros_like(query_states)
             if valid_q_len:
@@ -522,7 +649,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
                     full_attn_slices=full_attn_slices,
                     segment_specs=segment_specs,
                 )
-        else:
+        elif not paged_decode:
             attn_output = self._registered_attention(
                 query_states,
                 key_states,
@@ -541,7 +668,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         return attn_output.reshape(batch, q_len, -1)
 
     def _prepare_attention_segment_specs(self, pre_infer_out):
-        if self.attn_impl not in ("flash_attn2", "flash_attn3"):
+        if self._active_attention_impl() not in ("flash_attn2", "flash_attn3"):
             return None
 
         state = pre_infer_out.sequence_parallel_state
@@ -564,13 +691,20 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             return None
         batch, q_len = position_ids.shape
         kv_len = attention_mask.shape[-1]
-        if self._attention_mask_mode(attention_mask, q_len, kv_len) != "custom":
+        if attention_mask.dtype != torch.bool or attention_mask.dim() != 4 or attention_mask.shape[0] != batch or attention_mask.shape[1] != 1 or attention_mask.shape[-2] != q_len:
             return None
         batch_full_slices = self._normalize_full_attn_slices(pre_infer_out.full_attn_slices, batch)
         if batch_full_slices is None or not any(batch_full_slices):
             return None
+        cache_key = self._segment_specs_cache_key(position_ids, batch_full_slices, kv_len)
+        cached_specs = self._lookup_segment_specs_cache(cache_key, position_ids)
+        if cached_specs is not None:
+            return cached_specs
         segment_specs = [self._build_segment_specs(position_ids[batch_idx], batch_full_slices[batch_idx], kv_len) for batch_idx in range(batch)]
-        return None if any(specs is None for specs in segment_specs) else segment_specs
+        if any(specs is None for specs in segment_specs):
+            return None
+        self._store_segment_specs_cache(cache_key, position_ids, segment_specs)
+        return segment_specs
 
     def _cached_pre_infer_to_device(self, name, value, device):
         if value is None:
@@ -669,7 +803,11 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         if tp_size > 1:
             if tp_group is None:
                 raise RuntimeError("HunyuanImage3 active tensor parallelism requires an active TP process group.")
-            dist.all_reduce(output, op=dist.ReduceOp.SUM, group=tp_group)
+            phase_all_reduce = getattr(self.parallel_context, "tensor_parallel_all_reduce", None)
+            if callable(phase_all_reduce):
+                output = phase_all_reduce(output)
+            else:
+                dist.all_reduce(output, op=dist.ReduceOp.SUM, group=tp_group)
         return output
 
     def _moe_topk(self, moe, hidden_states):

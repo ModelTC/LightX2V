@@ -360,18 +360,26 @@ def main():
 
     validate_config_paths(config)
 
-    with ProfilingContext4DebugL1("Total Cost"):
-        # init runner
-        runner = init_runner(config)
-        # start to infer
-        data = args.__dict__
-        update_input_info_from_dict(input_info, data)
-        runner.run_pipeline(input_info)
-
-    # Clean up distributed process group
-    if dist.is_initialized():
-        dist.destroy_process_group()
-        logger.info("Distributed process group cleaned up")
+    runner = None
+    try:
+        with ProfilingContext4DebugL1("Total Cost"):
+            # init runner
+            runner = init_runner(config)
+            # start to infer
+            data = args.__dict__
+            update_input_info_from_dict(input_info, data)
+            runner.run_pipeline(input_info)
+    finally:
+        try:
+            if runner is not None and config.get("model_cls") == "hunyuan_image3":
+                close = getattr(runner, "close", None)
+                if callable(close):
+                    close()
+        finally:
+            # Graph-backed collectives must be released before process-group teardown.
+            if dist.is_initialized():
+                dist.destroy_process_group()
+                logger.info("Distributed process group cleaned up")
 
 
 if __name__ == "__main__":
