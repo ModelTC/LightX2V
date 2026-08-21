@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Iterator, Mapping
 
@@ -72,6 +72,7 @@ class HunyuanImage3ParallelContext:
         self.denoise_seq_size = int(denoise_seq_size)
         self._phase_states = dict(phase_states)
         self._phase = self._normalize_phase(initial_phase)
+        self.ar_custom_all_reduce = None
 
     @staticmethod
     def _normalize_phase(name: str) -> str:
@@ -174,6 +175,34 @@ class HunyuanImage3ParallelContext:
             yield self
         finally:
             self.activate_phase(previous)
+
+    def tensor_parallel_all_reduce(self, tensor: torch.Tensor) -> torch.Tensor:
+        """SUM across active TP, using custom all-reduce only during AR."""
+
+        if self.active_tp_size <= 1:
+            return tensor
+        if self.active_tp_group is None:
+            raise RuntimeError(f"HunyuanImage3 phase={self.phase!r} has TP size {self.active_tp_size} without a TP group.")
+
+        reducer = self.ar_custom_all_reduce
+        if self.phase == "ar" and reducer is not None:
+            token_count = tensor.numel() // tensor.shape[-1] if tensor.ndim else 0
+            return reducer.all_reduce(tensor, is_decode=token_count == 1)
+
+        dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=self.active_tp_group)
+        return tensor
+
+    def custom_all_reduce_capture(self):
+        reducer = self.ar_custom_all_reduce
+        if reducer is None:
+            return nullcontext()
+        return reducer.capture()
+
+    def close_custom_all_reduce(self) -> None:
+        reducer = self.ar_custom_all_reduce
+        self.ar_custom_all_reduce = None
+        if reducer is not None:
+            reducer.close()
 
     @property
     def _active(self) -> _PhaseParallelState:
@@ -324,6 +353,13 @@ def build_hunyuan_image3_parallel_context(config) -> HunyuanImage3ParallelContex
         raise RuntimeError(f"Invalid HunyuanImage3 AR logical TP mapping: {physical_to_logical}.")
     logical_gather_order = tuple(sorted(range(world_size), key=physical_to_logical.__getitem__))
 
+    ar_metadata_group = None
+    if config.get("enable_ar_custom_all_reduce", False):
+        # vLLM uses this CPU group only to exchange CUDA IPC metadata.  AR is
+        # full-world in the official phase-aware topology, so every rank is a
+        # member and enters initialization collectives in the same order.
+        ar_metadata_group = dist.new_group(ranks=list(range(world_size)), backend="gloo")
+
     phase_states = {
         "ar": _PhaseParallelState(
             tp_group=dist.group.WORLD,
@@ -347,7 +383,7 @@ def build_hunyuan_image3_parallel_context(config) -> HunyuanImage3ParallelContex
         ),
     }
 
-    return HunyuanImage3ParallelContext(
+    context = HunyuanImage3ParallelContext(
         device_mesh=device_mesh,
         storage_tp_group=storage_tp_group,
         storage_tp_rank=storage_tp_rank,
@@ -359,6 +395,19 @@ def build_hunyuan_image3_parallel_context(config) -> HunyuanImage3ParallelContex
         denoise_seq_size=denoise_seq_size,
         phase_states=phase_states,
     )
+    if ar_metadata_group is not None:
+        from lightx2v.models.networks.hunyuan_image3.custom_all_reduce import HunyuanImage3CustomAllReduce
+
+        reducer = HunyuanImage3CustomAllReduce(
+            metadata_group=ar_metadata_group,
+            fallback_group=lambda: context.active_tp_group,
+            config=config,
+            device=torch.device(AI_DEVICE, torch.cuda.current_device()),
+            phase_getter=lambda: context.phase,
+        )
+        context.ar_custom_all_reduce = reducer
+        reducer.initialize()
+    return context
 
 
 def initialize_hunyuan_image3_parallel_runtime(config) -> HunyuanImage3ParallelContext:

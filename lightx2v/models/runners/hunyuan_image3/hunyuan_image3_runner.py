@@ -17,6 +17,7 @@ from transformers import GenerationConfig
 from lightx2v.models.networks.hunyuan_image3.infer.kv_cache import HunyuanImage3StaticKVCache
 from lightx2v.models.networks.hunyuan_image3.model import HunyuanImage3Model
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.hunyuan_image3.cuda_graph import HunyuanImage3ARCudaGraphController
 from lightx2v.models.runners.hunyuan_image3.flashinfer_autotune import (
     DistributedAutotuneContext,
     FlashInferAutotuneController,
@@ -362,6 +363,17 @@ class HunyuanImage3Runner(DefaultRunner):
         if "enable_kv_cache" in self.config:
             return bool(self.config["enable_kv_cache"])
         return hasattr(self, "hunyuan_config")
+
+    def _get_ar_cuda_graph_controller(self):
+        controller = getattr(self, "_hunyuan_ar_cuda_graph_controller", None)
+        if controller is None:
+            controller = HunyuanImage3ARCudaGraphController(
+                config=self.config,
+                model=self.model,
+                device=self._pipeline_latent_device(),
+            )
+            self._hunyuan_ar_cuda_graph_controller = controller
+        return controller
 
     def _hunyuan_num_layers(self):
         hunyuan_config = getattr(self, "hunyuan_config", None)
@@ -964,14 +976,24 @@ class HunyuanImage3Runner(DefaultRunner):
         pending_tokens = []
         generated = []
         use_kv_cache = self._hunyuan_text_kv_cache_enabled()
+        graph_controller = self._get_ar_cuda_graph_controller()
+        if graph_controller.enabled and not use_kv_cache:
+            raise ValueError("HunyuanImage3 enable_ar_cuda_graph=true requires enable_text_kv_cache=true.")
         kv_cache = None
         cache_filled_length = 0
         if use_kv_cache:
-            kv_cache = HunyuanImage3StaticKVCache(
-                num_layers=self._hunyuan_num_layers(),
-                max_cache_len=input_ids.shape[1] + max_new_tokens + sum(len(tokens) for tokens in transition_map.values()),
-                dynamic=True,
-            )
+            max_cache_len = input_ids.shape[1] + max_new_tokens + sum(len(tokens) for tokens in transition_map.values())
+            if graph_controller.enabled:
+                kv_cache = graph_controller.acquire_kv_cache(
+                    num_layers=self._hunyuan_num_layers(),
+                    max_cache_len=max_cache_len,
+                )
+            else:
+                kv_cache = HunyuanImage3StaticKVCache(
+                    num_layers=self._hunyuan_num_layers(),
+                    max_cache_len=max_cache_len,
+                    dynamic=True,
+                )
 
         for _ in range(max_new_tokens):
             if pending_tokens:
@@ -999,7 +1021,17 @@ class HunyuanImage3Runner(DefaultRunner):
                     else:
                         model_inputs = self._build_text_model_inputs(input_ids, tokenizer_output, cond_inputs=cond_inputs, rope_image_info=rope_image_info)
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
-                    logits = self.model.infer(model_inputs)["logits"][:, -1, :]
+                    if graph_controller.enabled:
+                        pre_infer_out = self.model.prepare_ar_pre_infer(model_inputs)
+                        if not first_cache_step and graph_controller.is_target_decode(pre_infer_out):
+                            logits = graph_controller.run(
+                                pre_infer_out,
+                                valid_kv_len=cache_filled_length,
+                            )
+                        else:
+                            logits = self.model.infer_ar_prepared(pre_infer_out)["logits"][:, -1, :]
+                    else:
+                        logits = self.model.infer(model_inputs)["logits"][:, -1, :]
                 next_token = self._sample_text_token(logits, generator, generation_options=generation_options)
                 next_token = next_token.to(device=device, dtype=input_ids.dtype)
             next_token = self._broadcast_parallel_tensor(next_token)
@@ -1651,3 +1683,16 @@ class HunyuanImage3Runner(DefaultRunner):
             images[0].save(save_result_path)
             logger.info(f"HunyuanImage3 image saved successfully to: {save_result_path}")
         return {"image": None}
+
+    def close(self):
+        """Release graph and IPC resources before distributed teardown."""
+
+        controller = getattr(self, "_hunyuan_ar_cuda_graph_controller", None)
+        self._hunyuan_ar_cuda_graph_controller = None
+        if controller is not None:
+            controller.close()
+            return
+        context = self.config.get("parallel_context")
+        close_custom = getattr(context, "close_custom_all_reduce", None)
+        if callable(close_custom):
+            close_custom()

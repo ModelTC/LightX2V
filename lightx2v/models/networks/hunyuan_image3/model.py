@@ -451,6 +451,34 @@ class HunyuanImage3Model(BaseTransformerModel):
         return hidden_states
 
     @torch.no_grad()
+    def prepare_ar_pre_infer(self, inputs):
+        """Prepare embeddings and multimodal inputs for an AR forward."""
+
+        if self._active_seq_parallel():
+            raise RuntimeError("HunyuanImage3 prepared AR inference requires sequence parallelism to be inactive.")
+        if inputs.get("cache_dic") is not None:
+            raise RuntimeError("HunyuanImage3 prepared AR inference does not support Taylor cache state.")
+        if inputs.get("_cfg_parallel_branch", False):
+            raise RuntimeError("HunyuanImage3 prepared AR inference does not support a CFG-parallel branch.")
+        if hasattr(self, "scheduler"):
+            self.scheduler.infer_condition = True
+        pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
+        if pre_infer_out.sequence_parallel_state is not None:
+            raise RuntimeError("HunyuanImage3 prepared AR inference received unexpected sequence-parallel metadata.")
+        return pre_infer_out
+
+    @torch.no_grad()
+    def infer_ar_prepared(self, pre_infer_out):
+        """Run transformer and output projection from prepared AR inputs."""
+
+        if self._active_seq_parallel():
+            raise RuntimeError("HunyuanImage3 prepared AR inference requires sequence parallelism to be inactive.")
+        if pre_infer_out.sequence_parallel_state is not None:
+            raise RuntimeError("HunyuanImage3 prepared AR inference received sequence-parallel metadata.")
+        hidden_states = self._infer_transformer(pre_infer_out)
+        return self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out)
+
+    @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):
         if hasattr(self, "scheduler"):
             self.scheduler.infer_condition = infer_condition
