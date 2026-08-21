@@ -345,33 +345,40 @@ def main():
         parser.error("wan22_animate2_distilled requires a non-negative --seed")
     seed_all(args.seed)
 
-    # set config
     config = set_config(args)
     config["warmup"] = args.warmup
-    # init input_info
     input_info = init_empty_input_info(args.task, args.support_tasks)
 
-    if config["parallel"]:
-        platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
-        platform_device.init_parallel_env()
-        set_parallel_config(config)
+    runner = None
+    try:
+        if config["parallel"]:
+            platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
+            platform_device.init_parallel_env()
+            set_parallel_config(config)
 
-    print_config(config)
+        print_config(config)
+        validate_config_paths(config)
 
-    validate_config_paths(config)
-
-    with ProfilingContext4DebugL1("Total Cost"):
-        # init runner
-        runner = init_runner(config)
-        # start to infer
-        data = args.__dict__
-        update_input_info_from_dict(input_info, data)
-        runner.run_pipeline(input_info)
-
-    # Clean up distributed process group
-    if dist.is_initialized():
-        dist.destroy_process_group()
-        logger.info("Distributed process group cleaned up")
+        with ProfilingContext4DebugL1("Total Cost"):
+            runner = init_runner(config)
+            data = args.__dict__
+            update_input_info_from_dict(input_info, data)
+            runner.run_pipeline(input_info)
+    finally:
+        try:
+            if runner is not None:
+                close = getattr(runner, "close", None)
+                if callable(close):
+                    close()
+            else:
+                context = config.get("parallel_context")
+                if context is not None:
+                    context.close()
+        finally:
+            # Release runner-owned resources before distributed teardown.
+            if dist.is_initialized():
+                dist.destroy_process_group()
+                logger.info("Distributed process group cleaned up")
 
 
 if __name__ == "__main__":
