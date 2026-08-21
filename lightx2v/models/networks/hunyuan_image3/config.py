@@ -1,13 +1,5 @@
 SUPPORTED_TASKS = {"t2t", "t2i", "ti2t", "ti2i", "i2i"}
 SUPPORTED_BOT_TASKS = {"image", "auto", "think", "recaption", "think_recaption"}
-_AR_CUSTOM_ALL_REDUCE_KEYS = {
-    "enable_ar_custom_all_reduce",
-    "ar_custom_all_reduce_backend",
-    "ar_custom_all_reduce_required",
-    "ar_custom_all_reduce_max_size_bytes",
-    "ar_custom_all_reduce_skip_p2p_check",
-    "ar_custom_all_reduce_graph_mode",
-}
 
 
 def _config_ints(value):
@@ -18,32 +10,32 @@ def _config_ints(value):
     return [int(value)]
 
 
-def _normalize_ar_custom_all_reduce(config, *, phase_aware, parallel_config):
-    if not any(key in config for key in _AR_CUSTOM_ALL_REDUCE_KEYS):
+def _validate_ar_custom_all_reduce(config, *, phase_aware, parallel_config):
+    if not config.get("enable_ar_custom_all_reduce", False):
         return
 
     from lightx2v.models.networks.hunyuan_image3.custom_all_reduce import HunyuanImage3CustomAllReduceConfig
 
     custom_ar = HunyuanImage3CustomAllReduceConfig.from_mapping(config)
-    if custom_ar.enabled:
-        if not phase_aware:
-            raise ValueError("HunyuanImage3 AR custom all-reduce requires parallel.phase_aware=true.")
-        ar_tp_size = int((parallel_config.get("ar") or {}).get("tensor_p_size", 1))
-        if ar_tp_size not in (2, 4):
-            raise ValueError(f"HunyuanImage3 AR custom all-reduce supports full-world TP2 or TP4, got AR TP size {ar_tp_size}.")
-        if custom_ar.graph_mode == "workspace" and config.get("enable_ar_cuda_graph") is not True:
-            raise ValueError("ar_custom_all_reduce_graph_mode='workspace' requires enable_ar_cuda_graph=true.")
+    if not phase_aware:
+        raise ValueError("HunyuanImage3 AR custom all-reduce requires parallel.phase_aware=true.")
+    ar_tp_size = int(parallel_config["ar"]["tensor_p_size"])
+    if ar_tp_size not in (2, 4):
+        raise ValueError(f"HunyuanImage3 AR custom all-reduce supports full-world TP2 or TP4, got AR TP size {ar_tp_size}.")
+    if custom_ar.graph_mode == "workspace" and not config.get("enable_ar_cuda_graph", False):
+        raise ValueError("ar_custom_all_reduce_graph_mode='workspace' requires enable_ar_cuda_graph=true.")
 
-    config.update(
-        {
-            "enable_ar_custom_all_reduce": custom_ar.enabled,
-            "ar_custom_all_reduce_backend": custom_ar.backend,
-            "ar_custom_all_reduce_required": custom_ar.required,
-            "ar_custom_all_reduce_max_size_bytes": custom_ar.max_size_bytes,
-            "ar_custom_all_reduce_skip_p2p_check": custom_ar.skip_p2p_check,
-            "ar_custom_all_reduce_graph_mode": custom_ar.graph_mode,
-        }
-    )
+
+def _validate_ar_cuda_graph(config, *, phase_aware):
+    if not config.get("enable_ar_cuda_graph", False):
+        return
+    if not phase_aware:
+        raise ValueError("HunyuanImage3 AR CUDA Graph requires parallel.phase_aware=true.")
+    if config.get("ar_decode_attn_impl") != "flash_attn3_paged":
+        raise ValueError("HunyuanImage3 AR CUDA Graph requires ar_decode_attn_impl='flash_attn3_paged'.")
+    text_kv_cache = config.get("enable_text_kv_cache", config.get("enable_kv_cache", True))
+    if not text_kv_cache:
+        raise ValueError("HunyuanImage3 AR CUDA Graph requires the text KV cache.")
 
 
 def normalize_hunyuan_image3_phase_parallel(config, parallel_config):
@@ -261,14 +253,16 @@ def normalize_hunyuan_image3_config(config):
 
     parallel_config = config.get("parallel")
     if not isinstance(parallel_config, dict):
-        _normalize_ar_custom_all_reduce(config, phase_aware=False, parallel_config={})
+        _validate_ar_cuda_graph(config, phase_aware=False)
+        _validate_ar_custom_all_reduce(config, phase_aware=False, parallel_config={})
         if moe_backend == "multi_micro":
             raise ValueError("HunyuanImage3 moe_backend='multi_micro' requires a phase-aware parallel configuration.")
         return config
 
     parallel_config = dict(parallel_config)
     phase_aware, pipeline_parallel, cfg_mode = _normalize_parallel_config(config, parallel_config, task)
-    _normalize_ar_custom_all_reduce(config, phase_aware=phase_aware, parallel_config=parallel_config)
+    _validate_ar_cuda_graph(config, phase_aware=phase_aware)
+    _validate_ar_custom_all_reduce(config, phase_aware=phase_aware, parallel_config=parallel_config)
     config["parallel"] = parallel_config
     config["pipeline_parallel"] = pipeline_parallel
     config["hunyuan_cfg_mode"] = cfg_mode

@@ -382,24 +382,24 @@ class HunyuanImage3Model(BaseTransformerModel):
 
     def _active_seq_group(self):
         if self.parallel_context is not None:
-            return getattr(self.parallel_context, "active_seq_group", getattr(self.parallel_context, "seq_p_group", None))
+            return self.parallel_context.active_seq_group
         return self.seq_p_group
 
     def _active_seq_size(self):
         if self.parallel_context is not None:
-            return int(getattr(self.parallel_context, "active_seq_size", getattr(self.parallel_context, "seq_p_size", 1)))
+            return self.parallel_context.active_seq_size
         group = self._active_seq_group()
         return dist.get_world_size(group) if group is not None else 1
 
     def _active_seq_rank(self):
         if self.parallel_context is not None:
-            return int(getattr(self.parallel_context, "active_seq_rank", getattr(self.parallel_context, "seq_p_rank", 0)))
+            return self.parallel_context.active_seq_rank
         group = self._active_seq_group()
         return dist.get_rank(group) if group is not None else 0
 
     def _active_seq_parallel(self):
         if self.parallel_context is not None:
-            return bool(getattr(self.parallel_context, "active_seq_parallel", self._active_seq_size() > 1)) and self._active_seq_size() > 1
+            return self.parallel_context.active_seq_parallel
         return bool(self.config.get("seq_parallel", False))
 
     def reset_taylor_cache(self):
@@ -452,29 +452,15 @@ class HunyuanImage3Model(BaseTransformerModel):
 
     @torch.no_grad()
     def prepare_ar_pre_infer(self, inputs):
-        """Prepare embeddings and multimodal inputs for an AR forward."""
-
+        """Prepare inputs for a graph-captured AR forward."""
         if self._active_seq_parallel():
             raise RuntimeError("HunyuanImage3 prepared AR inference requires sequence parallelism to be inactive.")
-        if inputs.get("cache_dic") is not None:
-            raise RuntimeError("HunyuanImage3 prepared AR inference does not support Taylor cache state.")
-        if inputs.get("_cfg_parallel_branch", False):
-            raise RuntimeError("HunyuanImage3 prepared AR inference does not support a CFG-parallel branch.")
-        if hasattr(self, "scheduler"):
-            self.scheduler.infer_condition = True
-        pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
-        if pre_infer_out.sequence_parallel_state is not None:
-            raise RuntimeError("HunyuanImage3 prepared AR inference received unexpected sequence-parallel metadata.")
-        return pre_infer_out
+        self.scheduler.infer_condition = True
+        return self.pre_infer.infer(self.pre_weight, inputs)
 
     @torch.no_grad()
     def infer_ar_prepared(self, pre_infer_out):
-        """Run transformer and output projection from prepared AR inputs."""
-
-        if self._active_seq_parallel():
-            raise RuntimeError("HunyuanImage3 prepared AR inference requires sequence parallelism to be inactive.")
-        if pre_infer_out.sequence_parallel_state is not None:
-            raise RuntimeError("HunyuanImage3 prepared AR inference received sequence-parallel metadata.")
+        """Run the transformer and output projection for prepared AR inputs."""
         hidden_states = self._infer_transformer(pre_infer_out)
         return self.post_infer.infer(self.post_weight, hidden_states, pre_infer_out)
 
@@ -559,7 +545,7 @@ class HunyuanImage3Model(BaseTransformerModel):
         world_size = self._active_seq_size()
         local = x.transpose(0, 1).contiguous()
         output_shape = (local.shape[0] * world_size, *local.shape[1:])
-        phase = getattr(self.parallel_context, "phase", "legacy") if self.parallel_context is not None else "legacy"
+        phase = self.parallel_context.phase if self.parallel_context is not None else "legacy"
         key = ("hidden", phase, id(seq_group), local.device, local.dtype, output_shape)
         gathered = self._sp_gather_buffers.get(key)
         if gathered is None or gathered.shape != output_shape:

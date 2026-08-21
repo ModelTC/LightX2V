@@ -406,9 +406,9 @@ class HunyuanImage3Runner(DefaultRunner):
             return controller_config
 
         context = self._parallel_context()
-        phase = str(self._parallel_context_value(context, "phase", default="")).strip().lower()
-        if context is None or phase not in ("ar", "denoise"):
+        if context is None:
             return self.config
+        phase = context.phase
 
         # The grouped multi-micro denoise path does not invoke FlashInfer.
         # Keep AR on its topology-specific FlashInfer cache, but avoid opening
@@ -443,66 +443,41 @@ class HunyuanImage3Runner(DefaultRunner):
     def _parallel_context(self):
         return self.config.get("parallel_context")
 
-    @staticmethod
-    def _parallel_context_value(context, *names, default=None):
-        if context is None:
-            return default
-        for name in names:
-            if not hasattr(context, name):
-                continue
-            value = getattr(context, name)
-            if callable(value):
-                value = value()
-            if value is not None:
-                return value
-        return default
-
     def _activate_parallel_phase(self, phase):
         context = self._parallel_context()
-        if context is None:
-            return
-        activate_phase = getattr(context, "activate_phase", None)
-        if not callable(activate_phase):
-            raise RuntimeError("HunyuanImage3 parallel_context must provide activate_phase(name).")
-        activate_phase(phase)
+        if context is not None:
+            context.activate_phase(phase)
 
     def _active_tp_group(self):
         context = self._parallel_context()
-        group = self._parallel_context_value(context, "active_tp_group", "tp_group")
-        if group is not None:
-            return group
+        if context is not None:
+            return context.active_tp_group
         return getattr(self.model, "tp_group", None)
 
     def _active_tp_size(self):
         context = self._parallel_context()
-        size = self._parallel_context_value(context, "active_tp_size", "tp_size")
-        if size is not None:
-            return int(size)
+        if context is not None:
+            return context.active_tp_size
         group = self._active_tp_group()
         return dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else 1
 
     def _active_seq_group(self):
         context = self._parallel_context()
-        group = self._parallel_context_value(context, "active_seq_group", "seq_p_group")
-        if group is not None:
-            return group
+        if context is not None:
+            return context.active_seq_group
         return getattr(self.model, "seq_p_group", None)
 
     def _active_seq_size(self):
         context = self._parallel_context()
-        size = self._parallel_context_value(context, "active_seq_size", "seq_p_size", "seq_size")
-        if size is not None:
-            return int(size)
+        if context is not None:
+            return context.active_seq_size
         group = self._active_seq_group()
         return dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else 1
 
     def _sequence_parallel_enabled(self):
         context = self._parallel_context()
-        active = self._parallel_context_value(context, "active_seq_parallel")
-        if active is not None:
-            return bool(active) and self._active_seq_size() > 1
         if context is not None:
-            return self._active_seq_size() > 1
+            return context.active_seq_parallel
         return bool(self.config.get("seq_parallel", False) and dist.is_available() and dist.is_initialized() and getattr(self.model, "seq_p_group", None) is not None)
 
     def _tensor_parallel_enabled(self):
@@ -977,8 +952,6 @@ class HunyuanImage3Runner(DefaultRunner):
         generated = []
         use_kv_cache = self._hunyuan_text_kv_cache_enabled()
         graph_controller = self._get_ar_cuda_graph_controller()
-        if graph_controller.enabled and not use_kv_cache:
-            raise ValueError("HunyuanImage3 enable_ar_cuda_graph=true requires enable_text_kv_cache=true.")
         kv_cache = None
         cache_filled_length = 0
         if use_kv_cache:
@@ -1685,14 +1658,12 @@ class HunyuanImage3Runner(DefaultRunner):
         return {"image": None}
 
     def close(self):
-        """Release graph and IPC resources before distributed teardown."""
-
-        controller = getattr(self, "_hunyuan_ar_cuda_graph_controller", None)
-        self._hunyuan_ar_cuda_graph_controller = None
-        if controller is not None:
-            controller.close()
-            return
-        context = self.config.get("parallel_context")
-        close_custom = getattr(context, "close_custom_all_reduce", None)
-        if callable(close_custom):
-            close_custom()
+        """Release graph and collective resources."""
+        controller = self.__dict__.pop("_hunyuan_ar_cuda_graph_controller", None)
+        try:
+            if controller is not None:
+                controller.close()
+        finally:
+            context = self.config.get("parallel_context")
+            if context is not None:
+                context.close()

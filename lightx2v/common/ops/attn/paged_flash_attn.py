@@ -36,9 +36,6 @@ def build_flash_attn3_decode_scheduler_metadata(
 ) -> torch.Tensor:
     """Build FlashAttention 3 scheduling metadata for one-token decode."""
 
-    require_paged_flash_attn3()
-    if cache_seqlens.dtype != torch.int32 or not cache_seqlens.is_cuda:
-        raise ValueError("FlashAttention 3 cache_seqlens must be a CUDA int32 tensor.")
     return get_flash_attn3_scheduler_metadata(
         batch_size=int(cache_seqlens.numel()),
         max_seqlen_q=1,
@@ -139,15 +136,6 @@ class PagedFlashAttn3Weight(AttnWeightTemplate):
         max_num_splits: int,
         softmax_scale: float | None = None,
     ) -> torch.Tensor:
-        if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:
-            raise ValueError(f"Paged FA3 decode expects 4D Q/K/V, got {q.shape}, {k.shape}, {v.shape}.")
-        if q.shape[0] != 1 or q.shape[2] != 1 or k.shape[2] != 1 or v.shape[2] != 1:
-            raise ValueError(f"Paged FA3 decode requires batch=1 and q_len=1, got {q.shape}, {k.shape}, {v.shape}.")
-        if q.shape[1] % k.shape[1]:
-            raise ValueError(f"Paged FA3 GQA requires Q heads divisible by KV heads, got Hq={q.shape[1]}, Hkv={k.shape[1]}.")
-        if page_table.dtype != torch.int32 or cache_seqlens.dtype != torch.int32:
-            raise ValueError("Paged FA3 page_table and cache_seqlens must use torch.int32.")
-
         store_paged_kv(k, v, k_cache, v_cache, page_table, cache_seqlens)
         output = flash_attn3_with_kvcache(
             q.transpose(1, 2),

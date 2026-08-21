@@ -27,8 +27,14 @@ class HunyuanImage3StaticKVCache:
         self.page_table = None
         self.cache_seqlens = None
         self.scheduler_metadata = None
+        self.decode_ready = False
         self.num_key_value_heads = None
         self.head_dim = None
+
+    def begin_request(self):
+        self.decode_ready = False
+        if self.cache_seqlens is not None:
+            self.cache_seqlens.zero_()
 
     def _ensure_layer(self, layer_idx, key_states, value_states):
         layer = self.layers[layer_idx]
@@ -49,15 +55,11 @@ class HunyuanImage3StaticKVCache:
         return layer
 
     def _ensure_paged_metadata(self, device):
-        if not self.paged:
-            raise RuntimeError("Paged metadata was requested from a dense HunyuanImage3 KV cache.")
         if self.page_table is None:
             self.page_table = torch.arange(self.num_pages, device=device, dtype=torch.int32).reshape(1, self.num_pages)
             self.cache_seqlens = torch.zeros(1, device=device, dtype=torch.int32)
 
     def set_paged_decode_length(self, length):
-        if not self.paged or self.cache_seqlens is None:
-            raise RuntimeError("HunyuanImage3 paged decode metadata is not initialized; run prefill first.")
         length = int(length)
         if length < 1 or length > self.max_cache_len:
             raise ValueError(f"HunyuanImage3 paged decode length must be in [1, {self.max_cache_len}], got {length}.")
@@ -66,8 +68,6 @@ class HunyuanImage3StaticKVCache:
     def prepare_paged_decode_scheduler(self, *, valid_length, num_query_heads, max_num_splits):
         """Refresh FA3 scheduler data without changing its persistent address."""
 
-        if not self.paged or self.cache_seqlens is None or self.num_key_value_heads is None or self.head_dim is None:
-            raise RuntimeError("HunyuanImage3 paged KV cache must be populated by prefill before decode scheduling.")
         self.set_paged_decode_length(valid_length)
         from lightx2v.common.ops.attn.paged_flash_attn import build_flash_attn3_decode_scheduler_metadata
 
@@ -88,14 +88,11 @@ class HunyuanImage3StaticKVCache:
             raise RuntimeError(f"FA3 scheduler metadata grew from {self.scheduler_metadata.numel()} to {runtime_metadata.numel()} entries after allocation.")
         self.scheduler_metadata.zero_()
         self.scheduler_metadata[: runtime_metadata.numel()].copy_(runtime_metadata)
+        self.decode_ready = True
         return self.scheduler_metadata[: runtime_metadata.numel()]
 
     def get_paged_layer(self, layer_idx):
-        if not self.paged:
-            raise RuntimeError("Paged layer storage was requested from a dense HunyuanImage3 KV cache.")
         layer = self.layers[int(layer_idx)]
-        if layer.key is None or layer.value is None:
-            raise RuntimeError(f"HunyuanImage3 paged KV layer {layer_idx} has not been allocated by prefill.")
         return layer.key, layer.value
 
     def update(self, key_states, value_states, layer_idx, cache_position=None):
@@ -124,16 +121,7 @@ class HunyuanImage3StaticKVCache:
         return self._slice_dynamic(layer, int(cache_position.max().item()) + 1)
 
     def _update_paged(self, layer, key_states, value_states, cache_position):
-        if cache_position is None:
-            positions = torch.arange(key_states.shape[2], device=key_states.device, dtype=torch.long)
-        else:
-            positions = cache_position.to(device=key_states.device, dtype=torch.long)
-            if positions.dim() == 2:
-                if positions.shape[0] != 1:
-                    raise ValueError("HunyuanImage3 paged KV cache currently requires batch size 1.")
-                positions = positions[0]
-            elif positions.dim() != 1:
-                raise ValueError(f"HunyuanImage3 cache_position must be 1D or 2D, got {positions.shape}.")
+        positions = cache_position.to(device=key_states.device, dtype=torch.long)[0]
 
         flat_key = layer.key.reshape(self.max_cache_len, layer.key.shape[2], layer.key.shape[3])
         flat_value = layer.value.reshape(self.max_cache_len, layer.value.shape[2], layer.value.shape[3])
@@ -142,7 +130,7 @@ class HunyuanImage3StaticKVCache:
         flat_key.index_copy_(0, positions, new_key)
         flat_value.index_copy_(0, positions, new_value)
 
-        end = key_states.shape[2] if cache_position is None else int(positions[-1].item()) + 1
+        end = int(positions[-1].item()) + 1
         end = min(int(end), self.max_cache_len)
         dense_key = flat_key[:end].unsqueeze(0).transpose(1, 2)
         dense_value = flat_value[:end].unsqueeze(0).transpose(1, 2)

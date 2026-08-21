@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# By default, keep the three repositories side by side. Override either external
-# path when using a different workspace layout.
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 lightx2v_path="$(cd -- "${script_dir}/../.." && pwd)"
 workspace_path="$(dirname -- "${lightx2v_path}")"

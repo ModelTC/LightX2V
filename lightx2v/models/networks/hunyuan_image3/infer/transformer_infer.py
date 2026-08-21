@@ -46,16 +46,10 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         self.num_key_value_heads = self.global_num_key_value_heads // self.tp_size
         self.hidden_act = config.get("hidden_act", "silu")
         self.attn_impl = self._normalize_attention_impl(config.get("attn_impl", "torch_sdpa"))
-        self.ar_attn_impl = self._normalize_attention_impl(config.get("ar_attn_impl", self.attn_impl))
         self.denoise_attn_impl = self._normalize_attention_impl(config.get("denoise_attn_impl", self.attn_impl))
-        self._attn_kernels = {impl: None if impl == "torch_sdpa" else self._build_attention_kernel(impl) for impl in {self.attn_impl, self.ar_attn_impl, self.denoise_attn_impl}}
-        self.attn_kernel = self._attn_kernels[self.attn_impl]
-        self.ar_decode_attn_impl = str(config.get("ar_decode_attn_impl", "disabled") or "disabled").strip().lower()
-        if self.ar_decode_attn_impl in ("none", "off", "false"):
-            self.ar_decode_attn_impl = "disabled"
-        if self.ar_decode_attn_impl not in ("disabled", "flash_attn3_paged"):
-            raise ValueError(f"Unsupported HunyuanImage3 ar_decode_attn_impl={self.ar_decode_attn_impl!r}; expected 'disabled' or 'flash_attn3_paged'.")
-        self.ar_decode_attn_kernel = None if self.ar_decode_attn_impl == "disabled" else self._build_attention_kernel(self.ar_decode_attn_impl)
+        self._attn_kernels = {impl: None if impl == "torch_sdpa" else self._build_attention_kernel(impl) for impl in {self.attn_impl, self.denoise_attn_impl}}
+        decode_impl = config.get("ar_decode_attn_impl")
+        self.ar_decode_attn_kernel = self._build_attention_kernel(decode_impl) if decode_impl else None
         self._attn_cu_seqlens_cache = {}
         self._attn_segment_specs_cache = {}
         self._attn_fallback_warnings = set()
@@ -72,62 +66,40 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             self.seq_p_group = None
             self.sequence_parallel_attn_type = None
 
-    @staticmethod
-    def _parallel_context_value(context, *names, default=None):
-        if context is None:
-            return default
-        for name in names:
-            if not hasattr(context, name):
-                continue
-            value = getattr(context, name)
-            if callable(value):
-                value = value()
-            if value is not None:
-                return value
-        return default
-
     def _active_phase(self):
-        return str(self._parallel_context_value(self.parallel_context, "phase", default="legacy"))
+        return self.parallel_context.phase if self.parallel_context is not None else "legacy"
 
     def _active_attention_impl(self):
-        phase = self._active_phase().strip().lower()
-        if phase == "ar":
-            return self.ar_attn_impl
-        if phase == "denoise":
+        if self._active_phase() == "denoise":
             return self.denoise_attn_impl
         return self.attn_impl
 
-    def _active_attention_kernel(self, attn_impl=None):
-        attn_impl = self._active_attention_impl() if attn_impl is None else attn_impl
-        return self._attn_kernels.get(attn_impl)
+    def _active_attention_kernel(self, attn_impl):
+        return self._attn_kernels[attn_impl]
 
     def _active_tp_state(self):
-        group = self._parallel_context_value(self.parallel_context, "active_tp_group", "tp_group", default=self.tp_group)
-        size = self._parallel_context_value(self.parallel_context, "active_tp_size", "tp_size")
-        if size is None:
-            size = dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else self.tp_size
-        rank = self._parallel_context_value(self.parallel_context, "active_tp_rank", "tp_rank")
-        if rank is None:
-            rank = dist.get_rank(group) if group is not None and dist.is_available() and dist.is_initialized() else self.tp_rank
-        logical_rank = self._parallel_context_value(self.parallel_context, "logical_tp_rank", default=rank)
-        return group, int(rank), int(size), int(logical_rank)
+        if self.parallel_context is not None:
+            return (
+                self.parallel_context.active_tp_group,
+                self.parallel_context.active_tp_rank,
+                self.parallel_context.active_tp_size,
+                self.parallel_context.logical_tp_rank,
+            )
+        return self.tp_group, self.tp_rank, self.tp_size, self.tp_rank
 
     def _active_seq_group(self):
-        return self._parallel_context_value(self.parallel_context, "active_seq_group", "seq_p_group", default=self.seq_p_group)
+        if self.parallel_context is not None:
+            return self.parallel_context.active_seq_group
+        return self.seq_p_group
 
     def _active_seq_size(self):
-        size = self._parallel_context_value(self.parallel_context, "active_seq_size", "seq_p_size", "seq_size")
-        if size is not None:
-            return int(size)
-        group = self._active_seq_group()
-        return dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else 1
+        if self.parallel_context is not None:
+            return self.parallel_context.active_seq_size
+        return dist.get_world_size(self.seq_p_group) if self.seq_p_group is not None else 1
 
     def _active_seq_parallel(self):
-        active = self._parallel_context_value(self.parallel_context, "active_seq_parallel")
-        if active is not None:
-            return bool(active) and self._active_seq_size() > 1
         if self.parallel_context is not None:
-            return self._active_seq_size() > 1
+            return self.parallel_context.active_seq_parallel
         return self.seq_p_group is not None
 
     def set_scheduler(self, scheduler):
@@ -219,8 +191,6 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
 
     def _sdpa_attention(self, query_states, key_states, value_states, attention_mask):
         if query_states.shape[1] != key_states.shape[1]:
-            if query_states.shape[1] % key_states.shape[1]:
-                raise ValueError(f"HunyuanImage3 SDPA fallback requires Q heads to be divisible by KV heads; got Q={query_states.shape[1]}, KV={key_states.shape[1]}.")
             repeat_groups = query_states.shape[1] // key_states.shape[1]
             key_states = repeat_kv(key_states, repeat_groups)
             value_states = repeat_kv(value_states, repeat_groups)
@@ -234,8 +204,6 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         batch, q_len, query_heads, _ = q.shape
         kv_len = k.shape[1]
         attn_kernel = self._active_attention_kernel(attn_impl)
-        if attn_kernel is None:
-            raise RuntimeError(f"HunyuanImage3 attn_impl={attn_impl!r} has no registered attention kernel.")
         cu_seqlens_q = self._get_cu_seqlens("q", batch, q_len, q.device, attn_impl)
         cu_seqlens_kv = self._get_cu_seqlens("kv", batch, kv_len, k.device, attn_impl)
         attn_output = attn_kernel.apply(
@@ -248,13 +216,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             max_seqlen_kv=kv_len,
             causal=causal,
         )
-        if attn_output.dim() == 2:
-            attn_output = attn_output.reshape(batch, q_len, query_heads, self.head_dim)
-        elif attn_output.dim() == 3:
-            attn_output = attn_output.reshape(batch, q_len, query_heads, self.head_dim)
-        else:
-            raise RuntimeError(f"HunyuanImage3 attn_impl={attn_impl!r} returned unexpected shape {tuple(attn_output.shape)}.")
-        return attn_output
+        return attn_output.reshape(batch, q_len, query_heads, self.head_dim)
 
     def _apply_registered_attention_kernel(self, query_states, key_states, value_states, causal, attn_impl):
         original_dtype = query_states.dtype
@@ -264,34 +226,6 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         attn_output = self._apply_registered_attention_kernel_bshd(q, k, v, causal, attn_impl)
         return attn_output.to(original_dtype).transpose(1, 2)
 
-    def _normalize_full_attn_slices(self, full_attn_slices, batch):
-        if full_attn_slices is None:
-            return [[] for _ in range(batch)]
-        if len(full_attn_slices) == 0:
-            return [[] for _ in range(batch)]
-
-        first_item = full_attn_slices[0]
-        if isinstance(first_item, slice) or (isinstance(first_item, (list, tuple)) and len(first_item) == 2 and all(isinstance(v, int) for v in first_item)):
-            full_attn_slices = [full_attn_slices for _ in range(batch)]
-        elif len(full_attn_slices) == 1 and batch > 1:
-            full_attn_slices = list(full_attn_slices) * batch
-
-        normalized = []
-        for sample_slices in full_attn_slices:
-            sample = []
-            for item in sample_slices:
-                if isinstance(item, slice):
-                    start = 0 if item.start is None else int(item.start)
-                    stop = int(item.stop)
-                else:
-                    start, stop = int(item[0]), int(item[1])
-                if stop > start:
-                    sample.append((start, stop))
-            normalized.append(sorted(sample))
-        if len(normalized) != batch:
-            return None
-        return normalized
-
     @staticmethod
     def _find_full_attn_slice(full_slices, position):
         for start, stop in full_slices:
@@ -300,10 +234,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         return None
 
     def _build_segment_specs(self, position_ids, full_slices, kv_len):
-        if torch.is_tensor(position_ids):
-            positions = [int(position) for position in position_ids.detach().cpu().reshape(-1).tolist()]
-        else:
-            positions = [int(position) for position in position_ids]
+        positions = [int(position) for position in position_ids.detach().cpu().reshape(-1).tolist()]
         segments = []
         local_start = 0
         while local_start < len(positions):
@@ -339,21 +270,17 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         return segments
 
     def _segment_specs_cache_key(self, position_ids, batch_full_slices, kv_len):
-        if not torch.is_tensor(position_ids):
-            return None
         return (
             id(position_ids),
             tuple(position_ids.shape),
             tuple(position_ids.stride()),
             int(position_ids.storage_offset()),
-            int(getattr(position_ids, "_version", 0)),
+            int(position_ids._version),
             int(kv_len),
             tuple(tuple(sample_slices) for sample_slices in batch_full_slices),
         )
 
     def _lookup_segment_specs_cache(self, key, position_ids):
-        if key is None:
-            return None
         entry = self._attn_segment_specs_cache.get(key)
         if entry is None:
             return None
@@ -364,8 +291,6 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         return None
 
     def _store_segment_specs_cache(self, key, position_ids, segment_specs):
-        if key is None:
-            return
         if len(self._attn_segment_specs_cache) >= 32:
             stale_keys = [cache_key for cache_key, (tensor_ref, _) in self._attn_segment_specs_cache.items() if tensor_ref() is None]
             for cache_key in stale_keys:
@@ -381,10 +306,10 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         value_states,
         position_ids,
         full_attn_slices,
+        *,
+        attn_impl,
         segment_specs=None,
-        attn_impl=None,
     ):
-        attn_impl = self._active_attention_impl() if attn_impl is None else attn_impl
         if position_ids is None:
             return None
         batch, _, q_len, _ = query_states.shape
@@ -395,8 +320,8 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         if segment_specs is None:
             if full_attn_slices is None:
                 return None
-            batch_full_slices = self._normalize_full_attn_slices(full_attn_slices, batch)
-            if batch_full_slices is None or not any(batch_full_slices):
+            batch_full_slices = full_attn_slices
+            if not any(batch_full_slices):
                 return None
             segment_specs = [self._build_segment_specs(position_ids[batch_idx], batch_full_slices[batch_idx], kv_len) for batch_idx in range(batch)]
         if len(segment_specs) != batch or any(specs is None for specs in segment_specs):
@@ -603,15 +528,9 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             else:
                 raise ValueError(f"Unsupported HunyuanImage3 sequence parallel attention type: {sequence_parallel_state.attn_type!r}.")
 
-        paged_decode = (
-            past_key_values is not None and bool(getattr(past_key_values, "paged", False)) and self._active_phase().strip().lower() == "ar" and q_len == 1 and self.ar_decode_attn_kernel is not None
-        )
+        paged_decode = past_key_values is not None and past_key_values.paged and past_key_values.decode_ready and q_len == 1
 
         if paged_decode:
-            if sequence_parallel_state is not None:
-                raise RuntimeError("HunyuanImage3 paged AR decode does not support sequence parallel attention.")
-            if past_key_values.page_table is None or past_key_values.cache_seqlens is None or past_key_values.scheduler_metadata is None:
-                raise RuntimeError("HunyuanImage3 paged AR decode metadata must be prepared before model execution.")
             key_cache, value_cache = past_key_values.get_paged_layer(block_idx)
             query_states = query_states.to(key_cache.dtype)
             key_states = key_states.to(key_cache.dtype)
@@ -693,8 +612,8 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         kv_len = attention_mask.shape[-1]
         if attention_mask.dtype != torch.bool or attention_mask.dim() != 4 or attention_mask.shape[0] != batch or attention_mask.shape[1] != 1 or attention_mask.shape[-2] != q_len:
             return None
-        batch_full_slices = self._normalize_full_attn_slices(pre_infer_out.full_attn_slices, batch)
-        if batch_full_slices is None or not any(batch_full_slices):
+        batch_full_slices = pre_infer_out.full_attn_slices
+        if not any(batch_full_slices):
             return None
         cache_key = self._segment_specs_cache_key(position_ids, batch_full_slices, kv_len)
         cached_specs = self._lookup_segment_specs_cache(cache_key, position_ids)
@@ -709,15 +628,11 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
     def _cached_pre_infer_to_device(self, name, value, device):
         if value is None:
             return None
-        cache = getattr(self, "_pre_infer_device_cache", None)
-        if cache is None:
-            self._pre_infer_device_cache = {}
-            cache = self._pre_infer_device_cache
         key = (name, device, id(value))
-        cached = cache.get(key)
+        cached = self._pre_infer_device_cache.get(key)
         if cached is None:
             cached = to_device(value, device)
-            cache[key] = cached
+            self._pre_infer_device_cache[key] = cached
         return cached
 
     def _sequence_parallel_gather_kv(self, key_states, value_states, state):
@@ -786,7 +701,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         moe = phase.moe
         original_dtype = hidden_states.dtype
         compute_dtype = original_dtype if original_dtype in (torch.float16, torch.bfloat16) else torch.bfloat16
-        active_phase = self._active_phase().strip().lower()
+        active_phase = self._active_phase()
         if moe.moe_backend == "multi_micro" and active_phase == "denoise" and compute_dtype != torch.bfloat16:
             raise TypeError(f"HunyuanImage3 multi_micro requires BF16 inference; got compute dtype {compute_dtype}.")
 
@@ -803,9 +718,8 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         if tp_size > 1:
             if tp_group is None:
                 raise RuntimeError("HunyuanImage3 active tensor parallelism requires an active TP process group.")
-            phase_all_reduce = getattr(self.parallel_context, "tensor_parallel_all_reduce", None)
-            if callable(phase_all_reduce):
-                output = phase_all_reduce(output)
+            if self.parallel_context is not None:
+                output = self.parallel_context.tensor_parallel_all_reduce(output)
             else:
                 dist.all_reduce(output, op=dist.ReduceOp.SUM, group=tp_group)
         return output
