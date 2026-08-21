@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/FL/LightX2V
-model_path=/data/nvme1/yongyang/FL/neo_gen_30b_moe/neo_gen_30b_moe
+lightx2v_path=/data/nvme1/wushuo/LightX2V
+model_path=/data/nvme1/models/SenseNova-U1.5-8B-MoT-Preview
 
 export CUDA_VISIBLE_DEVICES=5
 
@@ -17,4 +17,4 @@ python -m lightx2v.infer \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/neopp/neopp_moe.json \
 --target_shape 512 512 \
---save_result_path ${lightx2v_path}/save_results/output_lightx2v_neopp_moe_t2i_512.png
+--save_result_path ${lightx2v_path}/save_results/output_lightx2v_neopp_moe_t2i_512_h100_origin.png

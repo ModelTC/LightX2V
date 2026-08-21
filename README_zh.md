@@ -48,6 +48,7 @@ pre-commit run --all-files
 - [Tyr0727](https://github.com/Tyr0727)
 - [hufangjian2017](https://github.com/hufangjian2017)
 - [Fatemanx](https://github.com/Fatemanx)
+- [qiuxin2012](https://github.com/qiuxin2012)
 
 ## :fire: 最新动态
 
@@ -223,6 +224,7 @@ pipe.generate(
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B)
+- ✅ [SwiftVR](https://huggingface.co/H-oliday/SwiftVR)；先使用 [convert_swiftvr.py](tools/convert/examples/convert_swiftvr.py) 转换权重，再运行 [超分脚本](scripts/swiftvr/run_swiftvr_sr.sh)。
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
 - ✅ [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)

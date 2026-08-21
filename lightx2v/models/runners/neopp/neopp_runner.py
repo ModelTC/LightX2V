@@ -91,7 +91,7 @@ class NeoppRunner(DefaultRunner):
         return inv_freq_full[::2]
 
     def _compute_rope(self, position_ids, inv_freq):
-        inv_freq = inv_freq.cuda()
+        inv_freq = inv_freq.to(device=position_ids.device)
         inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
         freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)

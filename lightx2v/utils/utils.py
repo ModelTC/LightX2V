@@ -363,6 +363,7 @@ def mux_audio_from_video(
     target_video_path: str,
     output_path: Optional[str] = None,
     prefer_copy: bool = True,
+    trim_to_shortest: bool = True,
 ) -> Optional[str]:
     """Mux audio from source_video_path into target_video_path.
 
@@ -371,6 +372,7 @@ def mux_audio_from_video(
         target_video_path: Video file that contains the video stream to keep.
         output_path: Optional output path. Defaults to target_video_path (in-place replace).
         prefer_copy: If True, try stream copy for audio first, then fallback to AAC re-encode.
+        trim_to_shortest: End the output when its shortest stream ends.
 
     Returns:
         The output path on success, or None on failure.
@@ -406,8 +408,9 @@ def mux_audio_from_video(
             "copy",
             "-c:a",
             audio_codec,
-            "-shortest",
         ]
+        if trim_to_shortest:
+            cmd.append("-shortest")
         # Be explicit about container format in case ffmpeg can't infer it
         cmd += ["-f", "mp4"]
         if extra_args:

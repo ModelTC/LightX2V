@@ -1,0 +1,37 @@
+{
+  "infer_steps": 30,
+  "target_video_length": 124,
+  "target_height": 544,
+  "target_width": 960,
+  "fps": 24,
+  "target_fps": 24,
+  "enable_cfg": false,
+  "cpu_offload": false,
+  "text_encoder_cpu_offload": false,
+  "text_encoder_tensor_parallel": true,
+  "vae_cpu_offload": false,
+  "vae_decode_parallel": true,
+  "lazy_load": false,
+  "unload_modules": false,
+  "attn_type": "mlu_flash_attn",
+  "rms_type": "mlu_rms_norm",
+  "rope_type": "torch_real_rope",
+  "feature_caching": "NoCaching",
+  "use_compile": true,
+  "vae_use_compile": true,
+  "video_flow_shift": 12.0,
+  "audio_flow_shift": 3.0,
+  "vae_spatial_scale_factor": 16,
+  "audio_sampling_rate": 32000,
+  "audio_latents_per_second": 40,
+  "audio_channels": 2,
+  "keep_latents_dtype_in_scheduler": true,
+  "parallel": {
+    "seq_p_size": 8,
+    "seq_p_attn_type": "ulysses"
+  },
+  "video_codec_options": {
+    "preset": "ultrafast",
+    "crf": "18"
+  }
+}

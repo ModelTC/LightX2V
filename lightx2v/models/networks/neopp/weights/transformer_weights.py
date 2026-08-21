@@ -1,13 +1,8 @@
 import torch
 
-try:
-    from flashinfer.fused_moe.core import get_cutlass_fused_moe_module
-except ImportError:
-    get_cutlass_fused_moe_module = None
-
-
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.attn import FlashAttn2Weight, FlashAttn3Weight  # noqa: F401
+from lightx2v.common.ops.moe.fused_moe import create_local_fused_moe
 from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightFusedQKNorm3DRope
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
@@ -48,6 +43,23 @@ class NeoppTransformerWeights(WeightModule):
             NeoppFmHeadWeights(self.mm_type, config=self.config),
         )
 
+    @staticmethod
+    def _reject_routed_expert_adapter(weight_dict):
+        if any(".mlp_mot_gen.experts." in key for key in weight_dict):
+            raise NotImplementedError("NeoPP common fused MoE backends do not support routed-expert LoRA/diff adapters")
+
+    def register_lora(self, weight_dict, strength):
+        self._reject_routed_expert_adapter(weight_dict)
+        super().register_lora(weight_dict, strength)
+
+    def update_lora(self, weight_dict, strength):
+        self._reject_routed_expert_adapter(weight_dict)
+        super().update_lora(weight_dict, strength)
+
+    def register_diff(self, weight_dict):
+        self._reject_routed_expert_adapter(weight_dict)
+        super().register_diff(weight_dict)
+
 
 class NeoppDecoderLayerWeights(WeightModule):
     def __init__(self, block_index, config, mm_type, attn_type="flash_attn2", lora_path=None):
@@ -69,14 +81,25 @@ class NeoppDecoderLayerWeights(WeightModule):
         )
 
         if config["version"] == "moe":
+            if mm_type != "Default":
+                raise NotImplementedError(f"NeoPP common fused MoE backends support only mm_type='Default', got {mm_type!r}")
             gen_num_experts = int(config["llm_config"]["gen_num_experts"])
             moe_backend = config.get("moe_backend", "flashinfer")
-            if moe_backend not in ("pytorch", "flashinfer"):
-                raise ValueError(f"Invalid moe_backend={moe_backend!r}, expected 'pytorch' or 'flashinfer'")
+            supported_moe_backends = {"flashinfer", "torch_grouped_mm", "torch_expert_loop"}
+            if moe_backend not in supported_moe_backends:
+                raise ValueError(f"Invalid moe_backend={moe_backend!r}, expected one of {sorted(supported_moe_backends)}")
             fi_cfg = config.get("moe_flashinfer_setting") or {}
             if fi_cfg.get("autotune") and moe_backend != "flashinfer":
                 raise ValueError("moe_flashinfer_setting.autotune=true requires moe_backend='flashinfer'")
-            mlp_mot_gen = NeoppSparseMoeWeights(block_index, mm_type, "mlp_mot_gen", gen_num_experts, moe_backend=moe_backend, lora_path=lora_path)
+            tune_max_num_tokens = int(fi_cfg.get("tune_max_num_tokens", 8192))
+            mlp_mot_gen = NeoppSparseMoeWeights(
+                block_index,
+                mm_type,
+                gen_num_experts,
+                moe_backend=moe_backend,
+                tune_max_num_tokens=tune_max_num_tokens,
+                lora_path=lora_path,
+            )
         elif config["version"] == "dense":
             mlp_mot_gen = NeoppMlpWeights(block_index, mm_type, lora_path=lora_path)
         else:
@@ -138,55 +161,58 @@ class NeoppAttentionWeights(WeightModule):
 
 
 class NeoppSparseMoeWeights(WeightModule):
-    def __init__(self, block_index, mm_type, subname, num_experts, moe_backend, lora_path=None):
+    def __init__(self, block_index, mm_type, num_experts, moe_backend, tune_max_num_tokens, lora_path=None):
         super().__init__()
-        prefix = f"language_model.model.layers.{block_index}.{subname}"
+        prefix = f"language_model.model.layers.{block_index}.mlp_mot_gen"
         lora_prefix = "language_model"
 
         self.moe_backend = moe_backend
+        self.tune_max_num_tokens = tune_max_num_tokens
         self.add_module("gate", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate.weight", None, lora_prefix=lora_prefix, lora_path=lora_path))
 
-        self.num_experts = num_experts
-        experts = WeightModuleList(NeoppMoeSingleExpertWeights(block_index, mm_type, subname, j, lora_path=lora_path) for j in range(num_experts))
+        experts = WeightModuleList(NeoppMoeSingleExpertWeights(block_index, mm_type, j, lora_path=lora_path) for j in range(num_experts))
         self.add_module("experts", experts)
 
     def load(self, weight_dict):
         super().load(weight_dict)
-        if self.moe_backend == "flashinfer":
-            self._build_flashinfer_weights()
-        elif self.moe_backend == "pytorch":
-            self._build_pytorch_grouped_mm_weights()
-        else:
-            raise ValueError(f"Invalid moe_backend={self.moe_backend!r}, expected 'pytorch' or 'flashinfer'")
 
-    def _build_pytorch_grouped_mm_weights(self):
-        gate_list, up_list, down_list = [], [], []
-        for expert_w in self.experts:
-            gate_list.append(expert_w.gate_proj._get_actual_weight())
-            up_list.append(expert_w.up_proj._get_actual_weight())
-            down_list.append(expert_w.down_proj._get_actual_weight())
-        self._pt_gate_weight = torch.stack(gate_list, dim=0).contiguous()
-        self._pt_up_weight = torch.stack(up_list, dim=0).contiguous()
-        self._pt_down_weight = torch.stack(down_list, dim=0).contiguous()
+        fc1_weights, fc2_weights = [], []
+        for expert_idx, expert in enumerate(self.experts):
+            up_weight = self._loaded_weight(expert.up_proj, f"experts.{expert_idx}.up_proj").t()
+            gate_weight = self._loaded_weight(expert.gate_proj, f"experts.{expert_idx}.gate_proj").t()
+            down_weight = self._loaded_weight(expert.down_proj, f"experts.{expert_idx}.down_proj").t()
+            fc1_weights.append(torch.cat([up_weight, gate_weight], dim=0))
+            fc2_weights.append(down_weight)
 
-    def _build_flashinfer_weights(self):
-        if torch.cuda.is_available():
-            major, minor = torch.cuda.get_device_capability()
-            get_cutlass_fused_moe_module(f"{major * 10 + minor}")
-        fc1_list, fc2_list = [], []
-        for expert_w in self.experts:
-            up_w = expert_w.up_proj._get_actual_weight().t().contiguous()
-            gate_w = expert_w.gate_proj._get_actual_weight().t().contiguous()
-            fc1_list.append(torch.cat([up_w, gate_w], dim=0))
-            fc2_list.append(expert_w.down_proj._get_actual_weight().t().contiguous())
-        self._fi_fc1_weight = torch.stack(fc1_list, dim=0)
-        self._fi_fc2_weight = torch.stack(fc2_list, dim=0)
+        self.add_module(
+            "fused_moe",
+            create_local_fused_moe(
+                self.moe_backend,
+                fc1_weights,
+                fc2_weights,
+                "swiglu",
+                tune_max_num_tokens=self.tune_max_num_tokens,
+            ),
+        )
+
+        for expert in self.experts:
+            for projection in (expert.gate_proj, expert.up_proj, expert.down_proj):
+                projection.weight = None
+                projection.pin_weight = None
+
+    @staticmethod
+    def _loaded_weight(module, name):
+        if module.weight is not None:
+            return module._get_actual_weight()
+        if module.pin_weight is not None:
+            return module.pin_weight
+        raise RuntimeError(f"NeoPP MoE weight {name} is not loaded")
 
 
 class NeoppMoeSingleExpertWeights(WeightModule):
-    def __init__(self, block_index, mm_type, subname, expert_index, lora_path=None):
+    def __init__(self, block_index, mm_type, expert_index, lora_path=None):
         super().__init__()
-        prefix = f"language_model.model.layers.{block_index}.{subname}.experts.{expert_index}"
+        prefix = f"language_model.model.layers.{block_index}.mlp_mot_gen.experts.{expert_index}"
         lora_prefix = "language_model"
         self.add_module("gate_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.gate_proj.weight", None, lora_prefix=lora_prefix, lora_path=lora_path))
         self.add_module("up_proj", MM_WEIGHT_REGISTER[mm_type](f"{prefix}.up_proj.weight", None, lora_prefix=lora_prefix, lora_path=lora_path))

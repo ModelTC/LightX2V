@@ -42,6 +42,15 @@ class NpuFlashAttnWeight(AttnWeightTemplate):
             raise ValueError(f"q, k, and v must have the same rank, but got {q.ndim}D, {k.ndim}D, and {v.ndim}D.")
         if k.shape[:-2] != v.shape[:-2]:
             raise ValueError(f"k and v must have matching batch and sequence dimensions, but got {k.shape[:-2]} and {v.shape[:-2]}.")
+        if k.shape[-2] != v.shape[-2]:
+            raise ValueError(f"k and v must have the same number of heads, but got {k.shape[-2]} and {v.shape[-2]}.")
+        if q.shape[-1] != k.shape[-1]:
+            raise ValueError(f"q and k must have the same head dimension, but got {q.shape[-1]} and {k.shape[-1]}.")
+
+        q_heads = q.shape[-2]
+        kv_heads = k.shape[-2]
+        if kv_heads == 0 or q_heads % kv_heads != 0:
+            raise ValueError(f"npu_flash_attn requires Q heads to be an integer multiple of KV heads for MHA/GQA, but got Q={q_heads}, KV={kv_heads}.")
 
         if q.ndim == 3:
             bs = 1

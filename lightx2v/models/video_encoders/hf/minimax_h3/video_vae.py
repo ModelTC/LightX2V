@@ -285,11 +285,12 @@ class MiniMaxH3VideoAttention(nn.Module):
         self.to_out = nn.ModuleList([nn.Linear(self.inner_dim, dim, bias=bias), nn.Dropout(0.0)])
 
     def _pack_fp8_qkv(self) -> None:
-        from lightx2v.models.input_encoders.hf.q_linear import SglQuantLinearFp8
-
         linears = (self.to_q, self.to_k, self.to_v)
+        linear_cls = type(linears[0])
+        if any(type(linear) is not linear_cls for linear in linears[1:]):
+            raise TypeError("MiniMax-H3 video VAE Q/K/V projections must use one FP8 linear class")
         with torch.device("meta"):
-            self.to_qkv = SglQuantLinearFp8(
+            self.to_qkv = linear_cls(
                 linears[0].in_features,
                 sum(linear.out_features for linear in linears),
                 bias=linears[0].bias is not None,
@@ -539,13 +540,14 @@ class MiniMaxH3VideoVAE(nn.Module):
         attn_type: str = "torch_sdpa",
     ) -> None:
         super().__init__()
-        if quant_scheme not in {None, "fp8-sgl"}:
+        if quant_scheme not in {None, "fp8-musa", "fp8-sgl"}:
             raise NotImplementedError(f"Unsupported MiniMax-H3 video VAE quantization scheme: {quant_scheme!r}")
         if attn_type not in {"torch_sdpa", "sage_attn2"}:
             raise ValueError(f"Unsupported MiniMax-H3 video VAE attention type: {attn_type!r}; expected torch_sdpa or sage_attn2")
         self.config = dict(config)
         self.execution_device = torch.device(device or AI_DEVICE)
         self.cpu_offload = cpu_offload
+        self.quant_scheme = quant_scheme
         self.decode_parallel = False
         self.infer_dtype = torch.float16
         self.sensitive_layer_dtype = sensitive_layer_dtype
@@ -593,7 +595,7 @@ class MiniMaxH3VideoVAE(nn.Module):
             use_compile=use_compile,
             attn_type=attn_type,
         )
-        if quant_scheme == "fp8-sgl":
+        if quant_scheme is not None:
             self._replace_decoder_linears_with_fp8(self.decoder.transformer_blocks)
             self.decoder.proj_out = self._make_fp8_linear(self.decoder.proj_out)
 
@@ -621,23 +623,26 @@ class MiniMaxH3VideoVAE(nn.Module):
         self._reset_runtime_buffers()
         self.load_report: SafetensorsSubsetReport | None = None
 
-    @classmethod
-    def _replace_decoder_linears_with_fp8(cls, module: nn.Module) -> None:
+    def _replace_decoder_linears_with_fp8(self, module: nn.Module) -> None:
         for name, child in module.named_children():
             if isinstance(child, nn.Linear):
-                setattr(module, name, cls._make_fp8_linear(child))
+                setattr(module, name, self._make_fp8_linear(child))
             else:
-                cls._replace_decoder_linears_with_fp8(child)
+                self._replace_decoder_linears_with_fp8(child)
 
     def _pack_decoder_fp8_qkv(self) -> None:
         for block in self.decoder.transformer_blocks:
             block.attn._pack_fp8_qkv()
 
-    @staticmethod
-    def _make_fp8_linear(linear: nn.Linear) -> nn.Module:
-        from lightx2v.models.input_encoders.hf.q_linear import SglQuantLinearFp8
+    def _make_fp8_linear(self, linear: nn.Linear) -> nn.Module:
+        if self.quant_scheme == "fp8-musa":
+            from lightx2v.models.input_encoders.hf.q_linear import MusaQuantLinearFp8 as linear_cls
+        elif self.quant_scheme == "fp8-sgl":
+            from lightx2v.models.input_encoders.hf.q_linear import SglQuantLinearFp8 as linear_cls
+        else:
+            raise RuntimeError(f"Cannot create FP8 linear for quantization scheme {self.quant_scheme!r}")
 
-        return SglQuantLinearFp8(
+        return linear_cls(
             linear.in_features,
             linear.out_features,
             bias=linear.bias is not None,
@@ -700,7 +705,7 @@ class MiniMaxH3VideoVAE(nn.Module):
             )
         model._reset_runtime_buffers()
         model.load_report = load_safetensors_subset(model, weight_path)
-        if quant_scheme == "fp8-sgl":
+        if quant_scheme is not None:
             # Pack only after loading the checkpoint's original Q/K/V keys.
             model._pack_decoder_fp8_qkv()
         model._prepare_inference_dtypes()

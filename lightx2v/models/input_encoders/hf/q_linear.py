@@ -33,6 +33,7 @@ except ImportError:
 
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm
 from lightx2v.common.ops.mm.triton_kernels import fp8_gemm_bias_triton, fp8_gemm_triton, fp8_quantize_triton, int8_gemm_bias_triton, int8_gemm_triton, int8_quantize_triton
+from lightx2v_platform.ops.mm.mthreads_musa.fp8_scaled_mm import fp8_linear as musa_fp8_linear
 
 
 class TritonQuantLinearInt8(nn.Module):
@@ -302,6 +303,51 @@ class SglQuantLinearFp8(nn.Module):
             if transformed.device == t.device:
                 return t
             return t.to(transformed.device)
+
+        self.weight = maybe_cast(self.weight)
+        self.weight_scale = maybe_cast(self.weight_scale)
+        self.bias = maybe_cast(self.bias)
+        return self
+
+
+class MusaQuantLinearFp8(nn.Module):
+    """MUSA W8A8 FP8 linear with per-channel weights and per-token inputs."""
+
+    def __init__(self, in_features, out_features, bias=True, dtype=torch.bfloat16):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.register_buffer("weight", torch.empty((out_features, in_features), dtype=torch.float8_e4m3fn))
+        self.register_buffer("weight_scale", torch.empty((out_features, 1), dtype=torch.float32))
+        if bias:
+            self.register_buffer("bias", torch.empty(out_features, dtype=dtype))
+        else:
+            self.register_buffer("bias", None)
+
+    def forward(self, input_tensor):
+        output_dtype = input_tensor.dtype if input_tensor.dtype in (torch.bfloat16, torch.float16) else torch.bfloat16
+        return musa_fp8_linear(
+            input_tensor,
+            self.weight,
+            self.weight_scale,
+            bias=self.bias,
+            out_dtype=output_dtype,
+        )
+
+    def _apply(self, fn, recurse=True):
+        if recurse:
+            for module in self.children():
+                module._apply(fn)
+
+        def maybe_cast(tensor):
+            if tensor is None:
+                return None
+            transformed = fn(tensor)
+            if transformed.dtype == tensor.dtype:
+                return transformed
+            if transformed.device == tensor.device:
+                return tensor
+            return tensor.to(transformed.device)
 
         self.weight = maybe_cast(self.weight)
         self.weight_scale = maybe_cast(self.weight_scale)

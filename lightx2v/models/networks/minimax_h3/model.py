@@ -23,6 +23,7 @@ from lightx2v.utils.envs import GET_DTYPE
 
 H3_CHANNEL_QUANT_SCHEMES = {
     "fp8-q8f",
+    "fp8-musa",
     "fp8-sgl",
     "fp8-torchao",
     "fp8-triton",

@@ -4,12 +4,6 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
-# from flashinfer.activation import silu_and_mul as flashinfer_silu_and_mul
-try:
-    from flashinfer.fused_moe import cutlass_fused_moe as flashinfer_cutlass_fused_moe
-except ImportError:
-    flashinfer_cutlass_fused_moe = None
-
 from lightx2v.common.flashinfer_autotune import flashinfer_autotune
 from lightx2v.models.networks.neopp.infer.moe_fi_autotune import (
     MOE_FI_FORCE_RETUNE_ENV,
@@ -26,43 +20,6 @@ from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerI
 from lightx2v.models.networks.neopp.infer.kv_cache_manager import KVCacheManager
 from lightx2v.utils.profiler import *
 
-_GROUPED_MM_ALIGN = 8
-
-
-def _expert_padded_counts(counts, align=_GROUPED_MM_ALIGN):
-    pad = (align - counts.remainder(align)) % align
-    return torch.where(counts > 0, counts + pad, counts)
-
-
-def _sorted_expert_row_map(counts):
-    num_experts = counts.shape[0]
-    return torch.repeat_interleave(
-        torch.arange(num_experts, device=counts.device, dtype=torch.long),
-        counts.to(torch.long),
-    )
-
-
-def _pad_tokens_for_grouped_mm(x_perm, counts):
-    padded_counts = _expert_padded_counts(counts)
-    offsets = padded_counts.cumsum(0).to(torch.int32)
-
-    total = counts.sum()
-    expert_for_row = _sorted_expert_row_map(counts)
-    perm_starts = counts.cumsum(0) - counts
-    padded_starts = padded_counts.cumsum(0) - padded_counts
-    row_idx = torch.arange(total, device=counts.device, dtype=torch.long)
-    within = row_idx - perm_starts[expert_for_row]
-    dst_idx = padded_starts[expert_for_row] + within
-
-    x_padded = x_perm.new_zeros(padded_counts.sum(), x_perm.shape[-1])
-    x_padded[dst_idx] = x_perm
-    return x_padded, offsets, padded_counts, dst_idx
-
-
-def _strip_padding_from_grouped_mm_output(out_padded, dst_idx):
-    return out_padded[dst_idx]
-
-
 # Register neopp::kv_update as a PyTorch custom op via torch.library.
 # We use torch.library (define + impl) instead of magi_register_custom_op
 # because the latter internally calls torch.library.custom_op, which has
@@ -72,13 +29,28 @@ _LIB = torch.library.Library("neopp", "FRAGMENT")
 _LIB.define("kv_update(Tensor kv_buf, int layer_idx, Tensor key_states, Tensor value_states) -> (Tensor, Tensor)")
 
 
-@torch.library.impl(_LIB, "kv_update", "CUDA")
-def _kv_update_impl(kv_buf, layer_idx, key_states, value_states):
+def _kv_update_eager(kv_buf, layer_idx, key_states, value_states):
     past_seq = kv_buf.shape[2] - key_states.shape[0]
     end = past_seq + key_states.shape[0]
     kv_buf[layer_idx, 0, past_seq:end] = key_states
     kv_buf[layer_idx, 1, past_seq:end] = value_states
     return kv_buf[layer_idx, 0, :end], kv_buf[layer_idx, 1, :end]
+
+
+@torch.library.impl(_LIB, "kv_update", "CUDA")
+def _kv_update_cuda(kv_buf, layer_idx, key_states, value_states):
+    return _kv_update_eager(kv_buf, layer_idx, key_states, value_states)
+
+
+@torch.library.impl(_LIB, "kv_update", "CompositeExplicitAutograd")
+def _kv_update_composite(kv_buf, layer_idx, key_states, value_states):
+    """Portable correctness implementation used by Ascend/PrivateUse1 and CPU.
+
+    CUDA keeps its dedicated dispatch entry above.  The composite implementation
+    only uses ordinary PyTorch indexing/copy operations, which torch_npu lowers
+    for NPU tensors without requiring a CUDA-only custom kernel.
+    """
+    return _kv_update_eager(kv_buf, layer_idx, key_states, value_states)
 
 
 @torch.library.register_fake("neopp::kv_update")
@@ -129,13 +101,12 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             moe_backend = config.get("moe_backend", "flashinfer")
             logger.info(f"NeoPP MoE backend: {moe_backend}")
             self._mlp_forward = self._sparse_moe
-            if moe_backend == "flashinfer" and self.fi_moe_autotune.enabled:
-                if flashinfer_autotune is None or flashinfer_cutlass_fused_moe is None:
+            if self.fi_moe_autotune.enabled:
+                if flashinfer_autotune is None:
                     raise RuntimeError("moe_flashinfer_setting.autotune=true but flashinfer MoE autotuner is not available")
                 logger.info(
                     f"NeoPP flashinfer MoE autotune enabled "
                     f"(cache={self.fi_moe_autotune.cache_path}, "
-                    f"tune_mode=auto (cache-only if present, else lazy rebuild), "
                     f"tune_max_num_tokens={self.fi_moe_autotune.tune_max_num_tokens}, "
                     f"{MOE_FI_FORCE_RETUNE_ENV}={os.environ.get(MOE_FI_FORCE_RETUNE_ENV, '0')})"
                 )
@@ -384,61 +355,17 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
     def _moe_route(self, moe_w, hidden_states):
         router_logits = moe_w.gate.apply(hidden_states)
         if self.norm_topk_prob:
-            _, selected_experts = torch.topk(router_logits, self.num_experts_per_tok, dim=-1, sorted=False)
-            routing_weights = F.softmax(router_logits.gather(1, selected_experts).float(), dim=-1)
+            routing_weights, selected_experts = torch.topk(router_logits, self.num_experts_per_tok, dim=-1, sorted=False)
+            routing_weights = F.softmax(routing_weights.float(), dim=-1)
         else:
             routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
             routing_weights, selected_experts = torch.topk(routing_weights, self.num_experts_per_tok, dim=-1)
         return selected_experts, routing_weights
 
-    def _sparse_moe_pytorch(self, moe_w, hidden_states, selected_experts, routing_weights):
-        hidden_dim = hidden_states.shape[-1]
-        flat_topk_idx = selected_experts.reshape(-1)
-        flat_topk_weight = routing_weights.reshape(-1, 1)
-
-        idxs = flat_topk_idx.argsort()
-        token_idxs = idxs // self.num_experts_per_tok
-        counts = flat_topk_idx.bincount(minlength=moe_w.num_experts)
-
-        x_perm = hidden_states[token_idxs]
-        x_padded, offsets, _padded_counts, dst_idx = _pad_tokens_for_grouped_mm(x_perm, counts)
-        gate_out = torch._grouped_mm(x_padded, moe_w._pt_gate_weight, offs=offsets)
-        up_out = torch._grouped_mm(x_padded, moe_w._pt_up_weight, offs=offsets)
-        hidden = F.silu(gate_out) * up_out
-        out_padded = torch._grouped_mm(hidden, moe_w._pt_down_weight, offs=offsets)
-        expert_out = _strip_padding_from_grouped_mm_output(out_padded, dst_idx)
-        expert_out.mul_(flat_topk_weight[idxs])
-
-        expert_cache = torch.zeros_like(hidden_states)
-        expert_cache = expert_cache.to(expert_out.dtype)
-        expert_cache.scatter_reduce_(
-            0,
-            token_idxs.view(-1, 1).expand(-1, hidden_dim),
-            expert_out,
-            reduce="sum",
-        )
-        return expert_cache
-
     # @ProfilingContext4DebugL1("Sparse MoE")
     def _sparse_moe(self, moe_w, hidden_states):
         selected_experts, routing_weights = self._moe_route(moe_w, hidden_states)
-        if moe_w.moe_backend == "pytorch":
-            return self._sparse_moe_pytorch(moe_w, hidden_states, selected_experts, routing_weights)
-
-        if flashinfer_cutlass_fused_moe is None:
-            raise RuntimeError("moe_backend=flashinfer but flashinfer.fused_moe is not available")
-
-        output = flashinfer_cutlass_fused_moe(
-            hidden_states if hidden_states.is_contiguous() else hidden_states.contiguous(),
-            selected_experts.to(torch.int32),
-            routing_weights,
-            moe_w._fi_fc1_weight,
-            moe_w._fi_fc2_weight,
-            hidden_states.dtype,
-            quant_scales=None,
-            tune_max_num_tokens=self.fi_moe_autotune.tune_max_num_tokens,
-        )[0]
-        return output
+        return moe_w.fused_moe.apply(hidden_states, selected_experts, routing_weights)
 
     # @ProfilingContext4DebugL1("FM Head")
     def _fm_head(self, fm_head_w, hidden_states, token_h=None, token_w=None):
