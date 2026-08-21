@@ -5,6 +5,7 @@
   "dit_overlap": 0,
   "reae_frame_batch_size": 2,
   "fps": null,
+  "video_codec": "libx265",
   "quality": 60,
   "ffmpeg_preset": "ultrafast",
   "queue_size": 3
