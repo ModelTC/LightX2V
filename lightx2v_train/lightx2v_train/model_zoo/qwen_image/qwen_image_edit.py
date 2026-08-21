@@ -23,12 +23,8 @@ def _calculate_dimensions(target_area, ratio):
 
 @MODEL_REGISTER("qwen_image_edit")
 class QwenImageEditModel(QwenImageModel):
-    """Qwen-Image-Edit 2511 LoRA training.
-
-    This follows the local Qwen-Image-Edit-2511 model's
-    QwenImageEditPlusPipeline conditioning path: source images are used by the
-    Qwen2.5-VL text encoder and are also encoded as additional VAE latent
-    tokens for the transformer.
+    """Supports weights from these Hugging Face repos:
+    - https://huggingface.co/Qwen/Qwen-Image-Edit-2511
     """
 
     pipeline_cls = QwenImageEditPlusPipeline
