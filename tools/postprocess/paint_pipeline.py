@@ -6,16 +6,58 @@ import importlib.util
 import os
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from types import ModuleType
 from typing import Any, Callable, Iterator
 
+import torch
 from loguru import logger
 from torchvision_fix import apply_fix
 
 _POSTPROCESS_DIR = os.path.dirname(os.path.abspath(__file__))
 _HY3DPAINT_LINK = os.path.join(_POSTPROCESS_DIR, "hy3dpaint")
 _HF_PAINT_REPO_ID = "tencent/Hunyuan3D-2.1"
+_PAINT_MODEL_LABELS = {
+    "multiview_model": "Hunyuan3D Paint multiview diffusion model",
+    "super_model": "Hunyuan3D Paint super-resolution model",
+}
+
+
+@contextmanager
+def _profile_paint_models(pipeline: Any, device: str) -> Iterator[None]:
+    """Profile model calls without including render, bake, or export work."""
+    if int(os.getenv("PROFILING_DEBUG_LEVEL", "0")) < 1:
+        yield
+        return
+
+    synchronize = getattr(torch, device.split(":", 1)[0]).synchronize
+    elapsed = {model_key: 0.0 for model_key in _PAINT_MODEL_LABELS}
+    models = pipeline.models
+    original_models = {model_key: models[model_key] for model_key in _PAINT_MODEL_LABELS}
+
+    def timed_model(model_key: str) -> Callable:
+        model = original_models[model_key]
+
+        def call(*args, **kwargs):
+            synchronize()
+            start_time = time.perf_counter()
+            result = model(*args, **kwargs)
+            synchronize()
+            elapsed[model_key] += time.perf_counter() - start_time
+            return result
+
+        return call
+
+    models.update({model_key: timed_model(model_key) for model_key in original_models})
+    try:
+        yield
+    finally:
+        models.update(original_models)
+
+    for model_key, label in _PAINT_MODEL_LABELS.items():
+        logger.info(f"[Profile] Single GPU - Level1_Log {label} cost {elapsed[model_key]:.6f} seconds")
+    logger.info(f"[Profile] Single GPU - Level1_Log Hunyuan3D Paint model total cost {sum(elapsed.values()):.6f} seconds")
 
 
 def _bootstrap_torch_backend(device: str) -> None:
@@ -257,13 +299,14 @@ class PaintPipeline:
         os.makedirs(os.path.dirname(os.path.abspath(glb_path)), exist_ok=True)
 
         logger.info(f"Running Hunyuan3D paint: mesh={mesh_path}, image={image_path}")
-        self._pipeline(
-            mesh_path=mesh_path,
-            image_path=image_path,
-            output_mesh_path=obj_path,
-            use_remesh=use_remesh,
-            save_glb=save_glb,
-        )
+        with _profile_paint_models(self._pipeline, self.config["device"]):
+            self._pipeline(
+                mesh_path=mesh_path,
+                image_path=image_path,
+                output_mesh_path=obj_path,
+                use_remesh=use_remesh,
+                save_glb=save_glb,
+            )
 
         if save_glb and os.path.isfile(glb_path):
             result_path = glb_path
