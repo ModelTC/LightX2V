@@ -28,6 +28,7 @@ def get_default_config():
         "parallel": False,
         "seq_parallel": False,
         "cfg_parallel": False,
+        "pipefusion_parallel": False,
         "enable_cfg": False,
         "use_image_encoder": True,
     }
@@ -413,11 +414,12 @@ def set_parallel_config(config):
         tensor_p_size = int(config["parallel"].get("tensor_p_size", 1))
         cfg_p_size = int(config["parallel"].get("cfg_p_size", 1))
         seq_p_size = int(config["parallel"].get("seq_p_size", 1))
+        pp_size = int(config["parallel"].get("pp_size", 1))
         world_size = dist.get_world_size()
-        expected_world_size = tensor_p_size * cfg_p_size * seq_p_size
+        expected_world_size = tensor_p_size * cfg_p_size * seq_p_size * pp_size
         if expected_world_size != world_size:
             raise ValueError(
-                f"Parallel sizes must match the distributed world size: tensor_p_size ({tensor_p_size}) * cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) != world_size ({world_size})."
+                f"Parallel sizes must match the distributed world size: tensor_p_size ({tensor_p_size}) * cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) * pp_size ({pp_size}) != world_size ({world_size})."
             )
 
         phase_aware = bool(config.get("model_cls") == "hunyuan_image3" and config["parallel"].get("phase_aware", False))
@@ -446,14 +448,28 @@ def set_parallel_config(config):
                 mesh_dim_names=tuple(mesh_dim_names),
             )
             config["tensor_parallel"] = True
-            config["seq_parallel"] = seq_p_size > 1
-            config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
+            config["seq_parallel"] = False
+            config["cfg_parallel"] = False
+            config["pipefusion_parallel"] = False
         else:
-            # Original 2D mesh for cfg_p and seq_p
-            config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
+            # Multi-dimensional mesh: (cfg_p, pp, seq_p)
+            cfg_p_size = config["parallel"].get("cfg_p_size", 1)
+            pp_size = config["parallel"].get("pp_size", 1)
+            seq_p_size = config["parallel"].get("seq_p_size", 1)
+            assert cfg_p_size * pp_size * seq_p_size == dist.get_world_size(), (
+                f"cfg_p_size ({cfg_p_size}) * pp_size ({pp_size}) * seq_p_size ({seq_p_size}) must be equal to world_size ({dist.get_world_size()})"
+            )
+            config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, pp_size, seq_p_size), mesh_dim_names=("cfg_p", "pp", "seq_p"))
             config["tensor_parallel"] = False
             config["seq_parallel"] = seq_p_size > 1
             config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
+
+            config["pipefusion_parallel"] = pp_size > 1
+            if pp_size > 1:
+                from lightx2v.common.distributed import init_pipeline_parallel_state
+
+                pp_group = config["device_mesh"].get_group(mesh_dim="pp")
+                init_pipeline_parallel_state(pp_group)
 
         # warmup dist
         if AI_DEVICE == "cuda":
@@ -462,6 +478,8 @@ def set_parallel_config(config):
             warmup_device = AI_DEVICE
         _a = torch.zeros([1], device=warmup_device)
         dist.all_reduce(_a)
+    else:
+        config["pipefusion_parallel"] = False
 
 
 def print_config(config):
