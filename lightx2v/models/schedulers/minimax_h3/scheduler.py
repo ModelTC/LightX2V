@@ -146,6 +146,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
         video_timestep = float(self.video_timesteps[self.step_index])
         audio_timestep = float(self.audio_timesteps[self.step_index])
         unique, inverse = build_row_timesteps(self.layout_cpu, video_timestep, audio_timestep)
+        self.unique_timesteps_cpu = unique
         self.unique_timesteps = unique.to(AI_DEVICE)
         self.timestep_indices = inverse.to(AI_DEVICE)
 
@@ -193,6 +194,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
             "audio_noise_pred",
             "layout",
             "layout_cpu",
+            "unique_timesteps_cpu",
             "unique_timesteps",
             "timestep_indices",
         ):
