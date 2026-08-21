@@ -324,7 +324,11 @@ class HunyuanImage3HybridTensorParallelLinear(MMWeightTP):
         output = torch.mm(input_tensor, weight)
         if self.reduce_output:
             if self.active_tp_size > 1 and self.active_tp_group is not None:
-                dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.active_tp_group)
+                phase_all_reduce = getattr(self.parallel_context, "tensor_parallel_all_reduce", None)
+                if callable(phase_all_reduce):
+                    output = phase_all_reduce(output)
+                else:
+                    dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.active_tp_group)
             if self._row_split_bias is not None:
                 output = output + self._row_split_bias
         return output
