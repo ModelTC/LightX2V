@@ -1,10 +1,10 @@
 {
-  "attention_backend": "flash_attn3",
-  "cross_attention_backend": "flash_attn3",
+  "attention_backend": "sage_attn2",
+  "cross_attention_backend": "sage_attn2",
   "rope_type": "flashinfer_rope",
   "clip_len": 24,
   "dit_overlap": 0,
-  "reae_frame_batch_size": 0,
+  "reae_frame_batch_size": 2,
   "fps": null,
   "video_codec": "libx265",
   "quality": 60,
