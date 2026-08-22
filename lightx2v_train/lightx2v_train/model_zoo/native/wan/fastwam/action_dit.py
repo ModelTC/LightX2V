@@ -320,13 +320,13 @@ class ActionDiT(nn.Module):
             raise ValueError(f"`context` must be 3D [B, L, D], got shape {tuple(context.shape)}")
 
         batch_size = action_tokens.shape[0]
+        if self.training and batch_size != 1:
+            raise ValueError("FastWAM action training only supports physical batch size 1.")
         if context.shape[0] != batch_size:
             raise ValueError(f"Batch mismatch between action tokens and text context: {batch_size} vs {context.shape[0]}")
         if timestep.shape[0] not in (1, batch_size):
             raise ValueError(f"`timestep` length must be 1 or batch_size({batch_size}), got {timestep.shape[0]}")
         if timestep.shape[0] == 1 and batch_size > 1:
-            if self.training:
-                raise ValueError("During training, action timestep length must match batch_size.")
             timestep = timestep.expand(batch_size)
 
         if context_mask is None:

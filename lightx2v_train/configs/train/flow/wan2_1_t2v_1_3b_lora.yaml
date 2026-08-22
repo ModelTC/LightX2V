@@ -1,6 +1,6 @@
 model:
     name: wan_t2v
-    pretrained_model_name_or_path: /path/to/Wan2.1-T2V-1.3B
+    pretrained_model_name_or_path: /root/yongyang/models/Wan-AI/Wan2.1-T2V-1.3B
     max_sequence_length: 512
     running_dtype: bf16
     vae_dtype: fp32
@@ -30,10 +30,9 @@ data:
     train:
         name: video_dataset
         data_path:
-            - /path/to/OpenVid-1M/OpenVid-1M.csv
-        video_root: /path/to/OpenVid-1M/video
-        video_column: video
-        prompt_column: caption
+            - /root/yongyang/datasets/LightX2V_train_data_examples/dataset_v2/train.jsonl
+        video_column: target_data
+        prompt_column: prompt
         height: 480
         width: 832
         num_frames: 81
@@ -44,16 +43,14 @@ data:
         random_start: false
         skip_missing: true
         decode_retries: 3
-        batch_size: 1
         num_workers: 4
         pin_memory: true
         shuffle: true
     val:
         name: prompt_dataset
         data_path:
-            - /path/to/wan_t2v_prompts.txt
-        max_samples: 5
-        batch_size: 1
+            - /root/yongyang/datasets/LightX2V_train_data_examples/dataset_v2/val.jsonl
+        max_samples: 4
         num_workers: 0
         shuffle: false
 
@@ -77,7 +74,7 @@ scheduler:
         max_resolution: [720, 1280]
 
 training:
-    method: flow
+    method: flow_matching
     train_type: lora
     max_train_iters: 3000
     gradient_accumulation_iters: 1

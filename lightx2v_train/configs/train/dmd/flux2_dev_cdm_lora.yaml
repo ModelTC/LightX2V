@@ -23,13 +23,14 @@ distributed:
 
 data:
     train:
-        name: image_dataset
+        # JSONL row: {"prompt": "...", "target_height": 512, "target_width": 512}
+        name: prompt_dataset
         num_workers: 8
+        bucket_by_size: true
         prompt_dropout_rate: 0.0
-        target_area: 1048576 # 1024 * 1024
         shuffle: true
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /path/to/datasets/image_dmd/train.jsonl
     val:
         name: image_dataset
         num_workers: 8
@@ -69,7 +70,7 @@ training:
         fake_update_ratio: 2
         # Start at 512px for memory; raise to 1024px only after validating available GPUs.
         image_sizes:
-            - [512, 512]
+            - {value: [512, 512]}
         renoise_sigma_min: 0.02
         renoise_sigma_max: 1.0
         renoise_discrete_samples: 1000

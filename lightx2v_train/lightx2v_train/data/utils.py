@@ -14,6 +14,12 @@ PROMPT_KEYS = ("prompt", "caption", "text")
 _BILINEAR = getattr(Image, "Resampling", Image).BILINEAR
 
 
+def require_singleton_dataloader(dataloader, name):
+    batch_size = getattr(dataloader, "batch_size", None)
+    if batch_size != 1:
+        raise ValueError(f"{name} must use DataLoader(batch_size=1); custom batch samplers and physical batch sizes greater than 1 are not supported, got {batch_size!r}.")
+
+
 def to_list(value):
     if value is None:
         return []

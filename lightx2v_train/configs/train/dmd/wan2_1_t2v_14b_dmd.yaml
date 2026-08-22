@@ -45,7 +45,6 @@ data:
         frame_rate: 16
         fix_frame_rate: true
         random_start: true
-        batch_size: 1
         num_workers: 8
         pin_memory: true
         shuffle: true
@@ -55,7 +54,6 @@ data:
         data_path:
             - data/prompts/wan22_val_prompts.txt
         max_samples: 2
-        batch_size: 1
         num_workers: 0
         shuffle: false
 
@@ -73,7 +71,7 @@ scheduler:
         extra_one_step: true
 
 training:
-    method: video_dmd
+    method: dmd
     max_train_iters: 5000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true

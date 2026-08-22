@@ -54,7 +54,7 @@ scheduler:
         patch_size: [1, 1] # [H, W]
 
 training:
-    method: flow
+    method: flow_matching
     train_type: full
     max_train_iters: 3000
     gradient_accumulation_iters: 1

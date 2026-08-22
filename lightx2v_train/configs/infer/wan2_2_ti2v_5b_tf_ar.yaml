@@ -49,7 +49,6 @@ data:
         data_path:
             - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 10
-        batch_size: 1
         num_workers: 0
         pin_memory: true
         shuffle: false

@@ -13,17 +13,16 @@ data:
       images: [front, wrist]
     # Match the released Kairos recipe; training-time eval is in-sample.
     val_set_proportion: 0.0
-    batch_size: 8
     num_workers: 8
   val:
     <<: *libero_plus_data
 
 training:
-  method: fastwam
+  method: world_action
   output_dir: runs/fastwam_libero_plus_8gpu
   # Approximately 10 epochs over 2,238,036 frames at global batch 128.
   max_train_iters: 174848
-  gradient_accumulation_iters: 2
+  gradient_accumulation_iters: 16
   max_grad_norm: 1.0
   # One checkpoint per approximately 174848 / 8 optimizer steps.
   save_every_iters: 17485

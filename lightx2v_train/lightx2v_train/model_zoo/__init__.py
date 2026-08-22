@@ -3,18 +3,34 @@ import importlib
 from lightx2v_train.utils.registry import build_model
 
 _LAZY_EXPORTS = {
-    "Flux2DevModel": (".flux2_dev", "Flux2DevModel"),
-    "Flux2KleinModel": (".flux2_klein", "Flux2KleinModel"),
-    "LingBotVideoModel": (".lingbot_video", "LingBotVideoModel"),
-    "LongCatImageModel": (".longcat_image", "LongCatImageModel"),
-    "LTX2T2AVModel": (".ltx_t2av", "LTX2T2AVModel"),
-    "MiniMaxH3T2AVModel": (".minimax_h3_t2av", "MiniMaxH3T2AVModel"),
-    "QwenImageModel": (".qwen_image", "QwenImageModel"),
-    "QwenImageEditModel": (".qwen_image_edit", "QwenImageEditModel"),
-    "WanFastWAMModel": (".wan_fastwam", "WanFastWAMModel"),
-    "WanT2VModel": (".wan_t2v", "WanT2VModel"),
-    "WanTI2V5BModel": (".wan_ti2v_5b", "WanTI2V5BModel"),
+    "Flux2DevModel": (".flux2.flux2_dev", "Flux2DevModel"),
+    "Flux2KleinModel": (".flux2.flux2_klein", "Flux2KleinModel"),
+    "LingBotVideoModel": (".wan.lingbot_video", "LingBotVideoModel"),
+    "LongCatImageModel": (".longcat_image.longcat_image", "LongCatImageModel"),
+    "LTX2T2AVModel": (".ltx.ltx_t2av", "LTX2T2AVModel"),
+    "MiniMaxH3T2AVModel": (".minimax_h3.minimax_h3_t2av", "MiniMaxH3T2AVModel"),
+    "QwenImageModel": (".qwen_image.qwen_image", "QwenImageModel"),
+    "QwenImageEditModel": (".qwen_image.qwen_image_edit", "QwenImageEditModel"),
+    "WanFastWAMModel": (".wan.wan_fastwam", "WanFastWAMModel"),
+    "WanT2VModel": (".wan.wan_t2v", "WanT2VModel"),
+    "WanTI2V5BModel": (".wan.wan_ti2v_5b", "WanTI2V5BModel"),
 }
+
+
+def build_loaded_model(
+    config,
+    *,
+    transformer_only=False,
+    reference_model=None,
+):
+    """Build a model wrapper, load its components, then publish capabilities."""
+    model = build_model(config)
+    model.load_components(
+        transformer_only=transformer_only,
+        reference_model=reference_model,
+    )
+    model.ensure_capabilities()
+    return model
 
 
 def __getattr__(name):
@@ -29,6 +45,7 @@ def __getattr__(name):
 
 __all__ = [
     "build_model",
+    "build_loaded_model",
     "QwenImageModel",
     "QwenImageEditModel",
     "LongCatImageModel",

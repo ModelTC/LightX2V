@@ -7,16 +7,28 @@ from diffusers.optimization import get_scheduler
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
 
+from lightx2v_train.data.utils import require_singleton_dataloader
 from lightx2v_train.infer import build_inferencer
+from lightx2v_train.model_capabilities import (
+    CapabilityNotSupportedError,
+    CheckpointCapability,
+    ParallelCapability,
+    TrainableModelCapability,
+)
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process
 from lightx2v_train.runtime.monitor import build_monitor
-from lightx2v_train.runtime.parallel import apply_parallel, set_parallel_gradient_sync
 from lightx2v_train.schedulers.flow_matching import RectifiedFlowMatchingScheduler
 from lightx2v_train.utils.utils import get_running_dtype
 
 
 class BaseTrainer:
+    required_capabilities = (
+        TrainableModelCapability,
+        ParallelCapability,
+        CheckpointCapability,
+    )
+
     def __init__(self, config):
         self.config = config
         self.model_config = self.config["model"]
@@ -81,8 +93,23 @@ class BaseTrainer:
 
     def set_model(self, model):
         self.model = model
+        registry = model.ensure_capabilities()
+        missing = registry.missing(self.capability_requirements())
+        if missing:
+            model_name = self.model_config.get("name", type(model).__name__)
+            names = ", ".join(capability.__name__ for capability in missing)
+            raise CapabilityNotSupportedError(f"trainer={type(self).__name__} model={model_name!r} is missing capabilities: {names}.")
+        self.trainable_model = registry.require(TrainableModelCapability)
+        self.parallel = registry.require(ParallelCapability)
+        self.checkpoint = registry.require(CheckpointCapability)
+
+    def capability_requirements(self):
+        return self.required_capabilities
 
     def set_data(self, dataloader_train, dataloader_eval=None):
+        require_singleton_dataloader(dataloader_train, "Training dataloader")
+        if dataloader_eval is not None:
+            require_singleton_dataloader(dataloader_eval, "Evaluation dataloader")
         self.dataloader_train = dataloader_train
         self.dataloader_eval = dataloader_eval
 
@@ -93,17 +120,18 @@ class BaseTrainer:
         self.monitor.finish()
 
     def _setup_trainable_model(self, model):
-        if self.train_type == "lora":
-            model.add_lora(self.lora_rank, self.lora_alpha, self.lora_target_modules)
-            model.set_lora_trainable()
-            return
-        model.set_full_trainable()
+        capability = model.ensure_capabilities().require(TrainableModelCapability)
+        capability.configure(
+            self.train_type,
+            {
+                "rank": self.lora_rank,
+                "alpha": self.lora_alpha,
+                "target_modules": self.lora_target_modules,
+            },
+        )
 
     def _restore_trainable_model(self, model):
-        if self.train_type == "lora":
-            model.set_lora_trainable()
-            return
-        model.set_full_trainable()
+        model.ensure_capabilities().require(TrainableModelCapability).restore(self.train_type)
 
     def _build_optimizer(self, params, optimizer_config=None):
         if optimizer_config is None:
@@ -133,18 +161,18 @@ class BaseTrainer:
     def setup(self, resume_ckpt_path=None):
         self._setup_trainable_model(self.model)
 
-        apply_parallel(self.model, self.config)
+        self.parallel.apply(self.config)
 
         if self.gradient_checkpointing:
-            self.model.enable_gradient_checkpointing()
+            self.trainable_model.enable_gradient_checkpointing()
 
         if self.infer_every_iters:
             self.inferencer = build_inferencer(self.config)
             self.inferencer.set_model(self.model)
 
-        self.model.log_model_structure()
+        self.trainable_model.log_structure()
 
-        self.trainable_params = list(self.model.trainable_parameters())
+        self.trainable_params = list(self.trainable_model.parameters())
         self.optimizer = self._build_optimizer(self.trainable_params)
         self.lr_scheduler = self._build_lr_scheduler(self.optimizer)
 
@@ -152,24 +180,13 @@ class BaseTrainer:
             self._load_resume_state(resume_ckpt_path)
 
     def _save_model_weights(self, model, save_dir):
-        if self.train_type == "lora":
-            model.save_lora_weights(save_dir)
-            return
-        if is_main_process():
-            torch.save(model.denoiser_module().state_dict(), os.path.join(save_dir, "model_state.pt"))
+        model.ensure_capabilities().require(CheckpointCapability).save_weights(save_dir, self.train_type)
 
     def _load_model_weights(self, model, save_dir):
-        if self.train_type == "lora":
-            model.load_lora_weights_for_resume(save_dir)
-            return
-        model_state_path = os.path.join(save_dir, "model_state.pt")
-        if not os.path.exists(model_state_path):
-            raise RuntimeError(f"model_state.pt not found in {save_dir}")
-        state_dict = torch.load(model_state_path, map_location="cpu", weights_only=False)
-        model.denoiser_module().load_state_dict(state_dict)
+        model.ensure_capabilities().require(CheckpointCapability).load_weights(save_dir, self.train_type)
 
     def _load_resume_state(self, resume_ckpt_path):
-        if self.model.is_fsdp2_wrapped():
+        if self.parallel.is_fsdp():
             self._load_distributed_state(resume_ckpt_path)
             return
 
@@ -199,11 +216,16 @@ class BaseTrainer:
         self._validate_checkpoint_metadata(trainer_state, trainer_state_path, resume_ckpt_path)
 
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
-        model_state, optim_state = get_state_dict(self.model.fsdp2_state_module(), self.optimizer, options=options)
+        state_module = self.parallel.state_module()
+        model_state, optim_state = get_state_dict(
+            state_module,
+            self.optimizer,
+            options=options,
+        )
         state = {"model": model_state, "optimizer": optim_state}
         dcp.load(state, checkpoint_id=dist_state_path)
         set_state_dict(
-            self.model.fsdp2_state_module(),
+            state_module,
             self.optimizer,
             model_state_dict=state["model"],
             optim_state_dict=state["optimizer"],
@@ -235,7 +257,7 @@ class BaseTrainer:
         return ckpt_path, current_iter
 
     def _set_gradient_sync(self, enabled):
-        set_parallel_gradient_sync(self.model, enabled)
+        self.parallel.set_gradient_sync(enabled)
 
     def _after_backward(self):
         pass
@@ -266,7 +288,7 @@ class BaseTrainer:
             os.makedirs(save_dir, exist_ok=True)
         barrier()
 
-        save_standalone_weights = self.train_type == "lora" or not self.model.is_fsdp2_wrapped()
+        save_standalone_weights = self.train_type == "lora" or not self.parallel.is_fsdp()
         if save_standalone_weights:
             self._save_model_weights(self.model, save_dir)
         barrier()
@@ -275,7 +297,7 @@ class BaseTrainer:
         if is_main_process() and config_path is not None:
             shutil.copy2(config_path, os.path.join(save_dir, "config.yaml"))
 
-        if self.model.is_fsdp2_wrapped():
+        if self.parallel.is_fsdp():
             self._save_distributed_state(save_dir, iteration)
             self._save_consolidated_weights(save_dir)
             barrier()
@@ -301,7 +323,7 @@ class BaseTrainer:
             logger.warning("training.save_consolidated_weights=true is ignored for train_type='{}'.", self.train_type)
             return
         output_path = os.path.join(save_dir, self.consolidated_weights_name)
-        self.model.save_consolidated_weights(output_path)
+        self.checkpoint.save_consolidated(output_path)
         barrier()
 
     def _save_distributed_state(self, save_dir, iteration):
@@ -319,7 +341,11 @@ class BaseTrainer:
         barrier()
 
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
-        model_state, optim_state = get_state_dict(self.model.fsdp2_state_module(), self.optimizer, options=options)
+        model_state, optim_state = get_state_dict(
+            self.parallel.state_module(),
+            self.optimizer,
+            options=options,
+        )
         dcp.save(
             {"model": model_state, "optimizer": optim_state},
             checkpoint_id=dist_state_path,

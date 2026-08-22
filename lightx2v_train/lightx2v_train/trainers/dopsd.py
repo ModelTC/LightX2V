@@ -1,222 +1,170 @@
-###
-### Source idea: D-OPSD Trainer (https://github.com/vvvvvjdy/D-OPSD)
-###
+"""Decoupled DOPSD trainer.
+
+Algorithm math lives in :mod:`dopsd_core`; model families only implement the
+DopsdCapability data path, and adapter lifecycle is provided independently by
+AdapterBankCapability.
+"""
+
+from __future__ import annotations
+
 import os
 import shutil
 from pathlib import Path
 
 import torch
 import torch.distributed.checkpoint as dcp
-import torch.nn.functional as F
-from diffusers.optimization import get_scheduler
 from loguru import logger
-from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 
 from lightx2v_train.infer import build_inferencer
 from lightx2v_train.infer.dopsd_trajectory_viz import save_student_teacher_trajectory_grid
-from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
-from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_distributed, is_main_process, reduce_mean
-from lightx2v_train.runtime.parallel import apply_parallel
+from lightx2v_train.model_capabilities import AdapterBankCapability, DopsdCapability
+from lightx2v_train.runtime.checkpoint import prune_checkpoints
+from lightx2v_train.runtime.distributed import (
+    barrier,
+    get_rank,
+    get_world_size,
+    is_distributed,
+    is_main_process,
+    reduce_mean,
+)
 from lightx2v_train.utils.registry import TRAINER_REGISTER
-from lightx2v_train.utils.utils import get_running_dtype
 
 from .base import BaseTrainer
+from .dopsd_core import DopsdConfig, DopsdObjective
 
 
 @TRAINER_REGISTER("dopsd")
 class DopsdTrainer(BaseTrainer):
+    required_capabilities = (
+        *BaseTrainer.required_capabilities,
+        DopsdCapability,
+        AdapterBankCapability,
+    )
+
     def __init__(self, config):
         super().__init__(config)
-        self.running_dtype = get_running_dtype(self.model_config["running_dtype"])
-
-        lora_config = self.training_config.get("lora", {})
-        self.lora_rank = lora_config.get("rank", 16)
-        self.lora_alpha = lora_config.get("alpha", self.lora_rank)
-        self.lora_target_modules = lora_config.get("target_modules")
-
-        dopsd_config = self.training_config.get("dopsd", {})
-        self.num_training_steps = dopsd_config.get("num_training_steps", 4)
-        self.ema_decay = dopsd_config.get("ema_decay", 0.999)
-        self.ema_decay_warmup = dopsd_config.get("ema_decay_warmup")
-        self.ema_decay_warmup_iters = int(dopsd_config.get("ema_decay_warmup_iters", 0))
-        self.step_loss_weights = dopsd_config.get("step_loss_weights")
-        self.student_adapter = dopsd_config.get("student_adapter", "student")
-        self.teacher_adapter = dopsd_config.get("teacher_adapter", "teacher")
-        self.edit_sys_prompt = dopsd_config.get(
-            "edit_sys_prompt",
-            "The output must be exactly the same as the reference image.",
-        )
-        self.teacher_use_dataset_prompt = dopsd_config.get("teacher_use_dataset_prompt", False)
+        self.dopsd_config = DopsdConfig.from_training_config(self.training_config)
         self._train_reference_map = None
-        self.trajectory_every_iters = dopsd_config.get("trajectory_every_iters", None)
-        if self.trajectory_every_iters is not None:
-            self.trajectory_every_iters = int(self.trajectory_every_iters)
+        if int(self.gradient_accumulation_iters) <= 0:
+            raise ValueError("training.gradient_accumulation_iters must be positive.")
+        inference_lora = self.infer_config.get("lora_config") or {}
+        if inference_lora.get("path"):
+            raise ValueError("DOPSD inference uses the in-memory student and teacher adapters; inference.lora_config.path must not be set.")
 
-        self.gradient_checkpointing = self.training_config.get("gradient_checkpointing", True)
-
-        optimizer_config = self.training_config.get("optimizer", {})
-        self.optimizer_learning_rate = optimizer_config.get("learning_rate", 1e-4)
-        self.optimizer_adam_beta1 = optimizer_config.get("adam_beta1", 0.9)
-        self.optimizer_adam_beta2 = optimizer_config.get("adam_beta2", 0.999)
-        self.optimizer_weight_decay = optimizer_config.get("weight_decay", 0.01)
-        self.optimizer_adam_epsilon = optimizer_config.get("adam_epsilon", 1e-8)
-
-        self.lr_scheduler_name = self.training_config.get("lr_scheduler", "constant")
-        self.lr_warmup_iters = self.training_config["lr_warmup_iters"]
-        self.max_train_iters = self.training_config["max_train_iters"]
-
-        self.output_train_dir = self.training_config["output_dir"]
-        self.gradient_accumulation_iters = self.training_config["gradient_accumulation_iters"]
-        self.max_grad_norm = self.training_config.get("max_grad_norm", 1.0)
-        self.save_every_iters = self.training_config["save_every_iters"]
-        self.save_total_limit = self.training_config["save_total_limit"]
-
-        self.infer_every_iters = self.infer_config.get("infer_every_iters", None)
-        logging_config = self.config.get("logging", {})
-        self.train_log_every_iters = max(1, int(logging_config.get("train_log_every_iters", 10)))
-
-        resume_config = self.config.get("resume", {})
-        self.auto_resume = resume_config.get("auto_resume", False)
-
-    def _resolve_ema_decay(self, current_iter):
-        if self.ema_decay_warmup is not None and self.ema_decay_warmup_iters > 0 and current_iter <= self.ema_decay_warmup_iters:
-            return float(self.ema_decay_warmup)
-        return float(self.ema_decay)
-
-    def _step_loss_weights_for(self, num_steps):
-        if not self.step_loss_weights:
-            return [1.0] * num_steps
-        weights = [float(w) for w in self.step_loss_weights]
-        if len(weights) < num_steps:
-            weights.extend([weights[-1]] * (num_steps - len(weights)))
-        return weights[:num_steps]
+    def set_model(self, model):
+        super().set_model(model)
+        capabilities = model.ensure_capabilities()
+        self.dopsd = capabilities.require(DopsdCapability)
+        self.adapters = capabilities.require(AdapterBankCapability)
+        self.objective = DopsdObjective(
+            self.dopsd,
+            self.adapters,
+            self.noise_scheduler,
+            self.dopsd_config,
+            self.running_dtype,
+        )
 
     def setup(self, resume_ckpt_path=None):
-        self.model.add_dual_lora(
-            self.lora_rank,
-            self.lora_alpha,
-            self.lora_target_modules,
-            student_adapter=self.student_adapter,
-            teacher_adapter=self.teacher_adapter,
-            init_teacher_from_student=resume_ckpt_path is None,
+        algorithm = self.dopsd_config
+        self.adapters.configure_pair(
+            rank=self.lora_rank,
+            alpha=self.lora_alpha,
+            target_modules=self.lora_target_modules,
+            student_adapter=algorithm.student_adapter,
+            teacher_adapter=algorithm.teacher_adapter,
+            initialize_teacher=resume_ckpt_path is None,
         )
-        self.model.set_dual_lora_trainable(self.student_adapter, self.teacher_adapter)
-
-        apply_parallel(self.model, self.config)
+        self.parallel.apply(self.config)
 
         if self.gradient_checkpointing:
-            self.model.enable_gradient_checkpointing()
-
+            self.trainable_model.enable_gradient_checkpointing()
         if self.infer_every_iters:
             self.inferencer = build_inferencer(self.config)
             self.inferencer.set_model(self.model)
 
-        self.model.log_model_structure()
-
-        self.trainable_params = list(self.model.trainable_parameters())
-        self.optimizer = torch.optim.AdamW(
-            self.trainable_params,
-            lr=self.optimizer_learning_rate,
-            betas=(self.optimizer_adam_beta1, self.optimizer_adam_beta2),
-            weight_decay=self.optimizer_weight_decay,
-            eps=self.optimizer_adam_epsilon,
-        )
-        self.lr_scheduler = get_scheduler(
-            self.lr_scheduler_name,
-            optimizer=self.optimizer,
-            num_warmup_steps=self.lr_warmup_iters,
-            num_training_steps=self.max_train_iters,
-        )
+        self.trainable_model.log_structure()
+        self.trainable_params = list(self.adapters.parameters(algorithm.student_adapter))
+        if not self.trainable_params:
+            raise RuntimeError("DOPSD student adapter has no trainable parameters.")
+        self.optimizer = self._build_optimizer(self.trainable_params)
+        self.lr_scheduler = self._build_lr_scheduler(self.optimizer)
 
         if resume_ckpt_path is not None:
             self._load_resume_state(resume_ckpt_path)
+        self.adapters.set_trainable(algorithm.student_adapter)
 
-    def _teacher_lora_checkpoint_path(self, resume_ckpt_path):
-        return os.path.join(resume_ckpt_path, "teacher", "pytorch_lora_weights.safetensors")
+    @staticmethod
+    def _adapter_weights_path(checkpoint_path, weights_subdir=None):
+        weights_dir = Path(checkpoint_path)
+        if weights_subdir:
+            weights_dir /= weights_subdir
+        return weights_dir / "pytorch_lora_weights.safetensors"
 
     def _load_resume_state(self, resume_ckpt_path):
-        if self.model.is_fsdp2_wrapped():
-            self._load_distributed_state(resume_ckpt_path)
+        if self.parallel.is_fsdp():
+            super()._load_distributed_state(resume_ckpt_path)
         else:
             self._load_single_process_state(resume_ckpt_path)
 
-        teacher_weights_path = self._teacher_lora_checkpoint_path(resume_ckpt_path)
-        if os.path.exists(teacher_weights_path):
-            self.model.load_lora_weights_for_resume(
+        algorithm = self.dopsd_config
+        teacher_path = self._adapter_weights_path(resume_ckpt_path, "teacher")
+        if teacher_path.exists():
+            self.adapters.load(
                 resume_ckpt_path,
-                adapter_name=self.teacher_adapter,
+                algorithm.teacher_adapter,
                 weights_subdir="teacher",
             )
-            logger.info("Restored teacher EMA LoRA from {}", teacher_weights_path)
+            logger.info("Restored teacher EMA adapter from {}", teacher_path)
         else:
-            self.model.copy_lora_adapter_weights(self.student_adapter, self.teacher_adapter)
+            self.adapters.copy(algorithm.student_adapter, algorithm.teacher_adapter)
             logger.warning(
-                "Teacher LoRA not found in checkpoint {}; initialized teacher from student",
+                "Teacher adapter was not found in {}; initialized it from the student adapter.",
                 resume_ckpt_path,
             )
 
     def _load_single_process_state(self, resume_ckpt_path):
-        training_state_path = os.path.join(resume_ckpt_path, "training_state.pt")
-        if not os.path.exists(training_state_path):
+        state_path = Path(resume_ckpt_path) / "training_state.pt"
+        if not state_path.exists():
             raise RuntimeError(f"training_state.pt not found in {resume_ckpt_path}")
-
-        state = torch.load(training_state_path, map_location="cpu", weights_only=False)
-        self._validate_checkpoint_metadata(state, training_state_path, resume_ckpt_path)
-        self.model.load_lora_weights_for_resume(resume_ckpt_path, adapter_name=self.student_adapter)
+        state = torch.load(state_path, map_location="cpu", weights_only=False)
+        self._validate_checkpoint_metadata(state, str(state_path), resume_ckpt_path)
+        self.adapters.load(resume_ckpt_path, self.dopsd_config.student_adapter)
         self.optimizer.load_state_dict(state["optimizer"])
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
-        logger.info("Restored training state from {}", training_state_path)
+        logger.info("Restored DOPSD training state from {}", state_path)
 
-    def _load_distributed_state(self, resume_ckpt_path):
-        dist_state_path = os.path.join(resume_ckpt_path, "dist_state")
-        if not os.path.exists(dist_state_path):
-            raise RuntimeError(f"FSDP2 resume requires dist_state/, but it was not found in {resume_ckpt_path}")
+    def _checkpoint_metadata(self):
+        metadata = self.dopsd_config.checkpoint_metadata()
+        target_modules = self.lora_target_modules
+        if isinstance(target_modules, (list, tuple)):
+            target_modules = list(target_modules)
+        metadata["lora"] = {
+            "rank": int(self.lora_rank),
+            "alpha": int(self.lora_alpha),
+            "target_modules": target_modules,
+        }
+        return metadata
 
-        trainer_state_path = os.path.join(resume_ckpt_path, "trainer_state.pt")
-        if not os.path.exists(trainer_state_path):
-            raise RuntimeError(f"trainer_state.pt not found in {resume_ckpt_path}")
-        trainer_state = torch.load(trainer_state_path, map_location="cpu", weights_only=False)
-        self._validate_checkpoint_metadata(trainer_state, trainer_state_path, resume_ckpt_path)
-
-        options = StateDictOptions(ignore_frozen_params=True, strict=False)
-        state_module = self.model.fsdp2_state_module()
-        model_state, optim_state = get_state_dict(state_module, self.optimizer, options=options)
-        state = {"model": model_state, "optimizer": optim_state}
-        dcp.load(state, checkpoint_id=dist_state_path)
-        set_state_dict(
-            state_module,
-            self.optimizer,
-            model_state_dict=state["model"],
-            optim_state_dict=state["optimizer"],
-            options=options,
-        )
-
-        self.lr_scheduler.load_state_dict(trainer_state["lr_scheduler"])
-        logger.info("Restored distributed training state from {}", resume_ckpt_path)
-
-    def _teacher_edit_prompts(self, prompts):
-        if isinstance(prompts, str):
-            base_prompts = [prompts]
-        else:
-            base_prompts = list(prompts)
-        suffix = self.edit_sys_prompt.strip()
-        if not suffix:
-            return base_prompts
-        if not self.teacher_use_dataset_prompt:
-            return [suffix] * len(base_prompts)
-        return [f"{prompt} {suffix}".strip() for prompt in base_prompts]
+    def _validate_checkpoint_metadata(self, state, state_path, resume_ckpt_path):
+        super()._validate_checkpoint_metadata(state, state_path, resume_ckpt_path)
+        saved_metadata = state.get("dopsd")
+        if saved_metadata is None:
+            logger.warning("DOPSD checkpoint {} has no algorithm metadata; treating it as a legacy checkpoint.", state_path)
+            return
+        expected_metadata = self._checkpoint_metadata()
+        if saved_metadata != expected_metadata:
+            raise RuntimeError(f"DOPSD checkpoint configuration does not match the current run: saved={saved_metadata}, current={expected_metadata}.")
 
     def _build_train_reference_map(self):
         if self._train_reference_map is not None:
             return
         self._train_reference_map = {}
-        train_dataset = self.dataloader_train.dataset
-        for record in train_dataset.samples:
+        for record in getattr(self.dataloader_train.dataset, "samples", ()):
             target_image = record.get("target_image")
             prompt = record.get("prompt")
-            if target_image is None or prompt is None:
-                continue
-            self._train_reference_map[str(prompt).strip()] = target_image
+            if target_image is not None and prompt is not None:
+                self._train_reference_map[str(prompt).strip()] = target_image
 
     def _resolve_teacher_reference_image(self, record, dataset):
         target_image = record.get("target_image")
@@ -227,255 +175,146 @@ class DopsdTrainer(BaseTrainer):
 
         self._build_train_reference_map()
         fallback_path = self._train_reference_map.get(str(record.get("prompt", "")).strip())
-        if fallback_path is None:
-            return None
-        return dataset.load_image(fallback_path)
-
-    def _validate_checkpoint_metadata(self, state, state_path, resume_ckpt_path):
-        checkpoint_world_size = state.get("world_size")
-        current_world_size = get_world_size()
-        if checkpoint_world_size != current_world_size:
-            raise RuntimeError(f"Cannot resume checkpoint saved with world_size={checkpoint_world_size} using world_size={current_world_size}: {state_path}")
-
-        expected_iteration = parse_checkpoint_iteration(resume_ckpt_path)
-        checkpoint_iteration = state.get("iteration")
-        if checkpoint_iteration != expected_iteration:
-            raise RuntimeError(f"Cannot resume checkpoint with iteration={checkpoint_iteration} in {state_path}, expected iteration={expected_iteration} from {resume_ckpt_path}")
+        return None if fallback_path is None else dataset.load_image(fallback_path)
 
     def compute_loss_on_sample(self, sample, collect_trajectory=False):
-        image = sample["inputs"].get("target_image")
-        if image is None:
-            raise ValueError("D-OPSD training requires inputs.target_image in each sample.")
-
-        image = image.to(device=self.model.device, dtype=self.running_dtype)
-        bsz = image.shape[0]
-        height, width = image.shape[2], image.shape[3]
-        latent_hw = (height // 16, width // 16)
-        t_scale = float(self.noise_scheduler.num_train_timesteps)
-
-        with torch.no_grad():
-            student_condition = self.model.encode_condition(sample)
-            teacher_condition = self.model.encode_prompt_text(self._teacher_edit_prompts(sample["conditioning"]["prompt"]))
-            teacher_image_latents, teacher_image_latent_ids = self.model.prepare_reference_image_latents(image)
-            latents_begin, latent_ids = self.model.prepare_dopsd_initial_latents(height, width, bsz)
-
-            self.noise_scheduler.set_timesteps(self.num_training_steps, latent_hw=latent_hw)
-            timesteps = self.noise_scheduler.infer_timesteps
-
-        latents_student = latents_begin
-        total_loss = 0.0
-        num_steps = len(timesteps)
-        step_loss_weights = self._step_loss_weights_for(num_steps)
-        weight_sum = 0.0
-        student_x0_traj = []
-        teacher_x0_traj = []
-
-        for back_step in range(num_steps):
-            t = timesteps[back_step].expand(bsz) / t_scale
-            t = t.to(device=self.model.device, dtype=self.running_dtype)
-
-            if back_step < num_steps - 1:
-                next_t = timesteps[back_step + 1].expand(bsz) / t_scale
-            else:
-                next_t = torch.zeros_like(t)
-            next_t = next_t.to(device=self.model.device, dtype=self.running_dtype)
-            dt = next_t - t
-
-            latents_student = latents_student.detach().requires_grad_(True)
-
-            with torch.no_grad():
-                v_pred_teacher = self.model.predict_velocity(
-                    latents_student,
-                    t,
-                    teacher_condition,
-                    latent_ids,
-                    self.teacher_adapter,
-                    teacher_image_latents=teacher_image_latents,
-                    teacher_image_latent_ids=teacher_image_latent_ids,
-                )
-                latents_teacher_cur = latents_student
-                x_0_teacher = latents_teacher_cur + (0 - t).reshape(bsz, 1, 1) * v_pred_teacher
-                # latents_teacher = latents_teacher_cur + v_pred_teacher * dt.reshape(bsz, 1, 1)
-
-            v_pred_student = self.model.predict_velocity(
-                latents_student,
-                t,
-                student_condition,
-                latent_ids,
-                self.student_adapter,
-            )
-            latents_student_cur = latents_student
-            x_0_student = latents_student_cur + (0 - t).reshape(bsz, 1, 1) * v_pred_student
-            latents_student = latents_student_cur + v_pred_student * dt.reshape(bsz, 1, 1)
-
-            loss_dopsd = F.mse_loss(x_0_student, x_0_teacher.detach(), reduction="mean")
-            step_weight = step_loss_weights[back_step]
-            total_loss = total_loss + loss_dopsd * step_weight
-            weight_sum += step_weight
-            if collect_trajectory:
-                student_x0_traj.append(x_0_student.detach())
-                teacher_x0_traj.append(x_0_teacher.detach())
-
-        avg_loss = total_loss / weight_sum
-        if collect_trajectory:
-            return avg_loss, student_x0_traj, teacher_x0_traj, latent_ids, height, width
-        return avg_loss
+        return self.objective.compute_loss(sample, collect_trajectory=collect_trajectory)
 
     @torch.no_grad()
-    def _save_training_trajectory(self, current_iter, student_x0_traj, teacher_x0_traj, latent_ids):
-        traj_dir = Path(self.output_train_dir) / "trajectory" / f"iter-{current_iter:09d}"
-        traj_dir.mkdir(parents=True, exist_ok=True)
+    def _save_training_trajectory(self, current_iter, result):
+        if result.state_ids is None:
+            raise RuntimeError("DOPSD trajectory result is missing state IDs.")
+        trajectory_dir = Path(self.output_train_dir) / "trajectory" / f"iter-{current_iter:09d}"
+        trajectory_dir.mkdir(parents=True, exist_ok=True)
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        student_images = []
+        teacher_images = []
+        num_steps = len(result.student_trajectory)
+        for step_index, (student_x0, teacher_x0) in enumerate(zip(result.student_trajectory, result.teacher_trajectory)):
+            logger.info(
+                "[train] trajectory decode iter={} step={}/{}",
+                current_iter,
+                step_index + 1,
+                num_steps,
+            )
+            student_images.extend(self.dopsd.decode_state(student_x0, result.state_ids))
+            teacher_images.extend(self.dopsd.decode_state(teacher_x0, result.state_ids))
 
-        student_step_images = []
-        teacher_step_images = []
-        num_steps = len(student_x0_traj)
-        for step_idx, (x_0_student, x_0_teacher) in enumerate(zip(student_x0_traj, teacher_x0_traj)):
-            logger.info("[train] trajectory decode iter={} step={}/{} student", current_iter, step_idx + 1, num_steps)
-            student_step_images.extend(self.model.decode_packed_x0_to_images(x_0_student, latent_ids))
-            logger.info("[train] trajectory decode iter={} step={}/{} teacher", current_iter, step_idx + 1, num_steps)
-            teacher_step_images.extend(self.model.decode_packed_x0_to_images(x_0_teacher, latent_ids))
-
-        save_path = traj_dir / "student_teacher_x0_traj.png"
-        save_student_teacher_trajectory_grid(student_step_images, teacher_step_images, save_path)
+        save_path = trajectory_dir / "student_teacher_x0_traj.png"
+        save_student_teacher_trajectory_grid(student_images, teacher_images, save_path)
         logger.info("[train] saved trajectory iter={} path={}", current_iter, save_path)
 
-    def _resolve_resume(self):
-        if not self.auto_resume:
-            return None, 0
-        ckpt_path, current_iter = find_latest_checkpoint(self.output_train_dir)
-        if ckpt_path is None:
-            logger.info("Auto-resume enabled but no checkpoint found in '{}'. Starting from scratch.", self.output_train_dir)
-        else:
-            logger.info("Auto-resuming from checkpoint: {} (iteration {})", ckpt_path, current_iter)
-        return ckpt_path, current_iter
-
     def train(self):
-        resume_ckpt_path, current_iter = self._resolve_resume()
-        self.setup(resume_ckpt_path=resume_ckpt_path)
+        resume_path, current_iter = self._resolve_resume()
+        self.setup(resume_ckpt_path=resume_path)
         if is_main_process():
             os.makedirs(self.output_train_dir, exist_ok=True)
         barrier()
 
-        max_train_iters = self.max_train_iters
-        grad_accum_iters = self.gradient_accumulation_iters
-        max_grad_norm = self.max_grad_norm
-        save_every_iters = self.save_every_iters
-        save_total_limit = self.save_total_limit
+        algorithm = self.dopsd_config
         grad_accum_counter = 0
         running_loss = 0.0
-
         logger.info(
-            "[train] dopsd start iter={}/{} world_size={} grad_accum={} num_training_steps={} "
-            "ema_decay={} ema_decay_warmup={} ema_decay_warmup_iters={} step_loss_weights={} "
-            "edit_sys_prompt={!r} teacher_use_dataset_prompt={} trajectory_every_iters={}",
+            "[train] dopsd start iter={}/{} world_size={} grad_accum={} steps={} "
+            "ema={} warmup_ema={} warmup_iters={} weights={} teacher_prompt={!r} "
+            "teacher_use_dataset_prompt={} trajectory_every_iters={}",
             current_iter,
-            max_train_iters,
+            self.max_train_iters,
             get_world_size(),
-            grad_accum_iters,
-            self.num_training_steps,
-            self.ema_decay,
-            self.ema_decay_warmup,
-            self.ema_decay_warmup_iters,
-            self._step_loss_weights_for(self.num_training_steps),
-            self.edit_sys_prompt,
-            self.teacher_use_dataset_prompt,
-            self.trajectory_every_iters,
+            self.gradient_accumulation_iters,
+            algorithm.num_training_steps,
+            algorithm.ema_decay,
+            algorithm.ema_decay_warmup,
+            algorithm.ema_decay_warmup_iters,
+            algorithm.loss_weights(algorithm.num_training_steps),
+            algorithm.edit_sys_prompt,
+            algorithm.teacher_use_dataset_prompt,
+            algorithm.trajectory_every_iters,
         )
+
         if self.infer_every_iters:
             self.inferencer.set_data(self.dataloader_eval)
             if current_iter == 0:
                 self.run_inference(current_iter)
 
         epoch = 0
-        while current_iter < max_train_iters:
+        while current_iter < self.max_train_iters:
             sampler = getattr(self.dataloader_train, "sampler", None)
             if hasattr(sampler, "set_epoch"):
                 sampler.set_epoch(epoch)
 
             for sample in self.dataloader_train:
-                sync_grad = (grad_accum_counter + 1) % grad_accum_iters == 0
+                sync_grad = (grad_accum_counter + 1) % self.gradient_accumulation_iters == 0
                 self._set_gradient_sync(sync_grad)
-
-                should_save_trajectory = self.trajectory_every_iters and (current_iter + 1) % self.trajectory_every_iters == 0
-                if should_save_trajectory:
-                    loss, student_x0_traj, teacher_x0_traj, latent_ids, _height, _width = self.compute_loss_on_sample(
-                        sample,
-                        collect_trajectory=True,
-                    )
-                else:
-                    loss = self.compute_loss_on_sample(sample)
-                (loss / grad_accum_iters).backward()
-                running_loss += loss.item() / grad_accum_iters
+                collect_trajectory = bool(sync_grad and algorithm.trajectory_every_iters and (current_iter + 1) % algorithm.trajectory_every_iters == 0)
+                result = self.compute_loss_on_sample(sample, collect_trajectory=collect_trajectory)
+                (result.loss / self.gradient_accumulation_iters).backward()
+                running_loss += result.loss.item() / self.gradient_accumulation_iters
 
                 grad_accum_counter += 1
-                if grad_accum_counter % grad_accum_iters != 0:
+                if not sync_grad:
                     continue
 
-                torch.nn.utils.clip_grad_norm_(self.trainable_params, max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(self.trainable_params, self.max_grad_norm)
                 self.optimizer.step()
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad()
-                current_ema_decay = self._resolve_ema_decay(current_iter + 1)
-                self.model.ema_update_lora_adapter(
-                    self.student_adapter,
-                    self.teacher_adapter,
-                    current_ema_decay,
+                ema_decay = algorithm.ema_decay_at(current_iter + 1)
+                self.adapters.ema_update(
+                    algorithm.student_adapter,
+                    algorithm.teacher_adapter,
+                    ema_decay,
                 )
-
                 current_iter += 1
+
                 display_loss = reduce_mean(running_loss)
                 current_lr = self.lr_scheduler.get_last_lr()[0]
-                if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= max_train_iters:
+                if current_iter == 1 or current_iter % self.train_log_every_iters == 0 or current_iter >= self.max_train_iters:
                     logger.info(
                         "[train] iter={}/{} loss_dopsd={:.6f} lr={:.8f} ema_decay={:.4f}",
                         current_iter,
-                        max_train_iters,
+                        self.max_train_iters,
                         display_loss,
                         current_lr,
-                        current_ema_decay,
+                        ema_decay,
                     )
                     self.log_metrics(
                         {
                             "train/loss_dopsd": display_loss,
                             "train/lr": current_lr,
-                            "train/ema_decay": current_ema_decay,
+                            "train/ema_decay": ema_decay,
                         },
                         step=current_iter,
                     )
                 running_loss = 0.0
 
-                if should_save_trajectory:
+                if collect_trajectory:
+                    self.trainable_model.set_eval()
                     barrier()
                     if is_main_process():
-                        logger.info("[train] saving trajectory iter={} (decoding {} x0 pairs)...", current_iter, len(student_x0_traj))
-                        self.model.set_denoiser_eval()
-                        self._save_training_trajectory(
-                            current_iter,
-                            student_x0_traj,
-                            teacher_x0_traj,
-                            latent_ids,
-                        )
-                    self.model.set_dual_lora_trainable(self.student_adapter, self.teacher_adapter)
+                        self._save_training_trajectory(current_iter, result)
                     barrier()
+                    self.adapters.set_trainable(algorithm.student_adapter)
 
-                if save_every_iters and current_iter % save_every_iters == 0:
-                    self.save_checkpoint(current_iter, save_total_limit)
-
+                if self.save_every_iters and current_iter % self.save_every_iters == 0:
+                    self.save_checkpoint(current_iter, self.save_total_limit)
                 if self.infer_every_iters and current_iter % self.infer_every_iters == 0:
                     self.run_inference(current_iter)
-
-                if current_iter >= max_train_iters:
+                if current_iter >= self.max_train_iters:
                     break
-
             epoch += 1
 
-        logger.info("[train] finished iter={}/{}", current_iter, max_train_iters)
+        self.finish_monitor()
+        logger.info("[train] finished iter={}/{}", current_iter, self.max_train_iters)
 
-    def _set_gradient_sync(self, enabled):
-        self.model.set_fsdp2_gradient_sync(enabled)
+    def _first_teacher_reference(self, dataset, samples):
+        for record in samples:
+            reference = self._resolve_teacher_reference_image(record, dataset)
+            if reference is not None:
+                return reference, record
+        return None, None
 
     @torch.no_grad()
     def _run_teacher_inference(self, current_iter, iter_output_dir):
@@ -483,17 +322,20 @@ class DopsdTrainer(BaseTrainer):
         samples = dataset.samples
         rank = get_rank()
         world_size = get_world_size()
+        num_steps = int(self.infer_config.get("num_inference_steps", self.dopsd_config.num_training_steps))
+        if num_steps <= 0:
+            raise ValueError("inference.num_inference_steps must be positive.")
+        base_seed = int(self.infer_config.get("seed", 42))
 
-        num_inference_steps = self.infer_config.get("num_inference_steps", self.num_training_steps)
-        base_seed = self.infer_config.get("seed", 42)
-        t_scale = float(self.noise_scheduler.num_train_timesteps)
+        teacher_output_dir = Path(iter_output_dir) / "teacher"
+        teacher_output_dir.mkdir(parents=True, exist_ok=True)
+        dummy_reference, dummy_record = self._first_teacher_reference(dataset, samples)
+        if dummy_reference is None:
+            logger.warning("[train] skipped teacher inference: evaluation data has no reference images.")
+            barrier()
+            return
 
-        teacher_output_dir = os.path.join(iter_output_dir, "teacher")
-        os.makedirs(teacher_output_dir, exist_ok=True)
-
-        self.model.set_active_adapter(self.teacher_adapter)
-        self.model.set_denoiser_eval()
-
+        self.trainable_model.set_eval()
         num_slots = (len(samples) + world_size - 1) // world_size if is_distributed() else len(samples)
         saved_count = 0
         skipped_count = 0
@@ -501,84 +343,65 @@ class DopsdTrainer(BaseTrainer):
             "[train] running teacher inference iter={} output_dir={} steps={}",
             current_iter,
             teacher_output_dir,
-            num_inference_steps,
+            num_steps,
         )
-        for slot in range(num_slots):
-            i = slot * world_size + rank if is_distributed() else slot
-            if i >= len(samples):
-                continue
 
-            record = samples[i]
-            reference_image = self._resolve_teacher_reference_image(record, dataset)
-            if reference_image is None:
+        for slot in range(num_slots):
+            sample_index = slot * world_size + rank if is_distributed() else slot
+            has_sample = sample_index < len(samples)
+            record = samples[sample_index] if has_sample else dummy_record
+            reference = self._resolve_teacher_reference_image(record, dataset) if has_sample else dummy_reference
+            should_save = has_sample and reference is not None
+            if reference is None:
+                reference = dummy_reference
+            if has_sample and not should_save:
                 skipped_count += 1
                 logger.warning(
-                    "[train] teacher infer skip sample={}/{}: missing target_image in eval metadata",
-                    i + 1,
+                    "[train] teacher infer skip sample={}/{}: missing target_image in evaluation metadata",
+                    sample_index + 1,
                     len(samples),
                 )
+
+            if not torch.is_tensor(reference):
+                raise TypeError(f"DOPSD teacher references must be tensors after dataset loading, got {type(reference).__name__}.")
+            reference = reference.unsqueeze(0) if reference.ndim == 3 else reference
+            prompt = record.get("prompt", "")
+            teacher_prompts = self.dopsd_config.teacher_prompts(prompt)
+            seed = base_seed + sample_index if has_sample else base_seed
+            generator = torch.Generator(device=self.dopsd.device).manual_seed(seed)
+            rollout = self.objective.rollout_teacher(
+                reference,
+                teacher_prompts,
+                num_steps,
+                generator=generator,
+            )
+            if not should_save:
                 continue
-
-            image = reference_image.unsqueeze(0).to(device=self.model.device, dtype=self.running_dtype)
-            height, width = image.shape[2], image.shape[3]
-            latent_hw = (height // 16, width // 16)
-
-            teacher_prompts = self._teacher_edit_prompts(record["prompt"])
-            teacher_condition = self.model.encode_prompt_text(teacher_prompts)
-            teacher_image_latents, teacher_image_latent_ids = self.model.prepare_reference_image_latents(image)
-
-            seed = base_seed + i
-            generator = torch.Generator(device=self.model.device).manual_seed(seed)
-            latents, latent_ids = self.model.prepare_dopsd_initial_latents(height, width, 1, generator=generator)
-
-            self.noise_scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
-            timesteps = self.noise_scheduler.infer_timesteps
-            num_steps = len(timesteps)
 
             logger.info(
                 "[train] teacher infer sample={}/{} seed={} size={}x{} prompt={!r}",
-                i + 1,
+                sample_index + 1,
                 len(samples),
                 seed,
-                height,
-                width,
+                rollout.height,
+                rollout.width,
                 teacher_prompts[0],
             )
-            for back_step in range(num_steps):
-                t = timesteps[back_step].expand(1) / t_scale
-                t = t.to(device=self.model.device, dtype=self.running_dtype)
-                if back_step < num_steps - 1:
-                    next_t = timesteps[back_step + 1].expand(1) / t_scale
-                else:
-                    next_t = torch.zeros_like(t)
-                next_t = next_t.to(device=self.model.device, dtype=self.running_dtype)
-                dt = next_t - t
-
-                v_pred = self.model.predict_velocity(
-                    latents,
-                    t,
-                    teacher_condition,
-                    latent_ids,
-                    self.teacher_adapter,
-                    teacher_image_latents=teacher_image_latents,
-                    teacher_image_latent_ids=teacher_image_latent_ids,
-                )
-                latents = latents + v_pred * dt.reshape(1, 1, 1)
-
-            images = self.model.decode_packed_x0_to_images(latents, latent_ids)
-            save_path = Path(teacher_output_dir) / f"{i:05d}.png"
+            images = self.dopsd.decode_state(rollout.state, rollout.state_ids)
+            save_path = teacher_output_dir / f"{sample_index:05d}.png"
             images[0].save(save_path)
             saved_count += 1
-            logger.info("[train] teacher infer sample={}/{} saved path={}", i + 1, len(samples), save_path)
+            logger.info("[train] teacher infer sample={}/{} saved path={}", sample_index + 1, len(samples), save_path)
 
         barrier()
         if is_distributed():
-            saved_tensor = torch.tensor(saved_count, device=self.model.device, dtype=torch.int64)
-            skipped_tensor = torch.tensor(skipped_count, device=self.model.device, dtype=torch.int64)
-            torch.distributed.all_reduce(saved_tensor, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(skipped_tensor, op=torch.distributed.ReduceOp.SUM)
-            saved_count = saved_tensor.item()
-            skipped_count = skipped_tensor.item()
+            counts = torch.tensor(
+                [saved_count, skipped_count],
+                device=self.dopsd.device,
+                dtype=torch.int64,
+            )
+            torch.distributed.all_reduce(counts, op=torch.distributed.ReduceOp.SUM)
+            saved_count, skipped_count = counts.tolist()
         logger.info(
             "[train] finished teacher inference iter={} saved={} skipped={}",
             current_iter,
@@ -587,73 +410,89 @@ class DopsdTrainer(BaseTrainer):
         )
 
     def run_inference(self, current_iter):
-        base_output_dir = self.infer_config.get("output_dir", "./output_infer")
-        iter_output_dir = os.path.join(base_output_dir, f"iter-{current_iter:09d}")
-
-        self.model.set_active_adapter(self.student_adapter)
-        self.inferencer.output_infer_dir = iter_output_dir
-        os.makedirs(iter_output_dir, exist_ok=True)
-        logger.info("[train] running student inference iter={} output_dir={}", current_iter, iter_output_dir)
-        self.inferencer.infer()
-        barrier()
-        self._run_teacher_inference(current_iter, iter_output_dir)
+        output_dir = Path(self.infer_config.get("output_dir", "./output_infer")) / f"iter-{current_iter:09d}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        self.inferencer.output_infer_dir = str(output_dir)
+        logger.info("[train] running student inference iter={} output_dir={}", current_iter, output_dir)
+        with self.adapters.activate(self.dopsd_config.student_adapter):
+            self.inferencer.infer()
+        self._run_teacher_inference(current_iter, output_dir)
+        self.adapters.set_trainable(self.dopsd_config.student_adapter)
         logger.info("[train] finished inference iter={}", current_iter)
 
-        self.model.set_dual_lora_trainable(self.student_adapter, self.teacher_adapter)
+    def _training_state(self, iteration, include_optimizer):
+        state = {
+            "iteration": iteration,
+            "world_size": get_world_size(),
+            "lr_scheduler": self.lr_scheduler.state_dict(),
+            "dopsd": self._checkpoint_metadata(),
+        }
+        if include_optimizer:
+            state["optimizer"] = self.optimizer.state_dict()
+        return state
+
+    @staticmethod
+    def _atomic_torch_save(state, path):
+        path = Path(path)
+        temporary_path = path.with_suffix(path.suffix + ".tmp")
+        torch.save(state, temporary_path)
+        os.replace(temporary_path, path)
 
     def save_checkpoint(self, iteration, save_total_limit):
         if is_main_process():
             prune_checkpoints(self.output_train_dir, save_total_limit)
-
-        save_dir = os.path.join(self.output_train_dir, f"checkpoint-{iteration:09d}")
-        logger.info("[train] saving checkpoint iter={} path={}", iteration, save_dir)
+        save_dir = Path(self.output_train_dir) / f"checkpoint-{iteration:09d}"
+        logger.info("[train] saving DOPSD checkpoint iter={} path={}", iteration, save_dir)
         if is_main_process():
-            os.makedirs(save_dir, exist_ok=True)
+            save_dir.mkdir(parents=True, exist_ok=True)
         barrier()
 
-        self.model.save_lora_weights(save_dir, adapter_name=self.student_adapter)
+        self.adapters.save(save_dir, self.dopsd_config.student_adapter)
         barrier()
-        self.model.save_lora_weights(save_dir, adapter_name=self.teacher_adapter, weights_subdir="teacher")
+        self.adapters.save(save_dir, self.dopsd_config.teacher_adapter, weights_subdir="teacher")
         barrier()
 
         config_path = self.config.get("config_path")
         if is_main_process() and config_path is not None:
-            shutil.copy2(config_path, os.path.join(save_dir, "config.yaml"))
+            shutil.copy2(config_path, save_dir / "config.yaml")
 
-        if self.model.is_fsdp2_wrapped():
+        if self.parallel.is_fsdp():
             self._save_distributed_state(save_dir, iteration)
+        else:
+            if is_main_process():
+                self._atomic_torch_save(
+                    self._training_state(iteration, include_optimizer=True),
+                    save_dir / "training_state.pt",
+                )
             barrier()
-            logger.info("[train] saved checkpoint iter={} path={} (student + teacher EMA LoRA)", iteration, save_dir)
-            return
 
-        training_state = {
-            "iteration": iteration,
-            "world_size": get_world_size(),
-            "optimizer": self.optimizer.state_dict(),
-            "lr_scheduler": self.lr_scheduler.state_dict(),
-        }
         if is_main_process():
-            torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
+            (save_dir / "_SUCCESS").touch()
         barrier()
-        logger.info("[train] saved checkpoint iter={} path={} (student + teacher EMA LoRA)", iteration, save_dir)
+        logger.info("[train] saved DOPSD checkpoint iter={} path={}", iteration, save_dir)
 
     def _save_distributed_state(self, save_dir, iteration):
-        dist_state_path = os.path.join(save_dir, "dist_state")
+        dist_state_path = Path(save_dir) / "dist_state"
         if is_main_process():
-            os.makedirs(dist_state_path, exist_ok=True)
-            torch.save(
-                {
-                    "iteration": iteration,
-                    "world_size": get_world_size(),
-                    "lr_scheduler": self.lr_scheduler.state_dict(),
-                },
-                os.path.join(save_dir, "trainer_state.pt"),
-            )
+            dist_state_path.mkdir(parents=True, exist_ok=True)
         barrier()
 
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
-        model_state, optim_state = get_state_dict(self.model.fsdp2_state_module(), self.optimizer, options=options)
-        dcp.save(
-            {"model": model_state, "optimizer": optim_state},
-            checkpoint_id=dist_state_path,
+        model_state, optimizer_state = get_state_dict(
+            self.parallel.state_module(),
+            self.optimizer,
+            options=options,
         )
+        dcp.save(
+            {"model": model_state, "optimizer": optimizer_state},
+            checkpoint_id=str(dist_state_path),
+        )
+        barrier()
+
+        # trainer_state.pt is a runtime completion marker, so write it last.
+        if is_main_process():
+            self._atomic_torch_save(
+                self._training_state(iteration, include_optimizer=False),
+                Path(save_dir) / "trainer_state.pt",
+            )
+        barrier()

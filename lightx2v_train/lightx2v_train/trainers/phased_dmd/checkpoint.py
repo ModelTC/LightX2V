@@ -8,9 +8,7 @@ import torch.distributed.checkpoint as dcp
 from loguru import logger
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
-    get_model_state_dict,
     get_state_dict,
-    set_model_state_dict,
     set_state_dict,
 )
 
@@ -38,29 +36,11 @@ class PhasedCheckpointManager(DmdCheckpointManager):
 
     def _save_model_weights(self, model, save_dir, role="student"):
         train_type = self._role_train_type(role)
-        if train_type == "lora":
-            model.save_lora_weights(save_dir)
-            return
-        if is_main_process():
-            torch.save(
-                model.denoiser_module().state_dict(),
-                os.path.join(save_dir, "model_state.pt"),
-            )
+        self._checkpoint(model).save_weights(save_dir, train_type)
 
     def _load_model_weights(self, model, save_dir, role="student"):
         train_type = self._role_train_type(role)
-        if train_type == "lora":
-            model.load_lora_weights_for_resume(save_dir)
-            return
-        model_state_path = os.path.join(save_dir, "model_state.pt")
-        if not os.path.exists(model_state_path):
-            raise RuntimeError(f"model_state.pt not found in {save_dir}")
-        state_dict = torch.load(
-            model_state_path,
-            map_location="cpu",
-            weights_only=False,
-        )
-        model.denoiser_module().load_state_dict(state_dict)
+        self._checkpoint(model).load_weights(save_dir, train_type)
 
     def _role_weights_dir(self, root_dir, role):
         directory_name = self.role_registry.weight_directory_name(role)
@@ -71,26 +51,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
     def _copy_fake_low_high_from_fake(self):
         if self.fake_low_high_model is None:
             return
-        source = self.fake_model.fsdp2_state_module()
-        target = self.fake_low_high_model.fsdp2_state_module()
-        if self.fake_model.is_fsdp2_wrapped():
-            options = StateDictOptions(
-                ignore_frozen_params=False,
-                strict=True,
-            )
-            source_state = get_model_state_dict(
-                source,
-                options=options,
-            )
-            set_model_state_dict(
-                target,
-                model_state_dict=source_state,
-                options=options,
-            )
-            del source_state
-        else:
-            target.load_state_dict(source.state_dict(), strict=True)
-        logger.warning("Checkpoint has no fake_low_high state; initialized it from the restored High Fake weights.")
+        self._copy_role_model("fake", "fake_low_high")
 
     def _fast_forward_fake_low_high_scheduler(self, iteration):
         if self.fake_low_high_lr_scheduler is None:
@@ -181,7 +142,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
 
     def _load_resume_state(self, resume_ckpt_path):
         models = tuple(model for _, model in self._trainable_role_models())
-        if any(model.is_fsdp2_wrapped() for model in models):
+        if any(self._parallel(model).is_fsdp() for model in models):
             self._load_distributed_state(resume_ckpt_path)
             return
         self._load_single_process_state(resume_ckpt_path)
@@ -502,7 +463,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                     role,
                 )
                 model_state, optimizer_state = get_state_dict(
-                    model.fsdp2_state_module(),
+                    self._parallel(model).state_module(),
                     optimizer,
                     options=options,
                 )
@@ -516,7 +477,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                     process_group=checkpoint_group,
                 )
                 set_state_dict(
-                    model.fsdp2_state_module(),
+                    self._parallel(model).state_module(),
                     optimizer,
                     model_state_dict=role_state["model"],
                     optim_state_dict=role_state["optimizer"],
@@ -533,7 +494,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             for role in required_roles:
                 model, optimizer = role_state_by_name[role]
                 model_state, optimizer_state = get_state_dict(
-                    model.fsdp2_state_module(),
+                    self._parallel(model).state_module(),
                     optimizer,
                     options=options,
                 )
@@ -547,7 +508,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
             for role in required_roles:
                 model, optimizer = role_state_by_name[role]
                 set_state_dict(
-                    model.fsdp2_state_module(),
+                    self._parallel(model).state_module(),
                     optimizer,
                     model_state_dict=state[f"{role}_model"],
                     optim_state_dict=state[f"{role}_optimizer"],
@@ -678,7 +639,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
         role_models = self._trainable_role_models()
         for role, model in role_models:
             weights_dir = self._role_weights_dir(save_dir, role)
-            save_weights = self._role_train_type(role) == "lora" or not model.is_fsdp2_wrapped()
+            save_weights = self._role_train_type(role) == "lora" or not self._parallel(model).is_fsdp()
             if save_weights and role != "student" and is_main_process():
                 os.makedirs(weights_dir, exist_ok=True)
             barrier()
@@ -703,7 +664,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 os.path.join(save_dir, "config.yaml"),
             )
 
-        if any(model.is_fsdp2_wrapped() for _, model in role_models):
+        if any(self._parallel(model).is_fsdp() for _, model in role_models):
             self._save_distributed_state(save_dir, iteration)
             self._finalize_checkpoint(
                 save_dir,
@@ -799,7 +760,7 @@ class PhasedCheckpointManager(DmdCheckpointManager):
                 role,
             )
             model_state, optimizer_state = get_state_dict(
-                model.fsdp2_state_module(),
+                self._parallel(model).state_module(),
                 optimizer,
                 options=options,
             )

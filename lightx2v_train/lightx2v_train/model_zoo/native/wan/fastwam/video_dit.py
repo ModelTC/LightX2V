@@ -80,6 +80,8 @@ class FastWAMVideoDiT(WanModel):
         if timestep.ndim != 1:
             raise ValueError(f"timestep must be [B] or [1], got {tuple(timestep.shape)}")
         batch_size = x.shape[0]
+        if self.training and batch_size != 1:
+            raise ValueError("FastWAM video training only supports physical batch size 1.")
         if context.shape[0] != batch_size:
             if not self.training and batch_size == 1:
                 x = x.expand(context.shape[0], -1, -1, -1, -1)
@@ -89,8 +91,6 @@ class FastWAMVideoDiT(WanModel):
         if timestep.shape[0] not in (1, batch_size):
             raise ValueError(f"timestep length must be 1 or {batch_size}, got {timestep.shape[0]}")
         if timestep.shape[0] == 1 and batch_size > 1:
-            if self.training:
-                raise ValueError("Training timestep length must match batch size.")
             timestep = timestep.expand(batch_size)
         if context_mask is None:
             context_mask = torch.ones(context.shape[:2], dtype=torch.bool, device=context.device)

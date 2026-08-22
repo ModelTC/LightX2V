@@ -35,7 +35,7 @@ class PhasedRolloutEngine:
             self.num_inference_steps,
             sigmas=[float(sigma) for sigma in self.denoising_sigmas.detach().cpu()],
             latent_hw=latent_shape[-2:],
-            device=self.model.device,
+            device=self.student.device,
         )
         if region == "high":
             min_step_index = self.diversity_trick.minimum_dmd_step_index if grad_enabled else 0
@@ -51,15 +51,14 @@ class PhasedRolloutEngine:
 
         if xt is None:
             xt = self.sample_initial_latents(latent_shape)
-        self.model.transformer.train()
-        self.student_2_model.transformer.train()
+        self.student.set_training(True)
+        self.student_2.set_training(True)
         for step_index in range(gradient_step_index + 1):
-            active_model = self.model if step_index < self.match_step_index else self.student_2_model
+            active_model = self.student if step_index < self.match_step_index else self.student_2
             sigma = self.scheduler.sigma_at(
                 step_index,
-                latent_shape[0],
-                device=self.model.device,
-                dtype=self.running_dtype,
+                device=self.student.device,
+                dtype=self.latent_dtype,
             )
             keep_gradient = grad_enabled and step_index == gradient_step_index
             context = torch.enable_grad if keep_gradient else torch.no_grad
@@ -86,8 +85,7 @@ class PhasedRolloutEngine:
         )
         if region == "high":
             sigma_s = self._phase_sigma(
-                latent_shape[0],
-                dtype=self.running_dtype,
+                dtype=self.latent_dtype,
             )
             anchor = self._euler_step(
                 xt,
@@ -100,8 +98,8 @@ class PhasedRolloutEngine:
             anchor = student_x0
         raw_gradient_timestep = self._raw_timestep_from_warped_step(self.denoising_steps[gradient_step_index])
         return (
-            anchor.to(dtype=self.running_dtype),
-            student_x0.to(dtype=self.running_dtype),
+            anchor.to(dtype=self.latent_dtype),
+            student_x0.to(dtype=self.latent_dtype),
             sigma_s,
             raw_gradient_timestep,
         )
@@ -117,20 +115,19 @@ class PhasedRolloutEngine:
             self.num_inference_steps,
             sigmas=[float(sigma) for sigma in self.denoising_sigmas.detach().cpu()],
             latent_hw=latent_shape[-2:],
-            device=self.model.device,
+            device=self.student.device,
         )
         if xt is None:
             xt = self.sample_initial_latents(latent_shape)
-        self.model.transformer.eval()
-        self.student_2_model.transformer.eval()
+        self.student.set_training(False)
+        self.student_2.set_training(False)
         x_bound = None
         for step_index in range(self.num_inference_steps):
-            active_model = self.model if step_index < self.match_step_index else self.student_2_model
+            active_model = self.student if step_index < self.match_step_index else self.student_2
             sigma = self.scheduler.sigma_at(
                 step_index,
-                latent_shape[0],
-                device=self.model.device,
-                dtype=self.running_dtype,
+                device=self.student.device,
+                dtype=self.latent_dtype,
             )
             velocity = self._predict_velocity(
                 active_model,
@@ -148,8 +145,8 @@ class PhasedRolloutEngine:
         if x_bound is None:
             raise RuntimeError("Full phased rollout did not reach the phase boundary.")
         return (
-            x_bound.to(dtype=self.running_dtype),
-            xt.detach().to(dtype=self.running_dtype),
+            x_bound.to(dtype=self.latent_dtype),
+            xt.detach().to(dtype=self.latent_dtype),
         )
 
     def _teacher_velocity(
@@ -194,17 +191,16 @@ class PhasedRolloutEngine:
         if teacher_branch == "high":
             raw_min = self.match_timestep + self.score_timestep_margin
             raw_max = self.num_train_timestep
-            teacher_model = self.teacher_model
+            teacher_model = self.teacher
         else:
             raw_min = 1
             raw_max = self.match_timestep
-            teacher_model = self.teacher_2_model
+            teacher_model = self.teacher_2
         sigma_t = self._sample_score_sigma_range(
-            anchor.shape[0],
             raw_min,
             raw_max,
             anchor.device,
-            self.running_dtype,
+            self.latent_dtype,
         )
         noise = broadcast_sequence_parallel_value(torch.randn_like(anchor, dtype=torch.float32))
         fake_model = self._fake_model_for_dmd(
@@ -218,8 +214,8 @@ class PhasedRolloutEngine:
                 sigma_s,
                 sigma_t,
             )
-            fake_model.transformer.eval()
-            teacher_model.transformer.eval()
+            fake_model.set_training(False)
+            teacher_model.set_training(False)
             velocity_fake = self._predict_velocity(
                 fake_model,
                 score_xt,
@@ -255,10 +251,10 @@ class PhasedRolloutEngine:
 
     def _fake_model_for_dmd(self, region, teacher_branch):
         if region == "high":
-            return self.fake_model
+            return self.fake
         if teacher_branch == "high" and self.fake_low_high_model is not None:
-            return self.fake_low_high_model
-        return self.fake_2_model
+            return self.fake_low_high
+        return self.fake_2
 
     def _fake_loss_for_score_range(
         self,
@@ -270,11 +266,10 @@ class PhasedRolloutEngine:
         raw_max,
     ):
         sigma_t = self._sample_score_sigma_range(
-            anchor.shape[0],
             raw_min,
             raw_max,
             anchor.device,
-            self.running_dtype,
+            self.latent_dtype,
         )
         noise = broadcast_sequence_parallel_value(torch.randn_like(anchor, dtype=torch.float32))
         with torch.no_grad():
@@ -290,7 +285,7 @@ class PhasedRolloutEngine:
                 sigma_s,
                 sigma_t,
             )
-        fake_model.transformer.train()
+        fake_model.set_training(True)
         velocity_fake = self._predict_velocity(
             fake_model,
             score_xt,
@@ -307,20 +302,19 @@ class PhasedRolloutEngine:
         if region == "high":
             anchor = x_bound
             sigma_s = self._phase_sigma(
-                x_bound.shape[0],
-                dtype=self.running_dtype,
+                dtype=self.latent_dtype,
             )
-            fake_model = self.fake_model
+            fake_model = self.fake
             raw_min = self.match_timestep + self.score_timestep_margin
             raw_max = self.num_train_timestep
         else:
             anchor = x0
             sigma_s = torch.zeros(
-                x0.shape[0],
+                1,
                 device=x0.device,
-                dtype=self.running_dtype,
+                dtype=self.latent_dtype,
             )
-            fake_model = self.fake_2_model
+            fake_model = self.fake_2
             raw_min = 1
             raw_max = self.num_train_timestep if self.fake_low_high_model is None else self.match_timestep
         specifications = [
@@ -337,12 +331,12 @@ class PhasedRolloutEngine:
             specifications.append(
                 (
                     "fake_low_high",
-                    self.fake_low_high_model,
+                    self.fake_low_high,
                     x0,
                     torch.zeros(
-                        x0.shape[0],
+                        1,
                         device=x0.device,
-                        dtype=self.running_dtype,
+                        dtype=self.latent_dtype,
                     ),
                     (self.match_timestep + self.score_timestep_margin),
                     self.num_train_timestep,
@@ -351,18 +345,11 @@ class PhasedRolloutEngine:
         return tuple(specifications)
 
     def _extract_real_latents(self, sample):
-        with torch.no_grad():
-            latent = sample["inputs"].get("latents")
-            if latent is None:
-                latent = self.model.encode_to_latent(sample)
-            latent = latent.to(
-                device=self.model.device,
-                dtype=self.running_dtype,
-            )
-            if latent.ndim == 4:
-                latent = latent.unsqueeze(0)
-            latent = broadcast_sequence_parallel_value(latent)
-        return latent
+        return self.student.extract_real_latents(
+            sample,
+            self.latent_dtype,
+            broadcast_sequence_parallel_value,
+        )
 
     def _predict_real_student_velocity(
         self,
@@ -374,8 +361,8 @@ class PhasedRolloutEngine:
     ):
         context = torch.enable_grad if grad_enabled else torch.no_grad
         with context():
-            student_model = self.model if region == "high" else self.student_2_model
-            student_model.transformer.train(mode=grad_enabled)
+            student_model = self.student if region == "high" else self.student_2
+            student_model.set_training(grad_enabled)
             velocity = self._predict_velocity(
                 student_model,
                 xt,
@@ -392,8 +379,8 @@ class PhasedRolloutEngine:
         condition,
         negative_condition,
     ):
-        teacher_model = self.teacher_model if region == "high" else self.teacher_2_model
-        teacher_model.transformer.eval()
+        teacher_model = self.teacher if region == "high" else self.teacher_2
+        teacher_model.set_training(False)
         return self._teacher_velocity(
             teacher_model,
             xt,
@@ -408,15 +395,15 @@ class PhasedRolloutEngine:
             condition=conditions[0],
             negative_condition=conditions[1],
             latent_hw=initial_noise.shape[-2:],
-            device=self.model.device,
-            dtype=self.running_dtype,
+            device=self.student.device,
+            dtype=self.latent_dtype,
             predict_teacher_velocity=partial(
                 self._teacher_velocity,
-                self.teacher_model,
+                self.teacher,
             ),
             predict_student_velocity=partial(
                 self._predict_velocity,
-                self.model,
+                self.student,
             ),
             student_scheduler=self.scheduler,
             expand_to_ndim=self.scheduler._expand_to_ndim,
@@ -439,12 +426,12 @@ class PhasedRolloutEngine:
     def _real_data_fake_context(self, sample, conditions, region):
         return RealDataFakeStepContext(
             region=region,
-            fake_model=(self.fake_real_high_model if region == "high" else self.fake_real_low_model),
+            fake_model=(self.fake_real_high if region == "high" else self.fake_real_low),
             sample=sample,
             condition=conditions[0],
             negative_condition=conditions[1],
-            device=self.model.device,
-            dtype=self.running_dtype,
+            device=self.student.device,
+            dtype=self.latent_dtype,
             extract_real_latents=self._extract_real_latents,
             sample_synced_int=self._sample_synced_int,
             broadcast_noise=broadcast_sequence_parallel_value,

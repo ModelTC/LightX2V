@@ -34,7 +34,6 @@ data:
         name: prompt_dataset
         data_path: /data/nvme5/gushiqiao/datatets/lingbot_video/vidprom_filtered_extended_first5k_auto_negative.jsonl
         max_samples: 5
-        batch_size: 1
         num_workers: 0
         pin_memory: true
         shuffle: false

@@ -12,6 +12,7 @@ data_process/
 
 | 训练方式 | 数据集 | 输入 |
 | --- | --- | --- |
+| 图像 DMD / CDM | `prompt_dataset` | prompt、目标高度和目标宽度 |
 | Flow | `video_dataset` | 视频路径和 caption 元数据，训练时在线编码 |
 | Flow | `latent_dataset` | 预先生成的视频、音频和文本缓存 |
 | DMD / AR-DMD | `prompt_dataset` | TXT prompt，训练时在线编码 |
@@ -52,22 +53,81 @@ data:
     width: 832
     num_frames: 81
     frame_rate: 24
-    batch_size: 1
 ```
 
 视频路径可以是绝对路径，也可以是相对元数据文件或 `video_root` 的路径。
 
 ## prompt_dataset
 
-`prompt_dataset` 读取 TXT 或 LIST 文件，每个非空行表示一个 prompt。
+`prompt_dataset` 支持 TXT、LIST、JSON 和 JSONL；TXT/LIST 中每个非空行表示一个 prompt。
 
 ```yaml
 data:
   train:
     name: prompt_dataset
     data_path: /path/to/prompts/train.txt
-    batch_size: 1
 ```
+
+图像 DMD / CDM 使用 JSON 或 JSONL。每条记录必须显式指定目标尺寸，
+不需要 `target_image`：
+
+```json
+{"prompt":"A cat walking through snow.","target_height":1024,"target_width":1024}
+```
+
+多尺寸训练时，每条记录的 `(target_height, target_width)` 表示它所属的
+精确尺寸桶。同一 batch 的样本会由 `bucket_by_size` 按尺寸分组：
+
+```jsonl
+{"prompt":"A square composition.","target_height":1024,"target_width":1024}
+{"prompt":"A wide landscape.","target_height":768,"target_width":1344}
+{"prompt":"A tall portrait.","target_height":1344,"target_width":768}
+```
+
+```yaml
+data:
+  train:
+    name: prompt_dataset
+    data_path: /path/to/image_dmd/train.jsonl
+    bucket_by_size: true
+    shuffle: true
+
+training:
+  method: dmd
+  dmd:
+    # 不配置采样比例：保持数据集中各尺寸桶的数量分布。
+    image_sizes:
+      - {value: [1024, 1024]}
+      - {value: [16, 768, 1344]}
+      - {value: [16, 1344, 768]}
+```
+
+如果需要显式控制尺寸桶的 global-batch 采样比例，为每个条目添加
+`ratio`：
+
+```yaml
+training:
+  dmd:
+    image_sizes:
+      - {value: [1024, 1024], ratio: 5}
+      - {value: [16, 768, 1344], ratio: 3}
+      - {value: [16, 1344, 768], ratio: 2}
+```
+
+`ratio` 是相对权重，会自动归一化；上例三个桶的期望采样占比为
+`50% / 30% / 20%`。权重在分布式训练步级别生效，所有分布式 rank
+在同一训练步使用同一尺寸。`value` 只支持 `[height, width]` 或
+`[prefix, height, width]`，图像 DMD 使用最后两个值作为像素高宽。一份配置必须
+全部带 `ratio` 或全部不带，不能混用。旧的裸数组格式（例如
+`- [1024, 1024]`）不再支持。
+
+如果配置了 `training.dmd.image_sizes`，每条样本的尺寸必须属于该列表；
+如果不配置，则接受能被模型图像尺寸倍数整除的任意正尺寸（当前图像模型为
+VAE 空间压缩倍率的 2 倍）。每个样本都必须
+同时提供 `target_height` 和 `target_width`。物理 batch 固定为 1；
+`bucket_by_size: true` 在分布式训练时保证同一步所有 rank 使用相同尺寸。
+默认 `drop_last: false` 会在每个尺寸桶内重复少量样本，使样本数能被数据并行
+rank 数整除；设置 `drop_last: true` 则丢弃不足一个分布式训练步的尾部样本。
 
 ## latent_dataset
 
@@ -98,12 +158,11 @@ data:
   train:
     name: latent_dataset
     data_path: /path/to/datasets/latent_cache
-    batch_size: 1
 ```
 
 相对路径以元数据文件所在目录为基准。缓存目录中的 `negative_condition.pt` 会被自动加载；`negative_condition_path` 仅用于指定其他位置的缓存。包含 `data.mdb` 或 `lock.mdb` 的目录会被识别为 LMDB，并支持 WAN causal LMDB 和统一的 `sample_pt` LMDB。
 
-常用 DataLoader 配置包括 `dataset_repeat`、`max_samples`、`batch_size`、`num_workers`、`shuffle`、`drop_last` 和 `pin_memory`。
+常用 DataLoader 配置包括 `dataset_repeat`、`max_samples`、`num_workers`、`shuffle`、`drop_last` 和 `pin_memory`。物理 batch 固定为 1，数据配置中不存在 `batch_size` 选项。
 
 ## 预处理输入元数据
 
@@ -216,7 +275,6 @@ data:
     width: 832
     num_frames: 81
     frame_rate: 24
-    batch_size: 1
     num_workers: 4
     shuffle: true
 ```
@@ -228,7 +286,6 @@ data:
   train:
     name: latent_dataset
     data_path: /path/to/datasets/latent_cache/metadata.jsonl
-    batch_size: 1
     num_workers: 4
     shuffle: true
 ```
@@ -244,7 +301,6 @@ data:
   train:
     name: prompt_dataset
     data_path: /path/to/prompts/train.txt
-    batch_size: 1
     num_workers: 4
     shuffle: true
     drop_last: true
@@ -257,7 +313,6 @@ data:
   train:
     name: latent_dataset
     data_path: /path/to/datasets/prompt_cache/metadata.jsonl
-    batch_size: 1
     num_workers: 4
     shuffle: true
     drop_last: true
@@ -274,7 +329,6 @@ data:
   train:
     name: latent_dataset
     data_path: /path/to/datasets/tf_cache/metadata.jsonl
-    batch_size: 1
     num_workers: 4
     shuffle: true
     drop_last: true
@@ -287,7 +341,6 @@ data:
   train:
     name: latent_dataset
     data_path: /path/to/datasets/tf_cache.lmdb
-    batch_size: 1
     num_workers: 4
     shuffle: true
     drop_last: true

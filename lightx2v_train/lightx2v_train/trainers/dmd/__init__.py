@@ -1,25 +1,11 @@
 import importlib
 
 _LAZY_EXPORTS = {
+    "AutoregressiveDmdTrainer": (
+        ".autoregressive_dmd",
+        "AutoregressiveDmdTrainer",
+    ),
     "DmdTrainer": (".trainer", "DmdTrainer"),
-    "VideoDmdTrainer": (".video_trainer", "VideoDmdTrainer"),
-    "LingBotVideoDmdTrainer": (
-        ".video_trainer",
-        "LingBotVideoDmdTrainer",
-    ),
-    "VideoArDmdTrainer": (
-        ".video_ar_trainer",
-        "VideoArDmdTrainer",
-    ),
-    "ARDmdTrainer": (".video_ar_trainer", "VideoArDmdTrainer"),
-    "LTX2T2AVDmdTrainer": (
-        ".ltx_trainer",
-        "LTX2T2AVDmdTrainer",
-    ),
-    "LTX2T2AVArDmdTrainer": (
-        ".ltx_trainer",
-        "LTX2T2AVArDmdTrainer",
-    ),
 }
 
 
