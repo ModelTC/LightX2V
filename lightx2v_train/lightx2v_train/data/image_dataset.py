@@ -1,5 +1,4 @@
 import json
-import math
 import random
 from pathlib import Path
 
@@ -12,31 +11,15 @@ from torch.utils.data.distributed import DistributedSampler
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
 
-_BICUBIC = getattr(Image, "Resampling", Image).BICUBIC
-
-
-def _resize_to_target_area(image, target_area):
-    width, height = image.size
-    ratio = width / height
-    target_width = round(math.sqrt(target_area * ratio) / 16) * 16
-    target_height = round(math.sqrt(target_area / ratio) / 16) * 16
-    scale = max(target_width / width, target_height / height)
-    scaled_width = round(width * scale)
-    scaled_height = round(height * scale)
-    image = image.resize((scaled_width, scaled_height), resample=_BICUBIC)
-    left = (scaled_width - target_width) // 2
-    top = (scaled_height - target_height) // 2
-    return image.crop((left, top, left + target_width, top + target_height))
-
 
 class ImageDataset(Dataset):
+    """Decode image records without applying model-specific transforms."""
+
     def __init__(
         self,
         metadata_paths,
-        target_area=1024 * 1024,
         prompt_dropout_rate=0.0,
     ):
-        self.target_area = target_area
         self.prompt_dropout_rate = prompt_dropout_rate
         self.samples = []
         for path in metadata_paths:
@@ -104,10 +87,11 @@ class ImageDataset(Dataset):
             return path
         return data_dir / path
 
-    def load_image(self, image_path):
-        image = Image.open(image_path).convert("RGB")
-        image = _resize_to_target_area(image, self.target_area)
-        return torch.from_numpy(np.asarray(image).astype(np.float32) / 127.5 - 1.0).permute(2, 0, 1)
+    @staticmethod
+    def load_image(image_path):
+        with Image.open(image_path) as image:
+            array = np.array(image.convert("RGB"), dtype=np.uint8, copy=True)
+        return torch.from_numpy(array).permute(2, 0, 1)
 
 
 @DATA_REGISTER("image_dataset")
@@ -115,14 +99,12 @@ def build_image_dataset(data_config_split, train_or_val="train"):
     data_path = data_config_split["data_path"]
     assert isinstance(data_path, list), f"config['data'][{train_or_val!r}]['data_path'] must be a list"
 
-    target_area = data_config_split.get("target_area", 1024 * 1024)
     prompt_dropout_rate = data_config_split.get("prompt_dropout_rate", 0.0)
     num_workers = data_config_split.get("num_workers", 8)
     shuffle = data_config_split.get("shuffle", train_or_val == "train")
 
     dataset = ImageDataset(
         metadata_paths=[Path(p) for p in data_path],
-        target_area=target_area,
         prompt_dropout_rate=prompt_dropout_rate,
     )
     dp_world_size = get_data_parallel_world_size()

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import cached_property
 
 import torch
 from diffusers import AutoencoderKLQwenImage, QwenImagePipeline, QwenImageTransformer2DModel
@@ -11,6 +12,7 @@ from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageCon
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from ..base import BaseModel
+from .data_process import QwenImageDataProcessor
 
 
 @dataclass
@@ -31,6 +33,10 @@ class QwenImageModel(BaseModel):
 
     pipeline_cls = QwenImagePipeline
     distribution_matching_capability_cls = GenericDistributionMatchingCapability
+
+    @cached_property
+    def data_processor(self):
+        return QwenImageDataProcessor(self.image_processor, self.config)
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -120,7 +126,7 @@ class QwenImageModel(BaseModel):
         return latents * std + mean
 
     def encode_to_latent(self, sample):
-        image = sample["inputs"]["target_image"].to(device=self.device, dtype=self.running_dtype)
+        image = self.data_processor.process_target(sample).to(device=self.device, dtype=self.running_dtype)
         pixel_values = image.unsqueeze(2)
         latent = self.vae.encode(pixel_values).latent_dist.sample()  # (B, C, T, H, W)
         return self._normalize_latents(latent)
@@ -128,6 +134,9 @@ class QwenImageModel(BaseModel):
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
         return self.encode_prompt_condition(prompt)
+
+    def infer_target_size(self, sample, default_height, default_width):
+        return self.data_processor.infer_target_size(sample, default_height, default_width)
 
     def encode_prompt_condition(self, prompt, **kwargs):
         prompt_embed, prompt_embed_mask = self.text_pipeline.encode_prompt(

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import cached_property
 
 import torch
 from diffusers import AutoencoderKL, LongCatImagePipeline
@@ -13,6 +14,7 @@ from lightx2v_train.model_zoo.longcat_image.capability_adapters import LongCatIm
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from ..base import BaseModel
+from .data_process import LongCatImageDataProcessor
 
 
 @dataclass
@@ -26,6 +28,10 @@ class LongCatImageDenoiserInput:
 @MODEL_REGISTER("longcat_image")
 class LongCatImageModel(BaseModel):
     pipeline_cls = LongCatImagePipeline
+
+    @cached_property
+    def data_processor(self):
+        return LongCatImageDataProcessor(self.image_processor, self.config)
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -106,7 +112,7 @@ class LongCatImageModel(BaseModel):
         return 2 ** (len(self.vae.config.block_out_channels) - 1)
 
     def encode_to_latent(self, sample):
-        image = sample["inputs"]["target_image"].to(device=self.device, dtype=self.running_dtype)
+        image = self.data_processor.process_target(sample).to(device=self.device, dtype=self.running_dtype)
         latent = self.vae.encode(image).latent_dist.sample()
         shift = getattr(self.vae.config, "shift_factor", 0.0)
         scale = getattr(self.vae.config, "scaling_factor", 1.0)
@@ -115,6 +121,9 @@ class LongCatImageModel(BaseModel):
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
         return self.encode_prompt_condition(prompt)
+
+    def infer_target_size(self, sample, default_height, default_width):
+        return self.data_processor.infer_target_size(sample, default_height, default_width)
 
     def encode_prompt_condition(self, prompt):
         rewrite_training = self.config.get(

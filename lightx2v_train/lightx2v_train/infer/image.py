@@ -13,18 +13,6 @@ def _record_has_source_images(record):
     return bool(record.get("source_images"))
 
 
-def _target_hw_for_sample(sample, default_height, default_width):
-    h = sample["meta"].get("target_height")
-    w = sample["meta"].get("target_width")
-    if h is not None and w is not None:
-        return int(h), int(w)
-    source_images = sample["inputs"].get("source_images")
-    if source_images:
-        source_image = source_images[0]
-        return int(source_image.shape[-2]), int(source_image.shape[-1])
-    return default_height, default_width
-
-
 @INFERENCER_REGISTER("image_infer")
 class ImageInferencer(BaseInferencer):
     def _load_infer_sample(self, index, prompt):
@@ -82,7 +70,7 @@ class ImageInferencer(BaseInferencer):
                 prompt = prompts[i] if has_sample else " "
                 infer_sample = self._load_infer_sample(i, prompt) if has_sample else self._load_dummy_sample(records)
 
-                height, width = _target_hw_for_sample(infer_sample, default_height, default_width)
+                height, width = self.model.infer_target_size(infer_sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
                 pos_cond = self.model.encode_condition(infer_sample)
