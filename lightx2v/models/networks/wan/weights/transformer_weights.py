@@ -518,6 +518,10 @@ class WanSelfAttention(WeightModule):
             if "operator" in dynamic_sparse_config:
                 attention_weights_cls.operator = dynamic_sparse_config["operator"]
 
+        # NPU dynamic sparse attention setting
+        if self.config["self_attn_1_type"] == "npu_dynamic_sparse_attn":
+            attention_weights_cls.configure(self.config.get("dynamic_sparse_attn_setting", {}))
+
         # spas_sage_attn2 setting
         if self.config["self_attn_1_type"] == "sparge_attn":
             sparge_config = self.config.get("sparge_attn_setting", {})

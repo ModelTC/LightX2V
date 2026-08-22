@@ -67,8 +67,8 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
             self.seq_p_configured_quant_scheme = parallel_config.get("seq_p_quant_scheme")
             self.seq_p_quant_scheme = self.seq_p_configured_quant_scheme
-            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
-                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4", "int8"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', 'fp4', or 'int8'.")
             if self.seq_p_quant_scheme is not None and legacy_quant_scheme is not None and self.seq_p_quant_scheme != legacy_quant_scheme:
                 raise ValueError("seq_p_quant_scheme conflicts with legacy seq_p_fp8_comm/seq_p_fp4_comm settings.")
             if self.seq_p_quant_scheme is None:
