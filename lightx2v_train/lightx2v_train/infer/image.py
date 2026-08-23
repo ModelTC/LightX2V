@@ -15,6 +15,18 @@ def _record_has_source_images(record):
 
 @INFERENCER_REGISTER("image_infer")
 class ImageInferencer(BaseInferencer):
+    def _inference_sigmas(self, num_inference_steps):
+        sigmas = self.infer_config.get("sigmas")
+        pcm_solver_steps = self.infer_config.get("pcm_solver_steps")
+        if sigmas is not None and pcm_solver_steps is not None:
+            raise ValueError("Set only one of inference.sigmas and inference.pcm_solver_steps.")
+        if pcm_solver_steps is None:
+            return sigmas
+
+        from lightx2v_train.trainers.consistency.pcm import pcm_inference_sigmas
+
+        return pcm_inference_sigmas(num_inference_steps, int(pcm_solver_steps))
+
     def _load_infer_sample(self, index, prompt):
         infer_sample = self.dataloader_eval.dataset[index]
         infer_sample["conditioning"]["prompt"] = prompt
@@ -93,7 +105,11 @@ class ImageInferencer(BaseInferencer):
                     neg_cond = None
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 latent_hw = (latent.shape[-2], latent.shape[-1])
-                self.scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
+                self.scheduler.set_timesteps(
+                    num_inference_steps,
+                    sigmas=self._inference_sigmas(num_inference_steps),
+                    latent_hw=latent_hw,
+                )
                 total_steps = len(self.scheduler.infer_timesteps)
 
                 if has_sample:

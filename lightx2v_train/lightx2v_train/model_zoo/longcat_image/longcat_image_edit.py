@@ -1,4 +1,3 @@
-from PIL import Image
 from diffusers import LongCatImageEditPipeline
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import prepare_pos_ids
 
@@ -75,17 +74,3 @@ class LongCatImageEditModel(LongCatImageModel):
             width=int(condition["source_width"]) // 2,
         ).to(self.device)
         return source_tokens, source_ids
-
-    def get_pipeline_infer_kwargs(self, infer_config):
-        enable_cfg = infer_config.get("enable_cfg", False)
-        return {
-            "num_inference_steps": infer_config.get("num_inference_steps", 50),
-            "guidance_scale": infer_config.get("cfg_guidance_scale", 4.5) if enable_cfg else 1.0,
-        }
-
-    def get_pipeline_sample_kwargs(self, sample):
-        source_paths = sample["meta"].get("source_image_paths", [])
-        if len(source_paths) != 1:
-            raise ValueError(f"LongCat Image Edit requires exactly one source image, got {len(source_paths)}")
-        with Image.open(source_paths[0]) as image:
-            return {"image": image.convert("RGB").copy()}

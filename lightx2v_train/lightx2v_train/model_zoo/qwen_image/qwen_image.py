@@ -197,38 +197,3 @@ class QwenImageModel(BaseModel):
         image = self.vae.decode(latent).sample  # (B, C, T, H, W)
         image = image[:, :, 0, :, :]  # drop temporal dim -> (B, C, H, W), T == 1
         return self.image_processor.postprocess(image, output_type="pil")
-
-    def get_pipeline_extra_components(self):
-        return {}
-
-    def assemble_pipeline(self, scheduler=None):
-        components = {
-            "tokenizer": self.text_pipeline.tokenizer,
-            "text_encoder": self.text_pipeline.text_encoder,
-            "vae": self.vae,
-            "transformer": self.transformer,
-            "scheduler": scheduler if scheduler is not None else self.text_pipeline.scheduler,
-            **self.get_pipeline_extra_components(),
-        }
-        return self.pipeline_cls(**components).to(self.device)
-
-    def get_pipeline_infer_kwargs(self, infer_config):
-        # QwenImagePipeline uses `true_cfg_scale` instead of the standard `guidance_scale`
-        enable_cfg = infer_config.get("enable_cfg", True)
-        kwargs = {
-            "height": infer_config.get("height", infer_config.get("default_height", 1024)),
-            "width": infer_config.get("width", infer_config.get("default_width", 1024)),
-            "num_inference_steps": infer_config.get("num_inference_steps", 50),
-            "true_cfg_scale": infer_config.get("cfg_guidance_scale", 4.0) if enable_cfg else 1.0,
-        }
-        sigmas = infer_config.get("sigmas")
-        pcm_solver_steps = infer_config.get("pcm_solver_steps")
-        if sigmas is not None and pcm_solver_steps is not None:
-            raise ValueError("Set only one of inference.sigmas and inference.pcm_solver_steps.")
-        if pcm_solver_steps is not None:
-            from lightx2v_train.trainers.consistency.pcm import pcm_inference_sigmas
-
-            sigmas = pcm_inference_sigmas(kwargs["num_inference_steps"], int(pcm_solver_steps))
-        if sigmas is not None:
-            kwargs["sigmas"] = [float(value) for value in sigmas]
-        return kwargs

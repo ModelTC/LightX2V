@@ -445,19 +445,6 @@ class LingBotVideoModel(BaseModel):
         frames = frames.permute(0, 2, 3, 4, 1).cpu().numpy()
         return [video for video in frames]
 
-    def assemble_pipeline(self, scheduler=None):
-        raise NotImplementedError("LingBot-Video training currently supports DMD only; native training inference is disabled.")
-
-    def get_pipeline_infer_kwargs(self, infer_config):
-        return {
-            "height": infer_config.get("default_height", 480),
-            "width": infer_config.get("default_width", 832),
-            "num_frames": infer_config.get("num_frames", 81),
-            "num_inference_steps": infer_config.get("num_inference_steps", 40),
-            "guidance_scale": infer_config.get("cfg_guidance_scale", 3.0),
-            "shift": infer_config.get("shift", 3.0),
-        }
-
     def log_model_structure(self):
         logger.info("[model] class={}", self.__class__.__name__)
         logger.info("[model] LingBot-Video transformer blocks={} experts_per_block={}", len(self.transformer.blocks), self.transformer.config.num_experts)

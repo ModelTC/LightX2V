@@ -81,7 +81,7 @@ training:
     output_dir: ./output_train/qwen_image_pcm_cd_lora
 
 inference:
-    method: image_native_infer
+    method: image_infer
     negative_prompt: " "
     default_width: 1024
     default_height: 1024

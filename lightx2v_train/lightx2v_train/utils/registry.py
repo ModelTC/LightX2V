@@ -74,7 +74,9 @@ SAMPLE_PROCESSOR_REGISTER = Register()
 
 _MODEL_MODULES = {
     "flux2_dev": "lightx2v_train.model_zoo.flux2.flux2_dev",
+    "flux2_dev_edit": "lightx2v_train.model_zoo.flux2.flux2_dev_edit",
     "flux2_klein": "lightx2v_train.model_zoo.flux2.flux2_klein",
+    "flux2_klein_edit": "lightx2v_train.model_zoo.flux2.flux2_klein_edit",
     "lingbot_video": "lightx2v_train.model_zoo.wan.lingbot_video",
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.longcat_image",
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.longcat_image_edit",
@@ -106,7 +108,6 @@ _TRAINER_MODULES = {
 
 _INFERENCER_MODULES = {
     "image_infer": "lightx2v_train.infer.image",
-    "image_native_infer": "lightx2v_train.infer.image_native",
     "lingbot_video_t2v_infer": "lightx2v_train.infer.video",
     "wan_t2v_infer": "lightx2v_train.infer.video",
     "wan_t2v_14b_infer": "lightx2v_train.infer.video",
@@ -119,7 +120,9 @@ _INFERENCER_MODULES = {
 
 _SAMPLE_PROCESSOR_MODULES = {
     "flux2_dev": "lightx2v_train.model_zoo.flux2.data_process",
+    "flux2_dev_edit": "lightx2v_train.model_zoo.flux2.data_process",
     "flux2_klein": "lightx2v_train.model_zoo.flux2.data_process",
+    "flux2_klein_edit": "lightx2v_train.model_zoo.flux2.data_process",
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.data_process",
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.data_process",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.data_process",

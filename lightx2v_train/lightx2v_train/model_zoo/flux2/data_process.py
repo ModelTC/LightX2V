@@ -2,18 +2,13 @@ import torch
 from diffusers import AutoencoderKLFlux2
 from diffusers.pipelines.flux2.image_processor import Flux2ImageProcessor
 
-from lightx2v_train.utils.image_ops import (
-    align_dimension,
-    calculate_area_dimensions,
-    resize_and_center_crop,
-)
+from lightx2v_train.utils.image_ops import align_dimension, calculate_area_dimensions, resize_and_center_crop
 from lightx2v_train.utils.registry import SAMPLE_PROCESSOR_REGISTER
 
 
 def _size_multiple_from_config(config):
     processor_config = config.get("data", {}).get("processor", {})
-    preprocessing = config.get("model", {}).get("input_preprocessing", {})
-    value = processor_config.get("size_multiple", preprocessing.get("size_multiple"))
+    value = processor_config.get("size_multiple")
     if value is None:
         model_path = config["model"]["pretrained_model_name_or_path"]
         vae_config = AutoencoderKLFlux2.load_config(model_path, subfolder="vae")
@@ -25,14 +20,8 @@ def _size_multiple_from_config(config):
 
 
 def _target_area_from_config(config):
-    preprocessing = config.get("model", {}).get("input_preprocessing", {})
-    if "target_area" in preprocessing:
-        return int(preprocessing["target_area"])
-    data_config = config.get("data", {})
-    for split in ("train", "val"):
-        if "target_area" in data_config.get(split, {}):
-            return int(data_config[split]["target_area"])
-    return 1024 * 1024
+    processor_config = config.get("data", {}).get("processor", {})
+    return int(processor_config.get("target_area", 1024 * 1024))
 
 
 def _optional_scalar(mapping, key):
@@ -71,20 +60,26 @@ class Flux2DataProcessor:
     def __call__(self, sample):
         inputs = sample["inputs"]
         image = inputs.pop("target_image", None)
-        if image is None:
-            return sample
+        if image is not None:
+            inputs["target_pixel_values"] = self._process_target(image, sample)
+        return sample
 
+    def _process_target(self, image, sample, fallback_size=None):
         height, width = _explicit_target_size(sample)
         multiple = int(self.image_processor.config.vae_scale_factor)
-        if height is None:
-            ratio = image.width / image.height
-            width, height = calculate_area_dimensions(self.target_area, ratio, multiple)
-        else:
-            width = align_dimension(width, multiple)
+        if height is not None:
             height = align_dimension(height, multiple)
+            width = align_dimension(width, multiple)
+        elif fallback_size is not None:
+            height, width = fallback_size
+        else:
+            width, height = calculate_area_dimensions(
+                self.target_area,
+                image.width / image.height,
+                multiple,
+            )
         image = resize_and_center_crop(image, width, height)
-        inputs["target_pixel_values"] = self.image_processor.preprocess(image)[0]
-        return sample
+        return self.image_processor.preprocess(image)[0]
 
     def infer_target_size(self, sample, default_height, default_width):
         height, width = _explicit_target_size(sample)
@@ -92,3 +87,63 @@ class Flux2DataProcessor:
         width = default_width if width is None else width
         multiple = int(self.image_processor.config.vae_scale_factor)
         return align_dimension(int(height), multiple), align_dimension(int(width), multiple)
+
+
+@SAMPLE_PROCESSOR_REGISTER("flux2_dev_edit")
+@SAMPLE_PROCESSOR_REGISTER("flux2_klein_edit")
+class Flux2EditDataProcessor(Flux2DataProcessor):
+    def __call__(self, sample):
+        inputs = sample["inputs"]
+        target_image = inputs.pop("target_image", None)
+        source_images = inputs.pop("source_images", [])
+        if not source_images:
+            raise ValueError("Flux2 image editing requires at least one source image")
+
+        source_pixels = []
+        source_sizes = []
+        for image in source_images:
+            pixels, size = self._process_source(image)
+            source_pixels.append(pixels)
+            source_sizes.append(size)
+
+        reference_height, reference_width = source_sizes[0]
+        sample["meta"]["reference_image_height"] = reference_height
+        sample["meta"]["reference_image_width"] = reference_width
+        inputs["source_vae_pixel_values"] = source_pixels
+        if target_image is not None:
+            inputs["target_pixel_values"] = self._process_target(
+                target_image,
+                sample,
+                fallback_size=(reference_height, reference_width),
+            )
+        return sample
+
+    def _process_source(self, image):
+        self.image_processor.check_image_input(image)
+        if image.width * image.height > self.target_area:
+            image = self.image_processor._resize_to_target_area(image, self.target_area)
+
+        multiple = int(self.image_processor.config.vae_scale_factor)
+        width = align_dimension(image.width, multiple)
+        height = align_dimension(image.height, multiple)
+        pixels = self.image_processor.preprocess(
+            image,
+            height=height,
+            width=width,
+            resize_mode="crop",
+        )[0]
+        return pixels, (height, width)
+
+    def infer_target_size(self, sample, default_height, default_width):
+        del default_height, default_width
+        height, width = _explicit_target_size(sample)
+        if height is not None:
+            multiple = int(self.image_processor.config.vae_scale_factor)
+            return align_dimension(height, multiple), align_dimension(width, multiple)
+
+        meta = sample.get("meta", {})
+        height = _optional_scalar(meta, "reference_image_height")
+        width = _optional_scalar(meta, "reference_image_width")
+        if height is None or width is None:
+            raise ValueError("Flux2 image editing requires source-derived target dimensions")
+        return height, width

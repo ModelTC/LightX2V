@@ -169,22 +169,6 @@ class BaseModel(CapabilityProvider):
     def decode_latent(self, latent):
         raise NotImplementedError
 
-    def assemble_pipeline(self, scheduler=None):
-        raise NotImplementedError
-
-    def get_pipeline_infer_kwargs(self, infer_config):
-        """Return kwargs to pass to pipeline.__call__. Override to adapt model-specific parameter names."""
-        return {
-            "height": infer_config.get("height", 1024),
-            "width": infer_config.get("width", 1024),
-            "num_inference_steps": infer_config.get("num_inference_steps", 50),
-            "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0),
-        }
-
-    def get_pipeline_sample_kwargs(self, sample):
-        """Return per-sample kwargs to pass to pipeline.__call__ during native inference."""
-        return {}
-
     def load_lora_for_infer(self, lora_path, adapter_name=None):
         denoiser = self.denoiser_module()
         if adapter_name is None:

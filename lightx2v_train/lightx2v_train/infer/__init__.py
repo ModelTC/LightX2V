@@ -4,7 +4,6 @@ from lightx2v_train.utils.registry import build_inferencer
 
 _LAZY_EXPORTS = {
     "ImageInferencer": (".image", "ImageInferencer"),
-    "NativeImageInferencer": (".image_native", "NativeImageInferencer"),
     "LingBotVideoT2VInferencer": (
         ".video",
         "LingBotVideoT2VInferencer",
@@ -31,7 +30,6 @@ def __getattr__(name):
 __all__ = [
     "build_inferencer",
     "ImageInferencer",
-    "NativeImageInferencer",
     "LingBotVideoT2VInferencer",
     "WanT2VDualInferencer",
     "WanT2VInferencer",

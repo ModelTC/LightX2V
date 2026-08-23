@@ -453,26 +453,6 @@ class WanT2VModel(BaseModel):
         videos = torch.stack(self.vae.decode(self._batch_to_list(latent)), dim=0)
         return self._postprocess_videos(videos)
 
-    def assemble_pipeline(self, scheduler=None):
-        raise NotImplementedError("Native Wan T2V uses wan_t2v_infer instead of assembling a diffusers pipeline.")
-
-    def get_pipeline_infer_kwargs(self, infer_config):
-        if "height" in infer_config:
-            height = infer_config["height"]
-        else:
-            height = infer_config.get("default_height", 480)
-        if "width" in infer_config:
-            width = infer_config["width"]
-        else:
-            width = infer_config.get("default_width", 832)
-        return {
-            "height": height,
-            "width": width,
-            "num_frames": infer_config.get("num_frames", 81),
-            "num_inference_steps": infer_config.get("num_inference_steps", 50),
-            "guidance_scale": infer_config.get("cfg_guidance_scale", 5.0),
-        }
-
     def _batch_to_list(self, tensor):
         if tensor.ndim == 4:
             tensor = tensor.unsqueeze(0)

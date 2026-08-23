@@ -4,7 +4,9 @@ from lightx2v_train.utils.registry import build_model
 
 _LAZY_EXPORTS = {
     "Flux2DevModel": (".flux2.flux2_dev", "Flux2DevModel"),
+    "Flux2DevEditModel": (".flux2.flux2_dev_edit", "Flux2DevEditModel"),
     "Flux2KleinModel": (".flux2.flux2_klein", "Flux2KleinModel"),
+    "Flux2KleinEditModel": (".flux2.flux2_klein_edit", "Flux2KleinEditModel"),
     "LingBotVideoModel": (".wan.lingbot_video", "LingBotVideoModel"),
     "LongCatImageModel": (".longcat_image.longcat_image", "LongCatImageModel"),
     "LongCatImageEditModel": (".longcat_image.longcat_image_edit", "LongCatImageEditModel"),
@@ -52,7 +54,9 @@ __all__ = [
     "LongCatImageModel",
     "LongCatImageEditModel",
     "Flux2DevModel",
+    "Flux2DevEditModel",
     "Flux2KleinModel",
+    "Flux2KleinEditModel",
     "LingBotVideoModel",
     "LTX2T2AVModel",
     "MiniMaxH3T2AVModel",

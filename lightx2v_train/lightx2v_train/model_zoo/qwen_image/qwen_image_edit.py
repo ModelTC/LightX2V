@@ -1,5 +1,4 @@
 import torch
-from PIL import Image
 from diffusers import QwenImageEditPlusPipeline
 
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageEditDistributionMatchingCapability
@@ -57,25 +56,3 @@ class QwenImageEditModel(QwenImageModel):
         if condition is None:
             raise ValueError("QwenImageEditModel.prepare_denoiser_input requires condition.")
         return condition.get("source_latents"), condition.get("source_img_shapes", [])
-
-    def get_pipeline_extra_components(self):
-        return {"processor": self.text_pipeline.processor}
-
-    def get_pipeline_infer_kwargs(self, infer_config):
-        kwargs = super().get_pipeline_infer_kwargs(infer_config)
-        if infer_config.get("height") is None:
-            kwargs.pop("height")
-        if infer_config.get("width") is None:
-            kwargs.pop("width")
-        return kwargs
-
-    def get_pipeline_sample_kwargs(self, sample):
-        source_image_paths = sample["meta"].get("source_image_paths", [])
-        if not source_image_paths:
-            return {}
-
-        images = []
-        for path in source_image_paths:
-            with Image.open(path) as image:
-                images.append(image.convert("RGB").copy())
-        return {"image": images[0] if len(images) == 1 else images}

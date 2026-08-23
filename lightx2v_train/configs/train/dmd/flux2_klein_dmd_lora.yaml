@@ -1,6 +1,6 @@
 model:
     name: flux2_klein
-    pretrained_model_name_or_path: /path/to/FLUX.2-klein-4B
+    pretrained_model_name_or_path: /path/to/FLUX.2-klein-base-4B
     max_sequence_length: 1024
     running_dtype: bf16
 

@@ -235,25 +235,3 @@ class LongCatImageModel(BaseModel):
     def decode_latent(self, latent):
         image = self.vae.decode(self._denormalize_latents(latent)).sample
         return self.image_processor.postprocess(image, output_type="pil")
-
-    def assemble_pipeline(self, scheduler=None):
-        return self.pipeline_cls(
-            tokenizer=self.text_pipeline.tokenizer,
-            text_encoder=self.text_pipeline.text_encoder,
-            text_processor=self.text_pipeline.text_processor,
-            vae=self.vae,
-            transformer=self.transformer,
-            scheduler=scheduler or self.text_pipeline.scheduler,
-        ).to(self.device)
-
-    def get_pipeline_infer_kwargs(self, infer_config):
-        enable_cfg = infer_config.get("enable_cfg", False)
-        return {
-            "height": infer_config.get("height", infer_config.get("default_height", 1024)),
-            "width": infer_config.get("width", infer_config.get("default_width", 1024)),
-            "num_inference_steps": infer_config.get("num_inference_steps", 50),
-            "guidance_scale": infer_config.get("cfg_guidance_scale", 4.5) if enable_cfg else 1.0,
-            "enable_cfg_renorm": infer_config.get("enable_cfg_renorm", True),
-            "cfg_renorm_min": infer_config.get("cfg_renorm_min", 0.0),
-            "enable_prompt_rewrite": infer_config.get("enable_prompt_rewrite", True),
-        }

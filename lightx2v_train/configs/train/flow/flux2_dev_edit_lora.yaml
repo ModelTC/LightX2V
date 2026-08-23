@@ -1,5 +1,5 @@
 model:
-    name: flux2_dev
+    name: flux2_dev_edit
     pretrained_model_name_or_path: /path/to/FLUX.2-dev
     max_sequence_length: 512
     text_encoder_out_layers: [10, 20, 30]
@@ -29,13 +29,13 @@ data:
         prompt_dropout_rate: 0.1
         shuffle: true
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /path/to/LightX2V_train_data_examples/dataset_edit/train.jsonl
     val:
         name: image_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /path/to/LightX2V_train_data_examples/dataset_edit/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000
@@ -51,8 +51,7 @@ scheduler:
         dynamic_shift: true
         shift_mu_strategy: flux2_empirical
         shift_mu_num_steps: 50
-        # Flux2 dev latents are already 2x2-patchified before scheduler shift length calculation.
-        patch_size: [1, 1] # [H, W]
+        patch_size: [1, 1]
 
 training:
     method: flow_matching
@@ -84,7 +83,7 @@ training:
         adam_beta2: 0.999
         weight_decay: 0.01
         adam_epsilon: 0.00000001
-    output_dir: ./output_train/flux2_dev_lora
+    output_dir: ./output_train/flux2_dev_edit_lora
 
 inference:
     method: image_infer
@@ -95,8 +94,8 @@ inference:
     enable_cfg: false
     cfg_guidance_scale: ${model.guidance_scale}
     seed: 42
-    output_dir: ./output_infer/flux2_dev_lora
-    infer_every_iters:
+    output_dir: ./output_infer/flux2_dev_edit_lora
+    infer_every_iters: ${training.save_every_iters}
 
 logging:
     rank_zero_only: true
