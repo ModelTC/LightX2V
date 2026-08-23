@@ -2,8 +2,6 @@ import json
 import random
 from pathlib import Path
 
-import numpy as np
-import torch
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
@@ -13,14 +11,16 @@ from lightx2v_train.utils.registry import DATA_REGISTER
 
 
 class ImageDataset(Dataset):
-    """Decode image records without applying model-specific transforms."""
+    """Decode image records and run an injected sample processor."""
 
     def __init__(
         self,
         metadata_paths,
         prompt_dropout_rate=0.0,
+        sample_processor=None,
     ):
         self.prompt_dropout_rate = prompt_dropout_rate
+        self.sample_processor = sample_processor
         self.samples = []
         for path in metadata_paths:
             path = Path(path)
@@ -36,7 +36,9 @@ class ImageDataset(Dataset):
         prompt = record["prompt"]
         if random.random() < self.prompt_dropout_rate:
             prompt = " "
+        return self.load_sample(record, prompt=prompt)
 
+    def load_sample(self, record, prompt=None):
         inputs = {}
         if record.get("target_image") is not None:
             inputs["target_image"] = self.load_image(record["target_image"])
@@ -52,7 +54,12 @@ class ImageDataset(Dataset):
             meta["target_height"] = int(record["target_height"])
         if record.get("target_width") is not None:
             meta["target_width"] = int(record["target_width"])
-        return {"inputs": inputs, "conditioning": {"prompt": prompt}, "meta": meta}
+        sample = {
+            "inputs": inputs,
+            "conditioning": {"prompt": record["prompt"] if prompt is None else prompt},
+            "meta": meta,
+        }
+        return sample if self.sample_processor is None else self.sample_processor(sample)
 
     def _load_metadata_samples(self, metadata_path, data_dir):
         if metadata_path.suffix != ".jsonl":
@@ -90,12 +97,14 @@ class ImageDataset(Dataset):
     @staticmethod
     def load_image(image_path):
         with Image.open(image_path) as image:
-            array = np.array(image.convert("RGB"), dtype=np.uint8, copy=True)
-        return torch.from_numpy(array).permute(2, 0, 1)
+            return image.convert("RGB").copy()
 
 
 @DATA_REGISTER("image_dataset")
-def build_image_dataset(data_config_split, train_or_val="train"):
+def build_image_dataset(data_config_split, train_or_val="train", sample_processor=None):
+    if sample_processor is None:
+        raise ValueError("image_dataset requires a sample_processor")
+
     data_path = data_config_split["data_path"]
     assert isinstance(data_path, list), f"config['data'][{train_or_val!r}]['data_path'] must be a list"
 
@@ -106,6 +115,7 @@ def build_image_dataset(data_config_split, train_or_val="train"):
     dataset = ImageDataset(
         metadata_paths=[Path(p) for p in data_path],
         prompt_dropout_rate=prompt_dropout_rate,
+        sample_processor=sample_processor,
     )
     dp_world_size = get_data_parallel_world_size()
     sampler = DistributedSampler(dataset, num_replicas=dp_world_size, rank=get_data_parallel_rank(), shuffle=shuffle) if dp_world_size > 1 and train_or_val == "train" else None

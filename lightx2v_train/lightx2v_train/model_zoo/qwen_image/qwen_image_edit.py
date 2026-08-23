@@ -1,13 +1,11 @@
-from functools import cached_property
-
 import torch
 from PIL import Image
 from diffusers import QwenImageEditPlusPipeline
 
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageEditDistributionMatchingCapability
+from lightx2v_train.utils.image_ops import image_tensor_to_pil
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
-from .data_process import QwenImageEditDataProcessor
 from .qwen_image import QwenImageModel
 
 
@@ -20,16 +18,15 @@ class QwenImageEditModel(QwenImageModel):
     pipeline_cls = QwenImageEditPlusPipeline
     distribution_matching_capability_cls = QwenImageEditDistributionMatchingCapability
 
-    @cached_property
-    def data_processor(self):
-        return QwenImageEditDataProcessor(self.image_processor, self.config)
-
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
         return self.encode_conditions_with_source(sample, [prompt])[0]
 
     def encode_conditions_with_source(self, sample, prompts):
-        condition_images, vae_images = self.data_processor.process_source_images(sample)
+        inputs = sample["inputs"]
+        condition_tensors = inputs.get("source_condition_images", [])
+        condition_images = [image_tensor_to_pil(image) for image in condition_tensors] or None
+        vae_images = inputs.get("source_vae_pixel_values", [])
         conditions = [self.encode_prompt_condition(prompt, image=condition_images) for prompt in prompts]
         if vae_images:
             source_latents, source_img_shapes = self._encode_source_image_latents(vae_images)
@@ -42,6 +39,10 @@ class QwenImageEditModel(QwenImageModel):
         packed_latents = []
         img_shapes = []
         for image in vae_images:
+            if image.ndim == 4:
+                image = image.unsqueeze(0)
+            if image.ndim != 5 or image.shape[0] != 1:
+                raise ValueError(f"Expected one source VAE image with shape [1, C, T, H, W], got {tuple(image.shape)}")
             image = image.to(device=self.device, dtype=self.running_dtype)
             latent = self.vae.encode(image).latent_dist.mode()
             latent = self._normalize_latents(latent)

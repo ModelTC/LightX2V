@@ -28,7 +28,12 @@ class ImageInferencer(BaseInferencer):
 
     @torch.no_grad()
     def infer(self):
-        records = self.dataloader_eval.dataset.samples
+        dataset = self.dataloader_eval.dataset
+        sample_processor = getattr(dataset, "sample_processor", None)
+        if sample_processor is None:
+            raise ValueError("image_infer requires a dataset with a sample_processor")
+
+        records = dataset.samples
         prompts = [record["prompt"] for record in records]
         rank = get_rank()
         world_size = get_world_size()
@@ -70,7 +75,7 @@ class ImageInferencer(BaseInferencer):
                 prompt = prompts[i] if has_sample else " "
                 infer_sample = self._load_infer_sample(i, prompt) if has_sample else self._load_dummy_sample(records)
 
-                height, width = self.model.infer_target_size(infer_sample, default_height, default_width)
+                height, width = sample_processor.infer_target_size(infer_sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
                 pos_cond = self.model.encode_condition(infer_sample)

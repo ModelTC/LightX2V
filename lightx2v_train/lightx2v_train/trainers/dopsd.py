@@ -164,18 +164,17 @@ class DopsdTrainer(BaseTrainer):
             target_image = record.get("target_image")
             prompt = record.get("prompt")
             if target_image is not None and prompt is not None:
-                self._train_reference_map[str(prompt).strip()] = target_image
+                self._train_reference_map[str(prompt).strip()] = record
 
     def _resolve_teacher_reference_image(self, record, dataset):
-        target_image = record.get("target_image")
-        if target_image is not None:
-            if isinstance(target_image, (str, os.PathLike)):
-                return dataset.load_image(target_image)
-            return target_image
-
-        self._build_train_reference_map()
-        fallback_path = self._train_reference_map.get(str(record.get("prompt", "")).strip())
-        return None if fallback_path is None else dataset.load_image(fallback_path)
+        reference_record = record if record.get("target_image") is not None else None
+        if reference_record is None:
+            self._build_train_reference_map()
+            reference_record = self._train_reference_map.get(str(record.get("prompt", "")).strip())
+        if reference_record is None:
+            return None
+        sample = dataset.load_sample(reference_record)
+        return sample["inputs"].get("target_pixel_values")
 
     def compute_loss_on_sample(self, sample, collect_trajectory=False):
         return self.objective.compute_loss(sample, collect_trajectory=collect_trajectory)

@@ -1,14 +1,31 @@
 import torch
+from diffusers import AutoencoderKLQwenImage
+from diffusers.image_processor import VaeImageProcessor
 
 from lightx2v_train.utils.image_ops import (
     align_dimension,
     calculate_area_dimensions,
-    image_tensor_to_pil,
+    pil_to_image_tensor,
     resize_and_center_crop,
 )
+from lightx2v_train.utils.registry import SAMPLE_PROCESSOR_REGISTER
 
 CONDITION_IMAGE_AREA = 384 * 384
 VAE_IMAGE_AREA = 1024 * 1024
+
+
+def _size_multiple_from_config(config):
+    processor_config = config.get("data", {}).get("processor", {})
+    preprocessing = config.get("model", {}).get("input_preprocessing", {})
+    value = processor_config.get("size_multiple", preprocessing.get("size_multiple"))
+    if value is None:
+        model_path = config["model"]["pretrained_model_name_or_path"]
+        vae_config = AutoencoderKLQwenImage.load_config(model_path, subfolder="vae")
+        value = 2 ** len(vae_config["temperal_downsample"]) * 2
+    value = int(value)
+    if value <= 0:
+        raise ValueError(f"size_multiple must be positive, got {value}")
+    return value
 
 
 def _target_area_from_config(config):
@@ -48,13 +65,18 @@ def _explicit_target_size(sample):
     return height, width
 
 
+@SAMPLE_PROCESSOR_REGISTER("qwen_image")
 class QwenImageDataProcessor:
-    def __init__(self, image_processor, config):
-        self.image_processor = image_processor
+    def __init__(self, config):
+        self.image_processor = VaeImageProcessor(vae_scale_factor=_size_multiple_from_config(config))
         self.target_area = _target_area_from_config(config)
 
-    def process_target(self, sample):
-        return self._process_target(sample)
+    def __call__(self, sample):
+        inputs = sample["inputs"]
+        image = inputs.pop("target_image", None)
+        if image is not None:
+            inputs["target_pixel_values"] = self._process_target(image, sample)
+        return sample
 
     def infer_target_size(self, sample, default_height, default_width):
         height, width = _explicit_target_size(sample)
@@ -63,78 +85,73 @@ class QwenImageDataProcessor:
         multiple = int(self.image_processor.config.vae_scale_factor)
         return align_dimension(int(height), multiple), align_dimension(int(width), multiple)
 
-    def _process_target(self, sample, reference_tensor=None, area_multiple=None):
-        image = image_tensor_to_pil(sample["inputs"]["target_image"])
-        reference = image if reference_tensor is None else image_tensor_to_pil(reference_tensor)
+    def _process_target(self, image, sample, reference_image=None, area_multiple=None):
+        reference = image if reference_image is None else reference_image
         width, height = self._resolve_target_size(
             sample,
-            reference,
+            reference.width / reference.height,
             self.target_area,
             area_multiple,
         )
         image = resize_and_center_crop(image, width, height)
-        return self.image_processor.preprocess(image)
+        return self.image_processor.preprocess(image)[0]
 
-    def _resolve_target_size(self, sample, reference_image, target_area, area_multiple=None):
+    def _resolve_target_size(self, sample, ratio, target_area, area_multiple=None):
         height, width = _explicit_target_size(sample)
         multiple = int(self.image_processor.config.vae_scale_factor)
         if height is not None:
             return align_dimension(width, multiple), align_dimension(height, multiple)
-        ratio = reference_image.width / reference_image.height
         return calculate_area_dimensions(target_area, ratio, area_multiple or multiple)
 
 
+@SAMPLE_PROCESSOR_REGISTER("qwen_image_edit")
 class QwenImageEditDataProcessor(QwenImageDataProcessor):
-    def process_target(self, sample):
-        source_images = sample["inputs"].get("source_images")
-        reference_tensor = source_images[-1] if source_images else None
-        return self._process_target(
-            sample,
-            reference_tensor=reference_tensor,
-            area_multiple=32,
-        )
+    def __call__(self, sample):
+        inputs = sample["inputs"]
+        target_image = inputs.pop("target_image", None)
+        source_images = inputs.pop("source_images", [])
+        reference_image = source_images[-1] if source_images else None
+
+        if reference_image is not None:
+            sample["meta"]["reference_image_height"] = reference_image.height
+            sample["meta"]["reference_image_width"] = reference_image.width
+        if target_image is not None:
+            inputs["target_pixel_values"] = self._process_target(
+                target_image,
+                sample,
+                reference_image=reference_image,
+                area_multiple=32,
+            )
+        if source_images:
+            condition_images, vae_images = self._process_source_images(source_images)
+            inputs["source_condition_images"] = condition_images
+            inputs["source_vae_pixel_values"] = vae_images
+        return sample
 
     def infer_target_size(self, sample, default_height, default_width):
-        source_images = sample["inputs"].get("source_images")
-        if not source_images:
+        meta = sample.get("meta", {})
+        reference_height = _optional_scalar(meta, "reference_image_height")
+        reference_width = _optional_scalar(meta, "reference_image_width")
+        if (reference_height is None) != (reference_width is None):
+            raise ValueError("meta.reference_image_height and meta.reference_image_width must be provided together")
+        if reference_height is None:
             return super().infer_target_size(sample, default_height, default_width)
-        reference_image = image_tensor_to_pil(source_images[-1])
         width, height = self._resolve_target_size(
             sample,
-            reference_image,
+            reference_width / reference_height,
             int(default_height) * int(default_width),
             area_multiple=32,
         )
         return height, width
 
-    def process_source_images(self, sample):
-        source_images = self._source_images(sample)
-        if not source_images:
-            return None, []
-
+    def _process_source_images(self, source_images):
         condition_images = []
         vae_images = []
         for image in source_images:
-            pil_image = image_tensor_to_pil(image)
-            ratio = pil_image.width / pil_image.height
+            ratio = image.width / image.height
             condition_width, condition_height = calculate_area_dimensions(CONDITION_IMAGE_AREA, ratio, multiple=32)
             vae_width, vae_height = calculate_area_dimensions(VAE_IMAGE_AREA, ratio, multiple=32)
-            condition_images.append(self.image_processor.resize(pil_image, condition_height, condition_width))
-            vae_images.append(self.image_processor.preprocess(pil_image, vae_height, vae_width).unsqueeze(2))
+            condition_image = self.image_processor.resize(image, condition_height, condition_width)
+            condition_images.append(pil_to_image_tensor(condition_image))
+            vae_images.append(self.image_processor.preprocess(image, vae_height, vae_width)[0].unsqueeze(1))
         return condition_images, vae_images
-
-    @staticmethod
-    def _source_images(sample):
-        source_images = sample["inputs"].get("source_images")
-        if source_images is None:
-            return []
-        tensors = []
-        for image in source_images:
-            if not isinstance(image, torch.Tensor):
-                raise TypeError(f"source_images must contain tensors after collation, got {type(image)}")
-            if image.ndim == 3:
-                image = image.unsqueeze(0)
-            if image.ndim != 4 or image.shape[0] != 1:
-                raise ValueError(f"QwenImageEditPlusPipeline requires source images with batch_size=1, got {tuple(image.shape)}")
-            tensors.append(image)
-        return tensors

@@ -1,11 +1,27 @@
 import torch
+from diffusers import AutoencoderKL
+from diffusers.image_processor import VaeImageProcessor
 
 from lightx2v_train.utils.image_ops import (
     align_dimension,
     calculate_area_dimensions,
-    image_tensor_to_pil,
     resize_and_center_crop,
 )
+from lightx2v_train.utils.registry import SAMPLE_PROCESSOR_REGISTER
+
+
+def _size_multiple_from_config(config):
+    processor_config = config.get("data", {}).get("processor", {})
+    preprocessing = config.get("model", {}).get("input_preprocessing", {})
+    value = processor_config.get("size_multiple", preprocessing.get("size_multiple"))
+    if value is None:
+        model_path = config["model"]["pretrained_model_name_or_path"]
+        vae_config = AutoencoderKL.load_config(model_path, subfolder="vae")
+        value = 2 ** (len(vae_config["block_out_channels"]) - 1) * 2
+    value = int(value)
+    if value <= 0:
+        raise ValueError(f"size_multiple must be positive, got {value}")
+    return value
 
 
 def _target_area_from_config(config):
@@ -45,13 +61,18 @@ def _explicit_target_size(sample):
     return height, width
 
 
+@SAMPLE_PROCESSOR_REGISTER("longcat_image")
 class LongCatImageDataProcessor:
-    def __init__(self, image_processor, config):
-        self.image_processor = image_processor
+    def __init__(self, config):
+        self.image_processor = VaeImageProcessor(vae_scale_factor=_size_multiple_from_config(config))
         self.target_area = _target_area_from_config(config)
 
-    def process_target(self, sample):
-        image = image_tensor_to_pil(sample["inputs"]["target_image"])
+    def __call__(self, sample):
+        inputs = sample["inputs"]
+        image = inputs.pop("target_image", None)
+        if image is None:
+            return sample
+
         height, width = _explicit_target_size(sample)
         multiple = int(self.image_processor.config.vae_scale_factor)
         if height is None:
@@ -61,7 +82,8 @@ class LongCatImageDataProcessor:
             width = align_dimension(width, multiple)
             height = align_dimension(height, multiple)
         image = resize_and_center_crop(image, width, height)
-        return self.image_processor.preprocess(image)
+        inputs["target_pixel_values"] = self.image_processor.preprocess(image)[0]
+        return sample
 
     def infer_target_size(self, sample, default_height, default_width):
         height, width = _explicit_target_size(sample)

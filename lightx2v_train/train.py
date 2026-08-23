@@ -3,7 +3,7 @@ import argparse
 import torch
 from loguru import logger
 
-from lightx2v_train.data import build_data, prepare_data
+from lightx2v_train.data import build_data, build_sample_processor, prepare_data
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
 from lightx2v_train.trainers import build_trainer
@@ -25,13 +25,14 @@ def main():
 
     try:
         prepare_data(config)
+        sample_processor = build_sample_processor(config)
         model = build_model(config)
         model.load_components()
 
-        dataloader_train = build_data(config, train_or_val="train")
+        dataloader_train = build_data(config, train_or_val="train", sample_processor=sample_processor)
         dataloader_eval = None
         if config.get("inference", {}).get("infer_every_iters", None):
-            dataloader_eval = build_data(config, train_or_val="val")
+            dataloader_eval = build_data(config, train_or_val="val", sample_processor=sample_processor)
 
         trainer = build_trainer(config)
         trainer.set_model(model)

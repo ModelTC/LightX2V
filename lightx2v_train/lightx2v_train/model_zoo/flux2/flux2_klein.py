@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from functools import cached_property
 
 import torch
 from diffusers import AutoencoderKLFlux2, Flux2KleinPipeline, Flux2Transformer2DModel
@@ -24,7 +23,6 @@ from lightx2v_train.model_zoo.flux2.capability_adapters import (
 from lightx2v_train.utils.registry import MODEL_REGISTER
 
 from ..base import BaseModel
-from .data_process import Flux2DataProcessor
 
 
 @dataclass
@@ -38,10 +36,6 @@ class Flux2KleinDenoiserInput:
 @MODEL_REGISTER("flux2_klein")
 class Flux2KleinModel(BaseModel):
     pipeline_cls = Flux2KleinPipeline
-
-    @cached_property
-    def data_processor(self):
-        return Flux2DataProcessor(self.image_processor, self.config)
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -135,16 +129,18 @@ class Flux2KleinModel(BaseModel):
         return Flux2KleinPipeline._unpatchify_latents(latents)
 
     def encode_to_latent(self, sample):
-        image = self.data_processor.process_target(sample).to(device=self.device, dtype=self.running_dtype)
+        image = sample["inputs"]["target_pixel_values"]
+        if image.ndim == 3:
+            image = image.unsqueeze(0)
+        if image.ndim != 4:
+            raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
+        image = image.to(device=self.device, dtype=self.running_dtype)
         latent = self.vae.encode(image).latent_dist.sample()
         return self._normalize_patch_latents(latent)
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
         return self.encode_prompt_condition(prompt)
-
-    def infer_target_size(self, sample, default_height, default_width):
-        return self.data_processor.infer_target_size(sample, default_height, default_width)
 
     def encode_prompt_condition(self, prompt):
         model_config = self.config["model"]

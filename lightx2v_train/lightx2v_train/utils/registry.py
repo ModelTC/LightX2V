@@ -69,6 +69,7 @@ MODEL_REGISTER = Register()
 TRAINER_REGISTER = Register()
 INFERENCER_REGISTER = Register()
 DATA_REGISTER = Register()
+SAMPLE_PROCESSOR_REGISTER = Register()
 
 
 _MODEL_MODULES = {
@@ -113,6 +114,14 @@ _INFERENCER_MODULES = {
     "wan_t2v_14b_ar_infer": "lightx2v_train.infer.video",
     "wan_ti2v_5b_infer": "lightx2v_train.infer.video",
     "wan_ti2v_5b_ar_infer": "lightx2v_train.infer.video",
+}
+
+_SAMPLE_PROCESSOR_MODULES = {
+    "flux2_dev": "lightx2v_train.model_zoo.flux2.data_process",
+    "flux2_klein": "lightx2v_train.model_zoo.flux2.data_process",
+    "longcat_image": "lightx2v_train.model_zoo.longcat_image.data_process",
+    "qwen_image": "lightx2v_train.model_zoo.qwen_image.data_process",
+    "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.data_process",
 }
 
 
@@ -162,7 +171,19 @@ def build_inferencer(config):
     return INFERENCER_REGISTER[name](config)
 
 
-def build_data(config, train_or_val):
+def build_sample_processor(config):
+    processor_config = config.get("data", {}).get("processor", {})
+    name = processor_config.get("name", config["model"]["name"])
+    _ensure_registered(name, SAMPLE_PROCESSOR_REGISTER, _SAMPLE_PROCESSOR_MODULES)
+    if name not in SAMPLE_PROCESSOR_REGISTER:
+        if "name" not in processor_config:
+            return None
+        available = ", ".join(sorted(SAMPLE_PROCESSOR_REGISTER.keys()))
+        raise ValueError(f"Unknown sample processor {name!r}. Available processors: {available}")
+    return SAMPLE_PROCESSOR_REGISTER[name](config)
+
+
+def build_data(config, train_or_val, sample_processor=None):
     data_config = config.get("data", {})
     if train_or_val not in data_config:
         available_splits = ", ".join(repr(k) for k in sorted(data_config.keys()))
@@ -177,4 +198,5 @@ def build_data(config, train_or_val):
     if data_name not in DATA_REGISTER:
         available_names = ", ".join(sorted(DATA_REGISTER.keys()))
         raise ValueError(f"Unknown data {data_name!r}. Available data: {available_names}")
-    return DATA_REGISTER[data_name](data_config_split, train_or_val=train_or_val)
+    kwargs = {"sample_processor": sample_processor} if data_name == "image_dataset" else {}
+    return DATA_REGISTER[data_name](data_config_split, train_or_val=train_or_val, **kwargs)

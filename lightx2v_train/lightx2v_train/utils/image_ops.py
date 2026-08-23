@@ -1,9 +1,17 @@
 import math
 
+import numpy as np
 import torch
 from PIL import Image
 
 _BICUBIC = getattr(Image, "Resampling", Image).BICUBIC
+
+
+def pil_to_image_tensor(image):
+    if not isinstance(image, Image.Image):
+        raise TypeError(f"Expected a PIL image, got {type(image)}")
+    array = np.array(image.convert("RGB"), dtype=np.uint8, copy=True)
+    return torch.from_numpy(array).permute(2, 0, 1).contiguous()
 
 
 def image_tensor_to_pil(image):

@@ -1,4 +1,4 @@
-from lightx2v_train.utils.registry import build_data
+from lightx2v_train.utils.registry import build_data, build_sample_processor
 
 
 def __getattr__(name):
@@ -27,6 +27,7 @@ def __getattr__(name):
 
 __all__ = [
     "build_data",
+    "build_sample_processor",
     "build_image_dataset",
     "build_libero_fastwam_dataset",
     "build_latent_dataset",

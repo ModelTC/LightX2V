@@ -62,9 +62,9 @@ class Flux2DopsdCapability(BoundCapability, DopsdCapability):
         teacher_prompts: list[str],
         running_dtype: torch.dtype,
     ) -> DopsdPreparedBatch:
-        image = batch.get("inputs", {}).get("target_image")
+        image = batch.get("inputs", {}).get("target_pixel_values")
         if image is None:
-            raise ValueError("DOPSD requires inputs.target_image.")
+            raise ValueError("DOPSD requires inputs.target_pixel_values.")
         image = self._image(image, running_dtype)
         height, width = image.shape[-2:]
         initial_state, state_ids, latent_hw = self._initial_state(height, width, generator=None)
