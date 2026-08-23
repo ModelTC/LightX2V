@@ -16,6 +16,36 @@ def _load_metax_rms_norm_op():
         raise RuntimeError("metax_rms_norm requires mcoplib._C with the _C::rms_norm operator") from error
 
 
+@torch.library.custom_op(
+    "lightx2v::metax_rms_norm",
+    mutates_args=(),
+    device_types="cuda",
+)
+def metax_rms_norm(input_tensor: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+    output = torch.empty_like(input_tensor)
+    _load_metax_rms_norm_op()(output, input_tensor, weight, eps)
+    return output
+
+
+@metax_rms_norm.register_fake
+def _metax_rms_norm_fake(input_tensor: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
+    return torch.empty_like(input_tensor)
+
+
+@lru_cache(maxsize=1)
+def _register_metax_rms_norm_lowering():
+    from torch._inductor.lowering import add, mean, mul, register_lowering, rsqrt, to_dtype
+
+    @register_lowering(torch.ops.lightx2v.metax_rms_norm.default, type_promotion_kind=None)
+    def _metax_rms_norm_lowering(input_tensor, weight, eps):
+        dtype = input_tensor.get_dtype()
+        input_fp32 = to_dtype(input_tensor, torch.float32)
+        variance = mean(mul(input_fp32, input_fp32), axis=-1, keepdim=True)
+        output = mul(input_fp32, rsqrt(add(variance, eps)))
+        output = mul(output, to_dtype(weight, torch.float32))
+        return to_dtype(output, dtype)
+
+
 @PLATFORM_RMS_WEIGHT_REGISTER("metax_rms_norm")
 class MetaxRmsNormWeight(RMSWeightTemplate):
     def __init__(
@@ -42,6 +72,7 @@ class MetaxRmsNormWeight(RMSWeightTemplate):
             lora_path,
         )
         _load_metax_rms_norm_op()
+        _register_metax_rms_norm_lowering()
 
     def _torch_fallback(self, input_tensor, weight):
         if self.sensitive_layer_dtype != self.infer_dtype:
@@ -70,8 +101,7 @@ class MetaxRmsNormWeight(RMSWeightTemplate):
         original_shape = input_tensor.shape
         hidden_size = original_shape[-1]
         flat_input = input_tensor.contiguous().view(-1, hidden_size)
-        output = torch.empty_like(flat_input)
-        torch.ops._C.rms_norm(output, flat_input, weight.contiguous(), self.eps)
+        output = metax_rms_norm(flat_input, weight.contiguous(), self.eps)
         return output.view(original_shape)
 
 
