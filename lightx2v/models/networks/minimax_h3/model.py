@@ -266,6 +266,12 @@ class MiniMaxH3Model(BaseTransformerModel):
         if offload_manager is not None:
             offload_manager.need_init_first_buffer = True
 
+    def _remove_lora(self):
+        super()._remove_lora()
+        transformer_infer = getattr(self, "transformer_infer", None)
+        if transformer_infer is not None:
+            transformer_infer._clear_adaln_cache()
+
     def _update_lora(self, lora_path, strength, alpha=None):
         if isinstance(lora_path, dict):
             raise NotImplementedError("MiniMax-H3 dynamic LoRA switching expects one checkpoint path, not a merged tensor dictionary")
