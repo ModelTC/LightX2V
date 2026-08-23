@@ -26,6 +26,11 @@ class LongCatImageDenoiserInput:
 
 @MODEL_REGISTER("longcat_image")
 class LongCatImageModel(BaseModel):
+    """Supports weights from these Hugging Face repos:
+    - https://huggingface.co/meituan-longcat/LongCat-Image
+    - https://huggingface.co/meituan-longcat/LongCat-Image-Dev
+    """
+
     pipeline_cls = LongCatImagePipeline
     distribution_matching_capability_cls = GenericDistributionMatchingCapability
     supports_cfg_renorm = True

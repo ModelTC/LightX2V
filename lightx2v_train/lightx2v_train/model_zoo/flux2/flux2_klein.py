@@ -17,7 +17,10 @@ from .common import Flux2ModelBase
 
 @MODEL_REGISTER("flux2_klein")
 class Flux2KleinModel(Flux2ModelBase):
-    """Flux2 Klein Base model. Step-distilled Klein checkpoints are unsupported."""
+    """Supports weights from these Hugging Face repos:
+    - https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B
+    - https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B
+    """
 
     pipeline_cls = Flux2KleinPipeline
     distribution_matching_capability_cls = GenericDistributionMatchingCapability

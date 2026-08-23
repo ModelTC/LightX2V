@@ -10,6 +10,10 @@ from .longcat_image import LongCatImageModel
 
 @MODEL_REGISTER("longcat_image_edit")
 class LongCatImageEditModel(LongCatImageModel):
+    """Supports weights from these Hugging Face repos:
+    - https://huggingface.co/meituan-longcat/LongCat-Image-Edit
+    """
+
     pipeline_cls = LongCatImageEditPipeline
     distribution_matching_capability_cls = LongCatImageEditDistributionMatchingCapability
     supports_cfg_renorm = False

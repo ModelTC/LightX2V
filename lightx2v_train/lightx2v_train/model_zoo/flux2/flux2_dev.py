@@ -12,6 +12,10 @@ from .common import Flux2ModelBase
 
 @MODEL_REGISTER("flux2_dev")
 class Flux2DevModel(Flux2ModelBase):
+    """Supports weights from these Hugging Face repos:
+    - https://huggingface.co/black-forest-labs/FLUX.2-dev
+    """
+
     pipeline_cls = Flux2Pipeline
     distribution_matching_capability_cls = GenericDistributionMatchingCapability
     default_text_encoder_out_layers = (10, 20, 30)
