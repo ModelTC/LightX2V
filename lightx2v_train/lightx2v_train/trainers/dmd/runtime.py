@@ -18,9 +18,6 @@ from lightx2v_train.runtime.sequence_parallel import (
 )
 from lightx2v_train.schedulers import DMDFlowMatchingScheduler
 from lightx2v_train.tricks import (
-    CdmStepContext,
-    CdmTrainerConstraints,
-    CdmTrick,
     IdaModelPair,
     IdaSetupContext,
     IdaStepContext,
@@ -44,7 +41,6 @@ class _DmdRuntime(BaseTrainer):
         DistributionMatchingCapability,
     )
     default_negative_prompt = None
-    supports_cdm = True
     supports_ida = True
     defer_ida_setup = False
 
@@ -77,13 +73,6 @@ class _DmdRuntime(BaseTrainer):
         self.fake_optimizer_adam_epsilon = self.fake_optimizer_config.get("adam_epsilon", self.optimizer_adam_epsilon)
 
         self.dmd_config = parsed.dmd
-        self.cdm_trick = CdmTrick.from_mapping(self.dmd_config.get("cdm", {}))
-        self.cdm_trick.validate_trainer(
-            CdmTrainerConstraints(
-                supported=self.supports_cdm,
-            ),
-            self.trainer_name,
-        )
         self.ida_trick = ImplicitDistributionAlignmentTrick.from_mapping(self.dmd_config.get("ida", {}))
         if self.ida_trick.enabled and not self.supports_ida:
             raise ValueError(f"{self.trainer_name} does not support training.dmd.ida.")
@@ -123,7 +112,6 @@ class _DmdRuntime(BaseTrainer):
     def _validate_distribution_matching_profile(self, profile):
         model_name = self.model_config.get("name", type(self.model).__name__)
         requested_features = (
-            (self.cdm_trick.enabled, profile.supports_cdm, "CDM"),
             (self.ida_trick.enabled, profile.supports_ida, "IDA"),
             (getattr(getattr(self, "diversity_trick", None), "enabled", False), profile.supports_diversity, "diversity loss"),
             (getattr(getattr(self, "real_data_fake_trick", None), "enabled", False), profile.supports_real_data_fake, "real-data fake loss"),
@@ -135,10 +123,6 @@ class _DmdRuntime(BaseTrainer):
             raise ValueError(f"model={model_name!r} has no unconditional branch; training.teacher.guidance_scale must be 1.0.")
         if getattr(self, "warp_denoising_step", False) and not profile.supports_warped_denoising_schedule:
             raise ValueError(f"model={model_name!r} requires an unwarped base denoising schedule; set training.dmd.warp_denoising_step=false.")
-
-    @property
-    def cdm_enabled(self):
-        return self.cdm_trick.enabled
 
     def _get_optimizer_config(self):
         return self.training_config["student"]["optimizer"]
@@ -266,12 +250,6 @@ class _DmdRuntime(BaseTrainer):
                 self.random_schedule_sigma_max,
                 self.random_schedule_sampling_method,
             )
-        if self.cdm_enabled:
-            logger.info(
-                "[train] dmd CDM enabled: weight={} warmup_iters={}",
-                self.cdm_trick.config.weight,
-                self.cdm_trick.config.warmup_iters,
-            )
 
     @staticmethod
     def _count_trainable(module):
@@ -386,45 +364,6 @@ class _DmdRuntime(BaseTrainer):
         if is_distributed():
             dist.broadcast(value, src=0)
         return int(value.item())
-
-    def _cdm_step_context(
-        self,
-        xt,
-        vt,
-        end_step_idx,
-        condition,
-        current_iter,
-    ):
-        return CdmStepContext(
-            trajectory_latent=xt,
-            trajectory_velocity=vt,
-            end_step_index=end_step_idx,
-            condition=condition,
-            current_iteration=current_iter,
-            device=self.student.device,
-            dtype=self.latent_dtype,
-            scheduler=self.scheduler,
-            predict_student_velocity=lambda latent, sigma, cond: self._predict_velocity(
-                self.student,
-                latent,
-                sigma,
-                cond,
-            ),
-            predict_fake_velocity=lambda latent, sigma, cond: self._predict_velocity(
-                self.fake,
-                latent,
-                sigma,
-                cond,
-            ),
-            predict_teacher_velocity=lambda latent, sigma, cond: self._predict_teacher_velocity(
-                latent,
-                sigma,
-                cond,
-                None,
-            ),
-            prepare_fake_model=lambda: self.fake.set_training(False),
-            dmd_loss=self._dmd_loss,
-        )
 
     def _iter_train_samples(self):
         epoch = 0

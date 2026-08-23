@@ -19,6 +19,7 @@ from ..base import BaseModel
 class LongCatImageDenoiserInput:
     hidden_states: torch.Tensor
     img_ids: torch.Tensor
+    target_token_length: int
     height: int
     width: int
 
@@ -26,6 +27,9 @@ class LongCatImageDenoiserInput:
 @MODEL_REGISTER("longcat_image")
 class LongCatImageModel(BaseModel):
     pipeline_cls = LongCatImagePipeline
+    distribution_matching_capability_cls = GenericDistributionMatchingCapability
+    supports_cfg_renorm = True
+    supports_prompt_rewrite = True
 
     def register_capabilities(self):
         super().register_capabilities()
@@ -35,7 +39,7 @@ class LongCatImageModel(BaseModel):
         )
         self.capabilities.register(
             DistributionMatchingCapability,
-            GenericDistributionMatchingCapability(
+            self.distribution_matching_capability_cls(
                 self,
                 latent_geometry=SpatialLatentGeometry(
                     channels_path="vae.config.latent_channels",
@@ -59,13 +63,17 @@ class LongCatImageModel(BaseModel):
             return
 
         model_path = self.config["model"]["pretrained_model_name_or_path"]
-        self.text_pipeline = LongCatImagePipeline.from_pretrained(
+        self.text_pipeline = self.pipeline_cls.from_pretrained(
             model_path,
             transformer=None,
             vae=None,
             torch_dtype=self.running_dtype,
         ).to(self.device)
-        self.vae = AutoencoderKL.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
+        self.vae = AutoencoderKL.from_pretrained(
+            model_path,
+            subfolder="vae",
+            torch_dtype=self.running_dtype,
+        ).to(self.device)
         self.transformer = self.load_transformer()
         self.text_pipeline.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
@@ -74,10 +82,14 @@ class LongCatImageModel(BaseModel):
 
     def load_transformer(self, model_path=None):
         model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
-        return LongCatImageTransformer2DModel.from_pretrained(model_path, subfolder="transformer").to(self.device, dtype=self.running_dtype)
+        return LongCatImageTransformer2DModel.from_pretrained(
+            model_path,
+            subfolder="transformer",
+            torch_dtype=self.running_dtype,
+        ).to(self.device)
 
     def _maybe_set_attention_backend(self):
-        attention_backend = self.config["model"].get("attention_backend", None)
+        attention_backend = self.config["model"].get("attention_backend")
         if attention_backend is not None:
             self.transformer.set_attention_backend(attention_backend)
 
@@ -105,6 +117,16 @@ class LongCatImageModel(BaseModel):
     def vae_scale_factor(self):
         return 2 ** (len(self.vae.config.block_out_channels) - 1)
 
+    def _normalize_latents(self, latents):
+        shift = getattr(self.vae.config, "shift_factor", 0.0)
+        scale = getattr(self.vae.config, "scaling_factor", 1.0)
+        return (latents - shift) * scale
+
+    def _denormalize_latents(self, latents):
+        shift = getattr(self.vae.config, "shift_factor", 0.0)
+        scale = getattr(self.vae.config, "scaling_factor", 1.0)
+        return latents / scale + shift
+
     def encode_to_latent(self, sample):
         image = sample["inputs"]["target_pixel_values"]
         if image.ndim == 3:
@@ -112,48 +134,68 @@ class LongCatImageModel(BaseModel):
         if image.ndim != 4:
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
         image = image.to(device=self.device, dtype=self.running_dtype)
-        latent = self.vae.encode(image).latent_dist.sample()
-        shift = getattr(self.vae.config, "shift_factor", 0.0)
-        scale = getattr(self.vae.config, "scaling_factor", 1.0)
-        return (latent - shift) * scale
+        return self._normalize_latents(self.vae.encode(image).latent_dist.sample())
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
+        if self.config["model"].get("enable_prompt_rewrite_training", False):
+            prompt = self.text_pipeline.rewire_prompt(prompt, self.device)
+        return self.encode_prompt_condition(prompt)
+
+    def encode_inference_condition(self, sample, *, is_negative=False):
+        prompt = sample["conditioning"]["prompt"]
+        rewrite = self.config.get("inference", {}).get("enable_prompt_rewrite", True)
+        if self.supports_prompt_rewrite and rewrite and not is_negative:
+            prompt = self.text_pipeline.rewire_prompt(prompt, self.device)
         return self.encode_prompt_condition(prompt)
 
     def encode_prompt_condition(self, prompt):
-        rewrite_training = self.config.get(
-            "enable_prompt_rewrite_training",
-            self.config["model"].get("enable_prompt_rewrite_training", False),
-        )
-        if rewrite_training:
-            prompt = self.text_pipeline.rewire_prompt(prompt, self.device)
         prompt_embed, text_ids = self.text_pipeline.encode_prompt(
             prompt=prompt,
             num_images_per_prompt=1,
         )
         return {"prompt_embed": prompt_embed, "text_ids": text_ids}
 
+    def _get_additional_image_condition(self, condition, position_start):
+        del condition, position_start
+        return None, None
+
     def prepare_denoiser_input(self, noisy_latent, condition=None):
-        n = noisy_latent.shape[0]
-        h, w = noisy_latent.shape[2], noisy_latent.shape[3]
-        packed = LongCatImagePipeline._pack_latents(noisy_latent, n, noisy_latent.shape[1], h, w)
-        img_ids = prepare_pos_ids(
+        if condition is None:
+            raise ValueError(f"{type(self).__name__}.prepare_denoiser_input requires condition")
+
+        batch_size, channels, height, width = noisy_latent.shape
+        target_tokens = self.pipeline_cls._pack_latents(noisy_latent, batch_size, channels, height, width)
+        position_start = int(condition["prompt_embed"].shape[1])
+        target_ids = prepare_pos_ids(
             modality_id=1,
             type="image",
-            start=(self.text_pipeline.tokenizer_max_length, self.text_pipeline.tokenizer_max_length),
-            height=h // 2,
-            width=w // 2,
+            start=(position_start, position_start),
+            height=height // 2,
+            width=width // 2,
         ).to(self.device)
+
+        additional_tokens, additional_ids = self._get_additional_image_condition(condition, position_start)
+        hidden_states = target_tokens
+        img_ids = target_ids
+        if additional_tokens is not None:
+            if additional_ids is None:
+                raise ValueError("Additional LongCat image tokens require matching image IDs")
+            if additional_tokens.shape[0] != batch_size or additional_tokens.shape[2] != target_tokens.shape[2]:
+                raise ValueError(f"Additional LongCat image tokens must match the target batch and channel dimensions, got {tuple(additional_tokens.shape)} and {tuple(target_tokens.shape)}")
+            hidden_states = torch.cat([target_tokens, additional_tokens], dim=1)
+            img_ids = torch.cat([target_ids, additional_ids], dim=0)
+
         return LongCatImageDenoiserInput(
-            hidden_states=packed,
+            hidden_states=hidden_states,
             img_ids=img_ids,
-            height=h,
-            width=w,
+            target_token_length=target_tokens.shape[1],
+            height=height,
+            width=width,
         )
 
     def denoise(self, denoiser_input, timestep_or_sigma, condition):
-        return self.transformer(
+        prediction = self.transformer(
             hidden_states=denoiser_input.hidden_states,
             timestep=timestep_or_sigma,
             guidance=None,
@@ -162,35 +204,40 @@ class LongCatImageModel(BaseModel):
             img_ids=denoiser_input.img_ids,
             return_dict=False,
         )[0]
+        return prediction[:, : denoiser_input.target_token_length]
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
-        return LongCatImagePipeline._unpack_latents(
+        return self.pipeline_cls._unpack_latents(
             prediction,
             height=denoiser_input.height * self.vae_scale_factor,
             width=denoiser_input.width * self.vae_scale_factor,
             vae_scale_factor=self.vae_scale_factor,
         )
 
+    def apply_cfg(self, positive, negative, guidance_scale):
+        prediction = super().apply_cfg(positive, negative, guidance_scale)
+        infer_config = self.config.get("inference", {})
+        if not self.supports_cfg_renorm or not infer_config.get("enable_cfg_renorm", True):
+            return prediction
+
+        positive_norm = torch.norm(positive, dim=-1, keepdim=True)
+        prediction_norm = torch.norm(prediction, dim=-1, keepdim=True)
+        minimum = float(infer_config.get("cfg_renorm_min", 0.0))
+        scale = (positive_norm / prediction_norm.clamp_min(1e-8)).clamp(min=minimum, max=1.0)
+        return prediction * scale
+
     def prepare_infer_latents(self, height, width, generator=None):
-        latent_h = height // self.vae_scale_factor
-        latent_w = width // self.vae_scale_factor
-        # latent shape: (batch=1, latent_channels, latent_h, latent_w)
-        shape = (1, self.vae.config.latent_channels, latent_h, latent_w)
+        latent_height = 2 * (int(height) // (self.vae_scale_factor * 2))
+        latent_width = 2 * (int(width) // (self.vae_scale_factor * 2))
+        shape = (1, self.vae.config.latent_channels, latent_height, latent_width)
         return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
 
     def decode_latent(self, latent):
-        # Reverse the normalization from encode_to_latent:
-        # encode: normalized = (raw - shift) * scale
-        # decode: raw = normalized / scale + shift
-        shift = getattr(self.vae.config, "shift_factor", 0.0)
-        scale = getattr(self.vae.config, "scaling_factor", 1.0)
-        latent = latent / scale + shift
-
-        image = self.vae.decode(latent).sample  # (B, C, H, W)
+        image = self.vae.decode(self._denormalize_latents(latent)).sample
         return self.image_processor.postprocess(image, output_type="pil")
 
     def assemble_pipeline(self, scheduler=None):
-        return LongCatImagePipeline(
+        return self.pipeline_cls(
             tokenizer=self.text_pipeline.tokenizer,
             text_encoder=self.text_pipeline.text_encoder,
             text_processor=self.text_pipeline.text_processor,
@@ -205,7 +252,7 @@ class LongCatImageModel(BaseModel):
             "height": infer_config.get("height", infer_config.get("default_height", 1024)),
             "width": infer_config.get("width", infer_config.get("default_width", 1024)),
             "num_inference_steps": infer_config.get("num_inference_steps", 50),
-            "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0) if enable_cfg else 1.0,
+            "guidance_scale": infer_config.get("cfg_guidance_scale", 4.5) if enable_cfg else 1.0,
             "enable_cfg_renorm": infer_config.get("enable_cfg_renorm", True),
             "cfg_renorm_min": infer_config.get("cfg_renorm_min", 0.0),
             "enable_prompt_rewrite": infer_config.get("enable_prompt_rewrite", True),

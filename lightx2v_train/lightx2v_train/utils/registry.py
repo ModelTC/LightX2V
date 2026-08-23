@@ -77,6 +77,7 @@ _MODEL_MODULES = {
     "flux2_klein": "lightx2v_train.model_zoo.flux2.flux2_klein",
     "lingbot_video": "lightx2v_train.model_zoo.wan.lingbot_video",
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.longcat_image",
+    "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.longcat_image_edit",
     "ltx_t2av": "lightx2v_train.model_zoo.ltx.ltx_t2av",
     "ltx_t2av_ar": "lightx2v_train.model_zoo.ltx.ltx_t2av",
     "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_t2av",
@@ -120,6 +121,7 @@ _SAMPLE_PROCESSOR_MODULES = {
     "flux2_dev": "lightx2v_train.model_zoo.flux2.data_process",
     "flux2_klein": "lightx2v_train.model_zoo.flux2.data_process",
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.data_process",
+    "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.data_process",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.data_process",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.data_process",
 }

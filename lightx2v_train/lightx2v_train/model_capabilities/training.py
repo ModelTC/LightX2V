@@ -101,7 +101,6 @@ class DistributionMatchingProfile:
     """Feature and precision constraints published by a distribution-matching adapter."""
 
     supports_guidance: bool = True
-    supports_cdm: bool = True
     supports_ida: bool = True
     supports_diversity: bool = True
     supports_real_data_fake: bool = True

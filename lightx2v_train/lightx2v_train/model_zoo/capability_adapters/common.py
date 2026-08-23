@@ -372,7 +372,7 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
             return self.predict_velocity(latents, sigma, condition)
 
         if self._guidance_in_denoiser_space:
-            denoiser_input = self.model.prepare_denoiser_input(latents)
+            denoiser_input = self.model.prepare_denoiser_input(latents, condition=condition)
             positive = self.model.denoise(
                 denoiser_input,
                 sigma,

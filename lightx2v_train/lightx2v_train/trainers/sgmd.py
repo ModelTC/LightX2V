@@ -69,8 +69,6 @@ class SgmdTrainer(DmdTrainer):
         super().__init__(config)
         if self.fake_update_ratio != 1:
             raise ValueError("SGMD uses one student and one fake-score update per iteration; set training.dmd.fake_update_ratio=1.")
-        if self.cdm_enabled:
-            raise ValueError("SGMD does not support training.dmd.cdm.")
 
     def sample_end_step(self):
         end_step_idx = self._sample_synced_int(

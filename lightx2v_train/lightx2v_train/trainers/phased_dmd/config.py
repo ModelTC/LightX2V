@@ -65,8 +65,6 @@ class PhasedDmdConfig(DmdScheduleConfig):
         max_train_iters,
         default_lora_target_modules,
     ):
-        if dmd_config.get("cdm", {}).get("enabled", False):
-            raise ValueError("phased_dmd does not support training.dmd.cdm.")
         phased = dmd_config.get("phased", {})
         if not isinstance(phased, dict):
             raise ValueError("training.dmd.phased must be a mapping.")

@@ -83,7 +83,6 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
     )
     _PROFILE = DistributionMatchingProfile(
         supports_guidance=False,
-        supports_cdm=False,
         supports_ida=False,
         supports_diversity=False,
         supports_real_data_fake=False,

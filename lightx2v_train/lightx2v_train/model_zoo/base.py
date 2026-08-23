@@ -119,6 +119,10 @@ class BaseModel(CapabilityProvider):
     def encode_condition(self, sample):
         raise NotImplementedError
 
+    def encode_inference_condition(self, sample, *, is_negative=False):
+        del is_negative
+        return self.encode_condition(sample)
+
     def prepare_denoiser_input(self, noisy_latent, condition=None):
         raise NotImplementedError
 
@@ -127,6 +131,9 @@ class BaseModel(CapabilityProvider):
 
     def postprocess_denoiser_output(self, prediction, denoiser_input):
         raise NotImplementedError
+
+    def apply_cfg(self, positive, negative, guidance_scale):
+        return negative + guidance_scale * (positive - negative)
 
     def denoiser_prediction_type(self):
         """Return the quantity predicted by the denoiser.

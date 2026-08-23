@@ -12,7 +12,7 @@ data_process/
 
 | 训练方式 | 数据集 | 输入 |
 | --- | --- | --- |
-| 图像 DMD / CDM | `prompt_dataset` | prompt、目标高度和目标宽度 |
+| 图像 DMD | `prompt_dataset` | prompt、目标高度和目标宽度 |
 | Flow | `video_dataset` | 视频路径和 caption 元数据，训练时在线编码 |
 | Flow | `latent_dataset` | 预先生成的视频、音频和文本缓存 |
 | DMD / AR-DMD | `prompt_dataset` | TXT prompt，训练时在线编码 |
@@ -68,7 +68,7 @@ data:
     data_path: /path/to/prompts/train.txt
 ```
 
-图像 DMD / CDM 使用 JSON 或 JSONL。每条记录必须显式指定目标尺寸，
+图像 DMD 使用 JSON 或 JSONL。每条记录必须显式指定目标尺寸，
 不需要 `target_image`：
 
 ```json

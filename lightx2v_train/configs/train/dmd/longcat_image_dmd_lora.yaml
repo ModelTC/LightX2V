@@ -1,7 +1,6 @@
 model:
     name: longcat_image
     pretrained_model_name_or_path: /path/to/LongCat-Image
-    max_sequence_length: 1024
     attention_backend: _native_flash
     running_dtype: bf16
 

@@ -29,8 +29,14 @@ class NativeImageInferencer(BaseInferencer):
 
         lora_config = self.infer_config.get("lora_config", None)
         lora_path = lora_config.get("path", None) if lora_config else None
-        if lora_path:
-            pipe.load_lora_weights(lora_path)
+        should_load_lora = lora_path and getattr(self.model, "_infer_lora_adapter_name", None) is None
+        lora_loaded_by_pipeline = False
+        if should_load_lora:
+            if hasattr(pipe, "load_lora_weights"):
+                pipe.load_lora_weights(lora_path)
+                lora_loaded_by_pipeline = True
+            else:
+                self.model.load_lora_for_infer(lora_path)
 
         saved_paths = []
         self.model.set_denoiser_eval()
@@ -52,7 +58,10 @@ class NativeImageInferencer(BaseInferencer):
                     logger.info("Saved to {}", save_path)
                     saved_paths.append(str(save_path))
 
-        if lora_path:
-            pipe.unload_lora_weights()
+        if should_load_lora:
+            if lora_loaded_by_pipeline:
+                pipe.unload_lora_weights()
+            else:
+                self.model.unload_lora_for_infer()
 
         return saved_paths

@@ -58,7 +58,7 @@ class ImageInferencer(BaseInferencer):
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 4.0)
             negative_prompt = self.infer_config.get("negative_prompt", " ")
             negative_sample = {"inputs": {}, "conditioning": {"prompt": negative_prompt}, "meta": {}}
-            static_neg_cond = None if has_source_condition else self.model.encode_condition(negative_sample)
+            static_neg_cond = None if has_source_condition else self.model.encode_inference_condition(negative_sample, is_negative=True)
         else:
             self.guidance_scale = None
             negative_prompt = None
@@ -78,7 +78,7 @@ class ImageInferencer(BaseInferencer):
                 height, width = sample_processor.infer_target_size(infer_sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_condition(infer_sample)
+                pos_cond = self.model.encode_inference_condition(infer_sample)
                 if self.enable_cfg:
                     if has_source_condition:
                         neg_sample = {
@@ -86,7 +86,7 @@ class ImageInferencer(BaseInferencer):
                             "conditioning": {**infer_sample["conditioning"], "prompt": negative_prompt},
                             "meta": infer_sample["meta"],
                         }
-                        neg_cond = self.model.encode_condition(neg_sample)
+                        neg_cond = self.model.encode_inference_condition(neg_sample, is_negative=True)
                     else:
                         neg_cond = static_neg_cond
                 else:

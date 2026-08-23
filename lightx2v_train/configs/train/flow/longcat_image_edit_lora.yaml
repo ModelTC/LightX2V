@@ -1,6 +1,6 @@
 model:
-    name: longcat_image
-    pretrained_model_name_or_path: /path/to/LongCat-Image
+    name: longcat_image_edit
+    pretrained_model_name_or_path: /path/to/LongCat-Image-Edit
     attention_backend: _native_flash
     running_dtype: bf16
 
@@ -10,17 +10,16 @@ data:
     train:
         name: image_dataset
         num_workers: 8
-        prompt_dropout_rate: 0.1
+        prompt_dropout_rate: 0.05
         shuffle: true
-        # examples: https://github.com/ModelTC/LightX2V_train_data_examples
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /path/to/LightX2V_train_data_examples/dataset_edit/train.jsonl
     val:
         name: image_dataset
-        num_workers: 8
+        num_workers: 4
         shuffle: false
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /path/to/LightX2V_train_data_examples/dataset_edit/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000
@@ -32,11 +31,9 @@ scheduler:
     time_shift_settings:
         do_time_shift: true
         shift_type: exponential
-        # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
         time_shift_power: 1.0
         dynamic_shift: true
-        patch_size: [2, 2]  # [H, W]
-        # https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/longcat_image/pipeline_longcat_image.py
+        patch_size: [2, 2]
         shift_x1: 256
         shift_x2: 4096
         shift_y1: 0.5
@@ -67,18 +64,18 @@ training:
         adam_beta2: 0.999
         weight_decay: 0.01
         adam_epsilon: 0.00000001
-    output_dir: ./output_train/longcat_image_lora
+    output_dir: ./output_train/longcat_image_edit_lora
 
 inference:
     method: image_infer
-    negative_prompt: " "
+    negative_prompt: ""
     default_width: 1024
     default_height: 1024
     num_inference_steps: 50
     enable_cfg: true
     cfg_guidance_scale: 4.5
     seed: 42
-    output_dir: ./output_infer/longcat_image_lora
+    output_dir: ./output_infer/longcat_image_edit_lora
     infer_every_iters: ${training.save_every_iters}
 
 logging:

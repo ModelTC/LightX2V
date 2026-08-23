@@ -307,11 +307,8 @@ class DmdTrainer(_DmdRuntime):
                 samples,
                 stage="student",
                 grad_accum_iters=grad_accum_iters,
-                current_iter=current_iter,
             )
             loss_dmd_value = student_result["dmd"]
-            loss_cdm_value = student_result.get("cdm", 0.0)
-            cdm_weight = student_result.get("cdm_weight", 0.0)
             loss_div_value = student_result["div_loss"]
             loss_real_dmd_value = student_result["real_dmd"]
             loss_fake_value = 0.0
@@ -321,7 +318,6 @@ class DmdTrainer(_DmdRuntime):
                     samples,
                     stage="fake",
                     grad_accum_iters=grad_accum_iters,
-                    current_iter=current_iter,
                 )
                 loss_fake_value += fake_result["loss"]
                 loss_fake_real_value += fake_result["fake_real"]
@@ -331,7 +327,6 @@ class DmdTrainer(_DmdRuntime):
             current_iter += 1
             display_fake = reduce_mean(loss_fake_value)
             display_dmd = reduce_mean(loss_dmd_value) if loss_dmd_value is not None else None
-            display_cdm = reduce_mean(loss_cdm_value)
             display_div = reduce_mean(loss_div_value)
             display_real_dmd = reduce_mean(loss_real_dmd_value)
             display_fake_real = reduce_mean(loss_fake_real_value)
@@ -358,9 +353,6 @@ class DmdTrainer(_DmdRuntime):
                 }
                 if display_dmd is not None:
                     metrics["train/dmd"] = display_dmd
-                if self.cdm_enabled:
-                    metrics["train/cdm"] = display_cdm
-                    metrics["train/cdm_weight"] = cdm_weight
                 self.log_metrics(metrics, step=current_iter)
 
             if save_every_iters and current_iter % save_every_iters == 0:
@@ -376,7 +368,6 @@ class DmdTrainer(_DmdRuntime):
         samples,
         stage,
         grad_accum_iters,
-        current_iter=None,
     ):
         if stage == "student":
             optimizer = self.optimizer
@@ -414,7 +405,6 @@ class DmdTrainer(_DmdRuntime):
                 conditions,
                 stage=stage,
                 initial_noise=initial_noise,
-                current_iter=current_iter,
             )
             if isinstance(result, dict):
                 loss = result["loss"]
@@ -617,7 +607,6 @@ class DmdTrainer(_DmdRuntime):
         conditions,
         stage,
         initial_noise=None,
-        current_iter=None,
     ):
         condition, negative_condition = conditions
         (
@@ -699,29 +688,10 @@ class DmdTrainer(_DmdRuntime):
             x_pred_fake,
             x_pred_teacher,
         )
-        result = {
+        return {
             "loss": loss_dmd,
             "dmd": loss_dmd.detach(),
         }
-        if not self.cdm_enabled:
-            return result
-
-        end_sample, end_velocity, end_step_index = self._last_rollout_end
-        cdm_result = self.cdm_trick.student_loss(
-            self._cdm_step_context(
-                end_sample,
-                end_velocity,
-                end_step_index,
-                condition,
-                current_iter,
-            )
-        )
-        result.update(
-            loss=loss_dmd + cdm_result.loss,
-            cdm=cdm_result.metrics["cdm"],
-            cdm_weight=cdm_result.metrics["cdm_weight"],
-        )
-        return result
 
     def sample_end_step(self):
         return self._sample_synced_int(
@@ -753,8 +723,6 @@ class DmdTrainer(_DmdRuntime):
             )
         )
         x0 = None
-        end_sample = None
-        end_velocity = None
         # Zoe runs every DMD role in eval mode. Gradients are controlled by
         # autograd contexts, not by module.train(), which keeps rollout
         # dropout and other training-only behavior deterministic.
@@ -773,23 +741,12 @@ class DmdTrainer(_DmdRuntime):
                     sigma,
                     condition,
                 )
-            if grad_enabled and idx == end_step_idx:
-                end_sample = self.student.detach(xt)
-                end_velocity = self.student.detach(velocity)
             xt, x0 = self.student.step(
                 self.scheduler,
                 velocity,
                 idx,
                 xt,
             )
-
-        if grad_enabled:
-            self._last_rollout_end = (
-                end_sample,
-                end_velocity,
-                end_step_idx,
-            )
-
         return self.student.to_dtype(
             x0,
             self.latent_dtype,

@@ -1,10 +1,4 @@
 from .base import TrainerTrick, TrickLossResult
-from .cdm import (
-    CdmConfig,
-    CdmStepContext,
-    CdmTrainerConstraints,
-    CdmTrick,
-)
 from .diversity import (
     DiversityConfig,
     DiversitySetupContext,
@@ -28,10 +22,6 @@ from .real_data_fake import (
 )
 
 __all__ = [
-    "CdmConfig",
-    "CdmStepContext",
-    "CdmTrainerConstraints",
-    "CdmTrick",
     "DiversityConfig",
     "DiversitySetupContext",
     "DiversityStepContext",
