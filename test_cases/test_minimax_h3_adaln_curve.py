@@ -1,10 +1,13 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.ops.mm.mm_weight import MMWeightForceFp32
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import interpolate_adaln_curve
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
+from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 
 
 class _RecordingProjection:
@@ -90,3 +93,49 @@ def test_full_checkpoint_adaln_preserves_activation_and_dtype():
 
     torch.testing.assert_close(projection.last_input, expected, rtol=0.0, atol=0.0)
     torch.testing.assert_close(result, expected, rtol=0.0, atol=0.0)
+
+
+def test_force_fp32_offload_buffer_preserves_curve_dtype():
+    weight_name = "transformer_blocks.0.adaln_proj.linear.weight"
+    bias_name = "transformer_blocks.0.adaln_proj.linear.bias"
+    checkpoint_weight = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=torch.bfloat16)
+    checkpoint_bias = torch.tensor([0.5, -0.5, 1.0], dtype=torch.bfloat16)
+
+    def _fake_create_cuda_buffers(*args, **kwargs):
+        return {
+            "weight": checkpoint_weight.t().clone(),
+            "bias": checkpoint_bias.clone(),
+        }
+
+    with patch("lightx2v.common.ops.mm.mm_weight.create_cuda_buffers", _fake_create_cuda_buffers):
+        projection = MMWeightForceFp32(weight_name, bias_name, create_cuda_buffer=True)
+        projection.load({})
+
+    assert projection.weight_cuda_buffer.dtype == torch.float32
+    assert projection.bias_cuda_buffer.dtype == torch.float32
+
+    projection.load_state_dict(
+        {
+            weight_name: checkpoint_weight.t().float(),
+            bias_name: checkpoint_bias.float(),
+        },
+        block_index=0,
+    )
+    curve_input = torch.tensor([[2.0, -1.0]], dtype=torch.float32)
+    expected = torch.addmm(checkpoint_bias.float(), curve_input, checkpoint_weight.t().float())
+    torch.testing.assert_close(projection.apply(curve_input), expected, rtol=0.0, atol=0.0)
+
+
+def test_curve_checkpoint_rejects_quantized_dit_before_loading():
+    config = {
+        "h3_adaln_curve": True,
+        "dit_quantized": True,
+    }
+    with patch("lightx2v.models.networks.minimax_h3.model.GET_DTYPE", return_value=torch.bfloat16):
+        try:
+            MiniMaxH3Model("unused", config, torch.device("cpu"))
+        except NotImplementedError as error:
+            assert "weight_scale-aware" in str(error)
+            assert "dit_quantized=false" in str(error)
+        else:
+            raise AssertionError("quantized AdaLN curve checkpoint was accepted")

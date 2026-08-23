@@ -54,6 +54,10 @@ class MiniMaxH3Model(BaseTransformerModel):
             )
         if config.get("cfg_parallel", False) or config.get("enable_cfg", False):
             raise ValueError("MiniMax-H3 is guidance-distilled and does not have a CFG/unconditional branch")
+        if self.h3_adaln_curve and config.get("dit_quantized", False):
+            raise NotImplementedError(
+                "MiniMax-H3 AdaLN curve checkpoints do not support quantized DiT weights yet: quantized adaln_proj tensors require weight_scale-aware loading, while the curve path requires FP32 AdaLN projections. Use dit_quantized=false."
+            )
         if config.get("dit_quantized", False):
             quant_scheme = config.get("dit_quant_scheme", "Default")
             if quant_scheme not in H3_CHANNEL_QUANT_SCHEMES:
