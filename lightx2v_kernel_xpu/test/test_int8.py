@@ -20,7 +20,7 @@ def relative_rms(actual, expected):
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("with_bias", [False, True])
-def test_onednn_w8a16_int8(dtype, with_bias):
+def test_onednn_w8a8_int8(dtype, with_bias):
     if not torch.xpu.is_available():
         pytest.skip("XPU is not available")
 
@@ -34,15 +34,19 @@ def test_onednn_w8a16_int8(dtype, with_bias):
     scales = scales.to("xpu")
     bias = torch.randn(N, dtype=dtype, device="xpu") if with_bias else None
 
+    x_f32 = x.float()
+    x_scales = (x_f32.abs().amax(dim=1) / 127.0).clamp_min(1e-30)
+    qx = torch.round(x_f32 / x_scales[:, None]).clamp(-127, 127)
+    dequantized_x = qx.to(dtype) * x_scales.to(dtype)[:, None]
     dequantized_weight = qweight.to(dtype) * scales.to(dtype)[:, None]
-    expected = torch.nn.functional.linear(x, dequantized_weight, bias)
-    actual = sycl_kernels.onednn_w8a16_int8(x, qweight, scales, bias)
+    expected = torch.nn.functional.linear(dequantized_x, dequantized_weight, bias)
+    actual = sycl_kernels.onednn_w8a8_int8(x, qweight, scales, bias)
     torch.xpu.synchronize()
 
     assert relative_rms(actual, expected) < 0.02
 
 
-def test_onednn_w8a16_int8_rejects_wrong_weight_dtype():
+def test_onednn_w8a8_int8_rejects_wrong_weight_dtype():
     if not torch.xpu.is_available():
         pytest.skip("XPU is not available")
 
@@ -50,4 +54,4 @@ def test_onednn_w8a16_int8_rejects_wrong_weight_dtype():
     weight = torch.randn(4, 16, dtype=torch.bfloat16, device="xpu")
     scales = torch.ones(4, dtype=torch.float32, device="xpu")
     with pytest.raises(RuntimeError, match="torch.int8"):
-        sycl_kernels.onednn_w8a16_int8(x, weight, scales)
+        sycl_kernels.onednn_w8a8_int8(x, weight, scales)
