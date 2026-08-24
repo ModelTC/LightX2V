@@ -121,8 +121,7 @@ class TrainingCacheTrainer:
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         dataset = self.dataloader.dataset
-        max_samples = self.cache_config["max_samples"]
-        sample_count = len(dataset) if max_samples is None else min(len(dataset), max_samples)
+        sample_count = len(dataset)
         dtype = CACHE_DTYPES[self.cache_config["save_dtype"]]
         records = []
 

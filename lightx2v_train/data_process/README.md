@@ -18,8 +18,8 @@ cd /path/to/LightX2V
 
 python lightx2v_train/cache_data.py \
   --config lightx2v_train/configs/train/flow/qwen_image_lora.yaml \
-  --output-dir /path/to/qwen_image_cache \
-  --save-dtype bf16
+  --output_dir /path/to/qwen_image_cache \
+  --save_dtype bf16
 ```
 
 输出格式对所有图像模型保持一致：
