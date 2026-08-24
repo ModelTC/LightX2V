@@ -24,10 +24,12 @@ elif PLATFORM == "ascend_npu":
     from .rope.ascend_npu import *
     # isort: on
 elif PLATFORM == "metax_cuda":
-    # MetaX attention imports the common registry, so platform MoE backends
-    # must be registered before that one-time registry merge.
+    # Register every platform implementation before framework registries take
+    # their one-time snapshot. Keep attention last to preserve that boundary.
     # isort: off
     from .moe.metax_cuda import *
+    from .norm.metax_cuda import *
+    from .rope.metax_cuda import *
     from .attn.metax_cuda import *
     # isort: on
 elif PLATFORM == "enflame_gcu":

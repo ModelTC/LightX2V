@@ -1,7 +1,7 @@
 from loguru import logger
 
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from lightx2v_platform.ops.attn.template import AttnWeightTemplate
+from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
 try:
     from sageattention import sageattn
@@ -10,7 +10,7 @@ except ImportError:
     sageattn = None
 
 
-@ATTN_WEIGHT_REGISTER("metax_sage_attn2")
+@PLATFORM_ATTN_WEIGHT_REGISTER("metax_sage_attn2")
 class MetaxSageAttn2Weight(AttnWeightTemplate):
     def __init__(self):
         self.config = {}
