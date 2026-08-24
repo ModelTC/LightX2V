@@ -204,8 +204,16 @@ class CausalForcingFlowMatchScheduler:
         return sigmas, weights
 
     def sample_clean_augmentation(self, num_frames, num_frame_per_chunk, max_timestep, device, dtype):
+        max_timestep = int(max_timestep)
+        if not 0 < max_timestep <= self.num_train_timesteps:
+            raise ValueError(f"max_timestep must be in [1, {self.num_train_timesteps}], got {max_timestep}.")
+
+        # The training schedule is stored from noisy to clean. A maximum
+        # augmentation timestep therefore selects from the clean tail rather
+        # than using the timestep directly as a lower schedule index.
+        min_schedule_index = self.num_train_timesteps - max_timestep
         index = torch.randint(
-            int(max_timestep),
+            min_schedule_index,
             self.num_train_timesteps,
             (1, num_frames),
             device=device,

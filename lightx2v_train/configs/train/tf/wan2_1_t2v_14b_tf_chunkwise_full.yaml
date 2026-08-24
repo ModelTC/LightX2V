@@ -2,6 +2,7 @@ model:
     name: wan_t2v_14b
     pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-14B/
     causal: true
+    num_frame_per_chunk: 3
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -77,9 +78,8 @@ training:
     save_every_iters: 100
     save_total_limit: 10
     teacher_forcing:
-        enabled: true
         mode: chunkwise
-        num_frame_per_chunk: 3
+        num_frame_per_chunk: ${model.num_frame_per_chunk}
         noise_augmentation_max_timestep: 0
     optimizer:
         learning_rate: 0.000002

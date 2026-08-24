@@ -89,12 +89,9 @@ class WanT2VModel(BaseModel):
         should_load_vae = load_vae and model_config.get("load_vae", True)
         should_load_text_encoder = load_condition_encoder and model_config.get("load_text_encoder", True)
         should_load_transformer = load_transformer and model_config.get("load_transformer", True)
-        training_config = self.config.get("training", {})
-        teacher_forcing_config = training_config.get("teacher_forcing", {})
         model_name = model_config.get("name")
-        teacher_forcing_enabled = teacher_forcing_config.get("enabled", False)
         causal_model_names = {"wan_t2v_ar", "wan_t2v_14b_ar"}
-        self.use_causal_transformer = model_name in causal_model_names or bool(model_config.get("causal", False)) or teacher_forcing_enabled
+        self.use_causal_transformer = model_name in causal_model_names or bool(model_config.get("causal", False))
         self.sample_posterior = model_config.get("sample_posterior", True)
         scheduler_config = self.config.get("scheduler", {})
         self.num_train_timesteps = scheduler_config.get("num_train_timesteps", 1000)
@@ -106,27 +103,15 @@ class WanT2VModel(BaseModel):
         self.vae_stride = tuple(model_config.get("vae_stride", (4, 8, 8)))
         self.patch_size = tuple(model_config.get("patch_size", (1, 2, 2)))
         self.sp_size = get_sequence_parallel_world_size()
-        if "num_frame_per_chunk" in teacher_forcing_config:
-            self.num_frame_per_chunk = int(teacher_forcing_config["num_frame_per_chunk"])
-        else:
-            self.num_frame_per_chunk = int(model_config.get("num_frame_per_chunk", 1))
-        if "local_attn_size" in model_config:
-            self.local_attn_size = int(model_config["local_attn_size"])
-        else:
-            self.local_attn_size = int(teacher_forcing_config.get("local_attn_size", -1))
-        if "sink_size" in model_config:
-            self.sink_size = int(model_config["sink_size"])
-        else:
-            self.sink_size = int(teacher_forcing_config.get("sink_size", 0))
+        self.num_frame_per_chunk = int(model_config.get("num_frame_per_chunk", 1))
+        self.local_attn_size = int(model_config.get("local_attn_size", -1))
+        self.sink_size = int(model_config.get("sink_size", 0))
         if "defer_kv_cache_updates" in model_config:
             self.defer_kv_cache_updates = bool(model_config["defer_kv_cache_updates"])
         else:
             self.defer_kv_cache_updates = bool(model_config.get("defer_cache_updates", False))
         self.detach_kv_cache_updates = bool(model_config.get("detach_kv_cache_updates", False))
-        if "independent_first_frame" in model_config:
-            self.independent_first_frame = bool(model_config["independent_first_frame"])
-        else:
-            self.independent_first_frame = bool(teacher_forcing_config.get("independent_first_frame", False))
+        self.independent_first_frame = bool(model_config.get("independent_first_frame", False))
         self.text_encoder = None
         self.text_pipeline = None
 
@@ -387,7 +372,7 @@ class WanT2VModel(BaseModel):
         global_num_frames=None,
     ):
         if not isinstance(self.transformer, CausalWanModel):
-            raise RuntimeError("Wan teacher forcing requires model.causal=True or training.teacher_forcing.enabled=True.")
+            raise RuntimeError("Wan teacher forcing requires model.causal=True.")
 
         timestep = timestep_or_sigma.float() * self.num_train_timesteps
         timestep = timestep.to(device=self.device)

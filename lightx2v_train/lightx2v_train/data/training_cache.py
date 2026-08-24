@@ -18,7 +18,6 @@ _RUNTIME_DATA_KEYS = {
     "dataset_repeat",
     "drop_last",
     "max_samples",
-    "name",
     "num_workers",
     "persistent_workers",
     "pin_memory",

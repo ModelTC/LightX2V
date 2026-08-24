@@ -800,4 +800,4 @@ class WanT2VARInferencer(BaseInferencer):
         return latent_height * latent_width // (patch_h * patch_w)
 
     def _num_frame_per_chunk(self):
-        return int(getattr(self.model, "num_frame_per_chunk", self.config.get("training", {}).get("teacher_forcing", {}).get("num_frame_per_chunk", 1)))
+        return int(getattr(self.model, "num_frame_per_chunk", 1))
