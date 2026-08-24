@@ -219,6 +219,13 @@ class MiniMaxH3Runner(DefaultRunner):
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
         )
+        if self.config.get("vae_encode_parallel", False):
+            world_size = dist.get_world_size() if dist.is_initialized() else 1
+            if world_size > 1:
+                video_vae.enable_encode_parallel()
+                logger.info(f"MiniMax-H3 spatiotemporal-tile VAE encode parallel enabled over {world_size} ranks")
+            else:
+                logger.info("MiniMax-H3 VAE encode parallel disabled for single-rank inference")
         if self.config.get("vae_decode_parallel", False):
             world_size = dist.get_world_size() if dist.is_initialized() else 1
             if world_size > 1:
