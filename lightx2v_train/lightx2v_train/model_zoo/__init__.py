@@ -14,7 +14,6 @@ _LAZY_EXPORTS = {
     "QwenImageModel": (".qwen_image.qwen_image", "QwenImageModel"),
     "QwenImageEditModel": (".qwen_image.qwen_image_edit", "QwenImageEditModel"),
     "WanT2VModel": (".wan.wan_t2v", "WanT2VModel"),
-    "WanTI2V5BModel": (".wan.wan_ti2v_5b", "WanTI2V5BModel"),
 }
 
 
@@ -60,5 +59,4 @@ __all__ = [
     "LingBotVideoModel",
     "MiniMaxH3T2AVModel",
     "WanT2VModel",
-    "WanTI2V5BModel",
 ]

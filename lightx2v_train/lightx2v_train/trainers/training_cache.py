@@ -11,7 +11,6 @@ from lightx2v_train.data.utils import require_singleton_dataloader
 from lightx2v_train.model_capabilities import (
     ConsistencyModelCapability,
     DistributionMatchingCapability,
-    DopsdCapability,
     FlowMatchingSFTCapability,
     TeacherForcingCapability,
 )
@@ -27,7 +26,6 @@ CACHE_CAPABILITIES = {
     "flow_matching": FlowMatchingSFTCapability,
     "consistency": ConsistencyModelCapability,
     "dmd": DistributionMatchingCapability,
-    "dopsd": DopsdCapability,
     "autoregressive_dmd": DistributionMatchingCapability,
     "phased_dmd": DistributionMatchingCapability,
     "sgmd": DistributionMatchingCapability,

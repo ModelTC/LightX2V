@@ -6,16 +6,12 @@ from .base import (
     ModelCapability,
 )
 from .training import (
-    AdapterBankCapability,
     AutoregressiveDistributionMatchingCapability,
     AutoregressiveRolloutContext,
     CheckpointCapability,
     ConsistencyModelCapability,
     DistributionMatchingCapability,
     DistributionMatchingProfile,
-    DopsdCapability,
-    DopsdPreparedBatch,
-    DopsdPreparedTeacherBatch,
     FlowMatchingSFTCapability,
     LossResult,
     ParallelCapability,
@@ -27,7 +23,6 @@ from .training import (
 )
 
 __all__ = [
-    "AdapterBankCapability",
     "AutoregressiveDistributionMatchingCapability",
     "AutoregressiveRolloutContext",
     "BoundCapability",
@@ -38,9 +33,6 @@ __all__ = [
     "ConsistencyModelCapability",
     "DistributionMatchingCapability",
     "DistributionMatchingProfile",
-    "DopsdCapability",
-    "DopsdPreparedBatch",
-    "DopsdPreparedTeacherBatch",
     "FlowMatchingSFTCapability",
     "LossResult",
     "ModelCapability",

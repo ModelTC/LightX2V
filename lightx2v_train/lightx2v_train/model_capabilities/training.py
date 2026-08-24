@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Collection
-from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Mapping, TypedDict
+from typing import Any, Callable, Mapping, TypedDict
 
 import torch
 from torch import Tensor
@@ -270,130 +269,6 @@ class AutoregressiveDistributionMatchingCapability(ModelCapability):
         context: AutoregressiveRolloutContext,
     ):
         """Run a differentiable chunk-wise autoregressive rollout."""
-
-
-@dataclass(frozen=True)
-class DopsdPreparedBatch:
-    """Model-specific values needed by the model-agnostic DOPSD objective."""
-
-    initial_state: Tensor
-    state_ids: Tensor
-    student_condition: Any
-    teacher_condition: Any
-    teacher_reference: Any
-    latent_hw: tuple[int, int]
-
-
-@dataclass(frozen=True)
-class DopsdPreparedTeacherBatch:
-    """Prepared inputs for a privileged-teacher rollout."""
-
-    initial_state: Tensor
-    state_ids: Tensor
-    condition: Any
-    reference: Any
-    latent_hw: tuple[int, int]
-    height: int
-    width: int
-
-
-class DopsdCapability(ModelCapability):
-    """Model operations required by DOPSD.
-
-    Adapter lifecycle and objective math intentionally live outside this
-    capability so a new model only needs to describe its own data path.
-    """
-
-    def encode_training_cache(self, batch: Mapping[str, Any]) -> TrainingCachePayload:
-        """Encode the static sample data consumed by DOPSD training."""
-        raise NotImplementedError(f"{type(self).__name__} does not support training-cache encoding.")
-
-    @property
-    @abstractmethod
-    def device(self) -> torch.device:
-        pass
-
-    @abstractmethod
-    def prepare_training_batch(
-        self,
-        batch: Mapping[str, Any],
-        teacher_prompts: list[str],
-        running_dtype: torch.dtype,
-    ) -> DopsdPreparedBatch:
-        pass
-
-    @abstractmethod
-    def prepare_teacher_batch(
-        self,
-        reference_image: Tensor,
-        teacher_prompts: list[str],
-        running_dtype: torch.dtype,
-        generator: torch.Generator | None = None,
-    ) -> DopsdPreparedTeacherBatch:
-        pass
-
-    @abstractmethod
-    def predict_velocity(
-        self,
-        state: Tensor,
-        time: Tensor,
-        condition: Any,
-        state_ids: Tensor,
-        reference: Any = None,
-    ) -> Tensor:
-        pass
-
-    @abstractmethod
-    def decode_state(self, state: Tensor, state_ids: Tensor):
-        pass
-
-
-class AdapterBankCapability(ModelCapability):
-    """Lifecycle for multiple named parameter-efficient adapters."""
-
-    @abstractmethod
-    def configure_pair(
-        self,
-        rank: int,
-        alpha: int,
-        target_modules: Any,
-        student_adapter: str,
-        teacher_adapter: str,
-        initialize_teacher: bool,
-    ) -> None:
-        pass
-
-    @abstractmethod
-    def parameters(self, adapter_name: str) -> Iterable[Tensor]:
-        pass
-
-    @abstractmethod
-    def activate(
-        self,
-        adapter_name: str,
-        training: bool | None = None,
-    ) -> AbstractContextManager[None]:
-        pass
-
-    @abstractmethod
-    def set_trainable(self, adapter_name: str) -> None:
-        pass
-
-    @abstractmethod
-    def copy(self, source_adapter: str, target_adapter: str) -> None:
-        pass
-
-    @abstractmethod
-    def ema_update(self, source_adapter: str, target_adapter: str, decay: float) -> None:
-        pass
-
-    @abstractmethod
-    def load(self, path, adapter_name: str, weights_subdir: str | None = None) -> None:
-        pass
-
-    @abstractmethod
-    def save(self, path, adapter_name: str, weights_subdir: str | None = None) -> None:
-        pass
 
 
 class TrainableModelCapability(ModelCapability):

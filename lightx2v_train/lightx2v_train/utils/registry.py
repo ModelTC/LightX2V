@@ -87,15 +87,12 @@ _MODEL_MODULES = {
     "wan_t2v_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
     "wan_t2v_14b": "lightx2v_train.model_zoo.wan.wan_t2v",
     "wan_t2v_14b_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
-    "wan_ti2v_5b": "lightx2v_train.model_zoo.wan.wan_ti2v_5b",
-    "wan_ti2v_5b_ar": "lightx2v_train.model_zoo.wan.wan_ti2v_5b",
 }
 
 _TRAINER_MODULES = {
     "autoregressive_dmd": "lightx2v_train.trainers.dmd.autoregressive_dmd",
     "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",
-    "dopsd": "lightx2v_train.trainers.dopsd",
     "flow_matching": "lightx2v_train.trainers.flow_matching",
     "phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
     "sgmd": "lightx2v_train.trainers.sgmd",
@@ -111,8 +108,6 @@ _INFERENCER_MODULES = {
     "wan_t2v_dual_infer": "lightx2v_train.infer.video",
     "wan_t2v_ar_infer": "lightx2v_train.infer.video",
     "wan_t2v_14b_ar_infer": "lightx2v_train.infer.video",
-    "wan_ti2v_5b_infer": "lightx2v_train.infer.video",
-    "wan_ti2v_5b_ar_infer": "lightx2v_train.infer.video",
 }
 
 _SAMPLE_PROCESSOR_MODULES = {
