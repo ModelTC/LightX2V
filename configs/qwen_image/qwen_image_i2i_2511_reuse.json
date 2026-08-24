@@ -10,5 +10,6 @@
     "CONDITION_IMAGE_SIZE": 147456,
     "USE_IMAGE_ID_IN_PROMPT": true,
     "use_compile": true,
-    "enable_reuse": true
+    "enable_reuse": true,
+    "reuse_cache_path": "save_results/reuse_cache/qwen_image_i2i_2511"
 }

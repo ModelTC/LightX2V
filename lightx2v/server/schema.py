@@ -76,6 +76,11 @@ class BaseTaskRequest(DisaggOverrideRequest):
 class VideoTaskRequest(BaseTaskRequest):
     num_fragments: int = Field(1, description="Number of fragments")
     target_video_length: int = Field(81, description="Target video length")
+    reuse_prefix_segments: int = Field(
+        0,
+        ge=0,
+        description="Number of prefix segments to reuse from the previous successful request",
+    )
     video_path: str = Field("", description="Input video path (for SR/V2V-like tasks)")
     sr_ratio: float = Field(2.0, gt=0, description="Super-resolution scale factor used when target_shape is not set")
     audio_path: str = Field("", description="Input audio path (Wan-Audio)")

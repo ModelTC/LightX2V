@@ -17,5 +17,6 @@
     "offload_granularity": "model",
     "boundary": 0.900,
     "use_image_encoder": false,
-    "enable_reuse": true
+    "enable_reuse": true,
+    "reuse_cache_path": "save_results/reuse_cache/wan22_moe_i2v"
 }

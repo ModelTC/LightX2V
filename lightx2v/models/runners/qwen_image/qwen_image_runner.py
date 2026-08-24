@@ -73,6 +73,9 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
 
+    def check_reuse_support(self):
+        pass
+
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
         task = self.config.get("task")
@@ -567,29 +570,44 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         elif input_info.save_result_path is not None:
             return {"images": None}
 
-    def _reuse_key(self):
-        reuse_key = (self.input_info.prompt, self.input_info.negative_prompt)
+    def reuse_key(self):
+        reuse_key = {
+            "prompt": self.input_info.prompt,
+            "negative_prompt": self.input_info.negative_prompt,
+        }
         if self.config["task"] == "i2i":
-            reuse_key += (tuple(self.input_info.image_path.split(",")),)
+            reuse_key["image_path"] = self.input_info.image_path.split(",")
         return reuse_key
 
+    def reuse_input_info(self):
+        input_info = {"txt_seq_lens": list(self.input_info.txt_seq_lens)}
+        if self.config["task"] == "i2i":
+            input_info["original_size"] = list(self.input_info.original_size)
+        return input_info
+
     def _run_pipeline_local(self, input_info):
-        if self.reuse:
-            self.inputs = self._get_reused_inputs()
-        else:
-            self.inputs = self.run_input_encoder()
-            if self.enable_reuse:
-                self._reuse_cache = {"reuse_key": self._reuse_key(), "inputs": self.inputs}
-        if self.config["task"] == "i2i" and "image_encoder_output" in self.inputs:
-            self.input_info.image_encoder_output = self.inputs["image_encoder_output"]
-        self.set_target_shape()
-        self.set_img_shapes()
-        logger.info(f"input_info: {self.input_info}")
-        latents, generator = self.run_dit()
-        images = self.run_vae_decoder(latents)
-        self.end_run()
-        self._save_images(images, input_info, log_prefix="Image saved")
-        return self._finalize_pipeline_outputs(input_info, images, latents=latents, generator=generator)
+        self.prepare_reuse_output()
+        try:
+            self.inputs = self.load_reused_inputs() if self.reuse else self.run_input_encoder()
+            self.stage_reuse_cache()
+            if self.config["task"] == "i2i" and "image_encoder_output" in self.inputs:
+                self.input_info.image_encoder_output = self.inputs["image_encoder_output"]
+            self.set_target_shape()
+            self.set_img_shapes()
+            logger.info(f"input_info: {self.input_info}")
+            latents, generator = self.run_dit()
+            images = self.run_vae_decoder(latents)
+            self.end_run()
+            self._save_images(images, input_info, log_prefix="Image saved")
+            result = self._finalize_pipeline_outputs(input_info, images, latents=latents, generator=generator)
+            self.commit_reuse_result()
+            return result
+        except Exception:
+            self.discard_reuse_result()
+            raise
+        finally:
+            if self.input_info is not None:
+                self.end_run()
 
     def _run_pipeline_disagg_encoder(self):
         self.inputs = self.run_input_encoder()

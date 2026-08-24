@@ -18,5 +18,6 @@
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
     "boundary": 0.875,
-    "enable_reuse": true
+    "enable_reuse": true,
+    "reuse_cache_path": "save_results/reuse_cache/wan22_moe_t2v"
 }
