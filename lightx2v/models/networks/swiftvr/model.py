@@ -11,11 +11,11 @@ import torch
 from lightx2v.models.networks.wan.infer.module_io import GridOutput, WanPreInferModuleOutput
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
-from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v.models.networks.wan.infer.utils import sinusoidal_embedding_1d
 from lightx2v.models.networks.wan.model import WanModel
 
 from .attention import SwiftVRShiftedWindowAttention
+from .transformer_infer import SwiftVRTransformerInfer
 
 INFERENCE_TIMESTEP = 1000.0
 
@@ -113,6 +113,7 @@ class SwiftVRPreInfer(WanPreInfer):
             tuple=grid_tuple,
         )
         cos_sin = self.prepare_rope(grid_tuple, temporal_offset)
+        window_layouts = SwiftVRShiftedWindowAttention.prepare_layouts(grid_tuple, hidden_states.device)
         return WanPreInferModuleOutput(
             embed=condition.timestep_embedding,
             grid_sizes=grid_sizes,
@@ -121,6 +122,7 @@ class SwiftVRPreInfer(WanPreInfer):
             context=condition.text_context,
             cos_sin=cos_sin,
             rope_positions=self.rope_positions,
+            conditional_dict={"window_layouts": window_layouts},
         )
 
 
@@ -143,7 +145,7 @@ class SwiftVRModel(WanModel):
 
     def _init_infer_class(self):
         self.pre_infer_class = SwiftVRPreInfer
-        self.transformer_infer_class = WanTransformerInfer
+        self.transformer_infer_class = SwiftVRTransformerInfer
         self.post_infer_class = SwiftVRPostInfer
 
     @torch.no_grad()
