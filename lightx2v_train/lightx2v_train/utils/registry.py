@@ -80,8 +80,6 @@ _MODEL_MODULES = {
     "lingbot_video": "lightx2v_train.model_zoo.wan.lingbot_video",
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.longcat_image",
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.longcat_image_edit",
-    "ltx_t2av": "lightx2v_train.model_zoo.ltx.ltx_t2av",
-    "ltx_t2av_ar": "lightx2v_train.model_zoo.ltx.ltx_t2av",
     "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_t2av",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.qwen_image",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.qwen_image_edit",

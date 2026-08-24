@@ -1,11 +1,10 @@
 # 训练数据与预处理
 
-本文说明训练数据格式，以及 WAN 和 LTX2 的 latent 数据集构建方法。预处理结果包含统一的 `metadata.jsonl`，可由 `latent_dataset` 直接读取。
+本文说明训练数据格式，以及 WAN 的 latent 数据集构建方法。预处理结果包含统一的 `metadata.jsonl`，可由 `latent_dataset` 直接读取。
 
 ```text
 data_process/
-├── wan/build_latent_dataset.py
-└── ltx/build_latent_dataset.py
+└── wan/build_latent_dataset.py
 ```
 
 ## 图像训练缓存
@@ -73,12 +72,12 @@ worker、持久 worker 与预取用于隐藏单样本 PT 的读取开销。
 | --- | --- | --- |
 | 图像 DMD | `prompt_dataset` | prompt、目标高度和目标宽度 |
 | Flow | `video_dataset` | 视频路径和 caption 元数据，训练时在线编码 |
-| Flow | `latent_dataset` | 预先生成的视频、音频和文本缓存 |
+| Flow | `latent_dataset` | 预先生成的视频和文本缓存 |
 | DMD / AR-DMD | `prompt_dataset` | TXT prompt，训练时在线编码 |
 | DMD / AR-DMD | `latent_dataset` | 预先生成的文本条件缓存 |
 | Teacher Forcing | `latent_dataset` | PT 缓存元数据或 LMDB |
 
-WAN 和 LTX2 使用相同的数据集入口。所有数据集均返回统一结构：
+所有数据集均返回统一结构：
 
 ```python
 {
@@ -195,7 +194,7 @@ rank 数整除；设置 `drop_last: true` 则丢弃不足一个分布式训练�
 | 字段 | 含义 |
 | --- | --- |
 | `video_latent_path` | 视频 latent 的 PT 文件 |
-| `audio_latent_path` | 音频 latent 的 PT 文件，LTX2 T2AV 使用 |
+| `audio_latent_path` | 音频 latent 的 PT 文件，音视频模型可选 |
 | `condition_path` | 正向文本条件的 PT 文件 |
 | `negative_condition_path` | 当前样本的负向文本条件，可选 |
 | `caption` | 原始文本，可选 |
@@ -204,12 +203,6 @@ WAN 示例：
 
 ```json
 {"video_latent_path":"latents/000001.pt","condition_path":"conditions/000001.pt"}
-```
-
-LTX2 T2AV 示例：
-
-```json
-{"video_latent_path":"latents/000001.pt","audio_latent_path":"audio_latents/000001.pt","condition_path":"conditions/000001.pt"}
 ```
 
 ```yaml
@@ -283,40 +276,9 @@ wan_latent_cache/
 
 脚本支持连续片段拼接。文件名形如 `sample_0.mp4`、`sample_1.mp4` 时，会按序拼接到目标帧数；拼接后仍不足目标帧数的样本会被跳过。对应 caption 使用 `--prompt-separator` 连接。
 
-## LTX2
-
-LTX2 预处理调用官方 LTX-2 工具，生成视频 latent、音频 latent 和文本条件：
-
-```bash
-cd /path/to/LightX2V
-
-python lightx2v_train/data_process/ltx/build_latent_dataset.py \
-  /path/to/datasets/ltx_t2av/metadata.jsonl \
-  --output-dir /path/to/datasets/ltx_t2av/cache \
-  --model-path /path/to/models/ltx-2.3/ltx-2.3-22b-dev.safetensors \
-  --text-encoder-path /path/to/models/LTX-2 \
-  --ltx2-repo /path/to/LTX-2 \
-  --resolution-buckets 768x512x241 \
-  --batch-size 1 \
-  --device cuda
-```
-
-输出结构：
-
-```text
-cache/
-├── metadata.jsonl
-├── negative_condition.pt
-├── latents/
-├── audio_latents/
-└── conditions/
-```
-
-脚本会先使用固定的 `LTX2_NEGATIVE_PROMPT` 生成 `negative_condition.pt`。该缓存用于 DMD 和 AR-DMD；仅训练 Flow 或 Teacher Forcing 时可通过 `--skip-negative-cache` 跳过。T2AV 的 Flow 和 Teacher Forcing 需要音频 latent；仅处理无音频任务时使用 `--skip-audio`。
-
 ## 训练
 
-训练任务通过配置中的 `data.train` 选择数据集。WAN 和 LTX2 的写法一致。
+训练任务通过配置中的 `data.train` 选择数据集。
 
 ### Flow
 
@@ -349,7 +311,7 @@ data:
     shuffle: true
 ```
 
-WAN 的缓存记录包含 `video_latent_path` 和 `condition_path`。LTX2 T2AV 还需要 `audio_latent_path`。
+WAN 的缓存记录包含 `video_latent_path` 和 `condition_path`。
 
 ### DMD / AR-DMD
 
@@ -405,4 +367,4 @@ data:
     drop_last: true
 ```
 
-WAN Teacher Forcing 需要视频 latent 和文本条件。LTX2 T2AV Teacher Forcing 需要视频 latent、音频 latent 和文本条件。
+WAN Teacher Forcing 需要视频 latent 和文本条件。
