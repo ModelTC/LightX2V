@@ -16,6 +16,7 @@ except ImportError:
     VideoReader = None
 
 from lightx2v.common.kvcache import KVCacheManager
+from lightx2v.models.networks.wan.animate2_identity import WAN_ANIMATE2_MODEL_ID
 from lightx2v.models.networks.wan.animate2_model import WanAnimate2Model
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.animate2 import WanAnimate2Scheduler
@@ -167,7 +168,7 @@ class _Animate2VideoRecorder(VideoRecorder):
         return self.returncode
 
 
-@RUNNER_REGISTER("wan22_animate2_distilled")
+@RUNNER_REGISTER(WAN_ANIMATE2_MODEL_ID)
 class WanAnimate2Runner(WanRunner):
     """Native LightX2V runner for Wan-Animate-2.
 
@@ -188,7 +189,7 @@ class WanAnimate2Runner(WanRunner):
         if self.config.get("enable_reuse", False):
             raise NotImplementedError("Wan-Animate-2 request reuse is not implemented for autoregressive inputs.")
         if self.config["task"] != "animate":
-            raise ValueError("wan22_animate2_distilled requires task='animate'.")
+            raise ValueError(f"{WAN_ANIMATE2_MODEL_ID} requires task='animate'.")
         if self.config.get("use_stream_vae", False):
             raise NotImplementedError("Wan-Animate-2 must drop its leading latent before Wan VAE decode; use_stream_vae is not supported.")
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
