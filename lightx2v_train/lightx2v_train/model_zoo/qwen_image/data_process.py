@@ -109,20 +109,33 @@ class QwenImageDataProcessor:
 class QwenImageEditDataProcessor(QwenImageDataProcessor):
     def __call__(self, sample):
         inputs = sample["inputs"]
+        meta = sample["meta"]
         target_image = inputs.pop("target_image", None)
         source_images = inputs.pop("source_images", [])
         reference_image = source_images[-1] if source_images else None
 
         if reference_image is not None:
-            sample["meta"]["reference_image_height"] = reference_image.height
-            sample["meta"]["reference_image_width"] = reference_image.width
+            meta["reference_image_height"] = reference_image.height
+            meta["reference_image_width"] = reference_image.width
         if target_image is not None:
-            inputs["target_pixel_values"] = self._process_target(
+            target_pixels = self._process_target(
                 target_image,
                 sample,
                 reference_image=reference_image,
                 area_multiple=32,
             )
+            inputs["target_pixel_values"] = target_pixels
+            meta["target_height"] = int(target_pixels.shape[-2])
+            meta["target_width"] = int(target_pixels.shape[-1])
+        elif reference_image is not None:
+            target_width, target_height = self._resolve_target_size(
+                sample,
+                reference_image.width / reference_image.height,
+                self.target_area,
+                area_multiple=32,
+            )
+            meta["target_height"] = target_height
+            meta["target_width"] = target_width
         if source_images:
             condition_images, vae_images = self._process_source_images(source_images)
             inputs["source_condition_images"] = condition_images

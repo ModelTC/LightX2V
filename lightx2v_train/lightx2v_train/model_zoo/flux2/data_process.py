@@ -95,6 +95,7 @@ class Flux2DataProcessor:
 class Flux2EditDataProcessor(Flux2DataProcessor):
     def __call__(self, sample):
         inputs = sample["inputs"]
+        meta = sample["meta"]
         target_image = inputs.pop("target_image", None)
         source_images = inputs.pop("source_images", [])
         if not source_images:
@@ -108,15 +109,28 @@ class Flux2EditDataProcessor(Flux2DataProcessor):
             source_sizes.append(size)
 
         reference_height, reference_width = source_sizes[0]
-        sample["meta"]["reference_image_height"] = reference_height
-        sample["meta"]["reference_image_width"] = reference_width
+        meta["reference_image_height"] = reference_height
+        meta["reference_image_width"] = reference_width
         inputs["source_vae_pixel_values"] = source_pixels
         if target_image is not None:
-            inputs["target_pixel_values"] = self._process_target(
+            target_pixels = self._process_target(
                 target_image,
                 sample,
                 fallback_size=(reference_height, reference_width),
             )
+            inputs["target_pixel_values"] = target_pixels
+            meta["target_height"] = int(target_pixels.shape[-2])
+            meta["target_width"] = int(target_pixels.shape[-1])
+        else:
+            target_height, target_width = _explicit_target_size(sample)
+            if target_height is None:
+                target_height, target_width = reference_height, reference_width
+            else:
+                multiple = int(self.image_processor.config.vae_scale_factor)
+                target_height = align_dimension(target_height, multiple)
+                target_width = align_dimension(target_width, multiple)
+            meta["target_height"] = target_height
+            meta["target_width"] = target_width
         return sample
 
     def _process_source(self, image):

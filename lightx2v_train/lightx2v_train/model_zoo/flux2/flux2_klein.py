@@ -38,6 +38,7 @@ class Flux2KleinModel(Flux2ModelBase):
                     channels_path="transformer.config.in_channels",
                     spatial_downsample_multiplier=2,
                 ),
+                guidance_in_denoiser_space=True,
             ),
         )
         self.capabilities.register(ConsistencyModelCapability, Flux2ConsistencyModelCapability(self))

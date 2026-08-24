@@ -99,8 +99,19 @@ class PCMLoss:
         return elementwise.flatten(1).mean(dim=1)
 
 
-def pcm_inference_sigmas(num_inference_steps: int, num_solver_steps: int) -> list[float]:
-    """Return the unshifted descending phase schedule used by PCM inference."""
+def pcm_inference_sigmas(
+    num_inference_steps: int,
+    num_solver_steps: int,
+    *,
+    scheduler=None,
+    latent_hw=None,
+) -> list[float]:
+    """Return the descending PCM phase schedule used by inference.
+
+    PCM is trained against phase boundaries after the scheduler's time shift.
+    Custom inference sigmas otherwise bypass scheduler shifting, so apply the
+    same transform here when a scheduler is provided.
+    """
     if not 1 <= num_inference_steps <= num_solver_steps:
         raise ValueError("PCM inference steps must be in [1, num_solver_steps].")
     indices = torch.div(
@@ -108,7 +119,10 @@ def pcm_inference_sigmas(num_inference_steps: int, num_solver_steps: int) -> lis
         num_inference_steps,
         rounding_mode="floor",
     )
-    return ((num_solver_steps - indices).float() / num_solver_steps).tolist()
+    sigmas = (num_solver_steps - indices).float() / num_solver_steps
+    if scheduler is not None and scheduler.do_time_shift:
+        sigmas = scheduler.time_shift(sigmas, latent_hw=latent_hw)
+    return sigmas.tolist()
 
 
 @CONSISTENCY_OBJECTIVE_REGISTER("pcm")

@@ -46,6 +46,7 @@ class QwenImageModel(BaseModel):
                     channels_path="latent_channels",
                     temporal_size=1,
                 ),
+                guidance_in_denoiser_space=True,
             ),
         )
         self.capabilities.register(
