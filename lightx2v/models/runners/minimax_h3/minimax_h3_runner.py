@@ -203,6 +203,40 @@ class MiniMaxH3Runner(DefaultRunner):
     def load_text_encoder(self):
         return [MiniMaxH3Qwen3VLTextEncoder(self.config)]
 
+    @staticmethod
+    def _validate_vae_decode_tile_shapes(tile_shapes, video_vae):
+        if not isinstance(tile_shapes, dict):
+            raise ValueError("vae_decode_tile_shape must map 'HEIGHTxWIDTH' to [tile_height, tile_width]")
+
+        ratio = video_vae.spatial_compression_ratio
+        overlap_height = video_vae.tile_sample_min_overlap_height
+        overlap_width = video_vae.tile_sample_min_overlap_width
+        for resolution, tile_shape in tile_shapes.items():
+            if not isinstance(resolution, str):
+                raise ValueError(f"invalid VAE tile resolution: {resolution!r}")
+            dimensions = resolution.split("x")
+            if len(dimensions) != 2:
+                raise ValueError(f"invalid VAE tile resolution: {resolution!r}")
+            height_text, width_text = dimensions
+            if not height_text.isdigit() or not width_text.isdigit():
+                raise ValueError(f"invalid VAE tile resolution: {resolution!r}")
+            height = int(height_text)
+            width = int(width_text)
+            if height <= 0 or width <= 0 or resolution != f"{height}x{width}":
+                raise ValueError(f"invalid VAE tile resolution: {resolution!r}")
+
+            shape_is_pair = isinstance(tile_shape, (list, tuple)) and len(tile_shape) == 2
+            if not shape_is_pair:
+                raise ValueError(f"VAE decode tile shape for {resolution} must contain two integers, got {tile_shape!r}")
+            tile_height, tile_width = tile_shape
+            if type(tile_height) is not int or type(tile_width) is not int:
+                raise ValueError(f"VAE decode tile shape for {resolution} must contain two integers, got {tile_shape!r}")
+
+            if tile_height % ratio or tile_width % ratio:
+                raise ValueError(f"VAE decode tile shape for {resolution} must be divisible by {ratio}, got {tile_shape}")
+            if tile_height <= overlap_height or tile_width <= overlap_width:
+                raise ValueError(f"VAE decode tile shape for {resolution} must be larger than the tile overlap, got {tile_shape}")
+
     def load_vae(self):
         cpu_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload", False))
         video_vae_quantized = self.config.get("video_vae_quantized", False)
@@ -219,6 +253,8 @@ class MiniMaxH3Runner(DefaultRunner):
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
         )
+        self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
+        self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
         if self.config.get("vae_decode_parallel", False):
             world_size = dist.get_world_size() if dist.is_initialized() else 1
             if world_size > 1:
@@ -555,6 +591,16 @@ class MiniMaxH3Runner(DefaultRunner):
             patch_size=tuple(self.config.get("patch_size", (1, 2, 2))),
         )
         audio_latents = unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)
+        if self._vae_decode_tile_shapes:
+            resolution = f"{self.request_height}x{self.request_width}"
+            default_tile_shape = (
+                self.video_vae.tile_sample_min_height,
+                self.video_vae.tile_sample_min_width,
+            )
+            tile_shape = self._vae_decode_tile_shapes.get(resolution, default_tile_shape)
+            self.video_vae.set_decode_tile_shape(*tile_shape)
+            logger.info(f"MiniMax-H3 Video VAE decode tile shape for {resolution}: {tile_shape[0]}x{tile_shape[1]}")
+
         with ProfilingContext4DebugL1("Run Video VAE Decoder"):
             video = self.video_vae.decode(video_latents)
         audio = None

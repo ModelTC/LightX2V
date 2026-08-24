@@ -625,6 +625,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.use_tiling = True
         self.tile_sample_min_height = 256
         self.tile_sample_min_width = 256
+        self.decode_tile_sample_min_height = 256
+        self.decode_tile_sample_min_width = 256
         self.tile_sample_min_overlap_height = 64
         self.tile_sample_min_overlap_width = 64
 
@@ -726,6 +728,10 @@ class MiniMaxH3VideoVAE(nn.Module):
             model.to(model.execution_device)
         return model
 
+    def set_decode_tile_shape(self, tile_height: int, tile_width: int) -> None:
+        self.decode_tile_sample_min_height = tile_height
+        self.decode_tile_sample_min_width = tile_width
+
     def enable_tiling(
         self,
         tile_sample_min_height: int | None = None,
@@ -734,8 +740,12 @@ class MiniMaxH3VideoVAE(nn.Module):
         tile_sample_min_overlap_width: int | None = None,
     ) -> None:
         self.use_tiling = True
-        self.tile_sample_min_height = tile_sample_min_height or self.tile_sample_min_height
-        self.tile_sample_min_width = tile_sample_min_width or self.tile_sample_min_width
+        if tile_sample_min_height:
+            self.tile_sample_min_height = tile_sample_min_height
+            self.decode_tile_sample_min_height = tile_sample_min_height
+        if tile_sample_min_width:
+            self.tile_sample_min_width = tile_sample_min_width
+            self.decode_tile_sample_min_width = tile_sample_min_width
         self.tile_sample_min_overlap_height = tile_sample_min_overlap_height or self.tile_sample_min_overlap_height
         self.tile_sample_min_overlap_width = tile_sample_min_overlap_width or self.tile_sample_min_overlap_width
 
@@ -837,12 +847,12 @@ class MiniMaxH3VideoVAE(nn.Module):
         sample_width = latents.shape[-1] * ratio
         height_starts, height_lengths, height_overlaps = self._split_tiles(
             sample_height,
-            self.tile_sample_min_height,
+            self.decode_tile_sample_min_height,
             self.tile_sample_min_overlap_height,
         )
         width_starts, width_lengths, width_overlaps = self._split_tiles(
             sample_width,
-            self.tile_sample_min_width,
+            self.decode_tile_sample_min_width,
             self.tile_sample_min_overlap_width,
         )
 
