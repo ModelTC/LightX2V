@@ -19,7 +19,13 @@ def compress_kernel(
 
     x_offset = idx_bh * L * D
     xm_offset = idx_bh * ((L + BLOCK_L - 1) // BLOCK_L) * D
-    x = tl.load(X + x_offset + offs_l[:, None] * D + offs_d[None, :], mask=offs_l[:, None] < L)
+    # Triton leaves masked lanes undefined when ``other`` is omitted. The
+    # lanes participate in the reduction below, so zero the tail padding.
+    x = tl.load(
+        X + x_offset + offs_l[:, None] * D + offs_d[None, :],
+        mask=offs_l[:, None] < L,
+        other=0.0,
+    )
 
     nx = min(BLOCK_L, L - idx_l * BLOCK_L)
     x_mean = tl.sum(x, axis=0, dtype=tl.float32) / nx
@@ -54,7 +60,8 @@ def get_block_map(q, k, topk_ratio, BLKQ=64, BLKK=64):
     pooled_score = pooled_qblocks @ pooled_kblocks.transpose(-1, -2)
 
     K = pooled_score.shape[-1]
-    topk = min(K, int(topk_ratio * K))
+    # Match the training router: short sequences still retain one key block.
+    topk = max(1, min(K, int(topk_ratio * K)))
     lut = torch.topk(pooled_score, topk, dim=-1, sorted=False).indices
 
     sparse_map = torch.zeros_like(pooled_score, dtype=torch.int8)

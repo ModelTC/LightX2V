@@ -1,0 +1,13 @@
+{
+    "attention_backend": "torch_sdpa",
+    "cross_attention_backend": "torch_sdpa",
+    "rope_type": "flashinfer_rope",
+    "clip_len": 24,
+    "dit_overlap": 0,
+    "reae_frame_batch_size": 0,
+    "fps": null,
+    "video_codec": "libx265",
+    "quality": 60,
+    "ffmpeg_preset": "ultrafast",
+    "queue_size": 3
+}

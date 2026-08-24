@@ -23,6 +23,7 @@ from lightx2v.utils.envs import GET_DTYPE
 
 H3_CHANNEL_QUANT_SCHEMES = {
     "fp8-q8f",
+    "fp8-musa",
     "fp8-sgl",
     "fp8-torchao",
     "fp8-triton",
@@ -264,6 +265,12 @@ class MiniMaxH3Model(BaseTransformerModel):
         offload_manager = getattr(getattr(self, "transformer_infer", None), "offload_manager", None)
         if offload_manager is not None:
             offload_manager.need_init_first_buffer = True
+
+    def _remove_lora(self):
+        super()._remove_lora()
+        transformer_infer = getattr(self, "transformer_infer", None)
+        if transformer_infer is not None:
+            transformer_infer._clear_adaln_cache()
 
     def _update_lora(self, lora_path, strength, alpha=None):
         if isinstance(lora_path, dict):
