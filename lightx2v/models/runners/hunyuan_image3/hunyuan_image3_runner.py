@@ -37,6 +37,32 @@ class HunyuanImage3TextGenerationPlan:
 class HunyuanImage3Runner(DefaultRunner):
     model_cpu_offload_seq = "transformer"
 
+    def __init__(self, config):
+        super().__init__(config)
+        self._close_after_run = self._is_offline_infer_entrypoint() and not self._is_multi_run_benchmark(config)
+
+    @staticmethod
+    def _is_offline_infer_entrypoint():
+        main_module = sys.modules.get("__main__")
+        module_spec = getattr(main_module, "__spec__", None)
+        if getattr(module_spec, "name", None) == "lightx2v.infer":
+            return True
+
+        main_file = getattr(main_module, "__file__", None)
+        if main_file is None:
+            return False
+        return Path(main_file).resolve() == Path(__file__).resolve().parents[3] / "infer.py"
+
+    @staticmethod
+    def _is_multi_run_benchmark(config):
+        return (
+            bool(config.get("benchmark_stage_timing", False))
+            or bool(config.get("benchmark_defer_cuda_event_materialization", False))
+            or bool(config.get("benchmark_result_path"))
+            or int(config.get("benchmark_warmup_iters", 0) or 0) > 0
+            or int(config.get("benchmark_measure_iters", 1) or 1) != 1
+        )
+
     def load_model(self):
         self.model = self.load_transformer()
         self.text_encoders = []
@@ -1636,6 +1662,13 @@ class HunyuanImage3Runner(DefaultRunner):
         return self.generate_ti2i(input_info)
 
     def run_pipeline(self, input_info):
+        try:
+            return self._run_pipeline(input_info)
+        finally:
+            if self._close_after_run:
+                self.close()
+
+    def _run_pipeline(self, input_info):
         self.input_info = input_info
         task = self.config.get("task")
         if task == "t2t":
