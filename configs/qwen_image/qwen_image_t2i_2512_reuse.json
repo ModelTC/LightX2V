@@ -8,5 +8,6 @@
     "enable_cfg": true,
     "sample_guide_scale": 4.0,
     "use_compile": true,
-    "enable_reuse": true
+    "enable_reuse": true,
+    "reuse_cache_path": "save_results/reuse_cache/qwen_image_t2i_2512"
 }

@@ -1,5 +1,7 @@
 import gc
+import json
 import os
+import shutil
 
 import numpy as np
 import requests
@@ -16,7 +18,7 @@ from lightx2v.utils.envs import *
 from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.profiler import *
-from lightx2v.utils.utils import fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
+from lightx2v.utils.utils import fixed_shape_resize, get_optimal_patched_size_with_sp, is_main_process, isotropic_crop_resize, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -88,6 +90,14 @@ class DefaultRunner(BaseRunner):
         super().__init__(config)
         self.has_prompt_enhancer = False
         self.progress_callback = None
+        self.reuse_cache_path = self.config.get("reuse_cache_path")
+        if self.enable_reuse and not self.reuse_cache_path:
+            raise ValueError("enable_reuse requires reuse_cache_path")
+        self.reuse_cache_dir = None
+        self.reuse_cache_stage_dir = None
+        self.final_result_path = None
+        self.previous_result_path = None
+        self.work_result_path = None
         if self.config["task"] == "t2v" and self.config.get("sub_servers", {}).get("prompt_enhancer") is not None:
             self.has_prompt_enhancer = True
             if not self.check_sub_servers("prompt_enhancer"):
@@ -97,6 +107,116 @@ class DefaultRunner(BaseRunner):
             self.config["use_prompt_enhancer"] = False
         self.set_init_device()
         self.init_scheduler()
+
+    def reuse_key(self):
+        raise NotImplementedError
+
+    def reuse_inputs_path(self, cache_dir):
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        return os.path.join(cache_dir, f"inputs_rank_{rank:05d}.pt")
+
+    def reuse_input_info(self):
+        return {}
+
+    def load_reuse_state(self, map_location=AI_DEVICE):
+        manifest_path = os.path.join(self.reuse_cache_dir, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            raise RuntimeError(f"No previous successful {type(self).__name__} request is available for reuse")
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+        if manifest["reuse_key"] != self.reuse_key():
+            raise ValueError("Reuse inputs must match the previous successful request")
+        self.previous_result_path = manifest["result_path"]
+        return torch.load(self.reuse_inputs_path(self.reuse_cache_dir), map_location=map_location, weights_only=True)
+
+    def load_reused_inputs(self):
+        cached = self.load_reuse_state()
+        for name, value in cached["input_info"].items():
+            setattr(self.input_info, name, value)
+        logger.info("[Reuse] Loaded the previous request's input encoder output from disk")
+        return cached["inputs"]
+
+    def save_reuse_inputs(self):
+        torch.save(
+            {"inputs": self.inputs, "input_info": self.reuse_input_info()},
+            self.reuse_inputs_path(self.reuse_cache_stage_dir),
+        )
+
+    def prepare_reuse_output(self):
+        self.reuse_cache_dir = None
+        self.reuse_cache_stage_dir = None
+        self.final_result_path = None
+        self.previous_result_path = None
+        self.work_result_path = None
+
+        output_path = self.input_info.save_result_path
+        local_output = bool(output_path) and not output_path.startswith(("http://", "https://", "rtmp://"))
+        reuse_cache_enabled = self.enable_reuse and local_output and not self.input_info.return_result_tensor
+        if self.reuse and not reuse_cache_enabled:
+            raise ValueError(f"{type(self).__name__} reuse requires a local output and return_result_tensor=false")
+        if not reuse_cache_enabled:
+            return
+
+        self.final_result_path = os.path.abspath(os.path.expanduser(output_path))
+        self.reuse_cache_dir = os.path.abspath(os.path.expanduser(self.reuse_cache_path))
+        self.reuse_cache_stage_dir = f"{self.reuse_cache_dir}.tmp"
+
+    def stage_reuse_cache(self):
+        if self.reuse_cache_dir is None:
+            return
+
+        if is_main_process():
+            shutil.rmtree(self.reuse_cache_stage_dir, ignore_errors=True)
+            os.makedirs(self.reuse_cache_stage_dir)
+        if dist.is_initialized():
+            dist.barrier()
+
+        if self.reuse:
+            shutil.copy2(
+                self.reuse_inputs_path(self.reuse_cache_dir),
+                self.reuse_inputs_path(self.reuse_cache_stage_dir),
+            )
+        else:
+            self.save_reuse_inputs()
+
+        if dist.is_initialized():
+            dist.barrier()
+        if is_main_process():
+            with open(os.path.join(self.reuse_cache_stage_dir, "manifest.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {"reuse_key": self.reuse_key(), "result_path": self.final_result_path},
+                    f,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+
+    def commit_reuse_result(self):
+        if self.reuse_cache_dir is None or not is_main_process():
+            return
+
+        cache_backup_dir = f"{self.reuse_cache_dir}.old"
+        shutil.rmtree(cache_backup_dir, ignore_errors=True)
+        cache_backed_up = os.path.isdir(self.reuse_cache_dir)
+        if cache_backed_up:
+            os.replace(self.reuse_cache_dir, cache_backup_dir)
+        try:
+            os.replace(self.reuse_cache_stage_dir, self.reuse_cache_dir)
+            if self.work_result_path is not None:
+                os.replace(self.work_result_path, self.final_result_path)
+        except Exception:
+            shutil.rmtree(self.reuse_cache_dir, ignore_errors=True)
+            if cache_backed_up:
+                os.replace(cache_backup_dir, self.reuse_cache_dir)
+            raise
+        shutil.rmtree(cache_backup_dir, ignore_errors=True)
+
+    def discard_reuse_result(self):
+        if not is_main_process():
+            return
+        if self.reuse_cache_stage_dir:
+            shutil.rmtree(self.reuse_cache_stage_dir, ignore_errors=True)
+        if self.work_result_path and os.path.exists(self.work_result_path):
+            os.remove(self.work_result_path)
 
     def warmup(self):
         if not self.config.get("warmup", False):

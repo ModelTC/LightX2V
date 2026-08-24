@@ -84,8 +84,9 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
 
-    def set_reuse(self, reuse):
-        if reuse and self.config["model_cls"] not in (
+    def check_reuse_support(self):
+        model_cls = self.config["model_cls"]
+        if model_cls not in (
             "wan2.1",
             "wan2.1_distill",
             "wan2.1_mean_flow_distill",
@@ -95,9 +96,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
             "infinitetalk",
         ):
             raise NotImplementedError("Wan reuse currently supports Wan2.1, Wan2.2, and InfiniteTalk only")
-        if reuse and self.config["model_cls"] != "infinitetalk" and self.config["task"] not in ("t2v", "i2v"):
+        if model_cls != "infinitetalk" and self.config["task"] not in ("t2v", "i2v"):
             raise NotImplementedError(f"Wan reuse does not support task: {self.config['task']}")
-        super().set_reuse(reuse)
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
@@ -496,33 +496,50 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.end_run()
         return gen_video_final
 
-    def _reuse_key(self):
+    def reuse_key(self):
         prompt = self.input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else self.input_info.prompt
-        reuse_key = (
-            prompt,
-            self.input_info.negative_prompt,
-            self.config["target_video_length"],
-        )
+        reuse_key = {
+            "prompt": prompt,
+            "negative_prompt": self.input_info.negative_prompt,
+            "target_video_length": self.config["target_video_length"],
+        }
         if self.config["task"] == "i2v":
-            reuse_key += (self.config.get("resize_mode"), tuple(self.input_info.image_path.split(",")))
-        else:
-            reuse_key += (tuple(self.input_info.target_shape),)
+            reuse_key.update(
+                {
+                    "image_path": self.input_info.image_path.split(","),
+                    "resize_mode": self.config.get("resize_mode"),
+                }
+            )
+        elif self.config["task"] == "t2v":
+            target_shape = self.input_info.target_shape or (
+                self.config["target_height"],
+                self.config["target_width"],
+            )
+            reuse_key["target_shape"] = list(target_shape)
         return reuse_key
+
+    def reuse_input_info(self):
+        return {
+            "latent_shape": list(self.input_info.latent_shape),
+            "target_shape": list(self.input_info.target_shape),
+        }
 
     def _run_pipeline_local(self):
         if self.config["use_prompt_enhancer"]:
             self.input_info.prompt_enhanced = self.post_prompt_enhancer()
-        if self.reuse:
-            self.inputs = self._get_reused_inputs()
-        else:
-            self.inputs = self.run_input_encoder()
-            if self.enable_reuse:
-                self._reuse_cache = {"reuse_key": self._reuse_key(), "inputs": self.inputs}
-        if self.enable_reuse and self.config["model_cls"] == "wan2.2" and self.config["task"] == "i2v":
-            # wan2.2 dense init_run clears this request's VAE output after scheduler.prepare; keep the cached container intact.
-            self.inputs = self.inputs.copy()
-            self.inputs["image_encoder_output"] = self.inputs["image_encoder_output"].copy()
-        return self.run_main()
+        self.prepare_reuse_output()
+        try:
+            self.inputs = self.load_reused_inputs() if self.reuse else self.run_input_encoder()
+            self.stage_reuse_cache()
+            result = self.run_main()
+            self.commit_reuse_result()
+            return result
+        except Exception:
+            self.discard_reuse_result()
+            raise
+        finally:
+            if self.input_info is not None:
+                self.end_run()
 
     def _run_pipeline_disagg_encoder(self):
         if self.config["use_prompt_enhancer"]:

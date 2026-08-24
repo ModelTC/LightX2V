@@ -10,5 +10,6 @@
     "sample_shift": 3,
     "enable_cfg": true,
     "cpu_offload": false,
-    "enable_reuse": true
+    "enable_reuse": true,
+    "reuse_cache_path": "save_results/reuse_cache/wan_i2v"
 }
