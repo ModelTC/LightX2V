@@ -82,6 +82,7 @@ class TorchrunInferenceWorker:
             lora_name = task_data.pop("lora_name", None)
             lora_strength = task_data.pop("lora_strength", 1.0)
             reuse = task_data.pop("reuse", False)
+            reuse_prefix_segments = task_data.pop("reuse_prefix_segments", 0)
 
             if self.lora_dir:
                 self.switch_lora(lora_name, lora_strength)
@@ -105,7 +106,7 @@ class TorchrunInferenceWorker:
                 self.input_info = init_empty_input_info(self.runner.config["task"])
             update_input_info_from_dict(self.input_info, task_data)
 
-            self.runner.set_reuse(reuse)
+            self.runner.set_reuse(reuse, reuse_prefix_segments)
             self.runner.set_config(task_data)
             pipeline_return = self.runner.run_pipeline(self.input_info)
 

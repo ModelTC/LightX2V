@@ -32,5 +32,6 @@
     "norm_output_audio": true,
     "mxfp8_fuse_enable": false,
     "use_timestep_transform": true,
-    "enable_reuse": true
+    "enable_reuse": true,
+    "reuse_cache_path": "save_results/reuse_cache/infinitetalk_480p_multi_reuse"
 }
