@@ -113,6 +113,13 @@ class MiniMaxH3Runner(DefaultRunner):
         if task not in self._WARMUP_TASKS:
             raise NotImplementedError(f"MiniMax-H3 warmup does not support task: {task}")
 
+        if task == "ref2av" and self.config.get("vae_use_compile", False):
+            height, width, _ = self._WARMUP_SHAPES[0]
+            pixels = torch.zeros((1, 3, self.video_vae.clip_length, height, width))
+            self.video_vae.encode_condition(pixels, video=True, return_cpu=False)
+            torch_device_module.synchronize()
+            del pixels
+
         for height, width, num_frames in self._WARMUP_SHAPES:
             logger.info(f"Warmup: {height}x{width}x{num_frames}")
             transformer_offloaded = not self.config.get("cpu_offload", False)
@@ -255,6 +262,13 @@ class MiniMaxH3Runner(DefaultRunner):
         )
         self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
         self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
+        if self.config.get("vae_encode_parallel", False):
+            world_size = dist.get_world_size() if dist.is_initialized() else 1
+            if world_size > 1:
+                video_vae.enable_encode_parallel()
+                logger.info(f"MiniMax-H3 spatiotemporal-tile VAE encode parallel enabled over {world_size} ranks")
+            else:
+                logger.info("MiniMax-H3 VAE encode parallel disabled for single-rank inference")
         if self.config.get("vae_decode_parallel", False):
             world_size = dist.get_world_size() if dist.is_initialized() else 1
             if world_size > 1:

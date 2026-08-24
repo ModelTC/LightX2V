@@ -561,6 +561,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.cpu_offload = cpu_offload
         self.quant_scheme = quant_scheme
         self.decode_parallel = False
+        self.encode_parallel = False
         self.infer_dtype = torch.float16
         self.sensitive_layer_dtype = sensitive_layer_dtype
         if use_compile:
@@ -726,6 +727,9 @@ class MiniMaxH3VideoVAE(nn.Module):
         model.eval().requires_grad_(False)
         if not cpu_offload:
             model.to(model.execution_device)
+        if use_compile:
+            logger.info("[Compile] Using torch.compile for MiniMaxH3VideoEncoder3d")
+            model.encoder = torch.compile(model.encoder, dynamic=None)
         return model
 
     def set_decode_tile_shape(self, tile_height: int, tile_width: int) -> None:
@@ -750,8 +754,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.tile_sample_min_overlap_width = tile_sample_min_overlap_width or self.tile_sample_min_overlap_width
 
     def disable_tiling(self) -> None:
-        if self.decode_parallel:
-            raise RuntimeError("MiniMax-H3 VAE decode parallel requires tiling")
+        if self.decode_parallel or self.encode_parallel:
+            raise RuntimeError("MiniMax-H3 VAE parallel execution requires tiling")
         self.use_tiling = False
 
     def enable_decode_parallel(self) -> None:
@@ -760,6 +764,13 @@ class MiniMaxH3VideoVAE(nn.Module):
         if not dist.is_initialized() or dist.get_world_size() <= 1:
             raise RuntimeError("MiniMax-H3 VAE decode parallel requires an initialized multi-rank process group")
         self.decode_parallel = True
+
+    def enable_encode_parallel(self) -> None:
+        if not self.use_tiling:
+            raise RuntimeError("MiniMax-H3 VAE encode parallel requires tiling")
+        if not dist.is_initialized() or dist.get_world_size() <= 1:
+            raise RuntimeError("MiniMax-H3 VAE encode parallel requires an initialized multi-rank process group")
+        self.encode_parallel = True
 
     def _split_tiles(self, length: int, tile_size: int, min_overlap: int) -> tuple[list[int], list[int], list[int]]:
         if tile_size >= length:
@@ -897,6 +908,73 @@ class MiniMaxH3VideoVAE(nn.Module):
             moments = moments[:, :, : -self.token_drop]
         return moments
 
+    def _encode_parallel(self, pixels: torch.Tensor, video: bool) -> torch.Tensor:
+        """Encode the global ``(clip, row, column)`` tile pool across all ranks.
+
+        Rank 0 stitches and samples the conditioning latent, then broadcasts it
+        to every rank for the following DiT stage.
+        """
+        num_frames = pixels.shape[2]
+        if video and num_frames % self.clip_length:
+            padding = pixels[:, :, -1:].repeat(1, 1, (-num_frames) % self.clip_length, 1, 1)
+            pixels = torch.cat((pixels, padding), dim=2)
+        clip_length = self.clip_length if video else pixels.shape[2]
+        num_clips = pixels.shape[2] // clip_length
+
+        height, width = pixels.shape[-2:]
+        y_indices, y_lengths, y_overlaps = self._split_tiles(height, self.tile_sample_min_height, self.tile_sample_min_overlap_height)
+        x_indices, x_lengths, x_overlaps = self._split_tiles(width, self.tile_sample_min_width, self.tile_sample_min_overlap_width)
+        num_columns = len(x_indices)
+        tiles_per_clip = len(y_indices) * num_columns
+        num_tiles = num_clips * tiles_per_clip
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        if num_tiles < world_size:
+            raise ValueError(f"MiniMax-H3 VAE encode parallel requires at least {world_size} tiles, got {num_tiles}")
+
+        local_tiles = []
+        task_counts = self._balanced_task_counts(num_tiles, world_size)
+        local_start = sum(task_counts[:rank])
+        local_end = local_start + task_counts[rank]
+        for tile_index in range(local_start, local_end):
+            clip_index, spatial_index = divmod(tile_index, tiles_per_clip)
+            row_index, column_index = divmod(spatial_index, num_columns)
+            frame_start = clip_index * clip_length
+            frame_end = frame_start + clip_length
+            y_start = y_indices[row_index]
+            y_end = y_start + y_lengths[row_index]
+            x_start = x_indices[column_index]
+            x_end = x_start + x_lengths[column_index]
+            tile = pixels[:, :, frame_start:frame_end, y_start:y_end, x_start:x_end]
+            local_tiles.append(self.quant_conv(self.encoder(tile)))
+
+        tiles = self._gather_tiles(local_tiles, task_counts)
+        if rank == 0:
+            latent_y_overlaps = [overlap // self.spatial_compression_ratio for overlap in y_overlaps]
+            latent_x_overlaps = [overlap // self.spatial_compression_ratio for overlap in x_overlaps]
+            clip_moments = []
+            for clip_index in range(num_clips):
+                clip_tiles = tiles[clip_index * tiles_per_clip : (clip_index + 1) * tiles_per_clip]
+                clip_moments.append(self._stitch_clip(clip_tiles, latent_y_overlaps, latent_x_overlaps))
+
+            if video:
+                moments = torch.cat(clip_moments, dim=2)
+                if self.token_drop > 0:
+                    moments = moments[:, :, : -self.token_drop]
+            else:
+                moments = clip_moments[0]
+            latents = self._sample_condition_latents(moments).contiguous()
+            latent_shape = torch.tensor(latents.shape, dtype=torch.int64, device=pixels.device)
+        else:
+            latent_shape = torch.empty(5, dtype=torch.int64, device=pixels.device)
+
+        dist.broadcast(latent_shape, src=0)
+        if rank != 0:
+            shape = tuple(latent_shape.tolist())
+            latents = torch.empty(shape, dtype=self.sensitive_layer_dtype, device=pixels.device)
+        dist.broadcast(latents, src=0)
+        return latents
+
     @staticmethod
     def _sample_posterior(moments: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
         mean, logvar = torch.chunk(moments, 2, dim=1)
@@ -905,6 +983,11 @@ class MiniMaxH3VideoVAE(nn.Module):
         # and moving the result, even when the posterior itself is on CUDA.
         noise = torch.randn(mean.shape, generator=generator, device="cpu", dtype=mean.dtype).to(mean.device)
         return mean + torch.exp(0.5 * logvar) * noise
+
+    def _sample_condition_latents(self, moments: torch.Tensor) -> torch.Tensor:
+        generator = torch.Generator(device="cpu").manual_seed(42)
+        latents = self._sample_posterior(moments, generator).to(self.infer_dtype)
+        return self.normalize_latents(latents)
 
     def normalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
         mean = self.latents_mean.to(latents.device).view(1, -1, 1, 1, 1)
@@ -924,13 +1007,11 @@ class MiniMaxH3VideoVAE(nn.Module):
             device = self._activate()
             pixels = self.preprocess(pixels.to(device=device, dtype=self.sensitive_layer_dtype))
             with torch.no_grad():
-                moments = self._encode(pixels) if video else self._encode_clip(pixels)
-                generator = torch.Generator(device="cpu").manual_seed(42)
-                latents = self._sample_posterior(moments, generator)
-                latents = latents.to(self.infer_dtype)
-                if self.sensitive_layer_dtype != self.infer_dtype:
-                    latents = latents.to(self.sensitive_layer_dtype)
-                latents = self.normalize_latents(latents)
+                if self.encode_parallel:
+                    latents = self._encode_parallel(pixels, video)
+                else:
+                    moments = self._encode(pixels) if video else self._encode_clip(pixels)
+                    latents = self._sample_condition_latents(moments)
             return latents.cpu() if return_cpu else latents
         finally:
             if self.cpu_offload:
