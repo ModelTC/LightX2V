@@ -1,7 +1,6 @@
 import pytest
-import torch
-
 import sycl_kernels
+import torch
 
 
 def quantize_int8_per_output_channel(weight):
@@ -14,8 +13,7 @@ def quantize_int8_per_output_channel(weight):
 def relative_rms(actual, expected):
     actual = actual.float()
     expected = expected.float()
-    return ((actual - expected).square().mean().sqrt()
-            / expected.square().mean().sqrt().clamp_min(1e-8)).item()
+    return ((actual - expected).square().mean().sqrt() / expected.square().mean().sqrt().clamp_min(1e-8)).item()
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])

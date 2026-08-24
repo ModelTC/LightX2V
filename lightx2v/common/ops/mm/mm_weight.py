@@ -2739,15 +2739,9 @@ class MMWeightInt8IntelXpu(MMWeightQuantTemplate):
 
     def apply(self, input_tensor):
         if sycl_kernels is None or not hasattr(sycl_kernels, "onednn_w8a8_int8"):
-            raise RuntimeError(
-                "int8-intel-xpu requires a lightx2v_kernel_xpu build that "
-                "exports sycl_kernels.onednn_w8a8_int8"
-            )
+            raise RuntimeError("int8-intel-xpu requires a lightx2v_kernel_xpu build that exports sycl_kernels.onednn_w8a8_int8")
         if input_tensor.dtype not in (torch.float16, torch.bfloat16):
-            raise RuntimeError(
-                "int8-intel-xpu requires FP16/BF16 activations, got "
-                f"{input_tensor.dtype} for {self.weight_name}"
-            )
+            raise RuntimeError(f"int8-intel-xpu requires FP16/BF16 activations, got {input_tensor.dtype} for {self.weight_name}")
 
         original_shape = input_tensor.shape[:-1]
         input_2d = input_tensor.reshape(-1, input_tensor.shape[-1]).contiguous()
