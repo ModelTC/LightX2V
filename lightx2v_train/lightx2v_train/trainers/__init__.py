@@ -30,7 +30,6 @@ _LAZY_EXPORTS = {
         ".training_cache",
         "TrainingCacheTrainer",
     ),
-    "WorldActionTrainer": (".world_action", "WorldActionTrainer"),
 }
 
 

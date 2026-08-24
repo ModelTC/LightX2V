@@ -24,7 +24,6 @@ from .training import (
     TeacherForcingStepContext,
     TrainableModelCapability,
     TrainingCachePayload,
-    WorldActionTrainingCapability,
 )
 
 __all__ = [
@@ -51,5 +50,4 @@ __all__ = [
     "TeacherForcingStepContext",
     "TrainingCachePayload",
     "TrainableModelCapability",
-    "WorldActionTrainingCapability",
 ]

@@ -3,9 +3,14 @@ import argparse
 import torch
 from loguru import logger
 
-from lightx2v_train.data import build_data, build_sample_processor, prepare_data
+from lightx2v_train.data import build_data, build_sample_processor
 from lightx2v_train.model_zoo import build_model
-from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
+from lightx2v_train.runtime import (
+    cleanup_distributed,
+    init_distributed,
+    load_config,
+    setup_logger,
+)
 from lightx2v_train.trainers import build_trainer
 
 
@@ -39,7 +44,6 @@ def main():
     setup_logger(config)
 
     try:
-        prepare_data(config)
         sample_processor = build_sample_processor(config)
         dataloader = build_data(config, train_or_val=args.split, sample_processor=sample_processor)
 

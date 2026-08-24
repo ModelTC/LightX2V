@@ -89,7 +89,6 @@ _MODEL_MODULES = {
     "wan_t2v_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
     "wan_t2v_14b": "lightx2v_train.model_zoo.wan.wan_t2v",
     "wan_t2v_14b_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
-    "wan_fastwam": "lightx2v_train.model_zoo.wan.wan_fastwam",
     "wan_ti2v_5b": "lightx2v_train.model_zoo.wan.wan_ti2v_5b",
     "wan_ti2v_5b_ar": "lightx2v_train.model_zoo.wan.wan_ti2v_5b",
 }
@@ -104,7 +103,6 @@ _TRAINER_MODULES = {
     "sgmd": "lightx2v_train.trainers.sgmd",
     "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",
     "training_cache": "lightx2v_train.trainers.training_cache",
-    "world_action": "lightx2v_train.trainers.world_action",
 }
 
 _INFERENCER_MODULES = {
@@ -144,8 +142,6 @@ def _ensure_data_registered(data_name):
         return
     if data_name == "image_dataset":
         import lightx2v_train.data.image_dataset  # noqa: F401
-    elif data_name == "libero_fastwam_dataset":
-        import lightx2v_train.data.libero.dataset  # noqa: F401
     elif data_name in {"latent_dataset", "prompt_dataset", "video_dataset"}:
         import lightx2v_train.data.video_dataset  # noqa: F401
 

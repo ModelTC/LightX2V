@@ -450,33 +450,3 @@ class CheckpointCapability(ModelCapability):
     @abstractmethod
     def save_full_model(self, output_path) -> None:
         pass
-
-
-class WorldActionTrainingCapability(ModelCapability):
-    @abstractmethod
-    def configure(self) -> None:
-        pass
-
-    @abstractmethod
-    def parameters(self):
-        pass
-
-    @abstractmethod
-    def module(self):
-        pass
-
-    @abstractmethod
-    def compute_loss(self, batch: Mapping[str, Any], module=None) -> LossResult:
-        pass
-
-    @abstractmethod
-    def evaluation_loss(self, batch: Mapping[str, Any]) -> LossResult:
-        pass
-
-    @abstractmethod
-    def load_checkpoint(self, path) -> None:
-        pass
-
-    @abstractmethod
-    def save_checkpoint(self, path, step=None) -> None:
-        pass
