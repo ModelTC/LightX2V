@@ -17,6 +17,7 @@ from transformers import GenerationConfig
 from lightx2v.models.networks.hunyuan_image3.infer.kv_cache import HunyuanImage3StaticKVCache
 from lightx2v.models.networks.hunyuan_image3.model import HunyuanImage3Model
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.hunyuan_image3.cuda_graph import HunyuanImage3ARCudaGraphController
 from lightx2v.models.runners.hunyuan_image3.flashinfer_autotune import (
     DistributedAutotuneContext,
     FlashInferAutotuneController,
@@ -35,6 +36,32 @@ class HunyuanImage3TextGenerationPlan:
 @RUNNER_REGISTER("hunyuan_image3")
 class HunyuanImage3Runner(DefaultRunner):
     model_cpu_offload_seq = "transformer"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self._close_after_run = self._is_offline_infer_entrypoint() and not self._is_multi_run_benchmark(config)
+
+    @staticmethod
+    def _is_offline_infer_entrypoint():
+        main_module = sys.modules.get("__main__")
+        module_spec = getattr(main_module, "__spec__", None)
+        if getattr(module_spec, "name", None) == "lightx2v.infer":
+            return True
+
+        main_file = getattr(main_module, "__file__", None)
+        if main_file is None:
+            return False
+        return Path(main_file).resolve() == Path(__file__).resolve().parents[3] / "infer.py"
+
+    @staticmethod
+    def _is_multi_run_benchmark(config):
+        return (
+            bool(config.get("benchmark_stage_timing", False))
+            or bool(config.get("benchmark_defer_cuda_event_materialization", False))
+            or bool(config.get("benchmark_result_path"))
+            or int(config.get("benchmark_warmup_iters", 0) or 0) > 0
+            or int(config.get("benchmark_measure_iters", 1) or 1) != 1
+        )
 
     def load_model(self):
         self.model = self.load_transformer()
@@ -363,6 +390,17 @@ class HunyuanImage3Runner(DefaultRunner):
             return bool(self.config["enable_kv_cache"])
         return hasattr(self, "hunyuan_config")
 
+    def _get_ar_cuda_graph_controller(self):
+        controller = getattr(self, "_hunyuan_ar_cuda_graph_controller", None)
+        if controller is None:
+            controller = HunyuanImage3ARCudaGraphController(
+                config=self.config,
+                model=self.model,
+                device=self._pipeline_latent_device(),
+            )
+            self._hunyuan_ar_cuda_graph_controller = controller
+        return controller
+
     def _hunyuan_num_layers(self):
         hunyuan_config = getattr(self, "hunyuan_config", None)
         fallback = self.config.get("num_hidden_layers", getattr(hunyuan_config, "num_hidden_layers", 1))
@@ -394,9 +432,9 @@ class HunyuanImage3Runner(DefaultRunner):
             return controller_config
 
         context = self._parallel_context()
-        phase = str(self._parallel_context_value(context, "phase", default="")).strip().lower()
-        if context is None or phase not in ("ar", "denoise"):
+        if context is None:
             return self.config
+        phase = context.phase
 
         # The grouped multi-micro denoise path does not invoke FlashInfer.
         # Keep AR on its topology-specific FlashInfer cache, but avoid opening
@@ -431,66 +469,41 @@ class HunyuanImage3Runner(DefaultRunner):
     def _parallel_context(self):
         return self.config.get("parallel_context")
 
-    @staticmethod
-    def _parallel_context_value(context, *names, default=None):
-        if context is None:
-            return default
-        for name in names:
-            if not hasattr(context, name):
-                continue
-            value = getattr(context, name)
-            if callable(value):
-                value = value()
-            if value is not None:
-                return value
-        return default
-
     def _activate_parallel_phase(self, phase):
         context = self._parallel_context()
-        if context is None:
-            return
-        activate_phase = getattr(context, "activate_phase", None)
-        if not callable(activate_phase):
-            raise RuntimeError("HunyuanImage3 parallel_context must provide activate_phase(name).")
-        activate_phase(phase)
+        if context is not None:
+            context.activate_phase(phase)
 
     def _active_tp_group(self):
         context = self._parallel_context()
-        group = self._parallel_context_value(context, "active_tp_group", "tp_group")
-        if group is not None:
-            return group
+        if context is not None:
+            return context.active_tp_group
         return getattr(self.model, "tp_group", None)
 
     def _active_tp_size(self):
         context = self._parallel_context()
-        size = self._parallel_context_value(context, "active_tp_size", "tp_size")
-        if size is not None:
-            return int(size)
+        if context is not None:
+            return context.active_tp_size
         group = self._active_tp_group()
         return dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else 1
 
     def _active_seq_group(self):
         context = self._parallel_context()
-        group = self._parallel_context_value(context, "active_seq_group", "seq_p_group")
-        if group is not None:
-            return group
+        if context is not None:
+            return context.active_seq_group
         return getattr(self.model, "seq_p_group", None)
 
     def _active_seq_size(self):
         context = self._parallel_context()
-        size = self._parallel_context_value(context, "active_seq_size", "seq_p_size", "seq_size")
-        if size is not None:
-            return int(size)
+        if context is not None:
+            return context.active_seq_size
         group = self._active_seq_group()
         return dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else 1
 
     def _sequence_parallel_enabled(self):
         context = self._parallel_context()
-        active = self._parallel_context_value(context, "active_seq_parallel")
-        if active is not None:
-            return bool(active) and self._active_seq_size() > 1
         if context is not None:
-            return self._active_seq_size() > 1
+            return context.active_seq_parallel
         return bool(self.config.get("seq_parallel", False) and dist.is_available() and dist.is_initialized() and getattr(self.model, "seq_p_group", None) is not None)
 
     def _tensor_parallel_enabled(self):
@@ -914,11 +927,26 @@ class HunyuanImage3Runner(DefaultRunner):
             logits = logits / temperature
 
         top_k = int(generation_options.get("text_top_k", self.config.get("text_top_k", getattr(self.hunyuan_generation_config, "top_k", 0))) or 0)
+        sampling_impl = str(generation_options.get("text_sampling_impl", self.config.get("text_sampling_impl", "pytorch"))).strip().lower()
+        if sampling_impl not in {"pytorch", "topk_compact"}:
+            raise ValueError(f"Unsupported HunyuanImage3 text_sampling_impl={sampling_impl!r}.")
+
+        top_p = float(generation_options.get("text_top_p", self.config.get("text_top_p", getattr(self.hunyuan_generation_config, "top_p", 1.0))))
+        if sampling_impl == "topk_compact" and 0 < top_k < logits.shape[-1]:
+            candidate_logits, candidate_indices = torch.topk(logits, top_k, dim=-1, sorted=True)
+            if 0.0 < top_p < 1.0:
+                cumulative_probs = torch.softmax(candidate_logits, dim=-1).cumsum(dim=-1)
+                sorted_remove = cumulative_probs > top_p
+                sorted_remove[..., 1:] = sorted_remove[..., :-1].clone()
+                sorted_remove[..., 0] = False
+                candidate_logits = candidate_logits.masked_fill(sorted_remove, torch.finfo(candidate_logits.dtype).min)
+            selected = torch.multinomial(torch.softmax(candidate_logits, dim=-1), num_samples=1, generator=generator)
+            return candidate_indices.gather(dim=-1, index=selected).squeeze(-1)
+
         if top_k > 0 and top_k < logits.shape[-1]:
             kth_values = torch.topk(logits, top_k, dim=-1).values[..., -1, None]
             logits = logits.masked_fill(logits < kth_values, torch.finfo(logits.dtype).min)
 
-        top_p = float(generation_options.get("text_top_p", self.config.get("text_top_p", getattr(self.hunyuan_generation_config, "top_p", 1.0))))
         if 0.0 < top_p < 1.0:
             sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
             cumulative_probs = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
@@ -964,14 +992,22 @@ class HunyuanImage3Runner(DefaultRunner):
         pending_tokens = []
         generated = []
         use_kv_cache = self._hunyuan_text_kv_cache_enabled()
+        graph_controller = self._get_ar_cuda_graph_controller()
         kv_cache = None
         cache_filled_length = 0
         if use_kv_cache:
-            kv_cache = HunyuanImage3StaticKVCache(
-                num_layers=self._hunyuan_num_layers(),
-                max_cache_len=input_ids.shape[1] + max_new_tokens + sum(len(tokens) for tokens in transition_map.values()),
-                dynamic=True,
-            )
+            max_cache_len = input_ids.shape[1] + max_new_tokens + sum(len(tokens) for tokens in transition_map.values())
+            if graph_controller.enabled:
+                kv_cache = graph_controller.acquire_kv_cache(
+                    num_layers=self._hunyuan_num_layers(),
+                    max_cache_len=max_cache_len,
+                )
+            else:
+                kv_cache = HunyuanImage3StaticKVCache(
+                    num_layers=self._hunyuan_num_layers(),
+                    max_cache_len=max_cache_len,
+                    dynamic=True,
+                )
 
         for _ in range(max_new_tokens):
             if pending_tokens:
@@ -999,7 +1035,17 @@ class HunyuanImage3Runner(DefaultRunner):
                     else:
                         model_inputs = self._build_text_model_inputs(input_ids, tokenizer_output, cond_inputs=cond_inputs, rope_image_info=rope_image_info)
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
-                    logits = self.model.infer(model_inputs)["logits"][:, -1, :]
+                    if graph_controller.enabled:
+                        pre_infer_out = self.model.prepare_ar_pre_infer(model_inputs)
+                        if not first_cache_step and graph_controller.is_target_decode(pre_infer_out):
+                            logits = graph_controller.run(
+                                pre_infer_out,
+                                valid_kv_len=cache_filled_length,
+                            )
+                        else:
+                            logits = self.model.infer_ar_prepared(pre_infer_out)["logits"][:, -1, :]
+                    else:
+                        logits = self.model.infer(model_inputs)["logits"][:, -1, :]
                 next_token = self._sample_text_token(logits, generator, generation_options=generation_options)
                 next_token = next_token.to(device=device, dtype=input_ids.dtype)
             next_token = self._broadcast_parallel_tensor(next_token)
@@ -1616,6 +1662,13 @@ class HunyuanImage3Runner(DefaultRunner):
         return self.generate_ti2i(input_info)
 
     def run_pipeline(self, input_info):
+        try:
+            return self._run_pipeline(input_info)
+        finally:
+            if self._close_after_run:
+                self.close()
+
+    def _run_pipeline(self, input_info):
         self.input_info = input_info
         task = self.config.get("task")
         if task == "t2t":
@@ -1651,3 +1704,14 @@ class HunyuanImage3Runner(DefaultRunner):
             images[0].save(save_result_path)
             logger.info(f"HunyuanImage3 image saved successfully to: {save_result_path}")
         return {"image": None}
+
+    def close(self):
+        """Release graph and collective resources."""
+        controller = self.__dict__.pop("_hunyuan_ar_cuda_graph_controller", None)
+        try:
+            if controller is not None:
+                controller.close()
+        finally:
+            context = self.config.get("parallel_context")
+            if context is not None:
+                context.close()

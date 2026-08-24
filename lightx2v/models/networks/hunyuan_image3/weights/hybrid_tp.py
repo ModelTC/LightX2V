@@ -1,18 +1,6 @@
-"""Phase-neutral tensor-parallel weights for HunyuanImage3.
-
-The 80B checkpoint is loaded once with a storage TP degree (two for the
-four-GPU AR/denoise topology).  Every storage shard contains a fixed number
-of contiguous *micro shards*.  Denoising consumes the whole storage shard,
-whereas autoregressive inference consumes the local micro shard selected by
-``parallel_context.local_micro_shard_id``.
-
-Only views are selected when the phase changes.  The one-time checkpoint to
-storage-layout transformation still happens while weights are initialized.
-"""
+"""Phase-dependent tensor-parallel weight views for HunyuanImage3."""
 
 from __future__ import annotations
-
-from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -25,26 +13,14 @@ GROUPED_QKV_LAYOUT = "grouped_qkv"
 FUSED_GATE_UP_LAYOUT = "fused_gate_up_micro_major"
 
 
-def _context_value(context: Any, name: str, default=None):
-    if context is None:
-        return default
-    return getattr(context, name, default)
-
-
 def resolve_storage_tp(config):
-    """Return ``(context, group, rank, size)`` for the resident weights.
-
-    The runtime context deliberately owns two topologies.  Loading must use
-    ``storage_tp_*`` and must never consult the phase-dependent active TP
-    aliases.  Falling back to the original device mesh keeps legacy TP
-    configurations working.
-    """
+    """Return the topology used to store resident weights."""
 
     context = config.get("parallel_context")
     if context is not None:
-        group = _context_value(context, "storage_tp_group")
-        rank = int(_context_value(context, "storage_tp_rank", 0))
-        size = int(_context_value(context, "storage_tp_size", 1))
+        group = context.storage_tp_group
+        rank = context.storage_tp_rank
+        size = context.storage_tp_size
         if size < 1 or not 0 <= rank < size:
             raise ValueError(f"Invalid HunyuanImage3 storage TP rank/size: rank={rank}, size={size}.")
         return context, group, rank, size
@@ -62,23 +38,18 @@ def resolve_micro_shard_count(config, storage_tp_size=None):
     if storage_tp_size is None:
         _, _, _, storage_tp_size = resolve_storage_tp(config)
 
-    value = _context_value(context, "micro_shard_count")
-    if value is not None:
-        count = int(value)
+    if context is not None:
+        count = context.micro_shard_count
     else:
-        ar_tp_size = _context_value(context, "ar_tp_size")
         parallel = config.get("parallel") or {}
-        if ar_tp_size is None:
-            ar_tp_size = parallel.get("ar_tp_size", config.get("ar_tp_size"))
+        ar_tp_size = parallel.get("ar_tp_size", config.get("ar_tp_size"))
         if ar_tp_size is not None:
             ar_tp_size = int(ar_tp_size)
             if ar_tp_size % storage_tp_size:
                 raise ValueError(f"HunyuanImage3 ar_tp_size={ar_tp_size} must be divisible by storage_tp_size={storage_tp_size}.")
             count = ar_tp_size // storage_tp_size
-        elif context is None:
-            count = 1
         else:
-            raise ValueError("HunyuanImage3 parallel_context must expose micro_shard_count (or ar_tp_size) before weights are initialized.")
+            count = 1
 
     if count < 1:
         raise ValueError(f"HunyuanImage3 micro_shard_count must be positive, got {count}.")
@@ -114,13 +85,7 @@ def select_grouped_qkv_storage_shard(
     num_key_value_heads,
     head_dim,
 ):
-    """Shard official HunyuanImage3 QKV by complete KV-head groups.
-
-    The checkpoint output order is
-    ``[kv_head, q_heads_per_kv + key + value, head_dim]``.  Treating a raw
-    fraction of the fused output as the semantic unit is fragile; this helper
-    validates and slices whole KV groups explicitly.
-    """
+    """Shard checkpoint QKV order by complete KV-head groups."""
 
     if num_attention_heads % num_key_value_heads:
         raise ValueError(f"HunyuanImage3 Q heads ({num_attention_heads}) must be divisible by KV heads ({num_key_value_heads}).")
@@ -140,12 +105,7 @@ def select_grouped_qkv_storage_shard(
 
 
 def select_fused_gate_up_storage_shard(tensor, storage_tp_rank, storage_tp_size, micro_shard_count):
-    """Build one resident gate/up shard in micro-shard-major order.
-
-    Official order is ``[gate_all, up_all]``.  Resident order is
-    ``[gate_micro0, up_micro0, gate_micro1, up_micro1, ...]`` so every AR
-    micro shard is one contiguous view.
-    """
+    """Convert checkpoint gate/up order to contiguous micro-major shards."""
 
     if tensor.shape[0] % 2:
         raise ValueError(f"HunyuanImage3 fused gate/up tensor has an odd output dimension: {tuple(tensor.shape)}.")
@@ -196,7 +156,7 @@ class HunyuanImage3HybridTensorParallelLinear(MMWeightTP):
         self.micro_shard_count = int(micro_shard_count)
         self.weight_layout = weight_layout
         self.qkv_group_width = qkv_group_width
-        self.hidden_act = str(hidden_act).strip().lower()
+        self.hidden_act = hidden_act
         self.storage_tp_group = self.tp_group
         self.storage_tp_rank = self.tp_rank
         self.storage_tp_size = self.tp_size
@@ -224,11 +184,11 @@ class HunyuanImage3HybridTensorParallelLinear(MMWeightTP):
 
     @property
     def active_tp_group(self):
-        return _context_value(self.parallel_context, "active_tp_group", _context_value(self.parallel_context, "tp_group", self.storage_tp_group))
+        return self.parallel_context.active_tp_group
 
     @property
     def active_tp_size(self):
-        return int(_context_value(self.parallel_context, "active_tp_size", _context_value(self.parallel_context, "tp_size", self.storage_tp_size)))
+        return self.parallel_context.active_tp_size
 
     @property
     def uses_micro_shard(self):
@@ -244,7 +204,7 @@ class HunyuanImage3HybridTensorParallelLinear(MMWeightTP):
 
     @property
     def active_micro_shard_id(self):
-        micro_id = int(_context_value(self.parallel_context, "local_micro_shard_id", 0)) if self.uses_micro_shard else None
+        micro_id = self.parallel_context.local_micro_shard_id if self.uses_micro_shard else None
         if micro_id is not None and not 0 <= micro_id < self.micro_shard_count:
             raise RuntimeError(f"Invalid HunyuanImage3 local micro shard id {micro_id} for count {self.micro_shard_count}.")
         return micro_id
@@ -316,27 +276,19 @@ class HunyuanImage3HybridTensorParallelLinear(MMWeightTP):
             bias = self._active_column_bias()
             output = torch.mm(input_tensor, weight) if bias is None else torch.addmm(bias, input_tensor, weight)
             if self.weight_layout == FUSED_GATE_UP_LAYOUT and not self.uses_micro_shard:
-                # Only activations are reordered.  The resident weight and all
-                # AR views remain untouched across phase switches.
                 output = restore_gate_up_projection_order(output, self.micro_shard_count)
             return output
 
         output = torch.mm(input_tensor, weight)
         if self.reduce_output:
-            if self.active_tp_size > 1 and self.active_tp_group is not None:
-                dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.active_tp_group)
+            if self.active_tp_size > 1:
+                output = self.parallel_context.tensor_parallel_all_reduce(output)
             if self._row_split_bias is not None:
                 output = output + self._row_split_bias
         return output
 
     def apply_gate_up_activation(self, input_tensor):
-        """Project and apply SwiGLU directly in resident micro-major order.
-
-        The returned intermediate is in canonical local order
-        ``[micro0, micro1, ...]``, which matches the resident down-projection
-        input rows.  This avoids both a weight transformation and the
-        compatibility ``restore_gate_up_projection_order`` activation copy.
-        """
+        """Project and apply SwiGLU in resident micro-major order."""
 
         if self.weight_layout != FUSED_GATE_UP_LAYOUT:
             raise RuntimeError(f"apply_gate_up_activation is only valid for fused gate/up weights, got {self.weight_layout!r}.")

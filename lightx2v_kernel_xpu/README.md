@@ -18,6 +18,7 @@ Exposed as the Python package `sycl_kernels`:
 | Function | Description |
 |----------|-------------|
 | `sdp(Q, K, V)` | ESIMD Flash Attention — `[B, L, H, 128]` fp16/bf16, PTL-H doubleGRF |
+| `onednn_w8a8_int8(x, qweight, scales[, bias])` | Dynamic W8A8 GEMM — rowwise INT8 activation quantization × INT8 weights |
 | `onednn_w8a16_fp8(x, qweight, scales[, bias])` | W8A16 GEMM — fp16/bf16 activations × FP8_E4M3 weights, per-column scale |
 | `onednn_w4a16(x, weight, scales, zeros[, bias])` | W4A16 GEMM — fp16/bf16 activations × INT4 packed weights |
 
@@ -124,6 +125,15 @@ Q = torch.randn(1, 14040, 12, 128, dtype=torch.bfloat16, device="xpu")
 K = torch.randn(1, 14040, 12, 128, dtype=torch.bfloat16, device="xpu")
 V = torch.randn(1, 14040, 12, 128, dtype=torch.bfloat16, device="xpu")
 out = sycl_kernels.sdp(Q, K, V)                    # [1, 14040, 12, 128] bf16
+
+# ── Dynamic W8A8 INT8 GEMM ───────────────────────────────────────────────────
+# x       : [M, K]  fp16 or bf16  on XPU
+# qweight : [N, K]  int8           on XPU
+# scales  : [N]     fp32           on XPU  (per-output-channel dequant scale)
+# bias    : [N]     floating point on XPU  (optional, fused by oneDNN)
+# Returns : [M, N]  same dtype as x
+out = sycl_kernels.onednn_w8a8_int8(x, qweight, scales)
+out = sycl_kernels.onednn_w8a8_int8(x, qweight, scales, bias)
 
 # ── W8A16 FP8 GEMM ────────────────────────────────────────────────────────────
 # x       : [M, K]  fp16 or bf16     on XPU

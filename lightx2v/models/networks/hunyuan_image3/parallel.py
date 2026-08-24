@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Iterator, Mapping
 
@@ -11,12 +11,7 @@ from torch.distributed.tensor.device_mesh import DeviceMesh, init_device_mesh
 
 from lightx2v_platform.base.global_var import AI_DEVICE
 
-_PHASE_ALIASES = {
-    "ar": "ar",
-    "autoregressive": "ar",
-    "denoise": "denoise",
-    "diffusion": "denoise",
-}
+_PHASES = {"ar", "denoise"}
 
 
 @dataclass(frozen=True)
@@ -32,18 +27,7 @@ class _PhaseParallelState:
 
 
 class HunyuanImage3ParallelContext:
-    """Static process groups with a lightweight AR/denoise phase selector.
-
-    The storage and denoise tensor-parallel layouts are identical. Sequence
-    ranks therefore hold replicas of the same storage shard (``ABAB`` for the
-    four-rank TP2+SP2 layout). AR further slices each storage shard locally and
-    uses every process as one logical TP rank without redistributing weights.
-
-    ``active_tp_rank`` is the rank in the physical process group. AR's logical
-    weight order differs from that physical order, so weight selection must use
-    ``logical_tp_rank`` and ordered gathers must apply
-    ``logical_gather_order``.
-    """
+    """Static process groups and phase-dependent active topology."""
 
     def __init__(
         self,
@@ -71,28 +55,21 @@ class HunyuanImage3ParallelContext:
         self.denoise_tp_size = int(denoise_tp_size)
         self.denoise_seq_size = int(denoise_seq_size)
         self._phase_states = dict(phase_states)
-        self._phase = self._normalize_phase(initial_phase)
+        self._phase = self._validate_phase(initial_phase)
+        self.ar_custom_all_reduce = None
 
     @staticmethod
-    def _normalize_phase(name: str) -> str:
-        normalized = _PHASE_ALIASES.get(str(name).strip().lower())
-        if normalized is None:
-            supported = ", ".join(sorted(_PHASE_ALIASES))
-            raise ValueError(f"Unsupported HunyuanImage3 parallel phase {name!r}; expected one of: {supported}.")
-        return normalized
+    def _validate_phase(name: str) -> str:
+        if name not in _PHASES:
+            raise ValueError(f"Unsupported HunyuanImage3 parallel phase {name!r}; expected 'ar' or 'denoise'.")
+        return name
 
     @property
     def phase(self) -> str:
         return self._phase
 
     def _assert_distributed_phase_consensus(self, target_phase: str | None) -> None:
-        """Fail all ranks together when local phase state or target diverges.
-
-        A rank-local early return is unsafe if another rank believes it still
-        needs to enter the transition barrier.  This small WORLD collective is
-        therefore also executed for no-op activations.
-        """
-
+        """Fail collectively when phase state or transition targets diverge."""
         if not dist.is_available() or not dist.is_initialized() or dist.get_world_size() == 1:
             return
 
@@ -114,26 +91,19 @@ class HunyuanImage3ParallelContext:
         current_codes = {int(status[0]) for status in gathered_status}
         target_codes = {int(status[1]) for status in gathered_status}
         code_names = {value: key for key, value in phase_codes.items()} | {-1: "<invalid>"}
-        if len(current_codes) != 1 or len(target_codes) != 1 or -1 in current_codes or -1 in target_codes:
+        invalid_current = len(current_codes) != 1 or -1 in current_codes
+        divergent_target = len(target_codes) != 1
+        if invalid_current or divergent_target:
             current_names = sorted(code_names.get(code, f"<invalid:{code}>") for code in current_codes)
             target_names = sorted(code_names.get(code, f"<invalid:{code}>") for code in target_codes)
             raise RuntimeError(f"HunyuanImage3 distributed phase state diverged across ranks: current={current_names}, target={target_names}.")
 
     def activate_phase(self, name: str) -> HunyuanImage3ParallelContext:
-        """Synchronize all ranks, then select a pre-built compute topology.
-
-        No process group or weight tensor is created here.  The synchronization
-        prevents one rank from entering a collective for the next phase while
-        another rank still has work queued for the previous topology.
-        """
-
-        phase = _PHASE_ALIASES.get(str(name).strip().lower())
+        """Synchronize all ranks and select a pre-built topology."""
+        phase = name if name in _PHASES else None
         self._assert_distributed_phase_consensus(phase)
         if phase is None:
-            # Single-process callers do not enter the consensus collective;
-            # preserve the detailed public validation error for that case.
-            self._normalize_phase(name)
-            raise AssertionError("Unreachable HunyuanImage3 phase validation path.")
+            self._validate_phase(name)
         if phase == self._phase:
             return self
 
@@ -175,6 +145,31 @@ class HunyuanImage3ParallelContext:
         finally:
             self.activate_phase(previous)
 
+    def tensor_parallel_all_reduce(self, tensor: torch.Tensor) -> torch.Tensor:
+        """SUM across active TP, using custom all-reduce only during AR."""
+
+        if self.active_tp_size <= 1:
+            return tensor
+
+        reducer = self.ar_custom_all_reduce
+        if self.phase == "ar" and reducer is not None:
+            return reducer.all_reduce(tensor, is_decode=tensor.numel() == tensor.shape[-1])
+
+        dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=self.active_tp_group)
+        return tensor
+
+    def custom_all_reduce_capture(self):
+        reducer = self.ar_custom_all_reduce
+        if reducer is None:
+            return nullcontext()
+        return reducer.capture()
+
+    def close(self) -> None:
+        reducer = self.ar_custom_all_reduce
+        if reducer is not None:
+            reducer.close()
+            self.ar_custom_all_reduce = None
+
     @property
     def _active(self) -> _PhaseParallelState:
         return self._phase_states[self._phase]
@@ -215,36 +210,6 @@ class HunyuanImage3ParallelContext:
     def logical_gather_order(self) -> tuple[int, ...]:
         return self._active.logical_gather_order
 
-    # Compatibility aliases used by existing HunyuanImage3 model/infer code.
-    @property
-    def tp_group(self) -> dist.ProcessGroup:
-        return self.active_tp_group
-
-    @property
-    def tp_rank(self) -> int:
-        return self.active_tp_rank
-
-    @property
-    def tp_size(self) -> int:
-        return self.active_tp_size
-
-    @property
-    def seq_p_group(self) -> dist.ProcessGroup | None:
-        return self.active_seq_group
-
-    @property
-    def seq_p_rank(self) -> int:
-        return self.active_seq_rank
-
-    @property
-    def seq_p_size(self) -> int:
-        return self.active_seq_size
-
-
-# The context owns both the static topology and the active phase selector. Keep
-# this semantic alias for callers that prefer the topology-oriented name.
-HunyuanImage3ParallelTopology = HunyuanImage3ParallelContext
-
 
 def _positive_int(value, name: str) -> int:
     try:
@@ -257,14 +222,7 @@ def _positive_int(value, name: str) -> int:
 
 
 def build_hunyuan_image3_parallel_context(config) -> HunyuanImage3ParallelContext:
-    """Create all groups for the phase-aware four-rank topology once.
-
-    The canonical rank matrix is ``[denoise_seq, denoise_tensor]``. With the
-    requested sizes this is ``[[0, 1], [2, 3]]``: storage/denoise TP groups are
-    ``[0, 1]`` and ``[2, 3]`` while SP groups are ``[0, 2]`` and ``[1, 3]``.
-    AR uses WORLD in physical rank order and exposes the logical permutation
-    ``(0, 2, 1, 3)`` for ordered outputs such as vocabulary logits.
-    """
+    """Create process groups for phase-aware HunyuanImage3 inference."""
 
     if not dist.is_available() or not dist.is_initialized():
         raise RuntimeError("HunyuanImage3 phase-aware parallelism requires torch.distributed initialization.")
@@ -324,6 +282,11 @@ def build_hunyuan_image3_parallel_context(config) -> HunyuanImage3ParallelContex
         raise RuntimeError(f"Invalid HunyuanImage3 AR logical TP mapping: {physical_to_logical}.")
     logical_gather_order = tuple(sorted(range(world_size), key=physical_to_logical.__getitem__))
 
+    ar_metadata_group = None
+    if config.get("enable_ar_custom_all_reduce", False):
+        # vLLM exchanges CUDA IPC metadata over Gloo.
+        ar_metadata_group = dist.new_group(ranks=list(range(world_size)), backend="gloo")
+
     phase_states = {
         "ar": _PhaseParallelState(
             tp_group=dist.group.WORLD,
@@ -347,7 +310,7 @@ def build_hunyuan_image3_parallel_context(config) -> HunyuanImage3ParallelContex
         ),
     }
 
-    return HunyuanImage3ParallelContext(
+    context = HunyuanImage3ParallelContext(
         device_mesh=device_mesh,
         storage_tp_group=storage_tp_group,
         storage_tp_rank=storage_tp_rank,
@@ -359,25 +322,26 @@ def build_hunyuan_image3_parallel_context(config) -> HunyuanImage3ParallelContex
         denoise_seq_size=denoise_seq_size,
         phase_states=phase_states,
     )
+    if ar_metadata_group is not None:
+        from lightx2v.models.networks.hunyuan_image3.custom_all_reduce import HunyuanImage3CustomAllReduce
+
+        reducer = HunyuanImage3CustomAllReduce(
+            metadata_group=ar_metadata_group,
+            fallback_group=dist.group.WORLD,
+            config=config,
+            device=torch.device(AI_DEVICE, torch.cuda.current_device()),
+            phase_getter=lambda: context.phase,
+        )
+        context.ar_custom_all_reduce = reducer
+        reducer.initialize()
+    return context
 
 
 def initialize_hunyuan_image3_parallel_runtime(config) -> HunyuanImage3ParallelContext:
     context = build_hunyuan_image3_parallel_context(config)
     config["parallel_context"] = context
-    config["hunyuan_image3_parallel_context"] = context
     config["device_mesh"] = context.denoise_device_mesh
     config["tensor_parallel"] = context.storage_tp_size > 1
     config["seq_parallel"] = context.denoise_seq_size > 1
     config["cfg_parallel"] = False
-    return context
-
-
-def build_hunyuan_image3_parallel_topology(config) -> HunyuanImage3ParallelContext:
-    return build_hunyuan_image3_parallel_context(config)
-
-
-def get_hunyuan_image3_parallel_context(config, *, required: bool = False) -> HunyuanImage3ParallelContext | None:
-    context = config.get("parallel_context") or config.get("hunyuan_image3_parallel_context")
-    if context is None and required:
-        raise RuntimeError("HunyuanImage3 phase-aware parallel context is not initialized.")
     return context
