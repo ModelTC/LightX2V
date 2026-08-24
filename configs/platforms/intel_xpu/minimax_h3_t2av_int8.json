@@ -1,5 +1,5 @@
 {
-  "infer_steps": 10,
+  "infer_steps": 30,
   "target_video_length": 124,
   "target_height": 544,
   "target_width": 960,
@@ -28,5 +28,5 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "int8-intel-xpu",
-  "dit_quantized_ckpt": "/llm/models/MiniMax-H3/quantized/int8/minimax_h3_int8_xpu.safetensors"
+  "dit_quantized_ckpt": "/llm/models/MiniMax-H3/quantized/int8/minimax_h3_int8.safetensors"
 }

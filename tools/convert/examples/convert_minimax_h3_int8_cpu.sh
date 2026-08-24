@@ -10,7 +10,7 @@ output_dir=${OUTPUT_DIR:-/llm/models/MiniMax-H3/quantized/int8}
 python "${REPO_ROOT}/tools/convert/converter.py" \
   --source "${source_dir}" \
   --output "${output_dir}" \
-  --output_name minimax_h3_int8_xpu \
+  --output_name minimax_h3_int8 \
   --model_type h3 \
   --quantized \
   --linear_type int8 \
