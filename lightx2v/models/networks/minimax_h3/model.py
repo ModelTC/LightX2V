@@ -33,6 +33,7 @@ H3_CHANNEL_QUANT_SCHEMES = {
     "int8-torchao",
     "int8-triton",
     "int8-vllm",
+    "int8-intel-xpu",
 }
 
 

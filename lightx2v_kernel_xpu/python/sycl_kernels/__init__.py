@@ -38,6 +38,7 @@ else:
 try:
     from sycl_kernels._ext import (  # noqa: E402, F401
         onednn_w4a16,
+        onednn_w8a8_int8,
         onednn_w8a16_fp8,
         sdp,
     )
@@ -47,6 +48,7 @@ except ImportError as _legacy_import_error:
         raise RuntimeError("sycl_kernels legacy ESIMD/oneDNN extension could not be loaded; check that the oneDNN headers and libdnnl runtime have matching versions") from _error
 
     onednn_w4a16 = _legacy_extension_unavailable
+    onednn_w8a8_int8 = _legacy_extension_unavailable
     onednn_w8a16_fp8 = _legacy_extension_unavailable
     sdp = _legacy_extension_unavailable
 from sycl_kernels.version import __version__  # noqa: E402, F401
