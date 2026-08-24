@@ -16,6 +16,11 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate, MMWeightTemplate
 from lightx2v_platform.registry_factory import PLATFORM_MM_WEIGHT_REGISTER
 
+try:
+    import sycl_kernels
+except ImportError:
+    sycl_kernels = None
+
 # Detect Intel XPU platform
 IS_INTEL_XPU = hasattr(torch, "xpu") and torch.xpu.is_available()
 
@@ -83,6 +88,58 @@ class IntelTensorParallel:
 
     def __new__(cls, *args, **kwargs):
         return _get_intel_tensor_parallel_class()(*args, **kwargs)
+
+
+@MM_WEIGHT_REGISTER("int8-intel-xpu")
+class MMWeightInt8IntelXpu(MMWeightQuantTemplate):
+    """Dynamic per-token W8A8 linear backed by the Intel XPU extension."""
+
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix,
+            lora_path,
+        )
+        self.load_func = self.load_int8_perchannel_sym
+        # The extension consumes the checkpoint's native Linear [N, K]
+        # layout. Other quant backends commonly transpose it to [K, N].
+        self.weight_need_transpose = False
+        self.scale_force_fp32 = True
+        self.bias_force_fp32 = True
+
+    def apply(self, input_tensor):
+        if sycl_kernels is None or not hasattr(sycl_kernels, "onednn_w8a8_int8"):
+            raise RuntimeError("int8-intel-xpu requires a lightx2v_kernel_xpu build that exports sycl_kernels.onednn_w8a8_int8")
+        if input_tensor.dtype not in (torch.float16, torch.bfloat16):
+            raise RuntimeError(f"int8-intel-xpu requires FP16/BF16 activations, got {input_tensor.dtype} for {self.weight_name}")
+
+        original_shape = input_tensor.shape[:-1]
+        input_2d = input_tensor.reshape(-1, input_tensor.shape[-1]).contiguous()
+        bias = self.bias if hasattr(self, "bias") else None
+        output = sycl_kernels.onednn_w8a8_int8(
+            input_2d,
+            self.weight.contiguous(),
+            self.weight_scale.reshape(-1).float().contiguous(),
+            bias,
+        )
+        return output.reshape(*original_shape, self.weight.shape[0])
 
 
 _TENSOR_PARALLEL_RMS_CLASS = None
