@@ -79,17 +79,14 @@ class SwiftVRShiftedWindowAttention(AttnWeightTemplate):
         self.config = {}
         self.dense_attention = ATTN_WEIGHT_REGISTER[self.backend]()
 
-    def apply(self, q, k, v, grid_sizes=None, block_idx=0, **kwargs):
+    @classmethod
+    def prepare_layouts(cls, grid_sizes: tuple[int, int, int], device: torch.device):
         frames, height, width = grid_sizes
-        window = min(self.window_size[0], height), min(self.window_size[1], width)
-        indices, owner, window_count, window_length = WindowLayout.get(
-            frames,
-            height,
-            width,
-            window,
-            shifted=bool(block_idx % 2),
-            device=q.device,
-        )
+        window = min(cls.window_size[0], height), min(cls.window_size[1], width)
+        return tuple(WindowLayout.get(frames, height, width, window, shifted=shifted, device=device) for shifted in (False, True))
+
+    def apply(self, q, k, v, window_layout, **kwargs):
+        indices, owner, window_count, window_length = window_layout
 
         heads, head_dim = q.shape[-2:]
         q = q.index_select(0, indices).view(window_count, window_length, heads, head_dim)

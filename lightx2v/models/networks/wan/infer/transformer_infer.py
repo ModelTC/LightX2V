@@ -223,7 +223,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             x = self.run_block(block_idx, block, x, pre_infer_out)
         return x
 
-    def infer_block(self, block, x, pre_infer_out):
+    def infer_block(self, block, x, pre_infer_out, self_attn_kwargs=None):
         if hasattr(block.compute_phases[0], "before_proj") and block.compute_phases[0].before_proj.weight is not None:
             x = block.compute_phases[0].before_proj.apply(x) + pre_infer_out.x
 
@@ -237,6 +237,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             shift_msa,
             scale_msa,
             grid_sizes=pre_infer_out.grid_sizes.tuple if getattr(pre_infer_out, "grid_sizes", None) is not None else None,
+            **(self_attn_kwargs or {}),
         )
         x, attn_out = self.infer_cross_attn(
             block.compute_phases[1],
@@ -269,7 +270,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
 
         return shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa
 
-    def infer_self_attn(self, phase, x, shift_msa, scale_msa, grid_sizes=None):
+    def infer_self_attn(self, phase, x, shift_msa, scale_msa, grid_sizes=None, **self_attn_kwargs):
         cos_sin = self.cos_sin
         norm1_quant = None
         norm1_scale = None
@@ -325,6 +326,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             "scheduler": self.scheduler,
             "grid_sizes": grid_sizes,
             "sol_morton_preordered": self._sol_morton_preordered,
+            **self_attn_kwargs,
         }
 
         if self.seq_parallel:
