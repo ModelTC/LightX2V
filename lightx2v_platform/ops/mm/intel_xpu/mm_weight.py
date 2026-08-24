@@ -1,12 +1,9 @@
 """Intel XPU matrix multiplication weight implementations."""
 
 import os
-import re
-from abc import ABCMeta, abstractmethod
 
 import torch
 import torch.distributed as dist
-from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
