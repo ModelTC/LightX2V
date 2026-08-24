@@ -30,8 +30,15 @@ distributed:
 
 data:
     train:
-        name: latent_dataset
-        data_path: /path/to/datasets/causal_forcing_data/dataset/clean_data/
+        name: video_dataset
+        data_path:
+            - /path/to/datasets/wan_t2v/train.jsonl
+        video_column: video
+        prompt_column: prompt
+        height: 480
+        width: 832
+        num_frames: 81
+        frame_rate: 24
         dataset_repeat: 1
         num_workers: 8
         pin_memory: true

@@ -40,9 +40,18 @@ distributed:
             cast_forward_inputs: false
 
 data:
+    use_training_cache: true
+
     train:
-        name: latent_dataset
-        data_path: /path/to/datasets/cache_data/wan2_2_ti2v_5b_tf_96f
+        name: video_dataset
+        data_path:
+            - /path/to/datasets/cache_data/wan2_2_ti2v_5b_tf_96f/cache_data.jsonl
+        video_column: video
+        prompt_column: prompt
+        height: 704
+        width: 1280
+        num_frames: 381
+        frame_rate: 24
         dataset_repeat: 1
         num_workers: 8
         pin_memory: true

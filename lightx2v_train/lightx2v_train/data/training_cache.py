@@ -3,8 +3,21 @@ import json
 
 CACHE_SCHEMA_VERSION = 2
 
+_DMD_METHODS = {"dmd", "autoregressive_dmd", "phased_dmd", "sgmd"}
+_RUNTIME_MODEL_KEYS = {
+    "cache_condition_encoder_cpu_offload",
+    "cache_encoder_cpu_offload",
+    "load_condition_encoder",
+    "load_text_encoder",
+    "load_transformer",
+    "load_vae",
+}
+
 _RUNTIME_DATA_KEYS = {
     "data_path",
+    "dataset_repeat",
+    "drop_last",
+    "max_samples",
     "name",
     "num_workers",
     "persistent_workers",
@@ -25,15 +38,16 @@ def training_cache_info(config):
     train_data = data.get("train", {})
     training = config["training"]
     method = training["method"]
+    objective_key = "dmd" if method in _DMD_METHODS else method
     signature_data = {
-        "model": model,
+        "model": {key: value for key, value in model.items() if key not in _RUNTIME_MODEL_KEYS},
         "data": {
             "processor": data.get("processor", {}),
             "train": {key: value for key, value in train_data.items() if key not in _RUNTIME_DATA_KEYS},
         },
         "training": {
             "method": method,
-            "objective": training.get(method, {}),
+            "objective": training.get(objective_key, {}),
             "teacher": training.get("teacher", {}),
         },
         "target_latent_mode": "mode",

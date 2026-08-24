@@ -122,6 +122,7 @@ _SAMPLE_PROCESSOR_MODULES = {
     "flux2_klein_edit": "lightx2v_train.model_zoo.flux2.data_process",
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.data_process",
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.data_process",
+    "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.data_process",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.data_process",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.data_process",
 }
@@ -140,7 +141,9 @@ def _ensure_data_registered(data_name):
         return
     if data_name == "image_dataset":
         import lightx2v_train.data.image_dataset  # noqa: F401
-    elif data_name in {"latent_dataset", "prompt_dataset", "video_dataset"}:
+    elif data_name == "training_cache_dataset":
+        import lightx2v_train.data.training_cache_dataset  # noqa: F401
+    elif data_name in {"prompt_dataset", "video_dataset"}:
         import lightx2v_train.data.video_dataset  # noqa: F401
 
 
@@ -192,11 +195,18 @@ def build_data(config, train_or_val, sample_processor=None):
         raise ValueError(f"config['data'] has no key {train_or_val!r}. Available keys: {available_splits}")
     data_config_split = dict(data_config[train_or_val])
     if "training_cache" in config:
-        data_config_split["prompt_dropout_rate"] = 0.0
+        data_config_split.update(
+            prompt_dropout_rate=0.0,
+            dataset_repeat=1,
+            shuffle=False,
+            drop_last=False,
+            decode_retries=1,
+        )
+        data_config_split.pop("max_samples", None)
     data_name = data_config_split.get("name", "image_dataset")
     use_training_cache = data_config.get("use_training_cache", False) if train_or_val == "train" and "training_cache" not in config else False
-    if use_training_cache and data_name != "image_dataset":
-        raise ValueError("data.use_training_cache=true requires data.train.name=image_dataset.")
+    if use_training_cache:
+        data_name = "training_cache_dataset"
     if train_or_val == "train" and data_name == "prompt_dataset":
         image_sizes = config.get("training", {}).get("dmd", {}).get("image_sizes")
         if image_sizes is not None:
@@ -207,12 +217,15 @@ def build_data(config, train_or_val, sample_processor=None):
         raise ValueError(f"Unknown data {data_name!r}. Available data: {available_names}")
     kwargs = (
         {
-            "sample_processor": sample_processor,
-            "use_training_cache": use_training_cache,
             "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
             "expected_cache_info": training_cache_info(config) if use_training_cache else None,
         }
-        if data_name == "image_dataset"
+        if data_name == "training_cache_dataset"
+        else {
+            "sample_processor": sample_processor,
+            "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
+        }
+        if data_name in {"image_dataset", "video_dataset"}
         else {}
     )
     return DATA_REGISTER[data_name](data_config_split, train_or_val=train_or_val, **kwargs)

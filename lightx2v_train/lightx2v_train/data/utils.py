@@ -94,10 +94,6 @@ def read_records(path, prompt_column="prompt", prompt_index=0):
             "audio_path",
             "image",
             "image_path",
-            "video_latent_path",
-            "audio_latent_path",
-            "condition_path",
-            "negative_condition_path",
         }
         if set(header).intersection(known_columns):
             for row in reader:

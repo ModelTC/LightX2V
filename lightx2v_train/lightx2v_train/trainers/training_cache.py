@@ -13,6 +13,7 @@ from lightx2v_train.model_capabilities import (
     DistributionMatchingCapability,
     DopsdCapability,
     FlowMatchingSFTCapability,
+    TeacherForcingCapability,
 )
 from lightx2v_train.runtime.distributed import get_rank, get_sequence_parallel_rank, is_distributed, is_main_process
 from lightx2v_train.utils.registry import TRAINER_REGISTER
@@ -27,6 +28,10 @@ CACHE_CAPABILITIES = {
     "consistency": ConsistencyModelCapability,
     "dmd": DistributionMatchingCapability,
     "dopsd": DopsdCapability,
+    "autoregressive_dmd": DistributionMatchingCapability,
+    "phased_dmd": DistributionMatchingCapability,
+    "sgmd": DistributionMatchingCapability,
+    "teacher_forcing": TeacherForcingCapability,
 }
 
 
@@ -121,7 +126,11 @@ class TrainingCacheTrainer:
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         dataset = self.dataloader.dataset
+        if not hasattr(dataset, "cache_source_record") or not hasattr(dataset, "cache_source_prompt"):
+            raise TypeError(f"{type(dataset).__name__} cannot be used as a cache source; use image_dataset, video_dataset, or prompt_dataset.")
         sample_count = len(dataset)
+        if len(getattr(dataset, "samples", ())) != sample_count:
+            raise ValueError("Cache construction requires data.train.dataset_repeat=1.")
         dtype = CACHE_DTYPES[self.cache_config["save_dtype"]]
         records = []
 
@@ -130,8 +139,10 @@ class TrainingCacheTrainer:
             if get_sequence_parallel_rank() != 0 or index >= sample_count:
                 continue
 
-            record = dict(dataset.samples[index]["_original_record"])
-            sample["conditioning"]["prompt"] = dataset.samples[index]["prompt"]
+            record = dataset.cache_source_record(index)
+            prompt = dataset.cache_source_prompt(index)
+            sample["conditioning"]["prompt"] = prompt
+            record["prompt"] = prompt
             cache_path = cache_dir / f"{index:08d}.pt"
             if self.cache_config["overwrite"] or not cache_path.exists():
                 torch.manual_seed(self.cache_config["seed"] + index)

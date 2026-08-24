@@ -908,7 +908,12 @@ class MiniMaxH3VideoVAE(nn.Module):
             moments = moments[:, :, : -self.token_drop]
         return moments
 
-    def _encode_parallel(self, pixels: torch.Tensor, video: bool) -> torch.Tensor:
+    def _encode_parallel(
+        self,
+        pixels: torch.Tensor,
+        video: bool,
+        sample_posterior: bool,
+    ) -> torch.Tensor:
         """Encode the global ``(clip, row, column)`` tile pool across all ranks.
 
         Rank 0 stitches and samples the conditioning latent, then broadcasts it
@@ -963,7 +968,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                     moments = moments[:, :, : -self.token_drop]
             else:
                 moments = clip_moments[0]
-            latents = self._sample_condition_latents(moments).contiguous()
+            latents = (self._sample_condition_latents(moments) if sample_posterior else self._mode_condition_latents(moments)).contiguous()
             latent_shape = torch.tensor(latents.shape, dtype=torch.int64, device=pixels.device)
         else:
             latent_shape = torch.empty(5, dtype=torch.int64, device=pixels.device)
@@ -989,6 +994,10 @@ class MiniMaxH3VideoVAE(nn.Module):
         latents = self._sample_posterior(moments, generator).to(self.infer_dtype)
         return self.normalize_latents(latents)
 
+    def _mode_condition_latents(self, moments: torch.Tensor) -> torch.Tensor:
+        mean, _ = torch.chunk(moments, 2, dim=1)
+        return self.normalize_latents(mean.to(self.infer_dtype))
+
     def normalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
         mean = self.latents_mean.to(latents.device).view(1, -1, 1, 1, 1)
         std = self.latents_std.to(latents.device).view(1, -1, 1, 1, 1)
@@ -999,8 +1008,15 @@ class MiniMaxH3VideoVAE(nn.Module):
         std = self.pixel_std.to(pixels.device).view(1, -1, 1, 1, 1)
         return (pixels.to(self.sensitive_layer_dtype) - mean) / std
 
-    def encode_condition(self, pixels: torch.Tensor, *, video: bool = False, return_cpu: bool = True) -> torch.Tensor:
-        """Encode an RGB ``[1,3,F,H,W]`` reference with the released seed-42 posterior."""
+    def encode_condition(
+        self,
+        pixels: torch.Tensor,
+        *,
+        video: bool = False,
+        return_cpu: bool = True,
+        sample_posterior: bool = True,
+    ) -> torch.Tensor:
+        """Encode RGB ``[1,3,F,H,W]`` using a seeded sample or posterior mode."""
         try:
             if pixels.ndim != 5 or pixels.shape[0] != 1 or pixels.shape[1] != 3:
                 raise ValueError(f"reference pixels must be [1,3,F,H,W], got {tuple(pixels.shape)}")
@@ -1008,10 +1024,10 @@ class MiniMaxH3VideoVAE(nn.Module):
             pixels = self.preprocess(pixels.to(device=device, dtype=self.sensitive_layer_dtype))
             with torch.no_grad():
                 if self.encode_parallel:
-                    latents = self._encode_parallel(pixels, video)
+                    latents = self._encode_parallel(pixels, video, sample_posterior)
                 else:
                     moments = self._encode(pixels) if video else self._encode_clip(pixels)
-                    latents = self._sample_condition_latents(moments)
+                    latents = self._sample_condition_latents(moments) if sample_posterior else self._mode_condition_latents(moments)
             return latents.cpu() if return_cpu else latents
         finally:
             if self.cpu_offload:

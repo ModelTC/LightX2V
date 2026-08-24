@@ -18,7 +18,7 @@ from lightx2v_train.model_capabilities import (
     FlowMatchingSFTCapability,
     TeacherForcingCapability,
 )
-from lightx2v_train.model_zoo.capability_adapters.common import GenericFlowMatchingCapability
+from lightx2v_train.model_zoo.wan.capability_adapters import WanFlowMatchingCapability
 from lightx2v_train.model_zoo.wan.capability_adapters.wan_autoregressive_distribution_matching_capability import (
     WanAutoregressiveDistributionMatchingCapability,
 )
@@ -56,7 +56,7 @@ class WanT2VModel(BaseModel):
         super().register_capabilities()
         self.capabilities.register(
             FlowMatchingSFTCapability,
-            GenericFlowMatchingCapability(self),
+            WanFlowMatchingCapability(self),
         )
         self.capabilities.register(
             DistributionMatchingCapability,

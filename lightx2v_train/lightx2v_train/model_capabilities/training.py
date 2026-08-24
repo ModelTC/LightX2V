@@ -55,6 +55,10 @@ class TeacherForcingStepContext:
 
 
 class TeacherForcingCapability(ModelCapability):
+    def encode_training_cache(self, batch: Mapping[str, Any]) -> TrainingCachePayload:
+        """Encode the static target and condition used by teacher forcing."""
+        raise NotImplementedError(f"{type(self).__name__} does not support training-cache encoding.")
+
     @abstractmethod
     def compute_loss(
         self,
@@ -120,6 +124,8 @@ class DistributionMatchingProfile:
     supports_real_data_fake: bool = True
     supports_warped_denoising_schedule: bool = True
     default_latent_dtype: torch.dtype | None = None
+    # ``None`` keeps the capability available to every DMD-family trainer.
+    supported_training_methods: frozenset[str] | None = None
 
 
 class DistributionMatchingCapability(ModelCapability):

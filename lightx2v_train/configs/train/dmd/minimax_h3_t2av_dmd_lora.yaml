@@ -10,6 +10,11 @@ model:
     video_latent_channels: 24
     audio_latent_channels: 32
     vae_spatial_scale_factor: 16
+    video_fps: 24
+    audio_sampling_rate: 32000
+    audio_latents_per_second: 40
+    # Keep frozen cache encoders off GPU outside their forward passes.
+    cache_encoder_cpu_offload: true
     # H3 keeps its diffusion latents in fp32; prompt embeddings remain bf16.
     use_autocast: false
     # Full SDPA is impractical at H3 sequence lengths; this matches run_h3.py.
@@ -43,9 +48,9 @@ distributed:
 
 data:
     train:
-        name: latent_dataset
-        data_path: /data/nvme6/gushiqiao/datasets/minimax_h3_prompt_cache
-        batch_size: 1
+        name: prompt_dataset
+        data_path:
+            - /path/to/datasets/minimax_h3_t2av/prompts.txt
         num_workers: 2
         pin_memory: true
         shuffle: true

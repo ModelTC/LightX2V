@@ -28,7 +28,7 @@ from .common import MiniMaxH3JointLatents, MiniMaxH3LatentShape
 class MiniMaxH3DistributionMatchingOptions:
     video_loss_weight: float = 1.0
     audio_loss_weight: float = 1.0
-    video_flow_shift: float = 12.0
+    video_flow_shift: float = 6.0
     audio_flow_shift: float = 3.0
 
     @classmethod
@@ -40,7 +40,7 @@ class MiniMaxH3DistributionMatchingOptions:
         options = cls(
             video_loss_weight=float(config.get("video_loss_weight", 1.0)),
             audio_loss_weight=float(config.get("audio_loss_weight", 1.0)),
-            video_flow_shift=float(config.get("video_flow_shift", 12.0)),
+            video_flow_shift=float(config.get("video_flow_shift", 6.0)),
             audio_flow_shift=float(config.get("audio_flow_shift", 3.0)),
         )
         if options.video_flow_shift <= 0 or options.audio_flow_shift <= 0:
@@ -82,6 +82,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         "ff.net.2",
     )
     _PROFILE = DistributionMatchingProfile(
+        supported_training_methods=frozenset({"dmd"}),
         supports_guidance=False,
         supports_ida=False,
         supports_diversity=False,
@@ -166,10 +167,8 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         if guidance_scale != 1.0:
             raise ValueError("MiniMax-H3 is guidance-distilled; training.teacher.guidance_scale must be 1.0.")
         positive = batch["conditioning"].get("positive")
-        if positive is None:
-            raise KeyError("MiniMax-H3 DMD requires conditioning.positive with cached prompt_embeds and text_token_tags. Build it with data_process/minimax_h3/build_minimax_h3_prompt_latents.py.")
         with torch.no_grad():
-            condition = self.model.prepare_text_condition(positive)
+            condition = self.model.encode_condition(batch) if positive is None else self.model.prepare_text_condition(positive)
         return broadcast(condition), None
 
     def predict_velocity(self, latents, sigma, condition):

@@ -11,6 +11,8 @@ from lightx2v_train.model_capabilities import (
     TeacherForcingCapability,
     TeacherForcingStepContext,
 )
+from lightx2v_train.model_zoo.capability_adapters.common import _cached_condition
+from lightx2v_train.model_zoo.wan.training_cache import encode_wan_video_cache
 from lightx2v_train.runtime.distributed import (
     get_sequence_parallel_group,
     get_sequence_parallel_world_size,
@@ -23,6 +25,9 @@ from lightx2v_train.runtime.sequence_parallel import (
 
 class WanTeacherForcingCapability(BoundCapability, TeacherForcingCapability):
     """Chunk-wise teacher forcing for a causal Wan denoiser."""
+
+    def encode_training_cache(self, batch):
+        return encode_wan_video_cache(self.model, batch)
 
     def compute_loss(
         self,
@@ -52,7 +57,10 @@ class WanTeacherForcingCapability(BoundCapability, TeacherForcingCapability):
             sigmas = broadcast(sigmas)
             weights = broadcast(weights)
             noisy_latent = context.scheduler.add_noise(latent, noise, sigmas)
-            condition = broadcast(self.model.encode_condition(batch))
+            condition = _cached_condition(batch, self.model)
+            if condition is None:
+                condition = self.model.encode_condition(batch)
+            condition = broadcast(condition)
 
             clean_latent = latent
             augmentation_sigmas = None

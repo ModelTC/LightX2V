@@ -111,6 +111,10 @@ class _DmdRuntime(BaseTrainer):
 
     def _validate_distribution_matching_profile(self, profile):
         model_name = self.model_config.get("name", type(self.model).__name__)
+        supported_methods = profile.supported_training_methods
+        if supported_methods is not None and self.trainer_name not in supported_methods:
+            methods = ", ".join(sorted(supported_methods))
+            raise ValueError(f"model={model_name!r} supports only these distribution-matching training methods: {methods}; got {self.trainer_name!r}.")
         requested_features = (
             (self.ida_trick.enabled, profile.supports_ida, "IDA"),
             (getattr(getattr(self, "diversity_trick", None), "enabled", False), profile.supports_diversity, "diversity loss"),

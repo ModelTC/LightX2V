@@ -6,11 +6,14 @@ def __getattr__(name):
         from .image_dataset import build_image_dataset
 
         return build_image_dataset
-    if name in {"build_latent_dataset", "build_prompt_dataset", "build_video_dataset"}:
-        from .video_dataset import build_latent_dataset, build_prompt_dataset, build_video_dataset
+    if name == "build_training_cache_dataset":
+        from .training_cache_dataset import build_training_cache_dataset
+
+        return build_training_cache_dataset
+    if name in {"build_prompt_dataset", "build_video_dataset"}:
+        from .video_dataset import build_prompt_dataset, build_video_dataset
 
         return {
-            "build_latent_dataset": build_latent_dataset,
             "build_prompt_dataset": build_prompt_dataset,
             "build_video_dataset": build_video_dataset,
         }[name]
@@ -21,7 +24,7 @@ __all__ = [
     "build_data",
     "build_sample_processor",
     "build_image_dataset",
-    "build_latent_dataset",
     "build_prompt_dataset",
+    "build_training_cache_dataset",
     "build_video_dataset",
 ]

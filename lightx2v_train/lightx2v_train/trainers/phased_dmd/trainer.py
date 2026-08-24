@@ -115,11 +115,8 @@ class PhasedDmdTrainer(DmdTrainer):
         self.fake_real_low_optimizer_config = copy.deepcopy(self.fake_2_optimizer_config)
         if self.real_data_fake_trick.enabled:
             train_data_name = self.config["data"]["train"].get("name")
-            if train_data_name not in {
-                "latent_dataset",
-                "video_dataset",
-            }:
-                raise ValueError("Fake-real training requires data.train.name=latent_dataset or video_dataset.")
+            if train_data_name != "video_dataset":
+                raise ValueError("Fake-real training requires data.train.name=video_dataset.")
 
     def _setup_fake_real_resources(self):
         # Phased resources are created after the Low roles are available.
