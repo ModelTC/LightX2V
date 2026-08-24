@@ -32,10 +32,10 @@ class _Animate2VideoRecorder(VideoRecorder):
         self.returncode = None
 
     def start_ffmpeg_process_local(self):
-        output_pix_fmt = "yuv420p" if self.width % 2 == 0 and self.height % 2 == 0 else "yuv444p"
-        if output_pix_fmt != "yuv420p":
+        needs_even_padding = self.width % 2 != 0 or self.height % 2 != 0
+        if needs_even_padding:
             logger.warning(
-                "Wan-Animate-2 stream output is {}x{}; using yuv444p to preserve the exact crop.",
+                "Wan-Animate-2 stream output is {}x{}; padding to even dimensions for yuv420p compatibility.",
                 self.width,
                 self.height,
             )
@@ -69,15 +69,21 @@ class _Animate2VideoRecorder(VideoRecorder):
             "zerolatency",
             "-g",
             str(max(1, round(self.fps))),
-            "-pix_fmt",
-            output_pix_fmt,
-            "-f",
-            "mp4",
-            self.livestream_url,
-            "-y",
-            "-loglevel",
-            self.ffmpeg_log_level,
         ]
+        if needs_even_padding:
+            ffmpeg_cmd.extend(["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"])
+        ffmpeg_cmd.extend(
+            [
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "mp4",
+                self.livestream_url,
+                "-y",
+                "-loglevel",
+                self.ffmpeg_log_level,
+            ]
+        )
         try:
             self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
             logger.info("Wan-Animate-2 FFmpeg stream started with PID: {}", self.ffmpeg_process.pid)
