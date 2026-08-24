@@ -12,23 +12,66 @@ from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
 from safetensors.torch import load_file, save_file
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 
+from lightx2v_train.model_capabilities import (
+    CapabilityProvider,
+    CheckpointCapability,
+    ParallelCapability,
+    TrainableModelCapability,
+)
+from lightx2v_train.model_zoo.capability_adapters.common import (
+    CommonCheckpointCapability,
+    CommonParallelCapability,
+    CommonTrainableCapability,
+)
 from lightx2v_train.runtime.distributed import is_main_process
 from lightx2v_train.runtime.fsdp import is_fsdp2_module
 from lightx2v_train.utils.utils import get_running_dtype
 
 
-class BaseModel:
+class BaseModel(CapabilityProvider):
+    default_unconditional_prompt = " "
+    shared_condition_keys = ()
+
     def __init__(self, config):
+        super().__init__()
         self.config = config
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
         self.device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
         self.vae = None
+        self.vae_config = None
+        self.text_pipeline = None
+        self.image_processor = None
 
-    def load_components(self, transformer_only=False, reference_model=None):
+    def register_capabilities(self):
+        self.capabilities.register(
+            TrainableModelCapability,
+            CommonTrainableCapability(self),
+        )
+        self.capabilities.register(
+            ParallelCapability,
+            CommonParallelCapability(self),
+        )
+        self.capabilities.register(
+            CheckpointCapability,
+            CommonCheckpointCapability(self),
+        )
+
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
+        """Load the requested model weights; lightweight config metadata may still be read."""
         raise NotImplementedError
 
-    def dmd_latent_shape(self, batch_size, height, width):
-        raise NotImplementedError(f"{self.__class__.__name__} must define dmd_latent_shape().")
+    def reuse_frozen_components_from(self, source):
+        """Reuse the frozen VAE and condition components owned by another model."""
+        self.vae = source.vae
+        self.vae_config = source.vae_config
+        self.text_pipeline = source.text_pipeline
+        self.image_processor = source.image_processor
 
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
@@ -41,64 +84,6 @@ class BaseModel:
             target_modules=target_modules,
         )
         self.denoiser_module().add_adapter(lora_config)
-
-    def add_dual_lora(
-        self,
-        rank,
-        alpha,
-        target_modules,
-        student_adapter="student",
-        teacher_adapter="teacher",
-        init_teacher_from_student=True,
-    ):
-        lora_config = LoraConfig(
-            r=rank,
-            lora_alpha=alpha,
-            init_lora_weights="gaussian",
-            target_modules=target_modules,
-        )
-        denoiser = self.denoiser_module()
-        denoiser.requires_grad_(False)
-        denoiser.add_adapter(lora_config, adapter_name=student_adapter)
-        denoiser.add_adapter(lora_config, adapter_name=teacher_adapter)
-        denoiser.set_adapter(student_adapter)
-        if init_teacher_from_student:
-            self.copy_lora_adapter_weights(student_adapter, teacher_adapter)
-
-    @torch.no_grad()
-    def copy_lora_adapter_weights(self, src_adapter, dst_adapter):
-        named_params = dict(self.denoiser_module().named_parameters())
-        for name, param in named_params.items():
-            if src_adapter not in name:
-                continue
-            dst_name = name.replace(src_adapter, dst_adapter)
-            if dst_name in named_params:
-                named_params[dst_name].data.copy_(param.data)
-
-    def set_active_adapter(self, adapter_name):
-        self.denoiser_module().set_adapter(adapter_name)
-
-    def set_dual_lora_trainable(self, student_adapter="student", teacher_adapter="teacher"):
-        denoiser = self.denoiser_module()
-        denoiser.requires_grad_(False)
-        denoiser.train()
-        for name, param in denoiser.named_parameters():
-            if student_adapter in name and "lora" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
-
-    @torch.no_grad()
-    def ema_update_lora_adapter(self, src_adapter="student", dst_adapter="teacher", ema_decay=0.999):
-        named_params = dict(self.denoiser_module().named_parameters())
-        for name, src_param in named_params.items():
-            if src_adapter not in name:
-                continue
-            dst_name = name.replace(src_adapter, dst_adapter)
-            if dst_name not in named_params:
-                continue
-            dst_param = named_params[dst_name]
-            dst_param.data.mul_(ema_decay).add_(src_param.data, alpha=1.0 - ema_decay)
 
     def set_lora_trainable(self):
         denoiser = self.denoiser_module()
@@ -154,6 +139,40 @@ class BaseModel:
     def encode_condition(self, sample):
         raise NotImplementedError
 
+    @property
+    def unconditional_prompt(self):
+        return self.config["model"].get("unconditional_prompt", self.default_unconditional_prompt)
+
+    def encode_condition_roles(self, sample, prompts, *, contextual_roles=()):
+        """Encode named prompts, retaining sample context only for requested roles."""
+        contextual_roles = set(contextual_roles)
+        contextual_names = [name for name in prompts if name in contextual_roles]
+        conditions = {name: self.encode_prompt_condition(prompt) for name, prompt in prompts.items() if name not in contextual_roles}
+        if contextual_names:
+            contextual_prompts = [prompts[name] for name in contextual_names]
+            contextual_conditions = self.encode_conditions_with_context(sample, contextual_prompts)
+            conditions.update(zip(contextual_names, contextual_conditions, strict=True))
+        return {name: conditions[name] for name in prompts}
+
+    def encode_conditions_with_context(self, sample, prompts):
+        conditions = []
+        for prompt in prompts:
+            contextual_sample = dict(sample)
+            contextual_sample["conditioning"] = {
+                **sample["conditioning"],
+                "prompt": prompt,
+            }
+            conditions.append(self.encode_condition(contextual_sample))
+        return conditions
+
+    def encode_to_cache_latent(self, sample):
+        """Encode a deterministic target latent for reuse across training epochs."""
+        return self.encode_to_latent(sample)
+
+    def encode_inference_condition(self, sample, *, is_negative=False):
+        del is_negative
+        return self.encode_condition(sample)
+
     def prepare_denoiser_input(self, noisy_latent, condition=None):
         raise NotImplementedError
 
@@ -163,33 +182,42 @@ class BaseModel:
     def postprocess_denoiser_output(self, prediction, denoiser_input):
         raise NotImplementedError
 
+    def apply_cfg(self, positive, negative, guidance_scale):
+        return negative + guidance_scale * (positive - negative)
+
+    def denoiser_prediction_type(self):
+        """Return the quantity predicted by the denoiser.
+
+        LightX2V's current diffusion backbones are trained as rectified-flow
+        velocity predictors.  Keeping this declaration on the model avoids
+        baking that assumption into training objectives and leaves room
+        for models that predict x0, noise, or another parameterization.
+        """
+        return "velocity"
+
+    def predict_denoiser_output(self, noisy_latent, timestep_or_sigma, condition, **denoiser_kwargs):
+        """Run the model-specific denoiser path and return latent-shaped output.
+
+        Consistency objectives operate on latent tensors, while individual
+        models may pack those tensors before the transformer forward.  This
+        method is the common boundary between the two layers.  Extra keyword
+        arguments are intentionally forwarded for algorithms such as
+        MeanFlow, whose denoisers can require an additional endpoint time.
+        """
+        denoiser_input = self.prepare_denoiser_input(noisy_latent, condition=condition)
+        prediction = self.denoise(
+            denoiser_input,
+            timestep_or_sigma,
+            condition,
+            **denoiser_kwargs,
+        )
+        return self.postprocess_denoiser_output(prediction, denoiser_input)
+
     def prepare_infer_latents(self, height, width, generator=None):
         raise NotImplementedError
 
-    def dmd_latent_shape(self, batch_size, height, width):
-        raise NotImplementedError(f"{self.__class__.__name__} must define dmd_latent_shape().")
-
-    def cfg_on_denoiser_output(self):
-        return False
-
     def decode_latent(self, latent):
         raise NotImplementedError
-
-    def assemble_pipeline(self, scheduler=None):
-        raise NotImplementedError
-
-    def get_pipeline_infer_kwargs(self, infer_config):
-        """Return kwargs to pass to pipeline.__call__. Override to adapt model-specific parameter names."""
-        return {
-            "height": infer_config.get("height", 1024),
-            "width": infer_config.get("width", 1024),
-            "num_inference_steps": infer_config.get("num_inference_steps", 50),
-            "guidance_scale": infer_config.get("cfg_guidance_scale", 4.0),
-        }
-
-    def get_pipeline_sample_kwargs(self, sample):
-        """Return per-sample kwargs to pass to pipeline.__call__ during native inference."""
-        return {}
 
     def load_lora_for_infer(self, lora_path, adapter_name=None):
         denoiser = self.denoiser_module()
@@ -204,8 +232,19 @@ class BaseModel:
             self.denoiser_module().delete_adapters(adapter_name)
             self._infer_lora_adapter_name = None
 
-    def save_lora_weights(self, save_dir, adapter_name=None, weights_subdir=None):
-        peft_state_dict = self._get_lora_state_dict_for_save(adapter_name=adapter_name)
+    def save_lora_weights(
+        self,
+        save_dir,
+        adapter_name=None,
+        weights_subdir=None,
+        *,
+        auxiliary_parameter_names=(),
+        auxiliary_weights_name=None,
+    ):
+        peft_state_dict, auxiliary_state_dict = self._get_lora_and_auxiliary_state_dict_for_save(
+            adapter_name=adapter_name,
+            auxiliary_parameter_names=auxiliary_parameter_names,
+        )
         if not is_main_process():
             return
 
@@ -216,23 +255,44 @@ class BaseModel:
             self.pipeline_cls.save_lora_weights(output_dir, lora_state_dict, safe_serialization=True)
         else:
             save_file(lora_state_dict, os.path.join(output_dir, "pytorch_lora_weights.safetensors"))
+        if auxiliary_state_dict:
+            if not auxiliary_weights_name:
+                raise ValueError("auxiliary_weights_name is required when auxiliary parameters are saved.")
+            save_file(
+                auxiliary_state_dict,
+                os.path.join(output_dir, auxiliary_weights_name),
+            )
 
     def _get_lora_state_dict_for_save(self, adapter_name=None):
+        return self._get_lora_and_auxiliary_state_dict_for_save(adapter_name=adapter_name)[0]
+
+    def _get_lora_and_auxiliary_state_dict_for_save(
+        self,
+        adapter_name=None,
+        auxiliary_parameter_names=(),
+    ):
         denoiser = self.denoiser_module()
         peft_kwargs = {} if adapter_name is None else {"adapter_name": adapter_name}
         if not is_fsdp2_module(denoiser):
-            return get_peft_model_state_dict(denoiser, **peft_kwargs)
+            state_dict = denoiser.state_dict()
+        else:
+            options = StateDictOptions(
+                full_state_dict=True,
+                cpu_offload=True,
+                ignore_frozen_params=False,
+                strict=False,
+            )
+            state_dict, _ = get_state_dict(denoiser, (), options=options)
+            if not is_main_process():
+                return {}, {}
 
-        options = StateDictOptions(
-            full_state_dict=True,
-            cpu_offload=True,
-            ignore_frozen_params=False,
-            strict=False,
-        )
-        state_dict, _ = get_state_dict(denoiser, (), options=options)
-        if not is_main_process():
-            return {}
-        return get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
+        peft_state_dict = get_peft_model_state_dict(denoiser, state_dict=state_dict, **peft_kwargs)
+        auxiliary_names = set(auxiliary_parameter_names)
+        missing = auxiliary_names - state_dict.keys()
+        if missing:
+            raise RuntimeError(f"Auxiliary parameters are missing from the model state: {sorted(missing)}")
+        auxiliary_state_dict = {name: state_dict[name].detach().cpu().contiguous() for name in auxiliary_names}
+        return peft_state_dict, auxiliary_state_dict
 
     def load_lora_weights_for_resume(self, lora_path, adapter_name=None, weights_subdir=None):
         weights_dir = os.path.join(lora_path, weights_subdir) if weights_subdir else lora_path
@@ -248,6 +308,27 @@ class BaseModel:
         incompatible = set_peft_model_state_dict(self.denoiser_module(), peft_state_dict, **load_kwargs)
         if incompatible and incompatible.unexpected_keys:
             logger.warning("Unexpected keys when resuming LoRA: {}", incompatible.unexpected_keys)
+
+    def load_auxiliary_weights(
+        self,
+        checkpoint_dir,
+        parameter_names,
+        *,
+        weights_name,
+    ):
+        names = set(parameter_names)
+        if not names:
+            return
+        path = os.path.join(checkpoint_dir, weights_name)
+        if not os.path.exists(path):
+            raise RuntimeError(f"Auxiliary weights were not found at {path}.")
+        incompatible = self.denoiser_module().load_state_dict(load_file(path), strict=False)
+        missing = [name for name in incompatible.missing_keys if name in names]
+        unexpected = [name for name in incompatible.unexpected_keys if name in names]
+        if missing:
+            raise RuntimeError(f"Missing auxiliary keys in {path}: {missing}")
+        if unexpected:
+            logger.warning("Unexpected auxiliary keys in {}: {}", path, unexpected)
 
     def load_full_weights_for_resume(self, resume_ckpt_path):
         raise NotImplementedError(f"{self.__class__.__name__} must define load_full_weights_for_resume().")

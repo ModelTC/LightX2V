@@ -1,10 +1,7 @@
 import importlib
 
 _LAZY_EXPORTS = {
-    "VideoPhasedDmdTrainer": (
-        ".trainer",
-        "VideoPhasedDmdTrainer",
-    ),
+    "PhasedDmdTrainer": (".trainer", "PhasedDmdTrainer"),
 }
 
 

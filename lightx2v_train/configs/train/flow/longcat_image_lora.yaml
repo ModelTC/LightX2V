@@ -1,16 +1,16 @@
 model:
     name: longcat_image
     pretrained_model_name_or_path: /path/to/LongCat-Image
-    max_sequence_length: 1024
     attention_backend: _native_flash
     running_dtype: bf16
 
 data:
+    processor:
+        target_area: 1048576 # 1024 * 1024
     train:
         name: image_dataset
         num_workers: 8
         prompt_dropout_rate: 0.1
-        target_area: 1048576 # 1024 * 1024
         shuffle: true
         # examples: https://github.com/ModelTC/LightX2V_train_data_examples
         data_path:
@@ -36,14 +36,14 @@ scheduler:
         time_shift_power: 1.0
         dynamic_shift: true
         patch_size: [2, 2]  # [H, W]
-        # https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L59
+        # https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/longcat_image/pipeline_longcat_image.py
         shift_x1: 256
         shift_x2: 4096
         shift_y1: 0.5
         shift_y2: 1.15
 
 training:
-    method: flow
+    method: flow_matching
     train_type: lora
     max_train_iters: 3000
     gradient_accumulation_iters: 1
@@ -76,7 +76,7 @@ inference:
     default_height: 1024
     num_inference_steps: 50
     enable_cfg: true
-    cfg_guidance_scale: 4.0
+    cfg_guidance_scale: 4.5
     seed: 42
     output_dir: ./output_infer/longcat_image_lora
     infer_every_iters: ${training.save_every_iters}

@@ -241,12 +241,11 @@ class RealDataFakeTrick(
 
     def _phase_sigma(
         self,
-        batch_size: int,
         device: torch.device,
         dtype: torch.dtype,
     ) -> torch.Tensor:
         raw_timestep = torch.full(
-            (int(batch_size),),
+            (1,),
             self.setup_context.match_timestep,
             device=device,
             dtype=torch.long,
@@ -270,7 +269,6 @@ class RealDataFakeTrick(
         )
         if setup.mode == "phased" and region == "high":
             sigma_s = self._phase_sigma(
-                xt.shape[0],
                 xt.device,
                 xt.dtype,
             )
@@ -292,7 +290,6 @@ class RealDataFakeTrick(
     def _sample_score_sigma(
         self,
         context: RealDataFakeStepContext,
-        batch_size: int,
     ) -> torch.Tensor:
         setup = self.setup_context
         if setup.mode == "standard":
@@ -306,7 +303,7 @@ class RealDataFakeTrick(
             timestep = torch.randint(
                 min_timestep,
                 max_timestep,
-                (int(batch_size),),
+                (1,),
                 device=context.device,
                 dtype=torch.long,
             ).float()
@@ -343,7 +340,7 @@ class RealDataFakeTrick(
             candidate_indices = torch.randint(
                 0,
                 candidate_sigmas.numel(),
-                (int(batch_size),),
+                (1,),
                 device=context.device,
                 dtype=torch.long,
             )
@@ -423,12 +420,14 @@ class RealDataFakeTrick(
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         config = self._region_config(context.region)
         real_latents = context.extract_real_latents(context.sample)
+        if real_latents.shape[0] != 1:
+            raise ValueError("Real-data DMD only supports physical batch size 1.")
         timestep_index = context.sample_synced_int(
             0,
             len(config.timestep_list),
         )
         raw_timestep = torch.full(
-            (real_latents.shape[0],),
+            (1,),
             config.timestep_list[timestep_index],
             device=context.device,
             dtype=torch.long,
@@ -469,7 +468,7 @@ class RealDataFakeTrick(
             context,
             grad_enabled=True,
         )
-        sigma_t = self._sample_score_sigma(context, anchor.shape[0])
+        sigma_t = self._sample_score_sigma(context)
         noise = context.broadcast_noise(torch.randn_like(anchor, dtype=torch.float32))
         with torch.no_grad():
             score_xt = self._score_forward(
@@ -523,7 +522,7 @@ class RealDataFakeTrick(
             context,
             grad_enabled=False,
         )
-        sigma_t = self._sample_score_sigma(context, anchor.shape[0])
+        sigma_t = self._sample_score_sigma(context)
         noise = context.broadcast_noise(torch.randn_like(anchor, dtype=torch.float32))
         with torch.no_grad():
             score_xt = self._score_forward(

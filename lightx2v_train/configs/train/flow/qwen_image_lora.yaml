@@ -1,6 +1,6 @@
 model:
     name: qwen_image
-    pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image-2512
+    pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
     max_sequence_length: 1024
     running_dtype: bf16
 
@@ -13,13 +13,13 @@ data:
         shuffle: true
         # examples: https://github.com/ModelTC/LightX2V_train_data_examples
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /root/yongyang/datasets/LightX2V_train_data_examples/dataset_v1/train.jsonl
     val:
         name: image_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /root/yongyang/datasets/LightX2V_train_data_examples/dataset_v1/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000
@@ -42,7 +42,7 @@ scheduler:
         shift_y2: 1.15
 
 training:
-    method: flow
+    method: flow_matching
     train_type: lora
     max_train_iters: 3000
     gradient_accumulation_iters: 1

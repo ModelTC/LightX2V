@@ -1,4 +1,4 @@
-from lightx2v_train.utils.registry import build_data
+from lightx2v_train.utils.registry import build_data, build_sample_processor
 
 
 def __getattr__(name):
@@ -6,31 +6,25 @@ def __getattr__(name):
         from .image_dataset import build_image_dataset
 
         return build_image_dataset
-    if name == "build_libero_fastwam_dataset":
-        from .libero.dataset import build_libero_fastwam_dataset
+    if name == "build_training_cache_dataset":
+        from .training_cache_dataset import build_training_cache_dataset
 
-        return build_libero_fastwam_dataset
-    if name in {"build_latent_dataset", "build_prompt_dataset", "build_video_dataset"}:
-        from .video_dataset import build_latent_dataset, build_prompt_dataset, build_video_dataset
+        return build_training_cache_dataset
+    if name in {"build_prompt_dataset", "build_video_dataset"}:
+        from .video_dataset import build_prompt_dataset, build_video_dataset
 
         return {
-            "build_latent_dataset": build_latent_dataset,
             "build_prompt_dataset": build_prompt_dataset,
             "build_video_dataset": build_video_dataset,
         }[name]
-    if name == "prepare_data":
-        from .preparation import prepare_data
-
-        return prepare_data
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
     "build_data",
+    "build_sample_processor",
     "build_image_dataset",
-    "build_libero_fastwam_dataset",
-    "build_latent_dataset",
     "build_prompt_dataset",
+    "build_training_cache_dataset",
     "build_video_dataset",
-    "prepare_data",
 ]

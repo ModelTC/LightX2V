@@ -69,56 +69,57 @@ MODEL_REGISTER = Register()
 TRAINER_REGISTER = Register()
 INFERENCER_REGISTER = Register()
 DATA_REGISTER = Register()
+SAMPLE_PROCESSOR_REGISTER = Register()
 
 
 _MODEL_MODULES = {
-    "flux2_dev": "lightx2v_train.model_zoo.flux2_dev",
-    "flux2_klein": "lightx2v_train.model_zoo.flux2_klein",
-    "lingbot_video": "lightx2v_train.model_zoo.lingbot_video",
-    "longcat_image": "lightx2v_train.model_zoo.longcat_image",
-    "ltx_t2av": "lightx2v_train.model_zoo.ltx_t2av",
-    "ltx_t2av_ar": "lightx2v_train.model_zoo.ltx_t2av",
-    "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3_t2av",
-    "qwen_image": "lightx2v_train.model_zoo.qwen_image",
-    "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image_edit",
-    "wan_t2v": "lightx2v_train.model_zoo.wan_t2v",
-    "wan_t2v_ar": "lightx2v_train.model_zoo.wan_t2v",
-    "wan_t2v_14b": "lightx2v_train.model_zoo.wan_t2v",
-    "wan_t2v_14b_ar": "lightx2v_train.model_zoo.wan_t2v",
-    "wan_fastwam": "lightx2v_train.model_zoo.wan_fastwam",
-    "wan_ti2v_5b": "lightx2v_train.model_zoo.wan_ti2v_5b",
-    "wan_ti2v_5b_ar": "lightx2v_train.model_zoo.wan_ti2v_5b",
+    "flux2_dev": "lightx2v_train.model_zoo.flux2.flux2_dev",
+    "flux2_dev_edit": "lightx2v_train.model_zoo.flux2.flux2_dev_edit",
+    "flux2_klein": "lightx2v_train.model_zoo.flux2.flux2_klein",
+    "flux2_klein_edit": "lightx2v_train.model_zoo.flux2.flux2_klein_edit",
+    "lingbot_video": "lightx2v_train.model_zoo.wan.lingbot_video",
+    "longcat_image": "lightx2v_train.model_zoo.longcat_image.longcat_image",
+    "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.longcat_image_edit",
+    "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_t2av",
+    "qwen_image": "lightx2v_train.model_zoo.qwen_image.qwen_image",
+    "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.qwen_image_edit",
+    "wan_t2v": "lightx2v_train.model_zoo.wan.wan_t2v",
+    "wan_t2v_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
+    "wan_t2v_14b": "lightx2v_train.model_zoo.wan.wan_t2v",
+    "wan_t2v_14b_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
 }
 
 _TRAINER_MODULES = {
+    "autoregressive_dmd": "lightx2v_train.trainers.dmd.autoregressive_dmd",
+    "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",
-    "dopsd": "lightx2v_train.trainers.dopsd",
-    "fastwam": "lightx2v_train.trainers.fastwam",
-    "flow": "lightx2v_train.trainers.flow",
-    "lingbot_video_dmd": "lightx2v_train.trainers.dmd.video_trainer",
-    "ltx_t2av_ar_dmd": "lightx2v_train.trainers.dmd.ltx_trainer",
-    "ltx_t2av_dmd": "lightx2v_train.trainers.dmd.ltx_trainer",
-    "minimax_h3_t2av_dmd": "lightx2v_train.trainers.dmd.minimax_h3_trainer",
-    "ltx_t2av_flow": "lightx2v_train.trainers.flow",
-    "ltx_t2av_teacher_forcing": "lightx2v_train.trainers.tf",
-    "teacher_forcing": "lightx2v_train.trainers.tf",
-    "video_ar_dmd": "lightx2v_train.trainers.dmd.video_ar_trainer",
-    "video_dmd": "lightx2v_train.trainers.dmd.video_trainer",
-    "video_phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
-    "video_sgmd": "lightx2v_train.trainers.sgmd",
+    "flow_matching": "lightx2v_train.trainers.flow_matching",
+    "phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
+    "sgmd": "lightx2v_train.trainers.sgmd",
+    "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",
+    "training_cache": "lightx2v_train.trainers.training_cache",
 }
 
 _INFERENCER_MODULES = {
     "image_infer": "lightx2v_train.infer.image",
-    "image_native_infer": "lightx2v_train.infer.image_native",
     "lingbot_video_t2v_infer": "lightx2v_train.infer.video",
     "wan_t2v_infer": "lightx2v_train.infer.video",
     "wan_t2v_14b_infer": "lightx2v_train.infer.video",
     "wan_t2v_dual_infer": "lightx2v_train.infer.video",
     "wan_t2v_ar_infer": "lightx2v_train.infer.video",
     "wan_t2v_14b_ar_infer": "lightx2v_train.infer.video",
-    "wan_ti2v_5b_infer": "lightx2v_train.infer.video",
-    "wan_ti2v_5b_ar_infer": "lightx2v_train.infer.video",
+}
+
+_SAMPLE_PROCESSOR_MODULES = {
+    "flux2_dev": "lightx2v_train.model_zoo.flux2.data_process",
+    "flux2_dev_edit": "lightx2v_train.model_zoo.flux2.data_process",
+    "flux2_klein": "lightx2v_train.model_zoo.flux2.data_process",
+    "flux2_klein_edit": "lightx2v_train.model_zoo.flux2.data_process",
+    "longcat_image": "lightx2v_train.model_zoo.longcat_image.data_process",
+    "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.data_process",
+    "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.data_process",
+    "qwen_image": "lightx2v_train.model_zoo.qwen_image.data_process",
+    "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.data_process",
 }
 
 
@@ -135,9 +136,9 @@ def _ensure_data_registered(data_name):
         return
     if data_name == "image_dataset":
         import lightx2v_train.data.image_dataset  # noqa: F401
-    elif data_name == "libero_fastwam_dataset":
-        import lightx2v_train.data.libero.dataset  # noqa: F401
-    elif data_name in {"latent_dataset", "prompt_dataset", "video_dataset"}:
+    elif data_name == "training_cache_dataset":
+        import lightx2v_train.data.training_cache_dataset  # noqa: F401
+    elif data_name in {"prompt_dataset", "video_dataset"}:
         import lightx2v_train.data.video_dataset  # noqa: F401
 
 
@@ -151,7 +152,7 @@ def build_model(config):
 
 
 def build_trainer(config):
-    name = config["training"]["method"]
+    name = "training_cache" if "training_cache" in config else config["training"]["method"]
     _ensure_registered(name, TRAINER_REGISTER, _TRAINER_MODULES)
     if name not in TRAINER_REGISTER:
         available = ", ".join(sorted(TRAINER_REGISTER.keys()))
@@ -168,15 +169,58 @@ def build_inferencer(config):
     return INFERENCER_REGISTER[name](config)
 
 
-def build_data(config, train_or_val):
+def build_sample_processor(config):
+    processor_config = config.get("data", {}).get("processor", {})
+    name = processor_config.get("name", config["model"]["name"])
+    _ensure_registered(name, SAMPLE_PROCESSOR_REGISTER, _SAMPLE_PROCESSOR_MODULES)
+    if name not in SAMPLE_PROCESSOR_REGISTER:
+        if "name" not in processor_config:
+            return None
+        available = ", ".join(sorted(SAMPLE_PROCESSOR_REGISTER.keys()))
+        raise ValueError(f"Unknown sample processor {name!r}. Available processors: {available}")
+    return SAMPLE_PROCESSOR_REGISTER[name](config)
+
+
+def build_data(config, train_or_val, sample_processor=None):
+    from lightx2v_train.data.training_cache import training_cache_info
+
     data_config = config.get("data", {})
     if train_or_val not in data_config:
         available_splits = ", ".join(repr(k) for k in sorted(data_config.keys()))
         raise ValueError(f"config['data'] has no key {train_or_val!r}. Available keys: {available_splits}")
-    data_config_split = data_config[train_or_val]
+    data_config_split = dict(data_config[train_or_val])
+    if "training_cache" in config:
+        data_config_split.update(
+            prompt_dropout_rate=0.0,
+            dataset_repeat=1,
+            shuffle=False,
+            drop_last=False,
+            decode_retries=1,
+        )
+        data_config_split.pop("max_samples", None)
     data_name = data_config_split.get("name", "image_dataset")
+    use_training_cache = data_config.get("use_training_cache", False) if train_or_val == "train" and "training_cache" not in config else False
+    if use_training_cache:
+        data_name = "training_cache_dataset"
+    if train_or_val == "train" and data_name == "prompt_dataset":
+        image_sizes = config.get("training", {}).get("dmd", {}).get("image_sizes")
+        if image_sizes is not None:
+            data_config_split["image_sizes"] = image_sizes
     _ensure_data_registered(data_name)
     if data_name not in DATA_REGISTER:
         available_names = ", ".join(sorted(DATA_REGISTER.keys()))
         raise ValueError(f"Unknown data {data_name!r}. Available data: {available_names}")
-    return DATA_REGISTER[data_name](data_config_split, train_or_val=train_or_val)
+    kwargs = (
+        {
+            "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
+            "expected_cache_info": training_cache_info(config) if use_training_cache else None,
+        }
+        if data_name == "training_cache_dataset"
+        else {
+            "sample_processor": sample_processor,
+            "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
+        }
+        if data_name in {"image_dataset", "video_dataset"}
+        else {}
+    )
+    return DATA_REGISTER[data_name](data_config_split, train_or_val=train_or_val, **kwargs)

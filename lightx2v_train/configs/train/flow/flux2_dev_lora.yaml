@@ -21,11 +21,12 @@ distributed:
             cast_forward_inputs: false
 
 data:
+    processor:
+        target_area: 1048576 # 1024 * 1024
     train:
         name: image_dataset
         num_workers: 8
         prompt_dropout_rate: 0.1
-        target_area: 1048576 # 1024 * 1024
         shuffle: true
         data_path:
             - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
@@ -54,7 +55,7 @@ scheduler:
         patch_size: [1, 1] # [H, W]
 
 training:
-    method: flow
+    method: flow_matching
     train_type: lora
     max_train_iters: 3000
     gradient_accumulation_iters: 1
@@ -86,7 +87,6 @@ training:
     output_dir: ./output_train/flux2_dev_lora
 
 inference:
-    # Use the distributed-safe inferencer for torchrun/FSDP. Use image_native_infer only for single-process eval.
     method: image_infer
     negative_prompt: ""
     default_width: 1024

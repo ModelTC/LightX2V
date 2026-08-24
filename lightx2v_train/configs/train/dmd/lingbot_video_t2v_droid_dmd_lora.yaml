@@ -39,7 +39,6 @@ data:
     train:
         name: prompt_dataset
         data_path: /data/nvme5/gushiqiao/datatets/droid_prompts/droid_prompts_50k_lingbot_auto_negative.jsonl
-        batch_size: 1
         num_workers: 4
         pin_memory: true
         shuffle: true
@@ -48,7 +47,6 @@ data:
         name: prompt_dataset
         data_path: /data/nvme5/gushiqiao/codes/new/LightX2V/lightx2v_train/assets/lingbot_video/t2v_prompts_first5.json
         max_samples: 2
-        batch_size: 1
         num_workers: 0
         pin_memory: true
         shuffle: false
@@ -68,7 +66,7 @@ scheduler:
         extra_one_step: true
 
 training:
-    method: lingbot_video_dmd
+    method: dmd
     max_train_iters: 5000
     gradient_accumulation_iters: 4
     gradient_checkpointing: true

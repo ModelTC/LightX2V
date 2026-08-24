@@ -1,0 +1,116 @@
+model:
+    name: minimax_h3_t2av
+    # Converted Diffusers model root containing transformer/config.json.
+    pretrained_model_name_or_path: /path/to/models/MiniMax-H3
+    running_dtype: bf16
+    transformer_param_dtype: bf16
+    # H3 diffusion states are kept in fp32; text embeddings remain bf16.
+    latent_dtype: fp32
+    local_files_only: true
+    patch_size: [1, 2, 2]
+    video_latent_channels: 24
+    audio_latent_channels: 32
+    vae_spatial_scale_factor: 16
+    video_fps: 24
+    audio_sampling_rate: 32000
+    audio_latents_per_second: 40
+    # Cache construction activates the large frozen encoders one at a time.
+    cache_encoder_cpu_offload: true
+    use_autocast: false
+    attention_backend: _flash_3_hub
+    capabilities:
+        flow_matching:
+            video_flow_shift: 6.0
+            audio_flow_shift: 3.0
+            video_loss_weight: 1.0
+            audio_loss_weight: 1.0
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        # Preserve the transformer's intentional fp32/bf16 parameter mix.
+        mixed_precision:
+            param_dtype: null
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: video_dataset
+        data_path:
+            - /path/to/datasets/minimax_h3_t2av/train.jsonl
+        video_column: video
+        audio_column: audio
+        prompt_column: prompt
+        height: 768
+        width: 1344
+        # H3 requires F = 17*n+5.
+        num_frames: 124
+        frame_rate: 24
+        fix_frame_rate: true
+        random_start: false
+        skip_missing: true
+        decode_retries: 3
+        num_workers: 4
+        pin_memory: true
+        shuffle: true
+        drop_last: true
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: uniform
+    min_t: 0.001
+    max_t: 1.0
+    # The H3 capability applies separate rational shifts to video and audio.
+    time_shift_settings:
+        do_time_shift: false
+
+training:
+    method: flow_matching
+    train_type: lora
+    max_train_iters: 3000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 10
+    save_every_iters: 100
+    save_total_limit: 10
+    lora:
+        rank: 128
+        alpha: 128
+        target_modules:
+            - to_q
+            - to_k
+            - to_v
+            - to_out.0
+            - ff.net.0.proj
+            - ff.net.2
+    optimizer:
+        learning_rate: 0.0001
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.01
+        adam_epsilon: 0.00000001
+    output_dir: ./output_train/minimax_h3_t2av_lora
+
+inference:
+    method: none
+    infer_every_iters: null
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+
+resume:
+    auto_resume: false

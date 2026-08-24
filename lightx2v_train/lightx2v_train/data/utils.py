@@ -3,6 +3,7 @@ import json
 import math
 import random
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import imageio
@@ -12,6 +13,18 @@ from PIL import Image
 
 PROMPT_KEYS = ("prompt", "caption", "text")
 _BILINEAR = getattr(Image, "Resampling", Image).BILINEAR
+
+
+@dataclass(frozen=True)
+class VideoFrameSelection:
+    frame_ids: tuple[int, ...]
+    start_time: float
+
+
+def require_singleton_dataloader(dataloader, name):
+    batch_size = getattr(dataloader, "batch_size", None)
+    if batch_size != 1:
+        raise ValueError(f"{name} must use DataLoader(batch_size=1); custom batch samplers and physical batch sizes greater than 1 are not supported, got {batch_size!r}.")
 
 
 def to_list(value):
@@ -88,10 +101,6 @@ def read_records(path, prompt_column="prompt", prompt_index=0):
             "audio_path",
             "image",
             "image_path",
-            "video_latent_path",
-            "audio_latent_path",
-            "condition_path",
-            "negative_condition_path",
         }
         if set(header).intersection(known_columns):
             for row in reader:
@@ -180,20 +189,31 @@ class VideoFrameSampler:
         frame_id = int(round(target_time * raw_frame_rate))
         return min(frame_id, total_raw_frames - 1)
 
-    def frame_ids(self, reader):
-        raw_frame_rate = reader.get_meta_data().get("fps", self.frame_rate)
+    def sample(self, reader):
+        raw_frame_rate = float(reader.get_meta_data().get("fps") or self.frame_rate)
+        if raw_frame_rate <= 0:
+            raise ValueError(f"Video frame rate must be positive, got {raw_frame_rate}.")
         total_raw_frames = int(reader.count_frames())
         num_frames = self.sample_count(reader)
         max_start = max(0, self.available_frames(reader) - num_frames)
         start = random.randint(0, max_start) if self.random_start and max_start > 0 else 0
-        return [self.raw_frame_id(start + frame_id, raw_frame_rate, total_raw_frames) for frame_id in range(num_frames)]
+        frame_ids = tuple(self.raw_frame_id(start + frame_id, raw_frame_rate, total_raw_frames) for frame_id in range(num_frames))
+        sampling_frame_rate = self.frame_rate if self.fix_frame_rate else raw_frame_rate
+        return VideoFrameSelection(
+            frame_ids=frame_ids,
+            start_time=start / sampling_frame_rate,
+        )
+
+    def frame_ids(self, reader):
+        return list(self.sample(reader).frame_ids)
 
 
-def load_video_tensor(video_path, height, width, frame_sampler):
+def load_video_tensor(video_path, height, width, frame_sampler, *, return_start_time=False):
     reader = imageio.get_reader(video_path)
     try:
+        selection = frame_sampler.sample(reader)
         frames = []
-        for frame_id in frame_sampler.frame_ids(reader):
+        for frame_id in selection.frame_ids:
             frame = Image.fromarray(reader.get_data(frame_id)).convert("RGB")
             frame_width, frame_height = frame.size
             scale = max(width / frame_width, height / frame_height)
@@ -207,4 +227,5 @@ def load_video_tensor(video_path, height, width, frame_sampler):
             frames.append(torch.from_numpy(array).permute(2, 0, 1))
     finally:
         reader.close()
-    return torch.stack(frames, dim=1)
+    video = torch.stack(frames, dim=1)
+    return (video, selection.start_time) if return_start_time else video

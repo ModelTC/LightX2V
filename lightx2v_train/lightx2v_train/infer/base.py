@@ -45,10 +45,6 @@ class BaseInferencer:
             timestep_or_sigma,
             pos_cond,
         )
-        pred_pos = model.postprocess_denoiser_output(
-            pred_pos,
-            denoiser_input,
-        )
 
         if self.enable_cfg:
             pred_neg = model.denoise(
@@ -56,14 +52,10 @@ class BaseInferencer:
                 timestep_or_sigma,
                 neg_cond,
             )
-            pred_neg = model.postprocess_denoiser_output(
-                pred_neg,
-                denoiser_input,
-            )
-            pred = pred_neg + self.guidance_scale * (pred_pos - pred_neg)
+            pred = model.apply_cfg(pred_pos, pred_neg, self.guidance_scale)
         else:
             pred = pred_pos
-        return pred
+        return model.postprocess_denoiser_output(pred, denoiser_input)
 
     @torch.no_grad()
     def infer(self):

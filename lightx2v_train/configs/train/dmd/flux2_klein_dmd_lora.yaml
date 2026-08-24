@@ -1,18 +1,19 @@
 model:
     name: flux2_klein
-    pretrained_model_name_or_path: /path/to/FLUX.2-klein-4B
+    pretrained_model_name_or_path: /path/to/FLUX.2-klein-base-4B
     max_sequence_length: 1024
     running_dtype: bf16
 
 data:
     train:
-        name: image_dataset
+        # JSONL row: {"prompt": "...", "target_height": 1024, "target_width": 1024}
+        name: prompt_dataset
         num_workers: 8
+        bucket_by_size: true
         prompt_dropout_rate: 0.0
-        target_area: 1048576 # 1024 * 1024
         shuffle: true
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/train.jsonl
+            - /path/to/datasets/image_dmd/train.jsonl
     val:
         name: image_dataset
         num_workers: 8
@@ -43,9 +44,9 @@ training:
         num_inference_steps: 4
         fake_update_ratio: 2
         image_sizes:
-            - [1024, 1024]
-            - [768, 1344]
-            - [1344, 768]
+            - {value: [1024, 1024], ratio: 5}
+            - {value: [16, 768, 1344], ratio: 3}
+            - {value: [16, 1344, 768], ratio: 2}
         renoise_sigma_min: 0.02
         renoise_sigma_max: 1.0
         renoise_discrete_samples: 1000

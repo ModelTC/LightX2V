@@ -2,6 +2,7 @@ model:
     name: wan_t2v
     pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
     causal: true
+    num_frame_per_chunk: 3
     max_sequence_length: 512
     running_dtype: bf16
     transformer_param_dtype: fp32
@@ -30,10 +31,16 @@ distributed:
 
 data:
     train:
-        name: latent_dataset
-        data_path: /path/to/datasets/causal_forcing_data/dataset/clean_data
+        name: video_dataset
+        data_path:
+            - /path/to/datasets/wan_t2v/train.jsonl
+        video_column: video
+        prompt_column: prompt
+        height: 480
+        width: 832
+        num_frames: 81
+        frame_rate: 24
         dataset_repeat: 1
-        batch_size: 1
         num_workers: 8
         pin_memory: true
         shuffle: true
@@ -43,7 +50,6 @@ data:
         data_path:
             - /path/to/prompts/wan_t2v_prompts.txt
         max_samples: 1
-        batch_size: 1
         num_workers: 0
         shuffle: false
 
@@ -72,9 +78,8 @@ training:
     save_every_iters: 100
     save_total_limit: 10
     teacher_forcing:
-        enabled: true
         mode: chunkwise
-        num_frame_per_chunk: 3
+        num_frame_per_chunk: ${model.num_frame_per_chunk}
         noise_augmentation_max_timestep: 0
     optimizer:
         learning_rate: 0.000002

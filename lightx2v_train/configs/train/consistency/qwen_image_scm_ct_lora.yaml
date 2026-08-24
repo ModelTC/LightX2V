@@ -1,0 +1,81 @@
+model:
+    name: qwen_image
+    pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
+    max_sequence_length: 1024
+    running_dtype: bf16
+
+data:
+    train:
+        name: image_dataset
+        num_workers: 8
+        prompt_dropout_rate: 0.1
+        target_area: 1048576
+        shuffle: true
+        data_path:
+            - /root/yongyang/datasets/LightX2V_train_data_examples/dataset_v1/train.jsonl
+
+scheduler:
+    num_train_timesteps: 1000
+    timestep_distribution: logitnormal
+    logitnormal_mean: 0.0
+    logitnormal_std: 1.0
+    min_t: 0.001
+    max_t: 1.0
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: exponential
+        time_shift_power: 1.0
+        dynamic_shift: true
+        patch_size: [2, 2]
+        shift_x1: 256
+        shift_x2: 4096
+        shift_y1: 0.5
+        shift_y2: 1.15
+
+training:
+    method: consistency
+    train_type: lora
+    max_train_iters: 10000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 10
+    save_every_iters: 100
+    save_total_limit: 10
+    consistency:
+        algorithm: scm
+        mode: ct
+        sigma_data: 0.5
+        jvp:
+            # Finite differences are much more memory-friendly for Qwen-Image.
+            # Set to exact to use torch.func.jvp with math attention.
+            method: finite_difference
+            epsilon: 0.001
+        loss:
+            tangent_warmup_steps: 10000
+            tangent_warmup_constant: 0.1
+            prior_weighting: true
+            spatially_normalized_tangent: true
+            normalize_by_numel: true
+    lora:
+        rank: 16
+        alpha: 16
+        target_modules: [to_k, to_q, to_v, to_out.0]
+    optimizer:
+        learning_rate: 0.0001
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.0
+        adam_epsilon: 0.00000001
+    output_dir: ./output_train/qwen_image_scm_ct_lora
+
+inference:
+    method: none
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+
+resume:
+    auto_resume: true

@@ -1,5 +1,7 @@
 model:
     name: minimax_h3_t2av
+    # This must be the converted Diffusers model root containing
+    # transformer/config.json (MiniMaxH3Transformer3DModel).
     pretrained_model_name_or_path: /data/nvme6/gushiqiao/models/MiniMax-H3
     running_dtype: bf16
     transformer_param_dtype: bf16
@@ -8,8 +10,22 @@ model:
     video_latent_channels: 24
     audio_latent_channels: 32
     vae_spatial_scale_factor: 16
+    video_fps: 24
+    audio_sampling_rate: 32000
+    audio_latents_per_second: 40
+    # Keep frozen cache encoders off GPU outside their forward passes.
+    cache_encoder_cpu_offload: true
+    # H3 keeps its diffusion latents in fp32; prompt embeddings remain bf16.
+    use_autocast: false
     # Full SDPA is impractical at H3 sequence lengths; this matches run_h3.py.
     attention_backend: _flash_3_hub
+    capabilities:
+        distribution_matching:
+            # The H3 denoiser applies separate shifts to one shared base sigma.
+            video_flow_shift: 6.0
+            audio_flow_shift: 3.0
+            video_loss_weight: 1.0
+            audio_loss_weight: 1.0
 
 distributed:
     backend: nccl
@@ -32,9 +48,9 @@ distributed:
 
 data:
     train:
-        name: latent_dataset
-        data_path: /data/nvme6/gushiqiao/datasets/minimax_h3_prompt_cache
-        batch_size: 1
+        name: prompt_dataset
+        data_path:
+            - /path/to/datasets/minimax_h3_t2av/prompts.txt
         num_workers: 2
         pin_memory: true
         shuffle: true
@@ -47,7 +63,7 @@ scheduler:
     max_t: 1.0
 
 training:
-    method: minimax_h3_t2av_dmd
+    method: dmd
     max_train_iters: 1000
     gradient_accumulation_iters: 1
     gradient_checkpointing: true
@@ -56,12 +72,6 @@ training:
     lr_warmup_iters: 0
     save_every_iters: 100
     save_total_limit: 5
-    minimax_h3:
-        video_flow_shift: 6.0
-        audio_flow_shift: 3.0
-        video_loss_weight: 1.0
-        audio_loss_weight: 1.0
-        latent_dtype: fp32
     dmd:
         # Four student model evaluations; the terminal zero sigma is added internally.
         num_inference_steps: 4
@@ -70,8 +80,11 @@ training:
         width: 1344
         # 124 = 17*7+5, about 5.17 seconds at H3's fixed 24 fps.
         num_frames: 124
-        renoise_sigma_min: 0.02
-        renoise_sigma_max: 0.98
+        score_sampling:
+            type: continuous_uniform
+            min_sigma: 0.02
+            max_sigma: 0.98
+        # Do not apply the generic scheduler shift before H3's modality shifts.
         warp_denoising_step: false
     student:
         train_type: lora

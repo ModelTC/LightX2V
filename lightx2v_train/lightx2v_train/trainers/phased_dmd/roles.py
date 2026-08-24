@@ -2,11 +2,12 @@ import copy
 
 from loguru import logger
 
-from lightx2v_train.model_zoo import build_model
-from lightx2v_train.runtime.parallel import (
-    apply_parallel,
-    set_parallel_gradient_sync,
+from lightx2v_train.model_capabilities import (
+    DistributionMatchingCapability,
+    ParallelCapability,
+    TrainableModelCapability,
 )
+from lightx2v_train.model_zoo import build_loaded_model
 from lightx2v_train.tricks import IdaModelPair
 
 from ..dmd.roles import (
@@ -96,22 +97,11 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             lora_config = self.fake_real_low_lora_config
         else:
             raise ValueError(f"Unsupported phased model role: {role}")
-        if train_type == "lora":
-            model.add_lora(
-                lora_config["rank"],
-                lora_config["alpha"],
-                lora_config.get("target_modules"),
-            )
-            model.set_lora_trainable()
-            return
-        model.set_full_trainable()
+        model.ensure_capabilities().require(TrainableModelCapability).configure(train_type, lora_config or {})
 
     def restore_trainable_model(self, model, role):
         train_type = self.runtime(role).train_type
-        if train_type == "lora":
-            model.set_lora_trainable()
-            return
-        model.set_full_trainable()
+        model.ensure_capabilities().require(TrainableModelCapability).restore(train_type)
 
     def role_model_config(self, role):
         excluded_roles = {
@@ -141,12 +131,12 @@ class PhasedRoleRegistry(DmdRoleRegistry):
     def ida_model_pairs(self):
         return {
             "high": IdaModelPair(
-                student=self.model.denoiser_module(),
-                fake=self.fake_model.denoiser_module(),
+                student=self.student.denoiser(),
+                fake=self.fake.denoiser(),
             ),
             "low": IdaModelPair(
-                student=self.student_2_model.denoiser_module(),
-                fake=self.fake_2_model.denoiser_module(),
+                student=self.student_2.denoiser(),
+                fake=self.fake_2.denoiser(),
             ),
         }
 
@@ -199,7 +189,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
 
     def set_role_gradient_sync(self, role, enabled):
         runtime = self.runtime(role)
-        set_parallel_gradient_sync(runtime.model, enabled)
+        runtime.model.capabilities.require(ParallelCapability).set_gradient_sync(enabled)
 
     def trainable_names(self):
         names = ["student", "fake", "student_2", "fake_2"]
@@ -253,48 +243,57 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             self.student_checkpoint_path = student_checkpoint_path
 
         student_2_model_config = self._role_model_config("student_2")
-        self.student_2_model = build_model(student_2_model_config)
-        self.student_2_model.load_components(
-            transformer_only=True,
-            reference_model=self.model,
+        self.student_2_model = build_loaded_model(
+            student_2_model_config,
+            load_transformer=True,
+            load_vae=False,
+            load_condition_encoder=False,
         )
+        self.student_2_model.reuse_frozen_components_from(self.model)
+        self.student_2 = self.student_2_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(
             self.student_2_model,
             role="student_2",
         )
-        apply_parallel(self.student_2_model, self.config)
+        self.student_2_model.capabilities.require(ParallelCapability).apply(self.config)
         if self.gradient_checkpointing:
-            self.student_2_model.enable_gradient_checkpointing()
+            self.student_2_model.capabilities.require(TrainableModelCapability).enable_gradient_checkpointing()
 
         fake_2_model_config = self._role_model_config("fake_2")
-        self.fake_2_model = build_model(fake_2_model_config)
-        self.fake_2_model.load_components(
-            transformer_only=True,
-            reference_model=self.model,
+        self.fake_2_model = build_loaded_model(
+            fake_2_model_config,
+            load_transformer=True,
+            load_vae=False,
+            load_condition_encoder=False,
         )
+        self.fake_2_model.reuse_frozen_components_from(self.model)
+        self.fake_2 = self.fake_2_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(self.fake_2_model, role="fake_2")
-        apply_parallel(self.fake_2_model, self.config)
+        self.fake_2_model.capabilities.require(ParallelCapability).apply(self.config)
         if self.gradient_checkpointing:
-            self.fake_2_model.enable_gradient_checkpointing()
+            self.fake_2_model.capabilities.require(TrainableModelCapability).enable_gradient_checkpointing()
 
         self.fake_low_high_model = None
         fake_low_high_model_config = None
         fake_low_high_model_path = None
         if self.enable_fake_low_high:
             fake_low_high_model_config = self._role_model_config("teacher")
-            self.fake_low_high_model = build_model(fake_low_high_model_config)
-            fake_low_high_model_path = fake_low_high_model_config["model"]["pretrained_model_name_or_path"]
-            self.fake_low_high_model.load_components(
-                transformer_only=True,
-                reference_model=self.model,
+            self.fake_low_high_model = build_loaded_model(
+                fake_low_high_model_config,
+                load_transformer=True,
+                load_vae=False,
+                load_condition_encoder=False,
             )
+            self.fake_low_high_model.reuse_frozen_components_from(self.model)
+            fake_low_high_model_path = fake_low_high_model_config["model"]["pretrained_model_name_or_path"]
+            self.fake_low_high = self.fake_low_high_model.capabilities.require(DistributionMatchingCapability)
             self._setup_trainable_model(
                 self.fake_low_high_model,
                 role="fake_low_high",
             )
-            apply_parallel(self.fake_low_high_model, self.config)
+            self.fake_low_high_model.capabilities.require(ParallelCapability).apply(self.config)
             if self.gradient_checkpointing:
-                self.fake_low_high_model.enable_gradient_checkpointing()
+                self.fake_low_high_model.capabilities.require(TrainableModelCapability).enable_gradient_checkpointing()
 
         self.fake_real_high_model = None
         self.fake_real_low_model = None
@@ -305,16 +304,20 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             if not self.real_data_fake_trick.enabled_for(region):
                 continue
             role_config = self._role_model_config(source_role)
-            model = build_model(role_config)
-            model.load_components(
-                transformer_only=True,
-                reference_model=self.model,
+            model = build_loaded_model(
+                role_config,
+                load_transformer=True,
+                load_vae=False,
+                load_condition_encoder=False,
             )
+            model.reuse_frozen_components_from(self.model)
             self._setup_trainable_model(model, role=role)
-            apply_parallel(model, self.config)
+            model.capabilities.require(ParallelCapability).apply(self.config)
             if self.gradient_checkpointing:
-                model.enable_gradient_checkpointing()
+                model.capabilities.require(TrainableModelCapability).enable_gradient_checkpointing()
             setattr(self, f"{role}_model", model)
+            capability = model.capabilities.require(DistributionMatchingCapability)
+            setattr(self, role, capability)
             logger.info(
                 "[train] phased_dmd independent {} path={} train_type={}",
                 role,
@@ -332,24 +335,28 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             if teacher_model_config != teacher_2_model_config:
                 raise ValueError("model.teacher_2 can share with teacher only when their model configurations match.")
             self.teacher_2_model = self.teacher_model
+            self.teacher_2 = self.teacher
             logger.info("[train] phased_dmd teacher_2 shares teacher weights")
         else:
             teacher_2_model_config = self._role_model_config("teacher_2")
-            self.teacher_2_model = build_model(teacher_2_model_config)
-            self.teacher_2_model.load_components(
-                transformer_only=True,
-                reference_model=self.model,
+            self.teacher_2_model = build_loaded_model(
+                teacher_2_model_config,
+                load_transformer=True,
+                load_vae=False,
+                load_condition_encoder=False,
             )
-            self.teacher_2_model.transformer.requires_grad_(False)
-            self.teacher_2_model.transformer.eval()
-            apply_parallel(self.teacher_2_model, self.config)
-            self.teacher_2_model.transformer.eval()
+            self.teacher_2_model.reuse_frozen_components_from(self.model)
+            self.teacher_2 = self.teacher_2_model.capabilities.require(DistributionMatchingCapability)
+            self.teacher_2.denoiser().requires_grad_(False)
+            self.teacher_2.set_training(False)
+            self.teacher_2_model.capabilities.require(ParallelCapability).apply(self.config)
+            self.teacher_2.set_training(False)
 
-        self.student_2_trainable_params = list(self.student_2_model.trainable_parameters())
-        self.fake_2_trainable_params = list(self.fake_2_model.trainable_parameters())
-        self.fake_low_high_trainable_params = list(self.fake_low_high_model.trainable_parameters()) if self.fake_low_high_model is not None else []
-        self.fake_real_high_trainable_params = list(self.fake_real_high_model.trainable_parameters()) if self.fake_real_high_model is not None else []
-        self.fake_real_low_trainable_params = list(self.fake_real_low_model.trainable_parameters()) if self.fake_real_low_model is not None else []
+        self.student_2_trainable_params = list(self.student_2_model.capabilities.require(TrainableModelCapability).parameters())
+        self.fake_2_trainable_params = list(self.fake_2_model.capabilities.require(TrainableModelCapability).parameters())
+        self.fake_low_high_trainable_params = list(self.fake_low_high_model.capabilities.require(TrainableModelCapability).parameters()) if self.fake_low_high_model is not None else []
+        self.fake_real_high_trainable_params = list(self.fake_real_high_model.capabilities.require(TrainableModelCapability).parameters()) if self.fake_real_high_model is not None else []
+        self.fake_real_low_trainable_params = list(self.fake_real_low_model.capabilities.require(TrainableModelCapability).parameters()) if self.fake_real_low_model is not None else []
         self.student_2_optimizer = self._build_optimizer(
             self.student_2_trainable_params,
             self.student_2_optimizer_config,
@@ -440,7 +447,7 @@ class PhasedRoleRegistry(DmdRoleRegistry):
         )
         if self.infer_every_iters:
             if not hasattr(self.inferencer, "set_low_model"):
-                raise RuntimeError("video_phased_dmd requires wan_t2v_dual_infer.")
+                raise RuntimeError("phased_dmd inference requires an inferencer that supports set_low_model().")
             self.inferencer.set_low_model(self.student_2_model)
 
         if resume_ckpt_path is not None:

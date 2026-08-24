@@ -17,7 +17,7 @@ from lightx2v_train.runtime.sequence_parallel import (
 )
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
-from .dmd import VideoDmdTrainer
+from .dmd import DmdTrainer
 
 
 def normalized_fisher_loss(
@@ -56,11 +56,11 @@ def generator_fake_correction_loss(
     )
 
 
-@TRAINER_REGISTER("video_sgmd")
-class VideoSgmdTrainer(VideoDmdTrainer):
+@TRAINER_REGISTER("sgmd")
+class SgmdTrainer(DmdTrainer):
     """Strict video SGMD with one student and one fake-score update per iter."""
 
-    trainer_name = "video_sgmd"
+    trainer_name = "sgmd"
     fake_correction_weight = 0.1
     supports_real_data_fake = False
     supports_ida = False
@@ -68,9 +68,7 @@ class VideoSgmdTrainer(VideoDmdTrainer):
     def __init__(self, config):
         super().__init__(config)
         if self.fake_update_ratio != 1:
-            raise ValueError("video_sgmd strictly uses one student and one fake-score update per iteration; set training.dmd.fake_update_ratio=1.")
-        if self.cdm_enabled:
-            raise ValueError("video_sgmd does not support training.dmd.cdm.")
+            raise ValueError("SGMD uses one student and one fake-score update per iteration; set training.dmd.fake_update_ratio=1.")
 
     def sample_end_step(self):
         end_step_idx = self._sample_synced_int(
@@ -99,16 +97,15 @@ class VideoSgmdTrainer(VideoDmdTrainer):
         )
         sgmd_step = self._last_sgmd_step
         sigma = self._sample_score_sigma(
-            latent_shape[0],
             denoised_timestep_from=denoised_timestep_from,
             denoised_timestep_to=denoised_timestep_to,
-            device=self.model.device,
-            dtype=self.running_dtype,
+            device=self.student.device,
+            dtype=self.latent_dtype,
         )
         noise = broadcast_sequence_parallel_value(
             torch.randn(
                 latent_shape,
-                device=self.model.device,
+                device=self.student.device,
                 dtype=torch.float32,
             )
         )
@@ -118,15 +115,15 @@ class VideoSgmdTrainer(VideoDmdTrainer):
             sigma,
         )
 
-        self.fake_model.transformer.eval()
+        self.fake.set_training(False)
         velocity_fake = self._predict_velocity(
-            self.fake_model,
+            self.fake,
             renoised_xt,
             sigma,
             condition,
         )
         with torch.no_grad():
-            self.teacher_model.transformer.eval()
+            self.teacher.set_training(False)
             velocity_teacher = self._predict_teacher_velocity(
                 renoised_xt,
                 sigma,
@@ -174,9 +171,9 @@ class VideoSgmdTrainer(VideoDmdTrainer):
             noise,
             sigma,
         )
-        self.fake_model.transformer.eval()
+        self.fake.set_training(False)
         velocity_fake = self._predict_velocity(
-            self.fake_model,
+            self.fake,
             renoised_xt,
             sigma,
             condition,

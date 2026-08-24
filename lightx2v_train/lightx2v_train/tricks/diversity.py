@@ -23,7 +23,6 @@ class DiversityScheduler(Protocol):
     def sigma_at(
         self,
         step_index: int,
-        batch_size: int,
         *,
         device: torch.device,
         dtype: torch.dtype,
@@ -180,7 +179,6 @@ class DiversityTrick(
             for step_index in range(self.config.anchor_step):
                 sigma = scheduler.sigma_at(
                     step_index,
-                    context.initial_noise.shape[0],
                     device=context.device,
                     dtype=context.dtype,
                 )
@@ -197,7 +195,6 @@ class DiversityTrick(
                 )
             anchor_sigma = scheduler.sigma_at(
                 self.config.anchor_step,
-                context.initial_noise.shape[0],
                 device=context.device,
                 dtype=context.dtype,
             )
@@ -218,7 +215,6 @@ class DiversityTrick(
         anchor_latent, anchor_sigma = self._compute_anchor(context)
         sigma_first = context.student_scheduler.sigma_at(
             0,
-            initial_noise.shape[0],
             device=context.device,
             dtype=context.dtype,
         )

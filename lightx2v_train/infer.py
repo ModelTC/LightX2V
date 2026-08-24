@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from loguru import logger
 
-from lightx2v_train.data import build_data
+from lightx2v_train.data import build_data, build_sample_processor
 from lightx2v_train.infer import build_inferencer
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
@@ -75,9 +75,11 @@ def _build_low_model_for_dual_infer(config, reference_model):
     low_config["model"].update(copy.deepcopy(low_override))
     low_model = build_model(low_config)
     low_model.load_components(
-        transformer_only=True,
-        reference_model=reference_model,
+        load_transformer=True,
+        load_vae=False,
+        load_condition_encoder=False,
     )
+    low_model.reuse_frozen_components_from(reference_model)
     _load_full_checkpoint_for_infer(
         low_model,
         low_config["model"],
@@ -93,8 +95,13 @@ def main():
     setup_logger(config)
 
     try:
+        sample_processor = build_sample_processor(config)
         model = build_model(config)
-        model.load_components()
+        model.load_components(
+            load_transformer=True,
+            load_vae=True,
+            load_condition_encoder=True,
+        )
         _load_full_checkpoint_for_infer(
             model,
             config.get("model", {}),
@@ -106,7 +113,11 @@ def main():
             model.load_lora_for_infer(lora_path)
         apply_fsdp2(model, config)
 
-        dataloader_val = build_data(config, train_or_val="val")
+        dataloader_val = build_data(
+            config,
+            train_or_val="val",
+            sample_processor=sample_processor,
+        )
 
         inferencer = build_inferencer(config)
         inferencer.set_model(model)

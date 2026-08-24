@@ -13,20 +13,25 @@ def _record_has_source_images(record):
     return bool(record.get("source_images"))
 
 
-def _target_hw_for_sample(sample, default_height, default_width):
-    h = sample["meta"].get("target_height")
-    w = sample["meta"].get("target_width")
-    if h is not None and w is not None:
-        return int(h), int(w)
-    source_images = sample["inputs"].get("source_images")
-    if source_images:
-        source_image = source_images[0]
-        return int(source_image.shape[-2]), int(source_image.shape[-1])
-    return default_height, default_width
-
-
 @INFERENCER_REGISTER("image_infer")
 class ImageInferencer(BaseInferencer):
+    def _inference_sigmas(self, num_inference_steps, *, latent_hw=None):
+        sigmas = self.infer_config.get("sigmas")
+        pcm_solver_steps = self.infer_config.get("pcm_solver_steps")
+        if sigmas is not None and pcm_solver_steps is not None:
+            raise ValueError("Set only one of inference.sigmas and inference.pcm_solver_steps.")
+        if pcm_solver_steps is None:
+            return sigmas
+
+        from lightx2v_train.trainers.consistency.pcm import pcm_inference_sigmas
+
+        return pcm_inference_sigmas(
+            num_inference_steps,
+            int(pcm_solver_steps),
+            scheduler=self.scheduler,
+            latent_hw=latent_hw,
+        )
+
     def _load_infer_sample(self, index, prompt):
         infer_sample = self.dataloader_eval.dataset[index]
         infer_sample["conditioning"]["prompt"] = prompt
@@ -40,7 +45,12 @@ class ImageInferencer(BaseInferencer):
 
     @torch.no_grad()
     def infer(self):
-        records = self.dataloader_eval.dataset.samples
+        dataset = self.dataloader_eval.dataset
+        sample_processor = getattr(dataset, "sample_processor", None)
+        if sample_processor is None:
+            raise ValueError("image_infer requires a dataset with a sample_processor")
+
+        records = dataset.samples
         prompts = [record["prompt"] for record in records]
         rank = get_rank()
         world_size = get_world_size()
@@ -65,7 +75,7 @@ class ImageInferencer(BaseInferencer):
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 4.0)
             negative_prompt = self.infer_config.get("negative_prompt", " ")
             negative_sample = {"inputs": {}, "conditioning": {"prompt": negative_prompt}, "meta": {}}
-            static_neg_cond = None if has_source_condition else self.model.encode_condition(negative_sample)
+            static_neg_cond = None if has_source_condition else self.model.encode_inference_condition(negative_sample, is_negative=True)
         else:
             self.guidance_scale = None
             negative_prompt = None
@@ -82,10 +92,10 @@ class ImageInferencer(BaseInferencer):
                 prompt = prompts[i] if has_sample else " "
                 infer_sample = self._load_infer_sample(i, prompt) if has_sample else self._load_dummy_sample(records)
 
-                height, width = _target_hw_for_sample(infer_sample, default_height, default_width)
+                height, width = sample_processor.infer_target_size(infer_sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_condition(infer_sample)
+                pos_cond = self.model.encode_inference_condition(infer_sample)
                 if self.enable_cfg:
                     if has_source_condition:
                         neg_sample = {
@@ -93,14 +103,21 @@ class ImageInferencer(BaseInferencer):
                             "conditioning": {**infer_sample["conditioning"], "prompt": negative_prompt},
                             "meta": infer_sample["meta"],
                         }
-                        neg_cond = self.model.encode_condition(neg_sample)
+                        neg_cond = self.model.encode_inference_condition(neg_sample, is_negative=True)
                     else:
                         neg_cond = static_neg_cond
                 else:
                     neg_cond = None
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 latent_hw = (latent.shape[-2], latent.shape[-1])
-                self.scheduler.set_timesteps(num_inference_steps, latent_hw=latent_hw)
+                self.scheduler.set_timesteps(
+                    num_inference_steps,
+                    sigmas=self._inference_sigmas(
+                        num_inference_steps,
+                        latent_hw=latent_hw,
+                    ),
+                    latent_hw=latent_hw,
+                )
                 total_steps = len(self.scheduler.infer_timesteps)
 
                 if has_sample:

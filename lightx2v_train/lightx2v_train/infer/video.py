@@ -32,7 +32,6 @@ def _target_hw_for_sample(sample, default_height, default_width):
     return default_height, default_width
 
 
-@INFERENCER_REGISTER("wan_ti2v_5b_infer")
 @INFERENCER_REGISTER("wan_t2v_14b_infer")
 @INFERENCER_REGISTER("wan_t2v_infer")
 class WanT2VInferencer(BaseInferencer):
@@ -425,7 +424,6 @@ class LingBotVideoT2VInferencer(BaseInferencer):
         return saved_paths
 
 
-@INFERENCER_REGISTER("wan_ti2v_5b_ar_infer")
 @INFERENCER_REGISTER("wan_t2v_14b_ar_infer")
 @INFERENCER_REGISTER("wan_t2v_ar_infer")
 class WanT2VARInferencer(BaseInferencer):
@@ -802,4 +800,4 @@ class WanT2VARInferencer(BaseInferencer):
         return latent_height * latent_width // (patch_h * patch_w)
 
     def _num_frame_per_chunk(self):
-        return int(getattr(self.model, "num_frame_per_chunk", self.config.get("training", {}).get("teacher_forcing", {}).get("num_frame_per_chunk", 1)))
+        return int(getattr(self.model, "num_frame_per_chunk", 1))

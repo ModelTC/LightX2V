@@ -6,7 +6,7 @@ from typing import (
     Optional,
 )
 
-from ..dmd.config import VideoDmdConfig
+from ..dmd.config import DmdScheduleConfig
 
 
 def parse_role_lora_config(
@@ -28,7 +28,7 @@ def parse_role_lora_config(
 
 
 @dataclass(frozen=True)
-class PhasedDmdConfig(VideoDmdConfig):
+class PhasedDmdConfig(DmdScheduleConfig):
     """Parsed configuration unique to dual-region phased DMD."""
 
     phased: Dict[str, Any]
@@ -65,8 +65,6 @@ class PhasedDmdConfig(VideoDmdConfig):
         max_train_iters,
         default_lora_target_modules,
     ):
-        if dmd_config.get("cdm", {}).get("enabled", False):
-            raise ValueError("video_phased_dmd does not support training.dmd.cdm.")
         phased = dmd_config.get("phased", {})
         if not isinstance(phased, dict):
             raise ValueError("training.dmd.phased must be a mapping.")
@@ -79,7 +77,7 @@ class PhasedDmdConfig(VideoDmdConfig):
 
         inference_steps = infer_config.get("denoising_step_list")
         if not isinstance(inference_steps, list):
-            raise ValueError("video_phased_dmd requires inference.denoising_step_list.")
+            raise ValueError("phased_dmd requires inference.denoising_step_list.")
         inference_step_count = int(
             infer_config.get(
                 "num_inference_steps",
@@ -102,7 +100,7 @@ class PhasedDmdConfig(VideoDmdConfig):
         if "training_target" in phased:
             raise ValueError("training.dmd.phased.training_target is no longer supported. Phased DMD always trains High and Low regions together.")
         if max_train_iters < 2:
-            raise ValueError("video_phased_dmd requires training.max_train_iters >= 2 so both High and Low regions are trained.")
+            raise ValueError("phased_dmd requires training.max_train_iters >= 2 so both High and Low regions are trained.")
 
         margin = int(phased.get("score_timestep_margin", 20))
         score_min = int(phased["score_timestep_min"])

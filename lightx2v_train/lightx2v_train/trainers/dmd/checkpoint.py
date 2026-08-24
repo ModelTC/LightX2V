@@ -13,6 +13,10 @@ from torch.distributed.checkpoint.state_dict import (
     set_state_dict,
 )
 
+from lightx2v_train.model_capabilities import (
+    CheckpointCapability,
+    ParallelCapability,
+)
 from lightx2v_train.runtime.checkpoint import prune_checkpoints
 from lightx2v_train.runtime.distributed import (
     barrier,
@@ -37,12 +41,22 @@ class DmdCheckpointManager:
         directory_name = self.role_registry.weight_directory_name("fake")
         return os.path.join(root_dir, directory_name)
 
+    @staticmethod
+    def _parallel(model):
+        return model.ensure_capabilities().require(ParallelCapability)
+
+    @staticmethod
+    def _checkpoint(model):
+        return model.ensure_capabilities().require(CheckpointCapability)
+
     def _copy_role_model(self, source_role, target_role):
         source = self.role_registry.runtime(source_role).model
         target = self.role_registry.runtime(target_role).model
-        source_module = source.fsdp2_state_module()
-        target_module = target.fsdp2_state_module()
-        if source.is_fsdp2_wrapped():
+        source_parallel = self._parallel(source)
+        target_parallel = self._parallel(target)
+        source_module = source_parallel.state_module()
+        target_module = target_parallel.state_module()
+        if source_parallel.is_fsdp():
             options = StateDictOptions(
                 ignore_frozen_params=False,
                 strict=True,
@@ -132,7 +146,7 @@ class DmdCheckpointManager:
                     raise RuntimeError(f"Checkpoint {key}={state[key]!r} does not match the current value {value!r}: {state_path}")
 
     def _load_resume_state(self, resume_ckpt_path):
-        if self.model.is_fsdp2_wrapped() or self.fake_model.is_fsdp2_wrapped():
+        if self.parallel.is_fsdp() or self._parallel(self.fake_model).is_fsdp():
             self._load_distributed_state(resume_ckpt_path)
             return
 
@@ -280,8 +294,10 @@ class DmdCheckpointManager:
         self._validate_dmd_checkpoint_metadata(trainer_state, trainer_state_path, resume_ckpt_path)
 
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
-        student_model_state, student_optim_state = get_state_dict(self.model.fsdp2_state_module(), self.optimizer, options=options)
-        fake_model_state, fake_optim_state = get_state_dict(self.fake_model.fsdp2_state_module(), self.fake_optimizer, options=options)
+        student_module = self.parallel.state_module()
+        fake_module = self._parallel(self.fake_model).state_module()
+        student_model_state, student_optim_state = get_state_dict(student_module, self.optimizer, options=options)
+        fake_model_state, fake_optim_state = get_state_dict(fake_module, self.fake_optimizer, options=options)
         state = {
             "student_model": student_model_state,
             "student_optimizer": student_optim_state,
@@ -290,14 +306,14 @@ class DmdCheckpointManager:
         }
         dcp.load(state, checkpoint_id=dist_state_path)
         set_state_dict(
-            self.model.fsdp2_state_module(),
+            student_module,
             self.optimizer,
             model_state_dict=state["student_model"],
             optim_state_dict=state["student_optimizer"],
             options=options,
         )
         set_state_dict(
-            self.fake_model.fsdp2_state_module(),
+            fake_module,
             self.fake_optimizer,
             model_state_dict=state["fake_model"],
             optim_state_dict=state["fake_optimizer"],
@@ -317,8 +333,9 @@ class DmdCheckpointManager:
                 )
                 raise RuntimeError(f"Checkpoint declares an independent fake_real role, but its distributed state is missing: {role_path}")
             if restored:
+                fake_real_module = self._parallel(self.fake_real_model).state_module()
                 model_state, optimizer_state = get_state_dict(
-                    self.fake_real_model.fsdp2_state_module(),
+                    fake_real_module,
                     self.fake_real_optimizer,
                     options=options,
                 )
@@ -328,7 +345,7 @@ class DmdCheckpointManager:
                 }
                 dcp.load(role_state, checkpoint_id=role_path)
                 set_state_dict(
-                    self.fake_real_model.fsdp2_state_module(),
+                    fake_real_module,
                     self.fake_real_optimizer,
                     model_state_dict=role_state["model"],
                     optim_state_dict=role_state["optimizer"],
@@ -380,13 +397,14 @@ class DmdCheckpointManager:
             os.makedirs(save_dir, exist_ok=True)
         barrier()
 
-        save_student_weights = self.student_train_type == "lora" or not self.model.is_fsdp2_wrapped()
+        save_student_weights = self.student_train_type == "lora" or not self.parallel.is_fsdp()
         if save_student_weights:
             self._save_model_weights(self.model, save_dir, role="student")
         barrier()
 
         fake_save_dir = self._fake_weights_dir(save_dir)
-        save_fake_weights = self.fake_train_type == "lora" or not self.fake_model.is_fsdp2_wrapped()
+        fake_parallel = self._parallel(self.fake_model)
+        save_fake_weights = self.fake_train_type == "lora" or not fake_parallel.is_fsdp()
         if save_fake_weights and is_main_process():
             os.makedirs(fake_save_dir, exist_ok=True)
         barrier()
@@ -399,7 +417,7 @@ class DmdCheckpointManager:
                 save_dir,
                 self.role_registry.weight_directory_name(role),
             )
-            save_fake_real_weights = self.fake_real_train_type == "lora" or not self.fake_real_model.is_fsdp2_wrapped()
+            save_fake_real_weights = self.fake_real_train_type == "lora" or not self._parallel(self.fake_real_model).is_fsdp()
             if save_fake_real_weights and is_main_process():
                 os.makedirs(fake_real_save_dir, exist_ok=True)
             barrier()
@@ -421,7 +439,7 @@ class DmdCheckpointManager:
         if is_main_process() and config_path is not None:
             shutil.copy2(config_path, os.path.join(save_dir, "config.yaml"))
 
-        if self.model.is_fsdp2_wrapped() or self.fake_model.is_fsdp2_wrapped():
+        if self.parallel.is_fsdp() or fake_parallel.is_fsdp():
             self._save_distributed_state(save_dir, iteration)
             if self._should_save_consolidated_student():
                 self._save_consolidated_student_weights(save_dir)
@@ -474,7 +492,7 @@ class DmdCheckpointManager:
     def _save_consolidated_student_weights(self, save_dir):
         output_dir = os.path.join(save_dir, "student_consolidated")
         logger.info("[train] saving consolidated student weights to {}", output_dir)
-        self.model.save_full_model(output_dir)
+        self._checkpoint(self.model).save_full_model(output_dir)
         barrier()
 
     def _save_distributed_state(self, save_dir, iteration):
@@ -501,8 +519,16 @@ class DmdCheckpointManager:
         barrier()
 
         options = StateDictOptions(ignore_frozen_params=True, strict=False)
-        student_model_state, student_optim_state = get_state_dict(self.model.fsdp2_state_module(), self.optimizer, options=options)
-        fake_model_state, fake_optim_state = get_state_dict(self.fake_model.fsdp2_state_module(), self.fake_optimizer, options=options)
+        student_model_state, student_optim_state = get_state_dict(
+            self.parallel.state_module(),
+            self.optimizer,
+            options=options,
+        )
+        fake_model_state, fake_optim_state = get_state_dict(
+            self._parallel(self.fake_model).state_module(),
+            self.fake_optimizer,
+            options=options,
+        )
         state = {
             "student_model": student_model_state,
             "student_optimizer": student_optim_state,
@@ -513,7 +539,7 @@ class DmdCheckpointManager:
         if getattr(self, "fake_real_model", None) is not None:
             role_path = os.path.join(dist_state_path, "fake_real")
             model_state, optimizer_state = get_state_dict(
-                self.fake_real_model.fsdp2_state_module(),
+                self._parallel(self.fake_real_model).state_module(),
                 self.fake_real_optimizer,
                 options=options,
             )

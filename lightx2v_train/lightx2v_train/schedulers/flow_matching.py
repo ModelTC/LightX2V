@@ -43,27 +43,27 @@ class RectifiedFlowMatchingScheduler:
         self.infer_timesteps = None
         self.num_inference_steps = None
 
-    def sample_timestep_or_sigma(self, num_samples, latent_hw=None, seq_len=None):
+    def sample_timestep_or_sigma(self, latent_hw=None, seq_len=None):
         if self.timestep_distribution == "logitnormal":
-            timestep_or_sigma = torch.randn((num_samples,), device=self.device, dtype=torch.float32) * self.logitnormal_std + self.logitnormal_mean
+            timestep_or_sigma = torch.randn((1,), device=self.device, dtype=torch.float32) * self.logitnormal_std + self.logitnormal_mean
             timestep_or_sigma = torch.sigmoid(timestep_or_sigma)
             timestep_or_sigma = timestep_or_sigma * (self.max_t - self.min_t) + self.min_t  # [0, 1] -> [min_t, max_t]
         elif self.timestep_distribution == "uniform":
-            timestep_or_sigma = torch.rand((num_samples,), device=self.device)
+            timestep_or_sigma = torch.rand((1,), device=self.device)
             timestep_or_sigma = timestep_or_sigma * (self.max_t - self.min_t) + self.min_t  # [0, 1] -> [min_t, max_t]
         elif self.timestep_distribution in {"shifted_logit_normal", "shifted_logitnormal"}:
             if seq_len is None:
                 raise ValueError("scheduler.timestep_distribution='shifted_logit_normal' requires seq_len.")
-            timestep_or_sigma = self._sample_shifted_logit_normal(num_samples, seq_len)
+            timestep_or_sigma = self._sample_shifted_logit_normal(seq_len)
         else:
             raise ValueError(f"Unsupported timestep distribution: {self.timestep_distribution}")
         if self.do_time_shift:
             timestep_or_sigma = self.time_shift(timestep_or_sigma, latent_hw=latent_hw)
         return timestep_or_sigma.to(self.running_dtype)
 
-    def _sample_shifted_logit_normal(self, num_samples, seq_len):
+    def _sample_shifted_logit_normal(self, seq_len):
         mu = self._get_shift_for_sequence_length(seq_len)
-        normal = torch.randn((num_samples,), device=self.device, dtype=torch.float32) * self.logitnormal_std + mu
+        normal = torch.randn((1,), device=self.device, dtype=torch.float32) * self.logitnormal_std + mu
         samples = torch.sigmoid(normal)
 
         upper = torch.sigmoid(torch.tensor(mu + 3.0902 * self.logitnormal_std, device=self.device, dtype=torch.float32))
@@ -72,8 +72,8 @@ class RectifiedFlowMatchingScheduler:
         stretched = torch.where(stretched >= self.logitnormal_eps, stretched, 2 * self.logitnormal_eps - stretched)
         stretched = torch.clamp(stretched, 0, 1)
 
-        uniform = (1 - self.logitnormal_eps) * torch.rand((num_samples,), device=self.device, dtype=torch.float32) + self.logitnormal_eps
-        choose_shifted = torch.rand((num_samples,), device=self.device) > self.logitnormal_uniform_prob
+        uniform = (1 - self.logitnormal_eps) * torch.rand((1,), device=self.device, dtype=torch.float32) + self.logitnormal_eps
+        choose_shifted = torch.rand((1,), device=self.device) > self.logitnormal_uniform_prob
         return torch.where(choose_shifted, stretched, uniform)
 
     @staticmethod
@@ -102,17 +102,29 @@ class RectifiedFlowMatchingScheduler:
     # ==============================
     # The following methods are for inference only
     # ==============================
-    def set_timesteps(self, num_inference_steps, sigmas=None, latent_hw=None):
-        self.num_inference_steps = num_inference_steps
-
+    def build_inference_sigmas(self, num_inference_steps, sigmas=None, latent_hw=None):
+        """Build an immutable inference schedule without changing scheduler state."""
+        num_inference_steps = int(num_inference_steps)
+        if num_inference_steps <= 0:
+            raise ValueError(f"num_inference_steps must be positive, got {num_inference_steps}.")
         if sigmas is None:
             sigmas = torch.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
             if self.do_time_shift:
                 sigmas = self.time_shift(sigmas, latent_hw=latent_hw, num_steps=num_inference_steps)
         else:
             sigmas = torch.tensor(sigmas, dtype=torch.float32)
-        self.infer_sigmas = torch.cat([sigmas, torch.zeros(1)]).to(self.device)
-        self.infer_timesteps = (sigmas * self.num_train_timesteps).to(self.device)
+            if sigmas.ndim != 1 or sigmas.numel() != num_inference_steps:
+                raise ValueError(f"sigmas must contain exactly {num_inference_steps} values, got shape {tuple(sigmas.shape)}.")
+        return torch.cat([sigmas, torch.zeros(1)]).to(self.device)
+
+    def set_timesteps(self, num_inference_steps, sigmas=None, latent_hw=None):
+        self.num_inference_steps = int(num_inference_steps)
+        self.infer_sigmas = self.build_inference_sigmas(
+            self.num_inference_steps,
+            sigmas=sigmas,
+            latent_hw=latent_hw,
+        )
+        self.infer_timesteps = self.infer_sigmas[:-1] * self.num_train_timesteps
 
     def step(self, model_output, step_index, latent):
         f"""
@@ -175,99 +187,43 @@ class CausalForcingFlowMatchScheduler:
             y_shifted = y - y.min()
             self.linear_timesteps_weights = y_shifted * (num_inference_steps / y_shifted.sum())
 
-    def sample_chunkwise(self, batch_size, num_frames, num_frame_per_chunk, device, dtype):
+    def sample_chunkwise(self, num_frames, num_frame_per_chunk, device, dtype):
         index = torch.randint(
             0,
             self.num_train_timesteps,
-            (batch_size, num_frames),
+            (1, num_frames),
             device=device,
             dtype=torch.long,
         )
-        index = index.reshape(batch_size, -1, num_frame_per_chunk)
+        index = index.reshape(1, -1, num_frame_per_chunk)
         index[:, :, 1:] = index[:, :, 0:1]
-        index = index.reshape(batch_size, num_frames)
+        index = index.reshape(1, num_frames)
 
         sigmas = self.sigmas.to(device=device, dtype=dtype)[index]
         weights = self.linear_timesteps_weights.to(device=device, dtype=torch.float32)[index]
         return sigmas, weights
 
-    def sample_clean_augmentation(self, batch_size, num_frames, num_frame_per_chunk, max_timestep, device, dtype):
+    def sample_clean_augmentation(self, num_frames, num_frame_per_chunk, max_timestep, device, dtype):
+        max_timestep = int(max_timestep)
+        if not 0 < max_timestep <= self.num_train_timesteps:
+            raise ValueError(f"max_timestep must be in [1, {self.num_train_timesteps}], got {max_timestep}.")
+
+        # The training schedule is stored from noisy to clean. A maximum
+        # augmentation timestep therefore selects from the clean tail rather
+        # than using the timestep directly as a lower schedule index.
+        min_schedule_index = self.num_train_timesteps - max_timestep
         index = torch.randint(
-            int(max_timestep),
+            min_schedule_index,
             self.num_train_timesteps,
-            (batch_size, num_frames),
+            (1, num_frames),
             device=device,
             dtype=torch.long,
         )
-        index = index.reshape(batch_size, -1, num_frame_per_chunk)
+        index = index.reshape(1, -1, num_frame_per_chunk)
         index[:, :, 1:] = index[:, :, 0:1]
-        index = index.reshape(batch_size, num_frames)
+        index = index.reshape(1, num_frames)
         return self.sigmas.to(device=device, dtype=dtype)[index]
 
     def add_noise(self, latent, noise, sigmas):
         sigmas = sigmas.reshape(sigmas.shape[0], 1, sigmas.shape[1], 1, 1)
         return (1.0 - sigmas) * latent + sigmas * noise
-
-
-class WanContinuousFlowMatchScheduler:
-    """Continuous flow matching used by FastWAM video and action experts."""
-
-    def __init__(self, num_train_timesteps=1000, shift=5.0, eps=1e-10):
-        if num_train_timesteps <= 0:
-            raise ValueError("num_train_timesteps must be positive.")
-        if shift <= 0:
-            raise ValueError("shift must be positive.")
-        self.num_train_timesteps = int(num_train_timesteps)
-        self.shift = float(shift)
-        self.eps = float(eps)
-        self._y_min, self._weight_norm_const = self._precompute_training_weight_stats()
-
-    @staticmethod
-    def _phi(value, shift):
-        return shift * value / (1.0 + (shift - 1.0) * value)
-
-    def _precompute_training_weight_stats(self):
-        steps = self.num_train_timesteps
-        grid = torch.linspace(1.0, 0.0, steps + 1, dtype=torch.float64)[:-1]
-        timestep = self._phi(grid, self.shift) * float(steps)
-        weights = torch.exp(-2.0 * ((timestep - steps / 2.0) / steps) ** 2)
-        minimum = float(weights.min().item())
-        return minimum, float((weights - minimum).mean().item())
-
-    def sample_training_t(self, batch_size, device, dtype):
-        value = torch.rand((batch_size,), device=device, dtype=torch.float32)
-        return (self._phi(value, self.shift) * self.num_train_timesteps).to(dtype=dtype)
-
-    def training_weight(self, timestep):
-        timestep = timestep.to(dtype=torch.float32)
-        steps = float(self.num_train_timesteps)
-        weight = torch.exp(-2.0 * ((timestep - steps / 2.0) / steps) ** 2)
-        weight = (weight - self._y_min) / (self._weight_norm_const + self.eps)
-        return weight.reshape(()) if weight.numel() == 1 else weight
-
-    def add_noise(self, original_samples, noise, timestep):
-        sigma = (timestep / self.num_train_timesteps).to(device=original_samples.device, dtype=original_samples.dtype)
-        if sigma.ndim:
-            sigma = sigma.view(-1, *([1] * (original_samples.ndim - 1)))
-        return (1 - sigma) * original_samples + sigma * noise
-
-    @staticmethod
-    def training_target(sample, noise, timestep):
-        del timestep
-        return noise - sample
-
-    def build_inference_schedule(self, num_inference_steps, device, dtype, shift_override=None):
-        if num_inference_steps <= 0:
-            raise ValueError("num_inference_steps must be positive.")
-        shift = self.shift if shift_override is None else float(shift_override)
-        values = torch.linspace(1.0, 0.0, num_inference_steps + 1, device=device)
-        sigmas = self._phi(values, shift)
-        timesteps = sigmas[:-1] * self.num_train_timesteps
-        return timesteps.to(dtype=dtype), (sigmas[1:] - sigmas[:-1]).to(dtype=dtype)
-
-    @staticmethod
-    def step(model_output, delta, sample):
-        delta = delta.to(device=sample.device, dtype=sample.dtype)
-        if delta.ndim:
-            delta = delta.view(-1, *([1] * (sample.ndim - 1)))
-        return sample + model_output * delta
