@@ -25,6 +25,13 @@ torch::Tensor onednn_w4a16(
     std::optional<torch::Tensor> bias
 );
 
+torch::Tensor onednn_w8a8_int8(
+    torch::Tensor x,
+    torch::Tensor weight,
+    torch::Tensor scales,
+    std::optional<torch::Tensor> bias
+);
+
 torch::Tensor onednn_w8a16_fp8(
     torch::Tensor x,
     torch::Tensor weight,
@@ -40,6 +47,10 @@ torch::Tensor sdp_torch(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("onednn_w4a16", &onednn_w4a16, "onednn w4a16 gemm");
+    m.def("onednn_w8a8_int8", &onednn_w8a8_int8,
+          "oneDNN dynamically quantized W8A8 INT8 GEMM",
+          py::arg("x"), py::arg("weight"), py::arg("scales"),
+          py::arg("bias") = py::none());
     m.def("onednn_w8a16_fp8", &onednn_w8a16_fp8,
           "onednn FP16 x FP8_E4M3 per-N-scale gemm",
           py::arg("x"), py::arg("weight"), py::arg("scales"),
