@@ -5,6 +5,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 
 import imageio
+import imageio.v3 as iio
 import torch
 import torch.nn.functional as F
 from decord import VideoReader
@@ -24,7 +25,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import mux_audio_from_video
+from lightx2v.utils.utils import mux_audio_from_video, save_to_image
 
 
 def mark_stage(device: torch.device):
@@ -53,7 +54,7 @@ class PendingVideoWrite:
 
 @RUNNER_REGISTER("swiftvr")
 class SwiftVRRunner(DefaultRunner):
-    """Native LightX2V runner for SwiftVR video restoration."""
+    """Native LightX2V runner for SwiftVR image and video restoration."""
 
     # Two spatial shapes trigger dynamic compilation before serving requests.
     WARMUP_RESOLUTIONS = ((720, 1280), (2048, 1536))
@@ -125,7 +126,13 @@ class SwiftVRRunner(DefaultRunner):
         self._maybe_freeze_gc()
 
     @staticmethod
-    def resolve_output_size(input_info, source_height: int, source_width: int) -> tuple[int, int]:
+    def resolve_output_size(
+        input_info,
+        source_height: int,
+        source_width: int,
+        *,
+        require_even: bool = False,
+    ) -> tuple[int, int]:
         if input_info.target_shape:
             if len(input_info.target_shape) != 2:
                 raise ValueError(f"SwiftVR target_shape must be [height, width], got {input_info.target_shape}")
@@ -135,7 +142,62 @@ class SwiftVRRunner(DefaultRunner):
             height, width = round(source_height * ratio), round(source_width * ratio)
         if height <= 0 or width <= 0:
             raise ValueError(f"SwiftVR output size must be positive, got {height}x{width}")
+        if require_even:
+            height = max(2, int(round(height / 2)) * 2)
+            width = max(2, int(round(width / 2)) * 2)
         return height, width
+
+    @staticmethod
+    def resolve_input_kind(input_info) -> str:
+        has_image = bool(input_info.image_path)
+        has_video = bool(input_info.video_path)
+        if has_image == has_video:
+            raise ValueError("SwiftVR requires exactly one of `image_path` or `video_path`.")
+        return "image" if has_image else "video"
+
+    @staticmethod
+    def read_image_frame(image_path: str):
+        frame = iio.imread(image_path)
+        if frame.ndim == 2:
+            frame = frame[..., None].repeat(3, axis=-1)
+        if frame.shape[-1] == 4:
+            frame = frame[..., :3]
+        if frame.ndim != 3 or frame.shape[-1] != 3:
+            raise ValueError(f"SwiftVR requires an RGB-compatible image, got shape {frame.shape}.")
+        source_height = frame.shape[0] // 8 * 8
+        source_width = frame.shape[1] // 8 * 8
+        if source_height <= 0 or source_width <= 0:
+            raise ValueError(f"SwiftVR image is too small after 8-pixel alignment: {frame.shape[:2]}.")
+        frames = torch.from_numpy(frame[:source_height, :source_width]).permute(2, 0, 1).contiguous().unsqueeze(0)
+        return frames, source_height, source_width
+
+    def restore_frames(
+        self,
+        frames,
+        chunk,
+        clip_latents,
+        output_height,
+        output_width,
+        pad_height,
+        pad_width,
+        stage_marks=None,
+    ):
+        video = self.preprocess_frames(
+            frames,
+            output_height,
+            output_width,
+            pad_height,
+            pad_width,
+            GET_DTYPE(),
+            self.init_device,
+            self.config.get("upscale_mode", "bilinear"),
+        )
+        if stage_marks is not None:
+            stage_marks.append(mark_stage(self.init_device))
+        restored = self.restorer.restore_chunk(video, chunk, clip_latents)
+        if stage_marks is not None:
+            stage_marks.append(mark_stage(self.init_device))
+        return restored[..., :output_height, :output_width]
 
     @staticmethod
     def read_video_frames(reader, chunk, raw_frame_count: int, source_height: int, source_width: int, pin_memory: bool):
@@ -185,6 +247,7 @@ class SwiftVRRunner(DefaultRunner):
         preset = self.config.get("ffmpeg_preset", "")
         if preset:
             ffmpeg_params.extend(["-preset", preset])
+        ffmpeg_params.extend(["-movflags", "+faststart"])
         pixel_format = "yuv444p" if self.config.get("save_format") == "yuv444p" else "yuv420p"
         return imageio.get_writer(
             output_path,
@@ -233,19 +296,69 @@ class SwiftVRRunner(DefaultRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
-        if not input_info.video_path:
-            raise ValueError("SwiftVR requires `video_path`.")
+        input_kind = self.resolve_input_kind(input_info)
         if not input_info.save_result_path:
             raise ValueError("SwiftVR requires `save_result_path`.")
         if input_info.return_result_tensor:
-            raise ValueError("SwiftVR streams its result to a video file; `return_result_tensor` is not supported.")
+            raise ValueError("SwiftVR writes its result to a media file; `return_result_tensor` is not supported.")
 
+        if input_kind == "image":
+            return self.run_image_pipeline(input_info)
+        return self.run_video_pipeline(input_info)
+
+    def run_image_pipeline(self, input_info):
+        frames, source_height, source_width = self.read_image_frame(input_info.image_path)
+        output_height, output_width = self.resolve_output_size(input_info, source_height, source_width)
+        pad_height = (-output_height) % 32
+        pad_width = (-output_width) % 32
+        clip_length = self.config.get("clip_len", 24)
+        chunk = build_video_chunks(1, clip_length)[0]
+        clip_latents = clip_length // 4
+
+        output_path = os.path.abspath(input_info.save_result_path)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        started_at = time.perf_counter()
+        self.restorer.reset()
+        try:
+            restored = self.restore_frames(
+                frames,
+                chunk,
+                clip_latents,
+                output_height,
+                output_width,
+                pad_height,
+                pad_width,
+            )
+            save_to_image(restored[0].permute(0, 2, 3, 1), output_path)
+        finally:
+            self.restorer.reset()
+
+        elapsed = time.perf_counter() - started_at
+        stats = {
+            "frames": 1,
+            "seconds": elapsed,
+            "fps": 1 / elapsed if elapsed else 0.0,
+            "output": output_path,
+        }
+        if self.progress_callback:
+            self.progress_callback(100, 100)
+        if GET_RECORDER_MODE():
+            monitor_cli.lightx2v_worker_request_success.inc()
+        logger.info(f"SwiftVR restored image to {output_path} in {elapsed:.3f}s")
+        return {"image": None, "stats": stats}
+
+    def run_video_pipeline(self, input_info):
         reader = VideoReader(input_info.video_path)
         raw_frame_count = len(reader)
         first_frame = reader[0]
         source_height = first_frame.shape[0] // 8 * 8
         source_width = first_frame.shape[1] // 8 * 8
-        output_height, output_width = self.resolve_output_size(input_info, source_height, source_width)
+        output_height, output_width = self.resolve_output_size(
+            input_info,
+            source_height,
+            source_width,
+            require_even=True,
+        )
         pad_height = (-output_height) % 32
         pad_width = (-output_width) % 32
         fps = self.config.get("fps") or reader.get_avg_fps() or 30
@@ -307,20 +420,16 @@ class SwiftVRRunner(DefaultRunner):
                     )
 
                 stage_marks = [mark_stage(self.init_device)]
-                video = self.preprocess_frames(
+                restored = self.restore_frames(
                     frames,
+                    chunk,
+                    clip_latents,
                     output_height,
                     output_width,
                     pad_height,
                     pad_width,
-                    GET_DTYPE(),
-                    self.init_device,
-                    self.config.get("upscale_mode", "bilinear"),
+                    stage_marks,
                 )
-                stage_marks.append(mark_stage(self.init_device))
-                restored = self.restorer.restore_chunk(video, chunk, clip_latents)
-                stage_marks.append(mark_stage(self.init_device))
-                restored = restored[..., :output_height, :output_width]
                 restored = restored[:, : raw_frame_count - written]
                 output_frames = (restored[0].permute(0, 2, 3, 1) * 255).clamp_(0, 255).to(torch.uint8)
                 cpu_frames, copy_complete = self.copy_frames_to_cpu(output_frames, self.copy_stream)
@@ -353,6 +462,7 @@ class SwiftVRRunner(DefaultRunner):
             reader_executor.shutdown(wait=True, cancel_futures=True)
             writer_executor.shutdown(wait=True)
             writer.close()
+            self.restorer.reset()
 
         elapsed = time.perf_counter() - started_at
         mux_audio_from_video(
