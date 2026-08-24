@@ -725,6 +725,9 @@ class MiniMaxH3VideoVAE(nn.Module):
         model.eval().requires_grad_(False)
         if not cpu_offload:
             model.to(model.execution_device)
+        if use_compile:
+            logger.info("[Compile] Using torch.compile for MiniMaxH3VideoEncoder3d")
+            model.encoder = torch.compile(model.encoder, dynamic=None)
         return model
 
     def enable_tiling(

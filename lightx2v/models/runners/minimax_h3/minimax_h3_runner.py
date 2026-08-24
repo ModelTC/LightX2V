@@ -113,6 +113,13 @@ class MiniMaxH3Runner(DefaultRunner):
         if task not in self._WARMUP_TASKS:
             raise NotImplementedError(f"MiniMax-H3 warmup does not support task: {task}")
 
+        if task == "ref2av" and self.config.get("vae_use_compile", False):
+            height, width, _ = self._WARMUP_SHAPES[0]
+            pixels = torch.zeros((1, 3, self.video_vae.clip_length, height, width))
+            self.video_vae.encode_condition(pixels, video=True, return_cpu=False)
+            torch_device_module.synchronize()
+            del pixels
+
         for height, width, num_frames in self._WARMUP_SHAPES:
             logger.info(f"Warmup: {height}x{width}x{num_frames}")
             transformer_offloaded = not self.config.get("cpu_offload", False)
