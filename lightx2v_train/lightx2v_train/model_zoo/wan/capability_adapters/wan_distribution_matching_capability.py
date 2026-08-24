@@ -17,6 +17,13 @@ from lightx2v_train.utils.constants import (
 class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
     """Distribution-matching operations for Wan-family video models."""
 
+    def encode_training_cache(self, batch):
+        cache = super().encode_training_cache(batch)
+        inputs = batch.get("inputs", {})
+        if inputs.get("video") is not None or inputs.get("latents") is not None:
+            cache["inputs"]["latents"] = self.model.encode_to_cache_latent(batch)
+        return cache
+
     @property
     def default_negative_prompt(self):
         return WAN_NEGATIVE_PROMPT

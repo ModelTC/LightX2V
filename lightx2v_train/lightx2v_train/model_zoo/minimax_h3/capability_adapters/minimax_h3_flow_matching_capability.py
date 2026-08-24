@@ -176,10 +176,7 @@ class MiniMaxH3FlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability
         num_frames = self._source_num_frames(latent_frames)
         expected_audio_latents = audio_latent_num_frames(num_frames)
         if audio_latents != expected_audio_latents:
-            raise ValueError(
-                f"MiniMax-H3 video geometry implies {expected_audio_latents} audio latents "
-                f"for {num_frames} source frames, but the cache contains {audio_latents}."
-            )
+            raise ValueError(f"MiniMax-H3 video geometry implies {expected_audio_latents} audio latents for {num_frames} source frames, but the cache contains {audio_latents}.")
         shape = MiniMaxH3LatentShape(
             num_frames=num_frames,
             latent_frames=latent_frames,
@@ -205,32 +202,20 @@ class MiniMaxH3FlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability
             if tensor.ndim == 4:
                 tensor = tensor.unsqueeze(0)
             if tensor.shape[0] != 1 or tensor.shape[1] != self.model.video_latent_channels:
-                raise ValueError(
-                    f"MiniMax-H3 raw video latents must have shape "
-                    f"[1,{self.model.video_latent_channels},F,H,W], got {tuple(tensor.shape)}."
-                )
+                raise ValueError(f"MiniMax-H3 raw video latents must have shape [1,{self.model.video_latent_channels},F,H,W], got {tuple(tensor.shape)}.")
             tensor = tensor.to(device=self.model.device, dtype=self._latent_dtype)
             latent_frames, latent_height, latent_width = map(int, tensor.shape[-3:])
             tokens = self._patchify_video(tensor)
         else:
-            raise ValueError(
-                "MiniMax-H3 video latents must be patchified [B,N,D] or raw [B,C,F,H,W], "
-                f"got {tuple(tensor.shape)}."
-            )
+            raise ValueError(f"MiniMax-H3 video latents must be patchified [B,N,D] or raw [B,C,F,H,W], got {tuple(tensor.shape)}.")
 
         expected_dimension = self.model.video_latent_channels * math.prod(self.model.patch_size)
         patch_t, patch_h, patch_w = self.model.patch_size
         if latent_frames % patch_t or latent_height % patch_h or latent_width % patch_w:
-            raise ValueError(
-                f"MiniMax-H3 video latent geometry {(latent_frames, latent_height, latent_width)} "
-                f"is not divisible by patch size {self.model.patch_size}."
-            )
+            raise ValueError(f"MiniMax-H3 video latent geometry {(latent_frames, latent_height, latent_width)} is not divisible by patch size {self.model.patch_size}.")
         expected_rows = (latent_frames // patch_t) * (latent_height // patch_h) * (latent_width // patch_w)
         if tokens.shape != (1, expected_rows, expected_dimension):
-            raise ValueError(
-                f"MiniMax-H3 video tokens must have shape {(1, expected_rows, expected_dimension)}, "
-                f"got {tuple(tokens.shape)}."
-            )
+            raise ValueError(f"MiniMax-H3 video tokens must have shape {(1, expected_rows, expected_dimension)}, got {tuple(tokens.shape)}.")
         return tokens, latent_frames, latent_height, latent_width
 
     def _audio_tokens(self, value):
@@ -238,10 +223,7 @@ class MiniMaxH3FlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability
         if tensor.ndim == 2:
             tensor = tensor.unsqueeze(0)
         if tensor.ndim != 3 or tensor.shape[0] != 1 or tensor.shape[-1] != self.model.audio_latent_channels:
-            raise ValueError(
-                f"MiniMax-H3 audio latents must have shape [1,N,{self.model.audio_latent_channels}], "
-                f"got {tuple(tensor.shape)}."
-            )
+            raise ValueError(f"MiniMax-H3 audio latents must have shape [1,N,{self.model.audio_latent_channels}], got {tuple(tensor.shape)}.")
         if tensor.shape[1] % 2:
             raise ValueError(f"MiniMax-H3 stereo audio requires an even token count, got {tensor.shape[1]}.")
         return tensor.to(device=self.model.device, dtype=self._latent_dtype)

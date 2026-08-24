@@ -46,11 +46,7 @@ class TrainingCacheDataset(Dataset):
         if use_unconditional and "unconditional" not in conditioning:
             raise ValueError(f"Training cache {cache_path} has no unconditional condition for prompt dropout.")
         conditioning["active"] = "unconditional" if use_unconditional else "positive"
-        conditioning["prompt"] = (
-            conditioning.get("unconditional_prompt", self.unconditional_prompt)
-            if use_unconditional
-            else record["prompt"]
-        )
+        conditioning["prompt"] = conditioning.get("unconditional_prompt", self.unconditional_prompt) if use_unconditional else record["prompt"]
         cache["meta"]["training_cache_path"] = str(cache_path)
         return cache
 
@@ -66,9 +62,7 @@ class TrainingCacheDataset(Dataset):
                 prompt = record.get("prompt")
                 cache_path = record.get("training_cache")
                 if prompt is None or cache_path is None or not str(cache_path).strip():
-                    raise ValueError(
-                        f"Training-cache record {metadata_path}:{line_number} must include prompt and training_cache."
-                    )
+                    raise ValueError(f"Training-cache record {metadata_path}:{line_number} must include prompt and training_cache.")
                 cache_path = Path(cache_path)
                 if not cache_path.is_absolute():
                     cache_path = metadata_path.parent / cache_path
@@ -91,16 +85,11 @@ class TrainingCacheDataset(Dataset):
         if not isinstance(cache_info, dict):
             raise ValueError(f"Invalid training cache metadata at {path}.")
         if cache_info.get("schema_version") != CACHE_SCHEMA_VERSION:
-            raise ValueError(
-                f"Unsupported training cache schema at {path}: {cache_info.get('schema_version')!r}."
-            )
+            raise ValueError(f"Unsupported training cache schema at {path}: {cache_info.get('schema_version')!r}.")
         if self.expected_cache_info is not None:
             for key, expected in self.expected_cache_info.items():
                 if cache_info.get(key) != expected:
-                    raise ValueError(
-                        f"Training cache {path} has incompatible {key}: "
-                        f"expected {expected!r}, got {cache_info.get(key)!r}."
-                    )
+                    raise ValueError(f"Training cache {path} has incompatible {key}: expected {expected!r}, got {cache_info.get(key)!r}.")
 
         conditioning = cache["conditioning"]
         if "positive" not in conditioning:

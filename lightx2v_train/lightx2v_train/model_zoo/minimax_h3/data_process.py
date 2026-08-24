@@ -23,13 +23,9 @@ class MiniMaxH3T2AVProcessor:
         if self.video_fps <= 0 or self.audio_sample_rate <= 0 or self.audio_latents_per_second <= 0:
             raise ValueError("MiniMax-H3 video/audio rates must be positive.")
         if self.video_fps != 24 or self.audio_latents_per_second != 40:
-            raise ValueError(
-                "MiniMax-H3 T2AV requires video_fps=24 and audio_latents_per_second=40."
-            )
+            raise ValueError("MiniMax-H3 T2AV requires video_fps=24 and audio_latents_per_second=40.")
         if self.audio_sample_rate % self.audio_latents_per_second:
-            raise ValueError(
-                "MiniMax-H3 audio_sampling_rate must be divisible by audio_latents_per_second."
-            )
+            raise ValueError("MiniMax-H3 audio_sampling_rate must be divisible by audio_latents_per_second.")
         self.audio_hop_length = self.audio_sample_rate // self.audio_latents_per_second
 
     def __call__(self, sample):
@@ -46,7 +42,11 @@ class MiniMaxH3T2AVProcessor:
         waveform = self._load_audio(audio_path)
         audio_frames = audio_latent_num_frames(num_frames)
         target_samples = audio_frames * self.audio_hop_length
-        waveform = self._fit_audio_length(waveform, target_samples)
+        video_start_time = float(sample["meta"].get("video_start_time", 0.0))
+        if video_start_time < 0:
+            raise ValueError(f"MiniMax-H3 video_start_time must be non-negative, got {video_start_time}.")
+        audio_start_sample = int(round(video_start_time * self.audio_sample_rate))
+        waveform = self._slice_audio(waveform, audio_start_sample, target_samples)
 
         # VideoDataset normalizes pixels to [-1, 1], while H3's ImageNet VAE
         # normalization consumes [0, 1].
@@ -58,6 +58,7 @@ class MiniMaxH3T2AVProcessor:
                 "target_height": int(video.shape[-2]),
                 "target_width": int(video.shape[-1]),
                 "audio_sample_rate": self.audio_sample_rate,
+                "audio_start_sample": audio_start_sample,
             }
         )
         return sample
@@ -85,10 +86,11 @@ class MiniMaxH3T2AVProcessor:
         return waveform.contiguous()
 
     @staticmethod
-    def _fit_audio_length(waveform, target_samples):
+    def _slice_audio(waveform, start_sample, target_samples):
+        waveform = waveform[..., start_sample : start_sample + target_samples]
         if waveform.shape[-1] < target_samples:
-            return F.pad(waveform, (0, target_samples - waveform.shape[-1]))
-        return waveform[..., :target_samples].contiguous()
+            waveform = F.pad(waveform, (0, target_samples - waveform.shape[-1]))
+        return waveform.contiguous()
 
 
 @SAMPLE_PROCESSOR_REGISTER("minimax_h3_t2av")

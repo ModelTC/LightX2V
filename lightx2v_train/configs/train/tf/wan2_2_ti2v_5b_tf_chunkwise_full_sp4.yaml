@@ -5,11 +5,12 @@ model:
     latent_channels: 48
     max_sequence_length: 512
     running_dtype: bf16
-    transformer_param_dtype: bf16
+    transformer_param_dtype: fp32
     vae_dtype: fp32
     t5_dtype: bf16
-    load_vae: false
-    load_text_encoder: false
+    t5_cpu: true
+    load_vae: true
+    load_text_encoder: true
     load_transformer: true
     vae_stride:
         - 4
@@ -39,12 +40,10 @@ distributed:
             cast_forward_inputs: false
 
 data:
-    use_training_cache: true
-
     train:
         name: video_dataset
         data_path:
-            - ./cache_data/wan2_2_ti2v_5b_tf_96f/cache_data.jsonl
+            - /path/to/datasets/wan_ti2v/train.jsonl
         video_column: video
         prompt_column: prompt
         height: 704

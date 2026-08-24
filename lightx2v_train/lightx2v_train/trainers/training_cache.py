@@ -97,13 +97,21 @@ class TrainingCacheTrainer:
             "cache_info": self.cache_info,
             **encoded,
         }
-        self._validate(cache, sample["conditioning"]["prompt"])
+        self._validate(
+            cache,
+            sample["conditioning"]["prompt"],
+            source_inputs=sample.get("inputs"),
+        )
         return _to_cpu(cache, dtype)
 
-    def _validate(self, cache, prompt, path="<encoded cache>"):
+    def _validate(self, cache, prompt, path="<encoded cache>", source_inputs=None):
         required = {"inputs", "conditioning", "meta"}
         if not isinstance(cache, dict) or not required.issubset(cache):
             raise ValueError(f"Invalid training cache at {path}: expected inputs, conditioning, and meta mappings.")
+        if not all(isinstance(cache[key], dict) for key in required):
+            raise ValueError(f"Invalid training cache at {path}: inputs, conditioning, and meta must be mappings.")
+        if source_inputs and not cache["inputs"]:
+            raise ValueError(f"Training cache at {path} has no encoded model inputs for a source sample that contains inputs. Rebuild it with --overwrite.")
         if cache.get("cache_info") != self.cache_info:
             raise ValueError(f"Training cache at {path} is incompatible with the current configuration. Rebuild it.")
         conditioning = cache["conditioning"]
@@ -151,7 +159,12 @@ class TrainingCacheTrainer:
                 _atomic_save(self._encode(sample, dtype), cache_path)
             else:
                 existing = torch.load(cache_path, map_location="cpu", weights_only=True)
-                self._validate(existing, sample["conditioning"]["prompt"], cache_path)
+                self._validate(
+                    existing,
+                    sample["conditioning"]["prompt"],
+                    cache_path,
+                    source_inputs=sample.get("inputs"),
+                )
 
             record["training_cache"] = cache_path.relative_to(output_dir).as_posix()
             records.append((index, record))

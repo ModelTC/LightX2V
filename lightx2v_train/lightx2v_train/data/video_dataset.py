@@ -157,7 +157,13 @@ class VideoDataset(torch.utils.data.Dataset):
         return samples
 
     def _load_video(self, video_path):
-        return load_video_tensor(video_path, self.height, self.width, self.frame_sampler)
+        return load_video_tensor(
+            video_path,
+            self.height,
+            self.width,
+            self.frame_sampler,
+            return_start_time=True,
+        )
 
     def __getitem__(self, index):
         base_index = index % len(self.samples)
@@ -170,8 +176,10 @@ class VideoDataset(torch.utils.data.Dataset):
                 prompt = record["prompt"]
                 if random.random() < self.prompt_dropout_rate:
                     prompt = self.unconditional_prompt
+                video, video_start_time = self._load_video(meta["video_path"])
+                meta["video_start_time"] = video_start_time
                 sample = {
-                    "inputs": {"video": self._load_video(meta["video_path"])},
+                    "inputs": {"video": video},
                     "conditioning": {"prompt": prompt},
                     "meta": meta,
                 }

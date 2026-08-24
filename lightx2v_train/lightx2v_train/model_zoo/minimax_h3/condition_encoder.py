@@ -21,9 +21,7 @@ class MiniMaxH3ConditionEncoder:
                 MiniMaxH3Qwen3VLTextEncoder,
             )
         except ImportError as error:
-            raise ImportError(
-                "MiniMax-H3 cache construction requires LightX2V's native Qwen3-VL conditioner."
-            ) from error
+            raise ImportError("MiniMax-H3 cache construction requires LightX2V's native Qwen3-VL conditioner.") from error
 
         self.device = torch.device(device)
         self.dtype = dtype
@@ -44,8 +42,10 @@ class MiniMaxH3ConditionEncoder:
             if len(prompts) != 1:
                 raise ValueError(f"MiniMax-H3 requires one prompt per rank, got {len(prompts)}.")
             prompt = prompts[0]
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError("MiniMax-H3 prompt must be a non-empty string.")
+        if not isinstance(prompt, str):
+            raise TypeError(f"MiniMax-H3 prompt must be a string, got {type(prompt).__name__}.")
+        if not prompt:
+            raise ValueError("MiniMax-H3 prompt must contain at least one character.")
         condition = self.encoder.infer(prompt)
         return {
             "prompt_embeds": condition["prompt_embeds"].to(
