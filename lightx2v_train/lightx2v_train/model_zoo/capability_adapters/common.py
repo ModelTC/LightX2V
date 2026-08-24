@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Collection
-from typing import Any, Mapping
+from collections.abc import Collection, Mapping
+from typing import Any
 
 import torch
 import torch.nn.functional as F
 
+from lightx2v_train.data.training_cache import preserve_cache_dtype
 from lightx2v_train.model_capabilities import (
     BoundCapability,
     CheckpointCapability,
@@ -60,6 +61,157 @@ def _require_singleton_tensor(value, name):
         shape = tuple(value.shape) if torch.is_tensor(value) else type(value).__name__
         raise ValueError(f"{name} must have leading dimension 1; physical batch sizes greater than 1 are not supported, got {shape}.")
     return value
+
+
+def _move_cached_value(value, model, key=None):
+    if torch.is_tensor(value):
+        kwargs = {"device": model.device}
+        if value.is_floating_point() and not preserve_cache_dtype(key):
+            kwargs["dtype"] = model.running_dtype
+        return value.to(**kwargs)
+    if isinstance(value, Mapping):
+        return {name: _move_cached_value(item, model, name) for name, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_move_cached_value(item, model, key) for item in value)
+    if isinstance(value, list):
+        return [_move_cached_value(item, model, key) for item in value]
+    return value
+
+
+def _cached_latent(batch, model):
+    latent = batch.get("inputs", {}).get("latents")
+    if latent is not None:
+        return _move_cached_value(latent, model)
+    cache_path = batch.get("meta", {}).get("training_cache_path")
+    if cache_path is not None:
+        raise KeyError(f"Training cache {cache_path} has no inputs.latents entry.")
+    return None
+
+
+def _cached_condition(batch, model, role=None):
+    conditioning = batch.get("conditioning", {})
+    if "positive" not in conditioning:
+        cache_path = batch.get("meta", {}).get("training_cache_path")
+        if cache_path is not None:
+            raise KeyError(f"Training cache {cache_path} has no conditioning.positive entry.")
+        return None
+    role = role or conditioning.get("active", "positive")
+    if role not in conditioning:
+        cache_path = batch.get("meta", {}).get("training_cache_path", "<unknown>")
+        raise KeyError(f"Training cache {cache_path} has no conditioning.{role} entry.")
+    condition = dict(conditioning.get("shared", {}))
+    condition.update(conditioning[role])
+    return _move_cached_value(condition, model)
+
+
+def _cached_condition_pair(batch, model, *, require_negative):
+    positive = _cached_condition(batch, model)
+    if positive is None:
+        return None
+    negative = _cached_condition(batch, model, role="negative") if require_negative else None
+    return positive, negative
+
+
+def _prompt_or_default(value, default):
+    return value if isinstance(value, str) else default
+
+
+def _uses_prompt_dropout(model):
+    return float(model.config.get("data", {}).get("train", {}).get("prompt_dropout_rate", 0.0)) > 0
+
+
+def _consistency_requires_negative(model):
+    config = model.config["training"].get("consistency", {})
+    algorithm = str(config.get("algorithm", "cm")).lower()
+    teacher = config.get("teacher", {})
+    guidance_scale = teacher.get("guidance_scale")
+    if algorithm in {"mean_flow", "meanflow"}:
+        guidance = config.get("guidance", {})
+        return any(
+            value is not None
+            for value in (
+                guidance.get("condition_dropout_probability"),
+                guidance.get("scale", guidance_scale),
+                guidance.get("mixture_ratio"),
+            )
+        )
+    if algorithm == "pcm":
+        return guidance_scale is not None and float(guidance_scale) != 1.0
+    return str(config.get("mode", "ct")).lower() == "cd" and guidance_scale is not None and float(guidance_scale) != 1.0
+
+
+def _target_cache_inputs(model, batch, *, required):
+    target = batch.get("inputs", {}).get("target_pixel_values")
+    if target is None:
+        if required:
+            raise ValueError("Training-cache encoding requires inputs.target_pixel_values.")
+        return {}
+    return {"latents": model.encode_to_cache_latent(batch)}
+
+
+def _encode_cache_conditions(model, batch, prompts, contextual_roles):
+    conditions = model.encode_condition_roles(
+        batch,
+        prompts,
+        contextual_roles=contextual_roles,
+    )
+    result = {}
+    for role, condition in conditions.items():
+        if not isinstance(condition, Mapping):
+            raise TypeError(f"Encoded {role} condition must be a mapping, got {type(condition).__name__}.")
+        result[role] = dict(condition)
+    return result
+
+
+def _cache_values_equal(left, right):
+    if left is right:
+        return True
+    if torch.is_tensor(left) or torch.is_tensor(right):
+        return torch.is_tensor(left) and torch.is_tensor(right) and left.shape == right.shape and left.dtype == right.dtype and torch.equal(left, right)
+    if isinstance(left, Mapping) or isinstance(right, Mapping):
+        return isinstance(left, Mapping) and isinstance(right, Mapping) and left.keys() == right.keys() and all(_cache_values_equal(left[key], right[key]) for key in left)
+    if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
+        return type(left) is type(right) and len(left) == len(right) and all(_cache_values_equal(a, b) for a, b in zip(left, right, strict=True))
+    return left == right
+
+
+def _factor_shared_conditions(conditions, shared_keys):
+    shared = {}
+    for key in shared_keys:
+        if not all(key in condition for condition in conditions.values()):
+            continue
+        values = [condition[key] for condition in conditions.values()]
+        if not all(_cache_values_equal(values[0], value) for value in values[1:]):
+            raise ValueError(f"Condition field {key!r} is declared shared but differs between roles.")
+        shared[key] = values[0]
+        for condition in conditions.values():
+            condition.pop(key)
+    return shared
+
+
+def _training_cache_data(model, batch, *, inputs, prompts, contextual_roles=(), conditioning_meta=None):
+    conditions = _encode_cache_conditions(model, batch, prompts, contextual_roles)
+    shared = _factor_shared_conditions(conditions, model.shared_condition_keys)
+    conditioning = {
+        "prompt": batch["conditioning"]["prompt"],
+        **conditions,
+        **(conditioning_meta or {}),
+    }
+    if "unconditional" in conditions:
+        conditioning["unconditional_prompt"] = model.unconditional_prompt
+    if shared:
+        conditioning["shared"] = shared
+
+    meta = dict(batch.get("meta", {}))
+    target = batch.get("inputs", {}).get("target_pixel_values")
+    if target is not None:
+        meta["target_height"] = int(target.shape[-2])
+        meta["target_width"] = int(target.shape[-1])
+    return {
+        "inputs": inputs,
+        "conditioning": conditioning,
+        "meta": meta,
+    }
 
 
 class CommonTrainableCapability(BoundCapability, TrainableModelCapability):
@@ -161,6 +313,19 @@ class CommonCheckpointCapability(BoundCapability, CheckpointCapability):
 
 
 class GenericFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
+    def encode_training_cache(self, batch):
+        prompt = batch["conditioning"]["prompt"]
+        prompts = {"positive": prompt}
+        if _uses_prompt_dropout(self.model):
+            prompts["unconditional"] = self.model.unconditional_prompt
+        return _training_cache_data(
+            self.model,
+            batch,
+            inputs=_target_cache_inputs(self.model, batch, required=True),
+            prompts=prompts,
+            contextual_roles=prompts,
+        )
+
     def compute_loss(
         self,
         batch: Mapping[str, Any],
@@ -170,8 +335,11 @@ class GenericFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
         broadcast = context.broadcast
 
         with torch.no_grad():
+            latent = _cached_latent(batch, self.model)
+            if latent is None:
+                latent = self.model.encode_to_latent(batch)
             latent = _require_singleton_tensor(
-                broadcast(self.model.encode_to_latent(batch)),
+                broadcast(latent),
                 "Flow-matching latent",
             )
             noise = broadcast(torch.randn_like(latent, dtype=context.running_dtype))
@@ -186,7 +354,10 @@ class GenericFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
                 noise,
                 timestep_or_sigma,
             )
-            condition = broadcast(self.model.encode_condition(batch))
+            condition = _cached_condition(batch, self.model)
+            if condition is None:
+                condition = self.model.encode_condition(batch)
+            condition = broadcast(condition)
 
         prediction = self.model.predict_denoiser_output(
             noisy_latent,
@@ -199,6 +370,26 @@ class GenericFlowMatchingCapability(BoundCapability, FlowMatchingSFTCapability):
 
 
 class GenericConsistencyModelCapability(BoundCapability, ConsistencyModelCapability):
+    def encode_training_cache(self, batch):
+        prompt = batch["conditioning"]["prompt"]
+        teacher = self.model.config["training"].get("consistency", {}).get("teacher", {})
+        negative_prompt = _prompt_or_default(teacher.get("negative_prompt"), self.model.unconditional_prompt)
+        prompts = {"positive": prompt}
+        conditioning_meta = {}
+        if _consistency_requires_negative(self.model):
+            prompts["negative"] = negative_prompt
+            conditioning_meta["negative_prompt"] = negative_prompt
+        if _uses_prompt_dropout(self.model):
+            prompts["unconditional"] = self.model.unconditional_prompt
+        return _training_cache_data(
+            self.model,
+            batch,
+            inputs=_target_cache_inputs(self.model, batch, required=True),
+            prompts=prompts,
+            contextual_roles=prompts,
+            conditioning_meta=conditioning_meta,
+        )
+
     def configure(self, features: Collection[str]) -> None:
         features = frozenset(features)
         if features:
@@ -212,13 +403,17 @@ class GenericConsistencyModelCapability(BoundCapability, ConsistencyModelCapabil
         return ()
 
     def encode_latent(self, batch):
+        latent = _cached_latent(batch, self.model)
+        if latent is None:
+            latent = self.model.encode_to_latent(batch)
         return _require_singleton_tensor(
-            self.model.encode_to_latent(batch),
+            latent,
             "Consistency latent",
         )
 
     def encode_condition(self, batch):
-        return self.model.encode_condition(batch)
+        condition = _cached_condition(batch, self.model)
+        return self.model.encode_condition(batch) if condition is None else condition
 
     def sampling_latent_hw(self, batch, clean) -> tuple[int, int]:
         del batch
@@ -255,6 +450,8 @@ class GenericConsistencyModelCapability(BoundCapability, ConsistencyModelCapabil
 class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchingCapability):
     """Distribution-matching operations shared by image flow models."""
 
+    cache_uses_sample_context = False
+
     def __init__(
         self,
         model,
@@ -272,11 +469,40 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
 
     @property
     def default_negative_prompt(self):
-        return None
+        return self.model.unconditional_prompt
 
     @property
     def default_lora_target_modules(self):
         return None
+
+    def encode_training_cache(self, batch):
+        training = self.model.config["training"]
+        teacher = training.get("teacher", {})
+        dmd = training.get("dmd", {})
+        guidance_scale = float(teacher.get("guidance_scale", dmd.get("guidance_scale", 3.0)))
+        negative_prompt = _prompt_or_default(
+            teacher.get(
+                "negative_prompt",
+                dmd.get("negative_prompt", self.default_negative_prompt),
+            ),
+            self.model.unconditional_prompt,
+        )
+        prompt = batch["conditioning"]["prompt"]
+        prompts = {"positive": prompt}
+        if _uses_prompt_dropout(self.model):
+            prompts["unconditional"] = self.model.unconditional_prompt
+        conditioning_meta = {}
+        if guidance_scale > 1.0:
+            prompts["negative"] = negative_prompt
+            conditioning_meta["negative_prompt"] = negative_prompt
+        return _training_cache_data(
+            self.model,
+            batch,
+            inputs=_target_cache_inputs(self.model, batch, required=False),
+            prompts=prompts,
+            contextual_roles=prompts if self.cache_uses_sample_context else (),
+            conditioning_meta=conditioning_meta,
+        )
 
     def latent_shape(
         self,
@@ -338,6 +564,14 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
         conditioning = batch["conditioning"]
         prompt = conditioning.get("prompt", "")
         scalar = _require_single_prompt(prompt)
+        cached = _cached_condition_pair(
+            batch,
+            self.model,
+            require_negative=guidance_scale > 1,
+        )
+        if cached is not None:
+            positive, negative = cached
+            return broadcast(positive), broadcast(negative) if negative is not None else None
         with torch.no_grad():
             positive = self.model.encode_prompt_condition(prompt)
             if guidance_scale > 1:
@@ -487,11 +721,11 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
 
     def extract_real_latents(self, batch, dtype, broadcast):
         with torch.no_grad():
-            latent = batch["inputs"].get("latents")
+            latent = _cached_latent(batch, self.model)
             if latent is None:
                 latent = self.model.encode_to_latent(batch)
             latent = latent.to(device=self.device, dtype=dtype)
-            if latent.ndim == 4:
+            if latent.ndim == 4 and latent.shape[0] != 1:
                 latent = latent.unsqueeze(0)
             _require_singleton_tensor(latent, "DMD real latent")
         return broadcast(latent)

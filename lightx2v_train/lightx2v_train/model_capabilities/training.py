@@ -4,7 +4,7 @@ from abc import abstractmethod
 from collections.abc import Collection
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, TypedDict
 
 import torch
 from torch import Tensor
@@ -18,6 +18,12 @@ class LossResult:
     metrics: Mapping[str, Tensor | float] = field(default_factory=dict)
 
 
+class TrainingCachePayload(TypedDict):
+    inputs: Mapping[str, Any]
+    conditioning: Mapping[str, Any]
+    meta: Mapping[str, Any]
+
+
 @dataclass(frozen=True)
 class SFTStepContext:
     noise_scheduler: Any
@@ -26,6 +32,10 @@ class SFTStepContext:
 
 
 class FlowMatchingSFTCapability(ModelCapability):
+    def encode_training_cache(self, batch: Mapping[str, Any]) -> TrainingCachePayload:
+        """Encode the static sample data consumed by flow-matching training."""
+        raise NotImplementedError(f"{type(self).__name__} does not support training-cache encoding.")
+
     @abstractmethod
     def compute_loss(
         self,
@@ -55,6 +65,10 @@ class TeacherForcingCapability(ModelCapability):
 
 
 class ConsistencyModelCapability(ModelCapability):
+    def encode_training_cache(self, batch: Mapping[str, Any]) -> TrainingCachePayload:
+        """Encode the static sample data consumed by consistency training."""
+        raise NotImplementedError(f"{type(self).__name__} does not support training-cache encoding.")
+
     @abstractmethod
     def configure(self, features: Collection[str]) -> None:
         """Install model structure required by the selected objective."""
@@ -114,6 +128,10 @@ class DistributionMatchingCapability(ModelCapability):
     @property
     def profile(self) -> DistributionMatchingProfile:
         return DistributionMatchingProfile()
+
+    def encode_training_cache(self, batch: Mapping[str, Any]) -> TrainingCachePayload:
+        """Encode the static sample data consumed by distribution matching."""
+        raise NotImplementedError(f"{type(self).__name__} does not support training-cache encoding.")
 
     @property
     @abstractmethod
@@ -279,6 +297,10 @@ class DopsdCapability(ModelCapability):
     Adapter lifecycle and objective math intentionally live outside this
     capability so a new model only needs to describe its own data path.
     """
+
+    def encode_training_cache(self, batch: Mapping[str, Any]) -> TrainingCachePayload:
+        """Encode the static sample data consumed by DOPSD training."""
+        raise NotImplementedError(f"{type(self).__name__} does not support training-cache encoding.")
 
     @property
     @abstractmethod

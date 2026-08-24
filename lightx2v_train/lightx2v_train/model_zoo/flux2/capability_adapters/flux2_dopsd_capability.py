@@ -12,6 +12,7 @@ from lightx2v_train.model_capabilities import (
     DopsdPreparedBatch,
     DopsdPreparedTeacherBatch,
 )
+from lightx2v_train.model_zoo.capability_adapters.common import _cached_condition, _training_cache_data, _uses_prompt_dropout
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,35 @@ class Flux2DopsdCapability(BoundCapability, DopsdCapability):
     @property
     def device(self) -> torch.device:
         return self.model.device
+
+    def encode_training_cache(self, batch):
+        from lightx2v_train.trainers.dopsd_core import DopsdConfig
+
+        image = batch.get("inputs", {}).get("target_pixel_values")
+        if image is None:
+            raise ValueError("DOPSD cache construction requires inputs.target_pixel_values.")
+        image = self._image(image, self.model.running_dtype)
+        latent = self.model.vae.encode(image).latent_dist.mode()
+        prompt = batch["conditioning"]["prompt"]
+        config = DopsdConfig.from_training_config(self.model.config["training"])
+        teacher_prompts = config.teacher_prompts(prompt)
+        prompts = {
+            "positive": prompt,
+            "teacher": teacher_prompts,
+        }
+        contextual_roles = {"positive"}
+        if _uses_prompt_dropout(self.model):
+            prompts["unconditional"] = self.model.unconditional_prompt
+            prompts["teacher_unconditional"] = config.teacher_prompts(self.model.unconditional_prompt)
+            contextual_roles.add("unconditional")
+        return _training_cache_data(
+            self.model,
+            batch,
+            inputs={"dopsd_reference_latents": self.model._normalize_patch_latents(latent)},
+            prompts=prompts,
+            contextual_roles=contextual_roles,
+            conditioning_meta={"teacher_prompt": teacher_prompts},
+        )
 
     def _image(self, image: torch.Tensor, running_dtype: torch.dtype) -> torch.Tensor:
         if image.ndim == 3:
@@ -56,12 +86,56 @@ class Flux2DopsdCapability(BoundCapability, DopsdCapability):
             ids=reference_ids,
         )
 
+    def _cached_reference(self, latent: torch.Tensor) -> Flux2DopsdReference:
+        reference_ids = Flux2KleinPipeline._prepare_image_ids([latent[:1]])
+        reference_ids = reference_ids.repeat(latent.shape[0], 1, 1).to(self.device)
+        return Flux2DopsdReference(
+            latents=Flux2KleinPipeline._pack_latents(latent),
+            ids=reference_ids,
+        )
+
+    @staticmethod
+    def _dimension(meta, key):
+        value = meta[key]
+        if torch.is_tensor(value):
+            value = value.reshape(-1)[0].item()
+        elif isinstance(value, (list, tuple)):
+            value = value[0]
+        return int(value)
+
     def prepare_training_batch(
         self,
         batch: Mapping[str, Any],
         teacher_prompts: list[str],
         running_dtype: torch.dtype,
     ) -> DopsdPreparedBatch:
+        cached_latent = batch.get("inputs", {}).get("dopsd_reference_latents")
+        if cached_latent is not None:
+            cached_teacher_prompt = batch["conditioning"].get("teacher_prompt")
+            if list(cached_teacher_prompt or []) != list(teacher_prompts):
+                raise ValueError("Cached DOPSD teacher prompt does not match the current training configuration. Rebuild the cache.")
+            cached_latent = cached_latent.to(device=self.device, dtype=running_dtype)
+            meta = batch.get("meta", {})
+            height = self._dimension(meta, "target_height")
+            width = self._dimension(meta, "target_width")
+            initial_state, state_ids, latent_hw = self._initial_state(height, width, generator=None)
+            return DopsdPreparedBatch(
+                initial_state=initial_state,
+                state_ids=state_ids,
+                student_condition=_cached_condition(batch, self.model),
+                teacher_condition=_cached_condition(
+                    batch,
+                    self.model,
+                    role="teacher_unconditional" if batch["conditioning"].get("active") == "unconditional" else "teacher",
+                ),
+                teacher_reference=self._cached_reference(cached_latent),
+                latent_hw=latent_hw,
+            )
+
+        cache_path = batch.get("meta", {}).get("training_cache_path")
+        if cache_path is not None:
+            raise KeyError(f"Training cache {cache_path} has no inputs.dopsd_reference_latents entry.")
+
         image = batch.get("inputs", {}).get("target_pixel_values")
         if image is None:
             raise ValueError("DOPSD requires inputs.target_pixel_values.")

@@ -8,6 +8,65 @@ data_process/
 └── ltx/build_latent_dataset.py
 ```
 
+## 图像训练缓存
+
+Qwen-Image、LongCat-Image 和 Flux2 的生成/编辑训练可以预先缓存 VAE latent
+与文本、参考图条件。构建缓存时只加载 VAE 和条件编码器，不加载 DiT：
+
+```bash
+cd /path/to/LightX2V
+
+python lightx2v_train/cache_data.py \
+  --config lightx2v_train/configs/train/flow/qwen_image_lora.yaml \
+  --output-dir /path/to/qwen_image_cache \
+  --save-dtype bf16
+```
+
+输出格式对所有图像模型保持一致：
+
+```text
+qwen_image_cache/
+├── cache_data.jsonl
+└── cache/
+    ├── 00000000.pt
+    └── 00000001.pt
+```
+
+`cache_data.jsonl` 保留原始记录，仅增加 `training_cache`：
+
+```json
+{"prompt":"A cat.","target_image":"images/cat.png","training_cache":"cache/00000000.pt"}
+```
+
+训练时把训练集改为 `image_dataset` 并指向该文件：
+
+```yaml
+data:
+  use_training_cache: true
+
+  train:
+    name: image_dataset
+    data_path: [/path/to/qwen_image_cache/cache_data.jsonl]
+    num_workers: 8
+    persistent_workers: true
+    prefetch_factor: 2
+    pin_memory: true
+
+inference:
+  method: none
+  infer_every_iters: null
+```
+
+Dataset 会自动读取 PT，并跳过图片解码与模型侧数据处理；训练启动时也只加载
+DiT。Flow Matching、Consistency、DMD 和 DOPSD 通过各自的训练能力接口生成并
+消费统一格式的缓存。DOPSD 缓存训练还需将
+`training.dopsd.trajectory_every_iters` 设为 `null`，因为轨迹可视化需要 VAE 解码。
+缓存按算法需要保存目标 latent 以及正向、无条件或负向条件；修改 prompt、负向
+prompt、图片处理参数或预训练模型后应重新构建。物理 batch 仍固定为 1；多
+worker、持久 worker 与预取用于隐藏单样本 PT 的读取开销。
+
+缓存会校验模型、算法和预处理签名；旧版 schema 1 缓存需要重新构建。
+
 ## 数据集选择
 
 | 训练方式 | 数据集 | 输入 |

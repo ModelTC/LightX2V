@@ -39,8 +39,8 @@ class Flux2DevModel(Flux2ModelBase):
     def _configure_model(self):
         self.guidance_scale = float(self.config["model"].get("guidance_scale", 4.0))
 
-    def _copy_model_state(self, reference_model):
-        self.guidance_scale = reference_model.guidance_scale
+    def _reuse_model_state_from(self, source):
+        self.guidance_scale = source.guidance_scale
 
     def denoise(self, denoiser_input, timestep_or_sigma, condition):
         guidance = torch.full(

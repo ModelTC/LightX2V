@@ -25,11 +25,17 @@ def main():
 
     try:
         prepare_data(config)
-        sample_processor = build_sample_processor(config)
-        model = build_model(config)
-        model.load_components()
-
+        use_training_cache = config["data"].get("use_training_cache", False)
+        sample_processor = None if use_training_cache else build_sample_processor(config)
         dataloader_train = build_data(config, train_or_val="train", sample_processor=sample_processor)
+
+        model = build_model(config)
+        model.load_components(
+            load_transformer=True,
+            load_vae=not use_training_cache,
+            load_condition_encoder=not use_training_cache,
+        )
+
         dataloader_eval = None
         if config.get("inference", {}).get("infer_every_iters", None):
             dataloader_eval = build_data(config, train_or_val="val", sample_processor=sample_processor)

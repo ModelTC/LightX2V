@@ -23,37 +23,51 @@ class Flux2ModelBase(BaseModel):
     requires_source_images = False
     target_latent_mode = "sample"
     default_text_encoder_out_layers = ()
+    default_unconditional_prompt = ""
 
-    def load_components(self, transformer_only=False, reference_model=None):
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
         self._validate_model_path(model_path)
         self._configure_model()
 
-        if transformer_only:
-            if reference_model is not None:
-                self.text_pipeline = reference_model.text_pipeline
-                self.vae = reference_model.vae
-                self.image_processor = reference_model.image_processor
-                self._copy_model_state(reference_model)
+        if load_condition_encoder:
+            self._load_condition_encoder(model_path)
+        if load_vae:
+            self._load_vae(model_path)
+        else:
+            self._load_vae_config(model_path)
+        if load_transformer:
             self.transformer = self.load_transformer(model_path)
-            return
 
+    def _load_condition_encoder(self, model_path):
         self.text_pipeline = self.pipeline_cls.from_pretrained(
             model_path,
             transformer=None,
             vae=None,
             torch_dtype=self.running_dtype,
         ).to(self.device)
+        self.text_pipeline.text_encoder.requires_grad_(False)
+        self.text_pipeline.text_encoder.eval()
+
+    def _load_vae(self, model_path):
         self.vae = AutoencoderKLFlux2.from_pretrained(
             model_path,
             subfolder="vae",
             torch_dtype=self.running_dtype,
         ).to(self.device)
-        self.transformer = self.load_transformer(model_path)
-
-        self.text_pipeline.text_encoder.requires_grad_(False)
+        self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
+        self.vae.eval()
         self.image_processor = Flux2ImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+
+    def _load_vae_config(self, model_path):
+        self.vae_config = AutoencoderKLFlux2.load_config(model_path, subfolder="vae")
 
     def _validate_model_path(self, model_path):
         del model_path
@@ -61,8 +75,12 @@ class Flux2ModelBase(BaseModel):
     def _configure_model(self):
         pass
 
-    def _copy_model_state(self, reference_model):
-        del reference_model
+    def reuse_frozen_components_from(self, source):
+        super().reuse_frozen_components_from(source)
+        self._reuse_model_state_from(source)
+
+    def _reuse_model_state_from(self, source):
+        del source
 
     def load_transformer(self, model_path=None):
         model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
@@ -94,7 +112,9 @@ class Flux2ModelBase(BaseModel):
 
     @property
     def vae_scale_factor(self):
-        return 2 ** (len(self.vae.config.block_out_channels) - 1)
+        config = self.vae_config
+        block_out_channels = config["block_out_channels"] if isinstance(config, dict) else config.block_out_channels
+        return 2 ** (len(block_out_channels) - 1)
 
     def _normalize_patch_latents(self, latents):
         latents = self.pipeline_cls._patchify_latents(latents)
@@ -111,6 +131,12 @@ class Flux2ModelBase(BaseModel):
         return mean, torch.sqrt(variance + self.vae.config.batch_norm_eps)
 
     def encode_to_latent(self, sample):
+        return self._encode_target_latent(sample, mode=self.target_latent_mode)
+
+    def encode_to_cache_latent(self, sample):
+        return self._encode_target_latent(sample, mode="mode")
+
+    def _encode_target_latent(self, sample, *, mode):
         image = sample["inputs"]["target_pixel_values"]
         if image.ndim == 3:
             image = image.unsqueeze(0)
@@ -118,7 +144,7 @@ class Flux2ModelBase(BaseModel):
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
         image = image.to(device=self.device, dtype=self.running_dtype)
         distribution = self.vae.encode(image).latent_dist
-        latent = getattr(distribution, self.target_latent_mode)()
+        latent = getattr(distribution, mode)()
         return self._normalize_patch_latents(latent)
 
     def encode_condition(self, sample):
@@ -126,6 +152,11 @@ class Flux2ModelBase(BaseModel):
         if self.requires_source_images:
             return self.encode_conditions_with_source(sample, [prompt])[0]
         return self.encode_prompt_condition(prompt)
+
+    def encode_conditions_with_context(self, sample, prompts):
+        if self.requires_source_images:
+            return self.encode_conditions_with_source(sample, prompts)
+        return super().encode_conditions_with_context(sample, prompts)
 
     def encode_prompt_condition(self, prompt):
         model_config = self.config["model"]

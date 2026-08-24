@@ -70,6 +70,7 @@ class QwenImageDataProcessor:
     def __init__(self, config):
         self.image_processor = VaeImageProcessor(vae_scale_factor=_size_multiple_from_config(config))
         self.target_area = _target_area_from_config(config)
+        self.unconditional_prompt = config["model"].get("unconditional_prompt", " ")
 
     def __call__(self, sample):
         inputs = sample["inputs"]

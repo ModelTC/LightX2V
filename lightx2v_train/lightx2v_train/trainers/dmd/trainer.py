@@ -170,9 +170,11 @@ class DmdTrainer(_DmdRuntime):
         model_config = copy.deepcopy(self.fake_model_config)
         self.fake_real_model = build_loaded_model(
             model_config,
-            transformer_only=True,
-            reference_model=self.model,
+            load_transformer=True,
+            load_vae=False,
+            load_condition_encoder=False,
         )
+        self.fake_real_model.reuse_frozen_components_from(self.model)
         self.fake_real = self.fake_real_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(
             self.fake_real_model,

@@ -71,7 +71,14 @@ class LTX2T2AVModel(BaseModel):
             LTXTeacherForcingCapability(self),
         )
 
-    def load_components(self, transformer_only=False, reference_model=None):
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
+        del load_vae
         model_config = self.config["model"]
         model_path = model_config["pretrained_model_name_or_path"]
         self.pretrained_model_path = os.path.abspath(os.path.expanduser(str(model_path)))
@@ -80,9 +87,9 @@ class LTX2T2AVModel(BaseModel):
         self.transformer_param_dtype = get_running_dtype(model_config.get("transformer_param_dtype", "bf16"))
         self.embeddings_dtype = get_running_dtype(model_config.get("embeddings_dtype", "bf16"))
         self.text_encoder_dtype = get_running_dtype(model_config.get("text_encoder_dtype", "bf16"))
-        self.load_transformer = bool(model_config.get("load_transformer", True))
-        self.load_embeddings_processor = bool(model_config.get("load_embeddings_processor", True))
-        self.load_text_encoder = bool(model_config.get("load_text_encoder", False))
+        should_load_transformer = load_transformer and bool(model_config.get("load_transformer", True))
+        should_load_embeddings_processor = load_condition_encoder and bool(model_config.get("load_embeddings_processor", True))
+        should_load_text_encoder = load_condition_encoder and bool(model_config.get("load_text_encoder", False))
         self.text_encoder_cpu = bool(model_config.get("text_encoder_cpu", False))
         self.load_text_encoder_in_8bit = bool(model_config.get("load_text_encoder_in_8bit", False))
         self.text_encoder_path = model_config.get("text_encoder_path", "/data/nvme0/gushiqiao/models/official_models/LTX-2")
@@ -97,17 +104,8 @@ class LTX2T2AVModel(BaseModel):
             self.defer_kv_cache_updates = bool(model_config.get("defer_cache_updates", False))
         self.detach_kv_cache_updates = bool(model_config.get("detach_kv_cache_updates", False))
 
-        if transformer_only:
-            self.load_embeddings_processor = False
-            self.load_text_encoder = False
-            if reference_model is not None:
-                self.embeddings_processor = reference_model.embeddings_processor
-                self.text_encoder = getattr(reference_model, "text_encoder", None)
-                self.text_encoder_path = getattr(reference_model, "text_encoder_path", self.text_encoder_path)
-                self.text_encoder_cpu = getattr(reference_model, "text_encoder_cpu", self.text_encoder_cpu)
-
-        transformer_path = self._resolve_transformer_path(model_path, model_config, transformer_only)
-        if self.load_transformer:
+        transformer_path = self._resolve_transformer_path(model_path, model_config)
+        if should_load_transformer:
             self.transformer = self._load_transformer(transformer_path)
             self._configure_causal_transformer()
         else:
@@ -115,16 +113,23 @@ class LTX2T2AVModel(BaseModel):
 
         self.embeddings_processor = getattr(self, "embeddings_processor", None)
         self.text_encoder = getattr(self, "text_encoder", None)
-        if self.load_embeddings_processor:
+        if should_load_embeddings_processor:
             self.embeddings_processor = self._load_embeddings_processor(model_path)
             self.embeddings_processor.requires_grad_(False)
             self.embeddings_processor.eval()
-            if hasattr(self.embeddings_processor, "feature_extractor") and not self.load_text_encoder:
+            if hasattr(self.embeddings_processor, "feature_extractor") and not should_load_text_encoder:
                 self.embeddings_processor.feature_extractor = None
-        if self.load_text_encoder:
+        if should_load_text_encoder:
             self.text_encoder = self._load_text_encoder(self.text_encoder_path)
             self.text_encoder.requires_grad_(False)
             self.text_encoder.eval()
+
+    def reuse_frozen_components_from(self, source):
+        super().reuse_frozen_components_from(source)
+        self.embeddings_processor = source.embeddings_processor
+        self.text_encoder = getattr(source, "text_encoder", None)
+        self.text_encoder_path = getattr(source, "text_encoder_path", self.text_encoder_path)
+        self.text_encoder_cpu = getattr(source, "text_encoder_cpu", self.text_encoder_cpu)
 
     def _load_transformer(self, model_path):
         builder = SingleGPUModelBuilder(
@@ -136,9 +141,9 @@ class LTX2T2AVModel(BaseModel):
         transformer = builder.build(device=self.device, dtype=self.transformer_param_dtype)
         return transformer.to(self.device, dtype=self.transformer_param_dtype)
 
-    def _resolve_transformer_path(self, model_path, model_config, transformer_only):
+    def _resolve_transformer_path(self, model_path, model_config):
         self.loaded_student_checkpoint_path = None
-        if transformer_only or model_config.get("name") != "ltx_t2av_ar":
+        if model_config.get("name") != "ltx_t2av_ar":
             return model_path
 
         student_config = model_config.get("student", {})

@@ -47,7 +47,7 @@ class LongCatImageModel(BaseModel):
             self.distribution_matching_capability_cls(
                 self,
                 latent_geometry=SpatialLatentGeometry(
-                    channels_path="vae.config.latent_channels",
+                    channels_path="latent_channels",
                 ),
                 guidance_in_denoiser_space=True,
             ),
@@ -57,33 +57,51 @@ class LongCatImageModel(BaseModel):
             LongCatImageConsistencyModelCapability(self),
         )
 
-    def load_components(self, transformer_only=False, reference_model=None):
-        if transformer_only:
-            if reference_model is not None:
-                self.text_pipeline = reference_model.text_pipeline
-                self.vae = reference_model.vae
-                self.image_processor = reference_model.image_processor
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
+        model_path = self.config["model"]["pretrained_model_name_or_path"]
+        if load_condition_encoder:
+            self._load_condition_encoder(model_path)
+        if load_vae:
+            self._load_vae(model_path)
+        else:
+            self._load_vae_config(model_path)
+        if load_transformer:
             self.transformer = self.load_transformer()
             self._maybe_set_attention_backend()
-            return
 
-        model_path = self.config["model"]["pretrained_model_name_or_path"]
+    def _load_condition_encoder(self, model_path):
         self.text_pipeline = self.pipeline_cls.from_pretrained(
             model_path,
             transformer=None,
             vae=None,
             torch_dtype=self.running_dtype,
         ).to(self.device)
+        self.text_pipeline.text_encoder.requires_grad_(False)
+        self.text_pipeline.text_encoder.eval()
+
+    def _load_vae(self, model_path):
         self.vae = AutoencoderKL.from_pretrained(
             model_path,
             subfolder="vae",
             torch_dtype=self.running_dtype,
         ).to(self.device)
-        self.transformer = self.load_transformer()
-        self.text_pipeline.text_encoder.requires_grad_(False)
+        self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
+        self.vae.eval()
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
-        self._maybe_set_attention_backend()
+
+    def _load_vae_config(self, model_path):
+        self.vae_config = AutoencoderKL.load_config(model_path, subfolder="vae")
+
+    @property
+    def latent_channels(self):
+        return int(self.vae_config["latent_channels"] if isinstance(self.vae_config, dict) else self.vae_config.latent_channels)
 
     def load_transformer(self, model_path=None):
         model_path = model_path or self.config["model"]["pretrained_model_name_or_path"]
@@ -120,7 +138,9 @@ class LongCatImageModel(BaseModel):
 
     @property
     def vae_scale_factor(self):
-        return 2 ** (len(self.vae.config.block_out_channels) - 1)
+        config = self.vae_config
+        block_out_channels = config["block_out_channels"] if isinstance(config, dict) else config.block_out_channels
+        return 2 ** (len(block_out_channels) - 1)
 
     def _normalize_latents(self, latents):
         shift = getattr(self.vae.config, "shift_factor", 0.0)
@@ -133,13 +153,20 @@ class LongCatImageModel(BaseModel):
         return latents / scale + shift
 
     def encode_to_latent(self, sample):
+        return self._encode_target_latent(sample, mode="sample")
+
+    def encode_to_cache_latent(self, sample):
+        return self._encode_target_latent(sample, mode="mode")
+
+    def _encode_target_latent(self, sample, *, mode):
         image = sample["inputs"]["target_pixel_values"]
         if image.ndim == 3:
             image = image.unsqueeze(0)
         if image.ndim != 4:
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
         image = image.to(device=self.device, dtype=self.running_dtype)
-        return self._normalize_latents(self.vae.encode(image).latent_dist.sample())
+        latent = getattr(self.vae.encode(image).latent_dist, mode)()
+        return self._normalize_latents(latent)
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
@@ -234,7 +261,7 @@ class LongCatImageModel(BaseModel):
     def prepare_infer_latents(self, height, width, generator=None):
         latent_height = 2 * (int(height) // (self.vae_scale_factor * 2))
         latent_width = 2 * (int(width) // (self.vae_scale_factor * 2))
-        shape = (1, self.vae.config.latent_channels, latent_height, latent_width)
+        shape = (1, self.latent_channels, latent_height, latent_width)
         return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
 
     def decode_latent(self, latent):

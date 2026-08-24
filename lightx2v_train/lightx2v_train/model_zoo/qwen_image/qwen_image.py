@@ -43,7 +43,7 @@ class QwenImageModel(BaseModel):
             self.distribution_matching_capability_cls(
                 self,
                 latent_geometry=SpatialLatentGeometry(
-                    channels_path="vae.config.z_dim",
+                    channels_path="latent_channels",
                     temporal_size=1,
                 ),
             ),
@@ -53,29 +53,52 @@ class QwenImageModel(BaseModel):
             QwenImageConsistencyModelCapability(self),
         )
 
-    def load_components(self, transformer_only=False, reference_model=None):
-        if transformer_only:
-            if reference_model is not None:
-                self.text_pipeline = reference_model.text_pipeline
-                self.vae = reference_model.vae
-                self.vae_scale_factor = reference_model.vae_scale_factor
-                self.image_processor = reference_model.image_processor
-            self.transformer = self.load_transformer()
-            return
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
+        if load_condition_encoder:
+            self._load_condition_encoder(model_path)
+        if load_vae:
+            self._load_vae(model_path)
+        else:
+            self._load_vae_config(model_path)
+        if load_transformer:
+            self.transformer = self.load_transformer()
+
+    def _load_condition_encoder(self, model_path):
         self.text_pipeline = self.pipeline_cls.from_pretrained(
             model_path,
             transformer=None,
             vae=None,
             torch_dtype=self.running_dtype,
         ).to(self.device)
-        self.vae = AutoencoderKLQwenImage.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
-        self.transformer = self.load_transformer()
-
         self.text_pipeline.text_encoder.requires_grad_(False)
+        self.text_pipeline.text_encoder.eval()
+
+    def _load_vae(self, model_path):
+        self.vae = AutoencoderKLQwenImage.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
+        self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
+        self.vae.eval()
         self.vae_scale_factor = 2 ** len(self.vae.temperal_downsample)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
+
+    def _load_vae_config(self, model_path):
+        self.vae_config = AutoencoderKLQwenImage.load_config(model_path, subfolder="vae")
+        self.vae_scale_factor = 2 ** len(self.vae_config["temperal_downsample"])
+
+    def reuse_frozen_components_from(self, source):
+        super().reuse_frozen_components_from(source)
+        self.vae_scale_factor = source.vae_scale_factor
+
+    @property
+    def latent_channels(self):
+        return int(self.vae_config["z_dim"] if isinstance(self.vae_config, dict) else self.vae_config.z_dim)
 
     def load_transformer(self):
         model_path = self.config["model"]["pretrained_model_name_or_path"]
@@ -106,9 +129,10 @@ class QwenImageModel(BaseModel):
         ]
 
     def _latent_statistics(self, latents):
-        shape = (1, self.vae.config.z_dim, 1, 1, 1)
-        mean = latents.new_tensor(self.vae.config.latents_mean).view(shape)
-        std = latents.new_tensor(self.vae.config.latents_std).view(shape)
+        config = self.vae.config
+        shape = (1, config.z_dim, 1, 1, 1)
+        mean = latents.new_tensor(config.latents_mean).view(shape)
+        std = latents.new_tensor(config.latents_std).view(shape)
         return mean, std
 
     def _normalize_latents(self, latents):
@@ -120,6 +144,12 @@ class QwenImageModel(BaseModel):
         return latents * std + mean
 
     def encode_to_latent(self, sample):
+        return self._encode_target_latent(sample, mode="sample")
+
+    def encode_to_cache_latent(self, sample):
+        return self._encode_target_latent(sample, mode="mode")
+
+    def _encode_target_latent(self, sample, *, mode):
         image = sample["inputs"]["target_pixel_values"]
         if image.ndim == 3:
             image = image.unsqueeze(0)
@@ -127,7 +157,7 @@ class QwenImageModel(BaseModel):
             raise ValueError(f"Expected target_pixel_values with shape [B, C, H, W], got {tuple(image.shape)}")
         image = image.to(device=self.device, dtype=self.running_dtype)
         pixel_values = image.unsqueeze(2)
-        latent = self.vae.encode(pixel_values).latent_dist.sample()  # (B, C, T, H, W)
+        latent = getattr(self.vae.encode(pixel_values).latent_dist, mode)()  # (B, C, T, H, W)
         return self._normalize_latents(latent)
 
     def encode_condition(self, sample):
@@ -189,7 +219,7 @@ class QwenImageModel(BaseModel):
     def prepare_infer_latents(self, height, width, generator=None):
         latent_h = height // self.vae_scale_factor
         latent_w = width // self.vae_scale_factor
-        shape = (1, self.vae.config.z_dim, 1, latent_h, latent_w)
+        shape = (1, self.latent_channels, 1, latent_h, latent_w)
         return torch.randn(shape, generator=generator, device=self.device, dtype=self.running_dtype)
 
     def decode_latent(self, latent):

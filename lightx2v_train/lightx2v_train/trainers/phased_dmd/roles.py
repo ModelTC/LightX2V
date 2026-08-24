@@ -245,9 +245,11 @@ class PhasedRoleRegistry(DmdRoleRegistry):
         student_2_model_config = self._role_model_config("student_2")
         self.student_2_model = build_loaded_model(
             student_2_model_config,
-            transformer_only=True,
-            reference_model=self.model,
+            load_transformer=True,
+            load_vae=False,
+            load_condition_encoder=False,
         )
+        self.student_2_model.reuse_frozen_components_from(self.model)
         self.student_2 = self.student_2_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(
             self.student_2_model,
@@ -260,9 +262,11 @@ class PhasedRoleRegistry(DmdRoleRegistry):
         fake_2_model_config = self._role_model_config("fake_2")
         self.fake_2_model = build_loaded_model(
             fake_2_model_config,
-            transformer_only=True,
-            reference_model=self.model,
+            load_transformer=True,
+            load_vae=False,
+            load_condition_encoder=False,
         )
+        self.fake_2_model.reuse_frozen_components_from(self.model)
         self.fake_2 = self.fake_2_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(self.fake_2_model, role="fake_2")
         self.fake_2_model.capabilities.require(ParallelCapability).apply(self.config)
@@ -276,9 +280,11 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             fake_low_high_model_config = self._role_model_config("teacher")
             self.fake_low_high_model = build_loaded_model(
                 fake_low_high_model_config,
-                transformer_only=True,
-                reference_model=self.model,
+                load_transformer=True,
+                load_vae=False,
+                load_condition_encoder=False,
             )
+            self.fake_low_high_model.reuse_frozen_components_from(self.model)
             fake_low_high_model_path = fake_low_high_model_config["model"]["pretrained_model_name_or_path"]
             self.fake_low_high = self.fake_low_high_model.capabilities.require(DistributionMatchingCapability)
             self._setup_trainable_model(
@@ -300,9 +306,11 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             role_config = self._role_model_config(source_role)
             model = build_loaded_model(
                 role_config,
-                transformer_only=True,
-                reference_model=self.model,
+                load_transformer=True,
+                load_vae=False,
+                load_condition_encoder=False,
             )
+            model.reuse_frozen_components_from(self.model)
             self._setup_trainable_model(model, role=role)
             model.capabilities.require(ParallelCapability).apply(self.config)
             if self.gradient_checkpointing:
@@ -333,9 +341,11 @@ class PhasedRoleRegistry(DmdRoleRegistry):
             teacher_2_model_config = self._role_model_config("teacher_2")
             self.teacher_2_model = build_loaded_model(
                 teacher_2_model_config,
-                transformer_only=True,
-                reference_model=self.model,
+                load_transformer=True,
+                load_vae=False,
+                load_condition_encoder=False,
             )
+            self.teacher_2_model.reuse_frozen_components_from(self.model)
             self.teacher_2 = self.teacher_2_model.capabilities.require(DistributionMatchingCapability)
             self.teacher_2.denoiser().requires_grad_(False)
             self.teacher_2.set_training(False)

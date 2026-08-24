@@ -2,10 +2,12 @@ import json
 import random
 from pathlib import Path
 
+import torch
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
+from lightx2v_train.data.training_cache import CACHE_SCHEMA_VERSION
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
 
@@ -18,25 +20,42 @@ class ImageDataset(Dataset):
         metadata_paths,
         prompt_dropout_rate=0.0,
         sample_processor=None,
+        preserve_records=False,
+        use_training_cache=False,
+        unconditional_prompt=" ",
+        expected_cache_info=None,
     ):
         self.prompt_dropout_rate = prompt_dropout_rate
         self.sample_processor = sample_processor
+        self.preserve_records = preserve_records
+        self.uses_training_cache = use_training_cache
+        self.unconditional_prompt = unconditional_prompt
+        self.expected_cache_info = expected_cache_info
         self.samples = []
         for path in metadata_paths:
             path = Path(path)
             self.samples.extend(self._load_metadata_samples(path, data_dir=path.parent))
         if not self.samples:
             raise ValueError(f"No valid image samples found in {metadata_paths}")
+        if self.uses_training_cache and any(record["training_cache"] is None for record in self.samples):
+            raise ValueError("data.use_training_cache=true requires every image record to include training_cache.")
+        if not self.uses_training_cache and self.sample_processor is None:
+            raise ValueError("Raw image records require a sample_processor.")
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, index):
         record = self.samples[index]
+        if self.uses_training_cache:
+            return self._load_training_cache(record)
         prompt = record["prompt"]
         if random.random() < self.prompt_dropout_rate:
-            prompt = " "
-        return self.load_sample(record, prompt=prompt)
+            prompt = self.unconditional_prompt
+        sample = self.load_sample(record, prompt=prompt)
+        if self.preserve_records:
+            sample["meta"]["dataset_index"] = index
+        return sample
 
     def load_sample(self, record, prompt=None):
         inputs = {}
@@ -61,6 +80,38 @@ class ImageDataset(Dataset):
         }
         return sample if self.sample_processor is None else self.sample_processor(sample)
 
+    def _load_training_cache(self, record):
+        path = record["training_cache"]
+        cache = self._read_training_cache(path, self.expected_cache_info)
+        conditioning = cache["conditioning"]
+        if "positive" not in conditioning:
+            raise ValueError(f"Invalid training cache at {path}: conditioning.positive is missing.")
+        if conditioning.get("prompt") != record["prompt"]:
+            raise ValueError(f"Prompt in {path} does not match cache_data.jsonl. Rebuild the training cache.")
+        use_unconditional = random.random() < self.prompt_dropout_rate
+        if use_unconditional and "unconditional" not in conditioning:
+            raise ValueError(f"Training cache {path} has no unconditional condition for prompt dropout.")
+        conditioning["active"] = "unconditional" if use_unconditional else "positive"
+        conditioning["prompt"] = conditioning.get("unconditional_prompt", self.unconditional_prompt) if use_unconditional else record["prompt"]
+        cache["meta"]["training_cache_path"] = str(path)
+        return cache
+
+    @staticmethod
+    def _read_training_cache(path, expected_cache_info=None):
+        cache = torch.load(path, map_location="cpu", weights_only=True)
+        if not isinstance(cache, dict) or not all(key in cache for key in ("inputs", "conditioning", "meta")):
+            raise ValueError(f"Invalid training cache at {path}: expected inputs, conditioning, and meta mappings.")
+        cache_info = cache.get("cache_info", {})
+        if not isinstance(cache_info, dict):
+            raise ValueError(f"Invalid training cache metadata at {path}.")
+        if cache_info.get("schema_version") != CACHE_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported training cache schema at {path}: {cache_info.get('schema_version')!r}.")
+        if expected_cache_info is not None:
+            for key, expected in expected_cache_info.items():
+                if cache_info.get(key) != expected:
+                    raise ValueError(f"Training cache {path} has incompatible {key}: expected {expected!r}, got {cache_info.get(key)!r}.")
+        return cache
+
     def _load_metadata_samples(self, metadata_path, data_dir):
         if metadata_path.suffix != ".jsonl":
             raise ValueError(f"Only metadata list files (.jsonl) are supported, not {metadata_path.suffix}: {metadata_path}")
@@ -79,14 +130,21 @@ class ImageDataset(Dataset):
             raise ValueError("Each metadata record must include prompt.")
 
         source_images = record.get("source_images", [])
+        training_cache = record.get("training_cache")
+        if training_cache is not None and not str(training_cache).strip():
+            training_cache = None
 
-        return {
+        normalized = {
             "target_image": self._resolve_path(target_image, data_dir) if target_image is not None else None,
             "prompt": str(prompt).strip(),
             "source_images": [self._resolve_path(p, data_dir) for p in source_images],
             "target_height": record.get("target_height"),
             "target_width": record.get("target_width"),
+            "training_cache": self._resolve_path(training_cache, data_dir) if training_cache is not None else None,
         }
+        if self.preserve_records:
+            normalized["_original_record"] = dict(record)
+        return normalized
 
     def _resolve_path(self, path, data_dir):
         path = Path(path)
@@ -101,10 +159,14 @@ class ImageDataset(Dataset):
 
 
 @DATA_REGISTER("image_dataset")
-def build_image_dataset(data_config_split, train_or_val="train", sample_processor=None):
-    if sample_processor is None:
-        raise ValueError("image_dataset requires a sample_processor")
-
+def build_image_dataset(
+    data_config_split,
+    train_or_val="train",
+    sample_processor=None,
+    use_training_cache=False,
+    unconditional_prompt=" ",
+    expected_cache_info=None,
+):
     data_path = data_config_split["data_path"]
     assert isinstance(data_path, list), f"config['data'][{train_or_val!r}]['data_path'] must be a list"
 
@@ -116,13 +178,30 @@ def build_image_dataset(data_config_split, train_or_val="train", sample_processo
         metadata_paths=[Path(p) for p in data_path],
         prompt_dropout_rate=prompt_dropout_rate,
         sample_processor=sample_processor,
+        preserve_records=data_config_split.get("preserve_records", False),
+        use_training_cache=use_training_cache,
+        unconditional_prompt=unconditional_prompt,
+        expected_cache_info=expected_cache_info,
     )
     dp_world_size = get_data_parallel_world_size()
     sampler = DistributedSampler(dataset, num_replicas=dp_world_size, rank=get_data_parallel_rank(), shuffle=shuffle) if dp_world_size > 1 and train_or_val == "train" else None
+    loader_kwargs = {}
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = data_config_split.get("persistent_workers", dataset.uses_training_cache)
+        loader_kwargs["prefetch_factor"] = data_config_split.get("prefetch_factor", 2)
     return DataLoader(
         dataset,
         batch_size=1,
         shuffle=shuffle if sampler is None else False,
         sampler=sampler,
         num_workers=num_workers,
+        pin_memory=data_config_split.get("pin_memory", dataset.uses_training_cache),
+        collate_fn=_single_sample_collate if dataset.uses_training_cache else None,
+        **loader_kwargs,
     )
+
+
+def _single_sample_collate(samples):
+    if len(samples) != 1:
+        raise ValueError(f"Cached image training requires batch_size=1, got {len(samples)} samples.")
+    return samples[0]

@@ -16,10 +16,14 @@ class QwenImageEditModel(QwenImageModel):
 
     pipeline_cls = QwenImageEditPlusPipeline
     distribution_matching_capability_cls = QwenImageEditDistributionMatchingCapability
+    shared_condition_keys = ("source_latents", "source_img_shapes")
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
         return self.encode_conditions_with_source(sample, [prompt])[0]
+
+    def encode_conditions_with_context(self, sample, prompts):
+        return self.encode_conditions_with_source(sample, prompts)
 
     def encode_conditions_with_source(self, sample, prompts):
         inputs = sample["inputs"]

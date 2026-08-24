@@ -23,14 +23,16 @@ _LAZY_EXPORTS = {
 def build_loaded_model(
     config,
     *,
-    transformer_only=False,
-    reference_model=None,
+    load_transformer,
+    load_vae,
+    load_condition_encoder,
 ):
     """Build a model wrapper, load its components, then publish capabilities."""
     model = build_model(config)
     model.load_components(
-        transformer_only=transformer_only,
-        reference_model=reference_model,
+        load_transformer=load_transformer,
+        load_vae=load_vae,
+        load_condition_encoder=load_condition_encoder,
     )
     model.ensure_capabilities()
     return model

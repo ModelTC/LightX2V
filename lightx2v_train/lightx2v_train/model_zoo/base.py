@@ -29,12 +29,18 @@ from lightx2v_train.utils.utils import get_running_dtype
 
 
 class BaseModel(CapabilityProvider):
+    default_unconditional_prompt = " "
+    shared_condition_keys = ()
+
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.running_dtype = get_running_dtype(config["model"]["running_dtype"])
         self.device = torch.device("cuda", torch.cuda.current_device()) if torch.cuda.is_available() else torch.device("cpu")
         self.vae = None
+        self.vae_config = None
+        self.text_pipeline = None
+        self.image_processor = None
 
     def register_capabilities(self):
         self.capabilities.register(
@@ -50,8 +56,22 @@ class BaseModel(CapabilityProvider):
             CommonCheckpointCapability(self),
         )
 
-    def load_components(self, transformer_only=False, reference_model=None):
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
+        """Load the requested model weights; lightweight config metadata may still be read."""
         raise NotImplementedError
+
+    def reuse_frozen_components_from(self, source):
+        """Reuse the frozen VAE and condition components owned by another model."""
+        self.vae = source.vae
+        self.vae_config = source.vae_config
+        self.text_pipeline = source.text_pipeline
+        self.image_processor = source.image_processor
 
     def denoiser_module(self):
         raise NotImplementedError(f"{self.__class__.__name__} must define denoiser_module().")
@@ -118,6 +138,36 @@ class BaseModel(CapabilityProvider):
 
     def encode_condition(self, sample):
         raise NotImplementedError
+
+    @property
+    def unconditional_prompt(self):
+        return self.config["model"].get("unconditional_prompt", self.default_unconditional_prompt)
+
+    def encode_condition_roles(self, sample, prompts, *, contextual_roles=()):
+        """Encode named prompts, retaining sample context only for requested roles."""
+        contextual_roles = set(contextual_roles)
+        contextual_names = [name for name in prompts if name in contextual_roles]
+        conditions = {name: self.encode_prompt_condition(prompt) for name, prompt in prompts.items() if name not in contextual_roles}
+        if contextual_names:
+            contextual_prompts = [prompts[name] for name in contextual_names]
+            contextual_conditions = self.encode_conditions_with_context(sample, contextual_prompts)
+            conditions.update(zip(contextual_names, contextual_conditions, strict=True))
+        return {name: conditions[name] for name in prompts}
+
+    def encode_conditions_with_context(self, sample, prompts):
+        conditions = []
+        for prompt in prompts:
+            contextual_sample = dict(sample)
+            contextual_sample["conditioning"] = {
+                **sample["conditioning"],
+                "prompt": prompt,
+            }
+            conditions.append(self.encode_condition(contextual_sample))
+        return conditions
+
+    def encode_to_cache_latent(self, sample):
+        """Encode a deterministic target latent for reuse across training epochs."""
+        return self.encode_to_latent(sample)
 
     def encode_inference_condition(self, sample, *, is_negative=False):
         del is_negative

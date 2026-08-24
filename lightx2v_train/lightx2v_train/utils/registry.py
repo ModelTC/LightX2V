@@ -103,6 +103,7 @@ _TRAINER_MODULES = {
     "phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
     "sgmd": "lightx2v_train.trainers.sgmd",
     "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",
+    "training_cache": "lightx2v_train.trainers.training_cache",
     "world_action": "lightx2v_train.trainers.world_action",
 }
 
@@ -159,7 +160,7 @@ def build_model(config):
 
 
 def build_trainer(config):
-    name = config["training"]["method"]
+    name = "training_cache" if "training_cache" in config else config["training"]["method"]
     _ensure_registered(name, TRAINER_REGISTER, _TRAINER_MODULES)
     if name not in TRAINER_REGISTER:
         available = ", ".join(sorted(TRAINER_REGISTER.keys()))
@@ -189,12 +190,19 @@ def build_sample_processor(config):
 
 
 def build_data(config, train_or_val, sample_processor=None):
+    from lightx2v_train.data.training_cache import training_cache_info
+
     data_config = config.get("data", {})
     if train_or_val not in data_config:
         available_splits = ", ".join(repr(k) for k in sorted(data_config.keys()))
         raise ValueError(f"config['data'] has no key {train_or_val!r}. Available keys: {available_splits}")
     data_config_split = dict(data_config[train_or_val])
+    if "training_cache" in config:
+        data_config_split["prompt_dropout_rate"] = 0.0
     data_name = data_config_split.get("name", "image_dataset")
+    use_training_cache = data_config.get("use_training_cache", False) if train_or_val == "train" and "training_cache" not in config else False
+    if use_training_cache and data_name != "image_dataset":
+        raise ValueError("data.use_training_cache=true requires data.train.name=image_dataset.")
     if train_or_val == "train" and data_name == "prompt_dataset":
         image_sizes = config.get("training", {}).get("dmd", {}).get("image_sizes")
         if image_sizes is not None:
@@ -203,5 +211,14 @@ def build_data(config, train_or_val, sample_processor=None):
     if data_name not in DATA_REGISTER:
         available_names = ", ".join(sorted(DATA_REGISTER.keys()))
         raise ValueError(f"Unknown data {data_name!r}. Available data: {available_names}")
-    kwargs = {"sample_processor": sample_processor} if data_name == "image_dataset" else {}
+    kwargs = (
+        {
+            "sample_processor": sample_processor,
+            "use_training_cache": use_training_cache,
+            "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
+            "expected_cache_info": training_cache_info(config) if use_training_cache else None,
+        }
+        if data_name == "image_dataset"
+        else {}
+    )
     return DATA_REGISTER[data_name](data_config_split, train_or_val=train_or_val, **kwargs)

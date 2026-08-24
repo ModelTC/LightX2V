@@ -16,13 +16,19 @@ from .wan_t2v import WanT2VModel
 @MODEL_REGISTER("wan_ti2v_5b_ar")
 @MODEL_REGISTER("wan_ti2v_5b")
 class WanTI2V5BModel(WanT2VModel):
-    def load_components(self, transformer_only=False, reference_model=None):
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
         model_config = self.config["model"]
         model_path = model_config["pretrained_model_name_or_path"]
 
-        self.load_vae = model_config.get("load_vae", True)
-        self.load_text_encoder = model_config.get("load_text_encoder", True)
-        self.load_transformer = model_config.get("load_transformer", True)
+        should_load_vae = load_vae and model_config.get("load_vae", True)
+        should_load_text_encoder = load_condition_encoder and model_config.get("load_text_encoder", True)
+        should_load_transformer = load_transformer and model_config.get("load_transformer", True)
         training_config = self.config.get("training", {})
         teacher_forcing_config = training_config.get("teacher_forcing", {})
         model_name = model_config.get("name")
@@ -63,34 +69,18 @@ class WanTI2V5BModel(WanT2VModel):
         self.text_encoder = None
         self.text_pipeline = None
 
-        if transformer_only:
-            if reference_model is not None:
-                self.vae = reference_model.vae
-                self.text_encoder = reference_model.text_encoder
-                self.text_pipeline = reference_model.text_pipeline
-                self.vae_stride = reference_model.vae_stride
-                self.patch_size = reference_model.patch_size
-                self.max_sequence_length = reference_model.max_sequence_length
-                self.vae_scale_factor_temporal = reference_model.vae_scale_factor_temporal
-                self.vae_scale_factor_spatial = reference_model.vae_scale_factor_spatial
-            self.transformer = self._load_transformer(model_path)
-            self._configure_transformer()
-            self.vae_scale_factor_temporal = self.vae_stride[0]
-            self.vae_scale_factor_spatial = self.vae_stride[1]
-            return
-
-        if self.load_transformer:
+        if should_load_transformer:
             self.transformer = self._load_transformer(model_path)
             self._configure_transformer()
         else:
             self.transformer = None
 
-        if self.load_vae:
+        if should_load_vae:
             vae_checkpoint = model_config.get("vae_checkpoint", os.path.join(model_path, "Wan2.2_VAE.pth"))
             self.vae = Wan2_2_VAE(vae_pth=vae_checkpoint, dtype=self.vae_dtype, device=self.device)
             self.vae.model.requires_grad_(False)
 
-        if self.load_text_encoder:
+        if should_load_text_encoder:
             t5_checkpoint = model_config.get("t5_checkpoint", os.path.join(model_path, "models_t5_umt5-xxl-enc-bf16.pth"))
             t5_tokenizer = model_config.get("t5_tokenizer", os.path.join(model_path, "google/umt5-xxl"))
             self.text_encoder = T5EncoderModel(

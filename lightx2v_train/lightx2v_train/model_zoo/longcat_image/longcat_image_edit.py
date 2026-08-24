@@ -18,10 +18,15 @@ class LongCatImageEditModel(LongCatImageModel):
     distribution_matching_capability_cls = LongCatImageEditDistributionMatchingCapability
     supports_cfg_renorm = False
     supports_prompt_rewrite = False
+    default_unconditional_prompt = ""
+    shared_condition_keys = ("source_tokens", "source_height", "source_width")
 
     def encode_condition(self, sample):
         prompt = sample["conditioning"]["prompt"]
         return self.encode_conditions_with_source(sample, [prompt])[0]
+
+    def encode_conditions_with_context(self, sample, prompts):
+        return self.encode_conditions_with_source(sample, prompts)
 
     def encode_inference_condition(self, sample, *, is_negative=False):
         del is_negative

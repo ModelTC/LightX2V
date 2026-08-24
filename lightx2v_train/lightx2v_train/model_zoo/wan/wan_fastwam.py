@@ -43,9 +43,15 @@ class WanFastWAMModel(CapabilityProvider):
             WanWorldActionCapability(self),
         )
 
-    def load_components(self, transformer_only=False, reference_model=None):
-        if transformer_only:
-            raise ValueError("wan_fastwam does not support transformer_only loading.")
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
+        if not (load_transformer and load_vae and load_condition_encoder):
+            raise ValueError("wan_fastwam does not support selective component loading.")
 
         model_path = _resolve_local_path(self.model_config.get("model_path"), "model_path", directory=True)
         configured_action_dit_path = self.model_config.get("action_dit_pretrained_path")

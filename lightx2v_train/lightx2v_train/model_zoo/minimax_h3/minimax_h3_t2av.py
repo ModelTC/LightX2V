@@ -40,8 +40,14 @@ class MiniMaxH3T2AVModel(BaseModel):
             MiniMaxH3ConsistencyModelCapability(self),
         )
 
-    def load_components(self, transformer_only=False, reference_model=None):
-        del transformer_only, reference_model
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
+        del load_vae, load_condition_encoder
         config = self.config["model"]
         self.pretrained_model_path = config["pretrained_model_name_or_path"]
         self.transformer_param_dtype = get_running_dtype(config.get("transformer_param_dtype", "bf16"))
@@ -54,13 +60,15 @@ class MiniMaxH3T2AVModel(BaseModel):
         if self.video_latent_channels <= 0 or self.audio_latent_channels <= 0 or self.vae_spatial_scale_factor <= 0:
             raise ValueError("MiniMax-H3 latent channels and VAE spatial scale must be positive.")
         self.use_autocast = bool(config.get("use_autocast", False))
-        self.transformer = load_minimax_h3_transformer(
-            self.pretrained_model_path,
-            torch_dtype=self.transformer_param_dtype,
-            local_files_only=bool(config.get("local_files_only", True)),
-            attention_backend=config.get("attention_backend"),
-        )
-        self.transformer.to(self.device)
+        self.transformer = None
+        if load_transformer:
+            self.transformer = load_minimax_h3_transformer(
+                self.pretrained_model_path,
+                torch_dtype=self.transformer_param_dtype,
+                local_files_only=bool(config.get("local_files_only", True)),
+                attention_backend=config.get("attention_backend"),
+            )
+            self.transformer.to(self.device)
 
     def denoiser_module(self):
         return self.transformer

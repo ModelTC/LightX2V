@@ -184,9 +184,11 @@ class _DmdRuntime(BaseTrainer):
         self.fake_model_config = copy.deepcopy(fake_model_config)
         self.fake_model = build_loaded_model(
             fake_model_config,
-            transformer_only=True,
-            reference_model=self.model,
+            load_transformer=True,
+            load_vae=False,
+            load_condition_encoder=False,
         )
+        self.fake_model.reuse_frozen_components_from(self.model)
         self.fake = self.fake_model.capabilities.require(DistributionMatchingCapability)
         self._setup_trainable_model(self.fake_model, role="fake")
         self.fake_model.capabilities.require(ParallelCapability).apply(self.config)
@@ -201,9 +203,11 @@ class _DmdRuntime(BaseTrainer):
             teacher_model_config["model"].update(copy.deepcopy(self.model_config["teacher"]))
         self.teacher_model = build_loaded_model(
             teacher_model_config,
-            transformer_only=True,
-            reference_model=self.model,
+            load_transformer=True,
+            load_vae=False,
+            load_condition_encoder=False,
         )
+        self.teacher_model.reuse_frozen_components_from(self.model)
         self.teacher = self.teacher_model.capabilities.require(DistributionMatchingCapability)
         self.teacher.denoiser().requires_grad_(False)
         self.teacher.set_training(False)

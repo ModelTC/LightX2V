@@ -13,3 +13,4 @@ class Flux2DevEditModel(Flux2DevModel):
     requires_source_images = True
     target_latent_mode = "mode"
     distribution_matching_capability_cls = Flux2EditDistributionMatchingCapability
+    shared_condition_keys = ("reference_tokens", "reference_ids")

@@ -134,9 +134,11 @@ class ConsistencyTrainer(FlowMatchingTrainer):
         teacher_config["model"].update(copy.deepcopy(teacher_override))
         teacher_model = build_loaded_model(
             teacher_config,
-            transformer_only=True,
-            reference_model=self.model,
+            load_transformer=True,
+            load_vae=False,
+            load_condition_encoder=False,
         )
+        teacher_model.reuse_frozen_components_from(self.model)
         self.teacher_consistency_model = teacher_model.capabilities.require(ConsistencyModelCapability)
         self.teacher_consistency_model.set_frozen()
         teacher_model.capabilities.require(ParallelCapability).apply(self.config)
@@ -172,9 +174,11 @@ class ConsistencyTrainer(FlowMatchingTrainer):
         reference_config["model"] = model_config
         reference_model = build_loaded_model(
             reference_config,
-            transformer_only=True,
-            reference_model=self.model,
+            load_transformer=True,
+            load_vae=False,
+            load_condition_encoder=False,
         )
+        reference_model.reuse_frozen_components_from(self.model)
         capability = reference_model.capabilities.require(ConsistencyModelCapability)
         if self.train_type == "lora":
             reference_model.capabilities.require(TrainableModelCapability).configure(
@@ -251,7 +255,9 @@ class ConsistencyTrainer(FlowMatchingTrainer):
             if len(values) != 1:
                 raise ValueError(f"Expected exactly one negative prompt, got {len(values)}.")
 
-        fallback = self.objective.negative_prompt or " "
+        fallback = self.objective.negative_prompt
+        if not isinstance(fallback, str):
+            fallback = self.model.unconditional_prompt
         values = [value if isinstance(value, str) and value.strip() else fallback for value in values]
         encoded_prompt = values[0] if isinstance(prompt, str) else values
 
@@ -259,8 +265,11 @@ class ConsistencyTrainer(FlowMatchingTrainer):
         negative_sample["conditioning"] = dict(conditioning)
         cached_negative = negative_sample["conditioning"].get("negative")
         if cached_negative is None:
+            cache_path = sample.get("meta", {}).get("training_cache_path")
+            if cache_path is not None:
+                raise KeyError(f"Training cache {cache_path} has no conditioning.negative entry required by this consistency objective.")
             negative_sample["conditioning"].pop("positive", None)
         else:
-            negative_sample["conditioning"]["positive"] = cached_negative
+            negative_sample["conditioning"]["active"] = "negative"
         negative_sample["conditioning"]["prompt"] = encoded_prompt
         return self.consistency_model.encode_condition(negative_sample)

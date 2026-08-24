@@ -64,15 +64,21 @@ class LingBotVideoModel(BaseModel):
     vae_scale_factor_temporal = 4
     vae_scale_factor_spatial = 8
 
-    def load_components(self, transformer_only=False, reference_model=None):
+    def load_components(
+        self,
+        *,
+        load_transformer,
+        load_vae,
+        load_condition_encoder,
+    ):
         model_config = self.config["model"]
         self.model_path = os.path.abspath(os.path.expanduser(str(model_config["pretrained_model_name_or_path"])))
         self.transformer_param_dtype = get_running_dtype(model_config.get("transformer_param_dtype", "bf16"))
         self.text_encoder_dtype = get_running_dtype(model_config.get("text_encoder_dtype", "bf16"))
         self.vae_dtype = get_running_dtype(model_config.get("vae_dtype", "fp32"))
-        self.load_transformer = bool(model_config.get("load_transformer", True))
-        self.load_text_encoder = bool(model_config.get("load_text_encoder", True))
-        self.load_vae = bool(model_config.get("load_vae", False))
+        should_load_transformer = load_transformer and bool(model_config.get("load_transformer", True))
+        should_load_text_encoder = load_condition_encoder and bool(model_config.get("load_text_encoder", True))
+        should_load_vae = load_vae and bool(model_config.get("load_vae", False))
         self.text_encoder_cpu = bool(model_config.get("text_encoder_cpu", True))
         self.max_sequence_length = int(model_config.get("max_sequence_length", TOKEN_LENGTH))
         self.hidden_state_skip_layer = int(model_config.get("hidden_state_skip_layer", HIDDEN_STATE_SKIP_LAYER))
@@ -82,20 +88,18 @@ class LingBotVideoModel(BaseModel):
         self.text_encoder = None
         self.processor = None
         self.vae = None
-        if transformer_only:
-            self.load_text_encoder = False
-            self.load_vae = False
-            if reference_model is not None:
-                self.text_encoder = reference_model.text_encoder
-                self.processor = reference_model.processor
-                self.vae = reference_model.vae
-                self._crop_start = reference_model._crop_start
 
-        self.transformer = self._load_transformer() if self.load_transformer else None
-        if self.load_text_encoder:
+        self.transformer = self._load_transformer() if should_load_transformer else None
+        if should_load_text_encoder:
             self.text_encoder, self.processor = self._load_text_components()
-        if self.load_vae:
+        if should_load_vae:
             self.vae = self._load_vae()
+
+    def reuse_frozen_components_from(self, source):
+        super().reuse_frozen_components_from(source)
+        self.text_encoder = source.text_encoder
+        self.processor = source.processor
+        self._crop_start = source._crop_start
 
     def _load_transformer(self):
         try:
