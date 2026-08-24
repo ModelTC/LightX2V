@@ -16,37 +16,15 @@ class HunyuanImage3PostInfer:
             self.tp_group = None
             self.tp_size = 1
 
-    @staticmethod
-    def _parallel_context_value(context, *names, default=None):
-        if context is None:
-            return default
-        for name in names:
-            if not hasattr(context, name):
-                continue
-            value = getattr(context, name)
-            if callable(value):
-                value = value()
-            if value is not None:
-                return value
-        return default
-
     def _active_tp_state(self):
-        group = self._parallel_context_value(self.parallel_context, "active_tp_group", "tp_group", default=self.tp_group)
-        size = self._parallel_context_value(self.parallel_context, "active_tp_size", "tp_size")
-        if size is None:
-            size = dist.get_world_size(group) if group is not None and dist.is_available() and dist.is_initialized() else self.tp_size
-        return group, int(size)
+        if self.parallel_context is not None:
+            return self.parallel_context.active_tp_group, self.parallel_context.active_tp_size
+        return self.tp_group, self.tp_size
 
     def _logical_gather_order(self, tp_size):
-        order = self._parallel_context_value(self.parallel_context, "logical_gather_order")
-        if order is None:
-            return tuple(range(tp_size))
-        if torch.is_tensor(order):
-            order = order.detach().cpu().tolist()
-        order = tuple(int(rank) for rank in order)
-        if len(order) != tp_size or sorted(order) != list(range(tp_size)):
-            raise ValueError(f"HunyuanImage3 logical_gather_order must be a permutation of [0, {tp_size}), got {order}.")
-        return order
+        if self.parallel_context is not None:
+            return self.parallel_context.logical_gather_order
+        return tuple(range(tp_size))
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

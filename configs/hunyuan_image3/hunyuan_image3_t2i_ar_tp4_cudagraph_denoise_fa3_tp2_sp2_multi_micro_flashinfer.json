@@ -1,0 +1,69 @@
+{
+    "infer_steps": 50,
+    "sample_guide_scale": 5.0,
+    "flow_shift": 1.0,
+    "target_height": 1024,
+    "target_width": 1024,
+    "feature_caching": "NoCaching",
+    "moe_backend": "multi_micro",
+    "attn_impl": "torch_sdpa",
+    "denoise_attn_impl": "flash_attn3",
+    "flashinfer_autotune_mode": "auto",
+    "flashinfer_autotune_cache_by_phase": {
+        "ar": "save_results/hunyuan_image3_flashinfer_autotune_t2i_ar_tp4_q1_optimized.json"
+    },
+    "flashinfer_tune_max_num_tokens": 16384,
+    "flashinfer_tuning_buckets": [
+        1,
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+        12288,
+        16384
+    ],
+    "flashinfer_autotune_round_up": true,
+    "enable_kv_cache": true,
+    "enable_text_kv_cache": true,
+    "ar_decode_attn_impl": "flash_attn3_paged",
+    "ar_kv_page_size": 16,
+    "ar_flash_attn_max_num_splits": 32,
+    "ar_decode_use_triton_rms_norm": true,
+    "ar_decode_use_fused_qk_rms_norm": true,
+    "ar_decode_use_compact_moe_router": true,
+    "ar_decode_overlap_shared_expert": true,
+    "enable_ar_custom_all_reduce": true,
+    "ar_custom_all_reduce_max_size_bytes": 8388608,
+    "ar_custom_all_reduce_skip_p2p_check": true,
+    "ar_custom_all_reduce_graph_mode": "workspace",
+    "enable_ar_cuda_graph": true,
+    "ar_cuda_graph_kv_bucket_size": 128,
+    "parallel": {
+        "pipeline_parallel": false,
+        "phase_aware": true,
+        "storage_tensor_p_size": 2,
+        "ar": {
+            "tensor_p_size": 4,
+            "seq_p_size": 1
+        },
+        "denoise": {
+            "tensor_p_size": 2,
+            "seq_p_size": 2
+        },
+        "cfg_p_size": 1,
+        "seq_p_attn_type": "ulysses",
+        "cfg_mode": "serial"
+    },
+    "enable_cfg": true,
+    "bot_task": "think_recaption",
+    "use_system_prompt": "en_unified",
+    "max_new_tokens": 2048,
+    "text_do_sample": true,
+    "text_sampling_impl": "topk_compact",
+    "text_top_k": 1024,
+    "text_top_p": 0.95,
+    "text_temperature": 0.6
+}
