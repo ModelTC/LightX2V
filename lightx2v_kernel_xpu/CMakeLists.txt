@@ -51,6 +51,7 @@ set(MODULE_NAME _ext)
 
 set(SYCL_SRCS
     csrc/onednn.cpp
+    csrc/onednn_int8.cpp
     csrc/onednn_fp8.cpp
 )
 set(ALL_SRCS ${SYCL_SRCS} csrc/entry.cpp csrc/sdp.cpp)
