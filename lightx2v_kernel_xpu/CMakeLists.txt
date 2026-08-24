@@ -84,15 +84,21 @@ execute_process(
     OUTPUT_VARIABLE Python_PREFIX
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
+set(DNNL_LIBRARY_HINTS
+    "${Python_PREFIX}/Library/lib"
+    "${Python_PREFIX}/lib"
+    "${Python_PREFIX}/lib64"
+    "$ENV{ONEAPI_ROOT}/dnnl/latest/lib"
+)
+if(WIN32)
+    list(APPEND DNNL_LIBRARY_HINTS
+        "C:/Program Files (x86)/Intel/oneAPI/dnnl/latest/lib"
+        "C:/Program Files/Intel/oneAPI/dnnl/latest/lib"
+    )
+endif()
 find_library(DNNL_LIBRARY
     NAMES dnnl
-    PATHS
-        "${Python_PREFIX}/Library/lib"
-        "${Python_PREFIX}/lib"
-        "${Python_PREFIX}/lib64"
-        "$ENV{ONEAPI_ROOT}/dnnl/latest/lib"
-        "C:/Program Files (x86)/Intel/oneAPI/dnnl/2025.2/lib"
-        "C:/Program Files/Intel/oneAPI/dnnl/2025.2/lib"
+    PATHS ${DNNL_LIBRARY_HINTS}
     NO_DEFAULT_PATH
 )
 if(NOT DNNL_LIBRARY)
@@ -100,7 +106,40 @@ if(NOT DNNL_LIBRARY)
         "oneDNN (dnnl) not found under ${Python_PREFIX}.\n"
         "Activate the lightx2v_kernel conda env before building.")
 endif()
+set(DNNL_INCLUDE_HINTS
+    "${Python_PREFIX}/include"
+    "$ENV{ONEAPI_ROOT}/dnnl/latest/include"
+)
+if(WIN32)
+    list(APPEND DNNL_INCLUDE_HINTS
+        "C:/Program Files (x86)/Intel/oneAPI/dnnl/latest/include"
+        "C:/Program Files/Intel/oneAPI/dnnl/latest/include"
+    )
+endif()
+find_path(DNNL_INCLUDE_DIR
+    NAMES oneapi/dnnl/dnnl.hpp
+    PATHS ${DNNL_INCLUDE_HINTS}
+    NO_DEFAULT_PATH
+)
+if(NOT DNNL_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "oneDNN headers not found for ${DNNL_LIBRARY}.\n"
+        "Install matching oneDNN development headers under ${Python_PREFIX}.")
+endif()
 message(STATUS "Found oneDNN: ${DNNL_LIBRARY}")
+message(STATUS "Found oneDNN headers: ${DNNL_INCLUDE_DIR}")
+
+# Torch ships its own oneDNN headers, which can be newer than the separately
+# linked libdnnl runtime. Use narrow wrappers for just the oneDNN entry headers;
+# adding the whole prefix first would also override the compiler's SYCL headers.
+set(DNNL_SHIM_DIR "${CMAKE_BINARY_DIR}/dnnl_include/oneapi/dnnl")
+file(MAKE_DIRECTORY "${DNNL_SHIM_DIR}")
+foreach(DNNL_HEADER dnnl.hpp dnnl_sycl.hpp)
+    file(WRITE "${DNNL_SHIM_DIR}/${DNNL_HEADER}"
+        "#pragma once\n#include \"${DNNL_INCLUDE_DIR}/oneapi/dnnl/${DNNL_HEADER}\"\n")
+endforeach()
+target_include_directories(${MODULE_NAME} BEFORE PRIVATE
+    "${CMAKE_BINARY_DIR}/dnnl_include")
 
 # ESIMD SDP library (must be built before configuring this project).
 # Windows links against the DLL import library; Linux links against the shared
