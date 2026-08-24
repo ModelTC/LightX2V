@@ -129,17 +129,27 @@ endif()
 message(STATUS "Found oneDNN: ${DNNL_LIBRARY}")
 message(STATUS "Found oneDNN headers: ${DNNL_INCLUDE_DIR}")
 
-# Torch ships its own oneDNN headers, which can be newer than the separately
-# linked libdnnl runtime. Use narrow wrappers for just the oneDNN entry headers;
-# adding the whole prefix first would also override the compiler's SYCL headers.
-set(DNNL_SHIM_DIR "${CMAKE_BINARY_DIR}/dnnl_include/oneapi/dnnl")
-file(MAKE_DIRECTORY "${DNNL_SHIM_DIR}")
-foreach(DNNL_HEADER dnnl.hpp dnnl_sycl.hpp)
-    file(WRITE "${DNNL_SHIM_DIR}/${DNNL_HEADER}"
-        "#pragma once\n#include \"${DNNL_INCLUDE_DIR}/oneapi/dnnl/${DNNL_HEADER}\"\n")
+# Torch may ship a different oneDNN version from the separately linked runtime.
+# Wrap the complete oneDNN public header tree so transitive includes cannot fall
+# back to Torch's headers. Adding the whole prefix first could also override the
+# compiler's SYCL headers.
+set(DNNL_HEADER_ROOT "${DNNL_INCLUDE_DIR}/oneapi/dnnl")
+set(DNNL_SHIM_ROOT "${CMAKE_BINARY_DIR}/dnnl_include")
+file(GLOB_RECURSE DNNL_PUBLIC_HEADERS
+    RELATIVE "${DNNL_INCLUDE_DIR}"
+    "${DNNL_HEADER_ROOT}/*.h"
+    "${DNNL_HEADER_ROOT}/*.hpp"
+)
+foreach(DNNL_HEADER IN LISTS DNNL_PUBLIC_HEADERS)
+    get_filename_component(DNNL_HEADER_DIR "${DNNL_HEADER}" DIRECTORY)
+    file(MAKE_DIRECTORY "${DNNL_SHIM_ROOT}/${DNNL_HEADER_DIR}")
+    file(TO_CMAKE_PATH
+        "${DNNL_INCLUDE_DIR}/${DNNL_HEADER}" DNNL_HEADER_SOURCE)
+    file(WRITE "${DNNL_SHIM_ROOT}/${DNNL_HEADER}"
+        "#pragma once\n#include \"${DNNL_HEADER_SOURCE}\"\n")
 endforeach()
 target_include_directories(${MODULE_NAME} BEFORE PRIVATE
-    "${CMAKE_BINARY_DIR}/dnnl_include")
+    "${DNNL_SHIM_ROOT}")
 
 # ESIMD SDP library (must be built before configuring this project).
 # Windows links against the DLL import library; Linux links against the shared
