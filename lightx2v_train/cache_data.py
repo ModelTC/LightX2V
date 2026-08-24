@@ -1,11 +1,12 @@
 import argparse
 
 import torch
+from loguru import logger
+
 from lightx2v_train.data import build_data, build_sample_processor, prepare_data
 from lightx2v_train.model_zoo import build_model
 from lightx2v_train.runtime import cleanup_distributed, init_distributed, load_config, setup_logger
 from lightx2v_train.trainers import build_trainer
-from loguru import logger
 
 
 def parse_args():
