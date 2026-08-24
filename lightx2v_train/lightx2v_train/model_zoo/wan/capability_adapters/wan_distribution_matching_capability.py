@@ -4,6 +4,7 @@ import torch
 
 from lightx2v_train.model_zoo.capability_adapters.common import (
     GenericDistributionMatchingCapability,
+    _cached_condition,
     _negative_prompt,
     _require_single_prompt,
     _require_singleton_tensor,
@@ -68,8 +69,8 @@ class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
         broadcast,
     ):
         conditioning = batch["conditioning"]
-        positive = conditioning.get("positive")
-        if positive is None:
+        cached_condition = _cached_condition(batch, self.model)
+        if cached_condition is None:
             return super().encode_conditions(
                 batch,
                 negative_prompt,
@@ -77,10 +78,14 @@ class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
                 broadcast,
             )
         with torch.no_grad():
-            condition = self.prepare_cached_condition(positive)
+            condition = self.prepare_cached_condition(cached_condition)
             if guidance_scale > 1:
-                cached_negative = conditioning.get("negative")
-                if cached_negative is not None:
+                if "negative" in conditioning:
+                    cached_negative = _cached_condition(
+                        batch,
+                        self.model,
+                        role="negative",
+                    )
                     negative = self.prepare_cached_condition(cached_negative)
                 else:
                     scalar = _require_single_prompt(conditioning.get("prompt", ""))

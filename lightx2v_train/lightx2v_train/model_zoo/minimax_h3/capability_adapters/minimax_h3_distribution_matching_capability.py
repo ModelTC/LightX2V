@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from lightx2v_train.model_capabilities import DistributionMatchingProfile
 from lightx2v_train.model_zoo.capability_adapters.common import (
     GenericDistributionMatchingCapability,
+    _cached_condition,
     _require_single_prompt,
     _require_singleton_tensor,
 )
@@ -166,9 +167,9 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         del negative_prompt
         if guidance_scale != 1.0:
             raise ValueError("MiniMax-H3 is guidance-distilled; training.teacher.guidance_scale must be 1.0.")
-        positive = batch["conditioning"].get("positive")
+        cached_condition = _cached_condition(batch, self.model)
         with torch.no_grad():
-            condition = self.model.encode_condition(batch) if positive is None else self.model.prepare_text_condition(positive)
+            condition = self.model.encode_condition(batch) if cached_condition is None else self.model.prepare_text_condition(cached_condition)
         return broadcast(condition), None
 
     def predict_velocity(self, latents, sigma, condition):

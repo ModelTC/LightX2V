@@ -113,10 +113,6 @@ class DmdTrainer(_DmdRuntime):
             mode="standard",
             num_train_timestep=self.num_train_timestep,
         )
-        if self.real_data_fake_trick.enabled:
-            train_data_name = self.config["data"]["train"].get("name")
-            if train_data_name != "video_dataset":
-                raise ValueError("Real-data fake training requires data.train.name=video_dataset.")
         self.fake_real_train_type = self.fake_train_type
         self.fake_real_lora_config = copy.deepcopy(self.fake_lora_config)
         self.fake_real_optimizer_config = copy.deepcopy(self.fake_optimizer_config)
