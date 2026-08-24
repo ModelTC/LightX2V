@@ -819,26 +819,26 @@ class MiniMaxH3Qwen3VLTextEncoder:
         return weight_map
 
     @staticmethod
-    def _adopt_pageable_weight(module, name, tensor):
-        """Keep a checkpoint-backed CPU tensor without making a pinned copy.
+    def _adopt_pageable_weights(module, tensors):
+        """Keep checkpoint-backed CPU tensors without making pinned copies.
 
-        MiniMax-H3 block offload only needs an immutable CPU source for each
-        device-buffer copy.  Retaining the safetensors-backed storage keeps
-        those pages reclaimable by the OS; the generic loader would instead
-        copy every tensor into unswappable pinned memory.
+        Retaining safetensors-backed storage keeps those pages reclaimable by
+        the OS; the generic loader instead copies tensors into unswappable
+        pinned memory.
         """
         storage = unwrap_tp_linear(module)
-        matches = [entry for entry in storage.base_attrs if entry[0] == name]
-        if len(matches) != 1:
-            raise RuntimeError(f"Cannot bind checkpoint-backed tensor {name}: matching base attrs={matches}")
-        _, attr_name, transpose = matches[0]
-        if transpose:
-            tensor = tensor.t()
-        setattr(storage, f"pin_{attr_name}", tensor)
-        setattr(storage, attr_name, None)
+        for name, attr_name, transpose in storage.base_attrs:
+            tensor = tensors.pop(name)
+            if transpose:
+                tensor = tensor.t()
+            setattr(storage, f"pin_{attr_name}", tensor)
+            setattr(storage, attr_name, None)
+        if hasattr(storage, "post_process"):
+            storage.post_process()
 
     @classmethod
     def _load_native_weights(cls, backbone, text_encoder_path, text_config):
+        text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
         modules = dict(backbone.named_weight_modules())
         expected_shapes = cls._expected_weight_shapes(text_config)
         if modules.keys() != expected_shapes.keys():
@@ -878,10 +878,11 @@ class MiniMaxH3Qwen3VLTextEncoder:
             raise ValueError(f"MiniMax-H3 Qwen3-VL weights must use one floating dtype, got {sorted(checkpoint_dtypes)}")
 
         logger.info(
-            "Loading {} native Qwen3-VL tensors (embedding + layers 0..{}) from {} shards",
+            "Loading {} native Qwen3-VL tensors (embedding + layers 0..{}) from {} shards with {} host weights",
             len(modules),
             MINIMAX_H3_TEXT_ENCODER_LAYER - 1,
             len(by_shard),
+            "pinned" if text_encoder_host_pinned else "pageable",
         )
         for shard_index, shard_name in enumerate(sorted(by_shard), start=1):
             shard_path = root / shard_name
@@ -904,10 +905,10 @@ class MiniMaxH3Qwen3VLTextEncoder:
                         # remain the same common-op path, only the transfer is
                         # synchronous when pinning is unavailable.
                         module.pin_weight = one_tensor.pop(name)
-                    elif backbone.block_offload:
-                        cls._adopt_pageable_weight(module, name, one_tensor.pop(name))
-                    else:
+                    elif text_encoder_host_pinned:
                         module.load(one_tensor)
+                    else:
+                        cls._adopt_pageable_weights(module, one_tensor)
                     if one_tensor:
                         raise RuntimeError(f"LightX2V weight loader did not consume tensor {name}")
 
@@ -918,6 +919,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     @staticmethod
     def _load_quantized_weights(backbone, checkpoint_path):
+        text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
         modules = dict(backbone.named_weight_modules())
         tensor_names = {}
         for primary_name, module in modules.items():
@@ -929,7 +931,12 @@ class MiniMaxH3Qwen3VLTextEncoder:
         if not checkpoint_path.is_file():
             raise FileNotFoundError(f"MiniMax-H3 quantized text encoder checkpoint was not found: {checkpoint_path}")
 
-        logger.info("Loading {} quantized Qwen3-VL tensors from {}", len(required_names), checkpoint_path)
+        logger.info(
+            "Loading {} quantized Qwen3-VL tensors from {} with {} host weights",
+            len(required_names),
+            checkpoint_path,
+            "pinned" if text_encoder_host_pinned else "pageable",
+        )
         with safe_open(checkpoint_path, framework="pt", device="cpu") as checkpoint:
             missing = sorted(required_names - set(checkpoint.keys()))
             if missing:
@@ -938,8 +945,10 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 tensors = {name: backbone.select_tp_shard(name, checkpoint.get_tensor(name)) for name in tensor_names[primary_name]}
                 if module is backbone.embed_tokens:
                     module.pin_weight = tensors.pop(primary_name)
-                else:
+                elif text_encoder_host_pinned:
                     module.load(tensors)
+                else:
+                    cls._adopt_pageable_weights(module, tensors)
                 if tensors:
                     raise RuntimeError(f"LightX2V weight loader did not consume tensors for {primary_name}: {sorted(tensors)}")
 
