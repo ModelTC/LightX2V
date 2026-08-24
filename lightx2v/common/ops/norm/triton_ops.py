@@ -936,6 +936,7 @@ def _rms_norm_tiled_onepass(
     EPS: tl.constexpr,
     BLOCK_SIZE_SEQ: tl.constexpr,
     BLOCK_SIZE_DIM: tl.constexpr,
+    MATCH_TORCH_RMS_CAST: tl.constexpr,
 ):
     seq_blk_id = tl.program_id(0)
     seq_id = seq_blk_id * BLOCK_SIZE_SEQ
@@ -952,10 +953,20 @@ def _rms_norm_tiled_onepass(
     mean_square = tl.sum(x * x, axis=1, keep_dims=True) / DIM
     rstd = tl.math.rsqrt(mean_square + EPS)
     w = tl.load(w_ptr + d_offset, mask=d_mask)
-    tl.store(y_blk, x * rstd * w, mask=mask)
+    if MATCH_TORCH_RMS_CAST:
+        y = (x * rstd).to(w.dtype) * w
+    else:
+        y = x * rstd * w
+    tl.store(y_blk, y, mask=mask)
 
 
-def rms_norm_kernel(x: torch.Tensor, w: torch.Tensor, eps: float = 1e-6):
+def rms_norm_kernel(
+    x: torch.Tensor,
+    w: torch.Tensor,
+    eps: float = 1e-6,
+    *,
+    match_torch_rms_cast: bool = False,
+):
     shape = x.shape
     x = x.contiguous()
     y = torch.empty_like(x)
@@ -976,6 +987,7 @@ def rms_norm_kernel(x: torch.Tensor, w: torch.Tensor, eps: float = 1e-6):
             eps,
             BLOCK_SIZE_DIM=triton.next_power_of_2(D),
             BLOCK_SIZE_SEQ=BLOCK_SIZE_SEQ,
+            MATCH_TORCH_RMS_CAST=match_torch_rms_cast,
         )
     return y
 

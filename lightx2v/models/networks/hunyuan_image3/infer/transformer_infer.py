@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops.attn import *  # noqa: F403,F401 - registers LightX2V attention kernels
 from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
+from lightx2v.common.ops.norm.triton_ops import fused_qk_rms_norm, rms_norm_kernel
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.hunyuan_image3.infer.utils import apply_linear, apply_mlp, apply_rotary_pos_emb, first_weight_device, repeat_kv, to_device
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
@@ -55,6 +56,11 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         self._attn_fallback_warnings = set()
         self._sp_gather_buffers = {}
         self._pre_infer_device_cache = {}
+        self.ar_decode_use_triton_rms_norm = bool(config.get("ar_decode_use_triton_rms_norm", False))
+        self.ar_decode_use_fused_qk_rms_norm = bool(config.get("ar_decode_use_fused_qk_rms_norm", False))
+        self.ar_decode_use_compact_moe_router = bool(config.get("ar_decode_use_compact_moe_router", False))
+        self.ar_decode_overlap_shared_expert = bool(config.get("ar_decode_overlap_shared_expert", False))
+        self._ar_shared_expert_streams = {}
         if config.get("seq_parallel", False):
             self.seq_p_group = config.get("device_mesh").get_group(mesh_dim="seq_p")
             self.sequence_parallel_attn_type = str(config["parallel"].get("seq_p_attn_type", "kv_all_gather")).strip().lower().replace("-", "_")
@@ -101,6 +107,58 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         if self.parallel_context is not None:
             return self.parallel_context.active_seq_parallel
         return self.seq_p_group is not None
+
+    def _is_single_token_ar_decode(self, tensor):
+        return self._active_phase() == "ar" and tensor.ndim >= 2 and tensor.shape[-2] == 1
+
+    @staticmethod
+    def _rms_weight(norm):
+        if not getattr(norm, "has_diff", False) and not getattr(norm, "has_lora_branch", False):
+            return norm.weight
+        return norm._get_actual_weight()
+
+    def _apply_block_rms_norm(self, norm, hidden_states):
+        if self.ar_decode_use_triton_rms_norm and self._is_single_token_ar_decode(hidden_states) and hidden_states.is_cuda:
+            weight = self._rms_weight(norm)
+            if weight is not None:
+                return rms_norm_kernel(
+                    hidden_states,
+                    weight,
+                    norm.eps,
+                    match_torch_rms_cast=True,
+                )
+        return norm.apply(hidden_states)
+
+    def _apply_attention_qk_norm(self, phase, query_states, key_states):
+        norm_q = getattr(phase, "query_layernorm", None)
+        norm_k = getattr(phase, "key_layernorm", None)
+        if norm_q is None:
+            return query_states, key_states
+        if (
+            norm_k is not None
+            and self.ar_decode_use_fused_qk_rms_norm
+            and self._is_single_token_ar_decode(query_states)
+            and query_states.is_cuda
+            and key_states.is_cuda
+            and query_states.shape[-1] == key_states.shape[-1]
+            and norm_q.eps == norm_k.eps
+        ):
+            q_shape = query_states.shape
+            k_shape = key_states.shape
+            head_dim = q_shape[-1]
+            query_states, key_states = fused_qk_rms_norm(
+                query_states.reshape(-1, head_dim),
+                key_states.reshape(-1, head_dim),
+                self._rms_weight(norm_q),
+                self._rms_weight(norm_k),
+                norm_q.eps,
+                match_torch_rms_cast=True,
+            )
+            return query_states.reshape(q_shape), key_states.reshape(k_shape)
+        query_states = norm_q.apply(query_states)
+        if norm_k is not None:
+            key_states = norm_k.apply(key_states)
+        return query_states, key_states
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -429,7 +487,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         custom_pos_emb = self._cached_pre_infer_to_device("custom_pos_emb", pre_infer_out.custom_pos_emb, device)
 
         residual = hidden_states
-        normed = attention_phase.input_layernorm.apply(hidden_states)
+        normed = self._apply_block_rms_norm(attention_phase.input_layernorm, hidden_states)
         attn_out = self.infer_attention(
             block_idx,
             attention_phase,
@@ -445,7 +503,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         hidden_states = residual + attn_out
 
         residual = hidden_states
-        normed = mlp_phase.post_attention_layernorm.apply(hidden_states)
+        normed = self._apply_block_rms_norm(mlp_phase.post_attention_layernorm, hidden_states)
         mlp_out = self.infer_mlp(mlp_phase, normed)
         return residual + mlp_out
 
@@ -487,8 +545,7 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
             query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if getattr(phase, "query_layernorm", None) is not None:
-            query_states = phase.query_layernorm.apply(query_states)
-            key_states = phase.key_layernorm.apply(key_states)
+            query_states, key_states = self._apply_attention_qk_norm(phase, query_states, key_states)
 
         query_states = query_states.to(value_states.dtype)
         key_states = key_states.to(value_states.dtype)
@@ -705,13 +762,32 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
         if moe.moe_backend == "multi_micro" and active_phase == "denoise" and compute_dtype != torch.bfloat16:
             raise TypeError(f"HunyuanImage3 multi_micro requires BF16 inference; got compute dtype {compute_dtype}.")
 
+        shared_mlp = getattr(moe, "shared_mlp", None)
+        overlap_shared = self.ar_decode_overlap_shared_expert and shared_mlp is not None and self._is_single_token_ar_decode(hidden_states) and hidden_states.is_cuda
+        shared_out = None
+        shared_stream = None
+        main_stream = None
+        if overlap_shared:
+            main_stream = torch.cuda.current_stream(hidden_states.device)
+            shared_stream = self._ar_shared_expert_stream(hidden_states.device)
+            shared_stream.wait_stream(main_stream)
+            with torch.cuda.stream(shared_stream):
+                shared_out = self._apply_phase_mlp(
+                    shared_mlp.gate_and_up_proj,
+                    shared_mlp.down_proj,
+                    hidden_states,
+                )
+
         flat, topk_weight, topk_idx = self._moe_topk(moe, hidden_states)
         fused_input = flat.to(dtype=compute_dtype).contiguous()
         fused_moe = moe.get_fused_moe(active_phase, fused_input.device, compute_dtype)
         output = fused_moe.apply(fused_input, topk_idx, topk_weight).reshape_as(hidden_states).to(original_dtype)
 
-        if getattr(moe, "shared_mlp", None) is not None:
-            shared_out = self._apply_phase_mlp(moe.shared_mlp.gate_and_up_proj, moe.shared_mlp.down_proj, hidden_states)
+        if shared_mlp is not None:
+            if overlap_shared:
+                main_stream.wait_stream(shared_stream)
+            else:
+                shared_out = self._apply_phase_mlp(shared_mlp.gate_and_up_proj, shared_mlp.down_proj, hidden_states)
             output = output + shared_out.to(output.dtype)
 
         tp_group, _, tp_size, _ = self._active_tp_state()
@@ -727,6 +803,20 @@ class HunyuanImage3TransformerInfer(BaseTransformerInfer):
     def _moe_topk(self, moe, hidden_states):
         flat = hidden_states.reshape(-1, hidden_states.shape[-1])
         logits = apply_linear(moe.gate, flat)
+        if self.ar_decode_use_compact_moe_router and self._is_single_token_ar_decode(hidden_states):
+            topk_logits, topk_idx = torch.topk(logits, moe.moe_topk, dim=-1)
+            return flat, torch.softmax(topk_logits, dim=-1), topk_idx
         topk_weight, topk_idx = torch.topk(torch.softmax(logits, dim=-1), moe.moe_topk, dim=-1)
         topk_weight = topk_weight / torch.clamp(topk_weight.sum(dim=-1, keepdim=True), min=1e-8)
         return flat, topk_weight, topk_idx
+
+    def _ar_shared_expert_stream(self, device):
+        device = torch.device(device)
+        key = (device.type, device.index)
+        stream = self._ar_shared_expert_streams.get(key)
+        if stream is None:
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("HunyuanImage3 shared-expert overlap stream must be initialized before CUDA Graph capture.")
+            stream = torch.cuda.Stream(device=device)
+            self._ar_shared_expert_streams[key] = stream
+        return stream

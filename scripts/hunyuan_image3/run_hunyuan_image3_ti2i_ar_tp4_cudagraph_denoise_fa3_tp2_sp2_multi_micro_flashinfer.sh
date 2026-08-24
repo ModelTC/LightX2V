@@ -12,6 +12,8 @@ export TORCH_NCCL_ASYNC_ERROR_HANDLING=0
 
 source "${lightx2v_path}/scripts/base/base.sh"
 export PROFILING_DEBUG_LEVEL=0
+export PYTORCH_ALLOC_CONF="backend:native,expandable_segments:False"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_ALLOC_CONF}"
 
 torchrun --standalone --nproc_per_node=4 -m lightx2v.infer \
     --model_cls hunyuan_image3 \

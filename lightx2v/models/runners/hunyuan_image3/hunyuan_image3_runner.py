@@ -901,11 +901,26 @@ class HunyuanImage3Runner(DefaultRunner):
             logits = logits / temperature
 
         top_k = int(generation_options.get("text_top_k", self.config.get("text_top_k", getattr(self.hunyuan_generation_config, "top_k", 0))) or 0)
+        sampling_impl = str(generation_options.get("text_sampling_impl", self.config.get("text_sampling_impl", "pytorch"))).strip().lower()
+        if sampling_impl not in {"pytorch", "topk_compact"}:
+            raise ValueError(f"Unsupported HunyuanImage3 text_sampling_impl={sampling_impl!r}.")
+
+        top_p = float(generation_options.get("text_top_p", self.config.get("text_top_p", getattr(self.hunyuan_generation_config, "top_p", 1.0))))
+        if sampling_impl == "topk_compact" and 0 < top_k < logits.shape[-1]:
+            candidate_logits, candidate_indices = torch.topk(logits, top_k, dim=-1, sorted=True)
+            if 0.0 < top_p < 1.0:
+                cumulative_probs = torch.softmax(candidate_logits, dim=-1).cumsum(dim=-1)
+                sorted_remove = cumulative_probs > top_p
+                sorted_remove[..., 1:] = sorted_remove[..., :-1].clone()
+                sorted_remove[..., 0] = False
+                candidate_logits = candidate_logits.masked_fill(sorted_remove, torch.finfo(candidate_logits.dtype).min)
+            selected = torch.multinomial(torch.softmax(candidate_logits, dim=-1), num_samples=1, generator=generator)
+            return candidate_indices.gather(dim=-1, index=selected).squeeze(-1)
+
         if top_k > 0 and top_k < logits.shape[-1]:
             kth_values = torch.topk(logits, top_k, dim=-1).values[..., -1, None]
             logits = logits.masked_fill(logits < kth_values, torch.finfo(logits.dtype).min)
 
-        top_p = float(generation_options.get("text_top_p", self.config.get("text_top_p", getattr(self.hunyuan_generation_config, "top_p", 1.0))))
         if 0.0 < top_p < 1.0:
             sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
             cumulative_probs = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)

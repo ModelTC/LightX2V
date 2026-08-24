@@ -10,10 +10,11 @@
     "denoise_attn_impl": "flash_attn3",
     "flashinfer_autotune_mode": "auto",
     "flashinfer_autotune_cache_by_phase": {
-        "ar": "save_results/hunyuan_image3_flashinfer_autotune_t2i_ar_tp4.json"
+        "ar": "save_results/hunyuan_image3_flashinfer_autotune_t2i_ar_tp4_q1_optimized.json"
     },
     "flashinfer_tune_max_num_tokens": 16384,
     "flashinfer_tuning_buckets": [
+        1,
         128,
         256,
         512,
@@ -30,6 +31,10 @@
     "ar_decode_attn_impl": "flash_attn3_paged",
     "ar_kv_page_size": 16,
     "ar_flash_attn_max_num_splits": 32,
+    "ar_decode_use_triton_rms_norm": true,
+    "ar_decode_use_fused_qk_rms_norm": true,
+    "ar_decode_use_compact_moe_router": true,
+    "ar_decode_overlap_shared_expert": true,
     "enable_ar_custom_all_reduce": true,
     "ar_custom_all_reduce_max_size_bytes": 8388608,
     "ar_custom_all_reduce_skip_p2p_check": true,
@@ -57,6 +62,7 @@
     "use_system_prompt": "en_unified",
     "max_new_tokens": 2048,
     "text_do_sample": true,
+    "text_sampling_impl": "topk_compact",
     "text_top_k": 1024,
     "text_top_p": 0.95,
     "text_temperature": 0.6
