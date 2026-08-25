@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=
-model_path=
+lightx2v_path=/data/wangshankun/LightX2V
+model_path=/data/wangshankun/models/h3/MiniMax-H3
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
