@@ -124,6 +124,7 @@ try:
 except ImportError:
     marlin_cuda_quant = None
 
+
 class MMWeightTemplate(metaclass=ABCMeta):
     def __init__(
         self,

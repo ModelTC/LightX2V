@@ -143,9 +143,7 @@ def test_cache_noncontiguous_and_e5m2():
     qweight, scales = quant_fp8_per_n(weight)
     bias = torch.randn([N], dtype=torch.float16, device="xpu")
 
-    ref = torch.nn.functional.linear(
-        x, qweight.to(torch.float16) * scales.to(torch.float16), bias
-    )
+    ref = torch.nn.functional.linear(x, qweight.to(torch.float16) * scales.to(torch.float16), bias)
     out = sycl_kernels.onednn_w8a16_fp8(x, qweight, scales, bias)
     # The second invocation must reuse the descriptor and primitive.
     out_cached = sycl_kernels.onednn_w8a16_fp8(x, qweight, scales, bias)
@@ -157,9 +155,7 @@ def test_cache_noncontiguous_and_e5m2():
     e5_max = torch.finfo(torch.float8_e5m2).max
     weight_f32 = torch.randn([N, K], dtype=torch.float32, device="xpu")
     e5_scales = (weight_f32.abs().amax(dim=1) / e5_max).clamp(min=1e-12)
-    e5_weight = (weight_f32 / e5_scales[:, None]).clamp(
-        -e5_max, e5_max
-    ).to(torch.float8_e5m2)
+    e5_weight = (weight_f32 / e5_scales[:, None]).clamp(-e5_max, e5_max).to(torch.float8_e5m2)
     x_bf16 = torch.randn([M, K], dtype=torch.bfloat16, device="xpu")
     e5_out = sycl_kernels.onednn_w8a16_fp8(x_bf16, e5_weight, e5_scales)
     e5_ref = torch.nn.functional.linear(
@@ -172,11 +168,7 @@ def test_cache_noncontiguous_and_e5m2():
     print("=" * 70)
     print("Cache, non-contiguous input, and FP8 E5M2")
     print("=" * 70)
-    print(
-        f"  cache hits={hits} misses={misses} size={size}; "
-        f"E4M3={'PASS' if e4_ok else 'FAIL'}; "
-        f"E5M2={'PASS' if e5_ok else 'FAIL'}"
-    )
+    print(f"  cache hits={hits} misses={misses} size={size}; E4M3={'PASS' if e4_ok else 'FAIL'}; E5M2={'PASS' if e5_ok else 'FAIL'}")
     print()
     return passed
 
