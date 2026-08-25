@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.networks.bagel.sensenova_tasks import OMNI_VISION_SUBTASK_CHOICES
+from lightx2v.models.networks.wan.animate2_identity import WAN_ANIMATE2_MODEL_ID
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
 from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner  # noqa: F401
 from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: F401
@@ -115,7 +116,7 @@ def main():
             "longcat_image",
             "cosmos3",
             "wan2.2_animate",
-            "wan22_animate2_distilled",
+            WAN_ANIMATE2_MODEL_ID,
             "wan2.2_s2v",
             "hunyuan_video_1.5",
             "hunyuan_video_1.5_distill",
@@ -341,8 +342,8 @@ def main():
     parser.add_argument("--mux_audio_video_path", type=str, default=None, help="(v2av, optional) After saving, mux audio from this file into the output mp4 (ffmpeg). ")
 
     args = parser.parse_args()
-    if args.model_cls == "wan22_animate2_distilled" and args.seed < 0:
-        parser.error("wan22_animate2_distilled requires a non-negative --seed")
+    if args.model_cls == WAN_ANIMATE2_MODEL_ID and args.seed < 0:
+        parser.error(f"{WAN_ANIMATE2_MODEL_ID} requires a non-negative --seed")
     seed_all(args.seed)
 
     # set config

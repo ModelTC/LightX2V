@@ -16,6 +16,7 @@ except ImportError:
     VideoReader = None
 
 from lightx2v.common.kvcache import KVCacheManager
+from lightx2v.models.networks.wan.animate2_identity import WAN_ANIMATE2_MODEL_ID
 from lightx2v.models.networks.wan.animate2_model import WanAnimate2Model
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.animate2 import WanAnimate2Scheduler
@@ -32,10 +33,10 @@ class _Animate2VideoRecorder(VideoRecorder):
         self.returncode = None
 
     def start_ffmpeg_process_local(self):
-        output_pix_fmt = "yuv420p" if self.width % 2 == 0 and self.height % 2 == 0 else "yuv444p"
-        if output_pix_fmt != "yuv420p":
+        needs_even_padding = self.width % 2 != 0 or self.height % 2 != 0
+        if needs_even_padding:
             logger.warning(
-                "Wan-Animate-2 stream output is {}x{}; using yuv444p to preserve the exact crop.",
+                "Wan-Animate-2 stream output is {}x{}; padding to even dimensions for yuv420p compatibility.",
                 self.width,
                 self.height,
             )
@@ -69,15 +70,21 @@ class _Animate2VideoRecorder(VideoRecorder):
             "zerolatency",
             "-g",
             str(max(1, round(self.fps))),
-            "-pix_fmt",
-            output_pix_fmt,
-            "-f",
-            "mp4",
-            self.livestream_url,
-            "-y",
-            "-loglevel",
-            self.ffmpeg_log_level,
         ]
+        if needs_even_padding:
+            ffmpeg_cmd.extend(["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"])
+        ffmpeg_cmd.extend(
+            [
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "mp4",
+                self.livestream_url,
+                "-y",
+                "-loglevel",
+                self.ffmpeg_log_level,
+            ]
+        )
         try:
             self.ffmpeg_process = subprocess.Popen(ffmpeg_cmd)
             logger.info("Wan-Animate-2 FFmpeg stream started with PID: {}", self.ffmpeg_process.pid)
@@ -161,7 +168,7 @@ class _Animate2VideoRecorder(VideoRecorder):
         return self.returncode
 
 
-@RUNNER_REGISTER("wan22_animate2_distilled")
+@RUNNER_REGISTER(WAN_ANIMATE2_MODEL_ID)
 class WanAnimate2Runner(WanRunner):
     """Native LightX2V runner for Wan-Animate-2.
 
@@ -182,7 +189,7 @@ class WanAnimate2Runner(WanRunner):
         if self.config.get("enable_reuse", False):
             raise NotImplementedError("Wan-Animate-2 request reuse is not implemented for autoregressive inputs.")
         if self.config["task"] != "animate":
-            raise ValueError("wan22_animate2_distilled requires task='animate'.")
+            raise ValueError(f"{WAN_ANIMATE2_MODEL_ID} requires task='animate'.")
         if self.config.get("use_stream_vae", False):
             raise NotImplementedError("Wan-Animate-2 must drop its leading latent before Wan VAE decode; use_stream_vae is not supported.")
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
@@ -633,7 +640,7 @@ class WanAnimate2Runner(WanRunner):
             "generation_y": generation_y,
             "generation_clip": self.generation_clip,
             "reference_kv_cache": self._build_reference_cache(reference_latents),
-            "origin_len": int(self.config["target_video_length"]),
+            "origin_len": clip_len,
             "origin_area": [int(self.config["target_width"]), int(self.config["target_height"])],
             "clip_len": clip_len,
         }
