@@ -32,7 +32,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import remove_weight_norm, weight_norm
+from torch.nn.utils import weight_norm
 
 from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     SafetensorsSubsetReport,
@@ -60,17 +60,6 @@ def _component_dir(model_path: str | Path, component: str) -> Path:
 def _wn_conv1d(*args, **kwargs) -> nn.Module:
     # The original checkpoint uses the legacy weight_g/weight_v spelling.
     return weight_norm(nn.Conv1d(*args, **kwargs))
-
-
-def _remove_inference_weight_norm(module: nn.Module) -> int:
-    """Fuse legacy weight-norm parameters after loading an inference model."""
-
-    removed = 0
-    for child in module.modules():
-        if hasattr(child, "weight_g") and hasattr(child, "weight_v"):
-            remove_weight_norm(child)
-            removed += 1
-    return removed
 
 
 def kaiser_sinc_filter1d(cutoff: float, half_width: float, kernel_size: int) -> torch.Tensor:
@@ -458,10 +447,6 @@ class MiniMaxH3AudioVAE(nn.Module):
             model = cls(config, device=device, cpu_offload=cpu_offload)
         model._reset_runtime_buffers()
         model.load_report = load_safetensors_subset(model, vae_dir)
-        # The checkpoint stores the training-time weight_g/weight_v layout.
-        # Fuse it once after loading, as BigVGAN's inference path does, instead
-        # of running the legacy weight_norm pre-hook before every XPU Conv1d.
-        _remove_inference_weight_norm(model)
         model.eval().requires_grad_(False)
         if not cpu_offload:
             model.to(model.execution_device)
