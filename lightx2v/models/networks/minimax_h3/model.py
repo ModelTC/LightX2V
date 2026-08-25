@@ -47,12 +47,17 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        self.h3_adaln_curve = bool(config.get("h3_adaln_curve", False))
         if GET_DTYPE() != torch.bfloat16:
             raise ValueError(
                 "MiniMax-H3 requires DTYPE=BF16. The native loader preserves the released checkpoint's 626 BF16 tensors and 12 FP32 projection/time/head tensors without dtype conversion."
             )
         if config.get("cfg_parallel", False) or config.get("enable_cfg", False):
             raise ValueError("MiniMax-H3 is guidance-distilled and does not have a CFG/unconditional branch")
+        if self.h3_adaln_curve and config.get("dit_quantized", False):
+            raise NotImplementedError(
+                "MiniMax-H3 AdaLN curve checkpoints do not support quantized DiT weights yet: quantized adaln_proj tensors require weight_scale-aware loading, while the curve path requires FP32 AdaLN projections. Use dit_quantized=false."
+            )
         if config.get("dit_quantized", False):
             quant_scheme = config.get("dit_quant_scheme", "Default")
             if quant_scheme not in H3_CHANNEL_QUANT_SCHEMES:
@@ -63,6 +68,11 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("MiniMax-H3 supports model and block CPU offload")
+        if self.h3_adaln_curve:
+            curve_grid = int(config.get("adaln_curve_grid", 0))
+            curve_basis = int(config.get("time_embed_dim", 0))
+            if curve_grid < 2 or curve_basis < 1:
+                raise ValueError(f"MiniMax-H3 curve checkpoints require adaln_curve_grid>=2 and time_embed_dim>=1; got grid={curve_grid}, basis={curve_basis}")
         if config.get("attn_type") == "sol_attn":
             reorder = str(config.get("sol_attn_setting", {}).get("reorder", "none")).lower()
             if reorder != "none":
@@ -90,6 +100,8 @@ class MiniMaxH3Model(BaseTransformerModel):
             "proj_out",
             "audio_proj_out",
         }
+        if self.h3_adaln_curve:
+            self.sensitive_layer.add("adaln_t_table")
         self._init_infer_class()
         self._init_weights()
         self._init_infer()

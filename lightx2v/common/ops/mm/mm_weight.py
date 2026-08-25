@@ -378,33 +378,18 @@ class MMWeightForceFp32(MMWeight):
     """
 
     def load(self, weight_dict):
-        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
-            device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
-            weight = device_tensors.get("weight")
-            bias = device_tensors.get("bias")
-            if weight is not None:
-                weight = weight.to(torch.float32)
-            if bias is not None:
-                bias = bias.to(torch.float32)
-            self.weight = weight
-            self.bias = bias
-            pin_weight = pin_tensors.get("weight")
-            pin_bias = pin_tensors.get("bias")
-            if pin_weight is not None:
-                pin_weight = pin_weight.to(torch.float32)
-            if pin_bias is not None:
-                pin_bias = pin_bias.to(torch.float32)
-            self.pin_weight = pin_weight
-            self.pin_bias = pin_bias
-        else:
-            # Fall back to the Default load path, then force fp32 on the
-            # tensors we expose (buffers for CUDA/CPU streams are left alone
-            # so the copy mechanics keep working; apply() will cast as needed).
-            super().load(weight_dict)
-            if getattr(self, "weight", None) is not None:
-                self.weight = self.weight.to(torch.float32)
-            if getattr(self, "bias", None) is not None:
-                self.bias = self.bias.to(torch.float32)
+        super().load(weight_dict)
+        for attr_name in (
+            "weight",
+            "bias",
+            "pin_weight",
+            "pin_bias",
+            "weight_cuda_buffer",
+            "bias_cuda_buffer",
+        ):
+            tensor = getattr(self, attr_name, None)
+            if tensor is not None:
+                setattr(self, attr_name, tensor.to(torch.float32))
 
 
 class MMWeightQuantTemplate(MMWeightTemplate):
