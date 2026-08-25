@@ -8,8 +8,12 @@
   "enable_cfg": false,
   "cpu_offload": true,
   "offload_granularity": "block",
-  "text_encoder_cpu_offload": true,
   "text_encoder_offload_granularity": "block",
+  "text_encoder_cpu_offload": true,
+  "text_encoder_tensor_parallel": true,
+  "text_encoder_quantized": true,
+  "text_encoder_quant_scheme": "fp8-sgl",
+  "text_encoder_quantized_ckpt": "/data/zhangbilang/models/minimax_h3/h3_quantized/fp8/minimax_h3_text_encoder_fp8_sgl.safetensors",
   "vae_cpu_offload": false,
   "vae_decode_parallel": true,
   "vae_sensitive_layer_dtype": "fp32",
@@ -31,8 +35,14 @@
   "rms_type": "sgl-kernel",
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
-  "use_compile": false,
+  "use_compile": true,
+  "use_adaln_cache": true,
   "vae_use_compile": true,
+  "vae_encode_parallel": true,
+  "vae_decode_tile_shape": {
+    "768x1344": [304, 320],
+    "544x960": [288, 304]
+  },
   "vae_attn_type": "sage_attn2",
   "video_flow_shift": 6.0,
   "audio_flow_shift": 3.0,
@@ -44,14 +54,14 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-sgl",
-  "dit_quantized_ckpt": "/data/models/h3/h3_quantized/fp8/minimax_h3_fp8.safetensors",
+  "dit_quantized_ckpt": "/data/wangshankun/models/h3/h3_quantized/fp8/minimax_h3_fp8.safetensors",
   "video_vae_quantized": true,
   "video_vae_quant_scheme": "fp8-sgl",
-  "video_vae_quantized_ckpt": "/data/models/h3/h3_quantized/fp8/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors",
+  "video_vae_quantized_ckpt": "/data/wangshankun/models/h3/h3_quantized/fp8/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors",
   "lora_dynamic_apply": true,
   "lora_configs": [
     {
-      "path": "/data/models/h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
+      "path": "/data/wangshankun/models/h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
       "strength": 1.0,
       "alpha": 128
     }
