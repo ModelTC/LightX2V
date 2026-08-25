@@ -20,6 +20,7 @@ from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.audio_io import load_audio_file
+from lightx2v.utils.audio_mux import MP4_AAC_BITRATE, mp4_audio_codec_args
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
 from lightx2v.utils.input_info import UNSET
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
@@ -1197,25 +1198,22 @@ class InfiniteTalkRunner(WanRunner):
             "1:a:0",
             "-shortest",
         ]
-        cmd = [
-            *base_cmd,
-            "-c:a",
-            "copy",
-            tmp_path,
-        ]
+        audio_args = mp4_audio_codec_args(audio_path, ffmpeg.get_ffmpeg_exe())
+        cmd = [*base_cmd, *audio_args, tmp_path]
         try:
             res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
-            if res.returncode != 0:
-                # Fallback to aac re-encoding (e.g. for WAV/PCM inputs)
+            if res.returncode != 0 and audio_args == ["-c:a", "copy"]:
                 cmd = [
                     *base_cmd,
                     "-c:a",
                     "aac",
                     "-b:a",
-                    "192k",
+                    MP4_AAC_BITRATE,
                     tmp_path,
                 ]
                 subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+            elif res.returncode != 0:
+                res.check_returncode()
             os.replace(tmp_path, video_path)
             logger.info(f"Muxed audio from {audio_path}")
         except subprocess.TimeoutExpired as exc:

@@ -17,6 +17,7 @@ from loguru import logger
 from torchvision.transforms import InterpolationMode
 from torchvision.transforms.functional import resize
 
+from lightx2v.utils.audio_mux import MP4_AAC_BITRATE, mp4_audio_codec_args
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -371,7 +372,8 @@ def mux_audio_from_video(
         source_video_path: Video file that contains the audio to copy.
         target_video_path: Video file that contains the video stream to keep.
         output_path: Optional output path. Defaults to target_video_path (in-place replace).
-        prefer_copy: If True, try stream copy for audio first, then fallback to AAC re-encode.
+        prefer_copy: If True, copy AAC audio and transcode other codecs to AAC. If False,
+            always transcode audio to AAC.
         trim_to_shortest: End the output when its shortest stream ends.
 
     Returns:
@@ -392,7 +394,7 @@ def mux_audio_from_video(
     if os.path.exists(tmp_path):
         os.remove(tmp_path)
 
-    def _run_mux(audio_codec: str, extra_args: Optional[list] = None) -> subprocess.CompletedProcess:
+    def _run_mux(audio_args: list[str]) -> subprocess.CompletedProcess:
         cmd = [
             ffmpeg_exe,
             "-y",
@@ -406,23 +408,21 @@ def mux_audio_from_video(
             "1:a?",
             "-c:v",
             "copy",
-            "-c:a",
-            audio_codec,
+            *audio_args,
         ]
         if trim_to_shortest:
             cmd.append("-shortest")
         # Be explicit about container format in case ffmpeg can't infer it
         cmd += ["-f", "mp4"]
-        if extra_args:
-            cmd += extra_args
         cmd.append(tmp_path)
         return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    result = _run_mux("copy") if prefer_copy else _run_mux("aac", ["-b:a", "192k"])
+    audio_args = mp4_audio_codec_args(source_video_path, ffmpeg_exe) if prefer_copy else ["-c:a", "aac", "-b:a", MP4_AAC_BITRATE]
+    result = _run_mux(audio_args)
 
-    if result.returncode != 0 and prefer_copy:
-        # Fallback to AAC re-encode if stream copy fails
-        result = _run_mux("aac", ["-b:a", "192k"])
+    if result.returncode != 0 and audio_args == ["-c:a", "copy"]:
+        # An unusual AAC stream may still be unsuitable for MP4 stream copying.
+        result = _run_mux(["-c:a", "aac", "-b:a", MP4_AAC_BITRATE])
 
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="ignore") if result.stderr else "Unknown error"
