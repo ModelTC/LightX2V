@@ -40,6 +40,9 @@ try:
         onednn_w4a16,
         onednn_w8a8_int8,
         onednn_w8a16_fp8,
+        fp8_cache_clear,
+        fp8_cache_stats,
+        fp8_failure_cache_stats,
         sdp,
     )
 except ImportError as _legacy_import_error:
@@ -50,6 +53,9 @@ except ImportError as _legacy_import_error:
     onednn_w4a16 = _legacy_extension_unavailable
     onednn_w8a8_int8 = _legacy_extension_unavailable
     onednn_w8a16_fp8 = _legacy_extension_unavailable
+    fp8_cache_clear = _legacy_extension_unavailable
+    fp8_cache_stats = _legacy_extension_unavailable
+    fp8_failure_cache_stats = _legacy_extension_unavailable
     sdp = _legacy_extension_unavailable
 from sycl_kernels.version import __version__  # noqa: E402, F401
 

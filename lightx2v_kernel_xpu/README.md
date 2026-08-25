@@ -19,7 +19,7 @@ Exposed as the Python package `sycl_kernels`:
 |----------|-------------|
 | `sdp(Q, K, V)` | ESIMD Flash Attention — `[B, L, H, 128]` fp16/bf16, PTL-H doubleGRF |
 | `onednn_w8a8_int8(x, qweight, scales[, bias])` | Dynamic W8A8 GEMM — rowwise INT8 activation quantization × INT8 weights |
-| `onednn_w8a16_fp8(x, qweight, scales[, bias])` | W8A16 GEMM — fp16/bf16 activations × FP8_E4M3 weights, per-column scale |
+| `onednn_w8a16_fp8(x, qweight, scales[, bias])` | Cached W8A16 GEMM — fp16/bf16/fp32 activations × FP8 E4M3/E5M2 weights, per-column scale |
 | `onednn_w4a16(x, weight, scales, zeros[, bias])` | W4A16 GEMM — fp16/bf16 activations × INT4 packed weights |
 
 Tested on **Intel Arc B390 GPU** (PTL-H / Xe2), PyTorch 2.9.1+xpu, oneAPI 2025.2.
@@ -136,13 +136,16 @@ out = sycl_kernels.onednn_w8a8_int8(x, qweight, scales)
 out = sycl_kernels.onednn_w8a8_int8(x, qweight, scales, bias)
 
 # ── W8A16 FP8 GEMM ────────────────────────────────────────────────────────────
-# x       : [M, K]  fp16 or bf16     on XPU
-# qweight : [N, K]  float8_e4m3fn    on XPU
+# x       : [M, K]  fp16/bf16/fp32   on XPU
+# qweight : [N, K]  float8_e4m3fn or float8_e5m2 on XPU
 # scales  : [N, 1]  fp32             on XPU  (per-output-channel absmax scale)
-# bias    : [N]     fp16/bf16        on XPU  (optional)
+# bias    : [N]     same dtype as x  on XPU  (optional)
 # Returns : [M, N]  same dtype as x
 out = sycl_kernels.onednn_w8a16_fp8(x, qweight, scales)
 out = sycl_kernels.onednn_w8a16_fp8(x, qweight, scales, bias)
+# Repeated shapes reuse cached oneDNN primitives. Known MiniMax-H3 large
+# projections are split along N to avoid unsupported full-size primitives.
+hits, misses, size = sycl_kernels.fp8_cache_stats()
 
 # ── W4A16 GEMM ────────────────────────────────────────────────────────────────
 # x      : [M, K]    fp16 or bf16    on XPU

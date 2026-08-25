@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 from safetensors import safe_open
 
+from lightx2v.common.ops.mm.mm_weight import MMWeightQuantTemplate as CommonMMWeightQuantTemplate
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 from lightx2v_platform.ops.mm.template import MMWeightQuantTemplate, MMWeightTemplate
@@ -135,6 +136,63 @@ class MMWeightInt8IntelXpu(MMWeightQuantTemplate):
             bias,
         )
         return output.reshape(*original_shape, self.weight.shape[0])
+
+
+@MM_WEIGHT_REGISTER("fp8-intel-xpu")
+class MMWeightFp8IntelXpu(CommonMMWeightQuantTemplate):
+    """Per-output-channel FP8 linear backed by the Intel XPU extension."""
+
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix=None,
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix,
+            lora_path,
+        )
+        self.load_func = self.load_fp8_perchannel_sym
+        self.weight_need_transpose = False
+
+    def apply(self, input_tensor):
+        if sycl_kernels is not None:
+            try:
+                return sycl_kernels.onednn_w8a16_fp8(
+                    input_tensor,
+                    self.weight,
+                    self.weight_scale.to(torch.float),
+                    self._get_actual_bias(),
+                )
+            except RuntimeError:
+                pass
+
+        infer_dtype = self.infer_dtype
+        squeeze_output = False
+        if input_tensor.dim() == 3 and input_tensor.shape[0] == 1:
+            input_tensor = input_tensor.squeeze(0)
+            squeeze_output = True
+        input_tensor = input_tensor.to(infer_dtype)
+        weight = self.weight.to(infer_dtype) * self.weight_scale.to(infer_dtype)
+        bias = self._get_actual_bias()
+        bias = bias.to(infer_dtype) if bias is not None else None
+        output = torch.nn.functional.linear(input_tensor, weight, bias)
+        if squeeze_output:
+            output = output.unsqueeze(0)
+        return output
 
 
 _TENSOR_PARALLEL_RMS_CLASS = None

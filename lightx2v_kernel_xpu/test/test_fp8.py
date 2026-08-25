@@ -1,7 +1,7 @@
 """
 Test: onednn_w8a16_fp8
-  Supported input dtypes: FP16 (optimised JIT on PTL), BF16 (ref kernel, slower)
-  Weight: FP8_E4M3, per-N scale
+  Supported input dtypes: FP16, BF16, and FP32
+  Weight: FP8 E4M3 or E5M2, per-N scale
 
 Shapes tested (LightX2V attention / FFN patterns):
   input [512, 4096]  × weight [4096,  4096]  → attention (to_q / to_k / to_v / to_out)
@@ -131,6 +131,48 @@ def test_bias(dtype: torch.dtype = torch.float16):
     return passed
 
 
+def test_cache_noncontiguous_and_e5m2():
+    """Exercise the optimized host path without allocating model-size weights."""
+    M, N, K = 16, 32, 64
+    sycl_kernels.fp8_cache_clear()
+
+    # Transpose produces a non-contiguous [M, K] view. The native entry point
+    # must materialize it before passing a dense descriptor to oneDNN.
+    x = torch.randn([K, M], dtype=torch.float16, device="xpu").t()
+    weight = torch.randn([N, K], dtype=torch.float16, device="xpu")
+    qweight, scales = quant_fp8_per_n(weight)
+    bias = torch.randn([N], dtype=torch.float16, device="xpu")
+
+    ref = torch.nn.functional.linear(x, qweight.to(torch.float16) * scales.to(torch.float16), bias)
+    out = sycl_kernels.onednn_w8a16_fp8(x, qweight, scales, bias)
+    # The second invocation must reuse the descriptor and primitive.
+    out_cached = sycl_kernels.onednn_w8a16_fp8(x, qweight, scales, bias)
+    hits, misses, size = sycl_kernels.fp8_cache_stats()
+
+    e4_ok = rel_rms(out, ref) < 0.03 and rel_rms(out_cached, ref) < 0.03
+    cache_ok = hits == 1 and misses == 1 and size == 1
+
+    e5_max = torch.finfo(torch.float8_e5m2).max
+    weight_f32 = torch.randn([N, K], dtype=torch.float32, device="xpu")
+    e5_scales = (weight_f32.abs().amax(dim=1) / e5_max).clamp(min=1e-12)
+    e5_weight = (weight_f32 / e5_scales[:, None]).clamp(-e5_max, e5_max).to(torch.float8_e5m2)
+    x_bf16 = torch.randn([M, K], dtype=torch.bfloat16, device="xpu")
+    e5_out = sycl_kernels.onednn_w8a16_fp8(x_bf16, e5_weight, e5_scales)
+    e5_ref = torch.nn.functional.linear(
+        x_bf16,
+        e5_weight.to(torch.bfloat16) * e5_scales[:, None].to(torch.bfloat16),
+    )
+    e5_ok = rel_rms(e5_out, e5_ref) < 0.03
+
+    passed = e4_ok and cache_ok and e5_ok
+    print("=" * 70)
+    print("Cache, non-contiguous input, and FP8 E5M2")
+    print("=" * 70)
+    print(f"  cache hits={hits} misses={misses} size={size}; E4M3={'PASS' if e4_ok else 'FAIL'}; E5M2={'PASS' if e5_ok else 'FAIL'}")
+    print()
+    return passed
+
+
 # ── benchmark ─────────────────────────────────────────────────────────────────
 
 
@@ -208,6 +250,7 @@ if __name__ == "__main__":
     ok &= test_correctness(torch.bfloat16)
     ok &= test_bias(torch.float16)
     ok &= test_bias(torch.bfloat16)
+    ok &= test_cache_noncontiguous_and_e5m2()
 
     if not no_bench:
         run_bench()
