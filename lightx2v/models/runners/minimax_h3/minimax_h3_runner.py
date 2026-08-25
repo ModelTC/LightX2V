@@ -98,6 +98,21 @@ class MiniMaxH3Runner(DefaultRunner):
     def __init__(self, config):
         if config.get("task") not in {"t2av", "i2av", "l2av", "fl2av", "ref2av"}:
             raise ValueError("MiniMax-H3 supports t2av/i2av/l2av/fl2av/ref2av")
+        empurple = config.get("h3_empurple") or {}
+        self.empurple_enabled = bool(empurple.get("enabled", False)) if isinstance(empurple, dict) else False
+        if self.empurple_enabled:
+            lora_configs = config.get("lora_configs") or []
+            if not config.get("lora_dynamic_apply", False) or len(lora_configs) != 1:
+                raise ValueError(
+                    "MiniMax-H3 EMPURPLE requires lora_dynamic_apply=true and exactly one lora_configs entry "
+                    "so teacher steps can use base weights and student steps can enable the distilled LoRA"
+                )
+            if config.get("use_compile", False):
+                raise ValueError(
+                    "MiniMax-H3 EMPURPLE currently requires use_compile=false because the teacher/student phase "
+                    "changes the runtime LoRA multiplier"
+                )
+            self.empurple_lora_base_strength = float(lora_configs[0].get("strength", 1.0))
         self.loaded_transformer_partition = "transformer_ref" if config["task"] == "ref2av" else "transformer"
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
@@ -131,6 +146,7 @@ class MiniMaxH3Runner(DefaultRunner):
 
                 for step_index in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
                     self.scheduler.step_pre(step_index)
+                    self._set_empurple_lora_for_step(step_index)
                     self.model.infer(self.inputs)
                     self.scheduler.step_post()
                 video_rows = self.scheduler.video_latents
@@ -185,6 +201,23 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def init_scheduler(self):
         self.scheduler = MiniMaxH3Scheduler(self.config)
+        if self.scheduler.empurple_enabled:
+            logger.info(
+                "MiniMax-H3 EMPURPLE schedule: teacher_prefix={}/{} NFE, student={} NFE, "
+                "handoff_base_sigma={:.6f}, handoff_video_sigma={:.6f}, handoff_audio_sigma={:.6f}",
+                self.scheduler.empurple_teacher_prefix_steps,
+                self.scheduler.empurple_teacher_num_inference_steps,
+                self.scheduler.empurple_student_num_inference_steps,
+                self.scheduler.empurple_handoff_base_sigma,
+                float(self.scheduler.empurple_handoff_video_sigma),
+                float(self.scheduler.empurple_handoff_audio_sigma),
+            )
+
+    def _set_empurple_lora_for_step(self, step_index):
+        if not self.scheduler.empurple_enabled:
+            return
+        runtime_strength = self.empurple_lora_base_strength * self.scheduler.lora_scale_for_step(step_index)
+        self.model.set_dynamic_lora_strength(runtime_strength)
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -562,9 +595,11 @@ class MiniMaxH3Runner(DefaultRunner):
                 metrics_labels=[step_index + 1, infer_steps],
             ):
                 self.check_stop()
-                logger.info(f"==> MiniMax-H3 step: {step_index + 1} / {infer_steps}")
+                phase = self.scheduler.phase_for_step(step_index)
+                logger.info(f"==> MiniMax-H3 step: {step_index + 1} / {infer_steps} ({phase})")
                 with ProfilingContext4DebugL1("step_pre"):
                     self.scheduler.step_pre(step_index)
+                    self._set_empurple_lora_for_step(step_index)
                 with ProfilingContext4DebugL1("🚀 infer_main"):
                     self.model.infer(self.inputs)
                 with ProfilingContext4DebugL1("step_post"):

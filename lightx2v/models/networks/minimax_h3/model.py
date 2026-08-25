@@ -264,12 +264,14 @@ class MiniMaxH3Model(BaseTransformerModel):
         self._register_dynamic_lora_weights(lora_weights, strength)
         self.lora_path = lora_path
         self.lora_strength = float(strength)
+        self._runtime_lora_strength = self.lora_strength
         offload_manager = getattr(getattr(self, "transformer_infer", None), "offload_manager", None)
         if offload_manager is not None:
             offload_manager.need_init_first_buffer = True
 
     def _remove_lora(self):
         super()._remove_lora()
+        self._runtime_lora_strength = None
         transformer_infer = getattr(self, "transformer_infer", None)
         if transformer_infer is not None:
             transformer_infer._clear_adaln_cache()
@@ -282,9 +284,40 @@ class MiniMaxH3Model(BaseTransformerModel):
         self._register_dynamic_lora_weights(lora_weights, strength)
         self.lora_path = lora_path
         self.lora_strength = float(strength)
+        self._runtime_lora_strength = self.lora_strength
         offload_manager = getattr(getattr(self, "transformer_infer", None), "offload_manager", None)
         if offload_manager is not None:
             offload_manager.need_init_first_buffer = True
+
+    def set_dynamic_lora_strength(self, strength):
+        """Change the registered H3 LoRA multiplier without reloading it."""
+        if not self.config.get("lora_dynamic_apply", False):
+            raise RuntimeError("MiniMax-H3 runtime LoRA strength changes require lora_dynamic_apply=true")
+        strength = float(strength)
+        if not math.isfinite(strength):
+            raise ValueError(f"MiniMax-H3 runtime LoRA strength must be finite, got {strength}")
+        if getattr(self, "_runtime_lora_strength", None) == strength:
+            return
+
+        registered = 0
+        for weight in self._iter_weight_objects(self.pre_weight, self.transformer_weights, self.post_weight):
+            if not getattr(weight, "has_lora_branch", False):
+                continue
+            current = getattr(weight, "lora_strength", None)
+            if isinstance(current, torch.Tensor):
+                current.fill_(strength)
+            else:
+                weight.lora_strength = strength
+            registered += 1
+        if not registered:
+            raise RuntimeError("MiniMax-H3 has no registered dynamic LoRA branches to scale")
+
+        self._runtime_lora_strength = strength
+        self.lora_strength = strength
+        transformer_infer = getattr(self, "transformer_infer", None)
+        if transformer_infer is not None:
+            transformer_infer._clear_adaln_cache()
+        logger.info("Set {} MiniMax-H3 dynamic LoRA branches to runtime strength={}", registered, strength)
 
     def _validate_tensor_parallel_config(self):
         if not self.use_tp:

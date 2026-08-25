@@ -1,3 +1,4 @@
+import math
 from dataclasses import replace
 
 import torch
@@ -27,6 +28,76 @@ def _make_schedule(num_grid_points: int, shift: float, device) -> tuple[torch.Te
     return sigmas, 1.0 - sigmas[:-1]
 
 
+def _shift_sigma(base_sigma: torch.Tensor, shift: float) -> torch.Tensor:
+    return shift * base_sigma / (1.0 + (shift - 1.0) * base_sigma)
+
+
+def _unshift_sigma(sigma: torch.Tensor, shift: float) -> torch.Tensor:
+    return sigma / (shift - (shift - 1.0) * sigma)
+
+
+def _make_retimed_schedule(start_sigma: torch.Tensor, num_inference_steps: int, shift: float, device) -> torch.Tensor:
+    """Build a shifted Euler grid that starts at an existing noisy latent.
+
+    EMPURPLE does not feed an already-denoised latent to the distilled model at
+    its original pure-noise timestep.  It retimes the complete few-step solver
+    so that its first sigma is the sigma of the reused latent.  MiniMax-H3 has
+    separate video/audio shifts, so this helper is applied once per modality.
+    """
+    if num_inference_steps < 1:
+        raise ValueError(f"MiniMax-H3 EMPURPLE student_num_inference_steps must be positive, got {num_inference_steps}")
+    if shift <= 0:
+        raise ValueError(f"MiniMax-H3 EMPURPLE student flow shift must be positive, got {shift}")
+
+    start_sigma_cpu = torch.as_tensor(start_sigma).detach().to(device="cpu", dtype=torch.float32).reshape(())
+    if not 0.0 < float(start_sigma_cpu) <= 1.0:
+        raise ValueError(f"MiniMax-H3 EMPURPLE handoff sigma must be in (0, 1], got {float(start_sigma_cpu)}")
+    start_base_sigma = _unshift_sigma(start_sigma_cpu, shift)
+    base_sigmas = torch.linspace(float(start_base_sigma), 0.0, num_inference_steps + 1, dtype=torch.float32, device="cpu")
+    sigmas = _shift_sigma(base_sigmas, shift)
+    # Preserve the teacher endpoint bit-for-bit at the phase boundary.
+    sigmas[0] = start_sigma_cpu
+    return sigmas.to(device)
+
+
+def _make_empurple_schedule(
+    *,
+    teacher_num_inference_steps: int,
+    teacher_prefix_steps: int,
+    student_num_inference_steps: int,
+    teacher_shift: float,
+    student_shift: float,
+    device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Join a base-model prefix and a retimed distilled-model schedule."""
+    if teacher_num_inference_steps < 1:
+        raise ValueError(
+            "MiniMax-H3 EMPURPLE teacher_num_inference_steps must be positive, "
+            f"got {teacher_num_inference_steps}"
+        )
+    if teacher_shift <= 0:
+        raise ValueError(f"MiniMax-H3 EMPURPLE teacher flow shift must be positive, got {teacher_shift}")
+    if not 1 <= teacher_prefix_steps < teacher_num_inference_steps:
+        raise ValueError(
+            "MiniMax-H3 EMPURPLE teacher_prefix_steps must be in "
+            f"[1, {teacher_num_inference_steps}), got {teacher_prefix_steps}"
+        )
+
+    # _make_schedule counts grid points, whereas this public EMPURPLE option
+    # deliberately counts model evaluations (NFE).
+    teacher_sigmas, _ = _make_schedule(teacher_num_inference_steps + 1, teacher_shift, device)
+    handoff_sigma = teacher_sigmas[teacher_prefix_steps]
+    student_sigmas = _make_retimed_schedule(
+        handoff_sigma,
+        student_num_inference_steps,
+        student_shift,
+        device,
+    )
+    # teacher_sigmas[:prefix] contains the inputs for the teacher evaluations;
+    # student_sigmas starts with their shared handoff endpoint.
+    return torch.cat((teacher_sigmas[:teacher_prefix_steps], student_sigmas)), handoff_sigma
+
+
 def _layout_to_device(layout: MiniMaxH3PackedSequence, device) -> MiniMaxH3PackedSequence:
     return replace(
         layout,
@@ -51,19 +122,93 @@ class MiniMaxH3Scheduler(BaseScheduler):
             raise ValueError(f"MiniMax-H3 h3_step_update must be 'reference_blend' or 'training_euler', got {self.step_update!r}")
         if self.video_shift <= 0 or self.audio_shift <= 0:
             raise ValueError("MiniMax-H3 flow shifts must be positive")
-        self.video_sigmas, self.video_timesteps = _make_schedule(self.num_grid_points, self.video_shift, AI_DEVICE)
-        self.audio_sigmas, self.audio_timesteps = _make_schedule(self.num_grid_points, self.audio_shift, AI_DEVICE)
+
+        empurple = config.get("h3_empurple") or {}
+        if not isinstance(empurple, dict):
+            raise ValueError("MiniMax-H3 h3_empurple must be a mapping")
+        self.empurple_enabled = bool(empurple.get("enabled", False))
+        if self.empurple_enabled:
+            self._init_empurple_schedule(empurple)
+        else:
+            self.video_sigmas, self.video_timesteps = _make_schedule(self.num_grid_points, self.video_shift, AI_DEVICE)
+            self.audio_sigmas, self.audio_timesteps = _make_schedule(self.num_grid_points, self.audio_shift, AI_DEVICE)
+            self.step_phases = ("student",) * int(self.video_timesteps.numel())
+            self.step_updates = (self.step_update,) * int(self.video_timesteps.numel())
+            self.step_lora_scales = (1.0,) * int(self.video_timesteps.numel())
         if self.video_timesteps.numel() != self.audio_timesteps.numel():
             raise ValueError("video and audio schedules collapsed to different step counts")
         # The user-facing value counts sigma grid points including terminal 0.
         # LightX2V's loop count is the number of model evaluations.
         self.infer_steps = int(self.video_timesteps.numel())
+        self.caching_records = [True] * self.infer_steps
         self.video_latents = None
         self.audio_latents = None
         self.video_noise_pred = None
         self.audio_noise_pred = None
         self.layout = None
         self.layout_cpu = None
+
+    def _init_empurple_schedule(self, empurple):
+        if self.num_grid_points < 2:
+            raise ValueError(f"MiniMax-H3 infer_steps must be at least 2, got {self.num_grid_points}")
+        self.empurple_student_num_inference_steps = self.num_grid_points - 1
+        self.empurple_teacher_num_inference_steps = int(empurple.get("teacher_num_inference_steps", 40))
+        self.empurple_teacher_prefix_steps = int(empurple.get("teacher_prefix_steps", 1))
+        self.empurple_teacher_video_shift = float(empurple.get("teacher_video_flow_shift", self.video_shift))
+        self.empurple_teacher_audio_shift = float(empurple.get("teacher_audio_flow_shift", self.audio_shift))
+        self.empurple_student_video_shift = float(empurple.get("student_video_flow_shift", self.video_shift))
+        self.empurple_student_audio_shift = float(empurple.get("student_audio_flow_shift", self.audio_shift))
+        self.empurple_teacher_step_update = empurple.get("teacher_step_update", "reference_blend")
+        self.empurple_student_step_update = empurple.get("student_step_update", self.step_update)
+        self.empurple_student_lora_scale = float(empurple.get("student_lora_scale", 1.0))
+        for name, value in (
+            ("teacher_step_update", self.empurple_teacher_step_update),
+            ("student_step_update", self.empurple_student_step_update),
+        ):
+            if value not in {"reference_blend", "training_euler"}:
+                raise ValueError(
+                    f"MiniMax-H3 h3_empurple.{name} must be 'reference_blend' or 'training_euler', got {value!r}"
+                )
+        if not math.isfinite(self.empurple_student_lora_scale) or self.empurple_student_lora_scale < 0.0:
+            raise ValueError(
+                "MiniMax-H3 h3_empurple.student_lora_scale must be non-negative, "
+                f"got {self.empurple_student_lora_scale}"
+            )
+
+        self.video_sigmas, self.empurple_handoff_video_sigma = _make_empurple_schedule(
+            teacher_num_inference_steps=self.empurple_teacher_num_inference_steps,
+            teacher_prefix_steps=self.empurple_teacher_prefix_steps,
+            student_num_inference_steps=self.empurple_student_num_inference_steps,
+            teacher_shift=self.empurple_teacher_video_shift,
+            student_shift=self.empurple_student_video_shift,
+            device=AI_DEVICE,
+        )
+        self.audio_sigmas, self.empurple_handoff_audio_sigma = _make_empurple_schedule(
+            teacher_num_inference_steps=self.empurple_teacher_num_inference_steps,
+            teacher_prefix_steps=self.empurple_teacher_prefix_steps,
+            student_num_inference_steps=self.empurple_student_num_inference_steps,
+            teacher_shift=self.empurple_teacher_audio_shift,
+            student_shift=self.empurple_student_audio_shift,
+            device=AI_DEVICE,
+        )
+        self.video_timesteps = 1.0 - self.video_sigmas[:-1]
+        self.audio_timesteps = 1.0 - self.audio_sigmas[:-1]
+        self.empurple_handoff_base_sigma = 1.0 - (
+            self.empurple_teacher_prefix_steps / self.empurple_teacher_num_inference_steps
+        )
+        teacher_count = self.empurple_teacher_prefix_steps
+        student_count = self.empurple_student_num_inference_steps
+        self.step_phases = ("teacher",) * teacher_count + ("student",) * student_count
+        self.step_updates = (self.empurple_teacher_step_update,) * teacher_count + (
+            self.empurple_student_step_update,
+        ) * student_count
+        self.step_lora_scales = (0.0,) * teacher_count + (self.empurple_student_lora_scale,) * student_count
+
+    def phase_for_step(self, step_index: int) -> str:
+        return self.step_phases[int(step_index)]
+
+    def lora_scale_for_step(self, step_index: int) -> float:
+        return self.step_lora_scales[int(step_index)]
 
     def prepare(
         self,
@@ -175,7 +320,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
             self.video_timesteps[self.step_index],
             self.video_sigmas,
             self.step_index,
-            self.step_update,
+            self.step_updates[self.step_index],
         )
         self.audio_latents[condition_audio_rows:] = self._step(
             self.audio_latents[condition_audio_rows:],
@@ -183,7 +328,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
             self.audio_timesteps[self.step_index],
             self.audio_sigmas,
             self.step_index,
-            self.step_update,
+            self.step_updates[self.step_index],
         )
 
     def clear(self):
