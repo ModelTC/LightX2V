@@ -2679,7 +2679,12 @@ class MMWeightFp8IntelXpu(MMWeightQuantTemplate):
 
         if sycl_kernels is not None:
             try:
-                return sycl_kernels.onednn_w8a16_fp8(input_tensor, self.weight, self.weight_scale.to(torch.float))
+                return sycl_kernels.onednn_w8a16_fp8(
+                    input_tensor,
+                    self.weight,
+                    self.weight_scale.to(torch.float),
+                    self._get_actual_bias(),
+                )
             except RuntimeError:
                 pass  # Fall through to torch dequantization path
 
@@ -2690,7 +2695,8 @@ class MMWeightFp8IntelXpu(MMWeightQuantTemplate):
             squeeze_output = True
         input_tensor = input_tensor.to(infer_dtype)
         weight_fp16 = self.weight.to(infer_dtype) * self.weight_scale.to(infer_dtype)
-        bias_fp16 = self.bias.to(infer_dtype) if hasattr(self, "bias") and self.bias is not None else None
+        bias = self._get_actual_bias()
+        bias_fp16 = bias.to(infer_dtype) if bias is not None else None
         output = torch.nn.functional.linear(input_tensor, weight_fp16, bias_fp16)
         if squeeze_output:
             output = output.unsqueeze(0)

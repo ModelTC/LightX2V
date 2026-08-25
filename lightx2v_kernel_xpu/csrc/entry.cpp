@@ -15,6 +15,7 @@
 //
 
 #include <optional>
+#include <tuple>
 #include <torch/extension.h>
 
 torch::Tensor onednn_w4a16(
@@ -39,6 +40,10 @@ torch::Tensor onednn_w8a16_fp8(
     std::optional<torch::Tensor> bias
 );
 
+void fp8_cache_clear();
+std::tuple<int64_t, int64_t, int64_t> fp8_cache_stats();
+std::tuple<int64_t, int64_t, int64_t> fp8_failure_cache_stats();
+
 torch::Tensor sdp_torch(
     torch::Tensor Q,
     torch::Tensor K,
@@ -52,9 +57,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("x"), py::arg("weight"), py::arg("scales"),
           py::arg("bias") = py::none());
     m.def("onednn_w8a16_fp8", &onednn_w8a16_fp8,
-          "onednn FP16 x FP8_E4M3 per-N-scale gemm",
+          "oneDNN W8A16 FP8 per-N-scale GEMM",
           py::arg("x"), py::arg("weight"), py::arg("scales"),
           py::arg("bias") = py::none());
+    m.def("fp8_cache_clear", &fp8_cache_clear,
+          "Clear cached oneDNN FP8 primitives and counters");
+    m.def("fp8_cache_stats", &fp8_cache_stats,
+          "Return FP8 primitive cache (hits, misses, size)");
+    m.def("fp8_failure_cache_stats", &fp8_failure_cache_stats,
+          "Return FP8 failure cache (failures, negative hits, size)");
     m.def("sdp", &sdp_torch,
           "ESIMD Flash Attention SDP [B,L,H,128] PTL-H (fp16/bf16)",
           py::arg("Q"), py::arg("K"), py::arg("V"));

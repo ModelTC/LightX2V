@@ -14,151 +14,388 @@
 // limitations under the License.
 //
 
-// FP16 activations × FP8_E4M3 weights GEMM via OneDNN
+// W8A16 GEMM via oneDNN.
 //
 // Layout
-//   A (activations) : [M, K]  FP16,       format_tag::ab
-//   B (weights)     : [N, K]  FP8_E4M3,   stored physically as [N,K],
-//                             logical [K,N] → format_tag::ba
-//   scale           : [N]     FP32,        per-output-channel
-//   C (output)      : [M, N]  FP16,       format_tag::ab
-//
-// Per-N scale → mask = 2  (bit-1 of logical B dims [K, N])
-//
-// On PTL this hits the optimised jit:gemm:any kernel and reaches ~80 % of
-// the 55 TFLOPS FP16 peak.  BF16 / FP32 inputs fall back to a slow
-// reference kernel; the function prints a warning in that case.
+//   A (activations) : [M, K]  FP16/BF16/FP32, format_tag::ab
+//   B (weights)     : [N, K]  FP8, stored physically as [N, K],
+//                           logical [K, N] -> format_tag::ba
+//   scale           : [N]     FP32, per-output-channel
+//   C (output)      : [M, N]  same dtype as A, format_tag::ab
 
-#include <torch/extension.h>
+#include <algorithm>
+#include <cstdio>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+
 #include <oneapi/dnnl/dnnl.hpp>
 #include <oneapi/dnnl/dnnl_sycl.hpp>
+#include <torch/extension.h>
 
 #include "utils.h"
 
 using ST = torch::ScalarType;
+using DT = dnnl::memory::data_type;
 
-// ── internal kernel ──────────────────────────────────────────────────────────
+namespace {
 
-template <dnnl::memory::data_type IT>   // IT = f16 | bf16 | f32
-static void onednn_w8a16_fp8_impl(
-    void*  x,
-    void*  weight,
-    void*  scales,
-    void*  bias,
-    void*  output,
+constexpr const char* kUnsupportedMarker =
+    "LIGHTX2V_FP8_PRIMITIVE_UNSUPPORTED:";
+
+struct CacheKey {
+    int device_index;
+    int input_type;
+    int weight_type;
+    int64_t M;
+    int64_t K;
+    int64_t N;
+    bool has_bias;
+
+    bool operator==(const CacheKey& other) const {
+        return device_index == other.device_index &&
+            input_type == other.input_type &&
+            weight_type == other.weight_type && M == other.M && K == other.K &&
+            N == other.N && has_bias == other.has_bias;
+    }
+};
+
+struct CacheKeyHash {
+    size_t operator()(const CacheKey& key) const {
+        size_t seed = 0;
+        auto combine = [&](size_t value) {
+            seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6) +
+                (seed >> 2);
+        };
+        combine(std::hash<int>{}(key.device_index));
+        combine(std::hash<int>{}(key.input_type));
+        combine(std::hash<int>{}(key.weight_type));
+        combine(std::hash<int64_t>{}(key.M));
+        combine(std::hash<int64_t>{}(key.K));
+        combine(std::hash<int64_t>{}(key.N));
+        combine(std::hash<bool>{}(key.has_bias));
+        return seed;
+    }
+};
+
+struct PrimitiveState {
+    dnnl::engine engine;
+    dnnl::memory::desc input_desc;
+    dnnl::memory::desc weight_desc;
+    dnnl::memory::desc scale_desc;
+    dnnl::memory::desc bias_desc;
+    dnnl::memory::desc output_desc;
+    dnnl::matmul primitive;
+};
+
+struct CacheCounters {
+    int64_t hits = 0;
+    int64_t misses = 0;
+    int64_t failures = 0;
+    int64_t negative_hits = 0;
+};
+
+std::mutex cache_mutex;
+std::unordered_map<CacheKey, std::shared_ptr<PrimitiveState>, CacheKeyHash>
+    primitive_cache;
+std::unordered_set<CacheKey, CacheKeyHash> failed_primitive_cache;
+CacheCounters cache_counters;
+
+std::optional<int64_t> select_chunk_n_for_shape(
     int64_t M,
     int64_t K,
     int64_t N,
-    const torch::Device& device
-) {
-    sycl::queue& q = utils::get_queue(device);
+    ST input_type,
+    const torch::Device& device) {
+    // Known-good chunk sizes for MiniMax-H3 projection shapes. Some full-N
+    // oneDNN primitives exhaust the requested register bundle, while these
+    // smaller primitives create and execute reliably.
+    if (M == 4096 && K == 4096) {
+        if (N == 12288) {
+            namespace syclex = sycl::ext::oneapi::experimental;
+            const auto architecture = utils::get_queue(device)
+                                          .get_device()
+                                          .get_info<
+                                              syclex::info::device::architecture>();
+            if (input_type == ST::Half &&
+                architecture == syclex::architecture::intel_gpu_ptl_h) {
+                return int64_t{2048};
+            }
+            return int64_t{4096};
+        }
 
-    dnnl::engine eng = dnnl::sycl_interop::make_engine(q.get_device(), q.get_context());
-    dnnl::stream  s  = dnnl::sycl_interop::make_stream(eng, q);
-
-    // A [M, K]
-    dnnl::memory::desc x_md(
-        {M, K}, IT, dnnl::memory::format_tag::ab);
-
-    // B logical [K, N], physical [N, K] → format_tag::ba
-    dnnl::memory::desc w_md(
-        {K, N}, dnnl::memory::data_type::f8_e4m3, dnnl::memory::format_tag::ba);
-
-    // scale [N] FP32 – provided per execution
-    dnnl::memory::desc scale_md(
-        {N}, dnnl::memory::data_type::f32, dnnl::memory::format_tag::a);
-
-    // C [M, N]
-    dnnl::memory::desc c_md(
-        {M, N}, IT, dnnl::memory::format_tag::ab);
-
-    dnnl::primitive_attr attr;
-    // mask = 2: per dim-1 of logical B[K,N] = per output-channel (per-N)
-    // set_scales_mask uses the implicit f32 scale path that the FP8 JIT kernel
-    // (jit:gemm:any) requires on PTL; set_scales with explicit f32 dtype
-    // unexpectedly forces the slow ocl:ref:any fallback.
-    attr.set_scales_mask(DNNL_ARG_WEIGHTS, 2);
-    attr.set_fpmath_mode(dnnl::fpmath_mode::any, /*apply_to_int=*/true);
-
-    dnnl::matmul::primitive_desc pd(eng, x_md, w_md, c_md, attr);
-
-    // Detect reference fallback so the caller isn't surprised by slow perf
-    std::string impl = pd.impl_info_str();
-    if (impl.find("ref") != std::string::npos) {
-        printf("[onednn_w8a16_fp8] WARNING: slow reference impl selected: %s\n"
-               "                   Only FP16×FP8 has an optimised JIT kernel "
-               "on PTL.\n", impl.c_str());
+        if (input_type == ST::BFloat16 && N == 24576) {
+            return int64_t{4096};
+        }
     }
 
-    dnnl::matmul prim(pd);
+    if (M == 4608 && K == 4096) {
+        if (N == 16384) {
+            // On BMG, the f16 primitive is reliable at N=256; bf16 can use
+            // the larger chunk used by the remaining H3 projections.
+            return input_type == ST::Half ? int64_t{256} : int64_t{4096};
+        }
 
-    std::unordered_map<int, dnnl::memory> args = {
-        {DNNL_ARG_SRC,                            dnnl::memory(x_md,     eng, x)},
-        {DNNL_ARG_WEIGHTS,                        dnnl::memory(w_md,     eng, weight)},
-        {DNNL_ARG_ATTR_SCALES | DNNL_ARG_WEIGHTS, dnnl::memory(scale_md, eng, scales)},
-        {DNNL_ARG_DST,                            dnnl::memory(c_md,     eng, output)},
-    };
-
-    if (bias) {
-        // Bias dtype matches I/O dtype
-        dnnl::memory::desc bias_md({N}, IT, dnnl::memory::format_tag::a);
-        args.insert({DNNL_ARG_BIAS, dnnl::memory(bias_md, eng, bias)});
+        if (input_type == ST::BFloat16 && N == 36864) {
+            return int64_t{4096};
+        }
     }
 
-    prim.execute(s, args);
+    if (input_type == ST::BFloat16) {
+        if (M == 4096 && K == 12288 && N == 4096) {
+            return int64_t{2048};
+        }
+
+        if (M == 4608 && K == 16384 && N == 4096) {
+            return int64_t{1024};
+        }
+    }
+
+    return std::nullopt;
 }
 
-// ── public entry point ───────────────────────────────────────────────────────
+std::shared_ptr<PrimitiveState> get_primitive(
+    int64_t M,
+    int64_t K,
+    int64_t N,
+    DT input_type,
+    DT weight_type,
+    bool has_bias,
+    const torch::Device& device) {
+    const CacheKey key{
+        device.index(), static_cast<int>(input_type),
+        static_cast<int>(weight_type), M, K, N, has_bias};
 
-// onednn_w8a16_fp8(x, weight, scales, bias=None) → output
-//
-//   x      : [M, K]  FP16 / BF16 / FP32  (XPU)
-//   weight : [N, K]  torch.float8_e4m3fn  (XPU)
-//   scales : [N]     FP32                 (XPU)
-//   bias   : [N]     same dtype as x      (XPU, optional)
-//   returns: [M, N]  same dtype as x
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto found = primitive_cache.find(key);
+    if (found != primitive_cache.end()) {
+        ++cache_counters.hits;
+        return found->second;
+    }
+    if (failed_primitive_cache.find(key) != failed_primitive_cache.end()) {
+        ++cache_counters.negative_hits;
+        TORCH_CHECK(
+            false, kUnsupportedMarker, "cached: device=", device, " M=", M,
+            " K=", K, " N=", N, " bias=", has_bias);
+    }
+
+    sycl::queue& queue = utils::get_queue(device);
+    auto state = std::make_shared<PrimitiveState>();
+    state->engine = dnnl::sycl_interop::make_engine(
+        queue.get_device(), queue.get_context());
+    state->input_desc = dnnl::memory::desc(
+        {M, K}, input_type, dnnl::memory::format_tag::ab);
+    state->weight_desc = dnnl::memory::desc(
+        {K, N}, weight_type, dnnl::memory::format_tag::ba);
+    state->scale_desc = dnnl::memory::desc(
+        {N}, DT::f32, dnnl::memory::format_tag::a);
+    state->output_desc = dnnl::memory::desc(
+        {M, N}, input_type, dnnl::memory::format_tag::ab);
+    if (has_bias) {
+        state->bias_desc = dnnl::memory::desc(
+            {1, N}, input_type, dnnl::memory::format_tag::ab);
+    }
+
+    dnnl::primitive_attr attributes;
+    // Bit 1 of logical weight dimensions [K, N]: one scale per output.
+    attributes.set_scales_mask(DNNL_ARG_WEIGHTS, 1 << 1);
+    attributes.set_fpmath_mode(dnnl::fpmath_mode::any, true);
+
+    try {
+        auto primitive_desc = has_bias
+            ? dnnl::matmul::primitive_desc(
+                  state->engine, state->input_desc, state->weight_desc,
+                  state->bias_desc, state->output_desc, attributes)
+            : dnnl::matmul::primitive_desc(
+                  state->engine, state->input_desc, state->weight_desc,
+                  state->output_desc, attributes);
+        const std::string implementation = primitive_desc.impl_info_str();
+        if (implementation.find("ref") != std::string::npos) {
+            std::fprintf(
+                stderr,
+                "[onednn_w8a16_fp8] WARNING: reference implementation "
+                "selected for M=%lld K=%lld N=%lld: %s\n",
+                static_cast<long long>(M), static_cast<long long>(K),
+                static_cast<long long>(N), implementation.c_str());
+        }
+        state->primitive = dnnl::matmul(primitive_desc);
+        primitive_cache.emplace(key, state);
+        ++cache_counters.misses;
+        return state;
+    } catch (const dnnl::error& error) {
+        const bool unsupported = error.status == dnnl_unimplemented ||
+            (error.status == dnnl_runtime_error &&
+             std::string(error.what()) == "could not create a primitive");
+        if (unsupported) {
+            if (failed_primitive_cache.emplace(key).second) {
+                ++cache_counters.failures;
+            }
+            TORCH_CHECK(
+                false, kUnsupportedMarker, "new: device=", device, " M=", M,
+                " K=", K, " N=", N, " bias=", has_bias,
+                "; oneDNN: ", error.what());
+        }
+        throw;
+    }
+}
+
+void execute_fp8_matmul(
+    const std::shared_ptr<PrimitiveState>& state,
+    const torch::Tensor& input,
+    const torch::Tensor& weight,
+    const torch::Tensor& scales,
+    const std::optional<torch::Tensor>& bias,
+    torch::Tensor& output) {
+    sycl::queue& queue = utils::get_queue(input.device());
+    dnnl::stream stream = dnnl::sycl_interop::make_stream(
+        state->engine, queue);
+    std::unordered_map<int, dnnl::memory> arguments = {
+        {DNNL_ARG_SRC,
+         dnnl::memory(state->input_desc, state->engine, input.data_ptr())},
+        {DNNL_ARG_WEIGHTS,
+         dnnl::memory(state->weight_desc, state->engine, weight.data_ptr())},
+        {DNNL_ARG_ATTR_SCALES | DNNL_ARG_WEIGHTS,
+         dnnl::memory(state->scale_desc, state->engine, scales.data_ptr())},
+        {DNNL_ARG_DST,
+         dnnl::memory(state->output_desc, state->engine, output.data_ptr())},
+    };
+    if (bias.has_value()) {
+        arguments.emplace(
+            DNNL_ARG_BIAS,
+            dnnl::memory(
+                state->bias_desc, state->engine, bias->data_ptr()));
+    }
+    state->primitive.execute(stream, arguments);
+}
+
+}  // namespace
+
+void fp8_cache_clear() {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    primitive_cache.clear();
+    failed_primitive_cache.clear();
+    cache_counters = {};
+}
+
+std::tuple<int64_t, int64_t, int64_t> fp8_cache_stats() {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    return {
+        cache_counters.hits, cache_counters.misses,
+        static_cast<int64_t>(primitive_cache.size())};
+}
+
+std::tuple<int64_t, int64_t, int64_t> fp8_failure_cache_stats() {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    return {
+        cache_counters.failures, cache_counters.negative_hits,
+        static_cast<int64_t>(failed_primitive_cache.size())};
+}
 
 torch::Tensor onednn_w8a16_fp8(
     torch::Tensor x,
     torch::Tensor weight,
     torch::Tensor scales,
-    std::optional<torch::Tensor> bias
-) {
-    TORCH_CHECK(x.dim() == 2 && weight.dim() == 2,
-                "x and weight must be 2-D");
-    TORCH_CHECK(scales.scalar_type() == torch::kFloat,
-                "scales must be FP32");
+    std::optional<torch::Tensor> bias) {
+    TORCH_CHECK(x.device().is_xpu(), "x must be an XPU tensor");
+    TORCH_CHECK(
+        weight.device() == x.device(),
+        "weight must be on the same XPU device as x");
+    TORCH_CHECK(
+        scales.device() == x.device(),
+        "scales must be on the same XPU device as x");
+    TORCH_CHECK(x.dim() == 2, "x must be 2-D [M, K]");
+    TORCH_CHECK(weight.dim() == 2, "weight must be 2-D [N, K]");
+    TORCH_CHECK(
+        x.scalar_type() == ST::Half || x.scalar_type() == ST::BFloat16 ||
+            x.scalar_type() == ST::Float,
+        "x must have dtype torch.float16, torch.bfloat16, or torch.float32");
+    TORCH_CHECK(
+        weight.scalar_type() == ST::Float8_e4m3fn ||
+            weight.scalar_type() == ST::Float8_e5m2,
+        "weight must have dtype torch.float8_e4m3fn or torch.float8_e5m2");
+    TORCH_CHECK(
+        scales.scalar_type() == ST::Float,
+        "scales must have dtype torch.float32");
 
     const int64_t M = x.size(0);
     const int64_t K = x.size(1);
     const int64_t N = weight.size(0);
+    TORCH_CHECK(
+        weight.size(1) == K, "weight K dimension (", weight.size(1),
+        ") must equal x K dimension (", K, ")");
+    TORCH_CHECK(
+        scales.numel() == N, "scales must contain N=", N,
+        " values, got ", scales.numel());
 
-    TORCH_CHECK(weight.size(1) == K,
-                "weight K-dim (", weight.size(1), ") != x K-dim (", K, ")");
-    TORCH_CHECK(scales.numel() == N,
-                "scales must have N=", N, " elements, got ", scales.numel());
-
-    torch::Tensor out = torch::empty(
-        {M, N}, torch::device(x.device()).dtype(x.dtype()));
-
-    using DT = dnnl::memory::data_type;
-    auto dispatch = [&](auto fn) {
-        fn(x.data_ptr(), weight.data_ptr(), scales.data_ptr(),
-           bias ? bias->data_ptr() : nullptr,
-           out.data_ptr(), M, K, N, x.device());
-    };
-
-    switch (x.scalar_type()) {
-        case ST::Half:
-            dispatch(onednn_w8a16_fp8_impl<DT::f16>); break;
-        case ST::BFloat16:
-            dispatch(onednn_w8a16_fp8_impl<DT::bf16>); break;
-        case ST::Float:
-            dispatch(onednn_w8a16_fp8_impl<DT::f32>); break;
-        default:
-            TORCH_CHECK(false,
-                "unsupported dtype: only FP16, BF16, FP32 are supported");
+    if (bias.has_value()) {
+        TORCH_CHECK(
+            bias->device() == x.device(),
+            "bias must be on the same XPU device as x");
+        TORCH_CHECK(
+            bias->dim() == 1 && bias->numel() == N,
+            "bias must have shape [N] = [", N, "]");
+        TORCH_CHECK(
+            bias->scalar_type() == x.scalar_type(),
+            "bias dtype must match x dtype");
     }
 
-    return out;
+    // oneDNN descriptors below describe dense [M,K], [N,K], and [N] storage.
+    // Avoid silent wrong results for views while keeping the common path zero-copy.
+    auto x_contiguous = x.contiguous();
+    auto weight_contiguous = weight.contiguous();
+    // Normalize both supported scale layouts ([N] and [N, 1]) so N-chunking
+    // always slices along the output-channel dimension.
+    auto scales_contiguous = scales.contiguous().view({N});
+    std::optional<torch::Tensor> bias_contiguous;
+    if (bias.has_value()) {
+        bias_contiguous = bias->contiguous();
+    }
+
+    if (M == 0 || N == 0) {
+        return torch::empty({M, N}, x.options());
+    }
+
+    const DT input_type = x.scalar_type() == ST::Half
+        ? DT::f16
+        : (x.scalar_type() == ST::BFloat16 ? DT::bf16 : DT::f32);
+    const DT weight_type = weight.scalar_type() == ST::Float8_e5m2
+        ? DT::f8_e5m2
+        : DT::f8_e4m3;
+    auto output = torch::empty({M, N}, x.options());
+    const auto chunk_n = select_chunk_n_for_shape(
+        M, K, N, x.scalar_type(), x.device());
+    if (chunk_n.has_value()) {
+        for (int64_t offset = 0; offset < N; offset += *chunk_n) {
+            const int64_t current_n = std::min(*chunk_n, N - offset);
+            auto weight_chunk =
+                weight_contiguous.slice(0, offset, offset + current_n);
+            auto scales_chunk =
+                scales_contiguous.slice(0, offset, offset + current_n);
+            std::optional<torch::Tensor> bias_chunk;
+            if (bias_contiguous.has_value()) {
+                bias_chunk =
+                    bias_contiguous->slice(0, offset, offset + current_n);
+            }
+
+            auto output_chunk = torch::empty({M, current_n}, x.options());
+            auto state = get_primitive(
+                M, K, current_n, input_type, weight_type,
+                bias_chunk.has_value(), x.device());
+            execute_fp8_matmul(
+                state, x_contiguous, weight_chunk, scales_chunk, bias_chunk,
+                output_chunk);
+            output.slice(1, offset, offset + current_n).copy_(output_chunk);
+        }
+    } else {
+        auto state = get_primitive(
+            M, K, N, input_type, weight_type, bias.has_value(), x.device());
+        execute_fp8_matmul(
+            state, x_contiguous, weight_contiguous, scales_contiguous,
+            bias_contiguous, output);
+    }
+    return output;
 }
