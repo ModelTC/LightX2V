@@ -62,6 +62,11 @@ try:
 except ImportError:
     sgl_kernel = None
 
+try:
+    import comfy_kitchen
+except ImportError:
+    comfy_kitchen = None
+
 
 if magi_register_custom_op is not None and sgl_kernel is not None:
 
@@ -1745,6 +1750,110 @@ class MMWeightWint8channelAint8channeldynamicTriton(MMWeightQuantTemplate):
             return output_tensor.squeeze(0) + self.apply_lora(input_tensor) if len(output_tensor.shape) == 3 else output_tensor + +self.apply_lora(input_tensor)
 
         return output_tensor.squeeze(0) if len(output_tensor.shape) == 3 else output_tensor
+
+
+@MM_WEIGHT_REGISTER("int8-convrot")
+class MMWeightWint8ConvRot(MMWeightQuantTemplate):
+    """ConvRot W8A8 linear backed by comfy-kitchen."""
+
+    supported_groupsizes = (256, 64, 16)
+
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix,
+            lora_path,
+        )
+        if comfy_kitchen is None or not hasattr(comfy_kitchen, "int8_linear"):
+            raise ImportError("int8-convrot requires comfy-kitchen with int8_linear support. Install or upgrade it with `pip install -U comfy-kitchen`.")
+        self.weight_need_transpose = False
+        self.scale_force_fp32 = True
+
+    def _update_base_attrs(self):
+        super()._update_base_attrs()
+        self.convrot_groupsize_name = self.weight_name.removesuffix(".weight") + ".convrot_groupsize"
+        self.base_attrs.append((self.convrot_groupsize_name, "convrot_groupsize", False))
+
+    def load_quantized(self, weight_dict):
+        if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
+            device_tensors, pin_tensors = create_default_tensors(self.base_attrs, weight_dict)
+            for attr, tensor in device_tensors.items():
+                setattr(self, attr, tensor)
+            for attr, tensor in pin_tensors.items():
+                setattr(self, f"pin_{attr}", tensor)
+        elif self.create_cuda_buffer:
+            result = create_cuda_buffers(self.base_attrs, weight_dict, self.lazy_load, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32, bias_force_fp32=self.bias_force_fp32)
+            for attr, tensor in result.items():
+                setattr(self, f"{attr}_cuda_buffer", tensor)
+        elif self.create_cpu_buffer:
+            result = create_cpu_buffers(self.base_attrs, self.lazy_load_file, scale_force_fp32=self.scale_force_fp32, bias_force_fp32=self.bias_force_fp32)
+            for attr, tensor in result.items():
+                setattr(self, f"pin_{attr}", tensor)
+                setattr(self, attr, None)
+
+    def _cache_convrot_groupsize(self):
+        groupsize = getattr(self, "convrot_groupsize", None)
+        if groupsize is None:
+            groupsize = getattr(self, "pin_convrot_groupsize", None)
+        if groupsize is None:
+            groupsize = getattr(self, "convrot_groupsize_cuda_buffer", None)
+        if groupsize is not None:
+            self._convrot_groupsize = int(groupsize.item())
+            if self._convrot_groupsize not in self.supported_groupsizes:
+                raise ValueError(f"Unsupported INT8 ConvRot group size {self._convrot_groupsize}; expected one of {self.supported_groupsizes}")
+
+    def post_process(self):
+        super().post_process()
+        self._cache_convrot_groupsize()
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        result = super().load_state_dict(destination, block_index, adapter_block_index)
+        if not hasattr(self, "_convrot_groupsize"):
+            self._cache_convrot_groupsize()
+        return result
+
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        super().load_state_dict_from_disk(block_index, adapter_block_index)
+        self.convrot_groupsize_name = resolve_block_name(self.convrot_groupsize_name, block_index, adapter_block_index, self.is_post_adapter)
+        lazy_load_file_path = get_lazy_load_file_path(self.lazy_load_file, self.weight_name)
+        with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
+            self.pin_convrot_groupsize.copy_(lazy_load_file.get_tensor(self.convrot_groupsize_name))
+        if not hasattr(self, "_convrot_groupsize"):
+            self._cache_convrot_groupsize()
+
+    def apply(self, input_tensor):
+        if input_tensor.shape[-1] % self._convrot_groupsize != 0:
+            raise ValueError(f"INT8 ConvRot requires input width divisible by {self._convrot_groupsize}, got {input_tensor.shape[-1]}")
+
+        output_tensor = comfy_kitchen.int8_linear(
+            input_tensor.contiguous(),
+            self.weight.contiguous(),
+            self.weight_scale.contiguous(),
+            self._get_actual_bias(),
+            out_dtype=self.infer_dtype,
+            convrot=True,
+            convrot_groupsize=self._convrot_groupsize,
+        )
+        if self.has_lora_branch:
+            output_tensor = output_tensor + self.apply_lora(input_tensor)
+        return output_tensor
 
 
 @MM_WEIGHT_REGISTER("fp8-b128-deepgemm")

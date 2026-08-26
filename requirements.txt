@@ -6,6 +6,7 @@ torch<=2.11.0
 torchvision<=0.26.0
 torchaudio<=2.11.0
 torchao
+comfy-kitchen>=0.2.15
 diffusers
 transformers
 tokenizers

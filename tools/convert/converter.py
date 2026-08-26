@@ -31,6 +31,7 @@ from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER  # noqa: E40
 
 dtype_mapping = {
     "int8": torch.int8,
+    "int8-convrot": torch.int8,
     "fp8": torch.float8_e4m3fn,
 }
 
@@ -408,6 +409,7 @@ def quantize_model(
             quantizer = CONVERT_WEIGHT_REGISTER[linear_type](tensor)
             w_q, scales, extra = quantizer.weight_quant_func(tensor, comfyui_mode)
             weight_global_scale = extra.get("weight_global_scale", None)  # For nvfp4
+            convrot_groupsize = extra.get("convrot_groupsize", None)
 
             # Replace original tensor and store scales
             weights[key] = w_q
@@ -417,10 +419,13 @@ def quantize_model(
                 weights[key + "_scale"] = scales
             if weight_global_scale:
                 weights[key + "_global_scale"] = weight_global_scale
+            if convrot_groupsize is not None:
+                weights[key.removesuffix(".weight") + ".convrot_groupsize"] = convrot_groupsize
 
             quantized_tensor_size = w_q.numel() * w_q.element_size()
             scale_size = scales.numel() * scales.element_size()
-            quantized_size += quantized_tensor_size + scale_size
+            extra_size = 0 if convrot_groupsize is None else convrot_groupsize.numel() * convrot_groupsize.element_size()
+            quantized_size += quantized_tensor_size + scale_size + extra_size
 
             total_quantized += 1
             del w_q, scales
@@ -1016,7 +1021,7 @@ def main():
     parser.add_argument(
         "--linear_type",
         type=str,
-        choices=["int8", "fp8", "nvfp4", "mxfp4", "mxfp6", "mxfp8"],
+        choices=["int8", "int8-convrot", "fp8", "nvfp4", "mxfp4", "mxfp6", "mxfp8"],
         help="Quant type for linear",
     )
     parser.add_argument(
@@ -1061,6 +1066,8 @@ def main():
 
     if args.quantized and args.linear_type is None:
         parser.error("--linear_type is required when --quantized is enabled (use --linear_type fp8 for MiniMax-H3 FP8)")
+    if args.linear_type == "int8-convrot" and args.comfyui_mode:
+        parser.error("--linear_type int8-convrot produces a LightX2V checkpoint and cannot be combined with --comfyui_mode")
 
     if args.model_type == "h3" and args.lora_path and args.lora_alpha is None:
         parser.error("MiniMax-H3 LoRA merging requires --lora_alpha; use --lora_alpha 8 for the MiniMax-H3 Turbo LoRA")
