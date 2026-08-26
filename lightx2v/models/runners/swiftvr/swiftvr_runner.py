@@ -5,9 +5,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 
 import imageio
-import imageio.v3 as iio
+import numpy as np
 import torch
 import torch.nn.functional as F
+from PIL import Image
 from decord import VideoReader
 from loguru import logger
 from safetensors import safe_open
@@ -157,13 +158,8 @@ class SwiftVRRunner(DefaultRunner):
 
     @staticmethod
     def read_image_frame(image_path: str):
-        frame = iio.imread(image_path)
-        if frame.ndim == 2:
-            frame = frame[..., None].repeat(3, axis=-1)
-        if frame.shape[-1] == 4:
-            frame = frame[..., :3]
-        if frame.ndim != 3 or frame.shape[-1] != 3:
-            raise ValueError(f"SwiftVR requires an RGB-compatible image, got shape {frame.shape}.")
+        with Image.open(image_path) as image:
+            frame = np.array(image.convert("RGB"), dtype=np.uint8)
         source_height = frame.shape[0] // 8 * 8
         source_width = frame.shape[1] // 8 * 8
         if source_height <= 0 or source_width <= 0:
@@ -239,7 +235,7 @@ class SwiftVRRunner(DefaultRunner):
     def open_video_writer(self, output_path: str, fps: float):
         quality = self.config.get("quality", 60)
         codec = self.config.get("video_codec", "libx265")
-        ffmpeg_params = ["-crf", str(round((100 - quality) * 51 / 100))]
+        ffmpeg_params = ["-crf", str(round((100 - quality) * 51 / 100)), "-movflags", "+faststart"]
         if codec == "libx265":
             ffmpeg_params.extend(["-x265-params", "log-level=warning"])
         # Common x264/x265 presets from fastest to slowest:
@@ -247,7 +243,6 @@ class SwiftVRRunner(DefaultRunner):
         preset = self.config.get("ffmpeg_preset", "")
         if preset:
             ffmpeg_params.extend(["-preset", preset])
-        ffmpeg_params.extend(["-movflags", "+faststart"])
         pixel_format = "yuv444p" if self.config.get("save_format") == "yuv444p" else "yuv420p"
         return imageio.get_writer(
             output_path,
@@ -297,16 +292,14 @@ class SwiftVRRunner(DefaultRunner):
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
         input_kind = self.resolve_input_kind(input_info)
-        if not input_info.save_result_path:
-            raise ValueError("SwiftVR requires `save_result_path`.")
-        if input_info.return_result_tensor:
-            raise ValueError("SwiftVR writes its result to a media file; `return_result_tensor` is not supported.")
-
         if input_kind == "image":
             return self.run_image_pipeline(input_info)
         return self.run_video_pipeline(input_info)
 
     def run_image_pipeline(self, input_info):
+        if not input_info.return_result_tensor and not input_info.save_result_path:
+            raise ValueError("SwiftVR image restoration requires `save_result_path` unless the image is returned in memory.")
+
         frames, source_height, source_width = self.read_image_frame(input_info.image_path)
         output_height, output_width = self.resolve_output_size(input_info, source_height, source_width)
         pad_height = (-output_height) % 32
@@ -315,8 +308,9 @@ class SwiftVRRunner(DefaultRunner):
         chunk = build_video_chunks(1, clip_length)[0]
         clip_latents = clip_length // 4
 
-        output_path = os.path.abspath(input_info.save_result_path)
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        output_path = None if input_info.return_result_tensor else os.path.abspath(input_info.save_result_path)
+        if output_path:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
         started_at = time.perf_counter()
         self.restorer.reset()
         try:
@@ -329,7 +323,12 @@ class SwiftVRRunner(DefaultRunner):
                 pad_height,
                 pad_width,
             )
-            save_to_image(restored[0].permute(0, 2, 3, 1), output_path)
+            images = restored[0].permute(0, 2, 3, 1).contiguous()
+            if input_info.return_result_tensor:
+                images = images.to(device="cpu", dtype=torch.float32)
+            else:
+                save_to_image(images, output_path)
+                images = None
         finally:
             self.restorer.reset()
 
@@ -344,10 +343,15 @@ class SwiftVRRunner(DefaultRunner):
             self.progress_callback(100, 100)
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
-        logger.info(f"SwiftVR restored image to {output_path} in {elapsed:.3f}s")
-        return {"image": None, "stats": stats}
+        logger.info(f"SwiftVR restored image to {output_path or 'memory'} in {elapsed:.3f}s")
+        return {"images": images, "stats": stats}
 
     def run_video_pipeline(self, input_info):
+        if not input_info.save_result_path:
+            raise ValueError("SwiftVR video restoration requires `save_result_path`.")
+        if input_info.return_result_tensor:
+            raise ValueError("SwiftVR video restoration does not support `return_result_tensor`.")
+
         reader = VideoReader(input_info.video_path)
         raw_frame_count = len(reader)
         first_frame = reader[0]

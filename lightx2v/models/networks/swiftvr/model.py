@@ -18,6 +18,7 @@ from .attention import SwiftVRShiftedWindowAttention
 from .transformer_infer import SwiftVRTransformerInfer
 
 INFERENCE_TIMESTEP = 1000.0
+ROPE_EXTENSION = 256
 
 
 def normalize_swiftvr_config(config):
@@ -76,14 +77,16 @@ class SwiftVRPreInfer(WanPreInfer):
     def get_frequency_table(self, required_length: int) -> torch.Tensor:
         if required_length <= self.freqs.shape[0]:
             return self.freqs
-        return torch.cat(
+        table_length = required_length + ROPE_EXTENSION
+        self.freqs = torch.cat(
             [
-                self.rope_params(required_length, self.head_size - 4 * (self.head_size // 6)),
-                self.rope_params(required_length, 2 * (self.head_size // 6)),
-                self.rope_params(required_length, 2 * (self.head_size // 6)),
+                self.rope_params(table_length, self.head_size - 4 * (self.head_size // 6)),
+                self.rope_params(table_length, 2 * (self.head_size // 6)),
+                self.rope_params(table_length, 2 * (self.head_size // 6)),
             ],
             dim=1,
         ).to(self.freqs.device)
+        return self.freqs
 
     def prepare_rope(self, grid_sizes: tuple[int, int, int], temporal_offset: int):
         frames, height, width = grid_sizes

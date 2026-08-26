@@ -475,7 +475,9 @@ class LightX2VPipeline:
         # image_strength can be a scalar (float/int) or a list matching the number of images
         # i2i_denoise_strength controls single-image edit redraw strength when explicitly set
         # image_frame_idx: optional list of pixel frame indices (one per image), or None to evenly space in [0, num_frames-1]
-        if self.model_cls in {WAN_ANIMATE2_MODEL_ID, "ltx2", "ltx2_5", "swiftvr"} and save_result_path == "lightx2v_gen_result.png":
+        uses_default_output_path = save_result_path == "lightx2v_gen_result.png"
+        is_video_output = self.model_cls in {WAN_ANIMATE2_MODEL_ID, "ltx2", "ltx2_5"} or (self.model_cls == "swiftvr" and bool(video_path))
+        if uses_default_output_path and is_video_output:
             save_result_path = "lightx2v_gen_result.mp4"
         self.seed = seed
         self.image_path = image_path

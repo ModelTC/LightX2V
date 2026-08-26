@@ -93,6 +93,7 @@ class VideoTaskRequest(BaseTaskRequest):
 class ImageTaskRequest(BaseTaskRequest):
     aspect_ratio: str = Field("16:9", description="Output aspect ratio")
     i2i_denoise_strength: Optional[float] = Field(None, description="Single-image I2I edit denoising strength in [0.0, 1.0]; omit to keep existing behavior")
+    sr_ratio: float = Field(2.0, gt=0, description="Super-resolution scale factor used when target_shape is not set")
 
 
 class SenseNovaVisionTaskRequest(BaseModel):

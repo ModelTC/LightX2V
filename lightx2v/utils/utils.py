@@ -412,7 +412,7 @@ def mux_audio_from_video(
         if trim_to_shortest:
             cmd.append("-shortest")
         # Be explicit about container format in case ffmpeg can't infer it
-        cmd += ["-f", "mp4"]
+        cmd += ["-movflags", "+faststart", "-f", "mp4"]
         if extra_args:
             cmd += extra_args
         cmd.append(tmp_path)
