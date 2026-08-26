@@ -48,6 +48,10 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block"
+        # Model offload moves pre/blocks/post together. Pre/post residency only applies
+        # to block offload and is ignored otherwise.
+        self.prepost_resident = self.block_offload and config.get("dit_prepost_resident", False)
         if GET_DTYPE() != torch.bfloat16:
             raise ValueError(
                 "MiniMax-H3 requires DTYPE=BF16. The native loader preserves the released checkpoint's 626 BF16 tensors and 12 FP32 projection/time/head tensors without dtype conversion."
@@ -484,14 +488,14 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        block_offload = self.cpu_offload and self.offload_granularity == "block"
-        if block_offload and self.scheduler.step_index == 0:
+        prepost_offload = self.block_offload and not self.prepost_resident
+        if prepost_offload and self.scheduler.step_index == 0:
             self.pre_weight.to_cuda()
             self.post_weight.to_cuda()
         output = self._infer_cond_uncond(inputs, infer_condition=True)
         self.scheduler.video_noise_pred = output.video
         self.scheduler.audio_noise_pred = output.audio
-        if block_offload and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+        if prepost_offload and self.scheduler.step_index == self.scheduler.infer_steps - 1:
             self.pre_weight.to_cpu()
             self.post_weight.to_cpu()
 

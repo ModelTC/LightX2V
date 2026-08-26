@@ -106,6 +106,10 @@ class MiniMaxH3Runner(DefaultRunner):
     def init_modules(self):
         super().init_modules()
         self.run_input_encoder = self._run_input_encoder_local_h3
+        if self.model.prepost_resident:
+            self.model.pre_weight.to_cuda()
+            self.model.post_weight.to_cuda()
+            logger.info("MiniMax-H3 pre/post weights will remain on the accelerator across requests")
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
@@ -577,10 +581,11 @@ class MiniMaxH3Runner(DefaultRunner):
     def _offload_transformer(self):
         if not self.config.get("cpu_offload", False):
             return
-        if self.config.get("offload_granularity", "model") == "block":
-            logger.info("Offloading MiniMax-H3 pre/post weights; retaining the two block-offload device buffers")
-            self.model.pre_weight.to_cpu()
-            self.model.post_weight.to_cpu()
+        if self.model.block_offload:
+            if not self.model.prepost_resident:
+                logger.info("Offloading MiniMax-H3 pre/post weights; retaining the two block-offload device buffers")
+                self.model.pre_weight.to_cpu()
+                self.model.post_weight.to_cpu()
         else:
             logger.info("Offloading MiniMax-H3 transformer before VAE decode")
             self.model.to_cpu()
