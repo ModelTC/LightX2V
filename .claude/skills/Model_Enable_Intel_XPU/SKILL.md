@@ -671,10 +671,10 @@ class MyModelTransformerInfer:
         # INT8 W8A8 GEMM（自动在 attn/FFN 的 mm_weight.apply() 中调用，非反量化）
         # 使用新的 attention 实现
         x = self.attn(x, block_weights.attn)  # 内部使用 intel_xpu_cute_attn（Linux）或 intel_xpu_flash_attn（Windows）
-        
+
         # 使用新的 RMSNorm（XPU 优化）
         x = self.norm(x, block_weights.norm)  # 内部使用 intel_xpu RMSNorm
-        
+
         # 使用新的旋转位置编码
         # rope 在 pre_infer 或 attn 内调用 minimax_h3_xpu_rope
         return x
