@@ -9,9 +9,9 @@ from ..observation import Observation
 
 class OpenPITransformerInfer:
     def __init__(self, num_steps: int = 10):
-        if int(num_steps) <= 0:
+        if num_steps <= 0:
             raise ValueError("num_steps must be positive")
-        self.num_steps = int(num_steps)
+        self.num_steps = num_steps
 
     @torch.no_grad()
     def infer(

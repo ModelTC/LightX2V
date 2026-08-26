@@ -4,28 +4,52 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 lightx2v_path="${LIGHTX2V_PATH:-$(cd -- "${script_dir}/../.." && pwd)}"
-openpi_path="${OPENPI_PATH:-/data/liuhongda/openpi}"
-runtime_path="${OPENPI_PYTORCH_RUNTIME_PATH:-/data/liuhongda/openpi_data/python_deps/openpi_pytorch_runtime}"
-python_bin="${OPENPI_RUNTIME_PYTHON:-/opt/conda/bin/python}"
+workspace_root="$(dirname -- "${lightx2v_path}")"
+openpi_path="${OPENPI_PATH:-${workspace_root}/openpi}"
+openpi_data_root="${OPENPI_DATA_ROOT:-${workspace_root}/openpi_data}"
+runtime_path="${OPENPI_TRANSFORMERS_RUNTIME_PATH:-${openpi_data_root}/python_deps/openpi_pytorch_runtime}"
 openpi_venv_python="${OPENPI_VENV_PYTHON:-${openpi_path}/.venv/bin/python}"
 patch_source="${lightx2v_path}/lightx2v/models/networks/openpi/transformers_replace"
+runtime_marker=".lightx2v_openpi_runtime"
 
 transformers_version="4.53.2"
 huggingface_hub_version="0.32.3"
 tokenizers_version="0.21.1"
 
-if [[ ! -x "${python_bin}" ]]; then
-    echo "Python executable not found: ${python_bin}" >&2
+python_request="${OPENPI_RUNTIME_PYTHON:-python}"
+
+if ! python_bin="$(command -v -- "${python_request}")" || [[ ! -x "${python_bin}" ]]; then
+    echo "Python executable not found: ${python_request}" >&2
     exit 1
 fi
 
-runtime_path="$(${python_bin} -c 'import os, sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "${runtime_path}")"
-case "${runtime_path}" in
-    /|/data|/data/liuhongda|/data/liuhongda/openpi_data|/data/liuhongda/openpi_data/python_deps)
-        echo "Refusing to use an unsafe runtime target: ${runtime_path}" >&2
-        exit 1
-        ;;
-esac
+runtime_path="$(
+    "${python_bin}" - "${runtime_path}" "${lightx2v_path}" "${openpi_path}" "${openpi_data_root}" <<'PY'
+import sys
+import tempfile
+from pathlib import Path
+
+target = Path(sys.argv[1]).expanduser().resolve()
+protected = {
+    "home directory": Path.home().resolve(),
+    "LightX2V project": Path(sys.argv[2]).expanduser().resolve(),
+    "OpenPI project": Path(sys.argv[3]).expanduser().resolve(),
+    "OpenPI data root": Path(sys.argv[4]).expanduser().resolve(),
+    "OpenPI Python dependency root": (Path(sys.argv[4]).expanduser().resolve() / "python_deps"),
+    "active Python environment": Path(sys.prefix).resolve(),
+    "Python base environment": Path(sys.base_prefix).resolve(),
+    "system temporary directory": Path(tempfile.gettempdir()).resolve(),
+}
+
+if target == Path(target.anchor) or target.parent == Path(target.anchor):
+    raise SystemExit(f"Refusing to use a broad runtime target: {target}")
+for label, path in protected.items():
+    if target == path or path.is_relative_to(target):
+        raise SystemExit(f"Refusing to use {target}: it is {label} or one of its parents")
+
+print(target)
+PY
+)"
 
 patch_files=(
     "models/gemma/configuration_gemma.py"
@@ -63,11 +87,10 @@ runtime_has_exact_layout() {
 
 guard_runtime() {
     local target_root="$1"
-    USE_FLAX=0 PYTHONPATH="${target_root}${PYTHONPATH:+:${PYTHONPATH}}" \
+    PYTHONDONTWRITEBYTECODE=1 USE_FLAX=0 PYTHONPATH="${target_root}${PYTHONPATH:+:${PYTHONPATH}}" \
         "${python_bin}" - "${target_root}" "${patch_source}" <<'PY'
 import filecmp
 import importlib.metadata
-import inspect
 from pathlib import Path
 import sys
 
@@ -106,21 +129,10 @@ for relative_path in patch_files:
     if not installed.is_file() or not filecmp.cmp(source, installed, shallow=False):
         raise RuntimeError(f"OpenPI Transformers patch mismatch: {installed}")
 
-from transformers.models.gemma.configuration_gemma import GemmaConfig
-from transformers.models.gemma.modeling_gemma import GemmaRMSNorm, _gated_residual
+from transformers.models.gemma.configuration_gemma import GemmaConfig  # noqa: F401
+from transformers.models.gemma.modeling_gemma import GemmaRMSNorm  # noqa: F401
 from transformers.models.paligemma import modeling_paligemma  # noqa: F401
 from transformers.models.siglip import check, modeling_siglip  # noqa: F401
-
-if not check.check_whether_transformers_replace_is_installed_correctly():
-    raise RuntimeError("OpenPI Transformers replacement guard returned false")
-
-config = GemmaConfig(use_adarms=True, adarms_cond_dim=8)
-if not config.use_adarms or config.adarms_cond_dim != 8:
-    raise RuntimeError("Patched GemmaConfig does not expose AdaRMS configuration")
-if "cond" not in inspect.signature(GemmaRMSNorm.forward).parameters:
-    raise RuntimeError("Patched GemmaRMSNorm does not accept AdaRMS conditioning")
-if not callable(_gated_residual):
-    raise RuntimeError("Patched Gemma gated residual helper is unavailable")
 
 print(f"private transformers={transformers.__version__} ({transformers.__file__})")
 print(f"private huggingface-hub={huggingface_hub.__version__} ({huggingface_hub.__file__})")
@@ -130,13 +142,30 @@ PY
 }
 
 if runtime_has_exact_layout "${runtime_path}"; then
-    echo "Refreshing OpenPI patches in existing private runtime: ${runtime_path}"
-    overlay_openpi_patches "${runtime_path}"
-    if guard_runtime "${runtime_path}"; then
-        echo "OpenPI private PyTorch runtime is ready: ${runtime_path}"
+    if [[ -f "${runtime_path}/${runtime_marker}" ]]; then
+        echo "Refreshing OpenPI patches in existing private runtime: ${runtime_path}"
+        overlay_openpi_patches "${runtime_path}"
+        if guard_runtime "${runtime_path}"; then
+            echo "OpenPI private PyTorch runtime is ready: ${runtime_path}"
+            exit 0
+        fi
+        echo "Existing private runtime failed validation." >&2
+    elif guard_runtime "${runtime_path}"; then
+        # Adopt only an already-correct runtime.
+        touch "${runtime_path}/${runtime_marker}"
+        echo "Validated and adopted existing OpenPI private runtime: ${runtime_path}"
         exit 0
+    else
+        echo "Refusing to patch an unowned existing runtime: ${runtime_path}" >&2
+        echo "Choose an empty OPENPI_TRANSFORMERS_RUNTIME_PATH instead." >&2
+        exit 1
     fi
-    echo "Existing private runtime failed validation; rebuilding it." >&2
+fi
+
+if [[ -e "${runtime_path}" || -L "${runtime_path}" ]] && [[ ! -f "${runtime_path}/${runtime_marker}" ]]; then
+    echo "Refusing to replace an existing directory not owned by this setup script: ${runtime_path}" >&2
+    echo "Choose an empty OPENPI_TRANSFORMERS_RUNTIME_PATH instead." >&2
+    exit 1
 fi
 
 runtime_parent="$(dirname -- "${runtime_path}")"
@@ -186,8 +215,14 @@ fi
 
 overlay_openpi_patches "${stage_dir}"
 guard_runtime "${stage_dir}"
+touch "${stage_dir}/${runtime_marker}"
 
 if [[ -e "${runtime_path}" || -L "${runtime_path}" ]]; then
+    if [[ ! -f "${runtime_path}/${runtime_marker}" ]]; then
+        echo "Refusing to replace an existing directory not owned by this setup script: ${runtime_path}" >&2
+        echo "Choose an empty OPENPI_TRANSFORMERS_RUNTIME_PATH instead." >&2
+        exit 1
+    fi
     backup_path="${runtime_path}.invalid.$(date -u +%Y%m%dT%H%M%SZ).$$"
     mv -- "${runtime_path}" "${backup_path}"
     echo "Previous invalid runtime was preserved at: ${backup_path}"
@@ -195,7 +230,6 @@ fi
 mv -- "${stage_dir}" "${runtime_path}"
 stage_dir=""
 
-guard_runtime "${runtime_path}"
 echo "OpenPI private PyTorch runtime is ready: ${runtime_path}"
 echo "Use it without changing base packages:"
 echo "  PYTHONPATH=${runtime_path}\${PYTHONPATH:+:\$PYTHONPATH} ${python_bin} <command>"

@@ -29,7 +29,7 @@ class OpenPINode(Node):
 
         self.get_logger().info("[libero] loading OpenPI policy")
         self.policy_config = self.build_policy_config()
-        self.policy = OpenPIPolicy.from_config(self.policy_config)
+        self.policy = OpenPIPolicy(self.policy_config)
         self.get_logger().info("[libero] OpenPI policy loaded")
 
         self.images = {camera: None for camera in self.contract.policy_input_cameras}
@@ -83,9 +83,7 @@ class OpenPINode(Node):
         )
         config = auto_calc_config(config)
 
-        # Explicit ROS parameters are runtime overrides and must win over JSON.
-        config["model_cls"] = "openpi"
-        config["task"] = "i2va"
+        # Runtime parameters win over the model JSON.
         config["model_path"] = model_path
         config["seed"] = seed
         actions_per_plan = int(self.get_parameter("actions_per_plan").value)
@@ -97,7 +95,7 @@ class OpenPINode(Node):
             "output_action_dim": self.contract.action_dim,
         }
         for key, expected in expected_dims.items():
-            if key in config and int(config[key]) != expected:
+            if int(config[key]) != expected:
                 raise ValueError(f"OpenPI config `{key}`={config[key]} does not match LIBERO contract ({expected}).")
         return config
 
@@ -180,8 +178,7 @@ class OpenPINode(Node):
         self.action_pub.publish(msg)
 
     def destroy_node(self):
-        if hasattr(self, "policy"):
-            self.policy.close()
+        self.policy.close()
         super().destroy_node()
 
 
@@ -203,9 +200,6 @@ def main(args=None):
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    except Exception:
-        if rclpy.ok():
-            raise
     finally:
         node.destroy_node()
         if rclpy.ok():

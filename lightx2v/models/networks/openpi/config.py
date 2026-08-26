@@ -7,8 +7,9 @@ not require JAX, Flax, Orbax, or the OpenPI source tree.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -55,18 +56,17 @@ class Pi0Config:
     pytorch_compile_mode: str | None = None
 
     @classmethod
-    def from_mapping(cls, config: dict) -> "Pi0Config":
-        precision = config.get("dtype", config.get("precision", "bfloat16"))
+    def from_mapping(cls, config: Mapping[str, Any]) -> "Pi0Config":
         return cls(
-            action_dim=int(config.get("action_dim", 32)),
-            action_horizon=int(config.get("action_horizon", 10)),
-            max_token_len=int(config.get("max_token_len", 200)),
-            dtype=str(precision),
-            paligemma_variant=str(config.get("paligemma_variant", "gemma_2b")),
-            action_expert_variant=str(config.get("action_expert_variant", "gemma_300m")),
-            pi05=bool(config.get("pi05", True)),
-            discrete_state_input=bool(config.get("discrete_state_input", False)),
-            pytorch_compile_mode=config.get("pytorch_compile_mode", config.get("compile_mode")),
+            action_dim=config["action_dim"],
+            action_horizon=config["action_horizon"],
+            max_token_len=config["max_token_len"],
+            dtype=config["dtype"],
+            paligemma_variant=config["paligemma_variant"],
+            action_expert_variant=config["action_expert_variant"],
+            pi05=config["pi05"],
+            discrete_state_input=config["discrete_state_input"],
+            pytorch_compile_mode=config["pytorch_compile_mode"],
         )
 
     def validate_pi05_libero(self) -> None:

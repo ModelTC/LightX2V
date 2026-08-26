@@ -3,6 +3,5 @@
 from .config import Pi0Config
 from .model import OpenPIModel
 from .observation import Observation
-from .pi0 import PI0Pytorch
 
-__all__ = ["Observation", "OpenPIModel", "PI0Pytorch", "Pi0Config"]
+__all__ = ["Observation", "OpenPIModel", "Pi0Config"]

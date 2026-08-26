@@ -8,9 +8,9 @@ workspace_root="$(dirname -- "${lightx2v_path}")"
 openpi_data_root="${OPENPI_DATA_ROOT:-${workspace_root}/openpi_data}"
 openpi_path="${OPENPI_PATH:-${workspace_root}/openpi}"
 model_path="${OPENPI_MODEL_PATH:-${openpi_data_root}/openpi-assets/checkpoints/pi05_libero_pytorch}"
-config_json="${OPENPI_CONFIG:-${lightx2v_path}/configs/openpi/pi05_libero.json}"
-save_action_path="${OPENPI_SAVE_ACTION_PATH:-${lightx2v_path}/save_results/output_openpi_pi05_libero.actions.npy}"
-save_video_path="${OPENPI_SAVE_VIDEO_PATH:-${lightx2v_path}/save_results/output_openpi_pi05_libero.mp4}"
+model_config="${OPENPI_CONFIG:-${lightx2v_path}/configs/openpi/pi05_libero.json}"
+eval_config="${OPENPI_EVAL_CONFIG:-${lightx2v_path}/configs/openpi/pi05_libero_eval.json}"
+output_dir="${OPENPI_EVAL_OUTPUT_DIR:-${lightx2v_path}/save_results/openpi_pi05_libero_evaluation}"
 python_bin="${OPENPI_PYTHON:-python}"
 
 export OPENPI_LIBERO_ROOT="${OPENPI_LIBERO_ROOT:-${openpi_path}/third_party/libero}"
@@ -26,12 +26,11 @@ mkdir -p "${NUMBA_CACHE_DIR}" "${MPLCONFIGDIR}"
 
 source "${lightx2v_path}/scripts/base/base.sh"
 
-OPENPI_RUN_MODE=rollout "${python_bin}" -m lightx2v.infer \
+OPENPI_RUN_MODE=evaluate \
+OPENPI_EVAL_CONFIG="${eval_config}" \
+"${python_bin}" -m lightx2v.infer \
   --model_cls openpi \
   --task i2va \
   --model_path "${model_path}" \
-  --config_json "${config_json}" \
-  --seed "${OPENPI_SEED:-7}" \
-  --prompt "${OPENPI_TASK_DESCRIPTION:-}" \
-  --save_result_path "${save_video_path}" \
-  --save_action_path "${save_action_path}"
+  --config_json "${model_config}" \
+  --save_result_path "${output_dir}"

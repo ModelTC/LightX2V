@@ -1,73 +1,99 @@
-# OpenPI pi0.5-LIBERO in LightX2V
+# OpenPI pi0.5-LIBERO
 
-This integration runs the released `pi05_libero` policy as a native local
-PyTorch model. It does not start an OpenPI policy server, web page, or viewer.
+This integration runs the converted `pi05_libero` checkpoint locally with
+PyTorch. The public entry remains `python -m lightx2v.infer`; a synchronous
+child process isolates OpenPI's patched Transformers dependency.
 
-## 1. Convert the released checkpoint
+## Paths
+
+The launchers derive their defaults from the LightX2V checkout:
+
+| Variable | Default |
+| --- | --- |
+| `OPENPI_DATA_ROOT` | `../openpi_data` |
+| `OPENPI_PATH` | `../openpi` |
+| `OPENPI_MODEL_PATH` | `$OPENPI_DATA_ROOT/openpi-assets/checkpoints/pi05_libero_pytorch` |
+| `OPENPI_TRANSFORMERS_RUNTIME_PATH` | `$OPENPI_DATA_ROOT/python_deps/openpi_pytorch_runtime` |
+| `OPENPI_LIBERO_ROOT` | `$OPENPI_PATH/third_party/libero` |
+| `OPENPI_LIBERO_CONFIG_DIR` | `$OPENPI_DATA_ROOT/runtime_configs/lightx2v_openpi_libero` |
+| `OPENPI_PYTHON` | `python` from the active environment |
+
+Override the two roots for a relocated installation:
 
 ```bash
-cd /data/liuhongda/LightX2V
-bash scripts/openpi/convert_pi05_libero_to_pytorch.sh
+OPENPI_DATA_ROOT=/mnt/models/openpi_data \
+OPENPI_PATH=/workspace/openpi \
+bash scripts/openpi/run_libero_i2va.sh
 ```
 
-The default output is:
+More specific path variables take precedence. The JSON files contain model
+semantics and evaluation settings, not machine-specific paths.
+
+## 1. Convert the checkpoint
+
+```bash
+bash scripts/openpi/1_convert_pi05_libero_to_pytorch.sh
+```
+
+The converter uses OpenPI's official
+`examples/convert_jax_model_to_pytorch.py` and writes:
 
 ```text
-/data/liuhongda/openpi_data/openpi-assets/checkpoints/pi05_libero_pytorch/
+pi05_libero_pytorch/
 ├── model.safetensors
 ├── config.json
+├── SHA256SUMS
+├── .lightx2v_openpi_checkpoint
 └── assets/
     ├── paligemma_tokenizer.model
     └── physical-intelligence/libero/norm_stats.json
 ```
 
-## 2. Prepare the isolated PyTorch dependency layer
+The conversion interpreter defaults to `$OPENPI_PATH/.venv/bin/python`. Use
+`OPENPI_CONVERT_PYTHON` to select another isolated environment containing
+Transformers 4.53.2. The script refuses a base interpreter, overlapping source
+and output checkpoints, broad targets, and unowned non-empty directories.
+`OPENPI_FORCE_CONVERT=1` is accepted only for a checkpoint already marked by
+the converter.
+
+## 2. Prepare the private runtime
 
 ```bash
-bash scripts/openpi/setup_pytorch_runtime.sh
+bash scripts/openpi/2_setup_pytorch_runtime.sh
 ```
 
-This creates
-`/data/liuhongda/openpi_data/python_deps/openpi_pytorch_runtime` with patched
-Transformers 4.53.2. It does not change packages installed in the base
-environment. The shared `lightx2v.infer` process continues to use the base
-Transformers 5.14.1 installation. Only the synchronous OpenPI worker prepends
-the private runtime to its `PYTHONPATH`; that worker also sets `USE_FLAX=0` so
-Transformers does not auto-import the base environment's JAX/Flax packages.
+This creates a private dependency directory containing Transformers 4.53.2,
+Hugging Face Hub 0.32.3, Tokenizers 0.21.1, and the five OpenPI replacement
+files. It does not modify the active environment. Set
+`OPENPI_RUNTIME_PYTHON` if the active interpreter is not named `python`.
 
-The split is required because the official OpenPI PyTorch implementation uses
-five replacement files tied to Transformers 4.53.2, while other LightX2V
-runners imported by the shared entry require newer Transformers APIs such as
-Qwen3-VL. The two versions are therefore never imported into the same Python
-process.
+The shared LightX2V process keeps its normal dependencies. Only the local
+OpenPI child receives the private directory at the front of `PYTHONPATH`.
 
-## 3. Local closed-loop LIBERO rollout video
-
-OpenPI predicts actions rather than video pixels. The default launcher now
-runs those actions in the local LIBERO MuJoCo simulator and records the real
-agent-view rollout:
+## 3. Local LIBERO rollout
 
 ```bash
-cd /data/liuhongda/LightX2V
 bash scripts/openpi/run_libero_i2va.sh
 ```
 
-The launcher follows the same public inference entry used by other LightX2V
-models:
+Call chain:
 
 ```text
-scripts/openpi/run_libero_i2va.sh
+run_libero_i2va.sh
   -> python -m lightx2v.infer
   -> RUNNER_REGISTER["openpi"]
   -> OpenPIRunner
-  -> synchronous local OpenPI/LIBERO worker
-  -> MP4 + executed actions + metrics
+  -> local libero_rollout process
+  -> MP4 + actions + metrics
 ```
 
-The shared entry and registry run in the base environment. `OpenPIRunner`
-waits for the local worker and propagates a worker failure back to the command.
-The worker is dependency isolation only: it is not a policy server, web
-service, viewer, or asynchronous background process.
+Default task:
+
+```text
+benchmark     libero_spatial
+task_id      0
+init_state   0
+```
 
 Default outputs:
 
@@ -77,7 +103,7 @@ save_results/output_openpi_pi05_libero.actions.npy
 save_results/output_openpi_pi05_libero.metrics.json
 ```
 
-Select another LIBERO task or output path with environment variables:
+Select a task and output files with:
 
 ```bash
 LIBERO_BENCHMARK=libero_goal \
@@ -89,119 +115,106 @@ OPENPI_SAVE_METRICS_PATH=/absolute/output/rollout.metrics.json \
 bash scripts/openpi/run_libero_i2va.sh
 ```
 
-The rollout performs 10 dummy stabilization steps, replans every 5 policy
-steps, records the correctly oriented `agentview_image` at 10 FPS, and stops
-when LIBERO reports BDDL task success or the suite-specific step cap is hit.
+Useful rollout overrides are `OPENPI_SEED`, `OPENPI_ACTIONS_PER_PLAN`,
+`OPENPI_NUM_STEPS_WAIT`, `OPENPI_MAX_STEPS`, `OPENPI_RENDER_SIZE`, and
+`OPENPI_VIDEO_FPS`.
 
-## 4. Run a sample by LIBERO benchmark and task ID
-
-Use the task launcher when selecting examples from the local LIBERO checkout:
-
-```text
-/data/liuhongda/openpi/third_party/libero/libero/libero/bddl_files
-/data/liuhongda/openpi/third_party/libero/libero/libero/init_files
-```
-
-The first argument is the benchmark (task suite), the second is the zero-based
-task ID, and the optional third argument is the zero-based initialization-state
-ID (default: `0`). Every bundled `.pruned_init` contains 50 states, so valid
-initialization-state IDs are `0-49`:
+For task-ID based output organization, use:
 
 ```bash
-cd /data/liuhongda/LightX2V
+bash scripts/openpi/run_libero_task_i2va.sh <benchmark> <task_id> [init_state_id]
+```
+
+For example:
+
+```bash
 bash scripts/openpi/run_libero_task_i2va.sh libero_goal 3 0
 ```
 
-Supported benchmark and task-ID ranges:
+This writes:
 
-| Benchmark | Task IDs |
+```text
+save_results/openpi_libero_tasks/libero_goal_task_3/
+├── init_state_0.mp4
+├── init_state_0.actions.npy
+└── init_state_0.metrics.json
+```
+
+The worker validates benchmark names and task/init-state ranges against the
+loaded LIBERO suite.
+
+## 4. Quantitative evaluation
+
+```bash
+bash scripts/openpi/run_libero_evaluate_i2va.sh
+```
+
+The default protocol in `configs/openpi/pi05_libero_eval.json` evaluates:
+
+| Suite | Tasks | Trials per task | Step cap |
+| --- | ---: | ---: | ---: |
+| `libero_spatial` | 10 | 50 | 220 |
+| `libero_object` | 10 | 50 | 280 |
+| `libero_goal` | 10 | 50 | 300 |
+| `libero_10` | 10 | 50 | 520 |
+
+The model is loaded once. Its random generator is reset at each suite boundary,
+not at each episode. Results default to:
+
+```text
+save_results/openpi_pi05_libero_evaluation/
+├── resolved_eval_config.json
+├── episodes.jsonl
+├── summary.json
+└── episodes/<suite>/task_<id>/init_<id>/metrics.json
+```
+
+`summary.json` reports per-task, per-suite, and complete-run success rates.
+Partial runs leave official success-rate fields null. Rollout exceptions count
+as failures; CUDA out-of-memory and setup errors stop evaluation.
+
+Resume is limited to complete suite boundaries. Model, task input, source, and
+protocol fingerprints prevent records from different evaluations being mixed.
+Use a new `OPENPI_EVAL_OUTPUT_DIR` after changing any of those inputs.
+
+Reference results for the released checkpoint are:
+
+| Suite | Success |
 | --- | ---: |
-| `libero_spatial` | 0-9 |
-| `libero_object` | 0-9 |
-| `libero_goal` | 0-9 |
-| `libero_10` | 0-9 |
-| `libero_90` | 0-89 |
+| LIBERO Spatial | 98.8% |
+| LIBERO Object | 98.2% |
+| LIBERO Goal | 98.0% |
+| LIBERO 10 | 92.4% |
+| Average | 96.85% |
 
-LIBERO's benchmark map (rather than alphabetical filename order) resolves the
-selected pair to its exact `.bddl` and `.pruned_init` files. For the example
-above, results are organized as:
+Evaluator overrides:
 
-```text
-save_results/openpi_libero_tasks/
-└── libero_goal_task_3/
-    ├── init_state_0.mp4
-    ├── init_state_0.actions.npy
-    └── init_state_0.metrics.json
-```
+| Variable | Value |
+| --- | --- |
+| `OPENPI_EVAL_OUTPUT_DIR` | Result directory |
+| `OPENPI_EVAL_BENCHMARKS` | Comma-separated suites |
+| `OPENPI_EVAL_TASK_IDS` | IDs or ranges such as `0,2-4` |
+| `OPENPI_EVAL_NUM_TRIALS_PER_TASK` | Trials per task |
+| `OPENPI_EVAL_MAX_STEPS` | Common step cap |
+| `OPENPI_EVAL_VIDEO_POLICY` | `none`, `failures`, or `all` |
+| `OPENPI_EVAL_RESUME` | `1` or `0` |
+| `OPENPI_EVAL_FAIL_FAST` | `1` or `0` |
+| `OPENPI_EVAL_SAVE_ACTIONS` | `1` or `0` |
 
-The metrics JSON records the task name and description, success result, exact
-BDDL/init-state file paths, selected initialization-state ID, and rollout
-statistics. Running a different initialization state of the same task places
-another set of `init_state_N.*` files in the same task directory.
-
-Change the result root or cap the rollout during a smoke test with:
+Use a separate directory for a short smoke run:
 
 ```bash
-OPENPI_LIBERO_RESULT_ROOT=/absolute/output/root \
-OPENPI_MAX_STEPS=20 \
-bash scripts/openpi/run_libero_task_i2va.sh libero_10 5 2
+OPENPI_EVAL_OUTPUT_DIR=/absolute/output/openpi_eval_smoke \
+OPENPI_EVAL_BENCHMARKS=libero_spatial \
+OPENPI_EVAL_TASK_IDS=0 \
+OPENPI_EVAL_NUM_TRIALS_PER_TASK=1 \
+OPENPI_EVAL_MAX_STEPS=2 \
+OPENPI_EVAL_VIDEO_POLICY=none \
+OPENPI_EVAL_RESUME=0 \
+bash scripts/openpi/run_libero_evaluate_i2va.sh
 ```
 
-Use `bash scripts/openpi/run_libero_task_i2va.sh --help` to display the command
-summary. Other model/runtime overrides accepted by `run_libero_i2va.sh` remain
-available, including `OPENPI_SEED`, `OPENPI_RENDER_SIZE`, and
-`OPENPI_VIDEO_FPS`.
-
-## 5. Static image/state-to-action smoke inference
-
-Place the two RGB frames and state in one input directory:
-
-```text
-INPUT_DIR/
-├── agentview_image.png
-├── wrist_image.png
-└── state.npy                 # float32 shape (8,)
-```
-
-A reproducible sample can be extracted from the already-downloaded raw
-LIBERO dataset with:
-
-```bash
-python scripts/openpi/prepare_libero_sample.py
-```
-
-Run:
-
-```bash
-OPENPI_RUN_MODE=single_observation \
-OPENPI_IMAGE_PATH=/absolute/path/to/INPUT_DIR \
-OPENPI_TASK_DESCRIPTION="pick up the black bowl and place it on the plate" \
-OPENPI_SAVE_ACTION_PATH=/absolute/path/to/actions.npy \
-bash scripts/openpi/run_libero_i2va.sh
-```
-
-This mode also enters through `python -m lightx2v.infer`, resolves
-`OpenPIRunner` through the shared registry, and then runs the synchronous local
-worker under the private Transformers 4.53.2 dependency layer. There is no
-OpenPI-specific `sys.argv` branch in `lightx2v.infer`.
-
-The result is a float32 NumPy array with shape `(10, 7)` at the exact
-`OPENPI_SAVE_ACTION_PATH`.
-
-The default closed-loop rollout was exercised on an H200. The generated
-artifacts are:
-
-```text
-/data/liuhongda/LightX2V/save_results/output_openpi_pi05_libero.mp4
-/data/liuhongda/LightX2V/save_results/output_openpi_pi05_libero.actions.npy
-/data/liuhongda/LightX2V/save_results/output_openpi_pi05_libero.metrics.json
-/data/liuhongda/openpi_data/results/pi05_libero_pytorch_parity.json
-```
-
-The parity report uses identical LIBERO input and fixed flow noise for upstream
-OpenPI PyTorch and the LightX2V-native network.
-
-## 6. Closed-loop ROS LIBERO rollout
+## 5. ROS rollout
 
 ```bash
 LIBERO_BENCHMARK=libero_10 \
@@ -210,6 +223,25 @@ LIBERO_INIT_STATE_ID=0 \
 bash scripts/openpi/run_libero_ros_i2va.sh
 ```
 
-The ROS script builds the existing LightX2V workspace, starts the shared local
-LIBERO simulator, and starts `openpi_node`. The simulator already performs the
-official 180-degree image rotation; the runner and policy do not flip again.
+The launcher sources `ROS_SETUP`, or falls back to
+`~/ros2_lyrical/install/setup.sh` and `/opt/ros/jazzy/setup.bash`. It builds
+the existing `common`, `simulator`, and `inference` packages, then starts
+the shared LIBERO simulator and `openpi_node`. The private Transformers path
+is applied only to the inference node.
+
+The ROS bridge publishes actions online and does not save MP4, NumPy, or
+metrics files. Stop it with `Ctrl+C`; the launcher also terminates the
+simulator process.
+
+## 6. Numerical parity
+
+`validate_pytorch_parity.py` compares upstream OpenPI and LightX2V with the
+same LIBERO observation and flow noise:
+
+```bash
+/path/to/openpi/.venv/bin/python scripts/openpi/validate_pytorch_parity.py
+```
+
+Use `--checkpoint`, `--config`, `--sample`, `--output`, and `--device`
+for non-default locations. Exit code zero and
+`allclose_atol_1e-6: true` indicate a passing comparison.

@@ -1,9 +1,4 @@
-"""Run the native PyTorch OpenPI policy in a local LIBERO simulator.
-
-This is the non-ROS closed-loop evaluation path. OpenPI predicts robot actions,
-not pixels, so an actual simulator rollout is required to produce a video of
-the robot executing those actions.
-"""
+"""Run the native PyTorch OpenPI policy in a local LIBERO simulator."""
 
 from __future__ import annotations
 
@@ -71,6 +66,10 @@ def _configure_libero(libero_root: Path, config_dir: Path):
     from libero.libero import benchmark, get_libero_path
     from libero.libero.envs import OffScreenRenderEnv
 
+    # robosuite imports with a physical CUDA id; EGL uses the visible-device index.
+    if os.environ.get("MUJOCO_GL", "").strip().lower() == "egl" and not os.environ.get("MUJOCO_EGL_DEVICE_ID"):
+        os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
+
     return benchmark, get_libero_path, OffScreenRenderEnv
 
 
@@ -86,27 +85,19 @@ def _quat_to_axis_angle(quaternion) -> np.ndarray:
 
 
 def _rotate_rgb(observation: dict, key: str) -> np.ndarray:
-    if key not in observation:
-        raise KeyError(f"LIBERO observation is missing {key!r}")
-    image = np.asarray(observation[key])
-    if image.ndim != 3 or image.shape[-1] != 3:
-        raise ValueError(f"LIBERO image {key!r} must be HWC RGB, got {image.shape}")
     # LIBERO renders both policy cameras rotated by 180 degrees relative to the
     # released pi05_libero training observations.
-    return np.ascontiguousarray(image[::-1, ::-1], dtype=np.uint8)
+    return np.ascontiguousarray(np.asarray(observation[key])[::-1, ::-1], dtype=np.uint8)
 
 
 def _state_from_observation(observation: dict) -> np.ndarray:
-    state = np.concatenate(
+    return np.concatenate(
         (
             np.asarray(observation["robot0_eef_pos"], dtype=np.float32),
             _quat_to_axis_angle(observation["robot0_eef_quat"]),
             np.asarray(observation["robot0_gripper_qpos"], dtype=np.float32),
         )
     ).astype(np.float32)
-    if state.shape != (8,) or not np.isfinite(state).all():
-        raise ValueError(f"Expected finite 8-D LIBERO state, got {state.shape}")
-    return state
 
 
 def _load_policy_config(args: argparse.Namespace) -> dict:
@@ -191,7 +182,7 @@ def run_rollout(args: argparse.Namespace) -> dict:
 
     try:
         LOGGER.info("Loading local PyTorch OpenPI policy")
-        policy = OpenPIPolicy.from_config(_load_policy_config(args))
+        policy = OpenPIPolicy(_load_policy_config(args))
         LOGGER.info("Starting %s task %d, init state %d: %s", args.benchmark, args.task_id, args.init_state_id, task_description)
         env.reset()
         observation = env.set_init_state(initial_states[args.init_state_id])
@@ -209,12 +200,7 @@ def run_rollout(args: argparse.Namespace) -> dict:
                 "agentview": _rotate_rgb(observation, "agentview_image"),
                 "wrist": _rotate_rgb(observation, "robot0_eye_in_hand_image"),
             }
-            action = np.asarray(
-                policy.next_action(images=images, state=_state_from_observation(observation), task_description=task_description),
-                dtype=np.float32,
-            ).reshape(-1)
-            if action.shape != (7,) or not np.isfinite(action).all():
-                raise ValueError(f"OpenPI returned an invalid LIBERO action: shape={action.shape}")
+            action = policy.next_action(images=images, state=_state_from_observation(observation), task_description=task_description)
             executed_actions.append(action.copy())
             observation, _reward, done, _info = env.step(action.tolist())
             frames.append(_rotate_rgb(observation, "agentview_image"))
