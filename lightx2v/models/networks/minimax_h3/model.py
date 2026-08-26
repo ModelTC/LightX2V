@@ -30,11 +30,13 @@ H3_CHANNEL_QUANT_SCHEMES = {
     "fp8-vllm",
     "fp8-intel-xpu",
     "int8-q8f",
+    "int8-convrot",
     "int8-sgl",
     "int8-torchao",
     "int8-triton",
     "int8-vllm",
     "int8-intel-xpu",
+    "int8-convrot",
 }
 
 
@@ -320,11 +322,13 @@ class MiniMaxH3Model(BaseTransformerModel):
         split_type = self._tp_split_type(key)
         if split_type is None:
             return tensor
+        if tensor.ndim < 2:
+            return tensor
 
         if split_type == "row":
             # Per-output-channel quantization scales remain replicated for a
             # row-parallel weight; only the weight's input dimension is split.
-            if key.endswith(".weight_scale") or tensor.ndim < 2:
+            if key.endswith(".weight_scale"):
                 return tensor
             split_dim = 1
             if tensor.shape[split_dim] % self.tp_size:

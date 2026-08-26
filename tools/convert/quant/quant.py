@@ -6,9 +6,17 @@ from qtorch.quant import float_quantize
 from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER
 
 try:
+    from comfy_kitchen.tensor.int8 import TensorWiseINT8Layout
+except ImportError:
+    TensorWiseINT8Layout = None
+
+try:
     from lightx2v_kernel.gemm import scaled_mxfp4_quant, scaled_mxfp6_quant, scaled_mxfp8_quant, scaled_nvfp4_quant
 except ImportError:
     pass
+
+
+CONVROT_GROUPSIZES = (256, 64, 16)
 
 
 class QuantTemplate(metaclass=ABCMeta):
@@ -47,6 +55,34 @@ class QuantWeightINT8(QuantTemplate):
             w_q = w_q.reshape(org_w_shape)
 
         return w_q, scales, self.extra
+
+
+@CONVERT_WEIGHT_REGISTER("int8-convrot")
+class QuantWeightINT8ConvRot(QuantTemplate):
+    def __init__(self, weight):
+        super().__init__(weight)
+        self.weight_quant_func = self.load_int8_convrot_weight
+
+    @torch.no_grad()
+    def load_int8_convrot_weight(self, w, comfyui_mode=False):
+        if TensorWiseINT8Layout is None:
+            raise ImportError("INT8 ConvRot conversion requires comfy-kitchen. Install it with `pip install comfy-kitchen`.")
+        if comfyui_mode:
+            raise ValueError("int8-convrot is a LightX2V checkpoint format and does not support --comfyui_mode")
+        convrot_groupsize = next((groupsize for groupsize in CONVROT_GROUPSIZES if w.shape[1] % groupsize == 0), None)
+        if convrot_groupsize is None:
+            raise ValueError(f"INT8 ConvRot requires in_features divisible by one of {CONVROT_GROUPSIZES}, got weight shape {tuple(w.shape)}")
+
+        w_q, params = TensorWiseINT8Layout.quantize(
+            w.contiguous(),
+            is_weight=True,
+            per_channel=True,
+            convrot=True,
+            convrot_groupsize=convrot_groupsize,
+            stochastic_rounding=0,
+        )
+        self.extra["convrot_groupsize"] = torch.tensor(convrot_groupsize, dtype=torch.int32, device=w.device)
+        return w_q.contiguous(), params.scale.to(torch.float32).contiguous(), self.extra
 
 
 @CONVERT_WEIGHT_REGISTER("fp8")
