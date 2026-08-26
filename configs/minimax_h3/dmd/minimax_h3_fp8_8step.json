@@ -32,7 +32,7 @@
     "lora_configs": [
       {
         "path": "/path/to/lora.safetensors",
-        "strength": 0.8,
+        "strength": 1.0,
         "alpha": 8
       }
     ],
