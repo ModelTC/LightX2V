@@ -60,7 +60,7 @@ config 顶部 `model_cls` 字段 = 推理命令的 `--model_cls` 参数值。
 ```powershell
 python -c "
 import os, glob
-d = 'D:/yanran/models/YOUR_MODEL'
+d = 'D:/path/to/your/ckpt'
 fs = glob.glob(d+'/**/*.safetensors', recursive=True) + glob.glob(d+'/**/*.bin', recursive=True)
 for f in sorted(fs): print(f'{os.path.getsize(f)/1e9:.1f}GB  {os.path.basename(f)}')
 "
@@ -116,7 +116,7 @@ python lightx2v/infer.py `
 from lightx2v import LightX2VPipeline
 
 pipe = LightX2VPipeline(
-    model_path=r"D:\yanran\models\Wan2.1-T2V-1.3B",
+    model_path=r"D:\path\to\your\ckpt",
     model_cls="wan2.1",
     task="t2v",
 )
@@ -156,7 +156,7 @@ pipe.generate(seed=42, prompt="a cat", save_result_path="output.mp4")
 
     "dit_quantized": true,
     "dit_quant_scheme": "int8-intel-xpu", // INT8：性能优于 FP8
-    "dit_quantized_ckpt": "D:/yanran/models/xxx/int8",
+    "dit_quantized_ckpt": "D:/path/to/your/int8_ckpt",
 
     "vae_cpu_offload": true,              // VAE 在 CPU 运行（节省 XPU 内存，属正常）
     "unload_modules": true,               // 文本编码器推理后释放，为 DiT 腾空间
@@ -179,7 +179,7 @@ pipe.generate(seed=42, prompt="a cat", save_result_path="output.mp4")
 
     "dit_quantized": true,
     "dit_quant_scheme": "int8-intel-xpu", // INT8：性能优于 FP8
-    "dit_quantized_ckpt": "D:/yanran/models/xxx/int8",
+    "dit_quantized_ckpt": "D:/path/to/your/int8_ckpt",
 
     "vae_cpu_offload": true,
     "unload_modules": true,
@@ -200,7 +200,7 @@ pipe.generate(seed=42, prompt="a cat", save_result_path="output.mp4")
 
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-intel-xpu",
-    "dit_quantized_ckpt": "D:/yanran/models/xxx/fp8",
+    "dit_quantized_ckpt": "D:/path/to/your/fp8_ckpt",
 
     "vae_cpu_offload": true,
     "unload_modules": true,
