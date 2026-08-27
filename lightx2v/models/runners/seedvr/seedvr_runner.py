@@ -800,9 +800,6 @@ class SeedVRRunner(DefaultRunner):
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
-        if self.config["use_prompt_enhancer"]:
-            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
-
         video_path = getattr(self.input_info, "video_path", "")
         if self._seedvr_sp_size > 1 and not video_path:
             raise ValueError("SeedVR VAE sequence parallel currently supports video SR input only")

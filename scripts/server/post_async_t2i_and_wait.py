@@ -15,7 +15,6 @@ def submit_t2i_task(
     aspect_ratio: str,
     target_shape: Optional[List[int]],
     save_result_path: str,
-    use_prompt_enhancer: bool,
 ) -> str:
     payload = {
         "prompt": prompt,
@@ -24,7 +23,6 @@ def submit_t2i_task(
         "seed": seed,
         "aspect_ratio": aspect_ratio,
         "save_result_path": save_result_path,
-        "use_prompt_enhancer": use_prompt_enhancer,
     }
     if target_shape:
         payload["target_shape"] = target_shape
@@ -92,7 +90,6 @@ def main():
         help="Target output shape, e.g. --target_shape 1536 2752",
     )
     parser.add_argument("--save_result_path", type=str, default="", help="Server-side save_result_path")
-    parser.add_argument("--use_prompt_enhancer", action="store_true", help="Enable prompt enhancer")
     parser.add_argument("--timeout_seconds", type=int, default=600, help="Polling timeout in seconds")
     parser.add_argument("--poll_interval", type=float, default=2.0, help="Polling interval in seconds")
     parser.add_argument("--output", type=str, default="save_results/t2i_result.png", help="Local output image path")
@@ -108,7 +105,6 @@ def main():
         aspect_ratio=args.aspect_ratio,
         target_shape=args.target_shape,
         save_result_path=args.save_result_path,
-        use_prompt_enhancer=args.use_prompt_enhancer,
     )
     print(f"Task submitted successfully, task_id={task_id}")
 

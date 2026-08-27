@@ -269,7 +269,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         return closest_size, closest_ratio
 
     def run_text_encoder(self, input_info):
-        prompt = input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else input_info.prompt
+        prompt = input_info.prompt
         neg_prompt = input_info.negative_prompt
 
         # run qwen25vl

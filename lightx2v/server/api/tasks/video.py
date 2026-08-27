@@ -45,7 +45,6 @@ async def create_video_task_form(
     last_frame_file: UploadFile = File(None),
     prompt: str = Form(default=""),
     save_result_path: str = Form(default=""),
-    use_prompt_enhancer: bool = Form(default=False),
     negative_prompt: str = Form(default=""),
     num_fragments: int = Form(default=1),
     infer_steps: int = Form(default=5),
@@ -85,7 +84,6 @@ async def create_video_task_form(
 
     message = VideoTaskRequest(
         prompt=prompt,
-        use_prompt_enhancer=use_prompt_enhancer,
         negative_prompt=negative_prompt,
         last_frame_path=last_frame_path,
         image_path=image_path,

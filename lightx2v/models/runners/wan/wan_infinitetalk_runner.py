@@ -166,7 +166,7 @@ class InfiniteTalkRunner(WanRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_encoders = self.load_text_encoder()
 
-        prompt = input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else input_info.prompt
+        prompt = input_info.prompt
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
 
@@ -506,9 +506,8 @@ class InfiniteTalkRunner(WanRunner):
         return [self._load_or_encode_audio(speech)]
 
     def reuse_key(self):
-        prompt = self.input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else self.input_info.prompt
         return {
-            "prompt": prompt,
+            "prompt": self.input_info.prompt,
             "negative_prompt": self.input_info.negative_prompt,
             "cond_audio": self.input_data["cond_audio"],
             "audio_type": self.input_data.get("audio_type", "para"),

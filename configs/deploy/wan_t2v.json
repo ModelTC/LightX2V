@@ -15,9 +15,6 @@
         "dit": [
             "http://localhost:9000"
         ],
-        "prompt_enhancer": [
-            "http://localhost:9001"
-        ],
         "text_encoders": [
             "http://localhost:9002"
         ],

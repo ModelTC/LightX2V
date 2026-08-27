@@ -48,7 +48,6 @@ class DisaggOverrideRequest(BaseModel):
 class BaseTaskRequest(DisaggOverrideRequest):
     task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
     prompt: str = Field("", description="Generation prompt")
-    use_prompt_enhancer: bool = Field(False, description="Whether to use prompt enhancer")
     negative_prompt: str = Field("", description="Negative prompt")
     image_path: str = Field("", description="Base64 encoded image or URL")
     last_frame_path: str = Field("", description="Last frame image path (base64, or local path)")

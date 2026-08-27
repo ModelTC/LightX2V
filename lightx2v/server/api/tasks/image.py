@@ -187,7 +187,6 @@ async def create_image_task_form(
     image_file: UploadFile = File(None),
     prompt: str = Form(default=""),
     save_result_path: str = Form(default=""),
-    use_prompt_enhancer: bool = Form(default=False),
     negative_prompt: str = Form(default=""),
     infer_steps: int = Form(default=5),
     seed: int = Form(default=42),
@@ -215,7 +214,6 @@ async def create_image_task_form(
 
     message = ImageTaskRequest(
         prompt=prompt,
-        use_prompt_enhancer=use_prompt_enhancer,
         negative_prompt=negative_prompt,
         image_path=image_path,
         save_result_path=save_result_path,

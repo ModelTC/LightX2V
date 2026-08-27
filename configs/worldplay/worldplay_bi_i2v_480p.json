@@ -28,7 +28,6 @@
     "feature_caching": "NoCaching",
     "cpu_offload": true,
     "offload_granularity": "block",
-    "use_prompt_enhancer": false,
     "use_image_encoder": true,
     "use_bi_model_as_main": true,
     "seq_parallel": false,

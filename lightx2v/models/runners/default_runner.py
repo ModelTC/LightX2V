@@ -4,18 +4,15 @@ import os
 import shutil
 
 import numpy as np
-import requests
 import torch
 import torch.distributed as dist
 import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
-from requests.exceptions import RequestException
 
 from lightx2v.models.runners.base_runner import BaseRunner
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.generate_task_id import generate_task_id
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import fixed_shape_resize, get_optimal_patched_size_with_sp, is_main_process, isotropic_crop_resize, mux_audio_from_video, save_to_image, save_to_video, wan_vae_to_comfy
@@ -88,7 +85,6 @@ def resize_image(img, resize_mode="adaptive", resolution="480p", bucket_shape=No
 class DefaultRunner(BaseRunner):
     def __init__(self, config):
         super().__init__(config)
-        self.has_prompt_enhancer = False
         self.progress_callback = None
         self.reuse_cache_path = self.config.get("reuse_cache_path")
         if self.enable_reuse and not self.reuse_cache_path:
@@ -98,13 +94,6 @@ class DefaultRunner(BaseRunner):
         self.final_result_path = None
         self.previous_result_path = None
         self.work_result_path = None
-        if self.config["task"] == "t2v" and self.config.get("sub_servers", {}).get("prompt_enhancer") is not None:
-            self.has_prompt_enhancer = True
-            if not self.check_sub_servers("prompt_enhancer"):
-                self.has_prompt_enhancer = False
-                logger.warning("No prompt enhancer server available, disable prompt enhancer.")
-        if not self.has_prompt_enhancer:
-            self.config["use_prompt_enhancer"] = False
         self.set_init_device()
         self.init_scheduler()
 
@@ -298,32 +287,11 @@ class DefaultRunner(BaseRunner):
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
         self.vsr_model = self.load_vsr_model() if "video_super_resolution" in self.config else None
 
-    def check_sub_servers(self, task_type):
-        urls = self.config.get("sub_servers", {}).get(task_type, [])
-        available_servers = []
-        for url in urls:
-            try:
-                status_url = f"{url}/v1/local/{task_type}/generate/service_status"
-                response = requests.get(status_url, timeout=2)
-                if response.status_code == 200:
-                    available_servers.append(url)
-                else:
-                    logger.warning(f"Service {url} returned status code {response.status_code}")
-
-            except RequestException as e:
-                logger.warning(f"Failed to connect to {url}: {str(e)}")
-                continue
-        logger.info(f"{task_type} available servers: {available_servers}")
-        self.config["sub_servers"][task_type] = available_servers
-        return len(available_servers) > 0
-
     def set_inputs(self, inputs):
         self.input_info.seed = inputs.get("seed", 42)
         self.input_info.prompt = inputs.get("prompt", "")
         if "prompt_ref" in self.input_info.__dataclass_fields__:
             self.input_info.prompt_ref = inputs.get("prompt_ref", self.input_info.prompt_ref)
-        if self.config["use_prompt_enhancer"]:
-            self.input_info.prompt_enhanced = inputs.get("prompt_enhanced", "")
         self.input_info.negative_prompt = inputs.get("negative_prompt", "")
         if "image_path" in self.input_info.__dataclass_fields__:
             self.input_info.image_path = inputs.get("image_path", "")
@@ -618,22 +586,6 @@ class DefaultRunner(BaseRunner):
             del self.vae_decoder
             self.maybe_empty_cache()
 
-    def post_prompt_enhancer(self):
-        while True:
-            for url in self.config["sub_servers"]["prompt_enhancer"]:
-                response = requests.get(f"{url}/v1/local/prompt_enhancer/generate/service_status").json()
-                if response["service_status"] == "idle":
-                    response = requests.post(
-                        f"{url}/v1/local/prompt_enhancer/generate",
-                        json={
-                            "task_id": generate_task_id(),
-                            "prompt": self.config["prompt"],
-                        },
-                    )
-                    enhanced_prompt = response.json()["output"]
-                    logger.info(f"Enhanced prompt: {enhanced_prompt}")
-                    return enhanced_prompt
-
     def process_images_after_vae_decoder(self):
         return_result_tensor = self.input_info.return_result_tensor
         save_result = self.input_info.save_result_path is not None
@@ -699,9 +651,6 @@ class DefaultRunner(BaseRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
-
-        if self.config["use_prompt_enhancer"]:
-            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
 
         self.inputs = self.run_input_encoder()
 
