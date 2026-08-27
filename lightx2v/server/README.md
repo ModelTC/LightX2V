@@ -304,7 +304,6 @@ stateDiagram-v2
 
 ```python
 class VideoTaskRequest(BaseTaskRequest):
-    num_fragments: int = 1
     target_video_length: int = 81
     audio_path: str = ""
     video_duration: int = 5

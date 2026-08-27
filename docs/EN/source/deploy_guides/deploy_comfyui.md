@@ -18,7 +18,6 @@ The official ComfyUI integration nodes for LightX2V are now available in a dedic
   - Memory optimization with CPU offloading
   - Lightweight VAE options
 - LoRA Support: Chain multiple LoRA models for customization
-- Multiple Model Support: wan2.1, hunyuan architectures
 
 ### Installation and Usage
 

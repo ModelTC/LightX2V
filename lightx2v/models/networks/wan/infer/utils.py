@@ -146,22 +146,6 @@ def compute_freqs_dist(s, c, grid_sizes, freqs, seq_p_group):
     return freqs_i_rank
 
 
-def compute_freqs_causvid(c, grid_sizes, freqs, start_frame=0):
-    freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-    f, h, w = grid_sizes
-    seq_len = f * h * w
-    freqs_i = torch.cat(
-        [
-            freqs[0][start_frame : start_frame + f].view(f, 1, 1, -1).expand(f, h, w, -1),
-            freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-            freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1),
-        ],
-        dim=-1,
-    ).reshape(seq_len, 1, -1)
-
-    return freqs_i
-
-
 def pad_freqs(original_tensor, target_len):
     seq_len, s1, s2 = original_tensor.shape
     pad_size = target_len - seq_len

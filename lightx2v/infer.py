@@ -105,7 +105,6 @@ def main():
             "lingbot_world",
             "wan2.2",
             "wan2.2_matrix_game3",
-            "wan2.2_moe_audio",
             "wan2.2_audio",
             "wan2.2_moe_distill",
             "wan2.2_moe_vace",

@@ -247,7 +247,6 @@ pipe.generate(
 - ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
 
 ### Autoregressive Models
-- ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
 - ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0)
 
