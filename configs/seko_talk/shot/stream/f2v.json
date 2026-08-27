@@ -1,7 +1,7 @@
 {
     "model_cls": "seko_talk",
     "task": "s2v",
-    "model_path":"/data/temp/Wan2.1-i2V1202-Audio-14B-720P/",
+    "model_path":"/path/to/Wan2.1-i2V1202-Audio-14B-720P",
     "target_fps": 16,
     "audio_sr": 16000,
     "self_attn_1_type": "flash_attn3",
@@ -26,7 +26,7 @@
     "audio_adapter_cpu_offload": false,
     "lora_configs": [
         {
-        "path": "/data/temp/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
+        "path": "/path/to/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors",
         "strength": 1.0
         }
     ],

@@ -25,6 +25,6 @@
     "use_tae": true,
     "tae_path": "/path/to/taew2_1.pth",
     "lazy_load": true,
-    "rotary_chunk": true,
+    "rope_chunk": true,
     "clean_cuda_cache": true
 }

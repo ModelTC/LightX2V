@@ -35,7 +35,6 @@
     "cross_attn_2_type": "flash_attn2",
 
     "cpu_offload": false,
-    "cpu_offload_activations": false,
     "offload_granularity": "block",
     "seq_parallel": false,
     "parallel": {},

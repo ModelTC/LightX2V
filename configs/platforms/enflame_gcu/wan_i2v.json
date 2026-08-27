@@ -1,5 +1,5 @@
 {
-    "comment": "Wan2.1 I2V 480P - Enflame GCU 8 GPUs with Ulysses + CFG parallelism",
+    "_comment": "Wan2.1 I2V 480P on 8 Enflame GCUs: 4-way Ulysses + 2-way CFG parallelism.",
     "infer_steps": 40,
     "target_video_length": 81,
     "target_height": 480,
@@ -20,6 +20,5 @@
         "seq_p_size": 4,
         "seq_p_attn_type": "ulysses",
         "cfg_p_size": 2
-    },
-    "comment_parallel": "Hybrid parallelism: 4-way Ulysses + 2-way CFG = 8 GPUs total"
+    }
 }

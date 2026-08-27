@@ -15,6 +15,5 @@
     "causal_self_attn_type": "flash_attn3",
     "add_resolution_template": false,
     "add_duration_template": false,
-    "cosmos3_meta_init": true,
     "vae_cpu_offload": false
 }

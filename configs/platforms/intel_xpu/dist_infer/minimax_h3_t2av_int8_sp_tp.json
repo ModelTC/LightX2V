@@ -29,7 +29,7 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "int8-intel-xpu",
-  "dit_quantized_ckpt": "/llm/models/MiniMax-H3/quantized/int8/minimax_h3_int8.safetensors",
+  "dit_quantized_ckpt": "/path/to/minimax_h3_int8.safetensors",
   "parallel": {
     "seq_p_size": 2,
     "seq_p_attn_type": "ulysses",

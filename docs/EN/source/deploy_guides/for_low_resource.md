@@ -134,8 +134,8 @@ VRAM optimization strategies for 720p video generation.
 ```python
 # CUDA memory cleanup configuration
 clean_cuda_cache = True        # Timely cleanup of GPU cache
-rotary_chunk = True            # Rotary position encoding chunked computation
-rotary_chunk_size = 100        # Chunk size, adjustable based on VRAM
+rope_chunk = True              # Rotary position encoding chunked computation
+rope_chunk_size = 100          # Chunk size, adjustable based on VRAM
 ```
 
 #### Chunked Computation Strategy

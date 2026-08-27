@@ -13,7 +13,7 @@
   "text_encoder_tensor_parallel": true,
   "text_encoder_quantized": true,
   "text_encoder_quant_scheme": "fp8-sgl",
-  "text_encoder_quantized_ckpt": "/data/zhangbilang/models/minimax_h3/h3_quantized/fp8/minimax_h3_text_encoder_fp8_sgl.safetensors",
+  "text_encoder_quantized_ckpt": "/path/to/minimax_h3_text_encoder_fp8_sgl.safetensors",
   "vae_cpu_offload": false,
   "vae_decode_parallel": true,
   "vae_sensitive_layer_dtype": "fp32",
@@ -54,14 +54,14 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-sgl",
-  "dit_quantized_ckpt": "/data/wangshankun/models/h3/h3_quantized/fp8/minimax_h3_fp8.safetensors",
+  "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors",
   "video_vae_quantized": true,
   "video_vae_quant_scheme": "fp8-sgl",
-  "video_vae_quantized_ckpt": "/data/wangshankun/models/h3/h3_quantized/fp8/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors",
+  "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors",
   "lora_dynamic_apply": true,
   "lora_configs": [
     {
-      "path": "/data/wangshankun/models/h3/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
+      "path": "/path/to/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
       "strength": 1.0,
       "alpha": 128
     }

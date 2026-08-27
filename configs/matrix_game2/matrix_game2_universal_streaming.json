@@ -60,7 +60,6 @@
     "ffn_dim": 8960,
     "freq_dim": 256,
     "in_dim": 36,
-    "inject_sample_info": false,
     "model_type": "i2v",
     "num_heads": 12,
     "num_layers": 30,
