@@ -52,6 +52,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 
 ## :fire: Latest News
 
+- **August 27, 2026:** 🚀 We release the [MiniMax-H3 Turbo 8-step v1.0 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors) for fast 768p audio-video generation with MiniMax-H3, delivering improved video and audio quality.
+
 - **August 11, 2026:** 🚀 We release and support the [MiniMax-H3 Turbo 4-step v1.0 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors). The released DMD configs under `configs/minimax_h3/dmd` run H3 at 1344x768 with `video_flow_shift=6`, `audio_flow_shift=3`, LoRA alpha 128, and 4-step guidance-free inference.
 
 - **August 7, 2026:** 🚀 LightX2V introduces comprehensive inference support for [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3), an omni-modal generative model that produces video with native synchronized stereo audio. The integration covers T2AV, I2AV, L2AV, FL2AV, and Ref2AV workflows, and incorporates model- and block-level offloading, tensor and sequence parallelism, quantized DiT inference, and feature caching. Single- and multi-GPU examples are available in the [MiniMax-H3 inference scripts](scripts/minimax_h3). Alongside this integration, we release the [MiniMax-H3 T2VA Prompt Rewriter LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA), fine-tuned from Qwen3.6-27B to transform concise user prompts into structured, H3-oriented multimodal descriptions spanning visual narrative, soundscape, and non-diegetic music.
