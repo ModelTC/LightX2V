@@ -452,7 +452,7 @@ class WanAnimate2Runner(WanRunner):
         if transient:
             self.text_encoders = self.load_text_encoder()
 
-        prompt = input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else input_info.prompt
+        prompt = input_info.prompt
         prompt_ref = input_info.prompt_ref or prompt
         negative_prompt = input_info.negative_prompt or ""
         context_ref = self._encode_text(prompt_ref)

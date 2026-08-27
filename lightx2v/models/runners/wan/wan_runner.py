@@ -119,7 +119,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self._maybe_freeze_gc()
 
     def _run_warmup(self):
-        input_info = T2VInputInfo(prompt="warmup", prompt_enhanced="warmup")
+        input_info = T2VInputInfo(prompt="warmup")
         inputs = {"text_encoder_output": self.run_text_encoder(input_info)}
         scheduler = self.model.scheduler
         original_guide_scale = scheduler.sample_guide_scale
@@ -497,9 +497,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
         return gen_video_final
 
     def reuse_key(self):
-        prompt = self.input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else self.input_info.prompt
         reuse_key = {
-            "prompt": prompt,
+            "prompt": self.input_info.prompt,
             "negative_prompt": self.input_info.negative_prompt,
             "target_video_length": self.config["target_video_length"],
         }
@@ -525,8 +524,6 @@ class WanRunner(DisaggMixin, DefaultRunner):
         }
 
     def _run_pipeline_local(self):
-        if self.config["use_prompt_enhancer"]:
-            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
         self.prepare_reuse_output()
         try:
             self.inputs = self.load_reused_inputs() if self.reuse else self.run_input_encoder()
@@ -542,8 +539,6 @@ class WanRunner(DisaggMixin, DefaultRunner):
                 self.end_run()
 
     def _run_pipeline_disagg_encoder(self):
-        if self.config["use_prompt_enhancer"]:
-            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
         self.inputs = self.run_input_encoder()
         latent_shape = list(self.input_info.latent_shape)
         self.send_encoder_outputs(self.inputs, latent_shape)
@@ -551,8 +546,6 @@ class WanRunner(DisaggMixin, DefaultRunner):
         return None
 
     def _run_pipeline_disagg_transformer(self):
-        if self.config["use_prompt_enhancer"]:
-            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
         self.inputs = self.receive_encoder_outputs()
         latent_shape = self.inputs.get("latent_shape")
         if latent_shape:
@@ -597,7 +590,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.text_encoders = self.load_text_encoder()
 
-        prompt = input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else input_info.prompt
+        prompt = input_info.prompt
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_prompt_len.observe(len(prompt))
         neg_prompt = input_info.negative_prompt

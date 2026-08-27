@@ -324,7 +324,6 @@ class ImageTaskRequest(BaseTaskRequest):
 class BaseTaskRequest(BaseModel):
     task_id: str  # auto-generated
     prompt: str = ""
-    use_prompt_enhancer: bool = False
     negative_prompt: str = ""
     image_path: str = ""  # URL, base64, or local path
     save_result_path: str = ""

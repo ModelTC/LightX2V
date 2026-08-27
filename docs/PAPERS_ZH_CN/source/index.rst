@@ -49,5 +49,4 @@ HuggingFace: https://huggingface.co/lightx2v
    步数蒸馏 <papers/step_distill.md>
    自回归模型 <papers/autoregressive.md>
    vae加速 <papers/vae.md>
-   prompt增强 <papers/prompt_enhance.md>
    强化学习 <papers/RL.md>

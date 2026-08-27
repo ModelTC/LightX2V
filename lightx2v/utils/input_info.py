@@ -17,7 +17,6 @@ UNSET = _UnsetType()
 class T2VInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
@@ -31,7 +30,6 @@ class T2VInputInfo:
 class I2VInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
@@ -68,7 +66,6 @@ class SRInputInfo:
 class Flf2vInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     last_frame_path: str = field(default_factory=str)
@@ -87,7 +84,6 @@ class Flf2vInputInfo:
 class VaceInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     src_ref_images: str = field(default_factory=str)
     src_video: str = field(default_factory=str)
@@ -106,7 +102,6 @@ class VaceInputInfo:
 class S2VInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     video_path: str = field(default_factory=str)
@@ -138,7 +133,6 @@ class S2VInputInfo:
 class RS2VInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     audio_path: str = field(default_factory=str)
@@ -173,7 +167,6 @@ class AnimateInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
     prompt_ref: str = field(default_factory=lambda: "人物动作的参考视频")
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     src_pose_path: str = field(default_factory=str)
@@ -263,7 +256,6 @@ class TI2IInputInfo(I2IInputInfo):
 class T2AVInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
@@ -279,7 +271,6 @@ class T2AVInputInfo:
 class I2AVInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     image_strength: float = field(default_factory=float)
@@ -319,7 +310,6 @@ class Ref2AVInputInfo(T2AVInputInfo):
 class I2VAInputInfo:
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     video_path: str = field(default_factory=str)
@@ -358,7 +348,6 @@ class V2AVInputInfo:
 
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     # Optional character / keyframe image conditioning (motion transfer).
     image_path: str = field(default_factory=str)
@@ -395,7 +384,6 @@ class LTX2S2VInputInfo:
 
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     image_strength: float = field(default_factory=float)
@@ -417,7 +405,6 @@ class WorldPlayI2VInputInfo:
 
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     image_path: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
@@ -473,7 +460,6 @@ class WorldPlayT2VInputInfo:
 
     seed: int = field(default_factory=int)
     prompt: str = field(default_factory=str)
-    prompt_enhanced: str = field(default_factory=str)
     negative_prompt: str = field(default_factory=str)
     save_result_path: str = field(default_factory=str)
     return_result_tensor: bool = field(default_factory=lambda: False)
@@ -602,7 +588,6 @@ class SekoTalkInputs:
     target_video_length: int | Any = UNSET
     seed: int | Any = UNSET
     prompt: str | Any = UNSET
-    prompt_enhanced: str | Any = UNSET
     negative_prompt: str | Any = UNSET
     image_path: str | Any = UNSET
     audio_path: str | Any = UNSET

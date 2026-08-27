@@ -40,7 +40,6 @@ def main():
     input_data = {
         "seed": SEED,
         "prompt": PROMPT,
-        "prompt_enhanced": "",
         "negative_prompt": "",
         "image_path": IMAGE_PATH,
         "save_result_path": os.path.join(OUTPUT_PATH, "worldplay_ar_test.mp4"),

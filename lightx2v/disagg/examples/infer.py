@@ -97,8 +97,6 @@ def main():
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sf_model_path", type=str, required=False)
     parser.add_argument("--config_json", type=str, required=True)
-    parser.add_argument("--use_prompt_enhancer", action="store_true")
-
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")
 
