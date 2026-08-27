@@ -52,6 +52,8 @@ pre-commit run --all-files
 
 ## :fire: 最新动态
 
+- **2026年8月27日：** 🚀 我们发布了 [MiniMax-H3 Turbo 8-step v1.0 768p 蒸馏 LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors)，用于通过 MiniMax-H3 快速生成 768p 音视频，并带来更高的视频与音频质量。
+
 - **2026年8月11日：** 🚀 我们发布并支持 [MiniMax-H3 Turbo 4-step v1.0 768p 蒸馏 LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors)。`configs/minimax_h3/dmd` 下的推理配置默认以 1344x768 分辨率运行 H3，使用 `video_flow_shift=6`、`audio_flow_shift=3`、LoRA alpha 128，并支持 4 步无 CFG 推理。
 
 - **2026年8月7日：** 🚀 LightX2V 正式推出对 [MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) 的完整推理支持。MiniMax-H3 是一款可生成原生同步立体声音频与视频的全模态生成模型；当前集成覆盖 T2AV、I2AV、L2AV、FL2AV 和 Ref2AV 工作流，并提供模型级与 Block 级 Offload、张量并行与序列并行、DiT 量化推理及特征缓存等优化能力。单卡与多卡示例请参阅 [MiniMax-H3 推理脚本](scripts/minimax_h3)。与此同时，我们发布了基于 Qwen3.6-27B 微调的 [MiniMax-H3 T2VA Prompt Rewriter LoRA](https://huggingface.co/lightx2v/MiniMax-H3-Prompt-Rewriter-LoRA)，可将简洁的用户提示词转换为面向 H3 的结构化多模态描述，涵盖视觉叙事、整体音景与非叙事音乐。
