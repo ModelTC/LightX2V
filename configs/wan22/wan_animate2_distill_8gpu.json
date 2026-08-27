@@ -62,9 +62,9 @@
         "seq_p_attn_type": "ulysses",
         "vae_parallel": false
     },
-    "dit_original_ckpt": "/data/nvme0/gushiqiao/models/Wan2.2-Animate-2-14B/wan_animate_2/wan_animate_2_bf16_distillation.safetensors",
-    "t5_original_ckpt": "/data/nvme0/gushiqiao/models/Wan2.2-Animate-2-14B/videomodel/Wan-AI/models_t5_umt5-xxl-enc-bf16.pth",
-    "t5_tokenizer_path": "/data/nvme0/gushiqiao/models/Wan2.2-Animate-2-14B/videomodel/Wan-AI/umt5-xxl",
-    "clip_original_ckpt": "/data/nvme0/gushiqiao/models/Wan2.2-Animate-2-14B/videomodel/Wan-AI/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
-    "vae_path": "/data/nvme0/gushiqiao/models/Wan2.2-Animate-2-14B/videomodel/Wan-AI/vae.pth"
+    "dit_original_ckpt": "/path/to/wan_animate_2_bf16_distillation.safetensors",
+    "t5_original_ckpt": "/path/to/models_t5_umt5-xxl-enc-bf16.pth",
+    "t5_tokenizer_path": "/path/to/umt5-xxl",
+    "clip_original_ckpt": "/path/to/models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
+    "vae_path": "/path/to/vae.pth"
 }

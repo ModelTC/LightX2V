@@ -1,5 +1,5 @@
 {
-    "model_path": "/root/zht/LightX2V/models/Wan-AI/Wan2.2-I2V-A14B",
+    "model_path": "/path/to/Wan2.2-I2V-A14B",
     "infer_steps": 50,
     "in_dim": 36,
     "dim": 5120,

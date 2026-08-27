@@ -9,5 +9,5 @@
     "enable_cfg": true,
     "parallel": {
         "cfg_p_size": 2
-    },
+    }
 }

@@ -1,6 +1,6 @@
 {
     "dancer_stage": "global",
-    "dit_original_ckpt": "/data/nvme1/yongyang/dan/Wan-Dancer/models/Wan-AI/Wan-Dancer-14B/global_model.safetensors",
+    "dit_original_ckpt": "/path/to/global_model.safetensors",
     "infer_steps": 4,
     "target_video_length": 149,
     "target_height": 1280,
@@ -18,7 +18,7 @@
     "denoising_step_list": [1000, 750, 500, 250],
     "lora_configs": [
         {
-            "path": "/data/nvme1/models/lightx2v_hf/lightx2v/Wan2.1-Distill-Loras/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
+            "path": "/path/to/wan2.1_i2v_lora_rank64_lightx2v_4step.safetensors",
             "strength": 1.0
         }
     ],

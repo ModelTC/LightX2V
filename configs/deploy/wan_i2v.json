@@ -9,19 +9,5 @@
     "sample_guide_scale": 5,
     "sample_shift": 5,
     "enable_cfg": true,
-    "cpu_offload": false,
-    "sub_servers": {
-        "dit": [
-            "http://localhost:9000"
-        ],
-        "text_encoders": [
-            "http://localhost:9002"
-        ],
-        "image_encoder": [
-            "http://localhost:9003"
-        ],
-        "vae_model": [
-            "http://localhost:9004"
-        ]
-    }
+    "cpu_offload": false
 }

@@ -13,7 +13,6 @@
     "rope_type": "cosmos3_rope",
     "self_attn_type": "flash_attn3",
     "causal_self_attn_type": "flash_attn3",
-    "cosmos3_meta_init": true,
     "vae_cpu_offload": false,
     "cpu_offload": false,
     "offload_granularity": "block"

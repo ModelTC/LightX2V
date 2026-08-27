@@ -11,7 +11,7 @@
   "text_encoder_tensor_parallel": true,
   "text_encoder_quantized": true,
   "text_encoder_quant_scheme": "fp8-musa",
-  "text_encoder_quantized_ckpt": "/data/MiniMax-H3-FP8/minimax_h3_text_encoder_fp8_musa.safetensors",
+  "text_encoder_quantized_ckpt": "/path/to/minimax_h3_text_encoder_fp8_musa.safetensors",
   "vae_cpu_offload": false,
   "vae_decode_parallel": true,
   "lazy_load": false,
@@ -31,10 +31,10 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-musa",
-  "dit_quantized_ckpt": "/data/MiniMax-H3-FP8/minimax_h3_dit_fp8_musa.safetensors",
+  "dit_quantized_ckpt": "/path/to/minimax_h3_dit_fp8_musa.safetensors",
   "video_vae_quantized": true,
   "video_vae_quant_scheme": "fp8-musa",
-  "video_vae_quantized_ckpt": "/data/MiniMax-H3-FP8/minimax_h3_video_vae_fp8_musa.safetensors",
+  "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_musa.safetensors",
   "parallel": {
     "tensor_p_size": 8
   },

@@ -9,7 +9,7 @@
     "use_triton_qknorm_rope": true,
     "lora_configs": [
         {
-          "path": "/data/nvme1/yongyang/kkk/models/sensenova/SenseNova-U1-8B-MoT-LoRAs/SenseNova-U1-8B-MoT-LoRA-8step-V1.0.safetensors",
+          "path": "/path/to/SenseNova-U1-8B-MoT-LoRA-8step-V1.0.safetensors",
           "strength": 1.0
         }
     ]

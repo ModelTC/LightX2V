@@ -8,7 +8,7 @@
     "sample_guide_scale": 4.0,
     "lora_configs": [
         {
-          "path": "/root/wushuo/models/qwen8steps/Qwen-Image-2512-Lightning-8steps-V1.0-fp32.safetensors",
+          "path": "/path/to/Qwen-Image-2512-Lightning-8steps-V1.0-fp32.safetensors",
           "strength": 1.0
         }
       ],

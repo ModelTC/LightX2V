@@ -26,7 +26,6 @@
     "add_resolution_template": false,
     "add_duration_template": false,
     "use_system_prompt": false,
-    "cosmos3_meta_init": true,
     "unload_modules": false,
     "vae_cpu_offload": true,
     "cpu_offload": true,

@@ -43,6 +43,6 @@
     "infinitetalk_context_tokens": 32,
     "infinitetalk_audio_output_dim": 768,
     "norm_output_audio": true,
-    "mxint8_fuse_enable": false,
+    "mxfp8_fuse_enable": false,
     "use_timestep_transform": true
 }
