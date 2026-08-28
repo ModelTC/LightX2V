@@ -4,8 +4,8 @@ set -e
 # set path firstly
 lightx2v_path=/path/to/LightX2V
 model_path=/path/to/Wan2.2-Animate-2-14B
-image_path=/path/to
-video_path=/path/to/601306049.mp4
+image_path=/path/to/Wan-Animate-2/examples/demo1/reference.png
+video_path=/path/to/Wan-Animate-2/examples/demo1/template.mp4
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
