@@ -25,6 +25,8 @@ from .packing import (
 )
 
 REFERENCE_IMAGE_SHORT_EDGE = 2048
+REFERENCE_IMAGE_RESIZE_MODES = ("match", "max", "diffusers")
+DEFAULT_REFERENCE_IMAGE_RESIZE_MODE = "diffusers"
 QWEN_VIDEO_SAMPLE_FPS = 2
 QWEN_TEMPORAL_PATCH = 2
 MAX_REFERENCE_IMAGES = 9
@@ -230,13 +232,32 @@ def build_ref2av_packed_sequence(
     )
 
 
-def resolve_reference_image_size(width: int, height: int) -> tuple[int, int]:
+def resolve_reference_image_size(
+    width: int,
+    height: int,
+    *,
+    target_width: int,
+    target_height: int,
+    mode: str = DEFAULT_REFERENCE_IMAGE_RESIZE_MODE,
+    multiple: int = CANVAS_MULTIPLE,
+    max_short_edge: int = REFERENCE_IMAGE_SHORT_EDGE,
+) -> tuple[int, int]:
     if width <= 0 or height <= 0 or width > 4 * height or height > 4 * width:
         raise ValueError(f"A reference image must be positive and within 1:4..4:1, got {width}x{height}")
-    scale = REFERENCE_IMAGE_SHORT_EDGE / min(width, height)
+    if target_width <= 0 or target_height <= 0:
+        raise ValueError(f"The target canvas must be positive, got {target_width}x{target_height}")
+    if mode not in REFERENCE_IMAGE_RESIZE_MODES:
+        raise ValueError(f"reference_image_resize_mode must be one of {REFERENCE_IMAGE_RESIZE_MODES}, got {mode!r}")
+
+    if mode == "match":
+        scale = min(1.0, math.sqrt((target_width * target_height) / (width * height)))
+    elif mode == "max":
+        scale = min(1.0, max_short_edge / min(width, height))
+    else:
+        scale = max_short_edge / min(width, height)
     return (
-        max(CANVAS_MULTIPLE, round(height * scale / CANVAS_MULTIPLE) * CANVAS_MULTIPLE),
-        max(CANVAS_MULTIPLE, round(width * scale / CANVAS_MULTIPLE) * CANVAS_MULTIPLE),
+        max(multiple, round(height * scale / multiple) * multiple),
+        max(multiple, round(width * scale / multiple) * multiple),
     )
 
 
