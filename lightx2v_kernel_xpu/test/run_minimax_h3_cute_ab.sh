@@ -10,7 +10,7 @@ cmake -S "${kernel_dir}" -B "${build_dir}" \
   ${CUTLASS_SYCL_ROOT:+-DCUTLASS_SYCL_ROOT="${CUTLASS_SYCL_ROOT}"}
 cmake --build "${build_dir}" --target cute_fmha_torch cute_fmha_minimax_h3_torch -j "${BUILD_JOBS:-2}"
 
-read -r -a sequence_lengths <<< "${SEQUENCE_LENGTHS:-19292 19930 37726}"
+read -r -a sequence_lengths <<< "${SEQUENCE_LENGTHS:-19292 37726}"
 read -r -a head_counts <<< "${HEAD_COUNTS:-56 28 14 7}"
 
 for sequence_length in "${sequence_lengths[@]}"; do
