@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-kernel_dir="${repo_root}/lightx2v_kernel_xpu"
+kernel_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${BUILD_DIR:-${kernel_dir}/_cmake_build}"
 
 cmake -S "${kernel_dir}" -B "${build_dir}" \
@@ -26,13 +25,13 @@ for sequence_length in "${sequence_lengths[@]}"; do
     # Separate processes make the default one-shot comparison insensitive to
     # which library happened to run second after GPU clock boosting.
     ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
-      python "${kernel_dir}/bench_minimax_h3_cute_ab.py" "${common_args[@]}" --variant generic
+      python "${kernel_dir}/test/bench_minimax_h3_cute_ab.py" "${common_args[@]}" --variant generic
     ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
-      python "${kernel_dir}/bench_minimax_h3_cute_ab.py" "${common_args[@]}" --variant optimized
+      python "${kernel_dir}/test/bench_minimax_h3_cute_ab.py" "${common_args[@]}" --variant optimized
 
     if [[ "${VERIFY_OUTPUTS:-0}" == "1" ]]; then
       ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
-        python "${kernel_dir}/bench_minimax_h3_cute_ab.py" "${common_args[@]}" --variant both
+        python "${kernel_dir}/test/bench_minimax_h3_cute_ab.py" "${common_args[@]}" --variant both
     fi
   done
 done
