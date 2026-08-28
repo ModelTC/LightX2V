@@ -1,12 +1,12 @@
 --- xe_fmha_fwd_mainloop.hpp
 +++ xe_fmha_fwd_mainloop.hpp
 @@ -275,6 +275,7 @@
- 
+
      /* Create register fragments for MMA and copies */
      auto tQrQ = thr_copy_q.partition_sg_fragment_D(gQ(_,_,0));
 +    decltype(tQrQ) tQrQ_cached0;
      auto tSrQ = thr_mma_qk.partition_sg_fragment_A(gQ(_,_,0));
- 
+
      auto tKrK = thr_copy_k.partition_sg_fragment_D(gK(_,_,0,0));
 @@ -310,6 +311,7 @@
      for (int D = 0; D < size<3>(pQgQ); D++) {
@@ -19,7 +19,7 @@
 @@ -353,23 +355,28 @@
          k_idx = K - kblocks_cache;
        }
- 
+
 +      /* Start V fetch before Q*K so its latency overlaps GEMM 1. */
 +      CUTLASS_PRAGMA_UNROLL
 +      for (int VV = 0; VV < VTiles; VV++) {
@@ -40,10 +40,10 @@
          copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
 -        reorder(tQrQ, tSrQ);
          reorder(tKrK, tSrK);
- 
+
          cute::gemm(mma_qk, tSrQ, tSrK, tSrS);
        }
- 
+
 -      /* V prefetch for GEMM 2 */
 -      CUTLASS_PRAGMA_UNROLL
 -      for (int VV = 0; VV < VTiles; VV++) {
@@ -54,7 +54,7 @@
          if (K == total_blk - 1) {
 @@ -405,7 +412,10 @@
        }
- 
+
        /* Apply softmax and scaling (tA rescaling fused into GEMM2 VTile loop) */
 -      auto rescale = softmax(K == blk_k0, tSrS, tA_max, tA_sum);
 +      bool h3_subgroup_needs_rescale;
@@ -62,7 +62,7 @@
 +          K == blk_k0, tSrS, tA_max, tA_sum,
 +          h3_subgroup_needs_rescale);
        reorder(tSrS, tArP);
- 
+
        /* GEMM 2: A += P * V, split in v dimension.
 @@ -414,7 +424,7 @@
        for (int VV = 0; VV < VTiles; VV++) {
@@ -88,7 +88,7 @@
 +          bool     & subgroup_needs_rescale) {
      /* Compute row-wise maxima for this block */
      auto tS_bmax = reduce<1>(tS, sycl::maximum{});
- 
+
      FragSRow rescale;
 +    bool local_max_unchanged = true;
      CUTLASS_PRAGMA_UNROLL
@@ -111,12 +111,12 @@
 +    } else {
 +      fill(rescale, ElementS(1));
 +    }
- 
+
      /* Scale S and subtract maxima, then exponentiate */
      CUTLASS_PRAGMA_UNROLL
 @@ -488,7 +513,7 @@
        tS(i) = sycl::native::exp2(params.scale * tS(i) - broadcast<0>(tS_max, tS, i));
- 
+
      /* Rescale existing S sums */
 -    if (!first_block) {
 +    if (subgroup_needs_rescale) {
