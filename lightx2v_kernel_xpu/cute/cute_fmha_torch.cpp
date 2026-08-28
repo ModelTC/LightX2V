@@ -41,6 +41,10 @@
 #include "flash_attention_v2/kernel/xe_tile_scheduler.hpp"
 #include "cute_fmha_config.h"
 
+#ifndef CUTE_FMHA_TORCH_LIBRARY
+#define CUTE_FMHA_TORCH_LIBRARY sycl_kernels_cute
+#endif
+
 using namespace cute;
 
 namespace {
@@ -376,10 +380,10 @@ at::Tensor sdp(const at::Tensor& q, const at::Tensor& k, const at::Tensor& v) {
 
 }  // namespace
 
-TORCH_LIBRARY(sycl_kernels_cute, m) {
+TORCH_LIBRARY(CUTE_FMHA_TORCH_LIBRARY, m) {
   m.def("sdp(Tensor q, Tensor k, Tensor v) -> Tensor");
 }
 
-TORCH_LIBRARY_IMPL(sycl_kernels_cute, XPU, m) {
+TORCH_LIBRARY_IMPL(CUTE_FMHA_TORCH_LIBRARY, XPU, m) {
   m.impl("sdp", &sdp);
 }
