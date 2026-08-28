@@ -1,4 +1,4 @@
-"""Environment-controlled one-step and one-block transformer profiling."""
+"""Environment-controlled transformer step, block, and region profiling."""
 
 from __future__ import annotations
 
@@ -58,8 +58,8 @@ def _profile_mode() -> str | None:
     mode = os.environ.get(PROFILE_MODE_ENV, "").strip().lower()
     if mode in _PROFILE_OFF_VALUES:
         return None
-    if mode not in {"full", "block"}:
-        raise ValueError(f"{PROFILE_MODE_ENV}={mode!r} is invalid; expected 'full' or 'block'.")
+    if mode not in {"full", "block", "region"}:
+        raise ValueError(f"{PROFILE_MODE_ENV}={mode!r} is invalid; expected 'full', 'block', or 'region'.")
     return mode
 
 
@@ -103,7 +103,13 @@ def _rank_suffix() -> str:
 
 
 @contextmanager
-def _one_call_torch_profile(out_dir: Path, name: str):
+def _one_call_torch_profile(
+    out_dir: Path,
+    name: str,
+    *,
+    record_shapes: bool = False,
+    with_flops: bool = False,
+):
     out_dir.mkdir(parents=True, exist_ok=True)
     cfg = TorchTraceProfileConfig(
         tb_dir=str(out_dir),
@@ -120,9 +126,10 @@ def _one_call_torch_profile(out_dir: Path, name: str):
     with torch_profiler.profile(
         activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
         schedule=schedule(wait=0, warmup=0, active=1, repeat=1),
-        record_shapes=False,
+        record_shapes=record_shapes,
         profile_memory=False,
         with_stack=False,
+        with_flops=with_flops,
         on_trace_ready=make_on_trace_ready(cfg),
     ) as profiler:
         try:
@@ -148,7 +155,7 @@ def suspend_transformer_profile():
 
 
 class TransformerProfile:
-    """Capture one configured diffusion step or one block within that step."""
+    """Capture one diffusion step, compiled block, or eager block region trace."""
 
     default_step = 1
     default_layer = 2
@@ -167,7 +174,7 @@ class TransformerProfile:
         self.step = self.default_step
         self.layer = self.default_layer
         self._profiled = False
-        self._block_mode_active = False
+        self._layer_mode_active = False
         self._block_recorded = False
 
         if self.mode is not None:
@@ -175,9 +182,10 @@ class TransformerProfile:
             self.layer = _nonnegative_env_int(PROFILE_LAYER_ENV, self.default_layer)
             if infer_steps is not None and self.step >= infer_steps:
                 raise ValueError(f"{PROFILE_STEP_ENV}={self.step} is out of range for infer_steps={infer_steps}.")
-            if self.mode == "block" and num_layers is not None and self.layer >= num_layers:
+            if self.mode in {"block", "region"} and num_layers is not None and self.layer >= num_layers:
                 raise ValueError(f"{PROFILE_LAYER_ENV}={self.layer} is out of range for num_layers={num_layers}.")
-            logger.info(f"[Profile] {self.model_name} target: mode={self.mode}, step={self.step}, layer={self.layer if self.mode == 'block' else 'all'}")
+            layer = self.layer if self.mode in {"block", "region"} else "all"
+            logger.info(f"[Profile] {self.model_name} target: mode={self.mode}, step={self.step}, layer={layer}")
 
     def mode_for_step(self, step_index: int) -> str | None:
         if self.mode is None or self._profiled or _profile_suspended.get():
@@ -185,7 +193,7 @@ class TransformerProfile:
         return self.mode if int(step_index) == self.step else None
 
     def _out_dir(self, mode: str) -> Path:
-        target = f"full_step_{self.step}" if mode == "full" else f"block_step_{self.step}_layer_{self.layer}"
+        target = f"full_step_{self.step}" if mode == "full" else f"{mode}_step_{self.step}_layer_{self.layer}"
         return _profile_root() / f"{self.model_name}_transformer_profile" / target
 
     @contextmanager
@@ -203,7 +211,7 @@ class TransformerProfile:
             logger.info(f"[Profile] {self.model_name} full-step trace: {_latest_trace(out_dir, previous_traces)}")
             return
 
-        self._block_mode_active = True
+        self._layer_mode_active = True
         self._block_recorded = False
         try:
             yield
@@ -211,28 +219,46 @@ class TransformerProfile:
                 raise RuntimeError(f"Transformer block {self.layer} was not executed during profile step {self.step}.")
             self._profiled = True
         finally:
-            self._block_mode_active = False
+            self._layer_mode_active = False
 
     def should_record_block(self, block_idx: int) -> bool:
-        return self._block_mode_active and not self._block_recorded and block_idx == self.layer
+        return self._layer_mode_active and not self._block_recorded and block_idx == self.layer
 
     @contextmanager
     def record_block(self, block_idx: int):
         if not self.should_record_block(block_idx):
             raise RuntimeError(f"Block {block_idx} is not the configured profile target.")
 
-        out_dir = self._out_dir("block")
+        out_dir = self._out_dir(self.mode)
         previous_traces = _trace_paths(out_dir)
+        if self.mode == "block":
+            with _one_call_torch_profile(
+                out_dir,
+                f"block_{block_idx}",
+                record_shapes=True,
+                with_flops=True,
+            ):
+                yield
+            trace_path = _latest_trace(out_dir, previous_traces)
+            write_inventory = getattr(self.block_profile, "write_inventory", None)
+            if write_inventory is not None:
+                inventory_path = out_dir / f"block_{block_idx}{_rank_suffix()}_inventory.json"
+                write_inventory(inventory_path, block_idx)
+                logger.info(f"[Profile] {self.model_name} block inventory: {inventory_path}")
+            self._block_recorded = True
+            logger.info(f"[Profile] {self.model_name} block trace: {trace_path}")
+            return
+
         if self.block_profile is None:
             with transformer_profile_regions():
                 with _one_call_torch_profile(out_dir, f"block_{block_idx}"):
                     yield
             self._block_recorded = True
-            logger.info(f"[Profile] {self.model_name} block trace: {_latest_trace(out_dir, previous_traces)}")
+            logger.info(f"[Profile] {self.model_name} region trace: {_latest_trace(out_dir, previous_traces)}")
             return
 
         suffix = _rank_suffix()
-        op_trace_path = out_dir / f"block_{block_idx}{suffix}_op_trace.jsonl"
+        op_trace_path = out_dir / f"region_{block_idx}{suffix}_op_trace.jsonl"
         try:
             ost.begin_recording(op_trace_path)
             with active_profile(self.block_profile):
@@ -247,7 +273,7 @@ class TransformerProfile:
 
         analyze = import_module(self.block_profile.block_profile_report_module).analyze
         trace_path = _latest_trace(out_dir, previous_traces)
-        report_path = out_dir / f"block_{block_idx}{suffix}_layer_trace.txt"
+        report_path = out_dir / f"region_{block_idx}{suffix}_layer_trace.txt"
         profile_meta = ProfileRunMeta(pre_steps=0, wait=0, warmup=0, active=1, with_stack=False)
         report, _, _ = analyze(
             trace_path,
@@ -258,7 +284,7 @@ class TransformerProfile:
         )
         report_path.write_text(report, encoding="utf-8")
         self._block_recorded = True
-        logger.info(f"[Profile] {self.model_name} block trace: {trace_path}")
+        logger.info(f"[Profile] {self.model_name} region trace: {trace_path}")
         logger.info(f"[Profile] {self.model_name} op trace: {op_trace_path}")
         logger.info(f"[Profile] {self.model_name} layer report: {report_path}")
 

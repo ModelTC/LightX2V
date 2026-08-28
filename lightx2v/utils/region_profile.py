@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextvars
 import functools
+import os
 from contextlib import contextmanager
 from typing import Any, Callable, TypeVar
 
@@ -49,6 +50,9 @@ def region_profile(
     """Annotate ``fn`` only while a targeted transformer block is profiled."""
 
     def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+        if os.environ.get("LIGHTX2V_PROFILE_MODE", "").strip().lower() != "region":
+            return fn
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs) -> T:
             profile = _active_profile.get()

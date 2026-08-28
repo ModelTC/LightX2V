@@ -11,52 +11,60 @@ LightX2V 提供 `lightx2v.utils.torch_trace_profiler` 模块，基于 PyTorch Pr
 
 ## Transformer 单步 / 单层采集
 
-保留开发工具分支额外提供了面向真实 diffusion 流程的 transformer profiler。它不会为了 profiler schedule 重复执行带状态的模型调用：
+保留开发工具分支额外提供了面向真实 diffusion 流程的 transformer profiler。它不会为了 profiler schedule 重复执行带状态的模型调用，并明确拆分三种用途：
 
 - `full`：采集目标 step 的完整 transformer。
-- `block`：只采集目标 step 的一个 block，并输出 trace、逻辑 op shape 和按 region 整理的文本报告。
+- `block`：采集目标 step 的完整目标层，不插入层内 region；保留 `torch.compile`，适合分析编译后真实单层。除 TensorBoard trace 外，已适配模型可额外输出逻辑 shape/FLOPs inventory。
+- `region`：采集目标 step 的目标层，并按 attention、FFN、MoE 等自然边界拆分；输出逻辑 op JSONL 与文本报告。该模式要求 eager，用于细粒度归因。
 
 | 环境变量 | 默认值 | 说明 |
 |---|---:|---|
-| `LIGHTX2V_PROFILE_MODE` | 未设置 | `full` 或 `block`；未设置时关闭 |
+| `LIGHTX2V_PROFILE_MODE` | 未设置 | `full`、`block` 或 `region`；未设置时关闭 |
 | `LIGHTX2V_PROFILE_STEP` | `1` | 目标 diffusion step，按 0 开始计数 |
-| `LIGHTX2V_PROFILE_LAYER` | `2` | `block` 模式目标层，按 0 开始计数 |
+| `LIGHTX2V_PROFILE_LAYER` | `2` | `block` / `region` 的目标层，按 0 开始计数 |
 | `LIGHTX2V_PROFILE_OUTPUT_DIR` | `{repo}/prof_results` | 输出根目录 |
 
-以 Wan2.2 extreme 脚本为例：
+这些环境变量必须在启动 Python 进程前设置。`region` 模式会在模型模块导入时决定是否安装层内 hook，进程内后改环境变量不会追溯修改已经导入的函数。
+
+以 MiniMax-H3 为例：
 
 ```bash
 # 完整 step
-LIGHTX2V_PROFILE_MODE=full \
-LIGHTX2V_PROFILE_STEP=1 \
-sh scripts/wan22/extreme/run_wan22_moe_t2v_extreme.sh
+LIGHTX2V_PROFILE_MODE=full LIGHTX2V_PROFILE_STEP=2 sh scripts/minimax_h3/run_minimax_h3_t2av_sp.sh
 
-# 单层
-LIGHTX2V_PROFILE_MODE=block \
-LIGHTX2V_PROFILE_STEP=1 \
-LIGHTX2V_PROFILE_LAYER=20 \
-sh scripts/wan22/extreme/run_wan22_moe_t2v_extreme.sh
+# 保留 torch.compile 的完整单层
+LIGHTX2V_PROFILE_MODE=block LIGHTX2V_PROFILE_STEP=2 LIGHTX2V_PROFILE_LAYER=47 sh scripts/minimax_h3/run_minimax_h3_t2av_sp.sh
+
+# eager 层内细分；对应 config 需设置 use_compile=false
+LIGHTX2V_PROFILE_MODE=region LIGHTX2V_PROFILE_STEP=2 LIGHTX2V_PROFILE_LAYER=47 sh scripts/minimax_h3/run_minimax_h3_t2av.sh
 ```
 
 输出目录形如：
 
 ```text
-prof_results/wan_transformer_profile/full_step_1/
+prof_results/minimax_h3_transformer_profile/full_step_2/
 └── *.pt.trace.json
 
-prof_results/wan_transformer_profile/block_step_1_layer_20/
+prof_results/minimax_h3_transformer_profile/block_step_2_layer_47/
 ├── *.pt.trace.json
-├── block_20_op_trace.jsonl
-└── block_20_layer_trace.txt
+└── block_47_rank_0_inventory.json
+
+prof_results/minimax_h3_transformer_profile/region_step_2_layer_47/
+├── *.pt.trace.json
+├── region_47_op_trace.jsonl
+└── region_47_layer_trace.txt
 ```
 
-脚本带 `--warmup` 时，warmup 不会消费目标 profile。多卡运行会给 op trace 和报告追加 rank 后缀。动态稀疏 attention 的报告 FLOPs 会标记为 `dense-equivalent`，不能当作实际执行 FLOPs 或直接与硬件峰值比较。
+`block` 的 inventory 是按实际运行时 token、权重布局与并行切分生成的逻辑算子清单；并非所有模型都已实现该可选产物。`region` 的 JSONL/文本报告用于层内 kernel 归属和 shape/FLOPs 分析。脚本带 `--warmup` 时，warmup 不会消费正式目标 profile；H3 的 AdaLN cache 若已命中，inventory 不会误计未执行的 AdaLN GEMM。多卡运行会给 inventory、op trace 和报告追加 rank 后缀。
+
+动态稀疏 attention 的报告 FLOPs 会标记为 `dense-equivalent`，不能当作实际执行 FLOPs 或直接与硬件峰值比较。`block` trace 中 PyTorch 自带的 FLOPs 也应结合 kernel 与量化语义审读。
+
+Profiler 产物用于性能诊断，不作为 bitwise 数值或画质回归基准。尤其 `full` 会覆盖完整的多 stream transformer step，采集活动可能改变异步工作时序；正确性对比应使用关闭 profiler 的独立运行。
 
 快速统计 full trace 的 GPU active/gap：
 
 ```bash
-python tools/profile/profiler_step_gap.py --brief \
-  prof_results/wan_transformer_profile/full_step_1/*.pt.trace.json
+python tools/profile/profiler_step_gap.py --brief prof_results/minimax_h3_transformer_profile/full_step_2/*.pt.trace.json
 ```
 
 工具优先使用 GPU `ProfilerStep#N` annotation；缺失时会选择对应 CPU step 内最宽的 GPU annotation，并打印实际 `Step windows` 来源。完整维护契约、支持矩阵和适配步骤见 [Transformer Profile 分支维护契约](transformer_profile_branch.md)。

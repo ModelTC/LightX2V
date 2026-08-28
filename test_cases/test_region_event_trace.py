@@ -1,5 +1,6 @@
 import unittest
 
+from tools.profile.profiler_step_gap import analyze_events
 from tools.profile.region_event_trace import (
     GpuEvent,
     OpEntry,
@@ -8,7 +9,6 @@ from tools.profile.region_event_trace import (
     format_evt_line,
     is_core_kernel,
 )
-from tools.profile.profiler_step_gap import analyze_events
 
 
 class RegionEventTraceTest(unittest.TestCase):
@@ -20,10 +20,7 @@ class RegionEventTraceTest(unittest.TestCase):
         )
 
     def test_uncorrelated_event_uses_matching_neighbor_anchors(self):
-        events = [
-            {"ph": "X", "cat": "kernel", "name": f"kernel_{index}", "ts": float(index), "dur": 0.1}
-            for index in (1, 2, 3)
-        ]
+        events = [{"ph": "X", "cat": "kernel", "name": f"kernel_{index}", "ts": float(index), "dur": 0.1} for index in (1, 2, 3)]
         gpu_annotations = [(0.5, 1.5, "self_attn"), (2.5, 3.5, "self_attn")]
 
         gpu_events = collect_gpu_events(events, 0.0, 4.0, [], gpu_annotations, self.config)

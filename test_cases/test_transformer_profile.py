@@ -7,6 +7,7 @@ from unittest.mock import patch
 os.environ.setdefault("SKIP_PLATFORM_CHECK", "1")
 
 from lightx2v.utils import transformer_profile as profile_module
+from lightx2v.utils.region_profile import region_profile
 from lightx2v.utils.transformer_profile import (
     PROFILE_LAYER_ENV,
     PROFILE_MODE_ENV,
@@ -35,7 +36,11 @@ class TransformerProfileTest(unittest.TestCase):
         self.assertEqual(mode, "block")
 
         with (
-            patch.object(profile_module, "_one_call_torch_profile", side_effect=lambda *_args: nullcontext()),
+            patch.object(
+                profile_module,
+                "_one_call_torch_profile",
+                side_effect=lambda *_args, **_kwargs: nullcontext(),
+            ) as torch_profile,
             patch.object(profile_module, "_latest_trace", return_value=Path("trace.json")),
             profile.record_transformer(mode),
         ):
@@ -44,6 +49,8 @@ class TransformerProfileTest(unittest.TestCase):
                 pass
 
         self.assertIsNone(profile.mode_for_step(2))
+        self.assertTrue(torch_profile.call_args.kwargs["record_shapes"])
+        self.assertTrue(torch_profile.call_args.kwargs["with_flops"])
 
     def test_missing_target_block_is_an_error(self):
         with self._block_profile():
@@ -60,6 +67,33 @@ class TransformerProfileTest(unittest.TestCase):
         with suspend_transformer_profile():
             self.assertIsNone(profile.mode_for_step(2))
         self.assertEqual(profile.mode_for_step(2), "block")
+
+    def test_region_mode_keeps_internal_regions_separate(self):
+        with self._block_profile(**{PROFILE_MODE_ENV: "region"}):
+            profile = TransformerProfile("test", infer_steps=4, num_layers=5)
+
+        with (
+            patch.object(
+                profile_module,
+                "_one_call_torch_profile",
+                side_effect=lambda *_args, **_kwargs: nullcontext(),
+            ) as torch_profile,
+            patch.object(profile_module, "_latest_trace", return_value=Path("trace.json")),
+            profile.record_transformer(profile.mode_for_step(2)),
+        ):
+            with profile.record_block(3):
+                pass
+
+        self.assertFalse(torch_profile.call_args.kwargs)
+
+    def test_region_decorator_is_identity_outside_region_mode(self):
+        def fn():
+            return 1
+
+        with self._block_profile():
+            decorated = region_profile("test")(fn)
+
+        self.assertIs(decorated, fn)
 
     def test_target_bounds_are_validated(self):
         with self._block_profile(**{PROFILE_LAYER_ENV: "5"}):

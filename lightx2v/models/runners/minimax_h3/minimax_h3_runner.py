@@ -45,6 +45,7 @@ from lightx2v.utils.input_info import FL2AVInputInfo, I2AVInputInfo, L2AVInputIn
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.transformer_profile import suspend_transformer_profile
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
@@ -112,6 +113,7 @@ class MiniMaxH3Runner(DefaultRunner):
             logger.info("MiniMax-H3 pre/post weights will remain on the accelerator across requests")
 
     @ProfilingContext4DebugL1("Warmup")
+    @suspend_transformer_profile()
     def run_warmup(self):
         task = self.config["task"]
         if task not in self._WARMUP_TASKS:

@@ -6,7 +6,9 @@ from types import SimpleNamespace
 
 import torch
 
+from lightx2v.common.ops.mm.mm_weight import MMWeightTP
 from lightx2v.models.networks.hunyuan3d.infer.block_profile import Hunyuan3DBlockProfile
+from lightx2v.models.networks.minimax_h3.infer.block_profile import MiniMaxH3BlockProfile
 from lightx2v.models.networks.wan.infer.block_profile import WanBlockProfile
 from lightx2v.utils import op_shape_trace as ost
 
@@ -25,6 +27,23 @@ def attention(hidden):
         to_qkv=None,
         out_proj=linear(hidden, hidden),
     )
+
+
+def h3_linear(k, n, *, lora_rank=0):
+    linear = SimpleNamespace(
+        weight=torch.empty(k, n),
+        has_lora_branch=lora_rank > 0,
+    )
+    linear._get_actual_weight = lambda: linear.weight
+    if lora_rank:
+        linear.lora_down = torch.empty(lora_rank, k)
+    return linear
+
+
+def h3_tp_linear(k, n):
+    linear = MMWeightTP("weight", None)
+    linear._mm.weight = torch.empty(k, n)
+    return linear
 
 
 class TransformerBlockProfileShapeTest(unittest.TestCase):
@@ -72,6 +91,53 @@ class TransformerBlockProfileShapeTest(unittest.TestCase):
         self.assertEqual(by_tag["cross_sdpa"]["flops"], 4 * 2 * 2 * 3 * 5 * 4)
         self.assertEqual(by_tag["moe_routed"]["intermediate"], 16)
         self.assertEqual(by_tag["moe_routed"]["routed_tokens"], 12)
+
+    def test_minimax_h3_inventory_uses_runtime_sp_and_cache_state(self):
+        hidden = 8
+        block = SimpleNamespace(
+            adaln=h3_linear(hidden, 6 * hidden),
+            attn=SimpleNamespace(
+                to_q=h3_tp_linear(hidden, hidden),
+                to_k=h3_linear(hidden, hidden),
+                to_v=h3_linear(hidden, hidden),
+                to_out=h3_linear(hidden, hidden),
+            ),
+            ff=SimpleNamespace(
+                in_proj=h3_linear(hidden, 4 * hidden),
+                out_proj=h3_linear(2 * hidden, hidden, lora_rank=2),
+            ),
+        )
+        pre_infer_out = SimpleNamespace(
+            temb=torch.empty(4, hidden),
+            sequence_parallel_state=SimpleNamespace(aux_length=2, main_shard_length=3),
+        )
+        profile = MiniMaxH3BlockProfile(
+            {
+                "attention_head_dim": 2,
+                "attn_type": "dynamic_sparse_attn",
+            },
+            num_heads=4,
+            seq_p_size=2,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "inventory.json"
+            profile.bind(block, torch.empty(5, hidden), pre_infer_out)
+            profile.write_inventory(path, block_idx=7)
+            inventory = json.loads(path.read_text())
+
+            profile.bind(block, torch.empty(5, hidden), pre_infer_out, include_adaln=False)
+            profile.write_inventory(path, block_idx=7)
+            cached_inventory = json.loads(path.read_text())
+
+        by_tag = {operation["tag"]: operation for operation in inventory["linear_operations"]}
+        self.assertEqual(by_tag["adaln"]["shape_mnk"], [4, 6 * hidden, hidden])
+        self.assertEqual(by_tag["attn_q"]["shape_mnk"], [5, hidden, hidden])
+        self.assertEqual(by_tag["ffn_in_fused"]["shape_mnk"], [5, 4 * hidden, hidden])
+        self.assertEqual(by_tag["ffn_out"]["lora_flops"], 2 * 5 * 2 * (hidden + 2 * hidden))
+        self.assertEqual(inventory["attention"]["shape_bhsd"], [1, 2, 8, 2])
+        self.assertEqual(inventory["attention"]["flops_semantics"], "dense-equivalent")
+        self.assertNotIn("adaln", {operation["tag"] for operation in cached_inventory["linear_operations"]})
 
     def test_wan_packed_fp4_restores_logical_k(self):
         hidden = 8

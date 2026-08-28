@@ -112,10 +112,10 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             infer_steps=config.get("infer_steps"),
             num_layers=self.blocks_num,
         )
-        if self._transformer_profile.mode == "block" and self.use_compile:
-            raise ValueError("Block profiling requires use_compile=false so the target block remains observable.")
-        if self._transformer_profile.mode == "block" and config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "phase":
-            raise ValueError("Block profiling does not support phase-granularity CPU offload.")
+        if self._transformer_profile.mode == "region" and self.use_compile:
+            raise ValueError("Region profiling requires use_compile=false so internal regions remain observable.")
+        if self._transformer_profile.mode == "region" and config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "phase":
+            raise ValueError("Region profiling does not support phase-granularity CPU offload.")
 
     @torch.no_grad()
     def reset_post_adapter_states(self):
@@ -244,7 +244,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         if self._transformer_profile.should_record_block(block_idx):
             self._block_profile.bind(block, args[0], args[1])
             with self._transformer_profile.record_block(block_idx):
-                return self.infer_block(block, *args)
+                return super().run_block(block_idx, block, *args)
         return super().run_block(block_idx, block, *args)
 
     def infer_block(self, block, x, pre_infer_out, self_attn_kwargs=None):

@@ -3,7 +3,10 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.models.networks.minimax_h3.infer.block_profile import MiniMaxH3BlockProfile
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.region_profile import region_profile
+from lightx2v.utils.transformer_profile import TransformerProfile
 
 
 class MiniMaxH3TransformerInfer(BaseTransformerInfer):
@@ -40,6 +43,32 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self._current_adaln_tables = None
         self._adaln_cache_hit = False
         self.init_compile(config)
+
+        seq_p_size = dist.get_world_size(self.seq_p_group) if self.seq_p_group is not None else 1
+        self._block_profile = MiniMaxH3BlockProfile(
+            config,
+            num_heads=self.num_heads,
+            seq_p_size=seq_p_size,
+        )
+        self._transformer_profile = TransformerProfile(
+            "minimax_h3",
+            self._block_profile,
+            infer_steps=config.get("infer_steps"),
+            num_layers=int(config.get("num_layers", 50)),
+        )
+        if self._transformer_profile.mode == "region" and (self.tp_size != 1 or self.seq_p_group is not None):
+            raise ValueError("MiniMax-H3 region profiling supports single-GPU execution only.")
+        if self._transformer_profile.mode == "region" and self.use_compile:
+            raise ValueError("MiniMax-H3 region profiling requires use_compile=false.")
+        if self._transformer_profile.mode is not None and config.get("torch_profile", {}).get("enabled", False):
+            raise ValueError("Disable config torch_profile when LIGHTX2V_PROFILE_MODE is enabled.")
+        if self._transformer_profile.mode == "region":
+            self._enable_region_profile()
+
+    def _enable_region_profile(self):
+        self._attention = region_profile("self_attn", emit="self_attn")(self._attention)
+        self._ff = region_profile("dense_ffn", emit="dense_ffn")(self._ff)
+        self._compute_adaln_table = region_profile("adaln", emit="adaln")(self._compute_adaln_table)
 
     def _gather_tp_last_dim(self, tensor):
         if self.tp_size == 1:
@@ -158,10 +187,24 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return adaln_table
 
     def run_block(self, block_idx, block, hidden_states, pre_infer_out):
-        if self.use_adaln_cache:
-            adaln_table = self._get_or_build_adaln(block_idx, block, pre_infer_out)
-            return super().run_block(block_idx, block, hidden_states, pre_infer_out, adaln_table)
-        return super().run_block(block_idx, block, hidden_states, pre_infer_out)
+        if not self._transformer_profile.should_record_block(block_idx):
+            if self.use_adaln_cache:
+                adaln_table = self._get_or_build_adaln(block_idx, block, pre_infer_out)
+                return super().run_block(block_idx, block, hidden_states, pre_infer_out, adaln_table)
+            return super().run_block(block_idx, block, hidden_states, pre_infer_out)
+
+        include_adaln = not (self.use_adaln_cache and self._adaln_cache_hit)
+        self._block_profile.bind(
+            block,
+            hidden_states,
+            pre_infer_out,
+            include_adaln=include_adaln,
+        )
+        with self._transformer_profile.record_block(block_idx):
+            if self.use_adaln_cache:
+                adaln_table = self._get_or_build_adaln(block_idx, block, pre_infer_out)
+                return super().run_block(block_idx, block, hidden_states, pre_infer_out, adaln_table)
+            return super().run_block(block_idx, block, hidden_states, pre_infer_out)
 
     def infer_without_offload(self, blocks, hidden_states, pre_infer_out):
         for block_index, block in enumerate(blocks):
@@ -170,6 +213,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return hidden_states
 
     def infer(self, block_weights, pre_infer_out):
-        if self.use_adaln_cache:
-            self._prepare_adaln_cache()
-        return self.infer_func(block_weights.blocks, pre_infer_out.hidden_states, pre_infer_out)
+        profile_mode = self._transformer_profile.mode_for_step(self.scheduler.step_index)
+        with self._transformer_profile.record_transformer(profile_mode):
+            if self.use_adaln_cache:
+                self._prepare_adaln_cache()
+            return self.infer_func(block_weights.blocks, pre_infer_out.hidden_states, pre_infer_out)
