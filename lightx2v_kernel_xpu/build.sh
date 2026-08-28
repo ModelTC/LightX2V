@@ -8,7 +8,7 @@ cd "$project_dir"
 : "${CMAKE:=cmake}"
 : "${CXX:=icpx}"
 : "${XPU_TARGET:=bmg}"
-: "${BUILD_JOBS:=1}"
+: "${BUILD_JOBS:=4}"
 : "${CUTLASS_SYCL_ROOT:=}"
 
 if [[ ! "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]; then

@@ -1,0 +1,125 @@
+--- xe_fmha_fwd_mainloop.hpp
++++ xe_fmha_fwd_mainloop.hpp
+@@ -275,6 +275,7 @@
+
+     /* Create register fragments for MMA and copies */
+     auto tQrQ = thr_copy_q.partition_sg_fragment_D(gQ(_,_,0));
++    decltype(tQrQ) tQrQ_cached0;
+     auto tSrQ = thr_mma_qk.partition_sg_fragment_A(gQ(_,_,0));
+
+     auto tKrK = thr_copy_k.partition_sg_fragment_D(gK(_,_,0,0));
+@@ -310,6 +311,7 @@
+     for (int D = 0; D < size<3>(pQgQ); D++) {
+       prefetch(prefetch_q, pQgQ(_,_,_,D));
+     }
++    copy(copy_q, tQgQ(_,_,_,0), tQrQ_cached0);
+     for (int D = 0; D < size<4>(pKgK); D++) {
+       CUTLASS_PRAGMA_UNROLL
+       for (int K = 0; K < Stages; K++) {
+@@ -353,23 +355,28 @@
+         k_idx = K - kblocks_cache;
+       }
+
++      /* Start V fetch before Q*K so its latency overlaps GEMM 1. */
++      CUTLASS_PRAGMA_UNROLL
++      for (int VV = 0; VV < VTiles; VV++) {
++        prefetch(prefetch_v_cur, pVgV_cur(_,_,_,VV,k_idx));
++      }
++
+       /* GEMM 1: S = K * Q */
+       clear(tSrS);
+       CUTLASS_PRAGMA_UNROLL
+       for (int D = 0; D < size<4>(tKgK); D++) {
+-        copy(copy_q, tQgQ(_,_,_,D), tQrQ);
++        if (D == 0) {
++          reorder(tQrQ_cached0, tSrQ);
++        } else {
++          copy(copy_q, tQgQ(_,_,_,D), tQrQ);
++          reorder(tQrQ, tSrQ);
++        }
+         copy(copy_k_cur, tKgK_cur(_,_,_,k_idx,D), tKrK);
+-        reorder(tQrQ, tSrQ);
+         reorder(tKrK, tSrK);
+
+         cute::gemm(mma_qk, tSrQ, tSrK, tSrS);
+       }
+
+-      /* V prefetch for GEMM 2 */
+-      CUTLASS_PRAGMA_UNROLL
+-      for (int VV = 0; VV < VTiles; VV++) {
+-        prefetch(prefetch_v_cur, pVgV_cur(_,_,_,VV,k_idx));
+-      }
+       /* Causal masking - only in non-cache mode */
+       if constexpr (!is_cache && CausalMask) {
+         if (K == total_blk - 1) {
+@@ -405,7 +412,10 @@
+       }
+
+       /* Apply softmax and scaling (tA rescaling fused into GEMM2 VTile loop) */
+-      auto rescale = softmax(K == blk_k0, tSrS, tA_max, tA_sum);
++      bool h3_subgroup_needs_rescale;
++      auto rescale = softmax(
++          K == blk_k0, tSrS, tA_max, tA_sum,
++          h3_subgroup_needs_rescale);
+       reorder(tSrS, tArP);
+
+       /* GEMM 2: A += P * V, split in v dimension.
+@@ -414,7 +424,7 @@
+       for (int VV = 0; VV < VTiles; VV++) {
+         copy(copy_v_cur, tVgV_cur(_,_,_,VV,k_idx), tVrV);
+         reorder(tVrV, tArV);
+-        if (K != blk_k0) {
++        if (h3_subgroup_needs_rescale) {
+           CUTLASS_PRAGMA_UNROLL
+           for (int i = 0; i < tArA.size() / VTiles; i++)
+             tArA(_,_,_,VV)(i) *= broadcast<0>(rescale, tArA, i);
+@@ -467,20 +477,35 @@
+   // Single step of blocked softmax.
+   CUTLASS_DEVICE
+   FragSRow
+-  softmax(bool       first_block, // First softmax block?
+-          FragS    & tS,          // Softmax src/dst block
+-          FragSRow & tS_max,      // Softmax row-wise max accumulator
+-          FragSRow & tS_sum) {    // Softmax row-wise sum accumulator
++  softmax(bool       first_block,
++          FragS    & tS,
++          FragSRow & tS_max,
++          FragSRow & tS_sum,
++          bool     & subgroup_needs_rescale) {
+     /* Compute row-wise maxima for this block */
+     auto tS_bmax = reduce<1>(tS, sycl::maximum{});
+
+     FragSRow rescale;
++    bool local_max_unchanged = true;
+     CUTLASS_PRAGMA_UNROLL
+     for (int i = 0; i < tS_max.size(); i++) {
+       ElementS new_max = sycl::max(tS_max(i), params.scale * tS_bmax(i));
+-      rescale(i) = sycl::native::exp2(tS_max(i) - new_max);
++      rescale(i) = tS_max(i) - new_max;
++      local_max_unchanged =
++          local_max_unchanged && (rescale(i) == ElementS(0));
+       tS_max(i) = new_max;
+     }
++    bool subgroup_max_unchanged = sycl::all_of_group(
++        sycl::ext::oneapi::this_work_item::get_sub_group(),
++        local_max_unchanged);
++    subgroup_needs_rescale = !first_block && !subgroup_max_unchanged;
++    if (subgroup_needs_rescale) {
++      CUTLASS_PRAGMA_UNROLL
++      for (int i = 0; i < rescale.size(); i++)
++        rescale(i) = sycl::native::exp2(rescale(i));
++    } else {
++      fill(rescale, ElementS(1));
++    }
+
+     /* Scale S and subtract maxima, then exponentiate */
+     CUTLASS_PRAGMA_UNROLL
+@@ -488,7 +513,7 @@
+       tS(i) = sycl::native::exp2(params.scale * tS(i) - broadcast<0>(tS_max, tS, i));
+
+     /* Rescale existing S sums */
+-    if (!first_block) {
++    if (subgroup_needs_rescale) {
+       CUTLASS_PRAGMA_UNROLL
+       for (int i = 0; i < tS_sum.size(); i++) {
+         tS_sum(i) *= rescale(i);

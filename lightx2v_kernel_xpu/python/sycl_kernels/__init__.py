@@ -5,6 +5,7 @@ import os
 
 _pkg_dir = os.path.dirname(os.path.abspath(__file__))
 _cute_fmha_loaded = False
+_cute_fmha_minimax_h3_loaded = False
 _rms_norm_loaded = False
 _minimax_h3_rope_loaded = False
 
@@ -158,9 +159,52 @@ def _load_cute_fmha():
     _cute_fmha_loaded = True
 
 
+def _load_cute_fmha_minimax_h3():
+    global _cute_fmha_minimax_h3_loaded
+    if os.name == "nt":
+        raise RuntimeError("CUTE FMHA is disabled on Windows because sycl-tla produces incorrect results")
+    if _cute_fmha_minimax_h3_loaded:
+        return
+    import torch
+
+    candidates = sorted(glob.glob(os.path.join(_pkg_dir, "cute_fmha_minimax_h3_torch*.so")))
+    if not candidates:
+        raise ImportError(f"cute_fmha_minimax_h3_torch.so not found in {_pkg_dir}")
+    torch.ops.load_library(candidates[0])
+    _cute_fmha_minimax_h3_loaded = True
+
+
+def _use_minimax_h3_cute(q, k, v):
+    import torch
+
+    return (
+        q.device.type == "xpu"
+        and q.dtype == torch.bfloat16
+        and q.ndim == 4
+        and q.shape[0] == 1
+        and q.shape[1] >= 18870
+        and q.shape[2] in (56, 28, 14, 7)
+        and q.shape[3] == 128
+        and tuple(k.shape) == tuple(q.shape)
+        and tuple(v.shape) == tuple(q.shape)
+        and k.device == q.device
+        and v.device == q.device
+        and k.dtype == q.dtype
+        and v.dtype == q.dtype
+    )
+
+
 def cute_sdp(q, k, v):
     """Run generic CUTLASS-SYCL CUTE self-attention on [B,L,H,128]."""
     import torch
+
+    if _use_minimax_h3_cute(q, k, v):
+        try:
+            op = torch.ops.sycl_kernels_cute_minimax_h3.sdp
+        except AttributeError:
+            _load_cute_fmha_minimax_h3()
+            op = torch.ops.sycl_kernels_cute_minimax_h3.sdp
+        return op(q, k, v)
 
     try:
         op = torch.ops.sycl_kernels_cute.sdp
