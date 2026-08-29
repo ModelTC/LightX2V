@@ -4,6 +4,7 @@ import os
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
@@ -11,6 +12,7 @@ from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.flux2.feature_caching.scheduler import Flux2DevSchedulerCaching, Flux2SchedulerCaching
 from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2Scheduler
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
+from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process
@@ -48,8 +50,17 @@ class Flux2BaseRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
-        self.text_encoders = self.load_text_encoder()
+        if self.config.get("text_encoder_mode", False) == "rank0_broadcast" and dist.get_rank() != 0:
+            self.text_encoders = None
+        else:
+            self.text_encoders = self.load_text_encoder()
         self.vae = self.load_vae()
+        if self.config.get("text_encoder_mode", False) == "rank0_broadcast":
+            torch_device_module.synchronize()
+            if AI_DEVICE == "cuda":
+                dist.barrier(device_ids=[torch.cuda.current_device()])
+            else:
+                dist.barrier()
         self.model = self.load_transformer()
 
     def load_vae(self):
@@ -338,7 +349,12 @@ class Flux2BaseRunner(DefaultRunner):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae = self.load_vae()
 
-        images = self._decode_latents_with_vae(latents)
+        # vae_decode_rank is used only by distributed configs.
+        decode_rank = self.config.get("vae_decode_rank")
+        if decode_rank is None:
+            images = self._decode_latents_with_vae(latents)
+        else:
+            images = self._decode_vae_on_rank(latents, decode_rank)
 
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae
@@ -347,7 +363,30 @@ class Flux2BaseRunner(DefaultRunner):
 
         return images
 
-    def _decode_latents_with_vae(self, latents):
+    def _decode_vae_on_rank(self, latents, decode_rank):
+        torch_device_module.synchronize()
+        torch_device_module.empty_cache()
+
+        rank = dist.get_rank()
+        if rank == decode_rank:
+            logger.info(f"[Flux2] Decoding VAE on global rank {decode_rank} and broadcasting images")
+            raw_images = self._decode_latents_with_vae(latents, output_type="latent").contiguous()
+            image_shape = torch.tensor(raw_images.shape, dtype=torch.long, device=raw_images.device)
+        else:
+            image_shape = torch.empty(4, dtype=torch.long, device=latents.device)
+
+        dist.broadcast(image_shape, src=decode_rank)
+        if rank != decode_rank:
+            raw_images = torch.empty(tuple(image_shape.tolist()), dtype=GET_DTYPE(), device=latents.device)
+        dist.broadcast(raw_images, src=decode_rank)
+
+        if self.input_info.return_result_tensor:
+            return self.vae.image_processor.postprocess(raw_images, output_type="pt")
+        if is_main_process():
+            return self.vae.image_processor.postprocess(raw_images, output_type="pil")
+        return None
+
+    def _decode_latents_with_vae(self, latents, output_type=None):
         B, _, C = latents.shape
 
         H = int((self.input_info.latent_image_ids[0, :, 1].max() + 1).item())
@@ -363,7 +402,7 @@ class Flux2BaseRunner(DefaultRunner):
         latents = latents.permute(0, 1, 4, 2, 5, 3)
         latents = latents.reshape(B, C // 4, H * 2, W * 2)
 
-        return self.vae.decode(latents, self.input_info)
+        return self.vae.decode(latents, self.input_info, output_type=output_type)
 
     @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
@@ -459,10 +498,30 @@ class Flux2DevRunner(Flux2BaseRunner):
 
     @ProfilingContext4DebugL1("Run Text Encoder")
     def run_text_encoder(self, text, image_list=None, neg_prompt=None):
-        prompt_embeds_list, _ = self.text_encoders[0].infer([text])
-        prompt_embeds = prompt_embeds_list[0].unsqueeze(0)
+        if self.config.get("text_encoder_mode", False) == "rank0_broadcast":
+            return self._run_text_encoder_rank0_broadcast(text)
+        prompt_embeds = self._encode_prompt(text)
         text_ids = self._prepare_text_ids(prompt_embeds).to(AI_DEVICE)
 
-        text_encoder_output = {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
+        return {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
 
-        return text_encoder_output
+    def _encode_prompt(self, text):
+        prompt_embeds_list, _ = self.text_encoders[0].infer([text])
+        return prompt_embeds_list[0].unsqueeze(0)
+
+    def _run_text_encoder_rank0_broadcast(self, text):
+        rank = dist.get_rank()
+        if rank == 0:
+            logger.info("[Flux2] Running Text Encoder on global rank 0 and broadcasting embeddings")
+            prompt_embeds = self._encode_prompt(text).contiguous()
+            prompt_shape = torch.tensor(prompt_embeds.shape, dtype=torch.long, device=prompt_embeds.device)
+        else:
+            prompt_shape = torch.empty(3, dtype=torch.long, device=AI_DEVICE)
+
+        dist.broadcast(prompt_shape, src=0)
+        if rank != 0:
+            prompt_embeds = torch.empty(tuple(prompt_shape.tolist()), dtype=GET_DTYPE(), device=AI_DEVICE)
+        dist.broadcast(prompt_embeds, src=0)
+
+        text_ids = self._prepare_text_ids(prompt_embeds).to(AI_DEVICE)
+        return {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
