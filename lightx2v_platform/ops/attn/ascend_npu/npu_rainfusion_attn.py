@@ -3,7 +3,11 @@ try:
     from mindiesd.layers.flash_attn.attention_forward import attention_forward
 
     _HAS_MINDIESD = True
-except ImportError:
+# Some CANN/MindIE combinations raise TypeError while probing NPU capabilities
+# during this optional import. Treat that as an unavailable optional backend so
+# importing the Ascend attention registry can continue; selecting RainFusion
+# still fails explicitly in NpuRainfusionOperator.__init__.
+except (ImportError, TypeError):
     mindiesd = None
     attention_forward = None
     _HAS_MINDIESD = False

@@ -1,26 +1,26 @@
 #!/bin/bash
 
 # set path firstly
-lightx2v_path=/LightX2V
-model_path=/Wan2.2-I2V-A14B
-
-if [ -z "$lightx2v_path" ] || [ -z "$model_path" ]; then
-    echo "Error: Please set lightx2v_path and model_path in this script before running."
-    exit 1
-fi
+lightx2v_path=
+model_path=
 
 export PLATFORM=ascend_npu
-export ASCEND_RT_VISIBLE_DEVICES=0,1
+export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
 
-torchrun --nproc_per_node=2 -m lightx2v.infer \
+# CANN 8.5.1 lacks aclnnBlockSparseAttention, so this config intentionally
+# keeps the same dynamic Top-K mask algorithm on the supported MindIE RF v2 op.
+# INT8 Ulysses communication uses the generic PyTorch pre/post path with HCCL.
+# Keep the CUDA-only Triton pre/post backend disabled on Ascend NPU.
+torchrun --nproc_per_node=8 -m lightx2v.infer \
 --model_cls wan2.2_moe_distill \
 --task i2v \
+--warmup \
 --model_path $model_path \
---config_json ${lightx2v_path}/configs/distill/wan22/wan_moe_i2v_distill_int8_4step_ulysses_npu.json \
+--config_json ${lightx2v_path}/configs/platforms/ascend_npu/extreme/wan_moe_i2v_distill_int8_dynamic_sparse_attn_sp_parallel.json \
 --prompt "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside." \
 --negative_prompt "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" \
 --image_path ${lightx2v_path}/assets/inputs/imgs/img_0.jpg \
---save_result_path ${lightx2v_path}/save_results/wan_moe_i2v_distill_int8_4step_ulysses_npu.mp4
+--save_result_path ${lightx2v_path}/save_results/output_lightx2v_wan22_moe_i2v_int8_dynamic_sparse_int8_comm_npu_sp8.mp4

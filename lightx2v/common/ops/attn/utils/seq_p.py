@@ -2,6 +2,8 @@ import torch
 
 from lightx2v.utils.quant_utils import dequant_fp8_vllm, quant_fp8_vllm
 
+INT8_MAX = 127.0
+
 try:
     from sageattn3_sparse import dequant_fp4 as dequant_fp4_sage3
     from sageattn3_sparse import quant_fp4 as quant_fp4_sage3
@@ -64,12 +66,41 @@ def split_main_aux_output(output, main_len, aux_len, aux_first):
 
 
 def validate_quant_scheme(quant_scheme):
-    if quant_scheme not in (None, "fp8", "fp4"):
-        raise ValueError(f"Unknown quant_scheme={quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+    if quant_scheme not in (None, "fp8", "fp4", "int8"):
+        raise ValueError(f"Unknown quant_scheme={quant_scheme!r}; expected None, 'fp8', 'fp4', or 'int8'.")
     if quant_scheme != "fp4":
         return
     if quant_fp4_sage3 is None or dequant_fp4_sage3 is None:
         raise ImportError("sageattn3_sparse quant_fp4/dequant_fp4 is required for sequence-parallel FP4 communication.")
+
+
+def quant_int8_per_row(tensor):
+    """Symmetrically quantize the last dimension to INT8 with FP32 row scales."""
+    if not tensor.is_floating_point():
+        raise ValueError(f"INT8 communication quantization requires a floating-point tensor, got {tensor.dtype}.")
+
+    shape = tensor.shape
+    hidden_dims = shape[-1]
+    rows = tensor.reshape(-1, hidden_dims).float()
+    amax = rows.abs().amax(dim=-1, keepdim=True)
+    scale = torch.where(amax > 0, amax / INT8_MAX, torch.ones_like(amax))
+
+    scaled = rows / scale
+    rounded = torch.round(scaled)
+    payload = rounded.clamp(-INT8_MAX, INT8_MAX).to(torch.int8)
+    return payload.reshape(shape).contiguous(), scale.reshape(*shape[:-1], 1).contiguous()
+
+
+def dequant_int8_per_row(payload, scale, output_dtype):
+    """Dequantize an INT8 communication payload using FP32 row scales."""
+    if payload.dtype != torch.int8:
+        raise ValueError(f"INT8 communication payload must have dtype torch.int8, got {payload.dtype}.")
+    if scale.dtype != torch.float32:
+        raise ValueError(f"INT8 communication scale must have dtype torch.float32, got {scale.dtype}.")
+    expected_scale_shape = (*payload.shape[:-1], 1)
+    if tuple(scale.shape) != expected_scale_shape:
+        raise ValueError(f"INT8 communication scale shape must be {expected_scale_shape}, got {tuple(scale.shape)}.")
+    return (payload.float() * scale).to(output_dtype)
 
 
 def pack_seq_p_tensor(tensor, quant_scheme):
@@ -83,6 +114,8 @@ def pack_seq_p_tensor(tensor, quant_scheme):
     if quant_scheme == "fp8":
         payload, scale = quant_fp8_vllm(tensor.reshape(-1, hidden_dims))
         return payload.reshape(shape).contiguous(), scale.reshape(*shape[:-1], 1).contiguous()
+    if quant_scheme == "int8":
+        return quant_int8_per_row(tensor)
 
     if hidden_dims % 16 != 0:
         raise ValueError(f"Sequence-parallel FP4 communication requires hidden_dims divisible by 16, got {hidden_dims}.")
@@ -96,6 +129,8 @@ def unpack_seq_p_tensor(packed, output_dtype, hidden_dims):
         return payload
     if payload.dtype == torch.float8_e4m3fn:
         return dequant_fp8_vllm(payload, scale, output_dtype)
+    if payload.dtype == torch.int8 and payload.shape[-1] == hidden_dims and tuple(scale.shape) == (*payload.shape[:-1], 1):
+        return dequant_int8_per_row(payload, scale, output_dtype)
     output_shape = (*payload.shape[:-1], hidden_dims)
     return dequant_fp4_sage3(
         payload.reshape(1, 1, -1, hidden_dims // 2),
