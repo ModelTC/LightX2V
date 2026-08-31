@@ -49,4 +49,7 @@ elif PLATFORM == "iluvatar_cuda":
     from .norm.iluvatar_cuda import *
     from .rope.iluvatar_cuda import *
 elif PLATFORM == "musa":
+    # Register platform sparse operators before the framework registry takes
+    # its one-time snapshot in lightx2v.utils.registry_factory.
+    from .attn.mthreads_musa import *
     from .mm.mthreads_musa import *

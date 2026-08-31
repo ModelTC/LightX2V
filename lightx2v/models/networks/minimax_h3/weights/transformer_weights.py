@@ -40,7 +40,7 @@ def _rms(config, name, eps, create_cuda_buffer=False):
 
 
 class MiniMaxH3AttentionWeights(WeightModule):
-    def __init__(self, prefix, config, create_cuda_buffer=False):
+    def __init__(self, prefix, config, create_cuda_buffer=False, layer_index=None):
         super().__init__()
         self.add_module("to_q", _linear(config, f"{prefix}.to_q", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         self.add_module("to_k", _linear(config, f"{prefix}.to_k", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
@@ -74,7 +74,10 @@ class MiniMaxH3AttentionWeights(WeightModule):
         attn_type = config.get("attn_type", "flash_attn3")
         attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
         if attn_type == "dynamic_sparse_attn":
-            calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
+            attention_config = dict(config.get("dynamic_sparse_attn_setting", {}))
+            if layer_index is not None:
+                attention_config["layer_index"] = int(layer_index)
+            calculate = attention_cls(attention_config)
         else:
             calculate = attention_cls()
         if attn_type == "sol_attn":
@@ -110,7 +113,15 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
                 eps=eps,
             ),
         )
-        self.add_module("attn", MiniMaxH3AttentionWeights(f"{prefix}.attn", config, create_cuda_buffer))
+        self.add_module(
+            "attn",
+            MiniMaxH3AttentionWeights(
+                f"{prefix}.attn",
+                config,
+                create_cuda_buffer,
+                layer_index=index,
+            ),
+        )
         self.add_module(
             "norm2",
             _rms(
