@@ -13,7 +13,7 @@ from loguru import logger
 from lightx2v.common.ops import *
 from lightx2v.models.networks.wan.animate2_identity import WAN_ANIMATE2_MODEL_ID
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
-from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
+from lightx2v.models.runners.flux2.flux2_runner import Flux2Runner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
@@ -86,11 +86,13 @@ class LightX2VPipeline:
         high_noise_original_ckpt=None,
         transformer_model_name=None,
         distill_method=None,
+        model_variant=None,
     ):
         self.task = task
         self.support_tasks = support_tasks
         self.model_path = model_path
         self.model_cls = model_cls
+        self.model_variant = model_variant
         self.sf_model_path = sf_model_path
         self.dit_original_ckpt = dit_original_ckpt
         self.low_noise_original_ckpt = low_noise_original_ckpt
@@ -160,10 +162,6 @@ class LightX2VPipeline:
             self.model_cls = "ernie_image"
         elif model_cls in ["ernie_image_turbo", "ernie-image-turbo", "ERNIE-Image-Turbo"]:
             self.model_cls = "ernie_image_turbo"
-        elif self.model_cls in ["flux2_klein"]:
-            self.model_cls = "flux2_klein"
-        elif self.model_cls in ["flux2_dev"]:
-            self.model_cls = "flux2_dev"
         elif model_cls in ["longcat_image", "longcat-image"]:
             self.model_cls = "longcat_image"
 

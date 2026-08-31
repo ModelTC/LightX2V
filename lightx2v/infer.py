@@ -12,7 +12,7 @@ from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
 from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner  # noqa: F401
 from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: F401
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
-from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
+from lightx2v.models.runners.flux2.flux2_runner import Flux2Runner  # noqa: F401
 from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner import HunyuanImage3Runner  # noqa: F401
@@ -119,8 +119,7 @@ def main():
             "worldplay_ar",
             "worldplay_bi",
             "z_image",
-            "flux2_klein",
-            "flux2_dev",
+            "flux2",
             "ltx2",
             "ltx2_ar",
             "ltx2_5",

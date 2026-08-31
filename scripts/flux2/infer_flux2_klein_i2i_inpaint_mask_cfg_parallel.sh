@@ -1,12 +1,12 @@
 #!/bin/bash
-lightx2v_path=
-model_path="/data/temp/black-forest-labs/FLUX.2-klein-base-4B/snapshots/ppt_260529_30e"
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/FLUX.2-klein-base-4B
 export CUDA_VISIBLE_DEVICES=5,6
 
 source ${lightx2v_path}/scripts/base/base.sh
 
 torchrun --nproc_per_node=2 -m lightx2v.infer \
-    --model_cls flux2_klein \
+    --model_cls flux2 \
     --task i2i \
     --model_path $model_path \
     --prompt "remove the masked foreground object and keep the background unchanged" \
