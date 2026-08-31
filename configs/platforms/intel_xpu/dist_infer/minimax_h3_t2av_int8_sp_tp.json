@@ -19,7 +19,7 @@
   "tp_mm_type": "IntelTensorParallel",
   "rope_type": "minimax_h3_xpu_rope",
   "feature_caching": "NoCaching",
-  "use_compile": false,
+  "use_compile": true,
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
