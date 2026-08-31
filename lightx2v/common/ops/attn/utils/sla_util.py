@@ -172,16 +172,10 @@ def _force_local_score_blocks(pooled_score, count):
         return pooled_score
     q_blocks = int(pooled_score.shape[-2])
     k_blocks = int(pooled_score.shape[-1])
-    centers = (
-        (torch.arange(q_blocks, device=pooled_score.device) * 2 + 1)
-        * k_blocks
-        // (2 * q_blocks)
-    )
+    centers = (torch.arange(q_blocks, device=pooled_score.device) * 2 + 1) * k_blocks // (2 * q_blocks)
     offsets = torch.arange(count, device=pooled_score.device) - count // 2
     local_indices = (centers[:, None] + offsets[None, :]).clamp(0, k_blocks - 1)
-    local_indices = local_indices.view(
-        *((1,) * (pooled_score.ndim - 2)), q_blocks, count
-    ).expand(*pooled_score.shape[:-2], q_blocks, count)
+    local_indices = local_indices.view(*((1,) * (pooled_score.ndim - 2)), q_blocks, count).expand(*pooled_score.shape[:-2], q_blocks, count)
     return pooled_score.scatter(
         -1,
         local_indices,

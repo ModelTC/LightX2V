@@ -191,11 +191,7 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         **kwargs,
     ):
         if getattr(self.sparse_operator, "block_indices_only", False):
-            get_lut = (
-                get_block_lut_nhd
-                if getattr(self.sparse_operator, "center_k", True)
-                else get_block_lut_nhd_uncentered
-            )
+            get_lut = get_block_lut_nhd if getattr(self.sparse_operator, "center_k", True) else get_block_lut_nhd_uncentered
             block_indices, _ = get_lut(
                 q,
                 k,
