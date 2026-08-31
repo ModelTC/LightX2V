@@ -11,7 +11,7 @@ source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \
 --seed 123 \
---model_cls hunyuan_video_1.5_distill \
+--model_cls hunyuan_video_1.5 \
 --task t2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/hunyuan_video_15/hunyuan_video_t2v_480p_distill.json \

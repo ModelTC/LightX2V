@@ -122,7 +122,7 @@ def auto_calc_config(config):
 
     assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
 
-    if config["model_cls"] in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:  # Special config for hunyuan video 1.5 model folder structure
+    if config["model_cls"] == "hunyuan_video_1.5":  # Special config for hunyuan video 1.5 model folder structure
         config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])  # transformer_model_name: [480p_t2v, 480p_i2v, 720p_t2v, 720p_i2v]
         if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
