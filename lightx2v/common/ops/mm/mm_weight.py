@@ -6,20 +6,32 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v_platform.base.global_var import AI_DEVICE
+
 try:
     from magi_compiler import magi_register_custom_op
 except ImportError:
     magi_register_custom_op = None
 
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
-from lightx2v.common.ops.mm.triton_kernels import (
-    fp8_gemm_bias_triton,
-    fp8_gemm_triton,
-    fp8_quantize_triton,
-    int8_gemm_bias_triton,
-    int8_gemm_triton,
-    int8_quantize_triton,
-)
+
+if str(AI_DEVICE) == "mps":
+    fp8_gemm_bias_triton = None
+    fp8_gemm_triton = None
+    fp8_quantize_triton = None
+    int8_gemm_bias_triton = None
+    int8_gemm_triton = None
+    int8_quantize_triton = None
+else:
+    from lightx2v.common.ops.mm.triton_kernels import (
+        fp8_gemm_bias_triton,
+        fp8_gemm_triton,
+        fp8_quantize_triton,
+        int8_gemm_bias_triton,
+        int8_gemm_triton,
+        int8_quantize_triton,
+    )
+
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import GGMLTensor
@@ -27,7 +39,6 @@ from lightx2v.utils.ggml_tensor import dequantize_tensor as gguf_dequantize_tens
 from lightx2v.utils.global_paras import CALIB
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
     from lightx2v_kernel.gemm import (
