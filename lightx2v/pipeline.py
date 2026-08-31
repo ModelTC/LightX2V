@@ -119,7 +119,7 @@ class LightX2VPipeline:
             self.num_channels_latents = 48
             if self.model_cls == "wan2.2_matrix_game3":
                 self.use_image_encoder = False
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
+        elif self.model_cls == "hunyuan_video_1.5":
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
         elif self.model_cls in ["ltx2", "ltx2_5"]:
@@ -279,7 +279,7 @@ class LightX2VPipeline:
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3"]:
             self.attn_type = attn_mode
             if self.model_cls == "minimax_h3":
                 self.video_flow_shift = sample_shift
@@ -338,7 +338,7 @@ class LightX2VPipeline:
             self.clip_quant_scheme = quant_scheme
             self.clip_quantized = image_encoder_quantized
             self.clip_quantized_ckpt = image_encoder_quantized_ckpt
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "qwen_image"]:
             self.qwen25vl_quantized = text_encoder_quantized
             self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
             self.qwen25vl_quant_scheme = text_encoder_quant_scheme
@@ -382,7 +382,7 @@ class LightX2VPipeline:
             self.t5_cpu_offload = text_encoder_offload
             self.clip_cpu_offload = image_encoder_offload
 
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
+        elif self.model_cls == "hunyuan_video_1.5":
             self.qwen25vl_cpu_offload = text_encoder_offload
             self.siglip_cpu_offload = image_encoder_offload
             self.byt5_cpu_offload = image_encoder_offload

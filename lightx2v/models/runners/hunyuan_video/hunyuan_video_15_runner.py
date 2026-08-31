@@ -15,6 +15,7 @@ from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.hunyuan_video.feature_caching.scheduler import HunyuanVideo15SchedulerCaching
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15SRScheduler, HunyuanVideo15Scheduler
+from lightx2v.models.schedulers.hunyuan_video.step_distill.scheduler import HunyuanVideo15StepDistillScheduler
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.hunyuanvideo_15_vae import HunyuanVideo15VAE
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.lighttae_hy15 import LightTaeHy15
 from lightx2v.server.metrics import monitor_cli
@@ -58,12 +59,22 @@ class HunyuanVideo15Runner(DefaultRunner):
         self.tae_cls = LightTaeHy15
 
     def init_scheduler(self):
-        if self.config["feature_caching"] == "NoCaching":
-            scheduler_class = HunyuanVideo15Scheduler
-        elif self.config.feature_caching in ["Mag", "Tea"]:
-            scheduler_class = HunyuanVideo15SchedulerCaching
+        distill_method = self.config.get("distill_method")
+        feature_caching = self.config["feature_caching"]
+
+        if distill_method == "dmd2":
+            if feature_caching != "NoCaching":
+                raise NotImplementedError("HunyuanVideo-1.5 DMD2 does not support feature caching")
+            scheduler_class = HunyuanVideo15StepDistillScheduler
+        elif distill_method is None:
+            if feature_caching == "NoCaching":
+                scheduler_class = HunyuanVideo15Scheduler
+            elif feature_caching in ["Mag", "Tea"]:
+                scheduler_class = HunyuanVideo15SchedulerCaching
+            else:
+                raise NotImplementedError(f"Unsupported feature_caching type: {feature_caching}")
         else:
-            raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
+            raise NotImplementedError(f"hunyuan_video_1.5 does not support distill_method {distill_method!r}")
         self.scheduler = scheduler_class(self.config)
 
         if self.sr_version is not None:

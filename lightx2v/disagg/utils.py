@@ -119,7 +119,7 @@ def set_config(
             args_dict["self_attn_1_type"] = attn_mode
             args_dict["cross_attn_1_type"] = attn_mode
             args_dict["cross_attn_2_type"] = attn_mode
-        elif model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image"]:
+        elif model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "z_image"]:
             args_dict["attn_type"] = attn_mode
 
         args_dict["norm_modulate_backend"] = norm_modulate_backend
