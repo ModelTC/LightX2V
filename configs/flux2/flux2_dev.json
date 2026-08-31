@@ -1,5 +1,6 @@
 {
-    "model_cls": "flux2_dev",
+    "model_cls": "flux2",
+    "model_variant": "dev",
     "task": "t2i",
     "infer_steps": 50,
     "sample_guide_scale": 4.0,
