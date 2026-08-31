@@ -325,10 +325,16 @@ class MiniMaxH3Model(BaseTransformerModel):
         split_type = self._tp_split_type(key)
         if split_type is None:
             return tensor
-        if tensor.ndim < 2:
+        # Scalar metadata such as ConvRot's group size is shared by all TP
+        # ranks.  One-dimensional column biases/scales still need sharding.
+        if tensor.ndim == 0:
             return tensor
 
         if split_type == "row":
+            # Row-parallel biases belong to the fully reduced output and stay
+            # replicated.  Other one-dimensional metadata is replicated too.
+            if tensor.ndim < 2:
+                return tensor
             # Per-output-channel quantization scales remain replicated for a
             # row-parallel weight; only the weight's input dimension is split.
             if key.endswith(".weight_scale"):
