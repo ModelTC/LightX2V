@@ -349,15 +349,6 @@ class DefaultRunner(BaseRunner):
 
         return self.model.scheduler.latents
 
-    def run_step(self):
-        self.inputs = self.run_input_encoder()
-        if hasattr(self, "sr_version") and self.sr_version is not None is not None:
-            self.config_sr["is_sr_running"] = True
-            self.inputs_sr = self.run_input_encoder()
-            self.config_sr["is_sr_running"] = False
-
-        self.run_main(total_steps=1)
-
     def maybe_empty_cache(self, *, force: bool = False, collect_garbage: bool = False) -> bool:
         """Collect Python garbage when requested and release cached device memory under pressure."""
         gib = 1024**3
