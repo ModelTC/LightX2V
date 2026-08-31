@@ -4,6 +4,7 @@ from abc import ABCMeta, abstractmethod
 import torch
 
 from lightx2v.utils.quant_utils import FloatQuantizer, IntegerQuantizer
+from lightx2v.common.ops.utils import create_pin_tensor, move_tensor_back_to_cpu
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
@@ -76,11 +77,11 @@ class MMWeightTemplate(metaclass=ABCMeta):
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_weight"):
-            self.weight = self.pin_weight.copy_(self.weight, non_blocking=non_blocking).cpu()
+            move_tensor_back_to_cpu(self, "weight", non_blocking=non_blocking)
             if hasattr(self, "weight_scale_name"):
-                self.weight_scale = self.pin_weight_scale.copy_(self.weight_scale, non_blocking=non_blocking).cpu()
+                move_tensor_back_to_cpu(self, "weight_scale", non_blocking=non_blocking)
             if self.bias is not None:
-                self.bias = self.pin_bias.copy_(self.bias, non_blocking=non_blocking).cpu()
+                move_tensor_back_to_cpu(self, "bias", non_blocking=non_blocking)
         else:
             self.weight = self.weight.to("cpu", non_blocking=non_blocking)
             if hasattr(self, "weight_scale"):
@@ -112,7 +113,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             if hasattr(self, "weight") and self.weight is not None:
                 self.weight = self.weight.t()
             if hasattr(self, "pin_weight") and self.pin_weight is not None:
-                self.pin_weight = self.pin_weight.t()
+                self.pin_weight = create_pin_tensor(self.pin_weight, transpose=True)
             if hasattr(self, "weight_cuda_buffer") and self.weight_cuda_buffer is not None:
                 self.weight_cuda_buffer = self.weight_cuda_buffer.t()
 
@@ -177,20 +178,18 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             return None
         if is_lazy:
             bias_tensor = source.get_tensor(self.bias_name)
-            if not self.bias_force_fp32:
-                bias_tensor = bias_tensor.to(self.infer_dtype)
         else:
             bias_tensor = source[self.bias_name]
         if self.bias_force_fp32:
-            bias_tensor = bias_tensor.to(torch.float32)
-        return self._create_pin_tensor(bias_tensor)
+            bias_dtype = torch.float32
+        elif is_lazy:
+            bias_dtype = self.infer_dtype
+        else:
+            bias_dtype = None
+        return self._create_pin_tensor(bias_tensor, dtype=bias_dtype)
 
     def _create_pin_tensor(self, tensor, dtype=None):
-        dtype = dtype or tensor.dtype
-        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=dtype)
-        pin_tensor.copy_(tensor)
-        del tensor
-        return pin_tensor
+        return create_pin_tensor(tensor, dtype=dtype)
 
     def _load_default_tensors(self, weight_dict):
         if not self.lazy_load:
@@ -258,15 +257,8 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         else:
             device = weight_dict[self.weight_name].device
             if device.type == "cpu":
-                weight_shape = weight_dict[self.weight_name].shape
-                weight_dtype = weight_dict[self.weight_name].dtype
-                self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-                self.pin_weight.copy_(weight_dict[self.weight_name])
-
-                weight_scale_shape = weight_dict[self.weight_scale_name].shape
-                weight_scale_dtype = weight_dict[self.weight_scale_name].dtype
-                self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
-                self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+                self.pin_weight = create_pin_tensor(weight_dict[self.weight_name])
+                self.pin_weight_scale = create_pin_tensor(weight_dict[self.weight_scale_name])
                 del weight_dict[self.weight_name]
             else:
                 self.weight = weight_dict[self.weight_name]
@@ -281,15 +273,8 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         else:
             device = weight_dict[self.weight_name].device
             if device.type == "cpu":
-                weight_shape = weight_dict[self.weight_name].shape
-                weight_dtype = weight_dict[self.weight_name].dtype
-                self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-                self.pin_weight.copy_(weight_dict[self.weight_name])
-
-                weight_scale_shape = weight_dict[self.weight_scale_name].shape
-                weight_scale_dtype = weight_dict[self.weight_scale_name].dtype
-                self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
-                self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+                self.pin_weight = create_pin_tensor(weight_dict[self.weight_name])
+                self.pin_weight_scale = create_pin_tensor(weight_dict[self.weight_scale_name])
                 del weight_dict[self.weight_name]
             else:
                 self.weight = weight_dict[self.weight_name]
@@ -304,15 +289,8 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         else:
             device = weight_dict[self.weight_name].device
             if device.type == "cpu":
-                weight_shape = weight_dict[self.weight_name].shape
-                weight_dtype = weight_dict[self.weight_name].dtype
-                self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-                self.pin_weight.copy_(weight_dict[self.weight_name])
-
-                weight_scale_shape = weight_dict[self.weight_scale_name].shape
-                weight_scale_dtype = weight_dict[self.weight_scale_name].dtype
-                self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
-                self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
+                self.pin_weight = create_pin_tensor(weight_dict[self.weight_name])
+                self.pin_weight_scale = create_pin_tensor(weight_dict[self.weight_scale_name])
                 del weight_dict[self.weight_name]
             else:
                 self.weight = weight_dict[self.weight_name]
@@ -327,25 +305,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         alpha = 1.0 / (input_global_scale * weight_global_scale)
 
         if device.type == "cpu":
-            weight_shape = weight_dict[self.weight_name].shape
-            weight_dtype = weight_dict[self.weight_name].dtype
-            self.pin_weight = torch.empty(weight_shape, pin_memory=True, dtype=weight_dtype)
-            self.pin_weight.copy_(weight_dict[self.weight_name])
-
-            weight_scale_shape = weight_dict[self.weight_scale_name].shape
-            weight_scale_dtype = weight_dict[self.weight_scale_name].dtype
-            self.pin_weight_scale = torch.empty(weight_scale_shape, pin_memory=True, dtype=weight_scale_dtype)
-            self.pin_weight_scale.copy_(weight_dict[self.weight_scale_name])
-
-            input_global_scale_shape = input_global_scale.shape
-            input_global_scale_dtype = input_global_scale.dtype
-            self.pin_input_global_scale = torch.empty(input_global_scale_shape, pin_memory=True, dtype=input_global_scale_dtype)
-            self.pin_input_global_scale.copy_(input_global_scale)
-
-            alpha_shape = alpha.shape
-            alpha_dtype = alpha.dtype
-            self.pin_alpha = torch.empty(alpha_shape, pin_memory=True, dtype=alpha_dtype)
-            self.pin_alpha.copy_(alpha)
+            self.pin_weight = create_pin_tensor(weight_dict[self.weight_name])
+            self.pin_weight_scale = create_pin_tensor(weight_dict[self.weight_scale_name])
+            self.pin_input_global_scale = create_pin_tensor(input_global_scale)
+            self.pin_alpha = create_pin_tensor(alpha)
 
             del weight_dict[self.weight_name]
         else:
@@ -360,10 +323,7 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             else:
                 device = weight_dict[self.bias_name].device
                 if device.type == "cpu":
-                    bias_shape = weight_dict[self.bias_name].shape
-                    bias_dtype = weight_dict[self.bias_name].dtype
-                    self.pin_bias = torch.empty(bias_shape, pin_memory=True, dtype=bias_dtype)
-                    self.pin_bias.copy_(weight_dict[self.bias_name])
+                    self.pin_bias = create_pin_tensor(weight_dict[self.bias_name])
                 else:
                     self.bias = weight_dict[self.bias_name]
         else:
@@ -485,16 +445,11 @@ class MMWeightQuantTemplate(MMWeightTemplate):
             self.weight_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_name, count=1)
             self.weight_scale_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.weight_scale_name, count=1)
 
-        if self.weight_need_transpose:
-            weight_tensor = self.lazy_load_file.get_tensor(self.weight_name).t()
-        else:
-            weight_tensor = self.lazy_load_file.get_tensor(self.weight_name)
-        self.pin_weight = self.pin_weight.copy_(weight_tensor)
+        weight_tensor = self.lazy_load_file.get_tensor(self.weight_name)
+        self.pin_weight = create_pin_tensor(weight_tensor, transpose=self.weight_need_transpose)
 
         weight_scale_tensor = self.lazy_load_file.get_tensor(self.weight_scale_name)
-        self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
-
-        del weight_tensor
+        self.pin_weight_scale = create_pin_tensor(weight_scale_tensor, dtype=torch.float32)
 
         if self.bias_name is not None:
             if self.is_post_adapter:
@@ -504,5 +459,5 @@ class MMWeightQuantTemplate(MMWeightTemplate):
                 self.bias_name = re.sub(r"\.\d+", lambda m: f".{block_index}", self.bias_name, count=1)
 
             bias_tensor = self.lazy_load_file.get_tensor(self.bias_name)
-            self.pin_bias.copy_(bias_tensor)
-            del bias_tensor
+            bias_dtype = torch.float32 if self.bias_force_fp32 else self.infer_dtype
+            self.pin_bias = create_pin_tensor(bias_tensor, dtype=bias_dtype)
