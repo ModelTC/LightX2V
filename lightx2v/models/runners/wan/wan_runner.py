@@ -19,18 +19,11 @@ from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
+from lightx2v.models.networks.wan.distill_model import WanDistillModel
 from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
-    WanScheduler4ChangingResolutionInterface,
-)
-from lightx2v.models.schedulers.wan.feature_caching.scheduler import (
-    WanSchedulerCaching,
-    WanSchedulerTaylorCaching,
-)
-from lightx2v.models.schedulers.wan.scheduler import WanScheduler
-from lightx2v.models.schedulers.wan.step_distill.scheduler import WanStepDistillScheduler
+from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler, get_wan_distill_method
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
@@ -71,6 +64,12 @@ def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, mo
     return model
 
 
+def get_wan_model_class(distill_method):
+    if distill_method is None:
+        return WanModel
+    return WanDistillModel
+
+
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
     _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
@@ -78,6 +77,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
     _SUPPORTS_GENERIC_WARMUP = True
 
     def __init__(self, config):
+        self.distill_method = get_wan_distill_method(config)
         super().__init__(config)
         self.vae_cls = WanVAE
         self.tiny_vae_cls = WanVAE_tiny
@@ -88,11 +88,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
         model_cls = self.config["model_cls"]
         if model_cls not in (
             "wan2.1",
-            "wan2.1_distill",
-            "wan2.1_mean_flow_distill",
             "wan2.2",
             "wan2.2_moe",
-            "wan2.2_moe_distill",
             "infinitetalk",
         ):
             raise NotImplementedError("Wan reuse currently supports Wan2.1, Wan2.2, and InfiniteTalk only")
@@ -236,7 +233,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         wan_model_kwargs = {"model_path": self.config["model_path"], "config": self.config, "device": self.init_device}
         lora_configs = self.config.get("lora_configs")
         if not lora_configs:
-            model = WanModel(**wan_model_kwargs)
+            model = get_wan_model_class(self.distill_method)(**wan_model_kwargs)
         else:
             model = build_wan_model_with_lora(WanModel, self.config, wan_model_kwargs, lora_configs, model_type="wan2.1")
         return model
@@ -411,25 +408,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         super().init_scheduler()
         if self.config.get("disagg_mode") == "decode":
             return
-
-        if self.config["feature_caching"] == "NoCaching":
-            if self.config.get("scheduler_type") == "WanStepDistillScheduler":
-                scheduler_class = WanStepDistillScheduler
-                logger.info("Using WanStepDistillScheduler")
-            else:
-                scheduler_class = WanScheduler
-                logger.info("Using WanScheduler")
-        elif self.config["feature_caching"] == "TaylorSeer":
-            scheduler_class = WanSchedulerTaylorCaching
-        elif self.config.feature_caching in ["Tea", "Ada", "Custom", "FirstBlock", "DualBlock", "DynamicBlock", "Mag"]:
-            scheduler_class = WanSchedulerCaching
-        else:
-            raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
-
-        if self.config.get("changing_resolution", False):
-            self.scheduler = WanScheduler4ChangingResolutionInterface(scheduler_class, self.config)
-        else:
-            self.scheduler = scheduler_class(self.config)
+        self.scheduler = create_wan_scheduler(self.config)
 
     def init_modules(self):
         if self.config.get("disagg_mode"):
@@ -934,14 +913,34 @@ class WanRunner(DisaggMixin, DefaultRunner):
 
 
 class MultiModelStruct:
-    def __init__(self, model_list, config, boundary=0.875, num_train_timesteps=1000):
+    def __init__(self, model_list, config, num_train_timesteps=1000):
         self.model = model_list  # [high_noise_model, low_noise_model]
         assert len(self.model) == 2, "MultiModelStruct only supports 2 models now."
         self.config = config
-        self.boundary = boundary
-        self.boundary_timestep = self.boundary * num_train_timesteps
         self.cur_model_index = -1
-        logger.info(f"boundary: {self.boundary}, boundary_timestep: {self.boundary_timestep}")
+        self.distill_method = get_wan_distill_method(config)
+        if self.distill_method not in (None, "dmd2"):
+            raise NotImplementedError(f"MultiModelStruct does not support distill_method {self.distill_method!r}")
+
+        if self.distill_method == "dmd2":
+            self.boundary_step_index = self.config["boundary_step_index"]
+            logger.info(f"boundary_step_index: {self.boundary_step_index}")
+        elif self.distill_method is None:
+            self.boundary = self.config["boundary"]
+            self.boundary_timestep = self.boundary * num_train_timesteps
+            logger.info(f"boundary: {self.boundary}, boundary_timestep: {self.boundary_timestep}")
+
+    def uses_high_noise_model(self):
+        if self.distill_method == "dmd2":
+            return self.scheduler.step_index < self.boundary_step_index
+        elif self.distill_method is None:
+            return self.scheduler.timesteps[self.scheduler.step_index] >= self.boundary_timestep
+
+    def get_switch_step_index(self):
+        if self.distill_method == "dmd2":
+            return self.boundary_step_index
+        elif self.distill_method is None:
+            return len(torch.nonzero(self.scheduler.timesteps >= self.boundary_timestep, as_tuple=True)[0])
 
     @property
     def device(self):
@@ -970,7 +969,7 @@ class MultiModelStruct:
                         "model_type": "wan2.2_moe_high_noise",
                     }
                     if not lora_configs:
-                        high_noise_model = WanModel(**high_model_kwargs)
+                        high_noise_model = get_wan_model_class(self.distill_method)(**high_model_kwargs)
                     else:
                         assert self.config.get("lora_dynamic_apply", False)
                         high_noise_model = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
@@ -986,7 +985,7 @@ class MultiModelStruct:
                         "model_type": "wan2.2_moe_low_noise",
                     }
                     if not lora_configs:
-                        low_noise_model = WanModel(**low_model_kwargs)
+                        low_noise_model = get_wan_model_class(self.distill_method)(**low_model_kwargs)
                     else:
                         assert self.config.get("lora_dynamic_apply", False)
                         low_noise_model = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
@@ -996,9 +995,10 @@ class MultiModelStruct:
 
     @ProfilingContext4DebugL2("Switch models in infer_main costs")
     def get_current_model_index(self):
-        if self.scheduler.timesteps[self.scheduler.step_index] >= self.boundary_timestep:
+        if self.uses_high_noise_model():
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
+            if self.config["enable_cfg"]:
+                self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=0)
@@ -1008,7 +1008,8 @@ class MultiModelStruct:
             self.cur_model_index = 0
         else:
             logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
-            self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
+            if self.config["enable_cfg"]:
+                self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
             if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=1)
@@ -1049,11 +1050,9 @@ class Wan22MoeRunner(WanRunner):
                 raise FileNotFoundError(f"Low Noise Model does not find")
 
     def get_warmup_step_indices(self, scheduler):
-        timesteps = scheduler.timesteps
-        boundary = self.model.boundary_timestep
-        high_noise_steps = torch.nonzero(timesteps >= boundary, as_tuple=True)[0]
-        low_noise_steps = torch.nonzero(timesteps < boundary, as_tuple=True)[0]
-        return tuple(indices[0].item() for indices in (high_noise_steps, low_noise_steps) if len(indices))
+        step_count = len(scheduler.timesteps)
+        switch_step_index = self.model.get_switch_step_index()
+        return (0, switch_step_index) if 0 < switch_step_index < step_count else (0,)
 
     def get_warmup_models(self):
         return tuple(self.model.model)
@@ -1075,15 +1074,16 @@ class Wan22MoeRunner(WanRunner):
                 "model_type": "wan2.2_moe_low_noise",
             }
             if not lora_configs:
-                high_noise_model = WanModel(**high_model_kwargs)
-                low_noise_model = WanModel(**low_model_kwargs)
+                model_class = get_wan_model_class(self.distill_method)
+                high_noise_model = model_class(**high_model_kwargs)
+                low_noise_model = model_class(**low_model_kwargs)
             else:
                 high_noise_model = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
                 low_noise_model = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
 
-            return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
+            return MultiModelStruct([high_noise_model, low_noise_model], self.config)
         else:
-            model_struct = MultiModelStruct([None, None], self.config, self.config["boundary"])
+            model_struct = MultiModelStruct([None, None], self.config)
             model_struct.low_noise_model_path = self.low_noise_model_path
             model_struct.high_noise_model_path = self.high_noise_model_path
             model_struct.init_device = self.init_device
@@ -1268,7 +1268,7 @@ class LingbotRunner(Wan22MoeRunner):
 
     def load_transformer(self):
         if self.config.get("dynamic_multimodel", False):
-            model_struct = MultiModelStruct([None, None], self.config, self.config["boundary"])
+            model_struct = MultiModelStruct([None, None], self.config)
             model_struct.low_noise_model_path = self.low_noise_model_path
             model_struct.high_noise_model_path = self.high_noise_model_path
             model_struct.init_device = self.init_device
@@ -1305,7 +1305,7 @@ class LingbotRunner(Wan22MoeRunner):
                 lora_configs,
                 model_type="low_noise_model",
             )
-        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
+        return MultiModelStruct([high_noise_model, low_noise_model], self.config)
 
     @staticmethod
     def _se3_inverse(T: torch.Tensor) -> torch.Tensor:

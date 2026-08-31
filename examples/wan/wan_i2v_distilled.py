@@ -6,11 +6,12 @@ This example demonstrates how to use LightX2V with Wan2.2 distilled model for I2
 from lightx2v import LightX2VPipeline
 
 # Initialize pipeline for Wan2.2 distilled I2V task
-# For wan2.1, use model_cls="wan2.1_distill"
+# For Wan2.1, use model_cls="wan2.1" with distill_method="dmd2".
 pipe = LightX2VPipeline(
     model_path="/path/to/wan2.2/Wan2.2-I2V-A14B",
-    model_cls="wan2.2_moe_distill",
+    model_cls="wan2.2_moe",
     task="i2v",
+    distill_method="dmd2",
     # Distilled weights: For wan2.1, only need to specify dit_original_ckpt="/path/to/wan2.1_i2v_720p_lightx2v_4step.safetensors"
     low_noise_original_ckpt="/path/to/wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors",
     high_noise_original_ckpt="/path/to/wan2.2_i2v_A14b_high_noise_lightx2v_4step_1030.safetensors",
@@ -18,7 +19,7 @@ pipe = LightX2VPipeline(
 
 # Alternative: create generator from config JSON file
 # pipe.create_generator(
-#     config_json="../configs/wan22/wan_moe_i2v_distill.json"
+#     config_json="configs/distill/wan22/wan_moe_i2v_distill_model.json"
 # )
 
 # Enable offloading to significantly reduce VRAM usage

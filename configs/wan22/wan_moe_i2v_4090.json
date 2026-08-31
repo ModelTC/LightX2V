@@ -16,12 +16,5 @@
     "cpu_offload": true,
     "offload_granularity": "phase",
     "boundary": 0.900,
-    "use_image_encoder": false,
-    "boundary_step_index": 2,
-    "denoising_step_list": [
-        1000,
-        750,
-        500,
-        250
-    ]
+    "use_image_encoder": false
 }

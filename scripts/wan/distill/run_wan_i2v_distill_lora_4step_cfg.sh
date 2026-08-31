@@ -10,7 +10,7 @@ export CUDA_VISIBLE_DEVICES=0
 source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \
---model_cls wan2.1_distill \
+--model_cls wan2.1 \
 --task i2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/distill/wan21/wan_i2v_distill_lora_4step_cfg.json \

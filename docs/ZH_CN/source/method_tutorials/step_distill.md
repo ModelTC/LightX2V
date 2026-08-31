@@ -84,10 +84,10 @@ Self-Forcing 针对 1.3B 的自回归模型进行步数蒸馏、CFG蒸馏。Ligh
 
 | 配置文件 | 用途 | 模型地址 |
 |----------|------|------------|
-| [wan_t2v_distill_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan_t2v_distill_4step_cfg.json) | 加载 T2V 4步蒸馏完整模型 | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/distill_models/distill_model.safetensors) |
+| [wan_t2v_distill_model_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_model_4step_cfg.json) | 加载 T2V 4步蒸馏完整模型 | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/distill_models/distill_model.safetensors) |
 | [wan_i2v_distill_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan_i2v_distill_4step_cfg.json) | 加载 I2V 4步蒸馏完整模型 | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/blob/main/distill_models/distill_model.safetensors) |
-| [wan_t2v_distill_4step_cfg_lora.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan_t2v_distill_4step_cfg_lora.json) | 加载 Wan-T2V 模型和步数蒸馏 LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
-| [wan_i2v_distill_4step_cfg_lora.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan_i2v_distill_4step_cfg_lora.json) | 加载 Wan-I2V 模型和步数蒸馏 LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
+| [wan_t2v_distill_lora_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json) | 加载 Wan-T2V 模型和步数蒸馏 LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
+| [wan_i2v_distill_lora_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_i2v_distill_lora_4step_cfg.json) | 加载 Wan-I2V 模型和步数蒸馏 LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
 
 ### 关键配置参数
 
@@ -131,13 +131,13 @@ Self-Forcing 针对 1.3B 的自回归模型进行步数蒸馏、CFG蒸馏。Ligh
 **T2V 完整模型：**
 
 ```bash
-bash scripts/wan/run_wan_t2v_distill_4step_cfg.sh
+bash scripts/wan/distill/run_wan_t2v_distill_model_4step_cfg.sh
 ```
 
 **I2V 完整模型：**
 
 ```bash
-bash scripts/wan/run_wan_i2v_distill_4step_cfg.sh
+bash scripts/wan/distill/run_wan_i2v_distill_4step_cfg.sh
 ```
 
 ### 步数蒸馏 LoRA 推理脚本
@@ -145,13 +145,13 @@ bash scripts/wan/run_wan_i2v_distill_4step_cfg.sh
 **T2V LoRA：**
 
 ```bash
-bash scripts/wan/run_wan_t2v_distill_4step_cfg_lora.sh
+bash scripts/wan/distill/run_wan_t2v_distill_lora_4step_cfg.sh
 ```
 
 **I2V LoRA：**
 
 ```bash
-bash scripts/wan/run_wan_i2v_distill_4step_cfg_lora.sh
+bash scripts/wan/distill/run_wan_i2v_distill_lora_4step_cfg.sh
 ```
 
 ## 🔧 服务化部署
@@ -162,10 +162,10 @@ bash scripts/wan/run_wan_i2v_distill_4step_cfg_lora.sh
 
 ```bash
 python -m lightx2v.api_server \
-  --model_cls wan2.1_distill \
+  --model_cls wan2.1 \
   --task t2v \
   --model_path $model_path \
-  --config_json ${lightx2v_path}/configs/distill/wan_t2v_distill_4step_cfg.json \
+  --config_json ${lightx2v_path}/configs/distill/wan21/wan_t2v_distill_model_4step_cfg.json \
   --port 8000 \
   --nproc_per_node 1
 ```

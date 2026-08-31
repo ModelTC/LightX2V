@@ -4,6 +4,7 @@
     "text_len": 512,
     "target_height": 480,
     "target_width": 832,
+    "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
@@ -13,6 +14,5 @@
     "cpu_offload": false,
     "offload_granularity": "model",
     "denoising_step_list": [1000, 750, 500, 250],
-    "dit_original_ckpt": "lightx2v/Wan2.1-Distill-Models/wan2.1_t2v_14b_lightx2v_4step.safetensors"
-
-  }
+    "dit_original_ckpt": "/path/to/wan2.1_t2v_14b_lightx2v_4step.safetensors"
+}
