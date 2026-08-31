@@ -38,6 +38,8 @@ class HunyuanVideo15Runner(DefaultRunner):
 
         if self.sr_version is not None:
             self.config_sr = copy.deepcopy(config)
+            self.config_sr.pop("dit_original_ckpt", None)
+            self.config_sr["transformer_model_path"] = os.path.join(os.path.dirname(config["transformer_model_path"]), self.sr_version)
             self.config_sr["is_sr_running"] = False
             self.config_sr["sample_shift"] = config["video_super_resolution"]["flow_shift"]  # for SR model
             self.config_sr["sample_guide_scale"] = config["video_super_resolution"]["guidance_scale"]  # for SR model
@@ -102,17 +104,18 @@ class HunyuanVideo15Runner(DefaultRunner):
         text_encoders = [text_encoder, byt5]
         return text_encoders
 
+    def load_sr_transformer(self):
+        if self.sr_version is None:
+            return None
+
+        self.config_sr["is_sr_running"] = True
+        model = HunyuanVideo15Model(self.config_sr["model_path"], self.config_sr, self.init_device)
+        self.config_sr["is_sr_running"] = False
+        return model
+
     def load_transformer(self):
         model = HunyuanVideo15Model(self.config["model_path"], self.config, self.init_device)
-        if self.sr_version is not None:
-            self.config_sr["transformer_model_path"] = os.path.join(os.path.dirname(self.config.transformer_model_path), self.sr_version)
-            self.config_sr["is_sr_running"] = True
-            model_sr = HunyuanVideo15Model(self.config_sr["model_path"], self.config_sr, self.init_device)
-            self.config_sr["is_sr_running"] = False
-        else:
-            model_sr = None
-
-        self.model_sr = model_sr
+        self.model_sr = self.load_sr_transformer()
         return model
 
     def get_latent_shape_with_target_hw(self, origin_size=None):
