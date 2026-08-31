@@ -160,8 +160,6 @@ class LightX2VPipeline:
             self.model_cls = "z_image"
         elif model_cls in ["ernie_image", "ernie-image", "ERNIE-Image"]:
             self.model_cls = "ernie_image"
-        elif model_cls in ["ernie_image_turbo", "ernie-image-turbo", "ERNIE-Image-Turbo"]:
-            self.model_cls = "ernie_image_turbo"
         elif model_cls in ["longcat_image", "longcat-image"]:
             self.model_cls = "longcat_image"
 
