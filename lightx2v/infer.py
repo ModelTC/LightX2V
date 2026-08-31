@@ -105,7 +105,6 @@ def main():
             "wan2.2_moe_vace",
             "qwen_image",
             "ernie_image",
-            "ernie_image_turbo",
             "hidream_o1_image",
             "longcat_image",
             "cosmos3",
