@@ -137,7 +137,9 @@ class WanPreWeights(WeightModule):
                 ),
             )
 
-        if config["model_cls"] == "wan2.1_distill" and config.get("enable_dynamic_cfg", False):
+        wan21_distill_method = config.get("distill_method") if config["model_cls"] == "wan2.1" else None
+
+        if wan21_distill_method == "dmd2" and config.get("enable_dynamic_cfg", False):
             self.add_module(
                 "cfg_cond_proj_1",
                 MM_WEIGHT_REGISTER["Default"](
@@ -153,7 +155,7 @@ class WanPreWeights(WeightModule):
                 ),
             )
 
-        if config["model_cls"] == "wan2.1_mean_flow_distill":
+        if wan21_distill_method == "mean_flow":
             self.add_module(
                 "time_embedding_r_0",
                 MM_WEIGHT_REGISTER["Default"]("time_embedding_r.0.weight", "time_embedding_r.0.bias"),

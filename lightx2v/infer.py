@@ -33,7 +33,6 @@ from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  #
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_dancer_runner import WanDancerRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_dreamzero_runner import WanDreamZeroRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_infinitetalk_runner import InfiniteTalkRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVARunner  # noqa: F401
@@ -93,8 +92,6 @@ def main():
         required=True,
         choices=[
             "wan2.1",
-            "wan2.1_distill",
-            "wan2.1_mean_flow_distill",
             "wan_dancer",
             "wan2.1_vace",
             "wan2.1_sf",
@@ -106,7 +103,6 @@ def main():
             "wan2.2",
             "wan2.2_matrix_game3",
             "wan2.2_audio",
-            "wan2.2_moe_distill",
             "wan2.2_moe_vace",
             "qwen_image",
             "ernie_image",

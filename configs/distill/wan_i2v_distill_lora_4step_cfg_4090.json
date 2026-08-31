@@ -3,6 +3,7 @@
   "target_video_length": 81,
   "target_height": 480,
   "target_width": 832,
+  "distill_method": "dmd2",
   "self_attn_1_type": "sage_attn2",
   "cross_attn_1_type": "sage_attn2",
   "cross_attn_2_type": "sage_attn2",

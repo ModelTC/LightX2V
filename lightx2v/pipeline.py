@@ -27,7 +27,6 @@ from lightx2v.models.runners.swiftvr.swiftvr_runner import SwiftVRRunner  # noqa
 from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_lingbot_fast_runner import LingbotFastRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVARunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
@@ -86,6 +85,7 @@ class LightX2VPipeline:
         low_noise_original_ckpt=None,
         high_noise_original_ckpt=None,
         transformer_model_name=None,
+        distill_method=None,
     ):
         self.task = task
         self.support_tasks = support_tasks
@@ -95,11 +95,11 @@ class LightX2VPipeline:
         self.dit_original_ckpt = dit_original_ckpt
         self.low_noise_original_ckpt = low_noise_original_ckpt
         self.high_noise_original_ckpt = high_noise_original_ckpt
+        self.distill_method = distill_method
         self.transformer_model_name = transformer_model_name
 
         if self.model_cls in [
             "wan2.1",
-            "wan2.1_distill",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
@@ -107,7 +107,6 @@ class LightX2VPipeline:
             "seko_talk_ar",
             "wan2.2_moe",
             "wan2.2_audio",
-            "wan2.2_moe_distill",
             "wan2.2_animate",
             WAN_ANIMATE2_MODEL_ID,
             "wan2.2_s2v",
@@ -367,7 +366,6 @@ class LightX2VPipeline:
         self.vae_cpu_offload = vae_offload
         if self.model_cls in [
             "wan2.1",
-            "wan2.1_distill",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
@@ -377,7 +375,6 @@ class LightX2VPipeline:
             "wan2.2",
             "wan2.2_matrix_game3",
             "wan2.2_audio",
-            "wan2.2_moe_distill",
             "wan2.2_animate",
             WAN_ANIMATE2_MODEL_ID,
             "wan2.2_s2v",

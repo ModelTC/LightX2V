@@ -82,28 +82,22 @@ LightX2V 支持多种 LoRA 权重命名约定：
 
 ```bash
 # T2V LoRA 推理
-bash scripts/wan/run_wan_t2v_distill_4step_cfg_lora.sh
+bash scripts/wan/distill/run_wan_t2v_distill_lora_4step_cfg.sh
 
 # I2V LoRA 推理
-bash scripts/wan/run_wan_i2v_distill_4step_cfg_lora.sh
-```
-
-**音频驱动 LoRA 推理：**
-
-```bash
-bash scripts/wan/run_wan_i2v_audio.sh
+bash scripts/wan/distill/run_wan_i2v_distill_lora_4step_cfg.sh
 ```
 
 ### API 服务中使用 LoRA
 
-在 API 服务中通过 [config 文件](wan_t2v_distill_4step_cfg_lora.json) 指定，对 [scripts/server/start_server.sh](https://github.com/ModelTC/lightx2v/blob/main/scripts/server/start_server.sh) 中的启动命令进行修改：
+在 API 服务中通过 [config 文件](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json) 指定，对 [scripts/server/start_server.sh](https://github.com/ModelTC/lightx2v/blob/main/scripts/server/start_server.sh) 中的启动命令进行修改：
 
 ```bash
 python -m lightx2v.api_server \
-  --model_cls wan2.1_distill \
+  --model_cls wan2.1 \
   --task t2v \
   --model_path $model_path \
-  --config_json ${lightx2v_path}/configs/distill/wan_t2v_distill_4step_cfg_lora.json \
+  --config_json ${lightx2v_path}/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json \
   --port 8000 \
   --nproc_per_node 1
 ```

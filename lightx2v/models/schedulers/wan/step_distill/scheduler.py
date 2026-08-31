@@ -1,4 +1,3 @@
-import math
 from typing import Union
 
 import torch
@@ -56,34 +55,5 @@ class Wan21MeanFlowStepDistillScheduler(WanStepDistillScheduler):
     def step_pre(self, step_index):
         super().step_pre(step_index)
         self.timestep_input = torch.stack([self.timesteps[self.step_index]])
-        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
-            self.timestep_input = (self.mask[0][:, ::2, ::2] * self.timestep_input).flatten()
-        if self.config["model_cls"] == "wan2.1_mean_flow_distill":
-            t_next = self.timesteps[self.step_index + 1] if self.step_index < self.infer_steps - 1 else torch.zeros_like(self.timestep_input)
-            self.timestep_input_r = torch.stack([t_next])
-
-
-class Wan22StepDistillScheduler(WanStepDistillScheduler):
-    def __init__(self, config):
-        super().__init__(config)
-        self.boundary_step_index = config["boundary_step_index"]
-
-    def set_denoising_timesteps(self, device: Union[str, torch.device] = None):
-        super().set_denoising_timesteps(device)
-        self.sigma_bound = self.sigmas[self.boundary_step_index].item()
-
-    def calculate_alpha_beta_high(self, sigma):
-        alpha = (1 - sigma) / (1 - self.sigma_bound)
-        beta = math.sqrt(sigma**2 - (alpha * self.sigma_bound) ** 2)
-        return alpha, beta
-
-    def step_post(self):
-        flow_pred = self.noise_pred.to(torch.float32)
-        sigma = self.sigmas[self.step_index].item()
-        noisy_image_or_video = self.latents.to(torch.float32) - flow_pred * sigma
-        # self.latent: x_t
-        if self.step_index < self.infer_steps - 1:
-            sigma_n = self.sigmas[self.step_index + 1].item()
-            noisy_image_or_video = noisy_image_or_video + flow_pred * sigma_n
-
-        self.latents = noisy_image_or_video.to(self.latents.dtype)
+        t_next = self.timesteps[self.step_index + 1] if self.step_index < self.infer_steps - 1 else torch.zeros_like(self.timestep_input)
+        self.timestep_input_r = torch.stack([t_next])

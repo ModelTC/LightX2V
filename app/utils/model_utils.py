@@ -480,6 +480,7 @@ def build_wan21(
     quant_op,
 ):
     wan21_config = {
+        "model_cls": "wan2.1",
         "dim": 5120,
         "eps": 1e-06,
         "ffn_dim": 13824,
@@ -497,9 +498,7 @@ def build_wan21(
 
     is_distill = is_distill_model_from_name(dit_path_input)
     if is_distill:
-        wan21_config["model_cls"] = "wan2.1_distill"
-    else:
-        wan21_config["model_cls"] = "wan2.1"
+        wan21_config["distill_method"] = "dmd2"
 
     wan21_config["dit_quantized_ckpt"] = None
     wan21_config["dit_original_ckpt"] = None
@@ -556,6 +555,7 @@ def build_wan22(
     quant_op,
 ):
     wan22_config = {
+        "model_cls": "wan2.2_moe",
         "dim": 5120,
         "eps": 1e-06,
         "ffn_dim": 13824,
@@ -573,9 +573,7 @@ def build_wan22(
 
     is_distill = is_distill_model_from_name(high_noise_path_input)
     if is_distill:
-        wan22_config["model_cls"] = "wan2.2_moe_distill"
-    else:
-        wan22_config["model_cls"] = "wan2.2_moe"
+        wan22_config["distill_method"] = "dmd2"
 
     wan22_config["high_noise_quantized_ckpt"] = None
     wan22_config["low_noise_quantized_ckpt"] = None
