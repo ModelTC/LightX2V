@@ -90,7 +90,7 @@ training:
         train_type: lora
         lora:
             rank: 128
-            alpha: 128
+            alpha: 8
             target_modules:
                 - to_q
                 - to_k
@@ -99,33 +99,23 @@ training:
                 - ff.net.0.proj
                 - ff.net.2
         optimizer:
-            learning_rate: 0.0001
-            adam_beta1: 0.9
+            learning_rate: 0.00005
+            adam_beta1: 0.0
             adam_beta2: 0.999
             weight_decay: 0.01
             adam_epsilon: 0.00000001
     fake:
-        train_type: lora
-        lora:
-            rank: 128
-            alpha: 128
-            target_modules:
-                - to_q
-                - to_k
-                - to_v
-                - to_out.0
-                - ff.net.0.proj
-                - ff.net.2
+        train_type: full
         optimizer:
-            learning_rate: 0.00002
-            adam_beta1: 0.9
+            learning_rate: 0.0000004
+            adam_beta1: 0.0
             adam_beta2: 0.999
             weight_decay: 0.01
             adam_epsilon: 0.00000001
     teacher:
         guidance_scale: 1.0
         cfg_norm: none
-    output_dir: /data/nvme6/gushiqiao/codes/latest/LightX2V/lightx2v_train/output_train/minimax_h3_t2av_dmd_lora1
+    output_dir: ./output_train/minimax_h3_t2av_dmd_zoe_fake_full
 
 inference:
     method: none
