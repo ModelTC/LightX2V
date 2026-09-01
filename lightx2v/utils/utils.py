@@ -32,7 +32,8 @@ def seed_all(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch_device_module.manual_seed(seed)
-    torch_device_module.manual_seed_all(seed)
+    if hasattr(torch_device_module, "manual_seed_all"):
+        torch_device_module.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
