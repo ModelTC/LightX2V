@@ -169,7 +169,16 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             hidden_states = self.run_block(block_index, block, hidden_states, pre_infer_out)
         return hidden_states
 
+    def infer_with_disk_streaming(self, block_weights, hidden_states, pre_infer_out):
+        for block_index in block_weights.checkpoint.block_indices:
+            block = block_weights.load_streaming_block(block_index)
+            self.block_idx = block_index
+            hidden_states = self.run_block(block_index, block, hidden_states, pre_infer_out)
+        return hidden_states
+
     def infer(self, block_weights, pre_infer_out):
         if self.use_adaln_cache:
             self._prepare_adaln_cache()
+        if getattr(block_weights, "disk_streaming", False):
+            return self.infer_with_disk_streaming(block_weights, pre_infer_out.hidden_states, pre_infer_out)
         return self.infer_func(block_weights.blocks, pre_infer_out.hidden_states, pre_infer_out)

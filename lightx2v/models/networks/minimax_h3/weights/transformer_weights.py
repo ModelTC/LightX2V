@@ -2,8 +2,27 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.models.networks.minimax_h3.checkpoint import MiniMaxH3ShardCheckpoint
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
+
+
+def _resolve_streaming_block_name(name, block_index):
+    block_prefix = "transformer_blocks."
+    if not name.startswith(block_prefix):
+        return name
+    parts = name.split(".", 2)
+    if len(parts) == 3 and parts[1].isdigit():
+        return f"{block_prefix}{int(block_index)}.{parts[2]}"
+    return name
+
+
+def _iter_base_attrs(module):
+    if hasattr(module, "base_attrs"):
+        yield from module.base_attrs
+    for child in getattr(module, "_modules", {}).values():
+        if child is not None:
+            yield from _iter_base_attrs(child)
 
 
 def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
@@ -129,11 +148,48 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
 class MiniMaxH3TransformerWeights(WeightModule):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
+        self.num_layers = int(config.get("num_layers", 50))
+        self.disk_streaming = bool(config.get("dit_disk_streaming", False))
+        if self.disk_streaming:
+            if config.get("lazy_load", False):
+                raise NotImplementedError(
+                    "MiniMax-H3 dit_disk_streaming reads the official sharded checkpoint directly and cannot be combined with converted lazy_load block shards."
+                )
+            if config.get("dit_quantized", False):
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support quantized DiT checkpoints yet.")
+            if config.get("tensor_parallel", False):
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support tensor parallel inference yet.")
+            if lora_path is not None:
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support LoRA streaming yet.")
+
+            checkpoint_dir = config.get("dit_original_ckpt")
+            if checkpoint_dir is None:
+                raise ValueError("MiniMax-H3 dit_disk_streaming requires config['dit_original_ckpt'] to point to the official transformer checkpoint directory.")
+            self.checkpoint = MiniMaxH3ShardCheckpoint(checkpoint_dir)
+            expected_block_indices = tuple(range(self.num_layers))
+            if self.checkpoint.block_indices != expected_block_indices:
+                raise ValueError(
+                    "MiniMax-H3 dit_disk_streaming checkpoint block indices mismatch: "
+                    f"expected {expected_block_indices}, found {self.checkpoint.block_indices}"
+                )
+
+            self.blocks = WeightModuleList([])
+            self.streaming_block = MiniMaxH3TransformerBlockWeights(0, config, create_cuda_buffer=True)
+            block0_tensors = self.checkpoint.load_tensors(self.checkpoint.tensor_names_for_block(0), device="cpu")
+            try:
+                self.streaming_block.load(block0_tensors)
+                self.streaming_block.load_state_dict(self._prepare_streaming_state_dict(block0_tensors, 0), 0)
+            finally:
+                del block0_tensors
+            self.add_module("blocks", self.blocks)
+            self.add_module("streaming_block", self.streaming_block)
+            return
+
         if config.get("lazy_load", False):
             raise NotImplementedError(
                 "MiniMax-H3 reads the official sharded checkpoint directly; disk lazy_load requires a converted block-sharded checkpoint and is not supported yet. Use lazy_load=false with model or block CPU offload."
             )
-        self.blocks = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config) for i in range(int(config.get("num_layers", 50)))])
+        self.blocks = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config) for i in range(self.num_layers)])
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block":
             self.offload_block_cuda_buffers = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config, create_cuda_buffer=True) for i in range(2)])
             # Register device buffers before source blocks: buffer allocation
@@ -141,3 +197,33 @@ class MiniMaxH3TransformerWeights(WeightModule):
             self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
             self.offload_phase_cuda_buffers = None
         self.add_module("blocks", self.blocks)
+
+    @property
+    def streaming_block_indices(self):
+        if not self.disk_streaming:
+            raise RuntimeError("MiniMax-H3 streaming_block_indices is only available when dit_disk_streaming=true.")
+        return self.checkpoint.block_indices
+
+    def load_streaming_block(self, block_index):
+        if not self.disk_streaming:
+            raise RuntimeError("MiniMax-H3 load_streaming_block requires dit_disk_streaming=true.")
+        block_index = int(block_index)
+        if block_index not in self.checkpoint.block_indices:
+            raise IndexError(f"MiniMax-H3 checkpoint does not contain transformer block {block_index}.")
+
+        tensor_names = self.checkpoint.tensor_names_for_block(block_index)
+        tensors = self.checkpoint.load_tensors(tensor_names, device="cpu")
+        try:
+            self.streaming_block.load_state_dict(self._prepare_streaming_state_dict(tensors, block_index), block_index)
+        finally:
+            del tensors
+        return self.streaming_block
+
+    def _prepare_streaming_state_dict(self, tensors, block_index):
+        state_dict = dict(tensors)
+        for name, _, transpose in _iter_base_attrs(self.streaming_block):
+            if transpose:
+                actual_name = _resolve_streaming_block_name(name, block_index)
+                if actual_name in state_dict:
+                    state_dict[actual_name] = state_dict[actual_name].t()
+        return state_dict
