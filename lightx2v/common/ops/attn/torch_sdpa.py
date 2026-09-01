@@ -44,7 +44,17 @@ class TorchSDPAWeight(AttnWeightTemplate):
                 enable_mem_efficient=True,
             )
         with sdpa_ctx:
-            x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=drop_rate, is_causal=causal)
+            # q/k/v are (B, H, S, D) here, so head count is dim 1. GQA models such as
+            # neopp (32 q heads, 8 kv heads) need SDPA to broadcast the kv groups.
+            x = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                dropout_p=drop_rate,
+                is_causal=causal,
+                enable_gqa=q.shape[1] != k.shape[1],
+            )
         x = x.transpose(1, 2)
         b, s, a, d = x.shape
         out = x.reshape(b, s, -1)
