@@ -3,11 +3,11 @@ import triton
 import triton.language as tl
 
 
-@triton.jit
+@triton.jit(do_not_specialize=("L",))
 def compress_kernel(
     X,
     XM,
-    L: tl.constexpr,
+    L,
     D: tl.constexpr,
     BLOCK_L: tl.constexpr,
 ):
