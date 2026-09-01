@@ -7,7 +7,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ModelTC/lightx2v)
 [![Doc](https://img.shields.io/badge/docs-English-99cc2)](https://lightx2v-en.readthedocs.io/en/latest)
 [![Doc](https://img.shields.io/badge/文档-中文-99cc2)](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest)
-[![Papers](https://img.shields.io/badge/论文集-中文-99cc2)](https://lightx2v-papers-zhcn.readthedocs.io/zh-cn/latest)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/lightx2v/lightx2v/tags)
 
 **\[ [English](README.md) | 中文 \]**
@@ -221,6 +220,7 @@ pipe.generate(
 ## 🤖 支持的模型生态
 
 ### 官方开源模型
+- ✅ [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
 - ✅ [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)
 - ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2)
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
@@ -316,6 +316,7 @@ pipe.generate(
 - [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan)
 - [Wan-Video](https://github.com/Wan-Video)
 - [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
+- [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
 - [LightLLM](https://github.com/ModelTC/LightLLM)
 - [sglang](https://github.com/sgl-project/sglang)
 - [vllm](https://github.com/vllm-project/vllm)
