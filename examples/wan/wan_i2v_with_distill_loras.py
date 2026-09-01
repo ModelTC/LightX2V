@@ -6,16 +6,17 @@ This example demonstrates how to use LightX2V with Wan2.2 distilled model and Lo
 from lightx2v import LightX2VPipeline
 
 # Initialize pipeline for Wan2.2 distilled I2V task with LoRA
-# For wan2.1, use model_cls="wan2.1_distill"
+# For Wan2.1, use model_cls="wan2.1" with distill_method="dmd2".
 pipe = LightX2VPipeline(
     model_path="/path/to/wan2.2/Wan2.2-I2V-A14B",
-    model_cls="wan2.2_moe_distill",
+    model_cls="wan2.2_moe",
     task="i2v",
+    distill_method="dmd2",
 )
 
 # Alternative: create generator from config JSON file
 # pipe.create_generator(
-#     config_json="../configs/wan22/wan_moe_i2v_distill_with_lora.json"
+#     config_json="configs/distill/wan22/wan_moe_i2v_distill_with_lora.json"
 # )
 
 # Enable offloading to significantly reduce VRAM usage

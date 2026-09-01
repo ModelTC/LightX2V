@@ -4,6 +4,7 @@
     "text_len": 512,
     "target_height": 720,
     "target_width": 1280,
+    "distill_method": "dmd2",
     "rainfusion_attn_setting": {
         "pool_size": 128,
         "sparsity": 0.8,
@@ -23,7 +24,6 @@
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
     "use_image_encoder": false,
-    "boundary": 0.900,
     "boundary_step_index": 2,
     "denoising_step_list": [
         1000,

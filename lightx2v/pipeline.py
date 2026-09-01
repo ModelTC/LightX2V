@@ -13,7 +13,7 @@ from loguru import logger
 from lightx2v.common.ops import *
 from lightx2v.models.networks.wan.animate2_identity import WAN_ANIMATE2_MODEL_ID
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
-from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
+from lightx2v.models.runners.flux2.flux2_runner import Flux2Runner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
@@ -27,7 +27,6 @@ from lightx2v.models.runners.swiftvr.swiftvr_runner import SwiftVRRunner  # noqa
 from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_lingbot_fast_runner import LingbotFastRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVARunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
@@ -86,20 +85,23 @@ class LightX2VPipeline:
         low_noise_original_ckpt=None,
         high_noise_original_ckpt=None,
         transformer_model_name=None,
+        distill_method=None,
+        model_variant=None,
     ):
         self.task = task
         self.support_tasks = support_tasks
         self.model_path = model_path
         self.model_cls = model_cls
+        self.model_variant = model_variant
         self.sf_model_path = sf_model_path
         self.dit_original_ckpt = dit_original_ckpt
         self.low_noise_original_ckpt = low_noise_original_ckpt
         self.high_noise_original_ckpt = high_noise_original_ckpt
+        self.distill_method = distill_method
         self.transformer_model_name = transformer_model_name
 
         if self.model_cls in [
             "wan2.1",
-            "wan2.1_distill",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
@@ -107,7 +109,6 @@ class LightX2VPipeline:
             "seko_talk_ar",
             "wan2.2_moe",
             "wan2.2_audio",
-            "wan2.2_moe_distill",
             "wan2.2_animate",
             WAN_ANIMATE2_MODEL_ID,
             "wan2.2_s2v",
@@ -120,7 +121,7 @@ class LightX2VPipeline:
             self.num_channels_latents = 48
             if self.model_cls == "wan2.2_matrix_game3":
                 self.use_image_encoder = False
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
+        elif self.model_cls == "hunyuan_video_1.5":
             self.vae_stride = (4, 16, 16)
             self.num_channels_latents = 32
         elif self.model_cls in ["ltx2", "ltx2_5"]:
@@ -159,12 +160,6 @@ class LightX2VPipeline:
             self.model_cls = "z_image"
         elif model_cls in ["ernie_image", "ernie-image", "ERNIE-Image"]:
             self.model_cls = "ernie_image"
-        elif model_cls in ["ernie_image_turbo", "ernie-image-turbo", "ERNIE-Image-Turbo"]:
-            self.model_cls = "ernie_image_turbo"
-        elif self.model_cls in ["flux2_klein"]:
-            self.model_cls = "flux2_klein"
-        elif self.model_cls in ["flux2_dev"]:
-            self.model_cls = "flux2_dev"
         elif model_cls in ["longcat_image", "longcat-image"]:
             self.model_cls = "longcat_image"
 
@@ -280,7 +275,7 @@ class LightX2VPipeline:
             self.self_attn_1_type = attn_mode
             self.cross_attn_1_type = attn_mode
             self.cross_attn_2_type = attn_mode
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3"]:
             self.attn_type = attn_mode
             if self.model_cls == "minimax_h3":
                 self.video_flow_shift = sample_shift
@@ -339,7 +334,7 @@ class LightX2VPipeline:
             self.clip_quant_scheme = quant_scheme
             self.clip_quantized = image_encoder_quantized
             self.clip_quantized_ckpt = image_encoder_quantized_ckpt
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "qwen_image"]:
             self.qwen25vl_quantized = text_encoder_quantized
             self.qwen25vl_quantized_ckpt = text_encoder_quantized_ckpt
             self.qwen25vl_quant_scheme = text_encoder_quant_scheme
@@ -367,7 +362,6 @@ class LightX2VPipeline:
         self.vae_cpu_offload = vae_offload
         if self.model_cls in [
             "wan2.1",
-            "wan2.1_distill",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
@@ -377,7 +371,6 @@ class LightX2VPipeline:
             "wan2.2",
             "wan2.2_matrix_game3",
             "wan2.2_audio",
-            "wan2.2_moe_distill",
             "wan2.2_animate",
             WAN_ANIMATE2_MODEL_ID,
             "wan2.2_s2v",
@@ -385,7 +378,7 @@ class LightX2VPipeline:
             self.t5_cpu_offload = text_encoder_offload
             self.clip_cpu_offload = image_encoder_offload
 
-        elif self.model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:
+        elif self.model_cls == "hunyuan_video_1.5":
             self.qwen25vl_cpu_offload = text_encoder_offload
             self.siglip_cpu_offload = image_encoder_offload
             self.byt5_cpu_offload = image_encoder_offload

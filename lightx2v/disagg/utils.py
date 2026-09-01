@@ -119,7 +119,7 @@ def set_config(
             args_dict["self_attn_1_type"] = attn_mode
             args_dict["cross_attn_1_type"] = attn_mode
             args_dict["cross_attn_2_type"] = attn_mode
-        elif model_cls in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill", "qwen_image", "longcat_image", "ltx2", "z_image"]:
+        elif model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "z_image"]:
             args_dict["attn_type"] = attn_mode
 
         args_dict["norm_modulate_backend"] = norm_modulate_backend
@@ -344,6 +344,8 @@ def load_wan_transformer(config: Dict[str, Any]):
         flush=True,
     )
     from lightx2v.models.networks.wan.model import WanModel
+    from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, get_wan_model_class
+    from lightx2v.models.schedulers.wan.scheduler_factory import get_wan_distill_method
 
     print(
         "Constructing WanModel: model_cls=%s model_path=%s device=%s dit_quantized=%s lazy_load=%s"
@@ -362,19 +364,19 @@ def load_wan_transformer(config: Dict[str, Any]):
     else:
         init_device = torch.device(AI_DEVICE)
 
+    model_class = get_wan_model_class(get_wan_distill_method(config))
+
     if config.get("model_cls") == "wan2.1":
         wan_model_kwargs = {"model_path": config["model_path"], "config": config, "device": init_device}
         lora_configs = config.get("lora_configs")
         if not lora_configs:
-            model = WanModel(**wan_model_kwargs)
+            model = model_class(**wan_model_kwargs)
         else:
             model = build_wan_model_with_lora(WanModel, config, wan_model_kwargs, lora_configs, model_type="wan2.1")
-        logger.info("WanModel construction finished")
+        logger.info("%s construction finished", type(model).__name__)
         return model
     elif config.get("model_cls") == "wan2.2_moe":
         print("Loading MultiModelStruct module start", flush=True)
-        from lightx2v.models.runners.wan.wan_runner import MultiModelStruct
-
         print("Loading MultiModelStruct module done", flush=True)
 
         high_noise_model_path = os.path.join(config["model_path"], "high_noise_model")
@@ -404,16 +406,16 @@ def load_wan_transformer(config: Dict[str, Any]):
                 "model_type": "wan2.2_moe_low_noise",
             }
             if not lora_configs:
-                high_noise_model = WanModel(**high_model_kwargs)
-                low_noise_model = WanModel(**low_model_kwargs)
+                high_noise_model = model_class(**high_model_kwargs)
+                low_noise_model = model_class(**low_model_kwargs)
             else:
                 high_noise_model = build_wan_model_with_lora(WanModel, config, high_model_kwargs, lora_configs, model_type="high_noise_model")
                 low_noise_model = build_wan_model_with_lora(WanModel, config, low_model_kwargs, lora_configs, model_type="low_noise_model")
 
-            logger.info("WanModel construction finished for wan2.2_moe")
-            return MultiModelStruct([high_noise_model, low_noise_model], config, config.get("boundary", 0.875))
+            logger.info("%s construction finished for wan2.2_moe", type(high_noise_model).__name__)
+            return MultiModelStruct([high_noise_model, low_noise_model], config)
         else:
-            model_struct = MultiModelStruct([None, None], config, config.get("boundary", 0.875))
+            model_struct = MultiModelStruct([None, None], config)
             model_struct.low_noise_model_path = low_noise_model_path
             model_struct.high_noise_model_path = high_noise_model_path
             model_struct.init_device = init_device

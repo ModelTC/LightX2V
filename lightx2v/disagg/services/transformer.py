@@ -24,7 +24,7 @@ from lightx2v.disagg.utils import (
     estimate_transformer_buffer_sizes,
     load_wan_transformer,
 )
-from lightx2v.models.schedulers.wan.scheduler import WanScheduler
+from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -504,7 +504,7 @@ class TransformerService(BaseService):
         self.transformer = load_wan_transformer(self.config)
 
         # Initialize scheduler
-        self.scheduler = WanScheduler(self.config)
+        self.scheduler = create_wan_scheduler(self.config)
         self.transformer.set_scheduler(self.scheduler)
 
         self.logger.info("Transformer Models loaded successfully.")

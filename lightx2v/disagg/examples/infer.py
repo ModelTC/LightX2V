@@ -7,8 +7,7 @@ from loguru import logger
 
 from lightx2v.common.ops import *
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
-from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
-from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
+from lightx2v.models.runners.flux2.flux2_runner import Flux2Runner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner  # noqa: F401
@@ -17,7 +16,6 @@ from lightx2v.models.runners.qwen_image.qwen_image_runner import QwenImageRunner
 from lightx2v.models.runners.seedvr.seedvr_runner import SeedVRRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game2_runner import WanSFMtxg2Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_matrix_game3_runner import WanMatrixGame3Runner  # noqa: F401
 from lightx2v.models.runners.wan.wan_runner import Wan22MoeRunner, WanRunner  # noqa: F401
@@ -57,8 +55,6 @@ def main():
         required=True,
         choices=[
             "wan2.1",
-            "wan2.1_distill",
-            "wan2.1_mean_flow_distill",
             "wan2.1_vace",
             "wan2.1_sf",
             "wan2.1_sf_mtxg2",
@@ -68,19 +64,16 @@ def main():
             "wan2.2",
             "wan2.2_matrix_game3",
             "wan2.2_audio",
-            "wan2.2_moe_distill",
             "wan2.2_moe_vace",
             "qwen_image",
             "longcat_image",
             "wan2.2_animate",
             "hunyuan_video_1.5",
-            "hunyuan_video_1.5_distill",
             "worldplay_distill",
             "worldplay_ar",
             "worldplay_bi",
             "z_image",
-            "flux2_klein",
-            "flux2_dev",
+            "flux2",
             "ltx2",
             "bagel",
             "seedvr2",

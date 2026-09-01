@@ -12,11 +12,10 @@ from lightx2v.models.runners.bagel.bagel_runner import BagelRunner  # noqa: F401
 from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner  # noqa: F401
 from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Runner  # noqa: F401
 from lightx2v.models.runners.ernie_image.ernie_image_runner import ErnieImageRunner  # noqa: F401
-from lightx2v.models.runners.flux2.flux2_runner import Flux2DevRunner, Flux2KleinRunner  # noqa: F401
+from lightx2v.models.runners.flux2.flux2_runner import Flux2Runner  # noqa: F401
 from lightx2v.models.runners.hidream_o1_image.hidream_o1_image_runner import HidreamO1ImageRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan3d.hunyuan3d_shape_runner import Hunyuan3DShapeRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_image3.hunyuan_image3_runner import HunyuanImage3Runner  # noqa: F401
-from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_distill_runner import HunyuanVideo15DistillRunner  # noqa: F401
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner  # noqa: F401
 from lightx2v.models.runners.lingbot_video.lingbot_video_runner import LingBotVideoRunner  # noqa: F401
 from lightx2v.models.runners.longcat_image.longcat_image_runner import LongCatImageRunner  # noqa: F401
@@ -33,7 +32,6 @@ from lightx2v.models.runners.wan.wan_animate2_runner import WanAnimate2Runner  #
 from lightx2v.models.runners.wan.wan_animate_runner import WanAnimateRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_audio_runner import Wan22AudioRunner, WanAudioRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_dancer_runner import WanDancerRunner  # noqa: F401
-from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_dreamzero_runner import WanDreamZeroRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_infinitetalk_runner import InfiniteTalkRunner  # noqa: F401
 from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVARunner  # noqa: F401
@@ -93,8 +91,6 @@ def main():
         required=True,
         choices=[
             "wan2.1",
-            "wan2.1_distill",
-            "wan2.1_mean_flow_distill",
             "wan_dancer",
             "wan2.1_vace",
             "wan2.1_sf",
@@ -106,11 +102,9 @@ def main():
             "wan2.2",
             "wan2.2_matrix_game3",
             "wan2.2_audio",
-            "wan2.2_moe_distill",
             "wan2.2_moe_vace",
             "qwen_image",
             "ernie_image",
-            "ernie_image_turbo",
             "hidream_o1_image",
             "longcat_image",
             "cosmos3",
@@ -118,15 +112,13 @@ def main():
             WAN_ANIMATE2_MODEL_ID,
             "wan2.2_s2v",
             "hunyuan_video_1.5",
-            "hunyuan_video_1.5_distill",
             "hunyuan_image3",
             "hunyuan3d",
             "worldplay_distill",
             "worldplay_ar",
             "worldplay_bi",
             "z_image",
-            "flux2_klein",
-            "flux2_dev",
+            "flux2",
             "ltx2",
             "ltx2_ar",
             "ltx2_5",

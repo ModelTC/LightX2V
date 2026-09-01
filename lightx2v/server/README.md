@@ -342,7 +342,7 @@ see `lightx2v/server/config.py`
 # Single GPU
 python -m lightx2v.server \
     --model_path /path/to/model \
-    --model_cls wan2.1_distill \
+    --model_cls wan2.1 \
     --task i2v \
     --host 0.0.0.0 \
     --port 8000 \
@@ -353,7 +353,7 @@ python -m lightx2v.server \
 # Multi-GPU with torchrun
 torchrun --nproc_per_node=2 -m lightx2v.server \
     --model_path /path/to/model \
-    --model_cls wan2.1_distill \
+    --model_cls wan2.1 \
     --task i2v \
     --host 0.0.0.0 \
     --port 8000 \
