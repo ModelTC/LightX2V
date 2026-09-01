@@ -284,6 +284,48 @@ def test_transformer_weights_stream_official_shards_one_block_at_a_time(tmp_path
     assert all(set(names) in [set(block0_names), set(block1_names)] for names in requested_names)
 
 
+def test_transformer_weights_release_and_reinitialize_streaming_block(tmp_path, h3_modules):
+    _checkpoint_module, weights_module, _infer_module = h3_modules
+    _write_fake_official_checkpoint(tmp_path, weights_module, num_layers=2)
+
+    weights = weights_module.MiniMaxH3TransformerWeights(
+        {
+            "dit_disk_streaming": True,
+            "dit_original_ckpt": str(tmp_path),
+            "num_layers": 2,
+            "dit_quantized": False,
+            "tensor_parallel": False,
+        }
+    )
+    old_block = weights.streaming_block
+    assert old_block.attn.to_q.weight_cuda_buffer is not None
+
+    weights.release_disk_streaming_buffer()
+
+    assert weights.streaming_block is None
+    assert old_block.attn.to_q.weight is None
+    assert old_block.attn.to_q.weight_cuda_buffer is None
+    assert old_block.adaln.bias is None
+    assert old_block.adaln.bias_cuda_buffer is None
+    assert old_block.norm1.weight is None
+    assert old_block.norm1.weight_cuda_buffer is None
+
+    block0 = weights.load_streaming_block(0)
+    assert block0 is weights.streaming_block
+    assert block0 is not old_block
+    assert torch.all(block0.attn.to_q.weight == 1)
+    assert block0.attn.to_q.weight_cuda_buffer is not None
+
+    weights.release_disk_streaming_buffer()
+    assert weights.streaming_block is None
+
+    block1 = weights.load_streaming_block(1)
+    assert block1 is weights.streaming_block
+    assert block1 is not block0
+    assert torch.all(block1.attn.to_q.weight == 2)
+    assert block1.attn.to_q.weight_cuda_buffer is not None
+
+
 def test_transformer_disk_streaming_rejects_missing_block(tmp_path, h3_modules):
     _checkpoint_module, weights_module, _infer_module = h3_modules
     _write_fake_official_checkpoint(tmp_path, weights_module, num_layers=1)

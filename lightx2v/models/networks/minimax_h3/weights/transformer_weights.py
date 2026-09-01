@@ -1,3 +1,6 @@
+import gc
+from contextlib import suppress
+
 import torch
 import torch.distributed as dist
 
@@ -5,6 +8,7 @@ from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.models.networks.minimax_h3.checkpoint import MiniMaxH3ShardCheckpoint
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def _resolve_streaming_block_name(name, block_index):
@@ -23,6 +27,14 @@ def _iter_base_attrs(module):
     for child in getattr(module, "_modules", {}).values():
         if child is not None:
             yield from _iter_base_attrs(child)
+
+
+def _empty_device_cache():
+    if not isinstance(AI_DEVICE, str):
+        return
+    device_module = getattr(torch, AI_DEVICE, None)
+    if device_module is not None and hasattr(device_module, "empty_cache"):
+        device_module.empty_cache()
 
 
 def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
@@ -148,6 +160,7 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
 class MiniMaxH3TransformerWeights(WeightModule):
     def __init__(self, config, lazy_load_path=None, lora_path=None):
         super().__init__()
+        self.config = config
         self.num_layers = int(config.get("num_layers", 50))
         self.disk_streaming = bool(config.get("dit_disk_streaming", False))
         if self.disk_streaming:
@@ -174,15 +187,9 @@ class MiniMaxH3TransformerWeights(WeightModule):
                 )
 
             self.blocks = WeightModuleList([])
-            self.streaming_block = MiniMaxH3TransformerBlockWeights(0, config, create_cuda_buffer=True)
-            block0_tensors = self.checkpoint.load_tensors(self.checkpoint.tensor_names_for_block(0), device="cpu")
-            try:
-                self.streaming_block.load(block0_tensors)
-                self.streaming_block.load_state_dict(self._prepare_streaming_state_dict(block0_tensors, 0), 0)
-            finally:
-                del block0_tensors
+            self.streaming_block = None
             self.add_module("blocks", self.blocks)
-            self.add_module("streaming_block", self.streaming_block)
+            self._ensure_streaming_block()
             return
 
         if config.get("lazy_load", False):
@@ -211,6 +218,7 @@ class MiniMaxH3TransformerWeights(WeightModule):
         if block_index not in self.checkpoint.block_indices:
             raise IndexError(f"MiniMax-H3 checkpoint does not contain transformer block {block_index}.")
 
+        self._ensure_streaming_block()
         tensor_names = self.checkpoint.tensor_names_for_block(block_index)
         tensors = self.checkpoint.load_tensors(tensor_names, device="cpu")
         try:
@@ -218,6 +226,55 @@ class MiniMaxH3TransformerWeights(WeightModule):
         finally:
             del tensors
         return self.streaming_block
+
+    def _ensure_streaming_block(self):
+        if self.streaming_block is not None:
+            return
+        self.streaming_block = MiniMaxH3TransformerBlockWeights(0, self.config, create_cuda_buffer=True)
+        self.add_module("streaming_block", self.streaming_block)
+        block0_tensors = self.checkpoint.load_tensors(self.checkpoint.tensor_names_for_block(0), device="cpu")
+        try:
+            self.streaming_block.load(block0_tensors)
+            self.streaming_block.load_state_dict(self._prepare_streaming_state_dict(block0_tensors, 0), 0)
+        finally:
+            del block0_tensors
+            gc.collect()
+            _empty_device_cache()
+
+    def release_disk_streaming_buffer(self):
+        if not self.disk_streaming:
+            return
+        block = self.streaming_block
+        if block is None:
+            return
+        with suppress(Exception):
+            device_module = getattr(torch, AI_DEVICE, None)
+            if device_module is not None and hasattr(device_module, "synchronize"):
+                device_module.synchronize()
+
+        stack = [block]
+        visited = set()
+        while stack:
+            module = stack.pop()
+            if module is None or id(module) in visited:
+                continue
+            visited.add(id(module))
+            for _, attr_name, _ in getattr(module, "base_attrs", ()):
+                if hasattr(module, attr_name):
+                    setattr(module, attr_name, None)
+                buffer_attr = f"{attr_name}_cuda_buffer"
+                if hasattr(module, buffer_attr):
+                    setattr(module, buffer_attr, None)
+            for attr_name in tuple(vars(module)):
+                if attr_name.endswith("_cuda_buffer"):
+                    setattr(module, attr_name, None)
+            stack.extend(getattr(module, "_modules", {}).values())
+            stack.extend(getattr(module, "_parameters", {}).values())
+
+        self.streaming_block = None
+        self._modules["streaming_block"] = None
+        gc.collect()
+        _empty_device_cache()
 
     def _prepare_streaming_state_dict(self, tensors, block_index):
         state_dict = dict(tensors)

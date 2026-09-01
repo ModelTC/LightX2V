@@ -1,3 +1,4 @@
+import gc
 import os
 from contextlib import suppress
 
@@ -194,9 +195,29 @@ class MiniMaxH3Runner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
+        if self._is_mps_low_memory_streaming():
+            self._validate_mps_low_memory_streaming_config()
         self.model = self.load_transformer()
         self.text_encoders = self.load_text_encoder()
+        if self._is_mps_low_memory_streaming():
+            self.video_vae = None
+            self.audio_vae = None
+            return
         self.video_vae, self.audio_vae = self.load_vae()
+
+    def _is_mps_low_memory_streaming(self):
+        return (
+            AI_DEVICE == "mps"
+            and self.config.get("task") == "t2av"
+            and self.config.get("dit_disk_streaming", False)
+            and self.config.get("text_encoder_disk_streaming", False)
+        )
+
+    def _validate_mps_low_memory_streaming_config(self):
+        if not self.config.get("text_encoder_release_block_offload_buffers", False):
+            raise ValueError("MiniMax-H3 MPS low-memory streaming requires text_encoder_release_block_offload_buffers=true.")
+        if self.config.get("warmup", False):
+            raise ValueError("MiniMax-H3 MPS low-memory streaming requires warmup=false in the first implementation.")
 
     def load_transformer(self):
         model_kwargs = {
@@ -219,14 +240,14 @@ class MiniMaxH3Runner(DefaultRunner):
     @staticmethod
     def _validate_vae_decode_tile_shapes(tile_shapes, video_vae):
         if not isinstance(tile_shapes, dict):
-            raise ValueError("vae_decode_tile_shape must map 'HEIGHTxWIDTH' to [tile_height, tile_width]")
+            raise TypeError("vae_decode_tile_shape must map 'HEIGHTxWIDTH' to [tile_height, tile_width]")
 
         ratio = video_vae.spatial_compression_ratio
         overlap_height = video_vae.tile_sample_min_overlap_height
         overlap_width = video_vae.tile_sample_min_overlap_width
         for resolution, tile_shape in tile_shapes.items():
             if not isinstance(resolution, str):
-                raise ValueError(f"invalid VAE tile resolution: {resolution!r}")
+                raise TypeError(f"invalid VAE tile resolution: {resolution!r}")
             dimensions = resolution.split("x")
             if len(dimensions) != 2:
                 raise ValueError(f"invalid VAE tile resolution: {resolution!r}")
@@ -594,7 +615,13 @@ class MiniMaxH3Runner(DefaultRunner):
         if not self.config.get("cpu_offload", False):
             return
         if self.model.block_offload:
-            if not self.model.prepost_resident:
+            if self._is_mps_low_memory_streaming() and self.config.get("dit_disk_streaming", False):
+                logger.info("Offloading MiniMax-H3 pre/post weights and releasing the disk-streaming DiT device block buffer")
+                if not self.model.prepost_resident:
+                    self.model.pre_weight.to_cpu()
+                    self.model.post_weight.to_cpu()
+                self.model.transformer_weights.release_disk_streaming_buffer()
+            elif not self.model.prepost_resident:
                 logger.info("Offloading MiniMax-H3 pre/post weights; retaining the two block-offload device buffers")
                 self.model.pre_weight.to_cpu()
                 self.model.post_weight.to_cpu()
@@ -611,6 +638,8 @@ class MiniMaxH3Runner(DefaultRunner):
         metrics_labels=["MiniMaxH3Runner"],
     )
     def run_vae_decoder(self, video_rows, audio_rows):
+        if self._is_mps_low_memory_streaming() and (self.video_vae is None or self.audio_vae is None):
+            self.video_vae, self.audio_vae = self.load_vae()
         video_rows = video_rows[self.scheduler.num_condition_video_rows :]
         audio_rows = audio_rows[self.scheduler.num_condition_audio_rows :]
         video_latents = unpatchify_video_tokens(
@@ -706,8 +735,13 @@ class MiniMaxH3Runner(DefaultRunner):
                 with suppress(Exception):
                     self._offload_transformer()
             try:
-                self.end_run()
+                if self._is_mps_low_memory_streaming() and (self.video_vae is not None or self.audio_vae is not None):
+                    self.video_vae = None
+                    self.audio_vae = None
+                    gc.collect()
+                    self.maybe_empty_cache(force=True, collect_garbage=True)
             finally:
+                self.end_run()
                 # Decoded FP32 video is large (roughly 1.5 GiB at the default
                 # shape). Returned tensors keep their own references/copies;
                 # the runner should not retain another request-sized result.
