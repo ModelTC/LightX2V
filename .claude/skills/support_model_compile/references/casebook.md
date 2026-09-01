@@ -20,6 +20,7 @@
 - [14. 最终输出相近但数值不一致](#14-最终输出相近但数值不一致)
 - [15. warmup 后首请求因共享 config 扩充而重编译](#15-warmup-后首请求因共享-config-扩充而重编译)
 - [16. 多模态 timestep layout 在后续 step 重编译](#16-多模态-timestep-layout-在后续-step-重编译)
+- [17. custom op 外层稳定但内层 Triton 仍冷编译](#17-custom-op-外层稳定但内层-triton-仍冷编译)
 
 ## 1. staging block 重复编译
 
@@ -145,3 +146,11 @@
 - **根因**：多模态 scheduler 的首步可能让各模态共享同一 timestep，后续 step 则产生多个 unique timesteps。以 MiniMax-H3 为例，Step 0 的 `temb.shape[0]` 为 1，后续 step 为 2；只 warmup Step 0 无法覆盖后一种图。
 - **处理**：在同一次正式 scheduler 状态上执行能覆盖每种稳定 timestep layout 的最少代表 step，并保持 `step_pre → infer → step_post`。不要默认跑完整 denoise loop，也不要仅因 shape 写成 `(H,W,T)` 就认为 graph signature 已覆盖。
 - **验收**：重编译应全部发生在服务 ready 前；再走真实 HTTP 请求，确认每个正式 step 均无新 recompile，并分别报告新增 warmup 时间和正式 E2E。
+
+## 17. custom op 外层稳定但内层 Triton 仍冷编译
+
+- **现象**：warmup 完成后，正式 Step 1 仍显著慢于稳态；custom op 已消除目标 Dynamo graph break 或 recompile，却只消除了一部分首轮耗时。
+- **确认**：比较 warmup 与正式请求在 packing、padding 和 SP 后各 rank 的实际 q/k 长度及 sparse block 数；在服务 ready 前后记录 Triton/第三方 JIT 日志或缓存产物，并用 dense/backend control 排除 runner 整体 warmup 失效。
+- **根因**：custom op 只隔离外层 Dynamo。内部 leaf kernel 仍可能按序列长度的数值或对齐关系特化；即使视频空间和时间尺寸相同，不同 prompt 经 packing 和 SP 后也可能得到新的本地长度。
+- **处理**：让 custom op 边界覆盖产生并消费 data-dependent 中间结果的最小完整语义单元。仅当长度不决定静态 shape、constexpr 控制流或 layout 时，才改为 Triton 运行时标量，并用 `do_not_specialize` 禁止运行时值和对齐关系特化；确需静态的参数使用有限 bucket/padding，不做 request-aware prompt 枚举。
+- **验收**：从冷缓存走完整 `warmup → ready → 正式请求`，确认所有内层编译都发生在 ready 前；用多个长度及非整除 tail 验证数值，且正式 Step 1 回到稳态量级、稳态性能无回退。

@@ -30,6 +30,38 @@ except ImportError:
     magi_ffa_func = None
 
 
+@torch.library.custom_op(
+    "lightx2v::dynamic_sparse_sage2",
+    mutates_args=(),
+    device_types="cuda",
+)
+def dynamic_sparse_sage2(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    topk_ratio: float,
+    block_q: int,
+    block_k: int,
+    arch: str,
+) -> torch.Tensor:
+    sparse_map, _, _ = get_block_map(q, k, topk_ratio=topk_ratio, BLKQ=block_q, BLKK=block_k)
+    lut, valid_block_num = block_map_incremental_lut_triton(sparse_map)
+    return sage2_block_sparse_attn(q, k, v, lut, valid_block_num, block_q, block_k, arch)
+
+
+@dynamic_sparse_sage2.register_fake
+def _dynamic_sparse_sage2_fake(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    topk_ratio: float,
+    block_q: int,
+    block_k: int,
+    arch: str,
+) -> torch.Tensor:
+    return torch.empty_like(q)
+
+
 @ATTN_WEIGHT_REGISTER("dynamic_sparse_attn")
 class DynamicSparseAttnWeight(AttnWeightTemplate):
     sparsity_ratio = 0.8
@@ -152,10 +184,7 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
         v = v.unsqueeze(0).transpose(1, 2).contiguous()
 
-        sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
-        lut, valid_block_num = block_map_incremental_lut_triton(sparse_map)
-
-        out = sage2_block_sparse_attn(q, k, v, lut, valid_block_num, self.BLKQ, self.BLKK, self.arch)
+        out = dynamic_sparse_sage2(q, k, v, self.topk, self.BLKQ, self.BLKK, self.arch)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
 
