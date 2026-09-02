@@ -5,6 +5,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from numbers import Integral, Real
 
+import torch
+
 
 @dataclass(frozen=True)
 class GenerationShape:
@@ -18,6 +20,106 @@ class GenerationShape:
     @property
     def spatial_size(self) -> tuple[int, int]:
         return self.value[-2], self.value[-1]
+
+
+@dataclass(frozen=True)
+class GenerationShapeIndex:
+    dataset_index: int
+    generation_shape: tuple[int, ...]
+
+
+class GenerationShapeSampler(torch.utils.data.Sampler):
+    """Sample an output shape per item while keeping data-parallel steps aligned."""
+
+    def __init__(
+        self,
+        dataset,
+        num_replicas=1,
+        rank=0,
+        shuffle=True,
+        drop_last=False,
+        seed=0,
+        generation_shapes=None,
+    ):
+        self.dataset = dataset
+        self.num_replicas = int(num_replicas)
+        self.rank = int(rank)
+        self.shuffle = bool(shuffle)
+        self.drop_last = bool(drop_last)
+        self.seed = int(seed)
+        self.epoch = 0
+        self.generation_shapes = parse_generation_shapes(generation_shapes)
+        if self.num_replicas <= 0:
+            raise ValueError(f"num_replicas must be positive, got {self.num_replicas}.")
+        if self.rank < 0 or self.rank >= self.num_replicas:
+            raise ValueError(f"rank must be in [0, {self.num_replicas}), got {self.rank}.")
+
+        if self.drop_last:
+            self.num_samples = len(self.dataset) // self.num_replicas
+        else:
+            self.num_samples = (len(self.dataset) + self.num_replicas - 1) // self.num_replicas
+        self.total_size = self.num_samples * self.num_replicas
+        if self.num_samples == 0:
+            raise ValueError("Generation-shape sampling produced no steps. Disable drop_last or add more samples.")
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def __iter__(self):
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + self.epoch)
+        if self.shuffle:
+            indices = torch.randperm(len(self.dataset), generator=generator).tolist()
+        else:
+            indices = list(range(len(self.dataset)))
+        if self.drop_last:
+            indices = indices[: self.total_size]
+        elif self.total_size > len(indices):
+            repeat = (self.total_size + len(indices) - 1) // len(indices)
+            indices = (indices * repeat)[: self.total_size]
+        local_indices = indices[self.rank : self.total_size : self.num_replicas]
+        sampled_shapes = self._sample_shapes(generator)
+        return iter(GenerationShapeIndex(dataset_index=index, generation_shape=shape) for index, shape in zip(local_indices, sampled_shapes, strict=True))
+
+    def _sample_shapes(self, generator):
+        weights = torch.tensor(
+            [shape.ratio if shape.ratio is not None else 1.0 for shape in self.generation_shapes],
+            dtype=torch.double,
+        )
+        exact_counts = weights / weights.sum() * self.num_samples
+        step_counts = exact_counts.floor().to(dtype=torch.int64)
+        remainder = self.num_samples - int(step_counts.sum().item())
+        if remainder:
+            fractions = exact_counts - step_counts
+            selected = torch.multinomial(
+                fractions,
+                remainder,
+                replacement=False,
+                generator=generator,
+            )
+            step_counts[selected] += 1
+
+        sampled_shapes = []
+        for shape, step_count in zip(self.generation_shapes, step_counts.tolist(), strict=True):
+            sampled_shapes.extend([shape.value] * step_count)
+        if len(sampled_shapes) > 1:
+            order = torch.randperm(len(sampled_shapes), generator=generator).tolist()
+            sampled_shapes = [sampled_shapes[position] for position in order]
+        return sampled_shapes
+
+    def __len__(self):
+        return self.num_samples
+
+
+def split_generation_shape_index(index) -> tuple[int, tuple[int, ...] | None]:
+    if isinstance(index, GenerationShapeIndex):
+        return index.dataset_index, index.generation_shape
+    return int(index), None
+
+
+def apply_generation_shape(metadata: dict, generation_shape: tuple[int, ...] | None) -> None:
+    if generation_shape is not None:
+        metadata["generation_shape"] = tuple(int(dimension) for dimension in generation_shape)
 
 
 def parse_generation_shapes(
@@ -109,23 +211,15 @@ def resolve_generation_shape(
         expected_dimensions=expected_dimensions,
         config_path=config_path,
     )
-    metadata_keys = (
-        ("target_height", "target_width")
-        if expected_dimensions == 2
-        else ("target_num_frames", "target_height", "target_width")
-    )
-    present = [key in metadata and metadata[key] is not None for key in metadata_keys]
-    if any(present) and not all(present):
-        missing = [key for key, is_present in zip(metadata_keys, present, strict=True) if not is_present]
-        raise ValueError(f"Generation shape metadata is incomplete; missing: {', '.join(missing)}.")
-
-    if all(present):
-        selected = tuple(_scalar(metadata[key], key) for key in metadata_keys)
+    sampled_shape = metadata.get("generation_shape")
+    if sampled_shape is not None:
+        if not isinstance(sampled_shape, (list, tuple)) or len(sampled_shape) != expected_dimensions:
+            raise ValueError(f"Sampled generation shape must have {expected_dimensions} dimensions, got {sampled_shape!r}.")
+        selected = tuple(_scalar(dimension, "generation_shape") for dimension in sampled_shape)
     elif len(shapes) == 1:
         selected = shapes[0].value
     else:
-        required = ", ".join(metadata_keys)
-        raise ValueError(f"Multiple {config_path} entries require every prompt sample to provide {required}.")
+        raise ValueError(f"Multiple {config_path} entries require generation-shape sampling to be enabled.")
 
     selected = tuple(int(broadcast(dimension)) for dimension in selected)
     configured = {shape.value for shape in shapes}

@@ -12,7 +12,7 @@ model:
 
 data:
     train:
-        # JSONL row: {"prompt": "...", "target_height": 1024, "target_width": 1024}
+        # JSONL row: {"prompt": "..."}; generation shape is sampled below.
         name: prompt_dataset
         num_workers: 8
         bucket_by_size: true

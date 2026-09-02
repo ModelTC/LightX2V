@@ -23,7 +23,7 @@ distributed:
 
 data:
     train:
-        # JSONL row: {"prompt": "...", "target_height": 512, "target_width": 512}
+        # JSONL row: {"prompt": "..."}; generation shape is selected below.
         name: prompt_dataset
         num_workers: 8
         bucket_by_size: true
