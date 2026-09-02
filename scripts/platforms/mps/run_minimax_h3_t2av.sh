@@ -37,6 +37,9 @@ mkdir -p "$(dirname -- "${output_path}")"
 prompt=${PROMPT:-A cinematic fox walking through a snowy forest}
 seed=${SEED:-42}
 
+echo "Starting MiniMax-H3 t2av on platform=${PLATFORM}, dtype=${DTYPE}"
+echo "Config: dit_disk_streaming=true, text_encoder_disk_streaming=true, VAE lazy lifecycle active"
+
 python -m lightx2v.infer \
   --model_cls minimax_h3 \
   --task t2av \
