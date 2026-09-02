@@ -8,7 +8,7 @@ from typing import (
 
 import torch
 
-from lightx2v_train.utils.image_size_buckets import parse_image_size_buckets
+from lightx2v_train.utils.generation_shapes import parse_generation_shapes
 from lightx2v_train.utils.utils import get_running_dtype
 
 
@@ -42,7 +42,7 @@ class DmdConfig:
     guidance_scale: float
     negative_prompt: Optional[str]
     cfg_norm: str
-    image_sizes: list
+    generation_shapes: list
     random_schedule_enabled: bool
     random_schedule_num_steps_min: int
     random_schedule_num_steps_max: int
@@ -79,8 +79,8 @@ class DmdConfig:
         latent_dtype = dmd.get("latent_dtype")
         if latent_dtype is not None:
             latent_dtype = get_running_dtype(str(latent_dtype).lower())
-        image_sizes = dmd.get("image_sizes", [])
-        parse_image_size_buckets(image_sizes)
+        generation_shapes = dmd.get("generation_shapes")
+        parse_generation_shapes(generation_shapes)
         return cls(
             student=student,
             fake=fake,
@@ -106,7 +106,7 @@ class DmdConfig:
                 "cfg_norm",
                 dmd.get("cfg_norm", "layer_norm"),
             ),
-            image_sizes=image_sizes,
+            generation_shapes=generation_shapes,
             random_schedule_enabled=bool(random_schedule.get("enabled", False)),
             random_schedule_num_steps_min=int(random_schedule.get("num_steps_min", 1)),
             random_schedule_num_steps_max=int(

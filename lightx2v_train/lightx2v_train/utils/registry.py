@@ -203,9 +203,9 @@ def build_data(config, train_or_val, sample_processor=None):
     if use_training_cache:
         data_name = "training_cache_dataset"
     if train_or_val == "train" and data_name == "prompt_dataset":
-        image_sizes = config.get("training", {}).get("dmd", {}).get("image_sizes")
-        if image_sizes is not None:
-            data_config_split["image_sizes"] = image_sizes
+        generation_shapes = config.get("training", {}).get("dmd", {}).get("generation_shapes")
+        if generation_shapes is not None:
+            data_config_split["generation_shapes"] = generation_shapes
     _ensure_data_registered(data_name)
     if data_name not in DATA_REGISTER:
         available_names = ", ".join(sorted(DATA_REGISTER.keys()))

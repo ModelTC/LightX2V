@@ -43,10 +43,10 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 2
-        image_sizes:
+        generation_shapes:
             - {value: [1024, 1024], ratio: 5}
-            - {value: [16, 768, 1344], ratio: 3}
-            - {value: [16, 1344, 768], ratio: 2}
+            - {value: [768, 1344], ratio: 3}
+            - {value: [1344, 768], ratio: 2}
         renoise_sigma_min: 0.02
         renoise_sigma_max: 1.0
         renoise_discrete_samples: 1000

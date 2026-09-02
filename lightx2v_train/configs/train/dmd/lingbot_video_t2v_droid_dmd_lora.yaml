@@ -78,9 +78,8 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 5
-        height: 480
-        width: 832
-        num_frames: 121
+        generation_shapes:
+            - {value: [121, 480, 832]}
         denoising_step_list: [1000, 750, 500, 250]
         warp_denoising_step: true
         ts_schedule: false

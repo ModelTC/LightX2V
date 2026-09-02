@@ -69,7 +69,7 @@ training:
         num_inference_steps: 4
         fake_update_ratio: 2
         # Start at 512px for memory; raise to 1024px only after validating available GPUs.
-        image_sizes:
+        generation_shapes:
             - {value: [512, 512]}
         renoise_sigma_min: 0.02
         renoise_sigma_max: 1.0

@@ -17,7 +17,7 @@ from lightx2v_train.data.utils import (
     to_list,
 )
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
-from lightx2v_train.utils.image_size_buckets import parse_image_size_buckets
+from lightx2v_train.utils.generation_shapes import parse_generation_shapes
 from lightx2v_train.utils.registry import DATA_REGISTER
 
 METADATA_SUFFIXES = {".jsonl", ".json", ".csv"}
@@ -251,7 +251,16 @@ class PromptDataset(torch.utils.data.Dataset):
                     target_width = int(target_width)
                     if target_height <= 0 or target_width <= 0:
                         raise ValueError(f"Prompt target dimensions must be positive, got {target_height}x{target_width}: {path}:{row_index + 1}")
+                target_num_frames = record_value(record, "target_num_frames")
+                if target_num_frames is not None:
+                    target_num_frames = int(target_num_frames)
+                    if target_num_frames <= 0:
+                        raise ValueError(f"Prompt target_num_frames must be positive, got {target_num_frames}: {path}:{row_index + 1}")
+                    if target_height is None:
+                        raise ValueError(f"Prompt video shape requires target_num_frames, target_height, and target_width together: {path}:{row_index + 1}")
                 meta = {"prompt_path": str(path), "row_index": row_index}
+                if target_num_frames is not None:
+                    meta["target_num_frames"] = target_num_frames
                 if target_height is not None:
                     meta["target_height"] = target_height
                     meta["target_width"] = target_width
@@ -297,18 +306,21 @@ class PromptDataset(torch.utils.data.Dataset):
     def cache_source_prompt(self, index):
         return self.samples[index]["prompt"]
 
-    def size_bucket(self, index):
+    def generation_shape(self, index):
         sample = self.samples[index % len(self.samples)]
         meta = sample["meta"]
         height = meta.get("target_height")
         width = meta.get("target_width")
         if height is None or width is None:
             return None
-        return int(height), int(width)
+        num_frames = meta.get("target_num_frames")
+        if num_frames is None:
+            return int(height), int(width)
+        return int(num_frames), int(height), int(width)
 
 
-class SizeBucketSampler(torch.utils.data.Sampler):
-    """Keep all data-parallel ranks on one exact size bucket per step."""
+class GenerationShapeBucketSampler(torch.utils.data.Sampler):
+    """Keep all data-parallel ranks on one exact generation shape per step."""
 
     def __init__(
         self,
@@ -318,10 +330,10 @@ class SizeBucketSampler(torch.utils.data.Sampler):
         shuffle=True,
         drop_last=False,
         seed=0,
-        image_sizes=None,
+        generation_shapes=None,
     ):
-        if not hasattr(dataset, "size_bucket"):
-            raise TypeError("Size-bucket sampling requires dataset.size_bucket(index).")
+        if not hasattr(dataset, "generation_shape"):
+            raise TypeError("Generation-shape bucketing requires dataset.generation_shape(index).")
         self.dataset = dataset
         self.num_replicas = int(num_replicas)
         self.rank = int(rank)
@@ -329,7 +341,7 @@ class SizeBucketSampler(torch.utils.data.Sampler):
         self.drop_last = bool(drop_last)
         self.seed = int(seed)
         self.epoch = 0
-        self.image_size_buckets = parse_image_size_buckets(image_sizes)
+        self.generation_shapes = parse_generation_shapes(generation_shapes)
         if self.num_replicas <= 0:
             raise ValueError(f"num_replicas must be positive, got {self.num_replicas}.")
         if self.rank < 0 or self.rank >= self.num_replicas:
@@ -337,16 +349,16 @@ class SizeBucketSampler(torch.utils.data.Sampler):
 
         self.buckets = defaultdict(list)
         for index in range(len(dataset)):
-            bucket = dataset.size_bucket(index)
+            bucket = dataset.generation_shape(index)
             if bucket is None:
-                raise ValueError(f"Size-bucket sampling requires target_height and target_width for every prompt sample; missing at dataset index {index}.")
+                raise ValueError(f"Generation-shape bucketing requires shape metadata for every prompt sample; missing at dataset index {index}.")
             self.buckets[tuple(bucket)].append(index)
         self._validate_configured_buckets()
-        self.weighted = bool(self.image_size_buckets and self.image_size_buckets[0].ratio is not None)
+        self.weighted = self.generation_shapes[0].ratio is not None
         self.num_steps = sum(self._bucket_total(len(indices)) // self.num_replicas for indices in self.buckets.values())
         self.num_samples = self.num_steps
         if self.num_samples == 0:
-            raise ValueError("Size-bucket sampling produced no steps. Disable drop_last or add more samples to each size bucket.")
+            raise ValueError("Generation-shape bucketing produced no steps. Disable drop_last or add more samples to each shape bucket.")
 
     def _bucket_total(self, size):
         multiple = self.num_replicas
@@ -355,18 +367,16 @@ class SizeBucketSampler(torch.utils.data.Sampler):
         return (size + multiple - 1) // multiple * multiple
 
     def _validate_configured_buckets(self):
-        if not self.image_size_buckets:
-            return
-        configured = {bucket.spatial_size for bucket in self.image_size_buckets}
+        configured = {shape.value for shape in self.generation_shapes}
         present = set(self.buckets)
         unexpected = sorted(present - configured)
         missing = sorted(configured - present)
         if unexpected:
-            values = ", ".join(f"{height}x{width}" for height, width in unexpected)
-            raise ValueError(f"Prompt dataset contains target sizes not listed in training.dmd.image_sizes: {values}.")
+            values = ", ".join(str(list(shape)) for shape in unexpected)
+            raise ValueError(f"Prompt dataset contains shapes not listed in training.dmd.generation_shapes: {values}.")
         if missing:
-            values = ", ".join(f"{height}x{width}" for height, width in missing)
-            raise ValueError(f"training.dmd.image_sizes contains buckets with no prompt samples: {values}.")
+            values = ", ".join(str(list(shape)) for shape in missing)
+            raise ValueError(f"training.dmd.generation_shapes contains buckets with no prompt samples: {values}.")
 
     def set_epoch(self, epoch):
         self.epoch = int(epoch)
@@ -405,9 +415,9 @@ class SizeBucketSampler(torch.utils.data.Sampler):
         return local_indices
 
     def _weighted_indices(self, generator):
-        bucket_order = [bucket.spatial_size for bucket in self.image_size_buckets]
+        bucket_order = [shape.value for shape in self.generation_shapes]
         weights = torch.tensor(
-            [bucket.ratio for bucket in self.image_size_buckets],
+            [shape.ratio for shape in self.generation_shapes],
             dtype=torch.double,
         )
         exact_counts = weights / weights.sum() * self.num_steps
@@ -466,21 +476,22 @@ def _build_dataloader(dataset, data_config, train_or_val):
     sampler = None
     shuffle = data_config.get("shuffle", train_or_val == "train")
     drop_last = data_config.get("drop_last", False)
-    image_size_buckets = parse_image_size_buckets(data_config.get("image_sizes"))
-    if train_or_val == "train" and image_size_buckets and image_size_buckets[0].ratio is not None and not data_config.get("bucket_by_size", False):
-        raise ValueError("training.dmd.image_sizes ratio requires data.train.bucket_by_size=true.")
+    generation_shapes = data_config.get("generation_shapes")
+    parsed_generation_shapes = parse_generation_shapes(generation_shapes) if generation_shapes is not None else []
+    if train_or_val == "train" and parsed_generation_shapes and parsed_generation_shapes[0].ratio is not None and not data_config.get("bucket_by_size", False):
+        raise ValueError("training.dmd.generation_shapes ratio requires data.train.bucket_by_size=true.")
     if train_or_val == "train" and data_config.get("bucket_by_size", False):
-        sampler = SizeBucketSampler(
+        sampler = GenerationShapeBucketSampler(
             dataset,
             num_replicas=dp_world_size,
             rank=get_data_parallel_rank(),
             shuffle=shuffle,
             drop_last=drop_last,
             seed=data_config.get("bucket_seed", 0),
-            image_sizes=data_config.get("image_sizes"),
+            generation_shapes=generation_shapes,
         )
         shuffle = False
-        # SizeBucketSampler already pads or truncates every distributed step.
+        # GenerationShapeBucketSampler already pads or truncates every distributed step.
         drop_last = False
     elif train_or_val == "train" and dp_world_size > 1:
         sampler = DistributedSampler(

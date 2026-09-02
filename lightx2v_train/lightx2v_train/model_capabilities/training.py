@@ -153,12 +153,17 @@ class DistributionMatchingCapability(ModelCapability):
     def default_lora_target_modules(self):
         pass
 
+    @property
+    @abstractmethod
+    def generation_shape_dimensions(self) -> int:
+        """Number of dimensions required by one generation shape."""
+        pass
+
     @abstractmethod
     def latent_shape(
         self,
         batch: Mapping[str, Any],
-        shape_config: Mapping[str, Any],
-        image_sizes,
+        generation_shapes,
         broadcast: Callable[[Any], Any],
     ):
         pass
