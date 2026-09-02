@@ -97,20 +97,7 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     fake:
-        train_type: lora
-        lora:
-            rank: 16
-            alpha: 16
-            target_modules:
-                - to_q
-                - to_k
-                - to_v
-                - to_out.0
-                - add_q_proj
-                - add_k_proj
-                - add_v_proj
-                - to_add_out
-                - to_qkv_mlp_proj
+        train_type: full
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9
