@@ -23,7 +23,7 @@ def int8_quantize_kernel(X, OUT, SCALES, HDIM, BLOCK_SIZE: tl.constexpr):
     x = tl.load(x_ptr + h_offset, mask=h_offset < HDIM).to(tl.float32)
     x_scale = 127.0 / tl.max(tl.abs(x))
     x_scaled = x * x_scale
-    x_scaled += (0.5 * tl.where(x_scaled >= 0, 1, -1)).to(tl.int8)
+    x_scaled = (x_scaled + 0.5 * tl.where(x_scaled >= 0, 1, -1)).to(tl.int8)
     tl.store(out_ptr + h_offset, x_scaled, mask=h_offset < HDIM)
     tl.store(SCALES + row_idx, 1 / x_scale)
 
