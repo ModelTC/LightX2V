@@ -101,9 +101,8 @@ training:
             weight: 5.0e-2
             teacher_inference_steps: 40
             anchor_step: 10
-        height: 480
-        width: 832
-        num_frames: 81
+        generation_shapes:
+            - {value: [81, 480, 832]}
         denoising_step_list:
             - 1000
             - 750

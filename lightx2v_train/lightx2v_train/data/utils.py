@@ -15,6 +15,10 @@ PROMPT_KEYS = ("prompt", "caption", "text")
 _BILINEAR = getattr(Image, "Resampling", Image).BILINEAR
 
 
+def preserve_cache_dtype(key):
+    return isinstance(key, str) and (key.endswith("_ids") or key.endswith("_mask"))
+
+
 @dataclass(frozen=True)
 class VideoFrameSelection:
     frame_ids: tuple[int, ...]

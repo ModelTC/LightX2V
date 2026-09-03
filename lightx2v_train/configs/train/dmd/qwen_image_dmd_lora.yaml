@@ -1,31 +1,48 @@
 model:
     name: qwen_image
-    pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image
+    pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
     fake:
         name: qwen_image
-        pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image
+        pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
     teacher:
         name: qwen_image
-        pretrained_model_name_or_path: /path/to/Qwen/Qwen-Image
+        pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
     max_sequence_length: 1024
     running_dtype: bf16
 
+distributed:
+    backend: nccl
+    timeout_minutes: 120
+    sequence_parallel:
+        enabled: false
+        size: 1
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
+        log_memory: true
+        reshard_after_forward:
+            root_reshard: true
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
 data:
     train:
-        # JSONL row: {"prompt": "...", "target_height": 1024, "target_width": 1024}
         name: prompt_dataset
         num_workers: 8
-        bucket_by_size: true
         prompt_dropout_rate: 0.0
         shuffle: true
         data_path:
             - /path/to/datasets/image_dmd/train.jsonl
     val:
-        name: image_dataset
+        name: prompt_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /path/to/datasets/image_dmd/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000
@@ -50,10 +67,10 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 2
-        image_sizes:
+        generation_shapes:
             - {value: [1024, 1024], ratio: 5}
-            - {value: [16, 768, 1344], ratio: 3}
-            - {value: [16, 1344, 768], ratio: 2}
+            - {value: [768, 1344], ratio: 3}
+            - {value: [1344, 768], ratio: 2}
         renoise_sigma_min: 0.02
         renoise_sigma_max: 1.0
         renoise_discrete_samples: 1000
@@ -83,23 +100,7 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     fake:
-        train_type: lora
-        lora:
-            rank: 32
-            alpha: 32
-            target_modules:
-                - to_k
-                - to_q
-                - to_v
-                - to_out.0
-                # - add_q_proj
-                # - add_k_proj
-                # - add_v_proj
-                # - to_add_out
-                # - img_mlp.net.0.proj
-                # - img_mlp.net.2
-                # - txt_mlp.net.0.proj
-                # - txt_mlp.net.2
+        train_type: full
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9
@@ -120,6 +121,7 @@ inference:
     cfg_guidance_scale: 4.0
     negative_prompt: " "
     enable_cfg: false
+    seed: 42
     output_dir: ./output_infer/qwen_image_dmd_lora
     infer_every_iters: ${training.save_every_iters}
 

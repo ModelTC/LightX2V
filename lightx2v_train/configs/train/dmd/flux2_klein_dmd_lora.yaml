@@ -6,7 +6,7 @@ model:
 
 data:
     train:
-        # JSONL row: {"prompt": "...", "target_height": 1024, "target_width": 1024}
+        # JSONL row: {"prompt": "..."}; generation shape is sampled below.
         name: prompt_dataset
         num_workers: 8
         bucket_by_size: true
@@ -43,10 +43,10 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 2
-        image_sizes:
+        generation_shapes:
             - {value: [1024, 1024], ratio: 5}
-            - {value: [16, 768, 1344], ratio: 3}
-            - {value: [16, 1344, 768], ratio: 2}
+            - {value: [768, 1344], ratio: 3}
+            - {value: [1344, 768], ratio: 2}
         renoise_sigma_min: 0.02
         renoise_sigma_max: 1.0
         renoise_discrete_samples: 1000
@@ -68,15 +68,7 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     fake:
-        train_type: lora
-        lora:
-            rank: 32
-            alpha: 32
-            target_modules:
-                - to_k
-                - to_q
-                - to_v
-                - to_out.0
+        train_type: full
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9

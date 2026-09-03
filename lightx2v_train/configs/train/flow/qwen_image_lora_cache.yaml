@@ -5,10 +5,8 @@ model:
     running_dtype: bf16
 
 data:
-    use_training_cache: true
-
     train:
-        name: image_dataset
+        name: cache_dataset
         num_workers: 8
         persistent_workers: true
         prefetch_factor: 2

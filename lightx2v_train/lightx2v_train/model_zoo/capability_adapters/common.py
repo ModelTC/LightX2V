@@ -7,7 +7,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from lightx2v_train.data.training_cache import preserve_cache_dtype
+from lightx2v_train.data.utils import preserve_cache_dtype
 from lightx2v_train.model_capabilities import (
     BoundCapability,
     CheckpointCapability,
@@ -24,7 +24,7 @@ from lightx2v_train.runtime.parallel import (
     apply_parallel,
     set_parallel_gradient_sync,
 )
-from lightx2v_train.utils.image_size_buckets import parse_image_size_buckets
+from lightx2v_train.utils.generation_shapes import resolve_generation_shape
 
 from .latent_geometry import LatentGeometry
 
@@ -475,6 +475,10 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
     def default_lora_target_modules(self):
         return None
 
+    @property
+    def generation_shape_dimensions(self) -> int:
+        return 2
+
     def encode_training_cache(self, batch):
         training = self.model.config["training"]
         teacher = training.get("teacher", {})
@@ -507,52 +511,23 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
     def latent_shape(
         self,
         batch,
-        shape_config,
-        image_sizes,
+        generation_shapes,
         broadcast,
     ):
         conditioning = batch["conditioning"]
         prompt = conditioning.get("prompt", "")
         _require_single_prompt(prompt)
         meta = batch.get("meta", {})
-        height = self._target_dimension(
+        height, width = resolve_generation_shape(
+            generation_shapes,
             meta,
-            "target_height",
+            expected_dimensions=self.generation_shape_dimensions,
+            broadcast=broadcast,
         )
-        width = self._target_dimension(
-            meta,
-            "target_width",
-        )
-        height = int(broadcast(height))
-        width = int(broadcast(width))
-
-        if image_sizes:
-            configured_buckets = {bucket.spatial_size for bucket in parse_image_size_buckets(image_sizes)}
-            if (height, width) not in configured_buckets:
-                configured = ", ".join(f"{bucket_height}x{bucket_width}" for bucket_height, bucket_width in sorted(configured_buckets))
-                raise ValueError(f"Image DMD sample size {height}x{width} is not in training.dmd.image_sizes: [{configured}].")
 
         if self._latent_geometry is None:
             raise NotImplementedError(f"{type(self).__name__} must override latent_shape() or be constructed with a latent_geometry adapter.")
         return self._latent_geometry.shape(self.model, height, width)
-
-    @staticmethod
-    def _target_dimension(meta, key):
-        if key not in meta:
-            raise KeyError(f"Image DMD prompt-only samples require meta.target_height and meta.target_width; missing {key}. target_image is not used.")
-        value = meta[key]
-        if torch.is_tensor(value):
-            values = value.detach().reshape(-1).tolist()
-        elif isinstance(value, (list, tuple)):
-            values = [item.item() if torch.is_tensor(item) else item for item in value]
-        else:
-            values = [value]
-        values = [int(item) for item in values]
-        if len(values) != 1:
-            raise ValueError(f"Image DMD requires exactly one {key} value per rank, got {values}.")
-        if any(item <= 0 for item in values):
-            raise ValueError(f"Image DMD {key} must be positive, got {values}.")
-        return values[0]
 
     def encode_conditions(
         self,

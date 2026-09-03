@@ -292,7 +292,7 @@ class DmdTrainer(_DmdRuntime):
             list(real_data_config.timestep_list),
         )
         if self.infer_every_iters:
-            self.inferencer.set_data(self.dataloader_eval)
+            self.inferencer.set_data(self.dataloader_val)
             if current_iter == 0:
                 self.run_inference(current_iter)
 

@@ -23,7 +23,7 @@ distributed:
 
 data:
     train:
-        # JSONL row: {"prompt": "...", "target_height": 512, "target_width": 512}
+        # JSONL row: {"prompt": "..."}; generation shape is selected below.
         name: prompt_dataset
         num_workers: 8
         bucket_by_size: true
@@ -69,7 +69,7 @@ training:
         num_inference_steps: 4
         fake_update_ratio: 2
         # Start at 512px for memory; raise to 1024px only after validating available GPUs.
-        image_sizes:
+        generation_shapes:
             - {value: [512, 512]}
         renoise_sigma_min: 0.02
         renoise_sigma_max: 1.0
@@ -97,20 +97,7 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     fake:
-        train_type: lora
-        lora:
-            rank: 16
-            alpha: 16
-            target_modules:
-                - to_q
-                - to_k
-                - to_v
-                - to_out.0
-                - add_q_proj
-                - add_k_proj
-                - add_v_proj
-                - to_add_out
-                - to_qkv_mlp_proj
+        train_type: full
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9

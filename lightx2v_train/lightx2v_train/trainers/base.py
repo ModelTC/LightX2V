@@ -106,12 +106,12 @@ class BaseTrainer:
     def capability_requirements(self):
         return self.required_capabilities
 
-    def set_data(self, dataloader_train, dataloader_eval=None):
+    def set_data(self, dataloader_train, dataloader_val=None):
         require_singleton_dataloader(dataloader_train, "Training dataloader")
-        if dataloader_eval is not None:
-            require_singleton_dataloader(dataloader_eval, "Evaluation dataloader")
+        if dataloader_val is not None:
+            require_singleton_dataloader(dataloader_val, "Validation dataloader")
         self.dataloader_train = dataloader_train
-        self.dataloader_eval = dataloader_eval
+        self.dataloader_val = dataloader_val
 
     def log_metrics(self, metrics, step=None):
         self.monitor.log_metrics(metrics, step=step)

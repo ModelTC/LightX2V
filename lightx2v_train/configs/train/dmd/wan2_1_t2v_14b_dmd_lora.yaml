@@ -80,9 +80,8 @@ training:
             decay: 0.97
         num_inference_steps: 4
         fake_update_ratio: 5
-        height: 480
-        width: 832
-        num_frames: 81
+        generation_shapes:
+            - {value: [81, 480, 832]}
         denoising_step_list:
             - 1000
             - 750
@@ -115,17 +114,7 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     fake:
-        train_type: lora
-        lora:
-            rank: 64
-            alpha: 64
-            target_modules:
-                - q
-                - k
-                - v
-                - o
-                - ffn.0
-                - ffn.2
+        train_type: full
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9

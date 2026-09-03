@@ -78,9 +78,8 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 5
-        height: 480
-        width: 832
-        num_frames: 121
+        generation_shapes:
+            - {value: [121, 480, 832]}
         denoising_step_list: [1000, 750, 500, 250]
         warp_denoising_step: true
         ts_schedule: false
@@ -103,11 +102,7 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     fake:
-        train_type: lora
-        lora:
-            rank: 128
-            alpha: 128
-            target_modules: [to_q, to_k, to_v, to_out, gate_proj, up_proj, down_proj]
+        train_type: full
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9

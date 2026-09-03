@@ -23,6 +23,7 @@ from lightx2v_train.tricks import (
     IdaStepContext,
     ImplicitDistributionAlignmentTrick,
 )
+from lightx2v_train.utils.generation_shapes import parse_generation_shapes
 
 from ..base import BaseTrainer
 from .checkpoint import DmdCheckpointManager
@@ -81,7 +82,7 @@ class _DmdRuntime(BaseTrainer):
         self.guidance_scale = parsed.guidance_scale
         self.negative_prompt = parsed.negative_prompt
         self.cfg_norm = parsed.cfg_norm
-        self.image_sizes = parsed.image_sizes
+        self.generation_shapes = parsed.generation_shapes
         self.random_schedule_enabled = parsed.random_schedule_enabled
         self.random_schedule_num_steps_min = parsed.random_schedule_num_steps_min
         self.random_schedule_num_steps_max = parsed.random_schedule_num_steps_max
@@ -94,6 +95,10 @@ class _DmdRuntime(BaseTrainer):
     def set_model(self, model):
         super().set_model(model)
         self.student = model.capabilities.require(DistributionMatchingCapability)
+        parse_generation_shapes(
+            self.generation_shapes,
+            expected_dimensions=self.student.generation_shape_dimensions,
+        )
         profile = self.student.profile
         if self._configured_latent_dtype is None and profile.default_latent_dtype is not None:
             self.latent_dtype = profile.default_latent_dtype
@@ -333,8 +338,7 @@ class _DmdRuntime(BaseTrainer):
     def _latent_shape(self, sample):
         return self.student.latent_shape(
             sample,
-            self.dmd_config,
-            self.image_sizes,
+            self.generation_shapes,
             broadcast_sequence_parallel_value,
         )
 

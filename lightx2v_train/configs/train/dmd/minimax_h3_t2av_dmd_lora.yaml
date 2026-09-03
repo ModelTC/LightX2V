@@ -76,10 +76,9 @@ training:
         # Four student model evaluations; the terminal zero sigma is added internally.
         num_inference_steps: 4
         fake_update_ratio: 5
-        height: 768
-        width: 1344
         # 124 = 17*7+5, about 5.17 seconds at H3's fixed 24 fps.
-        num_frames: 124
+        generation_shapes:
+            - {value: [124, 768, 1344]}
         score_sampling:
             type: continuous_uniform
             min_sigma: 0.02

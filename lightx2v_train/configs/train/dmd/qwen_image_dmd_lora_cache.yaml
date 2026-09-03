@@ -1,43 +1,58 @@
 model:
-    name: longcat_image
-    pretrained_model_name_or_path: /path/to/LongCat-Image
-    attention_backend: _native_flash
+    name: qwen_image
+    pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
+    fake:
+        name: qwen_image
+        pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
+    teacher:
+        name: qwen_image
+        pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
+    max_sequence_length: 1024
     running_dtype: bf16
+
+distributed:
+    backend: nccl
+    timeout_minutes: 120
+    sequence_parallel:
+        enabled: false
+        size: 1
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
+        log_memory: true
+        reshard_after_forward:
+            root_reshard: true
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
 
 data:
     train:
-        # JSONL row: {"prompt": "..."}; generation shape is sampled below.
-        name: prompt_dataset
+        name: cache_dataset
         num_workers: 8
-        bucket_by_size: true
         prompt_dropout_rate: 0.0
         shuffle: true
         data_path:
-            - /path/to/datasets/image_dmd/train.jsonl
+            - /root/yongyang/datasets/cache_dmd/train/cache_data.jsonl
     val:
-        name: image_dataset
+        name: cache_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
+            - /root/yongyang/datasets/cache_dmd/val/cache_data.jsonl
 
 scheduler:
     num_train_timesteps: 1000
-    timestep_distribution: logitnormal
-    logitnormal_mean: 0.0
-    logitnormal_std: 1.0
-    min_t: 0.001
-    max_t: 1.0
     time_shift_settings:
         do_time_shift: true
-        shift_type: exponential
+        shift_type: linear
+        # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
         time_shift_power: 1.0
-        dynamic_shift: true
-        patch_size: [2, 2]
-        shift_x1: 256
-        shift_x2: 4096
-        shift_y1: 0.5
-        shift_y2: 1.15
+        dynamic_shift: false
+        time_shift_mu: 3.0
 
 training:
     method: dmd
@@ -70,6 +85,14 @@ training:
                 - to_q
                 - to_v
                 - to_out.0
+                # - add_q_proj
+                # - add_k_proj
+                # - add_v_proj
+                # - to_add_out
+                # - img_mlp.net.0.proj
+                # - img_mlp.net.2
+                # - txt_mlp.net.0.proj
+                # - txt_mlp.net.2
         optimizer:
             learning_rate: 0.0001
             adam_beta1: 0.9
@@ -85,21 +108,23 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     teacher:
-        guidance_scale: 4.5
+        guidance_scale: 4.0
         negative_prompt: " "
         cfg_norm: layer_norm
-    output_dir: ./output_train/longcat_image_dmd_lora
+    output_dir: ./output_train/qwen_image_dmd_lora
 
 inference:
     method: image_infer
     default_width: 1024
     default_height: 1024
     num_inference_steps: 4
+    cfg_guidance_scale: 4.0
     negative_prompt: " "
     enable_cfg: false
-    cfg_guidance_scale: 1.0
-    enable_prompt_rewrite: false
-    output_dir: ./output_infer/longcat_image_dmd_lora
+    seed: 42
+    vae_cpu_offload: true
+    vae_tiling: true
+    output_dir: ./output_infer/qwen_image_dmd_lora
     infer_every_iters: ${training.save_every_iters}
 
 logging:
