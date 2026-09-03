@@ -21,12 +21,33 @@ from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
 from ..model_zoo.native.lingbot_video.scheduling_flow_unipc import FlowUniPCMultistepScheduler as LingBotVideoFlowUniPCMultistepScheduler
 from ..model_zoo.native.wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
-from .base import BaseInferencer
+from .base import BaseInferencer, cached_condition
+
+
+def _uses_cache_dataset(dataset):
+    return getattr(dataset, "uses_cache_dataset", False)
+
+
+def _load_infer_sample(dataset, index, has_sample):
+    if _uses_cache_dataset(dataset):
+        return dataset[index if has_sample else 0]
+    return dataset.samples[index] if has_sample else {}
+
+
+def _prompt_condition(dataset, sample, model, role, prompt):
+    condition = cached_condition(sample, model, role)
+    if condition is not None:
+        return condition
+    if _uses_cache_dataset(dataset):
+        cache_path = sample.get("meta", {}).get("training_cache_path", "<unknown>")
+        raise KeyError(f"Cached video inference requires conditioning.{role} in {cache_path}.")
+    return model.encode_prompt_condition(prompt)
 
 
 def _target_hw_for_sample(sample, default_height, default_width):
-    h = sample.get("target_height")
-    w = sample.get("target_width")
+    metadata = sample.get("meta", sample)
+    h = metadata.get("target_height")
+    w = metadata.get("target_width")
     if h is not None and w is not None:
         return int(h), int(w)
     return default_height, default_width
@@ -45,7 +66,8 @@ class WanT2VInferencer(BaseInferencer):
 
     @torch.no_grad()
     def infer(self):
-        samples = self.dataloader_eval.dataset.samples
+        dataset = self.dataloader_val.dataset
+        samples = dataset.samples
         prompts = [sample["prompt"] for sample in samples]
         rank = get_data_parallel_rank()
         world_size = get_data_parallel_world_size()
@@ -74,11 +96,13 @@ class WanT2VInferencer(BaseInferencer):
         self.enable_cfg = self.infer_config.get("enable_cfg", True)
         if self.enable_cfg:
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 5.0)
-            neg_cond = self.model.encode_prompt_condition(self.negative_prompt)
-            neg_cond = broadcast_sequence_parallel_value(neg_cond)
+            static_neg_cond = None
+            if not _uses_cache_dataset(dataset):
+                static_neg_cond = self.model.encode_prompt_condition(self.negative_prompt)
+                static_neg_cond = broadcast_sequence_parallel_value(static_neg_cond)
         else:
             self.guidance_scale = None
-            neg_cond = None
+            static_neg_cond = None
 
         saved_paths = []
         self.model.set_denoiser_eval()
@@ -97,13 +121,14 @@ class WanT2VInferencer(BaseInferencer):
                 i = slot * world_size + rank
                 has_sample = i < len(prompts)
                 prompt = prompts[i] if has_sample else " "
-                sample = samples[i] if has_sample else {}
+                sample = _load_infer_sample(dataset, i, has_sample)
                 should_log_sample = has_sample and is_sp_leader
 
                 height, width = _target_hw_for_sample(sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_prompt_condition(prompt)
+                pos_cond = _prompt_condition(dataset, sample, self.model, "positive", prompt)
+                neg_cond = _prompt_condition(dataset, sample, self.model, "negative", self.negative_prompt) if self.enable_cfg and static_neg_cond is None else static_neg_cond
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 pos_cond = broadcast_sequence_parallel_value(pos_cond)
                 latent = broadcast_sequence_parallel_value(latent)
@@ -323,7 +348,8 @@ class LingBotVideoT2VInferencer(BaseInferencer):
 
     @torch.no_grad()
     def infer(self):
-        samples = self.dataloader_eval.dataset.samples
+        dataset = self.dataloader_val.dataset
+        samples = dataset.samples
         prompts = [sample["prompt"] for sample in samples]
         rank = get_data_parallel_rank()
         world_size = get_data_parallel_world_size()
@@ -376,17 +402,17 @@ class LingBotVideoT2VInferencer(BaseInferencer):
             i = slot * world_size + rank
             has_sample = i < len(prompts)
             prompt = prompts[i] if has_sample else " "
-            sample = samples[i] if has_sample else {}
+            sample = _load_infer_sample(dataset, i, has_sample)
             should_log_sample = has_sample and is_sp_leader
             height, width = _target_hw_for_sample(sample, default_height, default_width)
             seed = base_seed + i if has_sample else base_seed
             generator = torch.Generator(device=self.model.device).manual_seed(seed)
 
-            pos_cond = broadcast_sequence_parallel_value(self.model.encode_prompt_condition(prompt))
+            pos_cond = broadcast_sequence_parallel_value(_prompt_condition(dataset, sample, self.model, "positive", prompt))
             neg_cond = None
             if self.enable_cfg:
                 negative_prompt = sample.get("negative_prompt") or self.negative_prompt
-                neg_cond = broadcast_sequence_parallel_value(self.model.encode_prompt_condition(negative_prompt))
+                neg_cond = broadcast_sequence_parallel_value(_prompt_condition(dataset, sample, self.model, "negative", negative_prompt))
             latent = broadcast_sequence_parallel_value(self.model.prepare_infer_latents(height, width, generator))
 
             if should_log_sample:
@@ -429,7 +455,8 @@ class LingBotVideoT2VInferencer(BaseInferencer):
 class WanT2VARInferencer(BaseInferencer):
     @torch.no_grad()
     def infer(self):
-        samples = self.dataloader_eval.dataset.samples
+        dataset = self.dataloader_val.dataset
+        samples = dataset.samples
         prompts = [sample["prompt"] for sample in samples]
         rank = get_data_parallel_rank()
         world_size = get_data_parallel_world_size()
@@ -473,14 +500,14 @@ class WanT2VARInferencer(BaseInferencer):
                 i = slot * world_size + rank
                 has_sample = i < len(prompts)
                 prompt = prompts[i] if has_sample else " "
-                sample = samples[i] if has_sample else {}
+                sample = _load_infer_sample(dataset, i, has_sample)
                 should_log_sample = has_sample and is_sp_leader
 
                 height, width = _target_hw_for_sample(sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_prompt_condition(prompt)
-                neg_cond = self.model.encode_prompt_condition(WAN_NEGATIVE_PROMPT) if enable_cfg else None
+                pos_cond = _prompt_condition(dataset, sample, self.model, "positive", prompt)
+                neg_cond = _prompt_condition(dataset, sample, self.model, "negative", WAN_NEGATIVE_PROMPT) if enable_cfg else None
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 pos_cond = broadcast_sequence_parallel_value(pos_cond)
                 neg_cond = broadcast_sequence_parallel_value(neg_cond) if neg_cond is not None else None

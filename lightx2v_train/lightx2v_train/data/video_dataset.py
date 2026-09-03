@@ -307,6 +307,7 @@ class PromptDataset(torch.utils.data.Dataset):
 def _build_dataloader(dataset, data_config, train_or_val):
     dp_world_size = get_data_parallel_world_size()
     sampler = None
+    distributed_sampling = train_or_val == "train" or data_config.get("distributed_cache_build", False)
     shuffle = data_config.get("shuffle", train_or_val == "train")
     drop_last = data_config.get("drop_last", False)
     generation_shapes = data_config.get("generation_shapes")
@@ -327,7 +328,7 @@ def _build_dataloader(dataset, data_config, train_or_val):
         shuffle = False
         # GenerationShapeSampler already pads or truncates every distributed step.
         drop_last = False
-    elif train_or_val == "train" and dp_world_size > 1:
+    elif distributed_sampling and dp_world_size > 1:
         sampler = DistributedSampler(
             dataset,
             num_replicas=dp_world_size,

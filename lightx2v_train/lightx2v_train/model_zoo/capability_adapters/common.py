@@ -7,7 +7,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from lightx2v_train.data.training_cache import preserve_cache_dtype
+from lightx2v_train.data.utils import preserve_cache_dtype
 from lightx2v_train.model_capabilities import (
     BoundCapability,
     CheckpointCapability,

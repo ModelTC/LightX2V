@@ -573,7 +573,7 @@ class PhasedDmdTrainer(DmdTrainer):
             self.diversity_trick.config.anchor_step,
         )
         if self.infer_every_iters:
-            self.inferencer.set_data(self.dataloader_eval)
+            self.inferencer.set_data(self.dataloader_val)
             if current_iter == 0:
                 self.run_inference(current_iter)
 

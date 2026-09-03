@@ -6,8 +6,7 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from lightx2v_train.data.training_cache import preserve_cache_dtype, training_cache_info
-from lightx2v_train.data.utils import require_singleton_dataloader
+from lightx2v_train.data.utils import preserve_cache_dtype, require_singleton_dataloader
 from lightx2v_train.model_capabilities import (
     ConsistencyModelCapability,
     DistributionMatchingCapability,
@@ -60,41 +59,42 @@ def _write_jsonl(records, path):
     os.replace(temporary, path)
 
 
+def _write_json(value, path):
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    os.replace(temporary, path)
+
+
 def _dataset_index(sample):
     value = sample["meta"].pop("dataset_index")
     return int(value.item() if torch.is_tensor(value) else value)
 
 
-@TRAINER_REGISTER("training_cache")
-class TrainingCacheTrainer:
+@TRAINER_REGISTER("cache_build")
+class CacheBuildTrainer:
     def __init__(self, config):
         self.config = config
-        self.cache_config = config["training_cache"]
+        self.cache_config = config["cache_build"]
+        self.data_split = self.cache_config.get("data_split", "train")
         self.training_method = config["training"]["method"]
-        self.cache_info = {
-            **training_cache_info(config),
-            "storage_dtype": self.cache_config["save_dtype"],
-        }
 
     def set_model(self, model):
         capability_type = CACHE_CAPABILITIES.get(self.training_method)
         if capability_type is None:
             supported = ", ".join(sorted(CACHE_CAPABILITIES))
-            raise ValueError(f"Training cache does not support {self.training_method!r}; expected one of: {supported}.")
+            raise ValueError(f"Cache build does not support {self.training_method!r}; expected one of: {supported}.")
         self.model = model
         self.encoder = model.ensure_capabilities().require(capability_type)
 
-    def set_data(self, dataloader_train, dataloader_eval=None):
-        del dataloader_eval
+    def set_data(self, dataloader_train, dataloader_val=None):
+        del dataloader_val
         require_singleton_dataloader(dataloader_train, "Cache dataloader")
         self.dataloader = dataloader_train
 
     def _encode(self, sample, dtype):
-        encoded = self.encoder.encode_training_cache(sample)
-        cache = {
-            "cache_info": self.cache_info,
-            **encoded,
-        }
+        cache = self.encoder.encode_training_cache(sample)
         self._validate(
             cache,
             sample["conditioning"]["prompt"],
@@ -110,8 +110,6 @@ class TrainingCacheTrainer:
             raise ValueError(f"Invalid training cache at {path}: inputs, conditioning, and meta must be mappings.")
         if source_inputs and not cache["inputs"]:
             raise ValueError(f"Training cache at {path} has no encoded model inputs for a source sample that contains inputs. Rebuild it with --overwrite.")
-        if cache.get("cache_info") != self.cache_info:
-            raise ValueError(f"Training cache at {path} is incompatible with the current configuration. Rebuild it.")
         conditioning = cache["conditioning"]
         if not isinstance(conditioning, dict) or "positive" not in conditioning:
             raise ValueError(f"Invalid training cache at {path}: conditioning.positive is missing.")
@@ -136,7 +134,7 @@ class TrainingCacheTrainer:
             raise TypeError(f"{type(dataset).__name__} cannot be used as a cache source; use image_dataset, video_dataset, or prompt_dataset.")
         sample_count = len(dataset)
         if len(getattr(dataset, "samples", ())) != sample_count:
-            raise ValueError("Cache construction requires data.train.dataset_repeat=1.")
+            raise ValueError(f"Cache construction requires data.{self.data_split}.dataset_repeat=1.")
         dtype = CACHE_DTYPES[self.cache_config["save_dtype"]]
         records = []
 
@@ -166,7 +164,7 @@ class TrainingCacheTrainer:
 
             record["training_cache"] = cache_path.relative_to(output_dir).as_posix()
             records.append((index, record))
-            logger.info("[cache] {}/{} -> {}", index + 1, sample_count, cache_path)
+            logger.info("[cache][{}] {}/{} -> {}", self.data_split, index + 1, sample_count, cache_path)
 
         records = self._gather_records(records)
         if is_main_process():
@@ -174,4 +172,11 @@ class TrainingCacheTrainer:
             if sorted(indexed_records) != list(range(sample_count)):
                 raise RuntimeError("Training cache is incomplete.")
             _write_jsonl([indexed_records[index] for index in range(sample_count)], output_dir / "cache_data.jsonl")
-            logger.info("[cache] wrote {} samples to {}", sample_count, output_dir / "cache_data.jsonl")
+            _write_json(
+                {
+                    "storage_dtype": self.cache_config["save_dtype"],
+                    "data_split": self.data_split,
+                },
+                output_dir / "cache_meta.json",
+            )
+            logger.info("[cache][{}] wrote {} samples to {}", self.data_split, sample_count, output_dir / "cache_data.jsonl")

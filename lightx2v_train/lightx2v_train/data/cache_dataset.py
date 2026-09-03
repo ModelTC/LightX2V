@@ -8,24 +8,27 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
-from lightx2v_train.data.training_cache import CACHE_SCHEMA_VERSION
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
 from lightx2v_train.utils.registry import DATA_REGISTER
 
 
-class TrainingCacheDataset(Dataset):
+class CacheDataset(Dataset):
     """Load the common ``cache_data.jsonl`` format for every model family."""
+
+    uses_cache_dataset = True
 
     def __init__(
         self,
         metadata_paths,
         prompt_dropout_rate=0.0,
         unconditional_prompt=" ",
-        expected_cache_info=None,
+        sample_processor=None,
+        train_or_val="train",
     ):
         self.prompt_dropout_rate = float(prompt_dropout_rate)
         self.unconditional_prompt = unconditional_prompt
-        self.expected_cache_info = expected_cache_info
+        self.sample_processor = sample_processor
+        self.train_or_val = train_or_val
         self.samples = []
         for metadata_path in metadata_paths:
             self.samples.extend(self._read_manifest(Path(metadata_path)))
@@ -42,7 +45,7 @@ class TrainingCacheDataset(Dataset):
         self._validate_cache(cache, cache_path, record["prompt"])
 
         conditioning = cache["conditioning"]
-        use_unconditional = random.random() < self.prompt_dropout_rate
+        use_unconditional = self.train_or_val == "train" and random.random() < self.prompt_dropout_rate
         if use_unconditional and "unconditional" not in conditioning:
             raise ValueError(f"Training cache {cache_path} has no unconditional condition for prompt dropout.")
         conditioning["active"] = "unconditional" if use_unconditional else "positive"
@@ -81,16 +84,6 @@ class TrainingCacheDataset(Dataset):
         if not all(isinstance(cache[key], dict) for key in required):
             raise ValueError(f"Invalid training cache at {path}: inputs, conditioning, and meta must be mappings.")
 
-        cache_info = cache.get("cache_info")
-        if not isinstance(cache_info, dict):
-            raise ValueError(f"Invalid training cache metadata at {path}.")
-        if cache_info.get("schema_version") != CACHE_SCHEMA_VERSION:
-            raise ValueError(f"Unsupported training cache schema at {path}: {cache_info.get('schema_version')!r}.")
-        if self.expected_cache_info is not None:
-            for key, expected in self.expected_cache_info.items():
-                if cache_info.get(key) != expected:
-                    raise ValueError(f"Training cache {path} has incompatible {key}: expected {expected!r}, got {cache_info.get(key)!r}.")
-
         conditioning = cache["conditioning"]
         if "positive" not in conditioning:
             raise ValueError(f"Invalid training cache at {path}: conditioning.positive is missing.")
@@ -98,27 +91,28 @@ class TrainingCacheDataset(Dataset):
             raise ValueError(f"Prompt in {path} does not match cache_data.jsonl. Rebuild the training cache.")
 
 
-@DATA_REGISTER("training_cache_dataset")
-def build_training_cache_dataset(
+@DATA_REGISTER("cache_dataset")
+def build_cache_dataset(
     data_config_split,
     train_or_val="train",
     unconditional_prompt=" ",
-    expected_cache_info=None,
+    sample_processor=None,
 ):
-    if train_or_val != "train":
-        raise ValueError("training_cache_dataset is only valid for the training split.")
+    if train_or_val not in {"train", "val"}:
+        raise ValueError(f"cache_dataset only supports train or val, got {train_or_val!r}.")
     data_paths = data_config_split["data_path"]
     if isinstance(data_paths, (str, Path)):
         data_paths = [data_paths]
 
-    dataset = TrainingCacheDataset(
+    dataset = CacheDataset(
         metadata_paths=data_paths,
         prompt_dropout_rate=data_config_split.get("prompt_dropout_rate", 0.0),
         unconditional_prompt=unconditional_prompt,
-        expected_cache_info=expected_cache_info,
+        sample_processor=sample_processor,
+        train_or_val=train_or_val,
     )
     world_size = get_data_parallel_world_size()
-    shuffle = data_config_split.get("shuffle", True)
+    shuffle = data_config_split.get("shuffle", train_or_val == "train")
     sampler = (
         DistributedSampler(
             dataset,
@@ -127,7 +121,7 @@ def build_training_cache_dataset(
             shuffle=shuffle,
             drop_last=data_config_split.get("drop_last", False),
         )
-        if world_size > 1
+        if world_size > 1 and train_or_val == "train"
         else None
     )
     num_workers = int(data_config_split.get("num_workers", 8))
@@ -150,5 +144,5 @@ def build_training_cache_dataset(
 
 def _single_sample_collate(samples):
     if len(samples) != 1:
-        raise ValueError(f"Cached training requires batch_size=1, got {len(samples)} samples.")
+        raise ValueError(f"Cached data requires batch_size=1, got {len(samples)} samples.")
     return samples[0]

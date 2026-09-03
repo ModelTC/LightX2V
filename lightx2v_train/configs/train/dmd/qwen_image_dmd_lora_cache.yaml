@@ -31,18 +31,18 @@ distributed:
 
 data:
     train:
-        name: prompt_dataset
+        name: cache_dataset
         num_workers: 8
         prompt_dropout_rate: 0.0
         shuffle: true
         data_path:
-            - /path/to/datasets/image_dmd/train.jsonl
+            - /root/yongyang/datasets/cache_dmd/train/cache_data.jsonl
     val:
-        name: prompt_dataset
+        name: cache_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /path/to/datasets/image_dmd/val.jsonl
+            - /root/yongyang/datasets/cache_dmd/val/cache_data.jsonl
 
 scheduler:
     num_train_timesteps: 1000
@@ -122,6 +122,8 @@ inference:
     negative_prompt: " "
     enable_cfg: false
     seed: 42
+    vae_cpu_offload: true
+    vae_tiling: true
     output_dir: ./output_infer/qwen_image_dmd_lora
     infer_every_iters: ${training.save_every_iters}
 

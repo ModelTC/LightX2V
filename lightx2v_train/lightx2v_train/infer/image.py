@@ -6,7 +6,7 @@ from loguru import logger
 from lightx2v_train.runtime.distributed import barrier, get_rank, get_world_size, is_distributed
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
-from .base import BaseInferencer
+from .base import BaseInferencer, cached_condition
 
 
 def _record_has_source_images(record):
@@ -33,7 +33,7 @@ class ImageInferencer(BaseInferencer):
         )
 
     def _load_infer_sample(self, index, prompt):
-        infer_sample = self.dataloader_eval.dataset[index]
+        infer_sample = self.dataloader_val.dataset[index]
         infer_sample["conditioning"]["prompt"] = prompt
         return infer_sample
 
@@ -41,11 +41,28 @@ class ImageInferencer(BaseInferencer):
         for index, record in enumerate(records):
             if _record_has_source_images(record):
                 return self._load_infer_sample(index, " ")
+        if getattr(self.dataloader_val.dataset, "uses_cache_dataset", False):
+            return self._load_infer_sample(0, records[0]["prompt"])
         return {"inputs": {}, "conditioning": {"prompt": " "}, "meta": {}}
+
+    def _decode_latent(self, latent):
+        vae = getattr(self.model, "vae", None)
+        if vae is None:
+            raise RuntimeError("image_infer requires a loaded VAE for decoding.")
+
+        cpu_offload = self.infer_config.get("vae_cpu_offload", False)
+        if cpu_offload:
+            vae.to(self.model.device)
+        try:
+            return self.model.decode_latent(latent)
+        finally:
+            if cpu_offload:
+                vae.to("cpu")
+                torch.cuda.empty_cache()
 
     @torch.no_grad()
     def infer(self):
-        dataset = self.dataloader_eval.dataset
+        dataset = self.dataloader_val.dataset
         sample_processor = getattr(dataset, "sample_processor", None)
         if sample_processor is None:
             raise ValueError("image_infer requires a dataset with a sample_processor")
@@ -63,6 +80,12 @@ class ImageInferencer(BaseInferencer):
 
         base_seed = self.infer_config.get("seed", 42)
 
+        vae = getattr(self.model, "vae", None)
+        if self.infer_config.get("vae_tiling", False):
+            if vae is None or not hasattr(vae, "enable_tiling"):
+                raise RuntimeError("inference.vae_tiling requires a VAE that supports enable_tiling().")
+            vae.enable_tiling()
+
         lora_config = self.infer_config.get("lora_config", None)
         lora_path = lora_config.get("path", None) if lora_config else None
         should_load_lora = lora_path and getattr(self.model, "_infer_lora_adapter_name", None) is None
@@ -70,12 +93,13 @@ class ImageInferencer(BaseInferencer):
             self.model.load_lora_for_infer(lora_path)
 
         self.enable_cfg = self.infer_config.get("enable_cfg", True)
+        uses_cache = getattr(dataset, "uses_cache_dataset", False)
         has_source_condition = any(_record_has_source_images(record) for record in records)
         if self.enable_cfg:
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 4.0)
             negative_prompt = self.infer_config.get("negative_prompt", " ")
             negative_sample = {"inputs": {}, "conditioning": {"prompt": negative_prompt}, "meta": {}}
-            static_neg_cond = None if has_source_condition else self.model.encode_inference_condition(negative_sample, is_negative=True)
+            static_neg_cond = None if has_source_condition or uses_cache else self.model.encode_inference_condition(negative_sample, is_negative=True)
         else:
             self.guidance_scale = None
             negative_prompt = None
@@ -95,17 +119,24 @@ class ImageInferencer(BaseInferencer):
                 height, width = sample_processor.infer_target_size(infer_sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_inference_condition(infer_sample)
+                pos_cond = cached_condition(infer_sample, self.model, "positive")
+                if pos_cond is None:
+                    pos_cond = self.model.encode_inference_condition(infer_sample)
                 if self.enable_cfg:
-                    if has_source_condition:
-                        neg_sample = {
-                            "inputs": infer_sample["inputs"],
-                            "conditioning": {**infer_sample["conditioning"], "prompt": negative_prompt},
-                            "meta": infer_sample["meta"],
-                        }
-                        neg_cond = self.model.encode_inference_condition(neg_sample, is_negative=True)
-                    else:
-                        neg_cond = static_neg_cond
+                    neg_cond = cached_condition(infer_sample, self.model, "negative")
+                    if neg_cond is None:
+                        if uses_cache:
+                            cache_path = infer_sample.get("meta", {}).get("training_cache_path", "<unknown>")
+                            raise KeyError(f"Cached inference with CFG requires conditioning.negative in {cache_path}.")
+                        if has_source_condition:
+                            neg_sample = {
+                                "inputs": infer_sample["inputs"],
+                                "conditioning": {**infer_sample["conditioning"], "prompt": negative_prompt},
+                                "meta": infer_sample["meta"],
+                            }
+                            neg_cond = self.model.encode_inference_condition(neg_sample, is_negative=True)
+                        else:
+                            neg_cond = static_neg_cond
                 else:
                     neg_cond = None
                 latent = self.model.prepare_infer_latents(height, width, generator)
@@ -140,7 +171,7 @@ class ImageInferencer(BaseInferencer):
                 if not has_sample:
                     continue
 
-                images = self.model.decode_latent(latent)
+                images = self._decode_latent(latent)
 
                 if self.output_infer_dir is not None:
                     save_path = Path(self.output_infer_dir) / f"{i:05d}.png"
