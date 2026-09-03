@@ -99,6 +99,7 @@ exclude = [
     ".cluade",
     ".cursor",
     "lightx2v_kernel",
+    "lightx2v/models/networks/openpi/transformers_replace",
 ]
 target-version = "py311"
 line-length = 200
