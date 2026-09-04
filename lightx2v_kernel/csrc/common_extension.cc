@@ -7,6 +7,50 @@
 TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
 
   m.def(
+      "cutlass_scaled_fp8_mm_f16_accum_sm120(Tensor activation, Tensor weight, Tensor activation_scale, "
+      "Tensor weight_scale, ScalarType out_dtype, Tensor? bias=None) -> Tensor");
+  m.impl(
+      "cutlass_scaled_fp8_mm_f16_accum_sm120",
+      torch::kCUDA,
+      &cutlass_scaled_fp8_mm_f16_accum_sm120);
+
+  m.def(
+      "cutlass_scaled_fp8_mm_f16_accum_with_config_sm120(Tensor activation, Tensor weight, "
+      "Tensor activation_scale, Tensor weight_scale, ScalarType out_dtype, Tensor? bias, int config_id) -> Tensor");
+  m.impl(
+      "cutlass_scaled_fp8_mm_f16_accum_with_config_sm120",
+      torch::kCUDA,
+      &cutlass_scaled_fp8_mm_f16_accum_with_config_sm120);
+
+  m.def("fp8_f16_accum_autotune_cache_abi_sm120() -> int");
+  m.impl(
+      "fp8_f16_accum_autotune_cache_abi_sm120",
+      &fp8_f16_accum_autotune_cache_abi_sm120);
+  m.def("fp8_f16_accum_autotune_configs_sm120() -> str[]");
+  m.impl(
+      "fp8_f16_accum_autotune_configs_sm120",
+      &fp8_f16_accum_autotune_configs_sm120);
+  m.def(
+      "set_fp8_f16_accum_autotune_config_sm120(int device_index, int m, int n, int k, "
+      "ScalarType out_dtype, bool has_bias, int config_id) -> ()");
+  m.impl(
+      "set_fp8_f16_accum_autotune_config_sm120",
+      &set_fp8_f16_accum_autotune_config_sm120);
+  m.def("set_fp8_f16_accum_autotune_enabled_sm120(bool enabled) -> ()");
+  m.impl(
+      "set_fp8_f16_accum_autotune_enabled_sm120",
+      &set_fp8_f16_accum_autotune_enabled_sm120);
+  m.def(
+      "get_fp8_f16_accum_autotune_cache_sm120(int device_index) -> Tensor");
+  m.impl(
+      "get_fp8_f16_accum_autotune_cache_sm120",
+      &get_fp8_f16_accum_autotune_cache_sm120);
+  m.def("clear_fp8_f16_accum_autotune_cache_sm120(int device_index=-1) -> ()");
+  m.impl(
+      "clear_fp8_f16_accum_autotune_cache_sm120",
+      &clear_fp8_f16_accum_autotune_cache_sm120);
+
+  m.def(
       "cutlass_scaled_nvfp4_mm_sm120(Tensor! out, Tensor mat_a, Tensor mat_b, Tensor scales_a, Tensor scales_b, Tensor "
       "alpha, Tensor? bias) -> ()");
   m.impl("cutlass_scaled_nvfp4_mm_sm120", torch::kCUDA, &cutlass_scaled_nvfp4_mm_sm120);
