@@ -36,13 +36,13 @@ data:
         prompt_dropout_rate: 0.0
         shuffle: true
         data_path:
-            - /path/to/datasets/image_dmd/train.jsonl
+            - /root/yongyang/data/image_dmd/train.jsonl
     val:
         name: prompt_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /path/to/datasets/image_dmd/val.jsonl
+            - /root/yongyang/data/image_dmd/val.jsonl
 
 scheduler:
     num_train_timesteps: 1000

@@ -286,7 +286,7 @@ class PromptDataset(torch.utils.data.Dataset):
             },
             "meta": dict(sample["meta"]),
         }
-        apply_generation_shape(result["meta"], generation_shape)
+        apply_generation_shape(result, generation_shape)
         if self.preserve_records:
             result["meta"]["dataset_index"] = sample_index
         return result
@@ -312,17 +312,14 @@ def _build_dataloader(dataset, data_config, train_or_val):
     drop_last = data_config.get("drop_last", False)
     generation_shapes = data_config.get("generation_shapes")
     parsed_generation_shapes = parse_generation_shapes(generation_shapes) if generation_shapes is not None else []
-    needs_shape_sampling = len(parsed_generation_shapes) > 1 or (parsed_generation_shapes and parsed_generation_shapes[0].ratio is not None)
-    if train_or_val == "train" and needs_shape_sampling and not data_config.get("bucket_by_size", False):
-        raise ValueError("Multiple or ratio-weighted training.dmd.generation_shapes require data.train.bucket_by_size=true.")
-    if train_or_val == "train" and data_config.get("bucket_by_size", False):
+    has_multiple_generation_shapes = len(parsed_generation_shapes) > 1
+    if train_or_val == "train" and has_multiple_generation_shapes and not data_config.get("distributed_cache_build", False):
         sampler = GenerationShapeSampler(
             dataset,
             num_replicas=dp_world_size,
             rank=get_data_parallel_rank(),
             shuffle=shuffle,
             drop_last=drop_last,
-            seed=data_config.get("bucket_seed", 0),
             generation_shapes=generation_shapes,
         )
         shuffle = False

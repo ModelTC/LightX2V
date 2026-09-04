@@ -203,7 +203,7 @@ def build_data(config, train_or_val, sample_processor=None):
         data_config_split["distributed_cache_build"] = True
         data_config_split.pop("max_samples", None)
     data_name = data_config_split.get("name", "image_dataset")
-    if train_or_val == "train" and data_name == "prompt_dataset":
+    if train_or_val == "train" and data_name in {"prompt_dataset", "cache_dataset"}:
         generation_shapes = config.get("training", {}).get("dmd", {}).get("generation_shapes")
         if generation_shapes is not None:
             data_config_split["generation_shapes"] = generation_shapes

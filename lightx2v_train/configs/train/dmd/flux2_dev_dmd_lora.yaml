@@ -26,7 +26,6 @@ data:
         # JSONL row: {"prompt": "..."}; generation shape is selected below.
         name: prompt_dataset
         num_workers: 8
-        bucket_by_size: true
         prompt_dropout_rate: 0.0
         shuffle: true
         data_path:

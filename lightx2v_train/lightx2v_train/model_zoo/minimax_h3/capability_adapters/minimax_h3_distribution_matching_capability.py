@@ -128,7 +128,7 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
         _require_single_prompt(prompt)
         num_frames, height, width = resolve_generation_shape(
             generation_shapes,
-            batch.get("meta", {}),
+            batch,
             expected_dimensions=self.generation_shape_dimensions,
             broadcast=broadcast,
         )

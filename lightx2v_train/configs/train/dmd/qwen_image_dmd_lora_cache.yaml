@@ -36,13 +36,13 @@ data:
         prompt_dropout_rate: 0.0
         shuffle: true
         data_path:
-            - /root/yongyang/datasets/cache_dmd/train/cache_data.jsonl
+            - /root/yongyang/data/image_dmd_cache/train/cache_data.jsonl
     val:
         name: cache_dataset
         num_workers: 8
         shuffle: false
         data_path:
-            - /root/yongyang/datasets/cache_dmd/val/cache_data.jsonl
+            - /root/yongyang/data/image_dmd_cache/val/cache_data.jsonl
 
 scheduler:
     num_train_timesteps: 1000
@@ -62,7 +62,7 @@ training:
     max_grad_norm: 1.0
     lr_scheduler: constant
     lr_warmup_iters: 10
-    save_every_iters: 100
+    save_every_iters: 20
     save_total_limit: 10
     dmd:
         num_inference_steps: 4
@@ -100,7 +100,23 @@ training:
             weight_decay: 0.001
             adam_epsilon: 0.00000001
     fake:
-        train_type: full
+        train_type: lora
+        lora:
+            rank: 32
+            alpha: 32
+            target_modules:
+                - to_k
+                - to_q
+                - to_v
+                - to_out.0
+                # - add_q_proj
+                # - add_k_proj
+                # - add_v_proj
+                # - to_add_out
+                # - img_mlp.net.0.proj
+                # - img_mlp.net.2
+                # - txt_mlp.net.0.proj
+                # - txt_mlp.net.2
         optimizer:
             learning_rate: 0.00002
             adam_beta1: 0.9
