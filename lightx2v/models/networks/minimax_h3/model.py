@@ -7,7 +7,13 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
+    DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
+    FP8_F16_ACCUM_WEIGHT_QMAX,
+    validate_fp8_f16_accum_checkpoint,
+)
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
@@ -23,6 +29,7 @@ from lightx2v.utils.envs import GET_DTYPE
 
 H3_CHANNEL_QUANT_SCHEMES = {
     "fp8-q8f",
+    "fp8-f16-accum",
     "fp8-musa",
     "fp8-sgl",
     "fp8-torchao",
@@ -64,6 +71,19 @@ class MiniMaxH3Model(BaseTransformerModel):
                 raise NotImplementedError(f"MiniMax-H3 quantized inference requires a per-output-channel FP8/INT8 scheme; got {quant_scheme!r}. Supported schemes: {sorted(H3_CHANNEL_QUANT_SCHEMES)}")
             if not config.get("dit_quantized_ckpt"):
                 raise ValueError("MiniMax-H3 quantized inference requires dit_quantized_ckpt")
+            if quant_scheme == "fp8-f16-accum":
+                validate_fp8_f16_accum_checkpoint(config["dit_quantized_ckpt"])
+                fallback_reason = fp8_f16_accum_mm_unavailable_reason()
+                if config.get("tensor_parallel", False):
+                    logger.info("MiniMax-H3 DiT FP8-F16 accumulation falls back to FP8-SGL under tensor parallel")
+                elif fallback_reason is not None:
+                    logger.warning("MiniMax-H3 DiT FP8-F16 accumulation requested but {}; falling back to FP8-SGL", fallback_reason)
+                else:
+                    logger.info(
+                        "MiniMax-H3 DiT FP8-F16 accumulation enabled for Q/K/V, attention output, and FFN projections (weight qmax={}, activation qmax={})",
+                        FP8_F16_ACCUM_WEIGHT_QMAX,
+                        DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
+                    )
         elif config.get("dit_quant_scheme", "Default") != "Default":
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
