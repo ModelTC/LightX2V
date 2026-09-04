@@ -1,0 +1,26 @@
+{
+  "benchmarks": [
+    "libero_spatial",
+    "libero_object",
+    "libero_goal",
+    "libero_10"
+  ],
+  "task_ids": "all",
+  "num_trials_per_task": 50,
+  "env_seed": 7,
+  "policy_seed": 0,
+  "actions_per_plan": 5,
+  "num_steps_wait": 10,
+  "render_size": 256,
+  "video_fps": 10,
+  "video_policy": "none",
+  "save_actions": false,
+  "resume": true,
+  "fail_fast": false,
+  "max_steps": {
+    "libero_spatial": 220,
+    "libero_object": 280,
+    "libero_goal": 300,
+    "libero_10": 520
+  }
+}

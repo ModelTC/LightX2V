@@ -54,6 +54,10 @@ class EnvContract:
         return f"{self.namespace}/observation_ready"
 
     @property
+    def observation_context_topic(self) -> str:
+        return f"{self.namespace}/observation_context"
+
+    @property
     def task_topic(self) -> str:
         return f"{self.namespace}/task_description"
 

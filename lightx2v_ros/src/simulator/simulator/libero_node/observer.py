@@ -28,7 +28,9 @@ def setup_libero_config(libero_root):
     if not (benchmark_root / "bddl_files").exists():
         raise FileNotFoundError(f"LIBERO submodule is incomplete: {libero_root}")
 
-    config_dir = Path.home() / ".cache" / "lightx2v_ros" / "libero_config"
+    configured = os.environ.get("LIBERO_CONFIG_PATH")
+    cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    config_dir = Path(configured).expanduser() if configured else cache_root / "lightx2v_ros" / "libero_config"
     config_file = config_dir / "config.yaml"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_file.write_text(
@@ -60,22 +62,6 @@ def load_libero(libero_root):
         raise
 
     return benchmark, get_libero_path, OffScreenRenderEnv
-
-
-def load_init_states(get_libero_path, task, init_state_id):
-    state, _ = load_init_state(get_libero_path, task, init_state_id)
-    return state
-
-
-def load_init_state(get_libero_path, task, init_state_id):
-    import torch
-
-    init_states_path = Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
-    init_states = torch.load(init_states_path, map_location="cpu", weights_only=False)
-    index = int(init_state_id)
-    if index < 0 or index >= len(init_states):
-        raise ValueError(f"init_state_id {index} is out of range for {task.name!r}; expected 0..{len(init_states) - 1}")
-    return init_states[index], len(init_states)
 
 
 def build_task_catalog(benchmark_module):
@@ -128,19 +114,27 @@ class LiberoActionObserver:
         # Keep an owned copy: every restart must restore this exact MuJoCo state,
         # rather than returning the observation cached after the last action.
         self.init_state_id = int(init_state_id)
-        init_state, self.num_init_states = load_init_state(get_libero_path, task, self.init_state_id)
-        self.init_state = np.asarray(init_state).copy()
+        init_states_path = Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
+        import torch
+
+        self.init_states = np.asarray(torch.load(init_states_path, map_location="cpu", weights_only=False))
+        self.num_init_states = len(self.init_states)
+        self.select_init_state(self.init_state_id)
         self.image_size = int(image_size)
         self.seed = int(seed)
 
+        # robosuite 1.4.1 mistakes a physical CUDA_VISIBLE_DEVICES value for an
+        # EGL ordinal. Imports must see the physical mask, while EGL must select
+        # logical device 0 inside that mask.
+        os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
         self.env = env_cls(
             bddl_file_name=str(bddl_file),
             camera_heights=self.image_size,
             camera_widths=self.image_size,
             camera_names=["robot0_eye_in_hand", "agentview", "frontview", "galleryview"],
+            render_gpu_device_id=0,
         )
         self.env.seed(self.seed)
-        self.reset()
 
     @property
     def task_key(self):
@@ -152,8 +146,15 @@ class LiberoActionObserver:
         self.obs = self.env.set_init_state(self.init_state.copy())
         return self.obs
 
+    def select_init_state(self, init_state_id):
+        index = int(init_state_id)
+        if index < 0 or index >= self.num_init_states:
+            raise ValueError(f"init_state_id {index} is out of range for {self.task.name!r}; expected 0..{self.num_init_states - 1}")
+        self.init_state_id = index
+        self.init_state = np.asarray(self.init_states[index]).copy()
+
     def step(self, action):
-        action = np.asarray(action, dtype=np.float32)
+        action = np.asarray(action)
         self.obs, reward, success, info = self.env.step(action)
         return self.obs, reward, success, info
 

@@ -35,7 +35,7 @@ import rclpy
 from common.contract import EnvContract
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Bool, Float32MultiArray, Int32, String
+from std_msgs.msg import Bool, Float32MultiArray, Float64MultiArray, Int32, MultiArrayDimension, String
 
 from .base_env import BaseSimEnv
 
@@ -50,11 +50,26 @@ SWITCHING = "switching"
 FINISHED_STATES = (SUCCESS, FAILURE)
 
 
-def rgb_to_image_msg(image, stamp, frame_id):
+def parse_action_identity(label):
+    fields = {}
+    for item in str(label).split(";"):
+        name, separator, value = item.partition("=")
+        if separator:
+            fields[name] = value
+    try:
+        return int(fields["episode"]), int(fields["observation"]), int(fields["plan_epoch"])
+    except (KeyError, ValueError):
+        return None
+
+
+def rgb_to_image_msg(image, stamp, frame_id, episode_index=None, observation_index=None):
     image = np.ascontiguousarray(image)
     msg = Image()
     msg.header.stamp = stamp
-    msg.header.frame_id = frame_id
+    if episode_index is None or observation_index is None:
+        msg.header.frame_id = frame_id
+    else:
+        msg.header.frame_id = f"{frame_id}|{episode_index}|{observation_index}"
     msg.height = int(image.shape[0])
     msg.width = int(image.shape[1])
     msg.encoding = "rgb8"
@@ -85,8 +100,18 @@ class SimulatorNode(Node):
         # Per-episode step cap; <=0 means "use the env hint (env.max_steps)".
         # Hitting the cap ends the episode as FAILURE.
         self.declare_parameter("max_episode_steps", 0)
+        self.declare_parameter("numeric_precision", "float32")
         self.republish_period = float(self.get_parameter("republish_period").value)
         self.loop = bool(self.get_parameter("loop").value)
+
+        precision = str(self.get_parameter("numeric_precision").value).strip().lower()
+        numeric_types = {
+            "float32": (Float32MultiArray, np.float32),
+            "float64": (Float64MultiArray, np.float64),
+        }
+        if precision not in numeric_types:
+            raise ValueError("numeric_precision must be 'float32' or 'float64'")
+        self.numeric_message_type, self.numeric_dtype = numeric_types[precision]
 
         # env_factory may declare/read its own parameters via `self`.
         self.env = env_factory(self)
@@ -103,14 +128,15 @@ class SimulatorNode(Node):
         else:
             self.max_episode_steps = 0
 
-        self.state_pub = self.create_publisher(Float32MultiArray, contract.state_topic, 10)
+        self.state_pub = self.create_publisher(self.numeric_message_type, contract.state_topic, 10)
         self.image_pubs = {cam: self.create_publisher(Image, contract.camera_topic(cam), 10) for cam in contract.cameras}
         self.success_pub = self.create_publisher(Bool, contract.success_topic, 10)
         self.observation_ready_pub = self.create_publisher(Int32, contract.observation_ready_topic, 10)
+        self.observation_context_pub = self.create_publisher(String, contract.observation_context_topic, 10)
         self.task_pub = self.create_publisher(String, contract.task_topic, 10)
         self.episode_pub = self.create_publisher(Int32, contract.episode_topic, 10)
         self.status_pub = self.create_publisher(String, contract.status_topic, 10)
-        self.action_sub = self.create_subscription(Float32MultiArray, contract.action_topic, self.on_action, 10)
+        self.action_sub = self.create_subscription(self.numeric_message_type, contract.action_topic, self.on_action, 10)
         self.control_sub = self.create_subscription(String, contract.control_topic, self.on_control, 10)
 
         # `step_index` is a monotonic global observation counter (never reset), so the
@@ -119,6 +145,7 @@ class SimulatorNode(Node):
         # `episode_step` counts steps within the current episode (drives the step cap).
         self.episode_step = 0
         self.episode_index = 0
+        self.plan_epoch = 0
         self.success = False
         self.state = READY
         self.history = []  # [{episode, task, config, seed, outcome, steps}]
@@ -149,10 +176,18 @@ class SimulatorNode(Node):
         for cam, pub in self.image_pubs.items():
             image = self.obs.images.get(cam)
             if image is not None:
-                pub.publish(rgb_to_image_msg(image, stamp, cam))
+                pub.publish(rgb_to_image_msg(image, stamp, cam, self.episode_index, self.step_index))
 
-        state_msg = Float32MultiArray()
-        state_msg.data = np.asarray(self.obs.state, dtype=np.float32).reshape(-1).tolist()
+        state = np.asarray(self.obs.state, dtype=self.numeric_dtype).reshape(-1)
+        state_msg = self.numeric_message_type()
+        state_msg.layout.dim = [
+            MultiArrayDimension(
+                label=f"episode={self.episode_index};observation={self.step_index}",
+                size=state.size,
+                stride=state.size,
+            )
+        ]
+        state_msg.data = state.tolist()
         self.state_pub.publish(state_msg)
 
         task_msg = String()
@@ -174,6 +209,17 @@ class SimulatorNode(Node):
             ready_msg = Int32()
             ready_msg.data = self.step_index
             self.observation_ready_pub.publish(ready_msg)
+
+            context_msg = String()
+            context_msg.data = json.dumps(
+                {
+                    "episode": self.episode_index,
+                    "observation": self.step_index,
+                    "plan_epoch": self.plan_epoch,
+                    "task_description": self.env.task_description or "",
+                }
+            )
+            self.observation_context_pub.publish(context_msg)
 
     def publish_intermediate_frames(self, images):
         """Publish viewer-only frames rendered mid-action (no observation_ready)."""
@@ -215,8 +261,14 @@ class SimulatorNode(Node):
     def on_action(self, msg):
         if self.state != RUNNING:
             return
+        if msg.layout.dim:
+            action_identity = parse_action_identity(msg.layout.dim[0].label)
+            expected_identity = (self.episode_index, self.step_index, self.plan_epoch)
+            if action_identity != expected_identity:
+                self.get_logger().warning(f"dropping stale action {action_identity}; current observation is {expected_identity}")
+                return
 
-        action = np.asarray(msg.data, dtype=np.float32).reshape(-1)
+        action = np.asarray(msg.data, dtype=self.numeric_dtype).reshape(-1)
         accepted_action_dims = tuple(int(dim) for dim in self.env.accepted_action_dims)
         if action.size not in accepted_action_dims:
             self.get_logger().error(f"expected action length in {accepted_action_dims}, got {action.size}")
@@ -359,6 +411,7 @@ class SimulatorNode(Node):
         self.state = RUNNING
         # Bump the counter: an action published for the pre-pause observation may
         # have been dropped, so re-advertise the current state as a new observation.
+        self.plan_epoch += 1
         self.step_index += 1
         self.publish_observation()
         self.publish_status()
