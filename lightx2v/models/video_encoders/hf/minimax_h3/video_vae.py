@@ -45,6 +45,8 @@ from loguru import logger
 
 from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     SafetensorsSubsetReport,
+    _is_official_video_vae_checkpoint,
+    load_minimax_h3_video_vae_checkpoint,
     load_safetensors_subset,
 )
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
@@ -813,7 +815,10 @@ class MiniMaxH3VideoVAE(nn.Module):
                 attn_type=attn_type,
             )
         model._reset_runtime_buffers()
-        model.load_report = load_safetensors_subset(model, weight_path)
+        if quant_scheme is None and _is_official_video_vae_checkpoint(weight_path):
+            model.load_report = load_minimax_h3_video_vae_checkpoint(model, weight_path)
+        else:
+            model.load_report = load_safetensors_subset(model, weight_path)
         if quant_scheme is not None:
             # Pack only after loading the checkpoint's original Q/K/V keys.
             model._pack_decoder_fp8_qkv()

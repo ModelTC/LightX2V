@@ -36,6 +36,8 @@ def video_vae_module(monkeypatch):
         monkeypatch,
         "lightx2v.models.video_encoders.hf.minimax_h3.weights",
         SafetensorsSubsetReport=object,
+        _is_official_video_vae_checkpoint=lambda *_args, **_kwargs: False,
+        load_minimax_h3_video_vae_checkpoint=lambda *_args, **_kwargs: None,
         load_safetensors_subset=lambda *_args, **_kwargs: None,
     )
     _install_module(monkeypatch, "lightx2v.utils.registry_factory", ATTN_WEIGHT_REGISTER={})
@@ -184,3 +186,59 @@ def test_legacy_layout_uses_component_dir_as_weight_path(video_vae_module, tmp_p
 
     assert config == legacy
     assert weight_path == vae_dir
+
+
+def test_from_pretrained_dispatches_official_and_legacy(video_vae_module, monkeypatch, tmp_path):
+    calls = []
+
+    class TinyVAE(video_vae_module.MiniMaxH3VideoVAE):
+        def __init__(self, _config, **_kwargs):
+            video_vae_module.nn.Module.__init__(self)
+            self.weight = video_vae_module.nn.Parameter(video_vae_module.torch.empty(1))
+            self.execution_device = video_vae_module.torch.device("cpu")
+
+        def _reset_runtime_buffers(self):
+            pass
+
+        def _prepare_inference_dtypes(self):
+            pass
+
+    monkeypatch.setattr(video_vae_module, "_resolve_video_vae_dir", lambda _path: tmp_path)
+    monkeypatch.setattr(video_vae_module, "_load_video_vae_config_and_weight_path", lambda *_args: ({}, tmp_path / "model.safetensors"))
+    monkeypatch.setattr(video_vae_module, "load_minimax_h3_video_vae_checkpoint", lambda *_args: calls.append("official") or "official-report")
+    monkeypatch.setattr(video_vae_module, "load_safetensors_subset", lambda *_args: calls.append("legacy") or "legacy-report")
+
+    monkeypatch.setattr(video_vae_module, "_is_official_video_vae_checkpoint", lambda _path: True)
+    assert TinyVAE.from_pretrained(tmp_path, cpu_offload=True).load_report == "official-report"
+    monkeypatch.setattr(video_vae_module, "_is_official_video_vae_checkpoint", lambda _path: False)
+    assert TinyVAE.from_pretrained(tmp_path, cpu_offload=True).load_report == "legacy-report"
+    assert calls == ["official", "legacy"]
+
+
+def test_from_pretrained_quantized_path_bypasses_official_adapter(video_vae_module, monkeypatch, tmp_path):
+    calls = []
+
+    class TinyQuantizedVAE(video_vae_module.MiniMaxH3VideoVAE):
+        def __init__(self, _config, **_kwargs):
+            video_vae_module.nn.Module.__init__(self)
+            self.weight = video_vae_module.nn.Parameter(video_vae_module.torch.empty(1))
+            self.execution_device = video_vae_module.torch.device("cpu")
+
+        def _reset_runtime_buffers(self):
+            pass
+
+        def _pack_decoder_fp8_qkv(self):
+            calls.append("pack")
+
+        def _prepare_inference_dtypes(self):
+            pass
+
+    monkeypatch.setattr(video_vae_module, "_resolve_video_vae_dir", lambda _path: tmp_path)
+    monkeypatch.setattr(video_vae_module, "_load_video_vae_config_and_weight_path", lambda *_args: ({}, tmp_path / "quant.safetensors"))
+    monkeypatch.setattr(video_vae_module, "_is_official_video_vae_checkpoint", lambda _path: pytest.fail("official detection must not run for quantized checkpoints"))
+    monkeypatch.setattr(video_vae_module, "load_minimax_h3_video_vae_checkpoint", lambda *_args: pytest.fail("official adapter must not run for quantized checkpoints"))
+    monkeypatch.setattr(video_vae_module, "load_safetensors_subset", lambda *_args: calls.append("legacy") or "quant-report")
+
+    model = TinyQuantizedVAE.from_pretrained(tmp_path, checkpoint_path=tmp_path / "quant.safetensors", quant_scheme="fp8-sgl", cpu_offload=True)
+    assert model.load_report == "quant-report"
+    assert calls == ["legacy", "pack"]
