@@ -3,6 +3,8 @@ from functools import cache
 import torch
 import torch.distributed as dist
 
+from lightx2v.utils.registry_factory import A2A_BACKEND_REGISTER
+
 
 @cache
 def _get_round_robin_schedule(world_size, rank):
@@ -75,4 +77,7 @@ def create_ulysses_a2a_backend(name):
         return TorchUlyssesA2A()
     if name == "round_robin":
         return RoundRobinUlyssesA2A()
-    raise ValueError(f"Unknown a2a_backend={name!r}; expected 'torch' or 'round_robin'.")
+    backend_type = A2A_BACKEND_REGISTER.get(name)
+    if backend_type is None:
+        raise ValueError(f"Unknown a2a_backend={name!r}; expected 'torch', 'round_robin', or a registered platform backend.")
+    return backend_type()

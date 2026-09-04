@@ -10,7 +10,7 @@ class NpuDevice:
 
     @staticmethod
     def init_device_env():
-        pass
+        import lightx2v_platform.compilation.ascend_npu  # noqa: F401
 
     @staticmethod
     def is_available() -> bool:

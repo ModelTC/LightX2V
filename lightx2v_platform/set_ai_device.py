@@ -2,7 +2,7 @@ import os
 
 from loguru import logger
 
-from lightx2v_platform import *
+from lightx2v_platform import *  # noqa: F403
 
 
 def _load_platform_plugins():
