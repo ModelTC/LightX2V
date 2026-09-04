@@ -79,7 +79,6 @@ def run_rollout(args: argparse.Namespace) -> dict:
 
     task_description = args.task_description.strip() or str(spec.task.language)
     env = create_environment(runtime, spec, args.render_size, args.env_seed)
-    policy = None
     started = time.perf_counter()
     try:
         LOGGER.info("Loading local PyTorch OpenPI policy")
@@ -88,7 +87,6 @@ def run_rollout(args: argparse.Namespace) -> dict:
                 args.config_json,
                 args.model_path,
                 seed=args.policy_seed,
-                actions_per_plan=args.actions_per_plan,
             )
         )
         policy.reset()
@@ -99,13 +97,12 @@ def run_rollout(args: argparse.Namespace) -> dict:
             task_description=task_description,
             max_steps=max_steps,
             num_steps_wait=args.num_steps_wait,
+            actions_per_plan=args.actions_per_plan,
             collect_frames=True,
         )
         rng_state_after = policy.export_rng_state()
     finally:
         env.close()
-        if policy is not None:
-            policy.close()
 
     artifact_errors: list[str] = []
     try:

@@ -13,35 +13,27 @@ SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
 EPISODES_PER_SUITE = 500
 
 
-def _parse_suites(value: str) -> tuple[str, ...]:
-    suites = tuple(item.strip() for item in value.split(",") if item.strip())
-    unknown = [suite for suite in suites if suite not in SUITES]
-    if not suites or unknown or len(set(suites)) != len(suites):
-        raise ValueError(f"invalid LIBERO suite selection: {value!r}")
-    return suites
-
-
-def _parse_status(values: list[str], suites: tuple[str, ...]) -> dict[str, int]:
+def _parse_status(values: list[str]) -> dict[str, int]:
     statuses: dict[str, int] = {}
     for value in values:
         suite, separator, return_code = value.partition("=")
-        if not separator or suite not in suites or suite in statuses:
+        if not separator or suite not in SUITES or suite in statuses:
             raise ValueError(f"invalid worker status: {value!r}")
         statuses[suite] = int(return_code)
-    missing = set(suites) - statuses.keys()
+    missing = set(SUITES) - statuses.keys()
     if missing:
         raise ValueError(f"missing worker status for: {sorted(missing)}")
     return statuses
 
 
-def aggregate(output_root: Path, suites: tuple[str, ...], statuses: dict[str, int], output_file: Path) -> tuple[dict, list[str]]:
+def aggregate(output_root: Path, statuses: dict[str, int]) -> tuple[dict, list[str]]:
     errors: list[str] = []
     shards: dict[str, dict] = {}
     successes = 0
     completed = 0
     rates: list[float] = []
 
-    for suite in suites:
+    for suite in SUITES:
         summary_path = output_root / suite / "summary.json"
         if not summary_path.is_file():
             errors.append(f"{suite}: missing {summary_path}")
@@ -89,7 +81,7 @@ def aggregate(output_root: Path, suites: tuple[str, ...], statuses: dict[str, in
             "protocol_id": protocol_id,
         }
 
-    expected = EPISODES_PER_SUITE * len(suites)
+    expected = EPISODES_PER_SUITE * len(SUITES)
     payload = {
         "schema_version": 1,
         "status": "complete" if not errors else "invalid",
@@ -98,12 +90,12 @@ def aggregate(output_root: Path, suites: tuple[str, ...], statuses: dict[str, in
         "successes": successes,
         "failures": completed - successes,
         "success_rate": successes / completed * 100.0 if completed else None,
-        "mean_suite_success_rate": sum(rates) / len(rates) if len(rates) == len(suites) else None,
+        "mean_suite_success_rate": sum(rates) / len(rates) if len(rates) == len(SUITES) else None,
         "shards": shards,
         "validation_errors": errors,
         "updated_at_unix": time.time(),
     }
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file = output_root / "parallel_summary.json"
     temporary = output_file.with_name(f".{output_file.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, output_file)
@@ -113,21 +105,17 @@ def aggregate(output_root: Path, suites: tuple[str, ...], statuses: dict[str, in
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--suites", required=True)
     parser.add_argument("--worker-status", action="append", default=[])
-    parser.add_argument("--output-file", type=Path)
     args = parser.parse_args()
     try:
         output_root = args.output_root.expanduser().resolve()
-        suites = _parse_suites(args.suites)
-        statuses = _parse_status(args.worker_status, suites)
-        output_file = args.output_file.expanduser().resolve() if args.output_file else output_root / "parallel_summary.json"
-        payload, errors = aggregate(output_root, suites, statuses, output_file)
+        statuses = _parse_status(args.worker_status)
+        payload, errors = aggregate(output_root, statuses)
     except (OSError, TypeError, ValueError) as exc:
         parser.error(str(exc))
 
     print("\nLIBERO suite summary")
-    for suite in suites:
+    for suite in SUITES:
         shard = payload["shards"].get(suite, {})
         rate = shard.get("success_rate")
         rate_text = "n/a" if rate is None else f"{float(rate):.2f}%"
@@ -135,7 +123,7 @@ def main() -> int:
     overall = payload["success_rate"]
     overall_text = "n/a" if overall is None else f"{overall:.2f}%"
     print(f"  {'overall':<18} {payload['successes']:>3}/{payload['expected_episodes']:<3} {overall_text:>8}")
-    print(f"  summary: {output_file}")
+    print(f"  summary: {output_root / 'parallel_summary.json'}")
     for error in errors:
         print(f"error: {error}")
     return 1 if errors else 0

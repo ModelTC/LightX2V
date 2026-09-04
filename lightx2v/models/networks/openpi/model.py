@@ -50,9 +50,6 @@ class OpenPIModel(nn.Module):
         tokenizer_path = checkpoint_dir / "assets/paligemma_tokenizer.model"
 
         device = torch.device(values["device"])
-        if device.type == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError("OpenPI config requests CUDA, but torch.cuda.is_available() is false")
-
         core_model = load_pi05_libero_weights(weight_path, model_config, device)
         return cls(
             core_model=core_model,

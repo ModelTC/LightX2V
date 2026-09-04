@@ -12,6 +12,7 @@ import os
 import sys
 import time
 import traceback
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -391,11 +392,12 @@ def resolved_protocol(
     }
     encoded = json.dumps(protocol_fields, sort_keys=True, separators=(",", ":")).encode("utf-8")
     protocol_id = hashlib.sha256(encoded).hexdigest()
+    official_protocol = is_official_protocol(config)
     resolved = {
         **protocol_fields,
         "protocol_id": protocol_id,
-        "protocol_name": "official_pi05_libero" if is_official_protocol(config) else "custom_pi05_libero",
-        "official_protocol": is_official_protocol(config),
+        "protocol_name": "official_pi05_libero" if official_protocol else "custom_pi05_libero",
+        "official_protocol": official_protocol,
         "libero_config_dir": str(config.libero_config_dir),
         "video_fps": config.video_fps,
         "video_policy": config.video_policy,
@@ -411,7 +413,6 @@ def load_policy_config(
     model_path: Path,
     *,
     seed: int,
-    actions_per_plan: int,
 ) -> dict[str, Any]:
     config_json = config_json.expanduser().resolve()
     model_path = model_path.expanduser().resolve()
@@ -426,7 +427,6 @@ def load_policy_config(
             "model_path": str(model_path),
             "config_json": str(config_json),
             "seed": int(seed),
-            "actions_per_plan": int(actions_per_plan),
         }
     )
     return values
@@ -453,7 +453,6 @@ def _assert_module_source(module: Any, libero_root: Path) -> None:
 def _constrain_libero_namespace(package: Any, libero_root: Path) -> None:
     """Restrict the top-level namespace before resolving ``libero.libero``."""
     if getattr(package, "__file__", None):
-        _assert_module_source(package, libero_root)
         return
 
     requested = (libero_root / "libero").resolve()
@@ -464,7 +463,6 @@ def _constrain_libero_namespace(package: Any, libero_root: Path) -> None:
     spec = getattr(package, "__spec__", None)
     if spec is not None:
         spec.submodule_search_locations = package.__path__
-    _assert_module_source(package, libero_root)
 
 
 def configure_libero(libero_root: Path, config_dir: Path) -> LiberoRuntime:
@@ -501,6 +499,9 @@ def configure_libero(libero_root: Path, config_dir: Path) -> LiberoRuntime:
     nested_package = importlib.import_module("libero.libero")
     benchmark_module = importlib.import_module("libero.libero.benchmark")
     envs_module = importlib.import_module("libero.libero.envs")
+    # robosuite 1.4.1 reads the physical CUDA mask as an EGL ordinal. Import it
+    # with the caller's mask intact, then select logical device 0 within it.
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
     for module in (package, nested_package, benchmark_module, envs_module):
         _assert_module_source(module, libero_root)
 
@@ -637,6 +638,7 @@ def run_episode(
     task_description: str,
     max_steps: int,
     num_steps_wait: int,
+    actions_per_plan: int,
     collect_frames: bool,
 ) -> tuple[dict[str, Any], list[np.ndarray], np.ndarray]:
     """Run one episode with the exact official warmup/policy done semantics."""
@@ -650,8 +652,8 @@ def run_episode(
     error_message: str | None = None
     error_traceback: str | None = None
     started = time.perf_counter()
+    pending_actions: deque[np.ndarray] = deque()
 
-    policy.clear_action_queue()
     # Match the official evaluator: reset/init failures are infrastructure errors.
     env.reset()
     observation = env.set_init_state(initial_state)
@@ -671,13 +673,17 @@ def run_episode(
                 "agentview": agentview,
                 "wrist": policy_rgb(observation, "robot0_eye_in_hand_image"),
             }
-            if policy.pending_action_count == 0:
+            if not pending_actions:
                 action_chunk_calls += 1
-            action = policy.next_action(
-                images=images,
-                state=state_from_observation(observation),
-                task_description=task_description,
-            )
+                chunk = policy.predict_action_chunk(
+                    images=images,
+                    state=state_from_observation(observation),
+                    task_description=task_description,
+                )
+                if len(chunk) < actions_per_plan:
+                    raise ValueError(f"Policy returned {len(chunk)} actions; {actions_per_plan} are required per plan")
+                pending_actions.extend(action.copy() for action in chunk[:actions_per_plan])
+            action = pending_actions.popleft()
             action = np.asarray(action).reshape(-1)
             actions.append(action.copy())
             observation, _reward, done, _info = env.step(action.tolist())
@@ -693,8 +699,8 @@ def run_episode(
         error_traceback = traceback.format_exc(limit=20)
         LOGGER.exception("LIBERO episode failed with an exception")
     finally:
-        pending_actions_discarded = policy.pending_action_count
-        policy.clear_action_queue()
+        pending_actions_discarded = len(pending_actions)
+        pending_actions.clear()
 
     action_dim = int(policy.output_action_dim)
     action_array = np.stack(actions).reshape(-1, action_dim) if actions else np.empty((0, action_dim), dtype=np.float64)

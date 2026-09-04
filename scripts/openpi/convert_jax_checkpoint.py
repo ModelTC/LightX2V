@@ -148,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--precision",
         choices=tuple(DTYPE_BY_PRECISION),
-        default=os.environ.get("OPENPI_CONVERT_PRECISION", os.environ.get("OPENPI_OUTPUT_PRECISION", "float32")),
+        default=os.environ.get("OPENPI_CONVERT_PRECISION", "float32"),
     )
     parser.add_argument("--config-name", default=os.environ.get("OPENPI_CONFIG_NAME", "pi05_libero"))
     parser.add_argument("--openpi-root", default=os.environ.get("OPENPI_PATH", str(DEFAULT_OPENPI_ROOT)))

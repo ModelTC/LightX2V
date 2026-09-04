@@ -107,7 +107,7 @@ class PaliGemmaWithExpertModel(nn.Module):
                 position_ids=position_ids,
                 past_key_values=past_key_values,
                 use_cache=use_cache,
-                adarms_cond=adarms_cond[0] if adarms_cond is not None else None,
+                adarms_cond=adarms_cond[0],
             )
             prefix_past_key_values = prefix_output.past_key_values
             prefix_output = prefix_output.last_hidden_state
@@ -119,7 +119,7 @@ class PaliGemmaWithExpertModel(nn.Module):
                 position_ids=position_ids,
                 past_key_values=past_key_values,
                 use_cache=use_cache,
-                adarms_cond=adarms_cond[1] if adarms_cond is not None else None,
+                adarms_cond=adarms_cond[1],
             )
             suffix_output = suffix_output.last_hidden_state
             prefix_output = None

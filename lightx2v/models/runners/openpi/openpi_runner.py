@@ -4,7 +4,6 @@ import base64
 import os
 import subprocess
 import sys
-from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -20,19 +19,11 @@ class OpenPIPolicy:
     def __init__(self, config: Any):
         self.action_horizon = int(config["action_horizon"])
         self.output_action_dim = int(config["output_action_dim"])
-        self.actions_per_plan = int(config.get("actions_per_plan", 5))
-        if not 1 <= self.actions_per_plan <= self.action_horizon:
-            raise ValueError(f"OpenPI actions_per_plan must be in [1, {self.action_horizon}], got {self.actions_per_plan}.")
 
         # Import only after the worker activates the patched Transformers path.
         from lightx2v.models.networks.openpi import OpenPIModel
 
         self.model = OpenPIModel.from_config(config)
-        self.pending_actions: deque[np.ndarray] = deque()
-
-    @property
-    def pending_action_count(self) -> int:
-        return len(self.pending_actions)
 
     def predict_action_chunk(
         self,
@@ -56,38 +47,20 @@ class OpenPIPolicy:
             raise ValueError("OpenPI produced non-finite actions.")
         return np.ascontiguousarray(actions)
 
-    def next_action(self, images: dict[str, np.ndarray], state: np.ndarray, task_description: str) -> np.ndarray:
-        if not self.pending_actions:
-            chunk = self.predict_action_chunk(images, state, task_description, seed=None)
-            self.pending_actions.extend(action.copy() for action in chunk[: self.actions_per_plan])
-        return self.pending_actions.popleft()
-
-    def clear_action_queue(self) -> None:
-        self.pending_actions.clear()
-
-    def reset_rng(self) -> None:
-        self.model.reset()
-
     def reset(self) -> None:
-        self.clear_action_queue()
-        self.reset_rng()
+        self.model.reset()
 
     def export_rng_state(self) -> str:
         encoded = self.model.get_rng_state().cpu().numpy().tobytes()
         return base64.b64encode(encoded).decode("ascii")
 
     def import_rng_state(self, encoded: str) -> None:
-        if not encoded:
-            raise ValueError("OpenPI RNG state is empty")
         raw = base64.b64decode(encoded.encode("ascii"), validate=True)
         state_array = np.frombuffer(raw, dtype=np.uint8).copy()
         import torch
 
         state_tensor = torch.from_numpy(state_array)
         self.model.set_rng_state(state_tensor)
-
-    def close(self) -> None:
-        self.clear_action_queue()
 
 
 @RUNNER_REGISTER("openpi")
@@ -171,13 +144,7 @@ class OpenPIRunner(BaseRunner):
 
         child_env = os.environ.copy()
         child_env["USE_FLAX"] = "0"
-        visible_devices = [item.strip() for item in child_env.get("CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]
-        if len(visible_devices) == 1 and visible_devices[0] != "0":
-            # robosuite 1.4.1 validates physical IDs as EGL ordinals.
-            visible_devices.append("0")
-            child_env["CUDA_VISIBLE_DEVICES"] = ",".join(visible_devices)
-        if visible_devices:
-            child_env["MUJOCO_EGL_DEVICE_ID"] = "0"
+        child_env.pop("MUJOCO_EGL_DEVICE_ID", None)
         child_env["PYTHONPATH"] = os.pathsep.join((str(runtime_path), str(PROJECT_ROOT)))
         return child_env
 

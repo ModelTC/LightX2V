@@ -204,7 +204,6 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             Path(args.config_json),
             Path(args.model_path),
             seed=config.policy_seed,
-            actions_per_plan=config.actions_per_plan,
         )
     )
     global_indices = {key: index for index, key in enumerate(all_keys)}
@@ -216,8 +215,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 LOGGER.info("Episode resume: skipping complete suite %s", benchmark)
                 continue
 
-            policy.clear_action_queue()
-            policy.reset_rng()
+            policy.reset()
             # Official evaluation starts each suite in its own process. Mirror
             # that process-level NumPy seed when several suites share a worker.
             np.random.seed(config.env_seed)
@@ -252,6 +250,7 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                             task_description=str(spec.task.language),
                             max_steps=config.max_steps[benchmark],
                             num_steps_wait=config.num_steps_wait,
+                            actions_per_plan=config.actions_per_plan,
                             collect_frames=config.video_policy != "none",
                         )
                         record = {
@@ -300,7 +299,6 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 finally:
                     env.close()
     finally:
-        policy.close()
         summary = _write_current_outputs(output_dir, records, task_specs, config, protocol_id)
 
     LOGGER.info(

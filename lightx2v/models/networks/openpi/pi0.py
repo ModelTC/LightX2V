@@ -111,15 +111,6 @@ class PI0Pytorch(nn.Module):
 
         self.gradient_checkpointing_enabled = False
 
-        msg = "OpenPI's patched transformers==4.53.2 runtime is not active. Run scripts/openpi/2_setup_pytorch_runtime.sh and prepend OPENPI_TRANSFORMERS_RUNTIME_PATH to PYTHONPATH."
-        try:
-            from transformers.models.siglip import check
-
-            if not check.check_whether_transformers_replace_is_installed_correctly():
-                raise ValueError(msg)
-        except ImportError:
-            raise ValueError(msg) from None
-
     def gradient_checkpointing_enable(self):
         self.gradient_checkpointing_enabled = True
         self.paligemma_with_expert.paligemma.language_model.gradient_checkpointing = True

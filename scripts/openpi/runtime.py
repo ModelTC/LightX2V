@@ -137,7 +137,6 @@ import importlib
 import importlib.metadata
 import json
 import sys
-import sysconfig
 from pathlib import Path
 
 root = Path(sys.argv[1]).resolve()
@@ -364,8 +363,6 @@ for module in (libero_package, benchmark):
     origin = Path(module.__file__).resolve()
     if not origin.is_relative_to(libero_root):
         raise RuntimeError(f"{module.__name__} imported outside the official LIBERO root: {origin}")
-namespace_extras = [path for path in namespace_paths if not Path(path).is_relative_to(libero_root)]
-
 payload = {
     "python": sys.version.split()[0],
     "torch": torch.__version__,
@@ -381,7 +378,6 @@ payload = {
     "glfw": importlib.metadata.version("glfw"),
     "robosuite": importlib.metadata.version("robosuite"),
     "libero_namespace": namespace_paths,
-    "libero_namespace_extras_ignored_by_source_guard": namespace_extras,
     "libero_suites": sorted(benchmark.get_benchmark_dict()),
 }
 print(json.dumps(payload, sort_keys=True))

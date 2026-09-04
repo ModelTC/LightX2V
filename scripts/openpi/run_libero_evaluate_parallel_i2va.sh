@@ -3,16 +3,8 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 lightx2v_path="${LIGHTX2V_PATH:-$(cd -- "${script_dir}/../.." && pwd)}"
-workspace_root="$(dirname -- "${lightx2v_path}")"
-openpi_data_root="${OPENPI_DATA_ROOT:-${workspace_root}/openpi_data}"
 
-model_path="${OPENPI_MODEL_PATH:-${openpi_data_root}/openpi-assets/checkpoints/pi05_libero_pytorch_fp32}"
-config_json="${OPENPI_CONFIG:-${lightx2v_path}/configs/openpi/pi05_libero.json}"
-eval_config="${OPENPI_EVAL_CONFIG:-${lightx2v_path}/configs/openpi/pi05_libero_eval.json}"
-libero_root="${OPENPI_LIBERO_ROOT:-${workspace_root}/openpi/third_party/libero}"
-transformers_runtime="${OPENPI_TRANSFORMERS_RUNTIME_PATH:-${openpi_data_root}/python_deps/openpi_official_pytorch_runtime}"
 gpu_list="${CUDA_VISIBLE_DEVICES:-4,5,6,7}"
-suite_list="libero_spatial,libero_object,libero_goal,libero_10"
 output_root="${OPENPI_PARALLEL_OUTPUT_ROOT:-${lightx2v_path}/save_results/pi05_libero_pytorch_fp32_parallel_evaluation}"
 
 IFS=',' read -ra gpus <<< "${gpu_list}"
@@ -33,6 +25,9 @@ if ! flock -n "${lock_fd}"; then
   echo "Another evaluation is using ${output_root}" >&2
   exit 2
 fi
+for suite in "${suites[@]}"; do
+  rm -f "${output_root}/runtime/${suite}.status"
+done
 
 run_worker() {
   local worker_index="$1"
@@ -59,27 +54,14 @@ run_worker() {
 
     (
       export CUDA_VISIBLE_DEVICES="${gpu}"
-      export MUJOCO_GL="${MUJOCO_GL:-egl}"
-      export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
-      export OPENPI_RUN_MODE=evaluate
-      export OPENPI_LIBERO_ROOT="${libero_root}"
+      export OPENPI_EVAL_OUTPUT_DIR="${suite_output}"
+      export OPENPI_RUNTIME_DIR="${suite_runtime}"
       export OPENPI_LIBERO_CONFIG_DIR="${suite_runtime}/libero_config"
-      export OPENPI_EVAL_CONFIG="${eval_config}"
       export OPENPI_EVAL_BENCHMARKS="${suite}"
-      export OPENPI_TRANSFORMERS_RUNTIME_PATH="${transformers_runtime}"
       export NUMBA_CACHE_DIR="${suite_runtime}/numba"
       export MPLCONFIGDIR="${suite_runtime}/matplotlib"
       export XDG_CACHE_HOME="${suite_runtime}/cache"
-      export PYTHONNOUSERSITE=1
-      export TOKENIZERS_PARALLELISM=false
-      export PROFILING_DEBUG_LEVEL="${PROFILING_DEBUG_LEVEL:-0}"
-      exec setsid python -m lightx2v.infer \
-        --model_cls openpi \
-        --task i2va \
-        --model_path "${model_path}" \
-        --config_json "${config_json}" \
-        --seed "${OPENPI_POLICY_SEED:-0}" \
-        --save_result_path "${suite_output}"
+      exec setsid bash "${script_dir}/run_libero_evaluate_i2va.sh"
     ) >> "${log_path}" 2>&1 &
     child_pid=$!
     if wait "${child_pid}"; then
@@ -125,7 +107,6 @@ trap - EXIT HUP INT TERM
 summary_command=(
   python "${script_dir}/libero_summary.py"
   --output-root "${output_root}"
-  --suites "${suite_list}"
 )
 for suite in "${suites[@]}"; do
   exit_code=1

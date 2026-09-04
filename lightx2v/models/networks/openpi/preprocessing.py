@@ -7,6 +7,7 @@ from collections.abc import Sequence
 import torch
 
 from . import image_tools
+from .observation import Observation
 
 logger = logging.getLogger("openpi")
 
@@ -114,12 +115,7 @@ def preprocess_observation_pytorch(
         else:
             out_masks[key] = observation.image_masks[key]
 
-    class SimpleProcessedObservation:
-        def __init__(self, **kwargs):
-            for key, value in kwargs.items():
-                setattr(self, key, value)
-
-    return SimpleProcessedObservation(
+    return Observation(
         images=out_images,
         image_masks=out_masks,
         state=observation.state,
