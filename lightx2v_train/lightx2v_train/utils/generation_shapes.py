@@ -117,9 +117,9 @@ def split_generation_shape_index(index) -> tuple[int, tuple[int, ...] | None]:
     return int(index), None
 
 
-def apply_generation_shape(metadata: dict, generation_shape: tuple[int, ...] | None) -> None:
+def apply_generation_shape(sample: dict, generation_shape: tuple[int, ...] | None) -> None:
     if generation_shape is not None:
-        metadata["generation_shape"] = tuple(int(dimension) for dimension in generation_shape)
+        sample["generation_shape"] = tuple(int(dimension) for dimension in generation_shape)
 
 
 def parse_generation_shapes(
@@ -197,9 +197,23 @@ def _scalar(value, key: str) -> int:
     return result
 
 
+def normalize_generation_shape(value, *, key: str = "generation_shape") -> tuple[int, ...]:
+    if torch.is_tensor(value):
+        dimensions = value.detach().reshape(-1).tolist()
+    elif isinstance(value, (list, tuple)):
+        dimensions = value
+    else:
+        raise ValueError(f"Generation shape metadata {key} must be a sequence, got {value!r}.")
+    return tuple(_scalar(dimension, key) for dimension in dimensions)
+
+
+def generation_shape_key(value) -> str:
+    return "x".join(str(dimension) for dimension in normalize_generation_shape(value))
+
+
 def resolve_generation_shape(
     entries,
-    metadata: Mapping,
+    sample: Mapping,
     *,
     expected_dimensions: int,
     broadcast: Callable[[int], int],
@@ -211,11 +225,11 @@ def resolve_generation_shape(
         expected_dimensions=expected_dimensions,
         config_path=config_path,
     )
-    sampled_shape = metadata.get("generation_shape")
+    sampled_shape = sample.get("generation_shape")
     if sampled_shape is not None:
-        if not isinstance(sampled_shape, (list, tuple)) or len(sampled_shape) != expected_dimensions:
+        selected = normalize_generation_shape(sampled_shape)
+        if len(selected) != expected_dimensions:
             raise ValueError(f"Sampled generation shape must have {expected_dimensions} dimensions, got {sampled_shape!r}.")
-        selected = tuple(_scalar(dimension, "generation_shape") for dimension in sampled_shape)
     elif len(shapes) == 1:
         selected = shapes[0].value
     else:

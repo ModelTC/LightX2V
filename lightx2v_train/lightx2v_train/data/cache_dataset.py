@@ -9,6 +9,12 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
+from lightx2v_train.utils.generation_shapes import (
+    GenerationShapeSampler,
+    generation_shape_key,
+    parse_generation_shapes,
+    split_generation_shape_index,
+)
 from lightx2v_train.utils.registry import DATA_REGISTER
 
 
@@ -24,11 +30,16 @@ class CacheDataset(Dataset):
         unconditional_prompt=" ",
         sample_processor=None,
         train_or_val="train",
+        generation_shapes=None,
     ):
         self.prompt_dropout_rate = float(prompt_dropout_rate)
         self.unconditional_prompt = unconditional_prompt
         self.sample_processor = sample_processor
         self.train_or_val = train_or_val
+        parsed_generation_shapes = parse_generation_shapes(generation_shapes) if generation_shapes is not None else []
+        self.generation_shapes = tuple(shape.value for shape in parsed_generation_shapes)
+        self.generation_shape_keys = tuple(generation_shape_key(shape) for shape in self.generation_shapes)
+        self.has_multiple_generation_shapes = len(self.generation_shapes) > 1
         self.samples = []
         for metadata_path in metadata_paths:
             self.samples.extend(self._read_manifest(Path(metadata_path)))
@@ -39,10 +50,23 @@ class CacheDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, index):
+        index, generation_shape = split_generation_shape_index(index)
         record = self.samples[index]
-        cache_path = record["training_cache"]
+        if self.has_multiple_generation_shapes:
+            if generation_shape is None:
+                raise RuntimeError("Multiple generation shapes require GenerationShapeSampler for cache_dataset.")
+            generation_shape = tuple(int(dimension) for dimension in generation_shape)
+            shape_key = generation_shape_key(generation_shape)
+            cache_path = record["training_caches"].get(shape_key)
+            if cache_path is None:
+                raise KeyError(f"No {shape_key} training cache is available for prompt {record['prompt']!r}.")
+        else:
+            cache_path = record["training_cache"]
+
         cache = torch.load(cache_path, map_location="cpu", weights_only=True)
         self._validate_cache(cache, cache_path, record["prompt"])
+        if generation_shape is not None:
+            cache["generation_shape"] = generation_shape
 
         conditioning = cache["conditioning"]
         use_unconditional = self.train_or_val == "train" and random.random() < self.prompt_dropout_rate
@@ -63,18 +87,39 @@ class CacheDataset(Dataset):
                     continue
                 record = json.loads(line)
                 prompt = record.get("prompt")
+                record_path = f"{metadata_path}:{line_number}"
+                if prompt is None:
+                    raise ValueError(f"Training-cache record {record_path} must include prompt.")
+
+                if self.has_multiple_generation_shapes:
+                    cache_paths = record.get("training_caches")
+                    if not isinstance(cache_paths, dict):
+                        raise ValueError(f"Training-cache record {record_path} must include a training_caches mapping; rebuild the cache.")
+                    actual_keys = set(cache_paths)
+                    expected_keys = set(self.generation_shape_keys)
+                    if actual_keys != expected_keys:
+                        missing = sorted(expected_keys - actual_keys)
+                        extra = sorted(actual_keys - expected_keys)
+                        raise ValueError(f"Training-cache record {record_path} does not match configured generation shapes: missing={missing}, extra={extra}. Rebuild the cache.")
+                    resolved_paths = {}
+                    for shape_key in self.generation_shape_keys:
+                        cache_path = cache_paths[shape_key]
+                        if not str(cache_path).strip():
+                            raise ValueError(f"Training-cache record {record_path} has an empty path for shape {shape_key}.")
+                        cache_path = Path(cache_path)
+                        if not cache_path.is_absolute():
+                            cache_path = metadata_path.parent / cache_path
+                        resolved_paths[shape_key] = cache_path
+                    records.append({"prompt": str(prompt), "training_caches": resolved_paths})
+                    continue
+
                 cache_path = record.get("training_cache")
-                if prompt is None or cache_path is None or not str(cache_path).strip():
-                    raise ValueError(f"Training-cache record {metadata_path}:{line_number} must include prompt and training_cache.")
+                if cache_path is None or not str(cache_path).strip():
+                    raise ValueError(f"Training-cache record {record_path} must include training_cache.")
                 cache_path = Path(cache_path)
                 if not cache_path.is_absolute():
                     cache_path = metadata_path.parent / cache_path
-                records.append(
-                    {
-                        "prompt": str(prompt),
-                        "training_cache": cache_path,
-                    }
-                )
+                records.append({"prompt": str(prompt), "training_cache": cache_path})
         return records
 
     def _validate_cache(self, cache, path, prompt):
@@ -110,20 +155,32 @@ def build_cache_dataset(
         unconditional_prompt=unconditional_prompt,
         sample_processor=sample_processor,
         train_or_val=train_or_val,
+        generation_shapes=data_config_split.get("generation_shapes"),
     )
     world_size = get_data_parallel_world_size()
     shuffle = data_config_split.get("shuffle", train_or_val == "train")
-    sampler = (
-        DistributedSampler(
+    drop_last = data_config_split.get("drop_last", False)
+    sampler = None
+    if train_or_val == "train" and dataset.has_multiple_generation_shapes:
+        sampler = GenerationShapeSampler(
             dataset,
             num_replicas=world_size,
             rank=get_data_parallel_rank(),
             shuffle=shuffle,
-            drop_last=data_config_split.get("drop_last", False),
+            drop_last=drop_last,
+            generation_shapes=data_config_split["generation_shapes"],
         )
-        if world_size > 1 and train_or_val == "train"
-        else None
-    )
+        shuffle = False
+        drop_last = False
+    elif world_size > 1 and train_or_val == "train":
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=get_data_parallel_rank(),
+            shuffle=shuffle,
+            drop_last=drop_last,
+        )
+        shuffle = False
     num_workers = int(data_config_split.get("num_workers", 8))
     loader_kwargs = {}
     if num_workers > 0:
@@ -136,7 +193,7 @@ def build_cache_dataset(
         sampler=sampler,
         num_workers=num_workers,
         pin_memory=data_config_split.get("pin_memory", True),
-        drop_last=data_config_split.get("drop_last", False),
+        drop_last=drop_last,
         collate_fn=_single_sample_collate,
         **loader_kwargs,
     )

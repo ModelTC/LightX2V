@@ -517,10 +517,9 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
         conditioning = batch["conditioning"]
         prompt = conditioning.get("prompt", "")
         _require_single_prompt(prompt)
-        meta = batch.get("meta", {})
         height, width = resolve_generation_shape(
             generation_shapes,
-            meta,
+            batch,
             expected_dimensions=self.generation_shape_dimensions,
             broadcast=broadcast,
         )
