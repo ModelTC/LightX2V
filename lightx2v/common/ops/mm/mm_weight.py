@@ -11,6 +11,11 @@ try:
 except ImportError:
     magi_register_custom_op = None
 
+from lightx2v.common.ops.mm.fp8_f16_accum import (
+    fp8_f16_accum_linear,
+    fp8_f16_accum_mm_available,
+    validate_fp8_f16_accum_qmax,
+)
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
 from lightx2v.common.ops.mm.triton_kernels import (
     fp8_gemm_bias_triton,
@@ -1972,6 +1977,33 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
                 self.infer_dtype,
                 self._get_actual_bias(),
             )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
+        return output_tensor
+
+
+@MM_WEIGHT_REGISTER("fp8-f16-accum")
+class MMWeightWfp8channelAfp8channelF16Accum(MMWeightWfp8channelAfp8channeldynamicSgl):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fp8_activation_qmax = None
+
+    def enable_fp8_f16_accum(self, activation_qmax):
+        activation_qmax = validate_fp8_f16_accum_qmax(activation_qmax)
+        if fp8_f16_accum_mm_available():
+            self.fp8_activation_qmax = activation_qmax
+
+    def apply(self, input_tensor):
+        if self.fp8_activation_qmax is None:
+            return super().apply(input_tensor)
+
+        output_tensor = fp8_f16_accum_linear(
+            input_tensor,
+            self.weight,
+            self.weight_scale,
+            self._get_actual_bias(),
+            self.fp8_activation_qmax,
+        )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
         return output_tensor

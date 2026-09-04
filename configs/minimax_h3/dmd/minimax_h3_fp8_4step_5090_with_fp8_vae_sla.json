@@ -36,11 +36,11 @@
   "audio_channels": 2,
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
-  "dit_quant_scheme": "fp8-sgl",
-  "dit_quantized_ckpt": "/path/to/models/minimax_h3/h3_quantized/fp8/minimax_h3_fp8.safetensors",
+  "dit_quant_scheme": "fp8-f16-accum",
+  "dit_quantized_ckpt": "/path/to/models/minimax_h3/h3_quantized/minimax_h3_dit_fp8_f16_accum.safetensors",
   "video_vae_quantized": true,
-  "video_vae_quant_scheme": "fp8-sgl",
-  "video_vae_quantized_ckpt": "/path/to/models/minimax_h3/h3_quantized/fp8/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors",
+  "video_vae_quant_scheme": "fp8-f16-accum",
+  "video_vae_quantized_ckpt": "/path/to/models/minimax_h3/h3_quantized/minimax_h3_video_vae_fp8_f16_accum.safetensors",
   "lora_dynamic_apply": true,
   "lora_configs": [
     {

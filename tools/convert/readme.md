@@ -49,6 +49,8 @@ A powerful model weight conversion tool that supports format conversion, quantiz
   - `mxfp4`: MXFP4 quantization
   - `mxfp6`: MXFP6 quantization
   - `mxfp8`: MXFP8 quantization
+- `--quantization_profile`: Optional model-specific policy. `h3-fp8-f16-accum` supports `h3` and
+  `h3_video_vae_decoder` with `--quantized --linear_type fp8 --single_file`.
 - `--non_linear_dtype`: Non-linear layer data type
   - `torch.bfloat16`: BF16
   - `torch.float16`: FP16

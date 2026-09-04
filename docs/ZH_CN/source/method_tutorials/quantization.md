@@ -13,6 +13,7 @@ LightX2V 支持对 DIT、T5 和 CLIP 模型进行量化推理，通过降低模�
 | `fp8-vllm` | FP8 通道对称 | FP8 通道动态对称 | [VLLM](https://github.com/vllm-project/vllm) | H100/H200/H800, RTX 40系等 |
 | `int8-vllm` | INT8 通道对称 | INT8 通道动态对称 | [VLLM](https://github.com/vllm-project/vllm) | A100/A800, RTX 30/40系等  |
 | `fp8-sgl` | FP8 通道对称 | FP8 通道动态对称 | [SGL](https://github.com/sgl-project/sglang/tree/main/sgl-kernel) | H100/H200/H800, RTX 40系等 |
+| `fp8-f16-accum` | FP8 通道对称 | FP8 行动态对称 | CUTLASS FP16 累加 | RTX 5090（SM120） |
 | `int8-sgl` | INT8 通道对称 | INT8 通道动态对称 | [SGL](https://github.com/sgl-project/sglang/tree/main/sgl-kernel) | A100/A800, RTX 30/40系等  |
 | `fp8-q8f` | FP8 通道对称 | FP8 通道动态对称 | [Q8-Kernels](https://github.com/KONAKONA666/q8_kernels) | RTX 40系, L40S等 |
 | `int8-q8f` | INT8 通道对称 | INT8 通道动态对称 | [Q8-Kernels](https://github.com/KONAKONA666/q8_kernels) | RTX 40系, L40S等 |
@@ -67,7 +68,7 @@ huggingface-cli download lightx2v/Encoders-Lightx2v \
 
 #### 支持的量化模式
 
-DIT 量化模式（`dit_quant_scheme`）支持：`fp8-vllm`、`int8-vllm`、`fp8-sgl`、`int8-sgl`、`fp8-q8f`、`int8-q8f`、`int8-torchao`、`int4-g128-marlin`、`fp8-b128-deepgemm`
+DIT 量化模式（`dit_quant_scheme`）支持：`fp8-vllm`、`int8-vllm`、`fp8-sgl`、`fp8-f16-accum`、`int8-sgl`、`fp8-q8f`、`int8-q8f`、`int8-torchao`、`int4-g128-marlin`、`fp8-b128-deepgemm`
 
 #### 配置示例
 
@@ -80,6 +81,71 @@ DIT 量化模式（`dit_quant_scheme`）支持：`fp8-vllm`、`int8-vllm`、`fp8
 ```
 
 > 💡 **提示**：当运行脚本的 `model_path` 中只有一个 DIT 模型时，`dit_quantized_ckpt` 可以不用单独指定。
+
+#### MiniMax-H3 FP8 FP16 累加
+
+RTX 5090 上的 MiniMax-H3 可以通过 `fp8-f16-accum` 使用 FP8 输入和 FP16 累加。权重需要用
+`h3-fp8-f16-accum` profile 转换；普通 `fp8-sgl` checkpoint 不兼容。DiT 和 Video VAE decoder
+分别转换，profile 会独立选择使用 qmax 14 的投影层、保留其他层的标准 FP8 量化，并把策略写入
+safetensors metadata。
+
+```bash
+python tools/convert/converter.py \
+    --source /path/to/MiniMax-H3/transformer \
+    --output /path/to/h3_quantized \
+    --output_name minimax_h3_dit_fp8_f16_accum \
+    --output_ext .safetensors \
+    --model_type h3 \
+    --device cuda \
+    --quantized \
+    --bits 8 \
+    --linear_type fp8 \
+    --quantization_profile h3-fp8-f16-accum \
+    --single_file
+
+python tools/convert/converter.py \
+    --source /path/to/MiniMax-H3/vae \
+    --output /path/to/h3_quantized \
+    --output_name minimax_h3_video_vae_fp8_f16_accum \
+    --output_ext .safetensors \
+    --model_type h3_video_vae_decoder \
+    --device cuda \
+    --quantized \
+    --bits 8 \
+    --linear_type fp8 \
+    --quantization_profile h3-fp8-f16-accum \
+    --single_file
+```
+
+```json
+{
+  "dit_quantized": true,
+  "dit_quant_scheme": "fp8-f16-accum",
+  "dit_quantized_ckpt": "/path/to/minimax_h3_dit_fp8_f16_accum.safetensors",
+  "video_vae_quantized": true,
+  "video_vae_quant_scheme": "fp8-f16-accum",
+  "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_f16_accum.safetensors"
+}
+```
+
+激活按行动态量化，`scale = max(abs(x)) / qmax`。减小 qmax 会扩大 scale，从而降低 FP16
+累加器中的原始数值范围，但也会减少 FP8 有效量化级数。实测中 DiT 的 qmax 14 和 12 会在 FFN-out
+产生非有限值，qmax 7 可完成全部去噪步骤；Video VAE decoder 在 qmax 14 下保持有限且误差最小。因此
+当前 H3 策略固定使用 DiT activation qmax 7 和 Video VAE activation qmax 14，避免运行配置与
+checkpoint 的转换策略错配。
+
+DiT 仅对 Q/K/V、attention output 和 FFN projection 启用该内核，Video VAE 仅对 packed QKV、
+attention output 和 FFN projection 启用。扩展不可用或设备不是 SM120 时会回退到 `fp8-sgl`；
+DiT tensor parallel 当前也回退到 `fp8-sgl`。初始化日志会打印实际启用范围或回退原因。
+其他 pipeline 配置与该量化模式相互独立。
+
+该内核会按精确 GEMM shape 自动调优 CUTLASS tile 和 swizzle。首次遇到新 shape 时在 C++ 内遍历
+内置候选；后续调用只执行 C++ cache 查询。warmup 或请求结束后，runner 会把新增结果合并进与设备
+绑定的持久化 cache。默认路径为 `$XDG_CACHE_HOME/lightx2v/autotune/fp8_f16_accum`，未设置
+`XDG_CACHE_HOME` 时则使用 `~/.cache/lightx2v/autotune/fp8_f16_accum`。后续进程会自动加载兼容
+结果；若 warmup 覆盖正式请求的 shape，首次调优开销也会在请求前完成。高级用户可通过
+`fp8_f16_accum_autotune_cache` 指定其他 cache 文件。设备、CUDA、PyTorch 或 kernel ABI 不一致时，
+已有条目不会被复用。
 
 ### T5 模型量化
 
