@@ -122,6 +122,7 @@ class BaseTransformerModel(ABC):
             "int8-q8f",
             "int8-convrot",
             "fp8-b128-deepgemm",
+            "fp8-f16-accum",
             "fp8-sgl",
             "int8-sgl",
             "int8-torchao",
