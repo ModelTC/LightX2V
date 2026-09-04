@@ -4,43 +4,26 @@ from abc import ABC, abstractmethod
 import torch
 from loguru import logger
 
+from lightx2v.utils.registry_factory import COMPILE_BACKEND_REGISTER
+
 
 class BaseTransformerInfer(ABC):
     def init_compile(self, config):
         self.use_compile = config.get("use_compile", False)
-        # compile_backend: "default" -> plain torch.compile; "mindie" -> MindieSDBackend
         self.compile_backend = config.get("compile_backend", "default")
-        # compile_dynamic: "None" (default auto), True, or False. H3 per-step
-        # sequence is fixed, so False skips per-call shape guard checks.
-        self.compile_dynamic = config.get("compile_dynamic", None)
         self.compiled_blocks = {}
         self._compile_backend_obj = self._create_compile_backend() if self.use_compile else None
-        if self.use_compile:
+        if self._compile_backend_obj is not None:
             logger.info(f"[Compile] Using torch.compile (backend={self.compile_backend}) for {type(self).__name__}")
 
     def _create_compile_backend(self):
-        """Instantiate the configured compile backend, or None for the default.
-
-        Reuse ONE backend instance: a fresh MindieSDBackend() per call makes
-        Dynamo see a different backend callable each time (BACKEND_MATCH
-        recompilation until recompile_limit, then silent eager fallback).
-        Unknown names and unavailable optional backends degrade to the default
-        torch.compile with a warning.
-        """
-        if self.compile_backend not in ("default", "mindie"):
-            logger.warning(f"[Compile] Unknown compile_backend={self.compile_backend!r}; expected 'default' or 'mindie'. Falling back to 'default'.")
-            self.compile_backend = "default"
-            return None
+        """Create one explicitly selected platform backend for this instance."""
         if self.compile_backend == "default":
             return None
-        try:
-            from mindiesd.compilation import MindieSDBackend
-
-            return MindieSDBackend()
-        except Exception as e:  # pragma: no cover - optional dependency path
-            logger.warning(f"[Compile] MindieSDBackend unavailable ({e}); falling back to default torch.compile")
-            self.compile_backend = "default"
-            return None
+        backend_factory = COMPILE_BACKEND_REGISTER.get(self.compile_backend)
+        if backend_factory is None:
+            raise ValueError(f"Unknown compile_backend={self.compile_backend!r}; expected 'default' or a registered platform backend.")
+        return backend_factory()
 
     def get_compiled_block(self, block_idx, block):
         key = self.get_compile_block_key(block_idx, block)
@@ -51,14 +34,10 @@ class BaseTransformerInfer(ABC):
         def block_runner(*args):
             return self.infer_block(block, *args)
 
-        compile_kwargs = {}
-        if self.compile_backend == "mindie" and self._compile_backend_obj is not None:
-            compile_kwargs["backend"] = self._compile_backend_obj
-        # dynamic=False: H3 per-step sequence is fixed (9467 local); fixed-shape
-        # graphs skip Dynamo's per-call shape guard checks. Fall back to
-        # dynamic=None if the graph contains truly dynamic inputs (Sym symbols).
-        dynamic_mode = getattr(self, "compile_dynamic", None)
-        compiled = torch.compile(block_runner, dynamic=dynamic_mode, **compile_kwargs)
+        if self.compile_backend == "default":
+            compiled = torch.compile(block_runner, dynamic=None)
+        else:
+            compiled = torch.compile(block_runner, dynamic=None, backend=self._compile_backend_obj)
         self.compiled_blocks[key] = (block, compiled)
         return compiled
 

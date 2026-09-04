@@ -3,6 +3,8 @@ from functools import cache
 import torch
 import torch.distributed as dist
 
+from lightx2v.utils.registry_factory import A2A_BACKEND_REGISTER
+
 
 @cache
 def _get_round_robin_schedule(world_size, rank):
@@ -33,11 +35,7 @@ class TorchUlyssesA2A:
     """Ulysses all-to-all implemented by ``torch.distributed``."""
 
     @staticmethod
-    @torch._dynamo.disable
     def exchange(input_tensor, group=None, async_op=False):
-        # torch._dynamo.disable: keep the collective out of the compiled graph.
-        # Tracing it degrades HCCL all_to_all_single to the slow variable-length
-        # alltoallv path; running eager keeps the surrounding compute fused.
         output_tensor = torch.empty_like(input_tensor)
         work = dist.all_to_all_single(output_tensor, input_tensor, group=group, async_op=async_op)
         return output_tensor, work
@@ -79,4 +77,7 @@ def create_ulysses_a2a_backend(name):
         return TorchUlyssesA2A()
     if name == "round_robin":
         return RoundRobinUlyssesA2A()
-    raise ValueError(f"Unknown a2a_backend={name!r}; expected 'torch' or 'round_robin'.")
+    backend_type = A2A_BACKEND_REGISTER.get(name)
+    if backend_type is None:
+        raise ValueError(f"Unknown a2a_backend={name!r}; expected 'torch', 'round_robin', or a registered platform backend.")
+    return backend_type()

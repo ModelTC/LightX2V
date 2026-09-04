@@ -26,5 +26,10 @@
     "audio_latents_per_second": 40,
     "audio_channels": 2,
     "keep_latents_dtype_in_scheduler": true,
-    "parallel": {"tensor_p_size": 1, "seq_p_size": 4, "seq_p_attn_type": "ulysses"},
+    "parallel": {
+        "tensor_p_size": 1,
+        "seq_p_size": 4,
+        "seq_p_attn_type": "ulysses",
+        "seq_p_a2a_backend": "hccl_eager"
+    }
 }
