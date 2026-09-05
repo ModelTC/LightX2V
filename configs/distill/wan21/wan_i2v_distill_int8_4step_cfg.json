@@ -12,10 +12,7 @@
     "enable_cfg": false,
     "cpu_offload": false,
     "denoising_step_list": [1000, 750, 500, 250],
-    "lora_configs": [
-        {
-            "path": "/path/to/Wan2.1-Distill-Loras/wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors",
-            "strength": 1.0
-        }
-    ]
+    "dit_quantized": true,
+    "dit_quantized_ckpt": "/path/to/Wan2.1-Distill-Models/wan2.1_i2v_480p_int8_lightx2v_4step.safetensors",
+    "dit_quant_scheme": "int8-vllm"
 }
