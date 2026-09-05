@@ -14,7 +14,6 @@ torchrun --standalone --nproc_per_node=8 -m lightx2v.infer \
 --task t2av \
 --model_path ${model_path} \
 --config_json ${lightx2v_path}/configs/minimax_h3/dmd/minimax_h3_sp8_4step_5090_with_fp8_vae_sol.json \
---warmup \
 --prompt "integrated_multimodal_description: [Shot 1] Live-action wildlife cinematography, a low-angle medium-wide tracking shot follows a red fox moving purposefully through a dense, snow-covered pine forest at dawn. The camera tracks backward at moderate speed, keeping the fox’s face and amber eyes sharply focused as its paws plunge into fresh powder and scatter fine snow crystals toward the lens. Its thick red-and-white winter coat ripples naturally in the cold wind while visible breath streams from its muzzle. Pale golden sunbeams flicker rapidly across its body as it passes between dark tree trunks. The fox suddenly hears a distant cracking branch, raises its ears, turns sharply to the right, and accelerates into a sprint.
 
 [Shot 2] At 00:05.200, the camera cuts to a fast lateral tracking shot moving parallel to the sprinting fox. It weaves between closely spaced pine trunks, bounds over exposed roots, and ducks beneath a snow-laden branch. Its paws strike the ground in a rapid rhythm, throwing broad sprays of powder behind it. The disturbed branch snaps upward and releases a cascading curtain of snow as the camera passes through the falling crystals. The fox races down a short slope, briefly loses its footing in deep powder, recovers immediately, and launches toward a fallen log.

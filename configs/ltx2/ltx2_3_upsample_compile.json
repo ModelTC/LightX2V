@@ -22,5 +22,6 @@
     "use_upsampler": true,
     "upsampler_original_ckpt": "/path/to/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
     "distilled_sigma_values_upsample": [0.909375, 0.725, 0.421875, 0.0],
-    "use_compile": true
+    "use_compile": true,
+    "warmup": true
 }

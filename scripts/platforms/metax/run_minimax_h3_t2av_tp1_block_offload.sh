@@ -24,5 +24,4 @@ torchrun --standalone --nproc_per_node=1 -m lightx2v.infer \
     --config_json "${lightx2v_path}/configs/platforms/metax/minimax_h3_t2av_tp1_block_offload.json" \
     --prompt "${prompt}" \
     --save_result_path "${save_result_path}" \
-    --seed 0 \
-    --warmup
+    --seed 0
