@@ -368,3 +368,91 @@ def test_qwen3vl_release_disk_streaming_buffer_clears_device_refs(tmp_path, qwen
     assert old_layer.self_attn.q_proj.weight_cuda_buffer is None
     assert old_layer.input_layernorm.weight is None
     assert old_layer.input_layernorm.weight_cuda_buffer is None
+
+
+@pytest.mark.parametrize("mode", ["disk", "resident", "block"])
+@pytest.mark.parametrize("release_buffers", [True, False])
+@pytest.mark.parametrize("fail_forward", [False, True])
+def test_public_infer_offload_lifecycle(tmp_path, monkeypatch, qwen_module, mode, release_buffers, fail_forward):
+    from unittest.mock import Mock
+
+    # Exercise the real constructor's mode flags without needing an accelerator.
+    monkeypatch.setattr(qwen_module, "AI_DEVICE", "mps")
+    encoder = qwen_module.MiniMaxH3Qwen3VLTextEncoder(
+        {
+            "task": "t2av",
+            "text_encoder_cpu_offload": True,
+            "text_encoder_offload_granularity": "model" if mode == "resident" else "block",
+            "text_encoder_disk_streaming": mode == "disk",
+            "text_encoder_release_block_offload_buffers": release_buffers,
+            "text_encoder_load_on_init": False,
+        }
+    )
+    monkeypatch.setattr(qwen_module, "AI_DEVICE", "cpu")
+    monkeypatch.setattr(qwen_module, "MINIMAX_H3_TEXT_HIDDEN_SIZE", 8)
+    backbone = qwen_module._Qwen3VLTextBackboneWeights(
+        encoder.config, _tiny_text_config(), num_layers=2,
+        block_offload=encoder.block_offload, disk_streaming=encoder.disk_streaming,
+    )
+    encoder.text_encoder = backbone
+    encoder.tokenizer = Mock(return_value={"input_ids": [0, 1, 2]})
+    assert (encoder.cpu_offload, encoder.block_offload, encoder.disk_streaming) == (True, mode == "block", mode == "disk")
+    events = []
+
+    def layer_forward(self, hidden_states, position_embeddings):
+        events.append("layer")
+        if fail_forward and events.count("layer") == 2:
+            raise RuntimeError("injected forward failure")
+        return hidden_states + 1
+
+    monkeypatch.setattr(qwen_module._Qwen3VLDecoderLayerWeights, "forward", layer_forward)
+    if mode == "disk":
+        _, _, _, weight_map = _write_fake_checkpoint(tmp_path, backbone, qwen_module)
+        backbone.init_disk_streaming(tmp_path, weight_map)
+    else:
+        backbone.embed_tokens.weight = torch.full((32, 8), 5, dtype=torch.bfloat16)
+
+    def block_forward(input_ids, *args):
+        events.append("block")
+        if fail_forward:
+            raise RuntimeError("injected forward failure")
+        return torch.full((input_ids.numel(), 8), 7, dtype=torch.bfloat16)
+
+    monkeypatch.setattr(backbone, "_forward_with_block_offload", Mock(side_effect=block_forward))
+    for name in ("to_cuda", "to_cpu", "init_block_offload", "release_block_offload_buffers"):
+        monkeypatch.setattr(backbone, name, Mock())
+    for name in ("_forward_streaming_embedding", "load_streaming_layer", "release_disk_streaming_buffer"):
+        monkeypatch.setattr(backbone, name, Mock(wraps=getattr(backbone, name)))
+
+    prompt = "A cat walking on the grass."
+    if fail_forward:
+        with pytest.raises(RuntimeError, match="injected forward failure"):
+            encoder.infer(prompt)
+    else:
+        result = encoder.infer(prompt)
+        assert set(result) == {"prompt_embeds", "text_token_tags"}
+        embeds, tags = result["prompt_embeds"], result["text_token_tags"]
+        assert isinstance(embeds, torch.Tensor) and isinstance(tags, torch.Tensor)
+        assert embeds.shape == (3, 8) and embeds.dtype == torch.bfloat16
+        assert embeds.device.type == "cpu" and embeds.is_contiguous()
+        assert torch.isfinite(embeds).all() and torch.all(embeds == 7)
+        assert tags.shape == (3,) and tags.dtype == torch.long
+        assert tags.device == embeds.device
+        assert torch.all(tags == qwen_module.MINIMAX_H3_TEXT_TAG)
+
+    encoder.tokenizer.assert_called_once_with(prompt, add_special_tokens=False)
+    assert backbone.to_cuda.call_count == int(mode == "resident")
+    assert backbone.to_cpu.call_count == int(mode == "resident")
+    assert backbone.init_block_offload.call_count == int(mode == "block")
+    assert backbone.release_block_offload_buffers.call_count == int(mode == "block" and release_buffers)
+    assert backbone.release_disk_streaming_buffer.call_count == int(mode == "disk" and release_buffers)
+    assert backbone._forward_with_block_offload.call_count == int(mode == "block")
+    if mode == "disk":
+        backbone._forward_streaming_embedding.assert_called_once()
+        assert [call.args[0] for call in backbone.load_streaming_layer.call_args_list] == [0, 1]
+        assert (backbone.streaming_layer is None) == release_buffers
+        assert backbone.embed_tokens.weight is None
+        assert not hasattr(backbone.embed_tokens, "pin_weight")
+    else:
+        backbone._forward_streaming_embedding.assert_not_called()
+        backbone.load_streaming_layer.assert_not_called()

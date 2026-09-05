@@ -1499,7 +1499,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
                     video_grid_thw,
                 )
                 vision_mask, vision_embeds, deepstack = self._encode_vision(input_ids, pixel_values, image_grid_thw, pixel_values_videos, video_grid_thw)
-            if self.cpu_offload and not self.block_offload:
+            if self.cpu_offload and not self.block_offload and not self.disk_streaming:
                 self.text_encoder.to_cuda()
             elif self.block_offload:
                 # Recreate transient device slots if the previous request was
