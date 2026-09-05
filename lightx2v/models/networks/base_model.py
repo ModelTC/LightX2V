@@ -380,12 +380,14 @@ class BaseTransformerModel(ABC):
             lora_weight = self._load_lora_file(lora_path)
         self.pre_weight.update_lora(lora_weight, strength)
         self.transformer_weights.update_lora(lora_weight, strength)
-        self.post_weight.update_lora(lora_weight, strength)
+        if hasattr(self, "post_weight"):
+            self.post_weight.update_lora(lora_weight, strength)
 
     def _remove_lora(self):
         self.pre_weight.remove_lora()
         self.transformer_weights.remove_lora()
-        self.post_weight.remove_lora()
+        if hasattr(self, "post_weight"):
+            self.post_weight.remove_lora()
 
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         """Load a safetensors file into a dictionary.
