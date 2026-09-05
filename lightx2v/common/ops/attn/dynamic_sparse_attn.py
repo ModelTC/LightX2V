@@ -1,12 +1,12 @@
 import torch
 from loguru import logger
 
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
+from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, SPARSE_OPERATOR_REGISTER
 
 from .kernels.sla_kernel import _attention
 from .kernels.sla_kernel_ar import _attention_ar
 from .template import AttnWeightTemplate
-from .utils.sla_util import get_block_map, get_cuda_arch
+from .utils.sla_util import get_block_lut_nhd, get_block_lut_nhd_uncentered, get_block_map, get_cuda_arch
 from .utils.sla_util_blhd import get_block_map_blhd
 from .utils.sparge_util import block_map_incremental_lut_triton, block_map_ordinal_lut_triton, sage2_block_sparse_attn
 
@@ -73,11 +73,18 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         self.sparsity_ratio = float(self.config.get("sparsity_ratio", type(self).sparsity_ratio))
         self.operator = self.config.get("operator", type(self).operator)
         self.per_block_mean = bool(self.config.get("per_block_mean", type(self).per_block_mean))
+        self.force_local_blocks = int(self.config.get("force_local_blocks", 0))
+        self.operator_setting = dict(self.config.get("operator_setting", {}))
+        self.fixed_topk = self.config.get("topk")
+        if self.fixed_topk is not None:
+            self.fixed_topk = int(self.fixed_topk)
+            if self.fixed_topk <= 0:
+                raise ValueError(f"dynamic sparse attention topk must be positive, got {self.fixed_topk}")
 
         if not 0.0 <= self.sparsity_ratio < 1.0:
             raise ValueError(f"dynamic sparse attention sparsity_ratio must be in [0, 1), got {self.sparsity_ratio}")
 
-        self.arch = get_cuda_arch(torch.cuda.current_device())
+        self.arch = None
         self.topk = 1 - self.sparsity_ratio
         if self.operator == "triton":
             self.BLKQ, self.BLKK = 64, 64
@@ -86,6 +93,7 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
             self.BLKQ, self.BLKK = 128, 128
             self.apply_func = self.apply_triton_ar
         elif self.operator == "sage2":
+            self.arch = get_cuda_arch(torch.cuda.current_device())
             if self.arch == "sm90":
                 self.BLKQ, self.BLKK = 64, 128
             else:
@@ -100,6 +108,14 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         elif self.operator == "magi":
             self.BLKQ, self.BLKK = 128, 128
             self.apply_func = self.apply_magi
+        elif self.operator in SPARSE_OPERATOR_REGISTER:
+            if self.fixed_topk is not None:
+                self.operator_setting.setdefault("topk", self.fixed_topk)
+            self.sparse_operator = SPARSE_OPERATOR_REGISTER[self.operator](self.operator_setting)
+            self.fixed_topk = getattr(self.sparse_operator, "topk", self.fixed_topk)
+            self.BLKQ = self.sparse_operator.q_block_size
+            self.BLKK = self.sparse_operator.k_block_size
+            self.apply_func = self.apply_registered_operator
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
 
@@ -187,6 +203,53 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         out = dynamic_sparse_sage2(q, k, v, self.topk, self.BLKQ, self.BLKK, self.arch)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
         return out
+
+    def apply_registered_operator(
+        self,
+        q,
+        k,
+        v,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        if getattr(self.sparse_operator, "block_indices_only", False):
+            get_lut = get_block_lut_nhd if getattr(self.sparse_operator, "center_k", True) else get_block_lut_nhd_uncentered
+            block_indices, _ = get_lut(
+                q,
+                k,
+                topk_ratio=self.topk,
+                BLKQ=self.BLKQ,
+                BLKK=self.BLKK,
+                topk=self.fixed_topk,
+                force_local_blocks=self.force_local_blocks,
+            )
+            sparse_map = None
+        else:
+            q_for_mask = q.unsqueeze(0).transpose(1, 2).contiguous()
+            k_for_mask = k.unsqueeze(0).transpose(1, 2).contiguous()
+            sparse_map, block_indices, _ = get_block_map(
+                q_for_mask,
+                k_for_mask,
+                topk_ratio=self.topk,
+                BLKQ=self.BLKQ,
+                BLKK=self.BLKK,
+                topk=self.fixed_topk,
+            )
+        return self.sparse_operator(
+            q,
+            k,
+            v,
+            sparse_map,
+            block_indices=block_indices,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_kv=cu_seqlens_kv,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_kv=max_seqlen_kv,
+            **kwargs,
+        )
 
     def apply_sage3(
         self,
