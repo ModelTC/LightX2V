@@ -17,7 +17,6 @@ python -m lightx2v.infer \
 --config_json ${lightx2v_path}/configs/z_image/z_image_turbo_i2i.json \
 --image_path $image_path \
 --prompt "Change the cat to a dog." \
---negative_prompt " " \
 --save_result_path ${lightx2v_path}/save_results/z_image_turbo_i2i.png \
 --seed 42 \
 --i2i_denoise_strength 0.4
