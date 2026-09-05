@@ -146,11 +146,14 @@ class MiniMaxH3Model(BaseTransformerModel):
         if weight_dict is not None:
             raise ValueError("MiniMax-H3 dit_disk_streaming loads weights directly from the official checkpoint; explicit weight_dict is not supported.")
 
-        self.pre_weight = self.pre_weight_class(self.config)
         self.transformer_weights = self.transformer_weight_class(self.config)
+        self.pre_weight = self.pre_weight_class(self.config)
         self.post_weight = self.post_weight_class(self.config)
 
         checkpoint = self.transformer_weights.checkpoint
+        if checkpoint.selected_reader is not None:
+            checkpoint.selected_reader.load_modules([self.pre_weight, self.post_weight], device="cpu")
+            return None
         prepost_tensor_names = _collect_declared_base_tensor_names(self.pre_weight, self.post_weight)
         missing = sorted(name for name in prepost_tensor_names if name not in checkpoint.weight_map)
         if missing:
