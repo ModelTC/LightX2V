@@ -583,8 +583,6 @@ class LingbotVARunner(Wan22DenseRunner):
             self._streaming_vae_encoder.reset()
         self.scheduler.clear()
         self.action_scheduler.clear()
-        self.scheduler.generator = None
-        self.action_scheduler.generator = None
 
     def _run_pipeline_local(self):
         self.inputs = self.run_input_encoder()
