@@ -40,6 +40,7 @@ def test_mps_minimax_h3_config_enables_low_memory_streaming():
     assert config["unload_modules"] is False
     assert config["warmup"] is False
     assert config["attn_type"] == "torch_sdpa"
+    assert config["mps_sdpa_query_chunk_size"] == 512
     assert config["rms_type"] == "torch_native"
     assert config["rope_type"] == "torch_real_rope"
     assert config["vae_attn_type"] == "torch_sdpa"
