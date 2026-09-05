@@ -2,6 +2,7 @@ import gc
 import json
 import os
 import shutil
+import time
 
 import numpy as np
 import torch
@@ -11,6 +12,7 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.runners.base_runner import BaseRunner
+from lightx2v.models.runners.vae_postprocess import env_flag, should_skip_rank_postprocess, sync_device_if_available
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.global_paras import CALIB
@@ -587,8 +589,22 @@ class DefaultRunner(BaseRunner):
             self.gen_video_final = None
             return {"video": None}
 
+        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        rank0_post_only = env_flag("LIGHTX2V_VAE_RANK0_POST_ONLY", False)
+        if should_skip_rank_postprocess(self.gen_video_final, rank=rank, enabled=rank0_post_only):
+            logger.info(f"[VAE_DETAIL] rank={rank} skip postprocess for empty non-rank0 VAE payload")
+            return {"video": None}
+
+        detail_timing = env_flag("LIGHTX2V_VAE_DETAIL_TIMING", False)
+        if detail_timing:
+            sync_device_if_available()
+            post_start = time.perf_counter()
+
         with ProfilingContext4DebugL2("wan_vae_to_comfy"):
             self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
+        if detail_timing:
+            sync_device_if_available()
+            logger.info(f"[VAE_DETAIL] rank={rank} wan_vae_to_comfy_s={time.perf_counter() - post_start:.6f}")
 
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
