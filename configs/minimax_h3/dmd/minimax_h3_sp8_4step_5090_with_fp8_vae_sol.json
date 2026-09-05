@@ -36,6 +36,7 @@
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
   "use_compile": true,
+  "warmup": true,
   "use_adaln_cache": true,
   "vae_use_compile": true,
   "vae_encode_parallel": true,

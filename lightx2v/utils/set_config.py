@@ -28,6 +28,7 @@ def get_default_config():
         "seq_parallel": False,
         "cfg_parallel": False,
         "enable_cfg": False,
+        "warmup": False,
         "use_image_encoder": True,
     }
     default_config = LockableDict(default_config)

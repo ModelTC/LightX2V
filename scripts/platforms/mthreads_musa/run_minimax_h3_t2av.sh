@@ -24,4 +24,4 @@ nohup python -m lightx2v.infer \
     --prompt "$prompt" \
     --save_result_path ${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av.mp4 \
     --seed 0 \
-    --warmup > ${lightx2v_path}/save_results/minimax_h3_t2av_768p_362_1gpu_tp1-a.log 2>&1 &
+     > ${lightx2v_path}/save_results/minimax_h3_t2av_768p_362_1gpu_tp1-a.log 2>&1 &
