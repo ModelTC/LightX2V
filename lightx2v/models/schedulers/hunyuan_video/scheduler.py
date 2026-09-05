@@ -1,7 +1,6 @@
 import torch
 import torch.distributed as dist
 from einops import rearrange
-from loguru import logger
 from torch.nn import functional as F
 
 from lightx2v.models.networks.hunyuan_video.infer.posemb_layers import get_nd_rotary_pos_embed
@@ -51,10 +50,7 @@ class HunyuanVideo15Scheduler(BaseScheduler):
         self.cond_latents_concat, self.mask_concat = self._prepare_cond_latents_and_mask(self.config["task"], image_encoder_output["cond_latents"], self.latents, self.multitask_mask, self.reorg_token)
 
     def prepare_latents(self, seed, latent_shape, dtype=torch.bfloat16):
-        if self.generator is None:
-            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
-        else:
-            logger.info(f"Generator is not None, using existing generator for latents")
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(
             1,
             latent_shape[0],
@@ -177,10 +173,7 @@ class HunyuanVideo15SRScheduler(HunyuanVideo15Scheduler):
         self.zero_condition = zero_condition
 
     def prepare_latents(self, seed, latent_shape, lq_latents, dtype=torch.bfloat16):
-        if self.generator is None:
-            self.generator = torch.Generator(device=lq_latents.device).manual_seed(seed)
-        else:
-            logger.info(f"Generator is not None, using existing generator for latents")
+        self.generator = torch.Generator(device=lq_latents.device).manual_seed(seed)
         self.latents = torch.randn(
             1,
             latent_shape[0],
