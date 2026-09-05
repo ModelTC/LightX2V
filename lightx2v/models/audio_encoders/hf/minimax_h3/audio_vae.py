@@ -33,6 +33,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import weight_norm
+from torch.nn.utils.weight_norm import WeightNorm
 
 from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     SafetensorsSubsetReport,
@@ -497,8 +498,21 @@ class MiniMaxH3AudioVAE(nn.Module):
 
     def offload(self) -> None:
         self.to("cpu")
+        self._clear_weight_norm_derived_tensors()
         _empty_device_cache(self.execution_device)
         gc.collect()
+
+    def _clear_weight_norm_derived_tensors(self) -> None:
+        # Module.to() only moves registered parameters/buffers. Legacy
+        # WeightNorm leaves its computed weight as an ordinary tensor attribute.
+        # Its pre-hook recreates that attribute from weight_g/weight_v before
+        # every forward, so dropping it preserves both math and checkpoint keys.
+        for module in self.modules():
+            for hook in module._forward_pre_hooks.values():
+                if isinstance(hook, WeightNorm):
+                    name = hook.name
+                    if name not in module._parameters and name not in module._buffers and isinstance(vars(module).get(name), torch.Tensor):
+                        delattr(module, name)
 
     def _prepare_stereo_latents(
         self,
