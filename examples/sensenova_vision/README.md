@@ -202,7 +202,6 @@ For a direct JSON request, the key fields are:
   "images": ["<base64, URL, or server-local path>"],
   "prompt": "",
   "seed": 42,
-  "target_shape": [],
   "visualize": true,
   "postprocess_3d": false
 }
