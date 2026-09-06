@@ -69,22 +69,14 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
     per_block_mean = False
 
     def __init__(self, config=None):
-        self.config = dict(config or {})
-        self.sparsity_ratio = float(self.config.get("sparsity_ratio", type(self).sparsity_ratio))
-        self.operator = self.config.get("operator", type(self).operator)
-        self.per_block_mean = bool(self.config.get("per_block_mean", type(self).per_block_mean))
-        self.force_local_blocks = int(self.config.get("force_local_blocks", 0))
-        self.operator_setting = dict(self.config.get("operator_setting", {}))
-        self.fixed_topk = self.config.get("topk")
-        if self.fixed_topk is not None:
-            self.fixed_topk = int(self.fixed_topk)
-            if self.fixed_topk <= 0:
-                raise ValueError(f"dynamic sparse attention topk must be positive, got {self.fixed_topk}")
+        config = config or {}
+        self.sparsity_ratio = config.get("sparsity_ratio", type(self).sparsity_ratio)
+        self.operator = config.get("operator", type(self).operator)
+        self.per_block_mean = config.get("per_block_mean", type(self).per_block_mean)
 
         if not 0.0 <= self.sparsity_ratio < 1.0:
             raise ValueError(f"dynamic sparse attention sparsity_ratio must be in [0, 1), got {self.sparsity_ratio}")
 
-        self.arch = None
         self.topk = 1 - self.sparsity_ratio
         if self.operator == "triton":
             self.BLKQ, self.BLKK = 64, 64
@@ -109,17 +101,21 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
             self.BLKQ, self.BLKK = 128, 128
             self.apply_func = self.apply_magi
         elif self.operator in SPARSE_OPERATOR_REGISTER:
+            self.fixed_topk = config.get("topk")
+            if self.fixed_topk is not None and self.fixed_topk <= 0:
+                raise ValueError(f"dynamic sparse attention topk must be positive, got {self.fixed_topk}")
+
+            operator_setting = config.get("operator_setting", {}).copy()
             if self.fixed_topk is not None:
-                self.operator_setting.setdefault("topk", self.fixed_topk)
-            self.sparse_operator = SPARSE_OPERATOR_REGISTER[self.operator](self.operator_setting)
+                operator_setting.setdefault("topk", self.fixed_topk)
+            self.sparse_operator = SPARSE_OPERATOR_REGISTER[self.operator](operator_setting)
             self.fixed_topk = getattr(self.sparse_operator, "topk", self.fixed_topk)
+            self.force_local_blocks = config.get("force_local_blocks", 0)
             self.BLKQ = self.sparse_operator.q_block_size
             self.BLKK = self.sparse_operator.k_block_size
             self.apply_func = self.apply_registered_operator
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
-
-        # logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
 
     def apply(
         self,
@@ -267,7 +263,7 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         k = k.unsqueeze(0).transpose(1, 2).contiguous()
         v = v.unsqueeze(0).transpose(1, 2).contiguous()
 
-        sparse_map, lut, real_topk = get_block_map(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
+        sparse_map, _, _ = get_block_map(q, k, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
         lut, valid_block_num = block_map_ordinal_lut_triton(sparse_map)
         out = sage3_block_sparse_attn(q, k, v, lut, valid_block_num, per_block_mean=self.per_block_mean)
         out = out.transpose(1, 2).reshape(max_seqlen_q, -1)
@@ -287,7 +283,7 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         # (L, H, D) -> (B, L, H, D)
         qt = q.unsqueeze(0).transpose(1, 2).contiguous()
         kt = k.unsqueeze(0).transpose(1, 2).contiguous()
-        sparse_map, lut, real_topk = get_block_map(qt, kt, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
+        sparse_map, _, _ = get_block_map(qt, kt, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
 
         # (L, H, D) -> (B, L, H, D)
         q = q.unsqueeze(0)
@@ -331,7 +327,7 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         q_block_map = q_block_map.contiguous()
         k_block_map = k_block_map.contiguous()
 
-        sparse_map, lut, real_topk = get_block_map(q_block_map, k_block_map, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
+        sparse_map, _, _ = get_block_map(q_block_map, k_block_map, topk_ratio=self.topk, BLKQ=self.BLKQ, BLKK=self.BLKK)
         seqlen, head_num, head_dim = q.shape
 
         q_ranges, k_ranges = self.generate_qk_ranges(sparse_map[0], self.BLKQ, self.BLKK, seqlen)

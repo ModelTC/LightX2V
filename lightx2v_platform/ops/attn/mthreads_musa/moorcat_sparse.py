@@ -1,7 +1,3 @@
-from __future__ import annotations
-
-import math
-
 import torch
 from loguru import logger
 
@@ -19,24 +15,13 @@ _RUNTIME_CACHE = {}
 _VALIDATED_CONTRACTS = set()
 
 
-def _runtime_tensors(
-    q: torch.Tensor,
-    seq_len: int,
-    heads: int,
-    q_blocks: int,
-    topk: int,
-):
+def _runtime_tensors(q: torch.Tensor, seq_len: int, heads: int, q_blocks: int, topk: int):
     key = (q.device, seq_len, heads, q_blocks, topk)
     cached = _RUNTIME_CACHE.get(key)
     if cached is None:
         cached = (
             torch.arange(1, heads + 1, dtype=torch.int32, device=q.device),
-            torch.full(
-                (1, heads, q_blocks),
-                topk,
-                dtype=torch.int32,
-                device=q.device,
-            ),
+            torch.full((1, heads, q_blocks), topk, dtype=torch.int32, device=q.device),
             torch.tensor([0, seq_len], dtype=torch.int32, device=q.device),
         )
         _RUNTIME_CACHE[key] = cached
@@ -52,18 +37,18 @@ def _validate_lut_once(
     topk: int,
 ) -> None:
     expected = (1, heads, q_blocks, topk)
-    if tuple(block_indices.shape) != expected:
-        raise ValueError(f"Moorcat Q128 LUT must have shape {expected}, got {tuple(block_indices.shape)}")
+    if block_indices.shape != expected:
+        raise ValueError(f"expected LUT shape {expected}, got {tuple(block_indices.shape)}")
     contract = (expected, kv_blocks, block_indices.device)
     if contract in _VALIDATED_CONTRACTS:
         return
     min_index = int(block_indices.min().item())
     max_index = int(block_indices.max().item())
     if min_index < 0 or max_index >= kv_blocks:
-        raise ValueError(f"Moorcat Q128 LUT indices must be in [0, {kv_blocks}), got [{min_index}, {max_index}]")
+        raise ValueError(f"LUT index range [{min_index}, {max_index}] exceeds [0, {kv_blocks})")
     ordered = torch.sort(block_indices, dim=-1).values
     if not bool(torch.all(ordered[..., 1:] != ordered[..., :-1]).item()):
-        raise ValueError("Moorcat Q128 LUT rows must contain distinct K blocks")
+        raise ValueError("LUT rows must not contain duplicate K blocks")
     _VALIDATED_CONTRACTS.add(contract)
 
 
@@ -81,12 +66,9 @@ def musa_moorcat_sparse(
     softmax_scale: float,
     validate_lut: bool,
 ) -> torch.Tensor:
-    if _blocksparse is None:
-        raise RuntimeError("Moorcat is not importable. Install the Moorcat package supplied with the official MUSA SGL image.")
-
     seq_len, heads, _ = q.shape
-    q_blocks = math.ceil(seq_len / _BLOCK_SIZE)
-    kv_blocks = math.ceil(k.shape[0] / _BLOCK_SIZE)
+    q_blocks = (seq_len + _BLOCK_SIZE - 1) // _BLOCK_SIZE
+    kv_blocks = (k.shape[0] + _BLOCK_SIZE - 1) // _BLOCK_SIZE
     if validate_lut:
         _validate_lut_once(
             block_indices,
@@ -144,13 +126,12 @@ class MusaMoorcatSparseOperator:
     k_block_size = _BLOCK_SIZE
     block_indices_only = True
 
-    def __init__(self, operator_setting=None):
-        setting = dict(operator_setting or {})
-        self.topk = int(setting.get("topk", 16))
-        self.center_k = bool(setting.get("center_k", True))
-        self.validate_lut = bool(setting.get("validate_lut", setting.get("validate_mask", True)))
-        if self.topk <= 0:
-            raise ValueError(f"Moorcat topk must be positive, got {self.topk}")
+    def __init__(self, operator_setting):
+        if _blocksparse is None:
+            raise RuntimeError("Moorcat blocksparse extension is unavailable")
+        self.topk = operator_setting.get("topk", 16)
+        self.center_k = operator_setting.get("center_k", True)
+        self.validate_lut = operator_setting.get("validate_lut", operator_setting.get("validate_mask", True))
 
     @torch.compiler.disable
     def __call__(
@@ -166,25 +147,6 @@ class MusaMoorcatSparseOperator:
         max_seqlen_kv=None,
         **kwargs,
     ):
-        if _blocksparse is None:
-            raise RuntimeError("The official Moorcat binary is unavailable. Install the Moorcat package supplied with the official MUSA SGL image.")
-        if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
-            raise ValueError("Moorcat requires flattened [tokens, heads, head_dim] Q/K/V")
-        if q.shape != k.shape or q.shape != v.shape:
-            raise ValueError(f"Moorcat supports self-attention only, got q={tuple(q.shape)}, k={tuple(k.shape)}, v={tuple(v.shape)}")
-        if q.dtype != torch.bfloat16 or k.dtype != q.dtype or v.dtype != q.dtype:
-            raise ValueError("Moorcat requires BF16 Q/K/V")
-        if q.shape[-1] != 128:
-            raise ValueError(f"Moorcat requires head_dim=128, got {q.shape[-1]}")
-        if bool(kwargs.get("causal", False)):
-            raise ValueError("Moorcat supports non-causal attention only")
-        if cu_seqlens_q is not None and cu_seqlens_q.numel() != 2:
-            raise ValueError("Moorcat supports one packed sequence only")
-        if cu_seqlens_kv is not None and cu_seqlens_kv.numel() != 2:
-            raise ValueError("Moorcat supports one packed sequence only")
-        if block_indices is None:
-            raise ValueError("Moorcat requires Q128/K128 block indices")
-
         softmax_scale = kwargs.get("softmax_scale")
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** -0.5
