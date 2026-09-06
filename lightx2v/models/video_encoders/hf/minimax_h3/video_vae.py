@@ -48,7 +48,6 @@ from loguru import logger
 from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
     apply_vae_rope_sglang,
     apply_vae_silu_mul_sglang,
-    configure_sglang_fused_ops,
     prepare_vae_rope_sglang,
     scaled_residual_add_vae_sglang,
 )
@@ -988,7 +987,6 @@ class MiniMaxH3VideoVAE(nn.Module):
         attn_type: str = "torch_sdpa",
         encode_fp32: bool = False,
         sglang_parity_ops: bool = False,
-        sglang_root: str | None = None,
     ) -> "MiniMaxH3VideoVAE":
         vae_dir = _component_dir(model_path, "vae")
         if (checkpoint_path is None) != (quant_scheme is None):
@@ -996,9 +994,6 @@ class MiniMaxH3VideoVAE(nn.Module):
         weight_path = checkpoint_path if checkpoint_path is not None else vae_dir
         with (vae_dir / "config.json").open("r", encoding="utf-8") as handle:
             config = json.load(handle)
-        if sglang_parity_ops:
-            configure_sglang_fused_ops(sglang_root)
-
         # The released decoder is several GiB.  Constructing it on meta avoids
         # allocating and then immediately overwriting random initialized weights.
         with torch.device("meta"):

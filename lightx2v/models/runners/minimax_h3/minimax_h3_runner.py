@@ -278,7 +278,6 @@ class MiniMaxH3Runner(DefaultRunner):
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
             encode_fp32=self.config.get("vae_encode_fp32", False),
             sglang_parity_ops=self.config.get("h3_sglang_parity_ops", False),
-            sglang_root=self.config.get("h3_sglang_root"),
         )
         self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
         self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
@@ -710,7 +709,6 @@ class MiniMaxH3Runner(DefaultRunner):
                         fps=int(self.config.get("fps", 24)),
                         audio=audio,
                         output_path=output_path,
-                        ffmpeg_exe=self.config["sglang_ffmpeg_path"],
                         crf=self.config.get("sglang_export_crf", 25),
                         threads=self.config.get("sglang_export_threads", 24),
                     )

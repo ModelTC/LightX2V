@@ -7,7 +7,6 @@ from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adal
 from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
     apply_mlp_sglang,
     apply_qk_norm_rope_sglang,
-    configure_sglang_fused_ops,
     indexed_gate_sglang,
     indexed_scale_shift_sglang,
 )
@@ -43,7 +42,6 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
                 raise NotImplementedError("MiniMax-H3 SGLang parity ops currently require resident DiT weights")
             if config.get("use_compile", False):
                 raise NotImplementedError("MiniMax-H3 SGLang parity ops currently require use_compile=false")
-            configure_sglang_fused_ops(config["h3_sglang_root"])
         if config.get("seq_parallel", False):
             self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
             parallel = config.get("parallel", {})

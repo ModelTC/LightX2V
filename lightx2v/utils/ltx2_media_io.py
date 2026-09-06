@@ -1,5 +1,6 @@
 import logging
 import math
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Generator, Iterator, Mapping
@@ -8,6 +9,7 @@ from io import BytesIO
 from pathlib import Path
 
 import av
+import imageio_ffmpeg
 import numpy as np
 import torch
 from PIL import ExifTags, Image, ImageCms
@@ -281,15 +283,22 @@ def encode_video_sglang_compatible(
     audio: Audio,
     output_path: str,
     *,
-    ffmpeg_exe: str,
+    ffmpeg_exe: str | None = None,
     crf: int = 25,
     threads: int = 24,
 ) -> None:
     if video.ndim != 4 or video.shape[-1] != 3 or video.dtype != torch.uint8:
         raise ValueError(f"Expected uint8 video [frames,height,width,3], got {tuple(video.shape)} {video.dtype}")
     _, height, width, _ = video.shape
-    if not Path(ffmpeg_exe).is_file():
-        raise FileNotFoundError(f"SGLang-compatible ffmpeg was not found: {ffmpeg_exe}")
+    if ffmpeg_exe is None:
+        try:
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        except RuntimeError:
+            ffmpeg_exe = shutil.which("ffmpeg")
+    resolved_ffmpeg = str(Path(ffmpeg_exe).resolve()) if ffmpeg_exe and Path(ffmpeg_exe).is_file() else shutil.which(ffmpeg_exe or "")
+    if resolved_ffmpeg is None:
+        raise FileNotFoundError(f"SGLang-compatible ffmpeg was not found: {ffmpeg_exe!r}")
+    ffmpeg_exe = resolved_ffmpeg
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     from scipy.io import wavfile
