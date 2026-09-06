@@ -57,6 +57,21 @@ def validate_model_task_args(args):
             raise ValueError("--omni_vision_subtask is only valid with --task omni_vision_task")
 
 
+def validate_thor_config(config):
+    thor = config.get("thor", False)
+    if not isinstance(thor, bool):
+        raise TypeError("thor must be a boolean")
+    if not thor:
+        return
+
+    if config.get("model_cls") != "wan2.2_moe":
+        raise ValueError("thor=true only supports model_cls='wan2.2_moe'")
+    if config.get("task") not in ("i2v", "t2v"):
+        raise ValueError("thor=true only supports task='i2v' or 't2v'")
+    if config.get("dit_quant_scheme") != "nvfp4":
+        raise ValueError("thor=true requires dit_quant_scheme='nvfp4'")
+
+
 def set_args2config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items() if k not in ALL_INPUT_INFO_KEYS and v is not None})
@@ -398,6 +413,7 @@ def auto_calc_config(config):
         config["sound_sampling_rate"] = int(sound_config.get("sampling_rate", 48000))
         config["sound_hop_size"] = int(sound_config.get("hop_size", 1920))
 
+    validate_thor_config(config)
     return config
 
 

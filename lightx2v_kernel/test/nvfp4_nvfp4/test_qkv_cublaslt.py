@@ -1,0 +1,54 @@
+import torch
+from lightx2v_kernel.gemm import (
+    cublaslt_scaled_nvfp4_mm_bias,
+    cutlass_scaled_nvfp4_mm,
+    scaled_nvfp4_quant,
+)
+
+FLOAT4_E2M1_MAX = 6.0
+FLOAT8_E4M3_MAX = torch.finfo(torch.float8_e4m3fn).max
+
+
+@torch.inference_mode()
+def test_cublaslt_qkv_projection_matches_cutlass_with_auto_algorithm():
+    torch.manual_seed(0)
+    m, n, k = 257, 512, 512
+    activation = torch.randn((m, k), dtype=torch.bfloat16, device="cuda")
+    weight = torch.randn((n, k), dtype=torch.bfloat16, device="cuda")
+    bias = torch.randn((n,), dtype=torch.bfloat16, device="cuda")
+
+    activation_global_scale = (
+        (FLOAT8_E4M3_MAX * FLOAT4_E2M1_MAX) / activation.abs().max()
+    ).float()
+    weight_global_scale = (
+        (FLOAT8_E4M3_MAX * FLOAT4_E2M1_MAX) / weight.abs().max()
+    ).float()
+    activation_fp4, activation_scale = scaled_nvfp4_quant(
+        activation,
+        activation_global_scale,
+    )
+    weight_fp4, weight_scale = scaled_nvfp4_quant(
+        weight,
+        weight_global_scale,
+    )
+    alpha = 1.0 / (activation_global_scale * weight_global_scale)
+
+    expected = cutlass_scaled_nvfp4_mm(
+        activation_fp4,
+        weight_fp4,
+        activation_scale,
+        weight_scale,
+        alpha,
+        bias,
+    )
+    actual = cublaslt_scaled_nvfp4_mm_bias(
+        activation_fp4,
+        weight_fp4,
+        activation_scale,
+        weight_scale,
+        alpha,
+        bias,
+        algorithm_index=-1,
+    )
+
+    torch.testing.assert_close(actual, expected, atol=1e-1, rtol=1e-1)

@@ -22,11 +22,20 @@ except ImportError:
 
 try:
     from flash_attn.cute import flash_attn_func as flash_attn_func_v4
-    from flash_attn.cute.block_sparsity import BlockSparseTensorsTorch
 except (ImportError, AttributeError) as exc:
-    logger.info(f"FlashAttention 4 is unavailable: {exc}")
+    logger.info(f"FlashAttention 4 dense attention is unavailable: {exc}")
     flash_attn_func_v4 = None
+
+try:
+    from flash_attn.cute.block_sparsity import BlockSparseTensorsTorch
+except (ImportError, AttributeError):
     BlockSparseTensorsTorch = None
+
+try:
+    from flash_attn.cute import flash_attn_varlen_func as flash_attn_varlen_func_v4
+except (ImportError, AttributeError) as exc:
+    logger.info(f"FlashAttention 4 varlen attention is unavailable: {exc}")
+    flash_attn_varlen_func_v4 = None
 
 
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
@@ -200,19 +209,42 @@ class FlashAttn4Weight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
-        if len(q.shape) == 3:
-            bs = 1
-            q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
-        elif len(q.shape) == 4:
-            bs = q.shape[0]
-        assert bs == 1, "flash_attn4 doesn't support flash_attn_varlen_func now. Just use it for batchsize = 1 for sure."
-        x, _ = flash_attn_func_v4(
-            q,
-            k,
-            v,
-        )
-        x = x.reshape(bs * max_seqlen_q, -1)
-        return x
+        if q.ndim not in (3, 4):
+            raise ValueError(f"flash_attn4 expects a 3D or 4D tensor, got shape {tuple(q.shape)}")
+        if (cu_seqlens_q is None) != (cu_seqlens_kv is None):
+            raise ValueError("flash_attn4 requires both cu_seqlens_q and cu_seqlens_kv")
+
+        total_seqlen = q.shape[0] if q.ndim == 3 else q.shape[0] * q.shape[1]
+        single_sequence = cu_seqlens_q is None and (q.ndim == 3 or q.shape[0] == 1)
+        if single_sequence and flash_attn_func_v4 is not None:
+            if q.ndim == 3:
+                q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
+            x, _ = flash_attn_func_v4(q, k, v, softmax_scale=kwargs.get("softmax_scale"), causal=kwargs.get("causal", False))
+        else:
+            if flash_attn_varlen_func_v4 is None:
+                raise RuntimeError("flash_attn4 requires flash_attn.cute.flash_attn_varlen_func for this input")
+            if cu_seqlens_q is None:
+                raise ValueError("flash_attn4 varlen requires cu_seqlens_q and cu_seqlens_kv")
+            if q.ndim == 4:
+                q = q.reshape(-1, q.shape[-2], q.shape[-1])
+                k = k.reshape(-1, k.shape[-2], k.shape[-1])
+                v = v.reshape(-1, v.shape[-2], v.shape[-1])
+            if cu_seqlens_q.is_cpu:
+                cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
+            if cu_seqlens_kv.is_cpu:
+                cu_seqlens_kv = cu_seqlens_kv.to(k.device, non_blocking=True)
+            x, _ = flash_attn_varlen_func_v4(
+                q,
+                k,
+                v,
+                cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_kv,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_kv,
+                softmax_scale=kwargs.get("softmax_scale"),
+                causal=kwargs.get("causal", False),
+            )
+        return x.reshape(total_seqlen, -1)
 
 
 @ATTN_WEIGHT_REGISTER("spas_flash_attn4")
@@ -236,6 +268,8 @@ class SparseFlashAttn4Weight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        if flash_attn_func_v4 is None:
+            raise RuntimeError("spas_flash_attn4 is not available: could not import flash_attn.cute.flash_attn_func. Install FlashAttention-4 first.")
         if len(q.shape) == 3:
             bs = 1
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)

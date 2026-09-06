@@ -17,7 +17,7 @@ from utils.model_utils import cleanup_memory, extract_op_name, get_model_configs
 from utils.ui_builder import build_ui, generate_unique_filename, get_auto_config_dict
 
 from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
-from lightx2v.utils.set_config import get_default_config
+from lightx2v.utils.set_config import get_default_config, validate_thor_config
 
 warnings.filterwarnings("ignore", category=UserWarning, module="huggingface_hub")
 warnings.filterwarnings("ignore", category=UserWarning, module="huggingface_hub.utils")
@@ -230,6 +230,7 @@ def run_inference(
     if config.get("lora_configs"):
         config["lora_dynamic_apply"] = True
 
+    validate_thor_config(config)
     logger.info(f"Using model: {model_path}")
     logger.info(f"Inference config:\n{json.dumps(config, indent=4, ensure_ascii=False)}")
 

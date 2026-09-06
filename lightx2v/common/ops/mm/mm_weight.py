@@ -31,17 +31,28 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
     from lightx2v_kernel.gemm import (
+        cublaslt_scaled_nvfp4_mm_bias,
         cutlass_scaled_mxfp4_mm,
         cutlass_scaled_mxfp6_mxfp8_mm,
         cutlass_scaled_mxfp8_mm,
         cutlass_scaled_nvfp4_mm,
+        cutlass_scaled_nvfp4_mm_split_n_stride,
+        cutlass_scaled_nvfp4_mm_split_n_stride_gelu,
+        cutlass_scaled_nvfp4_mm_split_n_stride_residual_gate,
         scaled_mxfp4_quant,
         scaled_mxfp6_quant,
         scaled_mxfp8_quant,
         scaled_nvfp4_quant,
     )
 except ImportError:
-    scaled_nvfp4_quant, cutlass_scaled_nvfp4_mm = None, None
+    (
+        scaled_nvfp4_quant,
+        cutlass_scaled_nvfp4_mm,
+        cutlass_scaled_nvfp4_mm_split_n_stride,
+        cutlass_scaled_nvfp4_mm_split_n_stride_gelu,
+        cutlass_scaled_nvfp4_mm_split_n_stride_residual_gate,
+        cublaslt_scaled_nvfp4_mm_bias,
+    ) = None, None, None, None, None, None
     scaled_mxfp4_quant, cutlass_scaled_mxfp4_mm = None, None
     scaled_mxfp6_quant, cutlass_scaled_mxfp6_mxfp8_mm = None, None
     scaled_mxfp8_quant, cutlass_scaled_mxfp8_mm = None, None
@@ -61,6 +72,7 @@ try:
     import sgl_kernel
 except ImportError:
     sgl_kernel = None
+
 
 try:
     import comfy_kitchen
@@ -1247,6 +1259,35 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
         )
         return output_tensor
 
+    def apply_quantized(self, input_tensor_quant, input_tensor_scale):
+        return cutlass_scaled_nvfp4_mm(
+            input_tensor_quant,
+            self.weight,
+            input_tensor_scale,
+            self.weight_scale,
+            alpha=self.alpha,
+            bias=self.bias,
+        )
+
+    def apply_quantized_cublaslt(self, input_tensor_quant, input_tensor_scale, algorithm_index=-1):
+        return cublaslt_scaled_nvfp4_mm_bias(
+            input_tensor_quant,
+            self.weight,
+            input_tensor_scale,
+            self.weight_scale,
+            alpha=self.alpha,
+            bias=self.bias,
+            algorithm_index=algorithm_index,
+        )
+
+    def apply_cublaslt(self, input_tensor, algorithm_index=-1):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        return self.apply_quantized_cublaslt(
+            input_tensor_quant,
+            input_tensor_scale,
+            algorithm_index,
+        )
+
     def to_cuda(self, non_blocking=False):
         self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
         if hasattr(self, "pin_weight_scale"):
@@ -1329,6 +1370,84 @@ class MMWeightWnvfp4Anvfp4dynamic(MMWeightQuantTemplate):
             weight_scale_tensor = lazy_load_file.get_tensor(self.weight_scale_name)
             self.pin_weight_scale = self.pin_weight_scale.copy_(weight_scale_tensor)
             del weight_scale_tensor
+
+
+@MM_WEIGHT_REGISTER("nvfp4-split-n-stride-workaround")
+class MMWeightWnvfp4Anvfp4dynamicSplitNStrideWorkaround(MMWeightWnvfp4Anvfp4dynamic):
+    """Represent N shards as batches in one strided CUTLASS GEMM.
+
+    The activation is quantized once and the complete weight and scale tensors
+    are passed to the backend. A and its scales are broadcast across batches;
+    weight, weight scales, bias, and output columns advance by batch stride.
+    """
+
+    def __init__(
+        self,
+        weight_name,
+        bias_name,
+        create_cuda_buffer=False,
+        create_cpu_buffer=False,
+        lazy_load=False,
+        lazy_load_file=None,
+        is_post_adapter=False,
+        lora_prefix="diffusion_model.blocks",
+        lora_path="",
+        split_n_parts=2,
+    ):
+        super().__init__(
+            weight_name,
+            bias_name,
+            create_cuda_buffer,
+            create_cpu_buffer,
+            lazy_load,
+            lazy_load_file,
+            is_post_adapter,
+            lora_prefix=lora_prefix,
+            lora_path=lora_path,
+        )
+        if isinstance(split_n_parts, bool) or not isinstance(split_n_parts, int):
+            raise TypeError("split_n_parts must be an integer")
+        if split_n_parts < 2:
+            raise ValueError("split_n_parts must be at least 2 for the split-N weight type")
+        self.split_n_parts = split_n_parts
+
+    def apply(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        return cutlass_scaled_nvfp4_mm_split_n_stride(
+            input_tensor_quant,
+            self.weight,
+            input_tensor_scale,
+            self.weight_scale,
+            alpha=self.alpha,
+            bias=self.bias,
+            split_n_parts=self.split_n_parts,
+        )
+
+    def apply_gelu(self, input_tensor):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        return cutlass_scaled_nvfp4_mm_split_n_stride_gelu(
+            input_tensor_quant,
+            self.weight,
+            input_tensor_scale,
+            self.weight_scale,
+            alpha=self.alpha,
+            bias=self.bias,
+            split_n_parts=self.split_n_parts,
+        )
+
+    def apply_residual_gate(self, input_tensor, residual, gate):
+        input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        return cutlass_scaled_nvfp4_mm_split_n_stride_residual_gate(
+            input_tensor_quant,
+            self.weight,
+            input_tensor_scale,
+            self.weight_scale,
+            alpha=self.alpha,
+            residual=residual,
+            gate=gate,
+            bias=self.bias,
+            split_n_parts=self.split_n_parts,
+        )
 
 
 @MM_WEIGHT_REGISTER("nvfp4-split-n-workaround")
@@ -2592,6 +2711,7 @@ class MMWeightTP(MMWeightTemplate):
         lora_path="",
         reduce_output=True,
         lora_column_chunks=1,
+        mm_kwargs=None,
     ):
         super().__init__(
             weight_name,
@@ -2623,6 +2743,7 @@ class MMWeightTP(MMWeightTemplate):
             is_post_adapter=is_post_adapter,
             lora_prefix=lora_prefix,
             lora_path=lora_path,
+            **(mm_kwargs or {}),
         )
         self._row_split_bias = None
 
