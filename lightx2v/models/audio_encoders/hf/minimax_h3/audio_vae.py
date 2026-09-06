@@ -26,7 +26,7 @@ from __future__ import annotations
 import gc
 import json
 import math
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import torch
@@ -47,6 +47,33 @@ def _empty_device_cache(device: torch.device) -> None:
         backend.empty_cache()
 
 
+@contextmanager
+def _deterministic_audio_decode_context(device: torch.device):
+    if device.type != "cuda":
+        yield
+        return
+    backends = torch.backends
+    previous = (
+        backends.cudnn.allow_tf32,
+        backends.cuda.matmul.allow_tf32,
+        backends.cudnn.deterministic,
+        backends.cudnn.benchmark,
+    )
+    backends.cudnn.allow_tf32 = False
+    backends.cuda.matmul.allow_tf32 = False
+    backends.cudnn.deterministic = True
+    backends.cudnn.benchmark = False
+    try:
+        yield
+    finally:
+        (
+            backends.cudnn.allow_tf32,
+            backends.cuda.matmul.allow_tf32,
+            backends.cudnn.deterministic,
+            backends.cudnn.benchmark,
+        ) = previous
+
+
 def _component_dir(model_path: str | Path, component: str) -> Path:
     model_path = Path(model_path)
     nested = model_path / component
@@ -60,6 +87,14 @@ def _component_dir(model_path: str | Path, component: str) -> Path:
 def _wn_conv1d(*args, **kwargs) -> nn.Module:
     # The original checkpoint uses the legacy weight_g/weight_v spelling.
     return weight_norm(nn.Conv1d(*args, **kwargs))
+
+
+@torch.jit.script
+def _snakebeta(hidden_states: torch.Tensor, alpha: torch.Tensor, beta: torch.Tensor) -> torch.Tensor:
+    shape = hidden_states.shape
+    hidden_states = hidden_states.reshape(shape[0], shape[1], -1)
+    hidden_states = hidden_states + (beta + 1e-9).reciprocal() * torch.sin(alpha * hidden_states).pow(2)
+    return hidden_states.reshape(shape)
 
 
 def kaiser_sinc_filter1d(cutoff: float, half_width: float, kernel_size: int) -> torch.Tensor:
@@ -93,7 +128,7 @@ class MiniMaxH3AudioSnakeBeta(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         alpha = torch.exp(self.alpha.unsqueeze(0).unsqueeze(-1))
         beta = torch.exp(self.beta.unsqueeze(0).unsqueeze(-1))
-        return hidden_states + (beta + 1e-9).reciprocal() * torch.sin(alpha * hidden_states).pow(2)
+        return _snakebeta(hidden_states, alpha, beta)
 
 
 class MiniMaxH3AudioSnake1d(nn.Module):
@@ -537,7 +572,7 @@ class MiniMaxH3AudioVAE(nn.Module):
             # Disable an ambient CUDA autocast: the released DAC/BigVGAN weights
             # and arithmetic stay FP32 (BF16 decodes are roughly 20 dB quieter).
             autocast_context = torch.autocast(device_type="cuda", enabled=False) if device.type == "cuda" else nullcontext()
-            with torch.no_grad(), autocast_context:
+            with torch.no_grad(), _deterministic_audio_decode_context(device), autocast_context:
                 decoded = self.decoder(self.dec_in_proj(latents)).float()
 
             if stereo_groups is not None:

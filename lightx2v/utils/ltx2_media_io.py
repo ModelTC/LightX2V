@@ -1,5 +1,7 @@
 import logging
 import math
+import subprocess
+import tempfile
 from collections.abc import Generator, Iterator, Mapping
 from fractions import Fraction
 from io import BytesIO
@@ -271,6 +273,82 @@ def encode_video(
 
     container.close()
     logger.info(f"Video saved to {output_path}")
+
+
+def encode_video_sglang_compatible(
+    video: torch.Tensor,
+    fps: int,
+    audio: Audio,
+    output_path: str,
+    *,
+    ffmpeg_exe: str,
+    crf: int = 25,
+    threads: int = 24,
+) -> None:
+    if video.ndim != 4 or video.shape[-1] != 3 or video.dtype != torch.uint8:
+        raise ValueError(f"Expected uint8 video [frames,height,width,3], got {tuple(video.shape)} {video.dtype}")
+    _, height, width, _ = video.shape
+    if not Path(ffmpeg_exe).is_file():
+        raise FileNotFoundError(f"SGLang-compatible ffmpeg was not found: {ffmpeg_exe}")
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    from scipy.io import wavfile
+
+    waveform = audio.waveform.detach().float().clamp(-1.0, 1.0).transpose(0, 1).cpu().numpy()
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+        temporary_wav = handle.name
+
+    try:
+        wavfile.write(temporary_wav, audio.sampling_rate, waveform)
+        command = [
+            ffmpeg_exe,
+            "-y",
+            "-f",
+            "rawvideo",
+            "-vcodec",
+            "rawvideo",
+            "-s",
+            f"{width}x{height}",
+            "-pix_fmt",
+            "rgb24",
+            "-r",
+            f"{fps:.02f}",
+            "-i",
+            "pipe:0",
+            "-i",
+            temporary_wav,
+        ]
+
+        command += ["-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf)]
+        if width % 16 or height % 16:
+            output_width = width if width % 16 == 0 else width + 16 - width % 16
+            output_height = height if height % 16 == 0 else height + 16 - height % 16
+            command += ["-vf", f"scale={output_width}:{output_height}"]
+        command += ["-threads", str(threads), "-acodec", "aac", "-map", "0:v:0", "-map", "1:a:0"]
+        command += ["-v", "warning", output_path]
+
+        with tempfile.TemporaryFile() as stderr_file:
+            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=stderr_file)
+            assert process.stdin is not None
+            try:
+                video_cpu = video.contiguous().cpu().numpy()
+                for frame in video_cpu:
+                    process.stdin.write(frame.tobytes())
+                process.stdin.close()
+                process.stdin = None
+                returncode = process.wait()
+            finally:
+                if process.stdin is not None:
+                    process.stdin.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+            if returncode:
+                stderr_file.seek(0)
+                raise subprocess.CalledProcessError(returncode, command, stderr=stderr_file.read())
+    finally:
+        Path(temporary_wav).unlink(missing_ok=True)
+    logger.info(f"Video saved through SGLang-compatible ffmpeg to {output_path}")
 
 
 def _ltx25_bt709_yuv420p(frames: torch.Tensor) -> torch.Tensor:

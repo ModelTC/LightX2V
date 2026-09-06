@@ -1,11 +1,13 @@
 """Native Qwen3-VL vision tower used by MiniMax-H3 conditioning."""
 
+import gc
 import json
 import math
 from collections import defaultdict
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
@@ -65,6 +67,34 @@ def _rotate_half(value):
     return torch.cat((-second, first), dim=-1)
 
 
+def _replace_parameter(module, name, value):
+    setattr(module, name, nn.Parameter(value.contiguous(), requires_grad=False))
+
+
+def _column_shard(value, tp_rank, tp_size):
+    if value.shape[0] % tp_size:
+        raise ValueError(f"Cannot column-shard shape {tuple(value.shape)} over vision TP size {tp_size}")
+    shard_size = value.shape[0] // tp_size
+    return value.narrow(0, tp_rank * shard_size, shard_size)
+
+
+def _row_shard(value, tp_rank, tp_size):
+    if value.shape[1] % tp_size:
+        raise ValueError(f"Cannot row-shard shape {tuple(value.shape)} over vision TP size {tp_size}")
+    shard_size = value.shape[1] // tp_size
+    return value.narrow(1, tp_rank * shard_size, shard_size)
+
+
+def _row_parallel_linear(module, hidden_states, tp_group, tp_rank, tp_size):
+    if tp_size == 1:
+        return module(hidden_states)
+    # SGLang adds row-parallel bias on rank 0 before the reduction.
+    bias = module.bias if tp_rank == 0 else None
+    output = F.linear(hidden_states, module.weight, bias)
+    dist.all_reduce(output, op=dist.ReduceOp.SUM, group=tp_group)
+    return output
+
+
 class _PatchEmbed(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -80,13 +110,38 @@ class _PatchEmbed(nn.Module):
 
 
 class _VisionAttention(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, tp_group=None, tp_rank=0, tp_size=1):
         super().__init__()
-        self.num_heads = config["num_heads"]
-        self.head_dim = config["hidden_size"] // self.num_heads
+        self.tp_group = tp_group
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
+        self.total_num_heads = config["num_heads"]
+        if self.total_num_heads % tp_size:
+            raise ValueError(f"Qwen3-VL vision heads ({self.total_num_heads}) must be divisible by TP size ({tp_size})")
+        self.num_heads = self.total_num_heads // tp_size
+        self.head_dim = config["hidden_size"] // self.total_num_heads
         self.scaling = self.head_dim**-0.5
         self.qkv = nn.Linear(config["hidden_size"], config["hidden_size"] * 3, bias=True)
         self.proj = nn.Linear(config["hidden_size"], config["hidden_size"], bias=True)
+
+    def shard_for_tensor_parallel(self):
+        if self.tp_size == 1:
+            return
+        hidden_size = self.qkv.weight.shape[1]
+        if hidden_size % self.tp_size:
+            raise ValueError(f"Qwen3-VL vision hidden size ({hidden_size}) must be divisible by TP size ({self.tp_size})")
+        local_size = hidden_size // self.tp_size
+        qkv_weight = torch.cat(
+            [self.qkv.weight.narrow(0, component * hidden_size + self.tp_rank * local_size, local_size) for component in range(3)],
+            dim=0,
+        )
+        qkv_bias = torch.cat(
+            [self.qkv.bias.narrow(0, component * hidden_size + self.tp_rank * local_size, local_size) for component in range(3)],
+            dim=0,
+        )
+        _replace_parameter(self.qkv, "weight", qkv_weight)
+        _replace_parameter(self.qkv, "bias", qkv_bias)
+        _replace_parameter(self.proj, "weight", _row_shard(self.proj.weight, self.tp_rank, self.tp_size))
 
     def forward(self, hidden_states, cu_seqlens, cos, sin):
         length = hidden_states.shape[0]
@@ -109,26 +164,41 @@ class _VisionAttention(nn.Module):
                 scale=self.scaling,
             )
             outputs.append(out.transpose(1, 2).reshape(end - start, -1))
-        return self.proj(torch.cat(outputs, dim=0))
+        return _row_parallel_linear(self.proj, torch.cat(outputs, dim=0), self.tp_group, self.tp_rank, self.tp_size)
 
 
 class _VisionMLP(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, tp_group=None, tp_rank=0, tp_size=1):
         super().__init__()
+        self.tp_group = tp_group
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
         self.linear_fc1 = nn.Linear(config["hidden_size"], config["intermediate_size"], bias=True)
         self.linear_fc2 = nn.Linear(config["intermediate_size"], config["hidden_size"], bias=True)
 
+    def shard_for_tensor_parallel(self):
+        if self.tp_size == 1:
+            return
+        _replace_parameter(self.linear_fc1, "weight", _column_shard(self.linear_fc1.weight, self.tp_rank, self.tp_size))
+        _replace_parameter(self.linear_fc1, "bias", _column_shard(self.linear_fc1.bias, self.tp_rank, self.tp_size))
+        _replace_parameter(self.linear_fc2, "weight", _row_shard(self.linear_fc2.weight, self.tp_rank, self.tp_size))
+
     def forward(self, hidden_states):
-        return self.linear_fc2(F.gelu(self.linear_fc1(hidden_states), approximate="tanh"))
+        hidden_states = F.gelu(self.linear_fc1(hidden_states), approximate="tanh")
+        return _row_parallel_linear(self.linear_fc2, hidden_states, self.tp_group, self.tp_rank, self.tp_size)
 
 
 class _VisionBlock(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, tp_group=None, tp_rank=0, tp_size=1):
         super().__init__()
         self.norm1 = nn.LayerNorm(config["hidden_size"], eps=1e-6)
         self.norm2 = nn.LayerNorm(config["hidden_size"], eps=1e-6)
-        self.attn = _VisionAttention(config)
-        self.mlp = _VisionMLP(config)
+        self.attn = _VisionAttention(config, tp_group, tp_rank, tp_size)
+        self.mlp = _VisionMLP(config, tp_group, tp_rank, tp_size)
+
+    def shard_for_tensor_parallel(self):
+        self.attn.shard_for_tensor_parallel()
+        self.mlp.shard_for_tensor_parallel()
 
     def forward(self, hidden_states, cu_seqlens, cos, sin):
         hidden_states = hidden_states + self.attn(self.norm1(hidden_states), cu_seqlens, cos, sin)
@@ -136,8 +206,11 @@ class _VisionBlock(nn.Module):
 
 
 class _PatchMerger(nn.Module):
-    def __init__(self, config, postshuffle=False):
+    def __init__(self, config, postshuffle=False, tp_group=None, tp_rank=0, tp_size=1):
         super().__init__()
+        self.tp_group = tp_group
+        self.tp_rank = tp_rank
+        self.tp_size = tp_size
         merged_size = config["hidden_size"] * config["spatial_merge_size"] ** 2
         self.merged_size = merged_size
         self.postshuffle = postshuffle
@@ -145,27 +218,48 @@ class _PatchMerger(nn.Module):
         self.linear_fc1 = nn.Linear(merged_size, merged_size)
         self.linear_fc2 = nn.Linear(merged_size, config["out_hidden_size"])
 
+    def shard_for_tensor_parallel(self):
+        if self.tp_size == 1:
+            return
+        _replace_parameter(self.linear_fc1, "weight", _column_shard(self.linear_fc1.weight, self.tp_rank, self.tp_size))
+        _replace_parameter(self.linear_fc1, "bias", _column_shard(self.linear_fc1.bias, self.tp_rank, self.tp_size))
+        _replace_parameter(self.linear_fc2, "weight", _row_shard(self.linear_fc2.weight, self.tp_rank, self.tp_size))
+
     def forward(self, hidden_states):
         if self.postshuffle:
             hidden_states = self.norm(hidden_states.view(-1, self.merged_size))
         else:
             hidden_states = self.norm(hidden_states).view(-1, self.merged_size)
-        return self.linear_fc2(F.gelu(self.linear_fc1(hidden_states)))
+        hidden_states = F.gelu(self.linear_fc1(hidden_states))
+        return _row_parallel_linear(self.linear_fc2, hidden_states, self.tp_group, self.tp_rank, self.tp_size)
 
 
 class MiniMaxH3Qwen3VLVisionTower(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, tp_group=None):
         super().__init__()
         self.config = dict(config)
+        self.tp_group = tp_group
+        self.tp_size = dist.get_world_size(tp_group) if tp_group is not None else 1
+        self.tp_rank = dist.get_rank(tp_group) if tp_group is not None else 0
         self.spatial_merge_size = int(config["spatial_merge_size"])
         self.patch_embed = _PatchEmbed(config)
         self.pos_embed = nn.Embedding(config["num_position_embeddings"], config["hidden_size"])
-        self.blocks = nn.ModuleList([_VisionBlock(config) for _ in range(config["depth"])])
-        self.merger = _PatchMerger(config)
+        self.blocks = nn.ModuleList([_VisionBlock(config, tp_group, self.tp_rank, self.tp_size) for _ in range(config["depth"])])
+        self.merger = _PatchMerger(config, tp_group=tp_group, tp_rank=self.tp_rank, tp_size=self.tp_size)
         self.deepstack_visual_indexes = list(config["deepstack_visual_indexes"])
-        self.deepstack_merger_list = nn.ModuleList([_PatchMerger(config, postshuffle=True) for _ in self.deepstack_visual_indexes])
+        self.deepstack_merger_list = nn.ModuleList([_PatchMerger(config, postshuffle=True, tp_group=tp_group, tp_rank=self.tp_rank, tp_size=self.tp_size) for _ in self.deepstack_visual_indexes])
         head_dim = config["hidden_size"] // config["num_heads"]
         self.register_buffer("rotary_inv_freq", 1.0 / (10000.0 ** (torch.arange(0, head_dim // 2, 2).float() / (head_dim // 2))), persistent=False)
+
+    def shard_for_tensor_parallel(self):
+        if self.tp_size == 1:
+            return self
+        for block in self.blocks:
+            block.shard_for_tensor_parallel()
+        self.merger.shard_for_tensor_parallel()
+        for merger in self.deepstack_merger_list:
+            merger.shard_for_tensor_parallel()
+        return self
 
     def forward(self, pixels, grid_thw):
         grid_thw = grid_thw.to(device=pixels.device)
@@ -187,10 +281,10 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
         return self.merger(hidden_states), deepstack
 
     @classmethod
-    def from_pretrained(cls, text_encoder_path, vision_config):
+    def from_pretrained(cls, text_encoder_path, vision_config, tp_group=None):
         root = Path(text_encoder_path)
         with torch.device("meta"):
-            model = cls(vision_config)
+            model = cls(vision_config, tp_group=tp_group)
         with (root / "model.safetensors.index.json").open("r", encoding="utf-8") as handle:
             weight_map = json.load(handle)["weight_map"]
         prefix = "model.visual."
@@ -208,8 +302,13 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
         # rotary_inv_freq is non-persistent, so every persistent tensor must match.
         if missing or unexpected:
             raise RuntimeError(f"Qwen3-VL vision checkpoint mismatch: missing={missing}, unexpected={unexpected}")
+        model.shard_for_tensor_parallel()
+        state.clear()
+        gc.collect()
         head_dim = vision_config["hidden_size"] // vision_config["num_heads"]
         model.rotary_inv_freq = 1.0 / (10000.0 ** (torch.arange(0, head_dim // 2, 2, dtype=torch.float32) / (head_dim // 2)))
+        if model.tp_size > 1:
+            logger.info("Sharded native Qwen3-VL vision tower over rank {}/{}", model.tp_rank, model.tp_size)
         return model.eval().requires_grad_(False)
 
 

@@ -39,6 +39,17 @@ H3_CHANNEL_QUANT_SCHEMES = {
     "int8-convrot",
 }
 
+_SGLANG_PARITY_TP_SPLITS = {
+    "proj_in": "col",
+    "audio_proj_in": "col",
+    "context_embedder": "col",
+    "time_embedder.linear_1": "col",
+    "time_embedder.linear_2": "row",
+    "norm_out.linear": "col",
+    "proj_out": "col",
+    "audio_proj_out": "col",
+}
+
 
 class MiniMaxH3Model(BaseTransformerModel):
     """LightX2V-native MiniMax-H3 joint audio/video transformer."""
@@ -331,8 +342,11 @@ class MiniMaxH3Model(BaseTransformerModel):
             details = ", ".join(f"{name}={value}" for name, value in invalid.items())
             raise ValueError(f"MiniMax-H3 TP size {self.tp_size} must divide {details}")
 
-    @staticmethod
-    def _tp_split_type(key):
+    def _tp_split_type(self, key):
+        if self.config.get("h3_sglang_parity_ops", False):
+            for prefix, split_type in _SGLANG_PARITY_TP_SPLITS.items():
+                if key == prefix or key.startswith(f"{prefix}."):
+                    return split_type
         if ".attn.to_q." in key or ".attn.to_k." in key or ".attn.to_v." in key:
             return "col"
         if ".attn.to_out.0." in key:

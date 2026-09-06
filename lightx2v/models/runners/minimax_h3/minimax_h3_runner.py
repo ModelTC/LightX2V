@@ -45,7 +45,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
-from lightx2v.utils.ltx2_media_io import encode_video
+from lightx2v.utils.ltx2_media_io import encode_video, encode_video_sglang_compatible
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -276,6 +276,9 @@ class MiniMaxH3Runner(DefaultRunner):
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
+            encode_fp32=self.config.get("vae_encode_fp32", False),
+            sglang_parity_ops=self.config.get("h3_sglang_parity_ops", False),
+            sglang_root=self.config.get("h3_sglang_root"),
         )
         self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
         self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
@@ -469,10 +472,20 @@ class MiniMaxH3Runner(DefaultRunner):
             raise ValueError(f"MiniMax-H3 ref2av accepts at most {MAX_REFERENCE_AUDIOS} audio-bearing references")
         return references
 
+    def _reference_pixels(self, value, *, video: bool) -> torch.Tensor:
+        pixels = torch.from_numpy(np.asarray(value).copy())
+        if video:
+            pixels = pixels.permute(3, 0, 1, 2)[None]
+        else:
+            pixels = pixels.permute(2, 0, 1)[None, :, None]
+        if not self.config.get("h3_sglang_parity_ops", False):
+            pixels = pixels.float().div_(255.0)
+        return pixels
+
     def _encode_keyframes(self, keyframes):
         latents = []
         for image in keyframes:
-            pixels = torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1)[None, :, None].float().div_(255.0)
+            pixels = self._reference_pixels(image, video=False)
             latents.append(self.video_vae.encode_condition(pixels, video=False))
         return latents
 
@@ -481,11 +494,11 @@ class MiniMaxH3Runner(DefaultRunner):
         for reference in references:
             if reference.kind != "audio":
                 if reference.kind == "image":
-                    pixels = torch.from_numpy(np.asarray(reference.image).copy()).permute(2, 0, 1)[None, :, None].float().div_(255.0)
+                    pixels = self._reference_pixels(reference.image, video=False)
                     latent = self.video_vae.encode_condition(pixels, video=False)
                 else:
                     frames = reference.frames[: trim_reference_num_frames(reference.frames.shape[0])]
-                    pixels = torch.from_numpy(frames.copy()).permute(3, 0, 1, 2)[None].float().div_(255.0)
+                    pixels = self._reference_pixels(frames, video=True)
                     latent = self.video_vae.encode_condition(pixels, video=True)
                 reference.num_latent_frames = latent.shape[2]
                 reference.latent_height, reference.latent_width = latent.shape[3:]
@@ -606,6 +619,20 @@ class MiniMaxH3Runner(DefaultRunner):
         torch_device_module.synchronize()
         self.maybe_empty_cache(force=True, collect_garbage=True)
 
+    @ProfilingContext4DebugL2("Release DiT before VAE")
+    def _release_transformer_before_vae(self):
+        if not self.config.get("h3_release_transformer_before_vae", False):
+            return
+
+        logger.info("Releasing the resident MiniMax-H3 transformer before VAE decode")
+        torch_device_module.synchronize()
+        model = self.model
+        self.model = None
+        self.scheduler.transformer_infer = None
+        del self.inputs
+        del model
+        self.maybe_empty_cache(force=True, collect_garbage=True)
+
     @ProfilingContext4DebugL1(
         "Run VAE Decoder",
         recorder_mode=GET_RECORDER_MODE(),
@@ -635,18 +662,21 @@ class MiniMaxH3Runner(DefaultRunner):
             logger.info(f"MiniMax-H3 Video VAE decode tile shape for {resolution}: {tile_shape[0]}x{tile_shape[1]}")
 
         with ProfilingContext4DebugL1("Run Video VAE Decoder"):
-            video = self.video_vae.decode(video_latents)
+            return_video_cpu = False if self.config.get("sglang_compatible_export", False) else None
+            video = self.video_vae.decode(video_latents, return_cpu=return_video_cpu)
         audio = None
         if not self.video_vae.decode_parallel or dist.get_rank() == 0:
             with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
                 audio = self.audio_vae.decode(audio_latents)
         return video, audio
 
-    @staticmethod
-    def _video_to_uint8_frames(video):
+    def _video_to_uint8_frames(self, video):
         if video.ndim != 5 or video.shape[0] != 1 or video.shape[1] != 3:
             raise ValueError(f"decoded H3 video must be [1,3,F,H,W], got {tuple(video.shape)}")
-        return (video[0].permute(1, 2, 3, 0).float() * 255.0).round().to(torch.uint8).contiguous().cpu()
+        pixels = video[0].permute(1, 2, 3, 0).float() * 255.0
+        if self.config.get("sglang_compatible_export", False):
+            return pixels.clamp_(0, 255).to(torch.uint8).contiguous().cpu()
+        return pixels.round().to(torch.uint8).contiguous().cpu()
 
     def process_images_after_vae_decoder(self):
         if self.video_vae.decode_parallel and dist.get_rank() != 0:
@@ -674,14 +704,25 @@ class MiniMaxH3Runner(DefaultRunner):
             )
             logger.info(f"Saving MiniMax-H3 audio-video output to {output_path}")
             with ProfilingContext4DebugL2("Save Audio-Video Output"):
-                encode_video(
-                    video=frames,
-                    fps=int(self.config.get("fps", 24)),
-                    audio=audio,
-                    output_path=output_path,
-                    video_chunks_number=1,
-                    video_codec_options=self.config.get("video_codec_options"),
-                )
+                if self.config.get("sglang_compatible_export", False):
+                    encode_video_sglang_compatible(
+                        video=frames,
+                        fps=int(self.config.get("fps", 24)),
+                        audio=audio,
+                        output_path=output_path,
+                        ffmpeg_exe=self.config["sglang_ffmpeg_path"],
+                        crf=self.config.get("sglang_export_crf", 25),
+                        threads=self.config.get("sglang_export_threads", 24),
+                    )
+                else:
+                    encode_video(
+                        video=frames,
+                        fps=int(self.config.get("fps", 24)),
+                        audio=audio,
+                        output_path=output_path,
+                        video_chunks_number=1,
+                        video_codec_options=self.config.get("video_codec_options"),
+                    )
             logger.info(f"MiniMax-H3 output saved to {output_path}")
         return {"video": None, "audio": None}
 
@@ -698,6 +739,7 @@ class MiniMaxH3Runner(DefaultRunner):
                     self._offload_transformer()
                     transformer_offloaded = True
 
+            self._release_transformer_before_vae()
             self.gen_video, self.gen_audio = self.run_vae_decoder(video_rows, audio_rows)
             return self.process_images_after_vae_decoder()
         finally:

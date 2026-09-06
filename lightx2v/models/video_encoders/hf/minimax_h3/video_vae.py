@@ -31,9 +31,11 @@ There are two explicit decode boundaries:
 
 from __future__ import annotations
 
+import functools
 import gc
 import json
 import math
+from contextlib import nullcontext
 from pathlib import Path
 from typing import NamedTuple
 
@@ -43,6 +45,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
 
+from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
+    apply_vae_rope_sglang,
+    apply_vae_silu_mul_sglang,
+    configure_sglang_fused_ops,
+    prepare_vae_rope_sglang,
+    scaled_residual_add_vae_sglang,
+)
 from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     SafetensorsSubsetReport,
     load_safetensors_subset,
@@ -81,32 +90,92 @@ def _component_dir(model_path: str | Path, component: str) -> Path:
     raise FileNotFoundError(f"Cannot find MiniMax-H3 {component!r} below {model_path}")
 
 
+def _cuda_autocast_disabled(tensor: torch.Tensor):
+    return torch.autocast("cuda", enabled=False) if tensor.is_cuda else nullcontext()
+
+
+def _linear_with_module_dtype(
+    linear: nn.Linear,
+    tensor: torch.Tensor,
+    out_dtype: torch.dtype,
+) -> torch.Tensor:
+    return linear(tensor.to(linear.weight.dtype)).to(out_dtype)
+
+
+def _apply_qk_norm(module: nn.Module, hidden_states: torch.Tensor) -> torch.Tensor:
+    if (
+        isinstance(module, (nn.LayerNorm, nn.RMSNorm))
+        and module.weight is None
+        and (not isinstance(module, nn.LayerNorm) or module.bias is None)
+        and hidden_states.is_cuda
+        and hidden_states.dtype in (torch.float16, torch.bfloat16)
+        and not torch.is_grad_enabled()
+        and not torch.compiler.is_compiling()
+    ):
+        with torch.autocast("cuda", enabled=False):
+            return module(hidden_states)
+    return module(hidden_states.float()).to(hidden_states.dtype)
+
+
+@functools.lru_cache(maxsize=1)
+def _is_sm120() -> bool:
+    return torch.cuda.is_available() and torch.cuda.get_device_capability()[0] == 12
+
+
+def _unfused_bias_linear(linear: nn.Linear, hidden_states: torch.Tensor) -> torch.Tensor:
+    if linear.bias is None or not hidden_states.is_cuda or hidden_states.dtype != linear.weight.dtype or not _is_sm120():
+        return linear(hidden_states)
+    output = torch.matmul(hidden_states, linear.weight.t())
+    output += linear.bias
+    return output
+
+
 class _SwiGLU(nn.Module):
     """Checkpoint-compatible SwiGLU used by the ViT decoder."""
 
-    def __init__(self, dim_in: int, dim_out: int, bias: bool = True) -> None:
+    def __init__(self, dim_in: int, dim_out: int, bias: bool = True, sglang_parity_ops: bool = False) -> None:
         super().__init__()
+        self.sglang_parity_ops = sglang_parity_ops
         self.proj = nn.Linear(dim_in, dim_out * 2, bias=bias)
 
+    def _pack_sglang_layout(self) -> None:
+        value_weight, gate_weight = self.proj.weight.chunk(2, dim=0)
+        self.proj.weight = nn.Parameter(
+            torch.cat((gate_weight, value_weight), dim=0).contiguous(),
+            requires_grad=self.proj.weight.requires_grad,
+        )
+        if self.proj.bias is not None:
+            value_bias, gate_bias = self.proj.bias.chunk(2, dim=0)
+            self.proj.bias = nn.Parameter(
+                torch.cat((gate_bias, value_bias), dim=0).contiguous(),
+                requires_grad=self.proj.bias.requires_grad,
+            )
+
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.sglang_parity_ops:
+            return apply_vae_silu_mul_sglang(self.proj(hidden_states))
         hidden_states, gate = self.proj(hidden_states).chunk(2, dim=-1)
         return hidden_states * F.silu(gate)
 
 
 class _FeedForward(nn.Module):
-    def __init__(self, dim: int, mult: int = 4, bias: bool = True) -> None:
+    def __init__(self, dim: int, mult: int = 4, bias: bool = True, sglang_parity_ops: bool = False) -> None:
         super().__init__()
+        self.sglang_parity_ops = sglang_parity_ops
         inner_dim = int(dim * mult)
         # Keep the original ``net.0.proj`` and ``net.2`` parameter names.
         self.net = nn.ModuleList(
             [
-                _SwiGLU(dim, inner_dim, bias=bias),
+                _SwiGLU(dim, inner_dim, bias=bias, sglang_parity_ops=sglang_parity_ops),
                 nn.Dropout(0.0),
                 nn.Linear(inner_dim, dim, bias=bias),
             ]
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.sglang_parity_ops:
+            hidden_states = self.net[0](hidden_states)
+            return _unfused_bias_linear(self.net[2], hidden_states)
         for module in self.net:
             hidden_states = module(hidden_states)
         return hidden_states
@@ -249,15 +318,43 @@ class MiniMaxH3VideoEncoder3d(nn.Module):
 class MiniMaxH3VideoRotaryPosEmbed(nn.Module):
     """Three-axis rotary embedding used by the non-causal ViT decoder."""
 
-    def __init__(self, dim: int, theta: float = 100.0, num_axes: int = 3) -> None:
+    def __init__(
+        self,
+        dim: int,
+        theta: float = 100.0,
+        num_axes: int = 3,
+        sglang_parity_ops: bool = False,
+    ) -> None:
         super().__init__()
         if dim % (2 * num_axes) != 0:
             raise ValueError(f"dim={dim} must be divisible by 2 * num_axes={2 * num_axes}")
         self.dim = dim
         self.theta = theta
         self.num_axes = num_axes
+        self.sglang_parity_ops = sglang_parity_ops
+        inv_freq = 1 / self.theta ** torch.arange(
+            0,
+            1,
+            2 * self.num_axes / self.dim,
+            dtype=torch.float32,
+            device="cpu",
+        )
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.sglang_parity_ops:
+            if position_ids.shape[-1] != self.num_axes:
+                raise ValueError(f"Expected {self.num_axes} dimensions, got {position_ids.shape[-1]}")
+            with _cuda_autocast_disabled(position_ids):
+                angles = 2.0 * math.pi * position_ids[:, :, :, None]
+                angles = angles * self.inv_freq.to(position_ids.device)[None, None, None, :]
+                angles = angles.flatten(2, 3)
+                angles = angles.tile(2)
+                angles = angles.unsqueeze(2)
+                cos = torch.cos(angles)
+                sin = torch.sin(angles)
+            return cos.to(dtype=position_ids.dtype), sin.to(dtype=position_ids.dtype)
+
         inv_freq = 1.0 / self.theta ** torch.arange(
             0,
             1,
@@ -280,12 +377,14 @@ class MiniMaxH3VideoAttention(nn.Module):
         bias: bool = True,
         sensitive_layer_dtype: torch.dtype = torch.float32,
         attn_type: str = "torch_sdpa",
+        sglang_parity_ops: bool = False,
     ) -> None:
         super().__init__()
         self.heads = heads
         self.dim_head = dim_head
         self.inner_dim = heads * dim_head
         self.sensitive_layer_dtype = sensitive_layer_dtype
+        self.sglang_parity_ops = sglang_parity_ops
         self.calculate = ATTN_WEIGHT_REGISTER[attn_type]()
 
         self.norm_q = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=False)
@@ -295,6 +394,37 @@ class MiniMaxH3VideoAttention(nn.Module):
         self.to_v = nn.Linear(dim, self.inner_dim, bias=bias)
         self.to_qkv = None
         self.to_out = nn.ModuleList([nn.Linear(self.inner_dim, dim, bias=bias), nn.Dropout(0.0)])
+
+    def _pack_sglang_qkv(self) -> None:
+        linears = (self.to_q, self.to_k, self.to_v)
+        in_features = linears[0].in_features
+        with torch.device("meta"):
+            self.to_qkv = nn.Linear(
+                in_features,
+                self.inner_dim * 3,
+                bias=linears[0].bias is not None,
+                dtype=linears[0].weight.dtype,
+            )
+        packed_weight = torch.stack(
+            tuple(linear.weight.reshape(self.heads, self.dim_head, in_features) for linear in linears),
+            dim=1,
+        ).reshape(self.inner_dim * 3, in_features)
+        self.to_qkv.weight = nn.Parameter(
+            packed_weight.contiguous(),
+            requires_grad=linears[0].weight.requires_grad,
+        )
+        if linears[0].bias is not None:
+            packed_bias = torch.stack(
+                tuple(linear.bias.reshape(self.heads, self.dim_head) for linear in linears),
+                dim=1,
+            ).reshape(self.inner_dim * 3)
+            self.to_qkv.bias = nn.Parameter(
+                packed_bias.contiguous(),
+                requires_grad=linears[0].bias.requires_grad,
+            )
+        self.to_q = None
+        self.to_k = None
+        self.to_v = None
 
     def _pack_fp8_qkv(self) -> None:
         linears = (self.to_q, self.to_k, self.to_v)
@@ -331,8 +461,32 @@ class MiniMaxH3VideoAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        rotary_emb: tuple[torch.Tensor, ...] | None = None,
     ) -> torch.Tensor:
+        if self.sglang_parity_ops:
+            batch_size, seq_len, _ = hidden_states.shape
+            qkv = self.to_qkv(hidden_states)
+            qkv = qkv.view(batch_size, seq_len, -1, 3 * self.dim_head)
+            query, key, value = torch.chunk(qkv, 3, dim=-1)
+
+            query = _apply_qk_norm(self.norm_q, query)
+            key = _apply_qk_norm(self.norm_k, key)
+
+            if rotary_emb is not None:
+                query, key = apply_vae_rope_sglang(query, key, rotary_emb)
+
+            hidden_states = F.scaled_dot_product_attention(
+                query.transpose(1, 2),
+                key.transpose(1, 2),
+                value.transpose(1, 2),
+                attn_mask=None,
+                dropout_p=0.0,
+                is_causal=False,
+                scale=self.dim_head**-0.5,
+            ).transpose(1, 2)
+            hidden_states = hidden_states.reshape(batch_size, seq_len, -1)
+            return self.to_out[0](hidden_states)
+
         if self.to_qkv is None:
             query = self.to_q(hidden_states)
             key = self.to_k(hidden_states)
@@ -380,8 +534,10 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
         infer_dtype: torch.dtype = torch.float16,
         sensitive_layer_dtype: torch.dtype = torch.float32,
         attn_type: str = "torch_sdpa",
+        sglang_parity_ops: bool = False,
     ) -> None:
         super().__init__()
+        self.sglang_parity_ops = sglang_parity_ops
         self.infer_dtype = infer_dtype
         self.sensitive_layer_dtype = sensitive_layer_dtype
         self.norm1 = nn.RMSNorm(dim, eps=eps, elementwise_affine=True)
@@ -393,17 +549,31 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
             bias=bias,
             sensitive_layer_dtype=sensitive_layer_dtype,
             attn_type=attn_type,
+            sglang_parity_ops=sglang_parity_ops,
         )
         self.scale1 = nn.Parameter(torch.zeros(dim))
         self.norm2 = nn.RMSNorm(dim, eps=eps, elementwise_affine=True)
-        self.ff = _FeedForward(dim, mult=ffn_mult, bias=bias)
+        self.ff = _FeedForward(dim, mult=ffn_mult, bias=bias, sglang_parity_ops=sglang_parity_ops)
         self.scale2 = nn.Parameter(torch.zeros(dim))
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        rotary_emb: tuple[torch.Tensor, ...] | None = None,
     ) -> torch.Tensor:
+        if self.sglang_parity_ops:
+            norm_hidden_states = self.norm1(hidden_states.float()).to(hidden_states.dtype)
+            attention_output = self.attn(norm_hidden_states, rotary_emb)
+            hidden_states = scaled_residual_add_vae_sglang(hidden_states, attention_output, self.scale1)
+
+            norm_hidden_states = self.norm2(hidden_states.float()).to(hidden_states.dtype)
+            feed_forward_output = self.ff(norm_hidden_states)
+            return scaled_residual_add_vae_sglang(
+                hidden_states,
+                feed_forward_output,
+                self.scale2,
+            )
+
         norm_hidden_states = self.norm1(hidden_states)
         if self.sensitive_layer_dtype != self.infer_dtype:
             norm_hidden_states = norm_hidden_states.to(self.infer_dtype)
@@ -442,9 +612,11 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
+        sglang_parity_ops: bool = False,
     ) -> None:
         super().__init__()
         dim = num_attention_heads * attention_head_dim
+        self.sglang_parity_ops = sglang_parity_ops
         self.infer_dtype = infer_dtype
         self.sensitive_layer_dtype = sensitive_layer_dtype
         self.patch_size = patch_size
@@ -454,7 +626,11 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         self.use_compile = use_compile
         self.compiled_blocks = {}
 
-        self.rope = MiniMaxH3VideoRotaryPosEmbed(int(attention_head_dim * rope_dim_ratio), theta=rope_theta)
+        self.rope = MiniMaxH3VideoRotaryPosEmbed(
+            int(attention_head_dim * rope_dim_ratio),
+            theta=rope_theta,
+            sglang_parity_ops=sglang_parity_ops,
+        )
         self.proj_in = nn.Linear(in_channels, dim)
         self.register_tokens = nn.Parameter(torch.zeros(1, num_register_tokens, dim))
         self.transformer_blocks = nn.ModuleList(
@@ -468,6 +644,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
                     infer_dtype=infer_dtype,
                     sensitive_layer_dtype=sensitive_layer_dtype,
                     attn_type=attn_type,
+                    sglang_parity_ops=sglang_parity_ops,
                 )
                 for _ in range(num_layers)
             ]
@@ -480,7 +657,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         block_index: int,
         block: MiniMaxH3VideoTransformerBlock,
         hidden_states: torch.Tensor,
-        rotary_emb: tuple[torch.Tensor, torch.Tensor],
+        rotary_emb: tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
         if not self.use_compile:
             return block(hidden_states, rotary_emb)
@@ -491,7 +668,89 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
             self.compiled_blocks[block_index] = compiled_block
         return compiled_block(hidden_states, rotary_emb)
 
+    def _forward_sglang(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        batch_size, num_channels, num_frames, height, width = hidden_states.shape
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.view(
+            batch_size,
+            num_channels,
+            num_frames,
+            1,
+            height,
+            1,
+            width,
+            1,
+        )
+        hidden_states = hidden_states.permute(0, 2, 4, 6, 1, 3, 5, 7)
+        hidden_states = hidden_states.reshape(
+            batch_size,
+            num_frames * height * width,
+            num_channels,
+        )
+
+        with _cuda_autocast_disabled(hidden_states):
+            hidden_states = _linear_with_module_dtype(self.proj_in, hidden_states, input_dtype)
+        num_patches = hidden_states.shape[1]
+
+        hidden_states = torch.cat(
+            (
+                hidden_states,
+                self.register_tokens.expand(batch_size, -1, -1),
+                torch.zeros_like(hidden_states[:, 0:1, :]),
+            ),
+            dim=1,
+        )
+
+        coords = []
+        for size in (num_frames, height, width):
+            axis = torch.arange(0.5, size, dtype=input_dtype, device=hidden_states.device)
+            axis = axis / size
+            axis = 2.0 * axis - 1.0
+            coords.append(axis)
+        position_ids = torch.stack(torch.meshgrid(*coords, indexing="ij"), dim=-1)
+        position_ids = position_ids.flatten(0, 2).unsqueeze(0).expand(batch_size, -1, -1)
+        suffix_ids = torch.zeros(
+            (batch_size, self.num_register_tokens + 1, 3),
+            device=hidden_states.device,
+            dtype=position_ids.dtype,
+        )
+        position_ids = torch.cat((position_ids, suffix_ids), dim=1)
+        rotary_dtype = torch.get_autocast_dtype("cuda") if hidden_states.is_cuda and torch.is_autocast_enabled("cuda") else hidden_states.dtype
+        rotary_emb = prepare_vae_rope_sglang(self.rope(position_ids), dtype=rotary_dtype)
+
+        for block_index, block in enumerate(self.transformer_blocks):
+            hidden_states = self._run_block(block_index, block, hidden_states, rotary_emb)
+
+        hidden_states = self.norm_out(hidden_states)
+        with _cuda_autocast_disabled(hidden_states):
+            output = _linear_with_module_dtype(self.proj_out, hidden_states, hidden_states.dtype)
+        output = output[:, :num_patches, :]
+
+        video_frames = num_frames * self.patch_size_t
+        video_height = height * self.patch_size
+        video_width = width * self.patch_size
+        output = output.view(
+            batch_size,
+            num_frames,
+            height,
+            width,
+            self.out_channels,
+            self.patch_size_t,
+            self.patch_size,
+            self.patch_size,
+        )
+        output = output.permute(0, 4, 1, 5, 2, 6, 3, 7).contiguous()
+        return output.reshape(
+            batch_size,
+            self.out_channels,
+            video_frames,
+            video_height,
+            video_width,
+        )
+
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.sglang_parity_ops:
+            return self._forward_sglang(hidden_states)
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 4, 1).reshape(batch_size, num_frames * height * width, num_channels)
         hidden_states = self.proj_in(hidden_states)
@@ -550,12 +809,24 @@ class MiniMaxH3VideoVAE(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
+        encode_fp32: bool = False,
+        sglang_parity_ops: bool = False,
     ) -> None:
         super().__init__()
         if quant_scheme not in {None, "fp8-musa", "fp8-sgl"}:
             raise NotImplementedError(f"Unsupported MiniMax-H3 video VAE quantization scheme: {quant_scheme!r}")
         if attn_type not in {"torch_sdpa", "sage_attn2"}:
             raise ValueError(f"Unsupported MiniMax-H3 video VAE attention type: {attn_type!r}; expected torch_sdpa or sage_attn2")
+        if sglang_parity_ops:
+            if quant_scheme is not None:
+                raise ValueError("MiniMax-H3 video VAE SGLang parity requires the unquantized checkpoint")
+            if attn_type != "torch_sdpa":
+                raise ValueError("MiniMax-H3 video VAE SGLang parity requires vae_attn_type='torch_sdpa'")
+            if use_compile:
+                raise ValueError("MiniMax-H3 video VAE SGLang parity requires vae_use_compile=false")
+            if sensitive_layer_dtype != torch.float32:
+                raise ValueError("MiniMax-H3 video VAE SGLang parity requires vae_sensitive_layer_dtype='fp32'")
+        self.sglang_parity_ops = sglang_parity_ops
         self.config = dict(config)
         self.execution_device = torch.device(device or AI_DEVICE)
         self.cpu_offload = cpu_offload
@@ -563,6 +834,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.decode_parallel = False
         self.encode_parallel = False
         self.infer_dtype = torch.float16
+        self.encode_fp32 = encode_fp32 or sglang_parity_ops
         self.sensitive_layer_dtype = sensitive_layer_dtype
         if use_compile:
             logger.info("[Compile] Using torch.compile for MiniMaxH3VideoViTDecoder3d")
@@ -584,7 +856,7 @@ class MiniMaxH3VideoVAE(nn.Module):
             norm_num_groups=int(config.get("norm_num_groups", 32)),
             norm_eps=float(config.get("norm_eps", 1e-6)),
             spatial_padding_mode=config.get("spatial_padding_mode", "reflect"),
-            infer_dtype=self.infer_dtype,
+            infer_dtype=torch.float32 if self.encode_fp32 else self.infer_dtype,
             sensitive_layer_dtype=self.sensitive_layer_dtype,
         )
         self.quant_conv = nn.Conv3d(2 * latent_channels, 2 * latent_channels, kernel_size=1)
@@ -607,6 +879,7 @@ class MiniMaxH3VideoVAE(nn.Module):
             sensitive_layer_dtype=self.sensitive_layer_dtype,
             use_compile=use_compile,
             attn_type=attn_type,
+            sglang_parity_ops=self.sglang_parity_ops,
         )
         if quant_scheme is not None:
             self._replace_decoder_linears_with_fp8(self.decoder.transformer_blocks)
@@ -649,6 +922,11 @@ class MiniMaxH3VideoVAE(nn.Module):
         for block in self.decoder.transformer_blocks:
             block.attn._pack_fp8_qkv()
 
+    def _pack_decoder_sglang_layout(self) -> None:
+        for block in self.decoder.transformer_blocks:
+            block.attn._pack_sglang_qkv()
+            block.ff.net[0]._pack_sglang_layout()
+
     def _make_fp8_linear(self, linear: nn.Linear) -> nn.Module:
         if self.quant_scheme == "fp8-musa":
             from lightx2v.models.input_encoders.hf.q_linear import MusaQuantLinearFp8 as linear_cls
@@ -676,15 +954,25 @@ class MiniMaxH3VideoVAE(nn.Module):
         self._buffers["pixel_std"] = torch.tensor(MINIMAX_H3_PIXEL_STD, dtype=self.sensitive_layer_dtype)
 
     def _prepare_inference_dtypes(self) -> None:
-        # Keep normalization, residuals, and encoder boundaries in the
-        # sensitive dtype; bulk convolution and matrix multiplication use FP16.
-        for module in self.encoder.down_blocks.modules():
-            if isinstance(module, nn.Conv3d):
-                module.to(dtype=self.infer_dtype)
-        self.post_quant_conv.to(dtype=self.infer_dtype)
-        for module in self.decoder.modules():
-            if isinstance(module, nn.Linear):
-                module.to(dtype=self.infer_dtype)
+        # Reference encoding remains FP32 in parity mode.
+        if not self.encode_fp32:
+            for module in self.encoder.down_blocks.modules():
+                if isinstance(module, nn.Conv3d):
+                    module.to(dtype=self.infer_dtype)
+        if self.sglang_parity_ops:
+            for block in self.decoder.transformer_blocks:
+                for linear in (
+                    block.attn.to_qkv,
+                    block.attn.to_out[0],
+                    block.ff.net[0].proj,
+                    block.ff.net[2],
+                ):
+                    linear.to(dtype=self.infer_dtype)
+        else:
+            self.post_quant_conv.to(dtype=self.infer_dtype)
+            for module in self.decoder.modules():
+                if isinstance(module, nn.Linear):
+                    module.to(dtype=self.infer_dtype)
 
     @classmethod
     def from_pretrained(
@@ -698,6 +986,9 @@ class MiniMaxH3VideoVAE(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
+        encode_fp32: bool = False,
+        sglang_parity_ops: bool = False,
+        sglang_root: str | None = None,
     ) -> "MiniMaxH3VideoVAE":
         vae_dir = _component_dir(model_path, "vae")
         if (checkpoint_path is None) != (quant_scheme is None):
@@ -705,6 +996,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         weight_path = checkpoint_path if checkpoint_path is not None else vae_dir
         with (vae_dir / "config.json").open("r", encoding="utf-8") as handle:
             config = json.load(handle)
+        if sglang_parity_ops:
+            configure_sglang_fused_ops(sglang_root)
 
         # The released decoder is several GiB.  Constructing it on meta avoids
         # allocating and then immediately overwriting random initialized weights.
@@ -717,12 +1010,16 @@ class MiniMaxH3VideoVAE(nn.Module):
                 sensitive_layer_dtype=sensitive_layer_dtype,
                 use_compile=use_compile,
                 attn_type=attn_type,
+                encode_fp32=encode_fp32,
+                sglang_parity_ops=sglang_parity_ops,
             )
         model._reset_runtime_buffers()
         model.load_report = load_safetensors_subset(model, weight_path)
         if quant_scheme is not None:
             # Pack only after loading the checkpoint's original Q/K/V keys.
             model._pack_decoder_fp8_qkv()
+        elif sglang_parity_ops:
+            model._pack_decoder_sglang_layout()
         model._prepare_inference_dtypes()
         model.eval().requires_grad_(False)
         if not cpu_offload:
@@ -805,7 +1102,9 @@ class MiniMaxH3VideoVAE(nn.Module):
         slice_a[dim] = slice(-blend_extent, None)
         slice_b = [slice(None)] * b.ndim
         slice_b[dim] = slice(0, blend_extent)
-        blended = a[tuple(slice_a)] * weight_a + b[tuple(slice_b)] * weight_b
+        # Keep separate multiply/add kernels to avoid FMA drift.
+        blended = a[tuple(slice_a)] * weight_a
+        blended.add_(b[tuple(slice_b)] * weight_b)
 
         if blend_extent == b.shape[dim]:
             return blended
@@ -975,8 +1274,15 @@ class MiniMaxH3VideoVAE(nn.Module):
         dist.broadcast(latents, src=0)
         return latents
 
-    @staticmethod
-    def _sample_posterior(moments: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    def _sample_posterior(self, moments: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+        if self.encode_fp32:
+            parameters = moments.to(dtype=torch.float32)
+            mean, logvar = torch.chunk(parameters, 2, dim=1)
+            logvar = torch.clamp(logvar, -30.0, 20.0)
+            std = logvar.mul(0.5).exp_()
+            noise = torch.randn(mean.shape, generator=generator)
+            noise = noise.to(device=parameters.device)
+            return noise.mul_(std).add_(mean)
         mean, logvar = torch.chunk(moments, 2, dim=1)
         logvar = torch.clamp(logvar, -30.0, 20.0)
         # Diffusers' randn_tensor preserves a CPU generator by drawing on CPU
@@ -990,14 +1296,37 @@ class MiniMaxH3VideoVAE(nn.Module):
         return self.normalize_latents(latents)
 
     def normalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
+        if self.encode_fp32:
+            # Match SGLang's FP16-to-CPU-FP32 normalization path.
+            result_device = latents.device
+            latents_cpu = latents.detach().to(device="cpu", dtype=torch.float32)
+            mean = self.latents_mean.detach().to(device="cpu", dtype=torch.float32).view(1, -1, 1, 1, 1)
+            std = self.latents_std.detach().to(device="cpu", dtype=torch.float32).view(1, -1, 1, 1, 1)
+            return latents_cpu.sub_(mean).div_(std).to(result_device)
         mean = self.latents_mean.to(latents.device).view(1, -1, 1, 1, 1)
         std = self.latents_std.to(latents.device).view(1, -1, 1, 1, 1)
         return (latents.to(self.sensitive_layer_dtype) - mean) / std
 
+    def _preprocess_uint8_sglang(self, pixels: torch.Tensor, *, video: bool) -> torch.Tensor:
+        if video:
+            frames = pixels[0].transpose(0, 1).to(torch.float32).div_(255.0)
+            mean = self.pixel_mean.to(frames.device).view(1, -1, 1, 1)
+            std = self.pixel_std.to(frames.device).view(1, -1, 1, 1)
+            frames.sub_(mean).div_(std)
+            return frames.contiguous().transpose(0, 1).unsqueeze(0)
+        images = pixels.squeeze(2).to(torch.float32).div_(255.0)
+        mean = self.pixel_mean.to(images.device).view(1, -1, 1, 1)
+        std = self.pixel_std.to(images.device).view(1, -1, 1, 1)
+        images.sub_(mean).div_(std)
+        return images.contiguous().unsqueeze(2)
+
     def preprocess(self, pixels: torch.Tensor) -> torch.Tensor:
         mean = self.pixel_mean.to(pixels.device).view(1, -1, 1, 1, 1)
         std = self.pixel_std.to(pixels.device).view(1, -1, 1, 1, 1)
-        return (pixels.to(self.sensitive_layer_dtype) - mean) / std
+        pixels = pixels.to(self.sensitive_layer_dtype)
+        if self.sglang_parity_ops:
+            return pixels.sub_(mean).div_(std)
+        return (pixels - mean) / std
 
     def encode_condition(self, pixels: torch.Tensor, *, video: bool = False, return_cpu: bool = True) -> torch.Tensor:
         """Encode an RGB ``[1,3,F,H,W]`` reference with the released seed-42 posterior."""
@@ -1005,7 +1334,11 @@ class MiniMaxH3VideoVAE(nn.Module):
             if pixels.ndim != 5 or pixels.shape[0] != 1 or pixels.shape[1] != 3:
                 raise ValueError(f"reference pixels must be [1,3,F,H,W], got {tuple(pixels.shape)}")
             device = self._activate()
-            pixels = self.preprocess(pixels.to(device=device, dtype=self.sensitive_layer_dtype))
+            pixels = pixels.to(device=device)
+            if self.sglang_parity_ops and pixels.dtype == torch.uint8:
+                pixels = self._preprocess_uint8_sglang(pixels, video=video)
+            else:
+                pixels = self.preprocess(pixels)
             with torch.no_grad():
                 if self.encode_parallel:
                     latents = self._encode_parallel(pixels, video)
@@ -1091,6 +1424,43 @@ class MiniMaxH3VideoVAE(nn.Module):
 
         return self._gather_tiles(local_tiles, task_counts)
 
+    def _decode_temporal_frame_plan(
+        self,
+        latents: torch.Tensor,
+        num_clips: int,
+        pad_tokens: int,
+    ) -> tuple[int, int, int]:
+        """Compute logical, padding, and output frame counts."""
+        chunk_num_frames = self.tokens_chunk_size * self.temporal_compression_ratio
+        split_count = int(self.token_drop > 0) + 1
+        logical_frames = 0
+        final_overlap_frames = 0
+
+        for clip_index in range(num_clips):
+            token_start = clip_index * self.tokens_chunk_size
+            token_end = token_start + self.tokens_chunk_size + self.token_overlap
+            clip_token_count = max(
+                0,
+                min(token_end, latents.shape[2]) - min(token_start, latents.shape[2]),
+            )
+            clip_frame_count = clip_token_count * self.temporal_compression_ratio
+            for overlap_index in range(split_count):
+                frame_start = overlap_index * chunk_num_frames
+                frame_end = min(frame_start + chunk_num_frames, clip_frame_count)
+                part_frames = max(0, frame_end - frame_start - self.frame_pre_padding)
+                if overlap_index == 0:
+                    logical_frames += part_frames
+                else:
+                    final_overlap_frames = part_frames
+        logical_frames += final_overlap_frames
+
+        pad_frames = 0
+        if pad_tokens > 0:
+            intra_tail = self.clip_length % self.temporal_compression_ratio
+            num_tokens_before_pad = latents.shape[2] - pad_tokens
+            pad_frames = sum(intra_tail if intra_tail and (num_tokens_before_pad + offset) % self.tokens_chunk_size == 0 else self.temporal_compression_ratio for offset in range(pad_tokens))
+        return logical_frames, pad_frames, logical_frames - pad_frames
+
     def _decode(self, latents: torch.Tensor) -> torch.Tensor | None:
         """Decode tiled latents and assemble the full video on rank 0.
 
@@ -1124,7 +1494,36 @@ class MiniMaxH3VideoVAE(nn.Module):
             if dist.get_rank() != 0:
                 return None
 
-        decoded_chunks: list[torch.Tensor] = []
+        logical_frames, pad_frames, output_frames = self._decode_temporal_frame_plan(
+            latents,
+            num_clips,
+            pad_tokens,
+        )
+        if output_frames <= 0:
+            raise ValueError(f"Video VAE decode planned non-positive output frame count {output_frames} (logical={logical_frames}, pad={pad_frames})")
+
+        decoded = None
+        write_pos = 0
+        observed_frames = 0
+        dropped_frames = 0
+
+        def write_part(part: torch.Tensor) -> None:
+            nonlocal decoded, write_pos, observed_frames, dropped_frames
+            part_frames = int(part.shape[2])
+            if part_frames <= 0:
+                return
+            observed_frames += part_frames
+            if decoded is None:
+                output_shape = list(part.shape)
+                output_shape[2] = output_frames
+                decoded = torch.empty(output_shape, dtype=part.dtype, device=part.device)
+            remaining = output_frames - write_pos
+            copy_frames = min(part_frames, max(0, remaining))
+            if copy_frames > 0:
+                decoded[:, :, write_pos : write_pos + copy_frames].copy_(part[:, :, :copy_frames])
+                write_pos += copy_frames
+            dropped_frames += part_frames - copy_frames
+
         overlap = None
         for clip_index in range(num_clips):
             clip_start = clip_index * tiles_per_clip
@@ -1138,6 +1537,10 @@ class MiniMaxH3VideoVAE(nn.Module):
                 spatial_layout.height_overlaps,
                 spatial_layout.width_overlaps,
             )
+            if self.decode_parallel:
+                # Release completed views into P2P receive buffers.
+                all_tiles[clip_start:clip_end] = [None] * tiles_per_clip
+                del clip_tiles
 
             for overlap_index in range(int(self.token_drop > 0) + 1):
                 frame_start = overlap_index * chunk_num_frames
@@ -1146,18 +1549,21 @@ class MiniMaxH3VideoVAE(nn.Module):
                 if overlap_index == 0:
                     if overlap is not None:
                         chunk = self._blend(overlap, chunk, self.frame_overlap, dim=-3)
-                    decoded_chunks.append(chunk)
+                        overlap = None
+                    write_part(chunk)
                 else:
-                    overlap = chunk
+                    # Break the view's reference to the full decoded clip.
+                    overlap = chunk.contiguous()
+            del chunk, clip
         if overlap is not None:
-            decoded_chunks.append(overlap)
-
-        decoded = torch.cat(decoded_chunks, dim=2)
-        if pad_tokens > 0:
-            intra_tail = self.clip_length % temporal_ratio
-            num_tokens_before_pad = latents.shape[2] - pad_tokens
-            pad_frames = sum(intra_tail if intra_tail and (num_tokens_before_pad + offset) % tokens_chunk_size == 0 else temporal_ratio for offset in range(pad_tokens))
-            decoded = decoded[:, :, :-pad_frames]
+            write_part(overlap)
+            overlap = None
+        if decoded is None:
+            raise RuntimeError("Video VAE temporal assembly produced no output tensor")
+        if observed_frames != logical_frames or dropped_frames != pad_frames or write_pos != output_frames:
+            raise RuntimeError(
+                f"Video VAE temporal frame plan mismatch: observed={observed_frames} logical={logical_frames}, dropped={dropped_frames} pad={pad_frames}, written={write_pos} output={output_frames}"
+            )
         return decoded
 
     def denormalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
@@ -1166,6 +1572,13 @@ class MiniMaxH3VideoVAE(nn.Module):
         return latents.to(self.sensitive_layer_dtype) * std + mean
 
     def postprocess(self, video: torch.Tensor) -> torch.Tensor:
+        if self.sglang_parity_ops:
+            batch_size, channels, frames, height, width = video.shape
+            inverse_mean = video.new_tensor(tuple(-mean / std for mean, std in zip(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)))
+            inverse_std = video.new_tensor(tuple(1.0 / std for std in MINIMAX_H3_PIXEL_STD))
+            video = video.permute(0, 2, 1, 3, 4).reshape(batch_size * frames, channels, height, width)
+            video = video.clone().sub_(inverse_mean[:, None, None]).div_(inverse_std[:, None, None]).clamp_(0, 1)
+            return video.reshape(batch_size, frames, channels, height, width).permute(0, 2, 1, 3, 4).contiguous()
         mean = self.pixel_mean.to(device=video.device).view(1, -1, 1, 1, 1)
         std = self.pixel_std.to(device=video.device).view(1, -1, 1, 1, 1)
         return (video.to(self.sensitive_layer_dtype) * std + mean).clamp_(0, 1)
@@ -1195,9 +1608,10 @@ class MiniMaxH3VideoVAE(nn.Module):
             latents = latents.to(device=device, dtype=self.sensitive_layer_dtype)
             if denormalize:
                 latents = self.denormalize_latents(latents)
-            if self.sensitive_layer_dtype != self.infer_dtype:
+            if not self.sglang_parity_ops and self.sensitive_layer_dtype != self.infer_dtype:
                 latents = latents.to(self.infer_dtype)
-            with torch.no_grad():
+            decode_context = torch.autocast("cuda", dtype=self.infer_dtype) if self.sglang_parity_ops and latents.is_cuda else nullcontext()
+            with torch.no_grad(), decode_context:
                 video = self._decode(latents)
             if video is None:
                 return None

@@ -81,14 +81,30 @@ class MiniMaxH3PreWeights(WeightModule):
         super().__init__()
         # The released checkpoint deliberately keeps the two media projections
         # and timestep MLP in fp32.  The text projection/refiner stay bf16.
-        self.add_module("proj_in", _linear("proj_in", bias=True, force_fp32=True))
-        self.add_module("audio_proj_in", _linear("audio_proj_in", bias=True, force_fp32=True))
-        self.add_module("context_embedder", _linear("context_embedder", bias=True))
+        # SGLang uses column-parallel inputs and a column-to-row timestep MLP.
+        parity = bool(config.get("h3_sglang_parity_ops", False))
+        col = "col" if parity else None
+        row = "row" if parity else None
+        self.add_module("proj_in", _linear("proj_in", bias=True, force_fp32=True, config=config, tp_split=col))
+        self.add_module(
+            "audio_proj_in",
+            _linear("audio_proj_in", bias=True, force_fp32=True, config=config, tp_split=col),
+        )
+        self.add_module(
+            "context_embedder",
+            _linear("context_embedder", bias=True, config=config, tp_split=col),
+        )
         if not config.get("use_adaln_cache", False):
             # ADALN CACHE SYNC: The offline builder reads these keys and mirrors
             # their FP32 semantics; update the offline builder if either changes.
-            self.add_module("time_linear_1", _linear("time_embedder.linear_1", bias=True, force_fp32=True))
-            self.add_module("time_linear_2", _linear("time_embedder.linear_2", bias=True, force_fp32=True))
+            self.add_module(
+                "time_linear_1",
+                _linear("time_embedder.linear_1", bias=True, force_fp32=True, config=config, tp_split=col),
+            )
+            self.add_module(
+                "time_linear_2",
+                _linear("time_embedder.linear_2", bias=True, force_fp32=True, config=config, tp_split=row),
+            )
         self.add_module(
             "refiner_blocks",
             WeightModuleList([MiniMaxH3TokenRefinerBlockWeights(i, config) for i in range(int(config.get("num_refiner_layers", 2)))]),

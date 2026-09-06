@@ -16,9 +16,11 @@ from .packing import (
     FPS,
     FRAMES_PER_CHUNK,
     LATENTS_PER_CHUNK,
+    PADDING_TAG,
     TEXT_TAG,
     VIDEO_TAG,
     MiniMaxH3PackedSequence,
+    _align_sequence_length,
     _spatial_position_grid,
     _temporal_position_grid,
     resolve_canvas_size,
@@ -161,15 +163,17 @@ def build_ref2av_packed_sequence(
     latent_width: int,
     num_audio_latents: int,
     patch_size: tuple[int, int, int] = (1, 2, 2),
+    sequence_alignment: int = 1,
 ) -> MiniMaxH3PackedSequence:
-    """Build ``[presentation | ordered references | target audio | target video]``."""
+    """Build ``[presentation | references | target audio | target video | padding]``."""
     _, patch_h, patch_w = patch_size
     num_text_tokens = int(text_token_tags.shape[0])
     num_target_video_rows = num_latent_frames * (latent_height // patch_h) * (latent_width // patch_w)
     num_target_audio_rows = num_audio_latents * AUDIO_CHANNELS
     num_reference_video_rows = sum(ref.num_video_rows for ref in references if ref.kind != "audio")
     num_reference_audio_rows = sum(ref.num_audio_rows for ref in references)
-    sequence_length = num_text_tokens + num_reference_video_rows + num_reference_audio_rows + num_target_audio_rows + num_target_video_rows
+    used_sequence_length = num_text_tokens + num_reference_video_rows + num_reference_audio_rows + num_target_audio_rows + num_target_video_rows
+    sequence_length = _align_sequence_length(used_sequence_length, sequence_alignment)
 
     position_ids = torch.zeros(sequence_length, 3, dtype=torch.float64)
     position_ids[:num_text_tokens, 0] = torch.arange(num_text_tokens, dtype=torch.float64)
@@ -211,24 +215,25 @@ def build_ref2av_packed_sequence(
     video_start = audio_start + num_target_audio_rows
     _fill_audio_positions(position_ids, slice(audio_start, video_start), num_audio_latents, rotary_time, target_width_grid)
     frame_time = _temporal_position_grid(num_latent_frames, rotary_time)
-    position_ids[video_start:, 0] = frame_time.repeat_interleave(target_frame_grid.shape[0])
-    position_ids[video_start:, 1:] = target_frame_grid.repeat(num_latent_frames, 1)
-    video_indices = torch.cat(video_indices + [torch.arange(video_start, sequence_length)])
+    position_ids[video_start:used_sequence_length, 0] = frame_time.repeat_interleave(target_frame_grid.shape[0])
+    position_ids[video_start:used_sequence_length, 1:] = target_frame_grid.repeat(num_latent_frames, 1)
+    video_indices = torch.cat(video_indices + [torch.arange(video_start, used_sequence_length)])
     audio_indices = torch.cat(audio_indices + [torch.arange(audio_start, video_start)])
     text_indices = torch.arange(num_text_tokens)
-    token_tags = torch.empty(sequence_length, dtype=torch.long)
+    token_tags = torch.full((sequence_length,), PADDING_TAG, dtype=torch.long)
     token_tags[text_indices] = text_token_tags.long()
     token_tags[audio_indices] = AUDIO_TAG
     token_tags[video_indices] = VIDEO_TAG
     return MiniMaxH3PackedSequence(
-        sequence_length,
-        position_ids,
-        token_tags,
-        video_indices,
-        audio_indices,
-        text_indices,
-        num_reference_video_rows,
-        num_reference_audio_rows,
+        sequence_length=sequence_length,
+        position_ids=position_ids,
+        token_tags=token_tags,
+        video_indices=video_indices,
+        audio_indices=audio_indices,
+        text_indices=text_indices,
+        num_condition_video_rows=num_reference_video_rows,
+        num_condition_audio_rows=num_reference_audio_rows,
+        used_sequence_length=used_sequence_length,
     )
 
 

@@ -15,6 +15,7 @@ from PIL import Image
 VIDEO_TAG = 0
 TEXT_TAG = 1
 AUDIO_TAG = 2
+PADDING_TAG = -1
 
 FPS = 24
 AUDIO_LATENTS_PER_SECOND = 40
@@ -47,8 +48,22 @@ class MiniMaxH3PackedSequence:
     video_indices: torch.Tensor
     audio_indices: torch.Tensor
     text_indices: torch.Tensor
+    used_sequence_length: int
     num_condition_video_rows: int = 0
     num_condition_audio_rows: int = 0
+
+    @property
+    def cu_seqlens(self) -> torch.Tensor:
+        bounds = (0, self.used_sequence_length)
+        if self.used_sequence_length < self.sequence_length:
+            bounds += (self.sequence_length,)
+        return torch.tensor(bounds, dtype=torch.int32, device=self.position_ids.device)
+
+
+def _align_sequence_length(sequence_length: int, alignment: int) -> int:
+    if alignment < 1:
+        raise ValueError(f"MiniMax-H3 packed-sequence alignment must be positive, got {alignment}")
+    return ((sequence_length + alignment - 1) // alignment) * alignment
 
 
 def resolve_canvas_size(aspect_width: float, aspect_height: float) -> tuple[int, int]:
@@ -197,8 +212,9 @@ def build_t2av_packed_sequence(
     latent_width: int,
     num_audio_latents: int,
     patch_size: tuple[int, int, int] = (1, 2, 2),
+    sequence_alignment: int = 1,
 ) -> MiniMaxH3PackedSequence:
-    """Build the exact padless ``[text | audio | video]`` T2AV layout."""
+    """Build the exact ``[text | audio | video | optional padding]`` T2AV layout."""
     return build_packed_sequence(
         torch.full((num_text_tokens,), TEXT_TAG, dtype=torch.long),
         num_latent_frames,
@@ -206,6 +222,7 @@ def build_t2av_packed_sequence(
         latent_width,
         num_audio_latents,
         patch_size,
+        sequence_alignment=sequence_alignment,
     )
 
 
@@ -217,8 +234,9 @@ def build_packed_sequence(
     num_audio_latents: int,
     patch_size: tuple[int, int, int] = (1, 2, 2),
     keyframe_anchors: tuple[str, ...] = (),
+    sequence_alignment: int = 1,
 ) -> MiniMaxH3PackedSequence:
-    """Build ``[Qwen rows | keyframe rows | target audio | target video]``."""
+    """Build ``[Qwen rows | keyframes | target audio | target video | padding]``."""
     _, patch_h, patch_w = patch_size
     rows_per_frame = (latent_height // patch_h) * (latent_width // patch_w)
     num_text_tokens = int(text_token_tags.shape[0])
@@ -228,7 +246,8 @@ def build_packed_sequence(
     condition_start = num_text_tokens
     audio_start = condition_start + num_condition_rows
     video_start = audio_start + num_audio_rows
-    sequence_length = video_start + num_video_rows
+    used_sequence_length = video_start + num_video_rows
+    sequence_length = _align_sequence_length(used_sequence_length, sequence_alignment)
 
     position_ids = torch.zeros(sequence_length, 3, dtype=torch.float64)
     position_ids[:num_text_tokens, 0] = torch.arange(num_text_tokens, dtype=torch.float64)
@@ -261,12 +280,17 @@ def build_packed_sequence(
     video_positions = torch.empty(num_latent_frames, rows_per_frame, 3, dtype=torch.float64)
     video_positions[:, :, 0] = _temporal_position_grid(num_latent_frames, float(num_text_tokens))[:, None]
     video_positions[:, :, 1:] = frame_grid[None]
-    position_ids[video_start:] = video_positions.reshape(-1, 3)
+    position_ids[video_start:used_sequence_length] = video_positions.reshape(-1, 3)
 
     text_indices = torch.arange(num_text_tokens, dtype=torch.long)
     audio_indices = torch.arange(audio_start, video_start, dtype=torch.long)
-    video_indices = torch.cat((torch.arange(condition_start, audio_start, dtype=torch.long), torch.arange(video_start, sequence_length, dtype=torch.long)))
-    token_tags = torch.empty(sequence_length, dtype=torch.long)
+    video_indices = torch.cat(
+        (
+            torch.arange(condition_start, audio_start, dtype=torch.long),
+            torch.arange(video_start, used_sequence_length, dtype=torch.long),
+        )
+    )
+    token_tags = torch.full((sequence_length,), PADDING_TAG, dtype=torch.long)
     token_tags[text_indices] = text_token_tags.to(torch.long)
     token_tags[audio_indices] = AUDIO_TAG
     token_tags[video_indices] = VIDEO_TAG
@@ -280,6 +304,7 @@ def build_packed_sequence(
         text_indices=text_indices,
         num_condition_video_rows=num_condition_rows,
         num_condition_audio_rows=0,
+        used_sequence_length=used_sequence_length,
     )
 
 
