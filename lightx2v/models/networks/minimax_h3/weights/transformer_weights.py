@@ -165,6 +165,7 @@ class MiniMaxH3TransformerWeights(WeightModule):
         self.config = config
         self.num_layers = int(config.get("num_layers", 50))
         self.disk_streaming = bool(config.get("dit_disk_streaming", False))
+        self.streaming_lora = None
         if self.disk_streaming:
             if config.get("lazy_load", False):
                 raise NotImplementedError(
@@ -175,7 +176,7 @@ class MiniMaxH3TransformerWeights(WeightModule):
             if config.get("tensor_parallel", False):
                 raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support tensor parallel inference yet.")
             if lora_path is not None:
-                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support LoRA streaming yet.")
+                raise ValueError("Initialize MiniMax-H3 streamed LoRA through MiniMaxH3Model, not the weights constructor.")
 
             checkpoint_dir = config.get("dit_original_ckpt")
             if checkpoint_dir is None:
@@ -227,8 +228,13 @@ class MiniMaxH3TransformerWeights(WeightModule):
             raise IndexError(f"MiniMax-H3 checkpoint does not contain transformer block {block_index}.")
 
         self._ensure_streaming_block()
+        if self.streaming_lora is not None:
+            # Finish the previous use before either base weights or factors change.
+            self.streaming_lora.clear(self.streaming_block)
         if self.checkpoint.selected_reader is not None:
             self.checkpoint.selected_reader.load_modules([self.streaming_block], device=AI_DEVICE, block_index=block_index, reusable=True)
+            if self.streaming_lora is not None:
+                self.streaming_lora.load_block(self.streaming_block, block_index)
             return self.streaming_block
         tensor_names = self.checkpoint.tensor_names_for_block(block_index)
         tensors = self.checkpoint.load_tensors(tensor_names, device="cpu")
@@ -236,6 +242,8 @@ class MiniMaxH3TransformerWeights(WeightModule):
             self.streaming_block.load_state_dict(self._prepare_streaming_state_dict(tensors, block_index), block_index)
         finally:
             del tensors
+        if self.streaming_lora is not None:
+            self.streaming_lora.load_block(self.streaming_block, block_index)
         return self.streaming_block
 
     def _ensure_streaming_block(self):
@@ -261,6 +269,8 @@ class MiniMaxH3TransformerWeights(WeightModule):
         block = self.streaming_block
         if block is None:
             return
+        if self.streaming_lora is not None:
+            self.streaming_lora.clear(block)
         with suppress(Exception):
             device_module = getattr(torch, AI_DEVICE, None)
             if device_module is not None and hasattr(device_module, "synchronize"):

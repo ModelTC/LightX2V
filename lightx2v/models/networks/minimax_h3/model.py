@@ -2,6 +2,7 @@ import gc
 import glob
 import math
 import os
+from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
@@ -101,8 +102,10 @@ class MiniMaxH3Model(BaseTransformerModel):
                 raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support quantized DiT checkpoints yet.")
             if config.get("tensor_parallel", False):
                 raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support tensor parallel inference yet.")
-            if lora_path is not None or config.get("lora_configs"):
-                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support LoRA yet.")
+            if (lora_path is not None or config.get("lora_configs")) and not config.get("lora_dynamic_apply", False):
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming requires dynamic LoRA; dense load-time merging is not supported.")
+            if config.get("lora_configs") and lora_path is None:
+                raise ValueError("MiniMax-H3 streamed LoRA must be initialized through build_minimax_h3_model_with_lora.")
         if config.get("attn_type") == "sol_attn":
             reorder = str(config.get("sol_attn_setting", {}).get("reorder", "none")).lower()
             if reorder != "none":
@@ -153,6 +156,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         checkpoint = self.transformer_weights.checkpoint
         if checkpoint.selected_reader is not None:
             checkpoint.selected_reader.load_modules([self.pre_weight, self.post_weight], device="cpu")
+            self._init_streaming_lora()
             return None
         prepost_tensor_names = _collect_declared_base_tensor_names(self.pre_weight, self.post_weight)
         missing = sorted(name for name in prepost_tensor_names if name not in checkpoint.weight_map)
@@ -171,7 +175,32 @@ class MiniMaxH3Model(BaseTransformerModel):
             device_module = getattr(torch, torch.device(self.device).type, None)
             if device_module is not None and hasattr(device_module, "empty_cache"):
                 device_module.empty_cache()
+        self._init_streaming_lora()
         return None
+
+    def _init_streaming_lora(self):
+        if self.lora_path is None:
+            return
+        from lightx2v.models.networks.minimax_h3.streaming_lora import MiniMaxH3StreamingLora, streaming_target_shapes
+
+        weights = self.transformer_weights
+        shapes = streaming_target_shapes(weights.checkpoint, weights.streaming_block, self.pre_weight, self.post_weight)
+        weights.streaming_lora = MiniMaxH3StreamingLora(
+            self.lora_path,
+            normalize_key=self._normalize_dynamic_lora_key,
+            target_shapes=shapes,
+            strength=self.lora_strength,
+            alpha=self.lora_alpha,
+            dtype=GET_DTYPE(),
+        )
+        adapter = weights.streaming_lora
+        logger.info(
+            "Indexed MiniMax-H3 streamed LoRA: {} main-block pairs, {} pre/post pairs, ranks={}, strength={}",
+            sum(len(pairs) for pairs in adapter.blocks.values()),
+            len(adapter.resident),
+            sorted({pair.rank for pair in adapter.pairs.values()}),
+            adapter.strength,
+        )
 
     @staticmethod
     def _normalize_dynamic_lora_key(key):
@@ -231,6 +260,8 @@ class MiniMaxH3Model(BaseTransformerModel):
         return model_keys, ranks
 
     def _load_lora_file(self, file_path, alpha=None):
+        if self.config.get("dit_disk_streaming", False):
+            raise NotImplementedError("MiniMax-H3 disk streaming uses the selective LoRA index, not the full-factor loader.")
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"MiniMax-H3 LoRA file not found: {file_path}")
 
@@ -333,6 +364,8 @@ class MiniMaxH3Model(BaseTransformerModel):
         logger.info("Registered {} MiniMax-H3 dynamic LoRA branches with strength={}", len(self._pending_dynamic_lora_model_keys), strength)
 
     def _register_lora(self, lora_path, strength):
+        if self.config.get("dit_disk_streaming", False):
+            raise NotImplementedError("MiniMax-H3 streamed LoRA is configured at initialization; runtime adapter switching is not supported.")
         lora_weights = self._load_lora_file(lora_path)
         self._register_dynamic_lora_weights(lora_weights, strength)
         self.lora_path = lora_path
@@ -342,12 +375,20 @@ class MiniMaxH3Model(BaseTransformerModel):
             offload_manager.need_init_first_buffer = True
 
     def _remove_lora(self):
+        if self.config.get("dit_disk_streaming", False):
+            adapter = getattr(self.transformer_weights, "streaming_lora", None)
+            if adapter is not None:
+                for root in (self.pre_weight, self.post_weight, self.transformer_weights.streaming_block):
+                    adapter.clear(root)
+                self.transformer_weights.streaming_lora = None
         super()._remove_lora()
         transformer_infer = getattr(self, "transformer_infer", None)
         if transformer_infer is not None:
             transformer_infer._clear_adaln_cache()
 
     def _update_lora(self, lora_path, strength, alpha=None):
+        if self.config.get("dit_disk_streaming", False):
+            raise NotImplementedError("MiniMax-H3 streamed LoRA is configured at initialization; runtime adapter switching is not supported.")
         if isinstance(lora_path, dict):
             raise NotImplementedError("MiniMax-H3 dynamic LoRA switching expects one checkpoint path, not a merged tensor dictionary")
         lora_weights = self._load_lora_file(lora_path, alpha=alpha)
@@ -555,13 +596,16 @@ class MiniMaxH3Model(BaseTransformerModel):
         if not infer_condition:
             raise ValueError("MiniMax-H3 does not execute an unconditional pass")
         prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
-        pre = self.pre_infer.infer(self.pre_weight, prompt_embeds)
+        adapter = getattr(self.transformer_weights, "streaming_lora", None)
+        with adapter.resident_scope(self.pre_weight) if adapter is not None else nullcontext():
+            pre = self.pre_infer.infer(self.pre_weight, prompt_embeds)
         if self.config.get("seq_parallel", False):
             pre = self._seq_parallel_pre_process(pre)
         hidden_states = self.transformer_infer.infer(self.transformer_weights, pre)
         if self.config.get("seq_parallel", False):
             hidden_states = self._seq_parallel_post_process(hidden_states, pre)
-        return self.post_infer.infer(self.post_weight, hidden_states, pre)
+        with adapter.resident_scope(self.post_weight) if adapter is not None else nullcontext():
+            return self.post_infer.infer(self.post_weight, hidden_states, pre)
 
     @torch.no_grad()
     def infer(self, inputs):
