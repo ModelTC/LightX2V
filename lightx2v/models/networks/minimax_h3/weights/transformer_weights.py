@@ -99,7 +99,9 @@ class MiniMaxH3AttentionWeights(WeightModule):
             "rope",
             ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](
                 layout="split_half",
-                compute_dtype=torch.float32,
+                # H3 requires BF16 Q/K; the reference rounds frequencies and
+                # performs the rotation at that dtype, not in FP32.
+                compute_dtype=torch.bfloat16,
             ),
         )
         attn_type = config.get("attn_type", "flash_attn3")
