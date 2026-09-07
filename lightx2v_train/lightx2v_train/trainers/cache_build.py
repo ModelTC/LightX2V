@@ -92,6 +92,8 @@ class CacheBuildTrainer:
             raise ValueError(f"Cache build does not support {self.training_method!r}; expected one of: {supported}.")
         self.model = model
         self.encoder = model.ensure_capabilities().require(capability_type)
+        if isinstance(self.encoder, DistributionMatchingCapability):
+            self.encoder.validate_generation_shapes(self.config["training"]["dmd"].get("generation_shapes"))
 
     def set_data(self, dataloader_train, dataloader_val=None):
         del dataloader_val
@@ -104,18 +106,15 @@ class CacheBuildTrainer:
         self._validate(
             cache,
             sample["conditioning"]["prompt"],
-            source_inputs=sample.get("inputs"),
         )
         return _to_cpu(cache, dtype)
 
-    def _validate(self, cache, prompt, path="<encoded cache>", source_inputs=None):
+    def _validate(self, cache, prompt, path="<encoded cache>"):
         required = {"inputs", "conditioning", "meta"}
         if not isinstance(cache, dict) or not required.issubset(cache):
             raise ValueError(f"Invalid training cache at {path}: expected inputs, conditioning, and meta mappings.")
         if not all(isinstance(cache[key], dict) for key in required):
             raise ValueError(f"Invalid training cache at {path}: inputs, conditioning, and meta must be mappings.")
-        if source_inputs and not cache["inputs"]:
-            raise ValueError(f"Training cache at {path} has no encoded model inputs for a source sample that contains inputs. Rebuild it with --overwrite.")
         conditioning = cache["conditioning"]
         if not isinstance(conditioning, dict) or "positive" not in conditioning:
             raise ValueError(f"Invalid training cache at {path}: conditioning.positive is missing.")
@@ -176,7 +175,6 @@ class CacheBuildTrainer:
                         existing,
                         sample["conditioning"]["prompt"],
                         cache_path,
-                        source_inputs=sample.get("inputs"),
                     )
 
                 relative_cache_path = cache_path.relative_to(output_dir).as_posix()

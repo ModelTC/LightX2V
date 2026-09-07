@@ -62,9 +62,8 @@ class PhasedDmdTrainer(DmdTrainer):
         self.match_timestep = parsed.match_timestep
         self.match_step_index = parsed.match_step_index
         self.infer_boundary_step_index = parsed.infer_boundary_step_index
+        self.infer_config["boundary_step_index"] = self.infer_boundary_step_index
         self.score_timestep_margin = parsed.score_timestep_margin
-        self.score_timestep_min = parsed.score_timestep_min
-        self.score_timestep_max = parsed.score_timestep_max
         self.phased_eps = parsed.eps
         self.dmd_norm_clip_min = parsed.dmd_norm_clip_min
         self.guidance_distill = parsed.guidance_distill
@@ -213,8 +212,7 @@ class PhasedDmdTrainer(DmdTrainer):
             raw_max,
             device=device,
             dtype=dtype,
-            score_timestep_min=self.score_timestep_min,
-            score_timestep_max=self.score_timestep_max,
+            scheduler=self.scheduler,
             num_train_timestep=self.num_train_timestep,
             convert_timesteps=self._raw_timesteps_to_sigmas,
             broadcast_value=broadcast_sequence_parallel_value,
@@ -671,15 +669,6 @@ class PhasedDmdTrainer(DmdTrainer):
     def _role_weights_dir(self, root_dir, role):
         return self.checkpoint_manager._role_weights_dir(root_dir, role)
 
-    def _copy_fake_low_high_from_fake_2(self):
-        return self.checkpoint_manager._copy_fake_low_high_from_fake_2()
-
-    def _fast_forward_fake_low_high_scheduler(self, iteration):
-        return self.checkpoint_manager._fast_forward_fake_low_high_scheduler(iteration)
-
-    def _validate_phased_checkpoint_metadata(self, state, state_path, resume_ckpt_path):
-        return self.checkpoint_manager._validate_phased_checkpoint_metadata(state, state_path, resume_ckpt_path)
-
     def _load_resume_state(self, resume_ckpt_path):
         return self.checkpoint_manager._load_resume_state(resume_ckpt_path)
 
@@ -688,10 +677,6 @@ class PhasedDmdTrainer(DmdTrainer):
 
     def _get_checkpoint_process_group(self):
         return self.checkpoint_manager._get_checkpoint_process_group()
-
-    @staticmethod
-    def _checkpoint_role_layout(dist_state_path, required_roles):
-        return PhasedCheckpointManager._checkpoint_role_layout(dist_state_path, required_roles)
 
     def _load_distributed_state(self, resume_ckpt_path):
         return self.checkpoint_manager._load_distributed_state(resume_ckpt_path)

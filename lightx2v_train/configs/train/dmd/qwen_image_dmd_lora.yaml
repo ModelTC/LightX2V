@@ -45,14 +45,20 @@ data:
             - /root/yongyang/data/image_dmd/val.jsonl
 
 scheduler:
+    min_sigma: 0.02
+    max_sigma: 0.98
     num_train_timesteps: 1000
     time_shift_settings:
         do_time_shift: true
-        shift_type: linear
-        # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
+        shift_type: exponential
         time_shift_power: 1.0
-        dynamic_shift: false
-        time_shift_mu: 3.0
+        dynamic_shift: true
+        shift_mu_strategy: linear
+        patch_size: [2, 2]
+        shift_x1: 256
+        shift_x2: 8192
+        shift_y1: 0.5
+        shift_y2: 0.9
 
 training:
     method: dmd
@@ -71,10 +77,6 @@ training:
             - {value: [1024, 1024], ratio: 5}
             - {value: [768, 1344], ratio: 3}
             - {value: [1344, 768], ratio: 2}
-        renoise_sigma_min: 0.02
-        renoise_sigma_max: 1.0
-        renoise_discrete_samples: 1000
-        renoise_shift: 5.0
     student:
         train_type: lora
         lora:
@@ -117,7 +119,7 @@ inference:
     method: image_infer
     default_width: 1024
     default_height: 1024
-    num_inference_steps: 4
+    num_inference_steps: ${training.dmd.num_inference_steps}
     cfg_guidance_scale: 4.0
     negative_prompt: " "
     enable_cfg: false

@@ -42,8 +42,8 @@ scheduler:
     timestep_distribution: logitnormal
     logitnormal_mean: 0.0
     logitnormal_std: 1.0
-    min_t: 0.001
-    max_t: 1.0
+    min_sigma: 0.001
+    max_sigma: 1.0
     time_shift_settings:
         do_time_shift: true
         shift_type: exponential

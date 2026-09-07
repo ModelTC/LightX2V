@@ -60,22 +60,15 @@ def sample_score_sigma_range(
     *,
     device,
     dtype,
-    score_timestep_min,
-    score_timestep_max,
+    scheduler,
     num_train_timestep,
     convert_timesteps,
     broadcast_value,
 ):
-    raw_min = max(
-        1,
-        int(raw_min),
-        score_timestep_min,
-    )
-    raw_max = min(
-        num_train_timestep,
-        int(raw_max),
-        score_timestep_max + 1,
-    )
+    raw_min = max(1, int(raw_min))
+    raw_max = min(num_train_timestep, int(raw_max))
+    if raw_max <= raw_min:
+        raise ValueError(f"No valid score timesteps remain in raw range [{raw_min}, {raw_max}).")
     raw_candidates = torch.arange(
         raw_min,
         raw_max,
@@ -86,8 +79,8 @@ def sample_score_sigma_range(
         raw_candidates,
         dtype=torch.float32,
     )
-    if candidate_sigmas.numel() == 0:
-        raise RuntimeError(f"No valid score timesteps remain in raw range [{raw_min}, {raw_max}).")
+    if scheduler.min_sigma > candidate_sigmas[-1].item() or scheduler.max_sigma < candidate_sigmas[0].item():
+        raise ValueError(f"scheduler sigma bounds do not overlap the phased score range [{candidate_sigmas[0].item():.6f}, {candidate_sigmas[-1].item():.6f}].")
     candidate_indices = torch.randint(
         0,
         candidate_sigmas.numel(),
@@ -95,7 +88,7 @@ def sample_score_sigma_range(
         device=device,
         dtype=torch.long,
     )
-    sigma = candidate_sigmas[candidate_indices]
+    sigma = scheduler.clamp_training_sigma(candidate_sigmas[candidate_indices])
     return broadcast_value(sigma.to(dtype=dtype))
 
 

@@ -56,8 +56,8 @@ data:
 scheduler:
     num_train_timesteps: 1000
     timestep_distribution: uniform
-    min_t: 0.001
-    max_t: 1.0
+    min_sigma: 0.001
+    max_sigma: 1.0
     time_shift_settings:
         do_time_shift: true
         shift_type: linear
@@ -91,6 +91,7 @@ training:
 
 inference:
     method: wan_t2v_14b_ar_infer
+    scheduler_type: unipc
     default_width: 832
     default_height: 480
     num_frames: 81

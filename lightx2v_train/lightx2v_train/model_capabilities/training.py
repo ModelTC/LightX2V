@@ -8,6 +8,8 @@ from typing import Any, Callable, Mapping, TypedDict
 import torch
 from torch import Tensor
 
+from lightx2v_train.utils.generation_shapes import parse_generation_shapes
+
 from .base import ModelCapability
 
 
@@ -159,6 +161,13 @@ class DistributionMatchingCapability(ModelCapability):
         """Number of dimensions required by one generation shape."""
         pass
 
+    def validate_generation_shapes(self, generation_shapes) -> None:
+        """Validate configured sizes against the model's generation geometry."""
+        parse_generation_shapes(
+            generation_shapes,
+            expected_dimensions=self.generation_shape_dimensions,
+        )
+
     @abstractmethod
     def latent_shape(
         self,
@@ -253,8 +262,6 @@ class DistributionMatchingCapability(ModelCapability):
 
 @dataclass(frozen=True)
 class AutoregressiveRolloutContext:
-    denoising_steps: Tensor
-    denoising_scheduler: Any
     trajectory_scheduler: Any
     running_dtype: torch.dtype
     frames_per_chunk: int

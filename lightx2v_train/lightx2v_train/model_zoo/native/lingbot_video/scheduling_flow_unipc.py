@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin, SchedulerOutput
-from diffusers.utils import deprecate, is_scipy_available
+from diffusers.utils import is_scipy_available
 
 if is_scipy_available():
     pass
@@ -54,14 +54,6 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
             the sigmas are determined according to a sequence of noise levels {σi}.
         use_exponential_sigmas (`bool`, *optional*, defaults to `False`):
             Whether to use exponential sigmas for step sizes in the noise schedule during the sampling process.
-        timestep_spacing (`str`, defaults to `"linspace"`):
-            The way the timesteps should be scaled. Refer to Table 2 of the [Common Diffusion Noise Schedules and
-            Sample Steps are Flawed](https://huggingface.co/papers/2305.08891) for more information.
-        steps_offset (`int`, defaults to 0):
-            An offset added to the inference steps, as required by some model families.
-        final_sigmas_type (`str`, defaults to `"zero"`):
-            The final `sigma` value for the noise schedule during the sampling process. If `"sigma_min"`, the final
-            sigma is the same as the last sigma in the training schedule. If `zero`, the final sigma is set to 0.
     """
 
     _compatibles = [e.name for e in KarrasDiffusionSchedulers]
@@ -83,15 +75,9 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
         lower_order_final: bool = True,
         disable_corrector: List[int] = [],
         solver_p: SchedulerMixin = None,
-        timestep_spacing: str = "linspace",
-        steps_offset: int = 0,
-        final_sigmas_type: Optional[str] = "zero",  # "zero", "sigma_min"
     ):
         if solver_type not in ["bh1", "bh2"]:
-            if solver_type in ["midpoint", "heun", "logrho"]:
-                self.register_to_config(solver_type="bh2")
-            else:
-                raise NotImplementedError(f"{solver_type} is not implemented for {self.__class__}")
+            raise NotImplementedError(f"{solver_type} is not implemented for {self.__class__}")
 
         self.predict_x0 = predict_x0
         # setable values
@@ -176,12 +162,7 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
                 shift = self.config.shift
             sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)  # pyright: ignore
 
-        if self.config.final_sigmas_type == "sigma_min":
-            sigma_last = ((1 - self.alphas_cumprod[0]) / self.alphas_cumprod[0]) ** 0.5
-        elif self.config.final_sigmas_type == "zero":
-            sigma_last = 0
-        else:
-            raise ValueError(f"`final_sigmas_type` must be one of 'zero', or 'sigma_min', but got {self.config.final_sigmas_type}")
+        sigma_last = 0.0
 
         timesteps = sigmas * self.config.num_train_timesteps
         sigmas = np.concatenate([sigmas, [sigma_last]]).astype(np.float32)  # pyright: ignore
@@ -247,21 +228,13 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
     def time_shift(self, mu: float, sigma: float, t: torch.Tensor):
         return math.exp(mu) / (math.exp(mu) + (1 / t - 1) ** sigma)
 
-    def convert_model_output(
-        self,
-        model_output: torch.Tensor,
-        *args,
-        sample: torch.Tensor = None,
-        **kwargs,
-    ) -> torch.Tensor:
+    def convert_model_output(self, model_output: torch.Tensor, *, sample: torch.Tensor) -> torch.Tensor:
         r"""
         Convert the model output to the corresponding type the UniPC algorithm needs.
 
         Args:
             model_output (`torch.Tensor`):
                 The direct output from the learned diffusion model.
-            timestep (`int`):
-                The current discrete timestep in the diffusion chain.
             sample (`torch.Tensor`):
                 A current instance of a sample created by the diffusion process.
 
@@ -269,18 +242,6 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
             `torch.Tensor`:
                 The converted model output.
         """
-        timestep = args[0] if len(args) > 0 else kwargs.pop("timestep", None)
-        if sample is None:
-            if len(args) > 1:
-                sample = args[1]
-            else:
-                raise ValueError("missing `sample` as a required keyward argument")
-        if timestep is not None:
-            deprecate(
-                "timesteps",
-                "1.0.0",
-                "Passing `timesteps` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
 
         sigma = self.sigmas[self.step_index]
         alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma)
@@ -290,7 +251,7 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
                 sigma_t = self.sigmas[self.step_index]
                 x0_pred = sample - sigma_t * model_output
             else:
-                raise ValueError(f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction` or `flow_prediction` for the UniPCMultistepScheduler.")
+                raise ValueError(f"prediction_type given as {self.config.prediction_type} must be `flow_prediction` for the UniPCMultistepScheduler.")
 
             if self.config.thresholding:
                 x0_pred = self._threshold_sample(x0_pred)
@@ -301,7 +262,7 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
                 sigma_t = self.sigmas[self.step_index]
                 epsilon = sample - (1 - sigma_t) * model_output
             else:
-                raise ValueError(f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction` or `flow_prediction` for the UniPCMultistepScheduler.")
+                raise ValueError(f"prediction_type given as {self.config.prediction_type} must be `flow_prediction` for the UniPCMultistepScheduler.")
 
             if self.config.thresholding:
                 sigma_t = self.sigmas[self.step_index]
@@ -311,22 +272,13 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
 
             return epsilon
 
-    def multistep_uni_p_bh_update(
-        self,
-        model_output: torch.Tensor,
-        *args,
-        sample: torch.Tensor = None,
-        order: int = None,  # pyright: ignore
-        **kwargs,
-    ) -> torch.Tensor:
+    def multistep_uni_p_bh_update(self, model_output: torch.Tensor, *, sample: torch.Tensor, order: int) -> torch.Tensor:
         """
         One step for the UniP (B(h) version). Alternatively, `self.solver_p` is used if is specified.
 
         Args:
             model_output (`torch.Tensor`):
                 The direct output from the learned diffusion model at the current timestep.
-            prev_timestep (`int`):
-                The previous discrete timestep in the diffusion chain.
             sample (`torch.Tensor`):
                 A current instance of a sample created by the diffusion process.
             order (`int`):
@@ -336,23 +288,6 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
             `torch.Tensor`:
                 The sample tensor at the previous timestep.
         """
-        prev_timestep = args[0] if len(args) > 0 else kwargs.pop("prev_timestep", None)
-        if sample is None:
-            if len(args) > 1:
-                sample = args[1]
-            else:
-                raise ValueError(" missing `sample` as a required keyward argument")
-        if order is None:
-            if len(args) > 2:
-                order = args[2]
-            else:
-                raise ValueError(" missing `order` as a required keyward argument")
-        if prev_timestep is not None:
-            deprecate(
-                "prev_timestep",
-                "1.0.0",
-                "Passing `prev_timestep` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
         model_output_list = self.model_outputs
 
         s0 = self.timestep_list[-1]
@@ -440,23 +375,13 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
         x_t = x_t.to(x.dtype)
         return x_t
 
-    def multistep_uni_c_bh_update(
-        self,
-        this_model_output: torch.Tensor,
-        *args,
-        last_sample: torch.Tensor = None,
-        this_sample: torch.Tensor = None,
-        order: int = None,  # pyright: ignore
-        **kwargs,
-    ) -> torch.Tensor:
+    def multistep_uni_c_bh_update(self, this_model_output: torch.Tensor, *, last_sample: torch.Tensor, this_sample: torch.Tensor, order: int) -> torch.Tensor:
         """
         One step for the UniC (B(h) version).
 
         Args:
             this_model_output (`torch.Tensor`):
                 The model outputs at `x_t`.
-            this_timestep (`int`):
-                The current timestep `t`.
             last_sample (`torch.Tensor`):
                 The generated sample before the last predictor `x_{t-1}`.
             this_sample (`torch.Tensor`):
@@ -468,28 +393,6 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
             `torch.Tensor`:
                 The corrected sample tensor at the current timestep.
         """
-        this_timestep = args[0] if len(args) > 0 else kwargs.pop("this_timestep", None)
-        if last_sample is None:
-            if len(args) > 1:
-                last_sample = args[1]
-            else:
-                raise ValueError(" missing`last_sample` as a required keyward argument")
-        if this_sample is None:
-            if len(args) > 2:
-                this_sample = args[2]
-            else:
-                raise ValueError(" missing`this_sample` as a required keyward argument")
-        if order is None:
-            if len(args) > 3:
-                order = args[3]
-            else:
-                raise ValueError(" missing`order` as a required keyward argument")
-        if this_timestep is not None:
-            deprecate(
-                "this_timestep",
-                "1.0.0",
-                "Passing `this_timestep` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
 
         model_output_list = self.model_outputs
 
