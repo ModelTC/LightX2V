@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
     apply_mlp_sglang,
     apply_qk_norm_rope_sglang,
@@ -34,7 +35,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self.num_heads = self.global_num_heads // self.tp_size
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.infer_dtype = GET_DTYPE()
-        self.sglang_parity_ops = config.get("h3_sglang_parity_ops", False)
+        self.sglang_parity_ops = resolve_minimax_h3_sgl_alignment(config).parity_ops
         if self.sglang_parity_ops:
             if config.get("dit_quant_scheme", "Default") != "Default":
                 raise NotImplementedError("MiniMax-H3 SGLang parity ops currently require unquantized DiT weights")

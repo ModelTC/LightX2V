@@ -64,7 +64,12 @@ def test_h3_parity_configuration_has_no_checkout_paths():
     with (REPO_ROOT / "configs/minimax_h3/minimax_h3_ref2av.json").open(encoding="utf-8") as handle:
         config = json.load(handle)
 
-    assert config["h3_sglang_parity_ops"] is True
+    assert config["sgl_aligned"] is True
+    assert "h3_sglang_parity_ops" not in config
+    assert "h3_packed_sequence_alignment" not in config
+    assert "h3_rng_mode" not in config
+    assert "h3_step_update" not in config
+    assert "sglang_compatible_export" not in config
     assert "h3_sglang_root" not in config
     assert "sglang_ffmpeg_path" not in config
 
@@ -83,7 +88,7 @@ def test_h3_parity_configuration_has_no_checkout_paths():
 
 
 def test_h3_parity_initializes_without_sglang_root():
-    transformer = MiniMaxH3TransformerInfer({"h3_sglang_parity_ops": True})
+    transformer = MiniMaxH3TransformerInfer({"sgl_aligned": True})
     assert transformer.sglang_parity_ops is True
 
 

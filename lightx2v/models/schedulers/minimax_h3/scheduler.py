@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import torch
 
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.models.networks.minimax_h3.packing import (
     AUDIO_CHANNELS,
     KEYFRAME_NOISE_AUG,
@@ -43,16 +44,17 @@ class MiniMaxH3Scheduler(BaseScheduler):
 
     def __init__(self, config):
         super().__init__(config)
+        sgl_alignment = resolve_minimax_h3_sgl_alignment(config)
         infer_steps = int(config["infer_steps"])
         self.video_shift = float(config.get("video_flow_shift", 12.0))
         self.audio_shift = float(config.get("audio_flow_shift", 3.0))
-        self.packed_sequence_alignment = int(config.get("h3_packed_sequence_alignment", 1))
+        self.packed_sequence_alignment = sgl_alignment.packed_sequence_alignment
         if self.packed_sequence_alignment < 1:
             raise ValueError(f"MiniMax-H3 h3_packed_sequence_alignment must be positive, got {self.packed_sequence_alignment}")
-        self.rng_mode = config.get("h3_rng_mode", "legacy_stream")
+        self.rng_mode = sgl_alignment.rng_mode
         if self.rng_mode not in {"legacy_stream", "sglang"}:
             raise ValueError(f"MiniMax-H3 h3_rng_mode must be 'legacy_stream' or 'sglang', got {self.rng_mode!r}")
-        self.step_update = config.get("h3_step_update", "reference_blend")
+        self.step_update = sgl_alignment.step_update
         if self.step_update not in {"reference_blend", "sglang_reference_blend", "training_euler"}:
             raise ValueError(f"MiniMax-H3 h3_step_update must be 'reference_blend', 'sglang_reference_blend', or 'training_euler', got {self.step_update!r}")
         if self.video_shift <= 0 or self.audio_shift <= 0:

@@ -9,6 +9,7 @@ from safetensors import safe_open
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
@@ -60,6 +61,7 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        self.sglang_parity_ops = resolve_minimax_h3_sgl_alignment(config).parity_ops
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not self.use_adaln_cache:
             separator = "=" * 88
@@ -343,7 +345,7 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError(f"MiniMax-H3 TP size {self.tp_size} must divide {details}")
 
     def _tp_split_type(self, key):
-        if self.config.get("h3_sglang_parity_ops", False):
+        if self.sglang_parity_ops:
             for prefix, split_type in _SGLANG_PARITY_TP_SPLITS.items():
                 if key == prefix or key.startswith(f"{prefix}."):
                     return split_type

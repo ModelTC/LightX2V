@@ -9,6 +9,7 @@ from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
 from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
@@ -105,6 +106,7 @@ class MiniMaxH3Runner(DefaultRunner):
     }
 
     def __init__(self, config):
+        self.sgl_alignment = resolve_minimax_h3_sgl_alignment(config)
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
@@ -277,7 +279,7 @@ class MiniMaxH3Runner(DefaultRunner):
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
             encode_fp32=self.config.get("vae_encode_fp32", False),
-            sglang_parity_ops=self.config.get("h3_sglang_parity_ops", False),
+            sglang_parity_ops=self.sgl_alignment.parity_ops,
         )
         self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
         self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
@@ -477,7 +479,7 @@ class MiniMaxH3Runner(DefaultRunner):
             pixels = pixels.permute(3, 0, 1, 2)[None]
         else:
             pixels = pixels.permute(2, 0, 1)[None, :, None]
-        if not self.config.get("h3_sglang_parity_ops", False):
+        if not self.sgl_alignment.parity_ops:
             pixels = pixels.float().div_(255.0)
         return pixels
 
@@ -661,7 +663,7 @@ class MiniMaxH3Runner(DefaultRunner):
             logger.info(f"MiniMax-H3 Video VAE decode tile shape for {resolution}: {tile_shape[0]}x{tile_shape[1]}")
 
         with ProfilingContext4DebugL1("Run Video VAE Decoder"):
-            return_video_cpu = False if self.config.get("sglang_compatible_export", False) else None
+            return_video_cpu = False if self.sgl_alignment.compatible_export else None
             video = self.video_vae.decode(video_latents, return_cpu=return_video_cpu)
         audio = None
         if not self.video_vae.decode_parallel or dist.get_rank() == 0:
@@ -673,7 +675,7 @@ class MiniMaxH3Runner(DefaultRunner):
         if video.ndim != 5 or video.shape[0] != 1 or video.shape[1] != 3:
             raise ValueError(f"decoded H3 video must be [1,3,F,H,W], got {tuple(video.shape)}")
         pixels = video[0].permute(1, 2, 3, 0).float() * 255.0
-        if self.config.get("sglang_compatible_export", False):
+        if self.sgl_alignment.compatible_export:
             return pixels.clamp_(0, 255).to(torch.uint8).contiguous().cpu()
         return pixels.round().to(torch.uint8).contiguous().cpu()
 
@@ -703,7 +705,7 @@ class MiniMaxH3Runner(DefaultRunner):
             )
             logger.info(f"Saving MiniMax-H3 audio-video output to {output_path}")
             with ProfilingContext4DebugL2("Save Audio-Video Output"):
-                if self.config.get("sglang_compatible_export", False):
+                if self.sgl_alignment.compatible_export:
                     encode_video_sglang_compatible(
                         video=frames,
                         fps=int(self.config.get("fps", 24)),

@@ -5,6 +5,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.ops.mm.mm_weight import unwrap_tp_weight
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3PreInferOutput
 from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
     apply_mlp_sglang,
@@ -61,7 +62,7 @@ class MiniMaxH3PreInfer:
         self.rope_theta = float(config.get("rope_theta", 10000.0))
         self.freq_dim = int(config.get("freq_dim", 256))
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
-        self.sglang_parity_ops = config.get("h3_sglang_parity_ops", False)
+        self.sglang_parity_ops = resolve_minimax_h3_sgl_alignment(config).parity_ops
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

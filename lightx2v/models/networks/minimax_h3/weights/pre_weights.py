@@ -1,6 +1,7 @@
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
@@ -82,7 +83,7 @@ class MiniMaxH3PreWeights(WeightModule):
         # The released checkpoint deliberately keeps the two media projections
         # and timestep MLP in fp32.  The text projection/refiner stay bf16.
         # SGLang uses column-parallel inputs and a column-to-row timestep MLP.
-        parity = bool(config.get("h3_sglang_parity_ops", False))
+        parity = resolve_minimax_h3_sgl_alignment(config).parity_ops
         col = "col" if parity else None
         row = "row" if parity else None
         self.add_module("proj_in", _linear("proj_in", bias=True, force_fp32=True, config=config, tp_split=col))

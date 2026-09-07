@@ -1,6 +1,7 @@
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3VelocityOutput
 from lightx2v.models.networks.minimax_h3.infer.sglang_fused import indexed_scale_shift_sglang
 from lightx2v.models.networks.minimax_h3.infer.sglang_parity import tp_all_gather_last_dim
@@ -15,7 +16,7 @@ class MiniMaxH3PostInfer:
         if config.get("tensor_parallel", False):
             self.tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
             self.tp_size = dist.get_world_size(self.tp_group)
-        self.sglang_parity_ops = config.get("h3_sglang_parity_ops", False)
+        self.sglang_parity_ops = resolve_minimax_h3_sgl_alignment(config).parity_ops
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler

@@ -1,6 +1,7 @@
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
@@ -28,7 +29,7 @@ def _rms(config, name, eps):
 class MiniMaxH3PostWeights(WeightModule):
     def __init__(self, config):
         super().__init__()
-        parity = bool(config.get("h3_sglang_parity_ops", False))
+        parity = resolve_minimax_h3_sgl_alignment(config).parity_ops
         col = "col" if parity else None
         self.add_module(
             "norm_out",
