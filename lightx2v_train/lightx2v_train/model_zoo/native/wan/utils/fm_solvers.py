@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers, SchedulerMixin, SchedulerOutput
-from diffusers.utils import deprecate, is_scipy_available
+from diffusers.utils import is_scipy_available
 from diffusers.utils.torch_utils import randn_tensor
 
 if is_scipy_available():
@@ -86,30 +86,13 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
             The threshold value for dynamic thresholding. Valid only when `thresholding=True` and
             `algorithm_type="dpmsolver++"`.
         algorithm_type (`str`, defaults to `dpmsolver++`):
-            Algorithm type for the solver; can be `dpmsolver`, `dpmsolver++`, `sde-dpmsolver` or `sde-dpmsolver++`. The
-            `dpmsolver` type implements the algorithms in the [DPMSolver](https://huggingface.co/papers/2206.00927)
-            paper, and the `dpmsolver++` type implements the algorithms in the
-            [DPMSolver++](https://huggingface.co/papers/2211.01095) paper. It is recommended to use `dpmsolver++` or
-            `sde-dpmsolver++` with `solver_order=2` for guided sampling like in Stable Diffusion.
+            Algorithm type for the solver: `dpmsolver++` or `sde-dpmsolver++`.
         solver_type (`str`, defaults to `midpoint`):
             Solver type for the second-order solver; can be `midpoint` or `heun`. The solver type slightly affects the
             sample quality, especially for a small number of steps. It is recommended to use `midpoint` solvers.
         lower_order_final (`bool`, defaults to `True`):
             Whether to use lower-order solvers in the final steps. Only valid for < 15 inference steps. This can
             stabilize the sampling of DPMSolver for steps < 15, especially for steps <= 10.
-        euler_at_final (`bool`, defaults to `False`):
-            Whether to use Euler's method in the final step. It is a trade-off between numerical stability and detail
-            richness. This can stabilize the sampling of the SDE variant of DPMSolver for small number of inference
-            steps, but sometimes may result in blurring.
-        final_sigmas_type (`str`, *optional*, defaults to "zero"):
-            The final `sigma` value for the noise schedule during the sampling process. If `"sigma_min"`, the final
-            sigma is the same as the last sigma in the training schedule. If `zero`, the final sigma is set to 0.
-        lambda_min_clipped (`float`, defaults to `-inf`):
-            Clipping threshold for the minimum value of `lambda(t)` for numerical stability. This is critical for the
-            cosine (`squaredcos_cap_v2`) noise schedule.
-        variance_type (`str`, *optional*):
-            Set to "learned" or "learned_range" for diffusion models that predict variance. If set, the model's output
-            contains the predicted Gaussian variance.
     """
 
     _compatibles = [e.name for e in KarrasDiffusionSchedulers]
@@ -129,31 +112,12 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         algorithm_type: str = "dpmsolver++",
         solver_type: str = "midpoint",
         lower_order_final: bool = True,
-        euler_at_final: bool = False,
-        final_sigmas_type: Optional[str] = "zero",  # "zero", "sigma_min"
-        lambda_min_clipped: float = -float("inf"),
-        variance_type: Optional[str] = None,
-        invert_sigmas: bool = False,
     ):
-        if algorithm_type in ["dpmsolver", "sde-dpmsolver"]:
-            deprecation_message = f"algorithm_type {algorithm_type} is deprecated and will be removed in a future version. Choose from `dpmsolver++` or `sde-dpmsolver++` instead"
-            deprecate("algorithm_types dpmsolver and sde-dpmsolver", "1.0.0", deprecation_message)
-
         # settings for DPM-Solver
-        if algorithm_type not in ["dpmsolver", "dpmsolver++", "sde-dpmsolver", "sde-dpmsolver++"]:
-            if algorithm_type == "deis":
-                self.register_to_config(algorithm_type="dpmsolver++")
-            else:
-                raise NotImplementedError(f"{algorithm_type} is not implemented for {self.__class__}")
-
+        if algorithm_type not in ["dpmsolver++", "sde-dpmsolver++"]:
+            raise NotImplementedError(f"{algorithm_type} is not implemented for {self.__class__}")
         if solver_type not in ["midpoint", "heun"]:
-            if solver_type in ["logrho", "bh1", "bh2"]:
-                self.register_to_config(solver_type="midpoint")
-            else:
-                raise NotImplementedError(f"{solver_type} is not implemented for {self.__class__}")
-
-        if algorithm_type not in ["dpmsolver++", "sde-dpmsolver++"] and final_sigmas_type == "zero":
-            raise ValueError(f"`final_sigmas_type` {final_sigmas_type} is not supported for `algorithm_type` {algorithm_type}. Please choose `sigma_min` instead.")
+            raise NotImplementedError(f"{solver_type} is not implemented for {self.__class__}")
 
         # setable values
         self.num_inference_steps = None
@@ -233,12 +197,7 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
                 shift = self.config.shift
             sigmas = shift * sigmas / (1 + (shift - 1) * sigmas)  # pyright: ignore
 
-        if self.config.final_sigmas_type == "sigma_min":
-            sigma_last = ((1 - self.alphas_cumprod[0]) / self.alphas_cumprod[0]) ** 0.5
-        elif self.config.final_sigmas_type == "zero":
-            sigma_last = 0
-        else:
-            raise ValueError(f"`final_sigmas_type` must be one of 'zero', or 'sigma_min', but got {self.config.final_sigmas_type}")
+        sigma_last = 0.0
 
         timesteps = sigmas * self.config.num_train_timesteps
         sigmas = np.concatenate([sigmas, [sigma_last]]).astype(np.float32)  # pyright: ignore
@@ -301,13 +260,7 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         return math.exp(mu) / (math.exp(mu) + (1 / t - 1) ** sigma)
 
     # Copied from diffusers.schedulers.scheduling_dpmsolver_multistep.DPMSolverMultistepScheduler.convert_model_output
-    def convert_model_output(
-        self,
-        model_output: torch.Tensor,
-        *args,
-        sample: torch.Tensor = None,
-        **kwargs,
-    ) -> torch.Tensor:
+    def convert_model_output(self, model_output: torch.Tensor, *, sample: torch.Tensor) -> torch.Tensor:
         """
         Convert the model output to the corresponding type the DPMSolver/DPMSolver++ algorithm needs. DPM-Solver is
         designed to discretize an integral of the noise prediction model, and DPM-Solver++ is designed to discretize an
@@ -325,18 +278,6 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
             `torch.Tensor`:
                 The converted model output.
         """
-        timestep = args[0] if len(args) > 0 else kwargs.pop("timestep", None)
-        if sample is None:
-            if len(args) > 1:
-                sample = args[1]
-            else:
-                raise ValueError("missing `sample` as a required keyward argument")
-        if timestep is not None:
-            deprecate(
-                "timesteps",
-                "1.0.0",
-                "Passing `timesteps` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
 
         # DPM-Solver++ needs to solve an integral of the data prediction model.
         if self.config.algorithm_type in ["dpmsolver++", "sde-dpmsolver++"]:
@@ -344,9 +285,7 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
                 sigma_t = self.sigmas[self.step_index]
                 x0_pred = sample - sigma_t * model_output
             else:
-                raise ValueError(
-                    f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction`, or `flow_prediction` for the FlowDPMSolverMultistepScheduler."
-                )
+                raise ValueError(f"prediction_type given as {self.config.prediction_type} must be `flow_prediction` for the FlowDPMSolverMultistepScheduler.")
 
             if self.config.thresholding:
                 x0_pred = self._threshold_sample(x0_pred)
@@ -354,32 +293,9 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
             return x0_pred
 
         # DPM-Solver needs to solve an integral of the noise prediction model.
-        elif self.config.algorithm_type in ["dpmsolver", "sde-dpmsolver"]:
-            if self.config.prediction_type == "flow_prediction":
-                sigma_t = self.sigmas[self.step_index]
-                epsilon = sample - (1 - sigma_t) * model_output
-            else:
-                raise ValueError(
-                    f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, `v_prediction` or `flow_prediction` for the FlowDPMSolverMultistepScheduler."
-                )
-
-            if self.config.thresholding:
-                sigma_t = self.sigmas[self.step_index]
-                x0_pred = sample - sigma_t * model_output
-                x0_pred = self._threshold_sample(x0_pred)
-                epsilon = model_output + x0_pred
-
-            return epsilon
 
     # Copied from diffusers.schedulers.scheduling_dpmsolver_multistep.DPMSolverMultistepScheduler.dpm_solver_first_order_update
-    def dpm_solver_first_order_update(
-        self,
-        model_output: torch.Tensor,
-        *args,
-        sample: torch.Tensor = None,
-        noise: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> torch.Tensor:
+    def dpm_solver_first_order_update(self, model_output: torch.Tensor, *, sample: torch.Tensor, noise: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         One step for the first-order DPMSolver (equivalent to DDIM).
         Args:
@@ -391,26 +307,6 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
             `torch.Tensor`:
                 The sample tensor at the previous timestep.
         """
-        timestep = args[0] if len(args) > 0 else kwargs.pop("timestep", None)
-        prev_timestep = args[1] if len(args) > 1 else kwargs.pop("prev_timestep", None)
-        if sample is None:
-            if len(args) > 2:
-                sample = args[2]
-            else:
-                raise ValueError(" missing `sample` as a required keyward argument")
-        if timestep is not None:
-            deprecate(
-                "timesteps",
-                "1.0.0",
-                "Passing `timesteps` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
-
-        if prev_timestep is not None:
-            deprecate(
-                "prev_timestep",
-                "1.0.0",
-                "Passing `prev_timestep` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
 
         sigma_t, sigma_s = self.sigmas[self.step_index + 1], self.sigmas[self.step_index]  # pyright: ignore
         alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma_t)
@@ -421,25 +317,13 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         h = lambda_t - lambda_s
         if self.config.algorithm_type == "dpmsolver++":
             x_t = (sigma_t / sigma_s) * sample - (alpha_t * (torch.exp(-h) - 1.0)) * model_output
-        elif self.config.algorithm_type == "dpmsolver":
-            x_t = (alpha_t / alpha_s) * sample - (sigma_t * (torch.exp(h) - 1.0)) * model_output
         elif self.config.algorithm_type == "sde-dpmsolver++":
             assert noise is not None
             x_t = (sigma_t / sigma_s * torch.exp(-h)) * sample + (alpha_t * (1 - torch.exp(-2.0 * h))) * model_output + sigma_t * torch.sqrt(1.0 - torch.exp(-2 * h)) * noise
-        elif self.config.algorithm_type == "sde-dpmsolver":
-            assert noise is not None
-            x_t = (alpha_t / alpha_s) * sample - 2.0 * (sigma_t * (torch.exp(h) - 1.0)) * model_output + sigma_t * torch.sqrt(torch.exp(2 * h) - 1.0) * noise
         return x_t  # pyright: ignore
 
     # Copied from diffusers.schedulers.scheduling_dpmsolver_multistep.DPMSolverMultistepScheduler.multistep_dpm_solver_second_order_update
-    def multistep_dpm_solver_second_order_update(
-        self,
-        model_output_list: List[torch.Tensor],
-        *args,
-        sample: torch.Tensor = None,
-        noise: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> torch.Tensor:
+    def multistep_dpm_solver_second_order_update(self, model_output_list: List[torch.Tensor], *, sample: torch.Tensor, noise: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         One step for the second-order multistep DPMSolver.
         Args:
@@ -451,26 +335,6 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
             `torch.Tensor`:
                 The sample tensor at the previous timestep.
         """
-        timestep_list = args[0] if len(args) > 0 else kwargs.pop("timestep_list", None)
-        prev_timestep = args[1] if len(args) > 1 else kwargs.pop("prev_timestep", None)
-        if sample is None:
-            if len(args) > 2:
-                sample = args[2]
-            else:
-                raise ValueError(" missing `sample` as a required keyward argument")
-        if timestep_list is not None:
-            deprecate(
-                "timestep_list",
-                "1.0.0",
-                "Passing `timestep_list` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
-
-        if prev_timestep is not None:
-            deprecate(
-                "prev_timestep",
-                "1.0.0",
-                "Passing `prev_timestep` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
 
         sigma_t, sigma_s0, sigma_s1 = (
             self.sigmas[self.step_index + 1],  # pyright: ignore
@@ -497,12 +361,6 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
                 x_t = (sigma_t / sigma_s0) * sample - (alpha_t * (torch.exp(-h) - 1.0)) * D0 - 0.5 * (alpha_t * (torch.exp(-h) - 1.0)) * D1
             elif self.config.solver_type == "heun":
                 x_t = (sigma_t / sigma_s0) * sample - (alpha_t * (torch.exp(-h) - 1.0)) * D0 + (alpha_t * ((torch.exp(-h) - 1.0) / h + 1.0)) * D1
-        elif self.config.algorithm_type == "dpmsolver":
-            # See https://arxiv.org/abs/2206.00927 for detailed derivations
-            if self.config.solver_type == "midpoint":
-                x_t = (alpha_t / alpha_s0) * sample - (sigma_t * (torch.exp(h) - 1.0)) * D0 - 0.5 * (sigma_t * (torch.exp(h) - 1.0)) * D1
-            elif self.config.solver_type == "heun":
-                x_t = (alpha_t / alpha_s0) * sample - (sigma_t * (torch.exp(h) - 1.0)) * D0 - (sigma_t * ((torch.exp(h) - 1.0) / h - 1.0)) * D1
         elif self.config.algorithm_type == "sde-dpmsolver++":
             assert noise is not None
             if self.config.solver_type == "midpoint":
@@ -519,27 +377,10 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
                     + (alpha_t * ((1.0 - torch.exp(-2.0 * h)) / (-2.0 * h) + 1.0)) * D1
                     + sigma_t * torch.sqrt(1.0 - torch.exp(-2 * h)) * noise
                 )
-        elif self.config.algorithm_type == "sde-dpmsolver":
-            assert noise is not None
-            if self.config.solver_type == "midpoint":
-                x_t = (alpha_t / alpha_s0) * sample - 2.0 * (sigma_t * (torch.exp(h) - 1.0)) * D0 - (sigma_t * (torch.exp(h) - 1.0)) * D1 + sigma_t * torch.sqrt(torch.exp(2 * h) - 1.0) * noise
-            elif self.config.solver_type == "heun":
-                x_t = (
-                    (alpha_t / alpha_s0) * sample
-                    - 2.0 * (sigma_t * (torch.exp(h) - 1.0)) * D0
-                    - 2.0 * (sigma_t * ((torch.exp(h) - 1.0) / h - 1.0)) * D1
-                    + sigma_t * torch.sqrt(torch.exp(2 * h) - 1.0) * noise
-                )
         return x_t  # pyright: ignore
 
     # Copied from diffusers.schedulers.scheduling_dpmsolver_multistep.DPMSolverMultistepScheduler.multistep_dpm_solver_third_order_update
-    def multistep_dpm_solver_third_order_update(
-        self,
-        model_output_list: List[torch.Tensor],
-        *args,
-        sample: torch.Tensor = None,
-        **kwargs,
-    ) -> torch.Tensor:
+    def multistep_dpm_solver_third_order_update(self, model_output_list: List[torch.Tensor], *, sample: torch.Tensor) -> torch.Tensor:
         """
         One step for the third-order multistep DPMSolver.
         Args:
@@ -551,27 +392,6 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
             `torch.Tensor`:
                 The sample tensor at the previous timestep.
         """
-
-        timestep_list = args[0] if len(args) > 0 else kwargs.pop("timestep_list", None)
-        prev_timestep = args[1] if len(args) > 1 else kwargs.pop("prev_timestep", None)
-        if sample is None:
-            if len(args) > 2:
-                sample = args[2]
-            else:
-                raise ValueError(" missing`sample` as a required keyward argument")
-        if timestep_list is not None:
-            deprecate(
-                "timestep_list",
-                "1.0.0",
-                "Passing `timestep_list` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
-
-        if prev_timestep is not None:
-            deprecate(
-                "prev_timestep",
-                "1.0.0",
-                "Passing `prev_timestep` is deprecated and has no effect as model output conversion is now handled via an internal counter `self.step_index`",
-            )
 
         sigma_t, sigma_s0, sigma_s1, sigma_s2 = (
             self.sigmas[self.step_index + 1],  # pyright: ignore
@@ -603,9 +423,6 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
             x_t = (
                 (sigma_t / sigma_s0) * sample - (alpha_t * (torch.exp(-h) - 1.0)) * D0 + (alpha_t * ((torch.exp(-h) - 1.0) / h + 1.0)) * D1 - (alpha_t * ((torch.exp(-h) - 1.0 + h) / h**2 - 0.5)) * D2
             )
-        elif self.config.algorithm_type == "dpmsolver":
-            # See https://arxiv.org/abs/2206.00927 for detailed derivations
-            x_t = (alpha_t / alpha_s0) * sample - (sigma_t * (torch.exp(h) - 1.0)) * D0 - (sigma_t * ((torch.exp(h) - 1.0) / h - 1.0)) * D1 - (sigma_t * ((torch.exp(h) - 1.0 - h) / h**2 - 0.5)) * D2
         return x_t  # pyright: ignore
 
     def index_for_timestep(self, timestep, schedule_timesteps=None):
@@ -673,9 +490,7 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
             self._init_step_index(timestep)
 
         # Improve numerical stability for small number of steps
-        lower_order_final = (self.step_index == len(self.timesteps) - 1) and (
-            self.config.euler_at_final or (self.config.lower_order_final and len(self.timesteps) < 15) or self.config.final_sigmas_type == "zero"
-        )
+        lower_order_final = self.step_index == len(self.timesteps) - 1
         lower_order_second = (self.step_index == len(self.timesteps) - 2) and self.config.lower_order_final and len(self.timesteps) < 15
 
         model_output = self.convert_model_output(model_output, sample=sample)
@@ -685,9 +500,9 @@ class FlowDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
 
         # Upcast to avoid precision issues when computing prev_sample
         sample = sample.to(torch.float32)
-        if self.config.algorithm_type in ["sde-dpmsolver", "sde-dpmsolver++"] and variance_noise is None:
+        if self.config.algorithm_type in ["sde-dpmsolver++"] and variance_noise is None:
             noise = randn_tensor(model_output.shape, generator=generator, device=model_output.device, dtype=torch.float32)
-        elif self.config.algorithm_type in ["sde-dpmsolver", "sde-dpmsolver++"]:
+        elif self.config.algorithm_type in ["sde-dpmsolver++"]:
             noise = variance_noise.to(device=model_output.device, dtype=torch.float32)  # pyright: ignore
         else:
             noise = None

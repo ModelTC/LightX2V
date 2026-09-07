@@ -482,13 +482,9 @@ class GenericDistributionMatchingCapability(BoundCapability, DistributionMatchin
     def encode_training_cache(self, batch):
         training = self.model.config["training"]
         teacher = training.get("teacher", {})
-        dmd = training.get("dmd", {})
-        guidance_scale = float(teacher.get("guidance_scale", dmd.get("guidance_scale", 3.0)))
+        guidance_scale = float(teacher.get("guidance_scale", 3.0))
         negative_prompt = _prompt_or_default(
-            teacher.get(
-                "negative_prompt",
-                dmd.get("negative_prompt", self.default_negative_prompt),
-            ),
+            teacher.get("negative_prompt", self.default_negative_prompt),
             self.model.unconditional_prompt,
         )
         prompt = batch["conditioning"]["prompt"]

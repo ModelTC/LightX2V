@@ -59,17 +59,15 @@ class PCMTimeGrid:
 
     def build_grid(self, scheduler, *, latent_hw, device) -> tuple[Tensor, Tensor]:
         steps = self.config.num_solver_steps
-        max_time = float(scheduler.max_t)
-        current = torch.arange(1, steps + 1, device=device, dtype=torch.float32) * (max_time / steps)
-        raw_boundary = scheduler.min_t if self.config.boundary_time is None else self.config.boundary_time
-        boundary = torch.tensor([raw_boundary], device=device, dtype=torch.float32)
-
-        if scheduler.do_time_shift:
-            current = scheduler.time_shift(current, latent_hw=latent_hw)
-            if raw_boundary > 0.0:
-                boundary = scheduler.time_shift(boundary, latent_hw=latent_hw)
-        if not boundary.item() < current[0].item():
-            raise ValueError(f"PCM boundary time must be smaller than the first solver time; got boundary={boundary.item():.6f}, first={current[0].item():.6f}.")
+        current = torch.arange(1, steps + 1, device=device, dtype=torch.float32) / steps
+        current = scheduler.clamp_training_sigma(scheduler.time_shift(current, latent_hw=latent_hw))
+        if self.config.boundary_time is None:
+            boundary = torch.tensor([scheduler.min_sigma], device=device, dtype=torch.float32)
+        else:
+            boundary = torch.tensor([self.config.boundary_time], device=device, dtype=torch.float32)
+            boundary = scheduler.time_shift(boundary, latent_hw=latent_hw)
+        if boundary.item() > current[0].item():
+            raise ValueError(f"PCM boundary time must not exceed the first solver time; got boundary={boundary.item():.6f}, first={current[0].item():.6f}.")
         previous = torch.cat([boundary, current[:-1]])
         return current, previous
 

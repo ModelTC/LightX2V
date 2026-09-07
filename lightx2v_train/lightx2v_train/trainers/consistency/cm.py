@@ -71,12 +71,6 @@ class CMTimePairSampler:
 class CMLoss:
     """Vector-distance CM loss with configurable interval weighting."""
 
-    _WEIGHT_ALIASES = {
-        "default": "inverse_delta",
-        "sqrt": "inverse_sqrt_delta",
-        "one": "none",
-    }
-
     def __init__(self, config: CMLossConfig):
         self.config = config
         self.dtype = torch.float64 if config.computation_dtype == "float64" else torch.float32
@@ -100,7 +94,7 @@ class CMLoss:
                 unweighted = l2_distance
 
         delta = (t.to(self.dtype) - r.to(self.dtype)).clamp_min(self.config.min_denominator)
-        weighting = self._WEIGHT_ALIASES.get(self.config.weighting, self.config.weighting)
+        weighting = self.config.weighting
         if weighting == "inverse_delta":
             weighted = unweighted / delta
         elif weighting == "inverse_sqrt_delta":

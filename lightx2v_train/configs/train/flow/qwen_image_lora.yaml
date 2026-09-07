@@ -26,20 +26,19 @@ scheduler:
     timestep_distribution: logitnormal
     logitnormal_mean: 0.0
     logitnormal_std: 1.0
-    min_t: 0.001
-    max_t: 1.0
+    min_sigma: 0.001
+    max_sigma: 1.0
     time_shift_settings:
         do_time_shift: true
         shift_type: exponential
-        # shift function: "linear" => mu/(mu+(1/t-1)^p), "exponential" => exp(mu)/(exp(mu)+(1/t-1)^p)
         time_shift_power: 1.0
         dynamic_shift: true
-        patch_size: [2, 2]  # [H, W]
-        # https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L59
+        shift_mu_strategy: linear
+        patch_size: [2, 2]
         shift_x1: 256
-        shift_x2: 4096
+        shift_x2: 8192
         shift_y1: 0.5
-        shift_y2: 1.15
+        shift_y2: 0.9
 
 training:
     method: flow_matching

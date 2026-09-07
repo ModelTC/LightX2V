@@ -38,12 +38,12 @@ data:
             - /path/to/LightX2V_train_data_examples/dataset_v1/val.jsonl
 
 scheduler:
+    min_sigma: 0.02
+    max_sigma: 0.98
     num_train_timesteps: 1000
     timestep_distribution: logitnormal
     logitnormal_mean: 0.0
     logitnormal_std: 1.0
-    min_t: 0.001
-    max_t: 1.0
     time_shift_settings:
         do_time_shift: true
         shift_type: exponential
@@ -70,10 +70,6 @@ training:
         # Start at 512px for memory; raise to 1024px only after validating available GPUs.
         generation_shapes:
             - {value: [512, 512]}
-        renoise_sigma_min: 0.02
-        renoise_sigma_max: 1.0
-        renoise_discrete_samples: 1000
-        renoise_shift: 5.0
     student:
         train_type: lora
         lora:
@@ -115,7 +111,7 @@ inference:
     negative_prompt: ""
     default_width: 1024
     default_height: 1024
-    num_inference_steps: 4
+    num_inference_steps: ${training.dmd.num_inference_steps}
     enable_cfg: false
     cfg_guidance_scale: ${model.guidance_scale}
     seed: 42

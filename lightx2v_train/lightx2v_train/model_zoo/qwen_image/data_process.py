@@ -16,8 +16,7 @@ VAE_IMAGE_AREA = 1024 * 1024
 
 def _size_multiple_from_config(config):
     processor_config = config.get("data", {}).get("processor", {})
-    preprocessing = config.get("model", {}).get("input_preprocessing", {})
-    value = processor_config.get("size_multiple", preprocessing.get("size_multiple"))
+    value = processor_config.get("size_multiple")
     if value is None:
         model_path = config["model"]["pretrained_model_name_or_path"]
         vae_config = AutoencoderKLQwenImage.load_config(model_path, subfolder="vae")
@@ -29,9 +28,6 @@ def _size_multiple_from_config(config):
 
 
 def _target_area_from_config(config):
-    preprocessing = config.get("model", {}).get("input_preprocessing", {})
-    if "target_area" in preprocessing:
-        return int(preprocessing["target_area"])
     data_config = config.get("data", {})
     for split in ("train", "val"):
         if "target_area" in data_config.get(split, {}):

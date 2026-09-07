@@ -7,22 +7,11 @@ from typing import Any, Mapping, Optional
 import torch
 from torch import Tensor
 
-_PREDICTION_TYPE_ALIASES = {
-    "flow": "velocity",
-    "velocity": "velocity",
-    "x0": "x0",
-    "sample": "x0",
-    "noise": "noise",
-    "epsilon": "noise",
-}
 
-
-def canonical_prediction_type(prediction_type: str) -> str:
-    try:
-        return _PREDICTION_TYPE_ALIASES[prediction_type.lower()]
-    except (AttributeError, KeyError) as exc:
-        supported = ", ".join(sorted(_PREDICTION_TYPE_ALIASES))
-        raise ValueError(f"Unsupported prediction type {prediction_type!r}; expected one of: {supported}.") from exc
+def validate_prediction_type(prediction_type: str) -> str:
+    if prediction_type not in {"velocity", "x0", "noise"}:
+        raise ValueError(f"Unsupported prediction type {prediction_type!r}; expected 'velocity', 'x0', or 'noise'.")
+    return prediction_type
 
 
 def expand_time(time: Tensor, ndim: int) -> Tensor:
@@ -57,8 +46,8 @@ class RectifiedFlowPath:
         source_type: str,
         target_type: str,
     ) -> Tensor:
-        source_type = canonical_prediction_type(source_type)
-        target_type = canonical_prediction_type(target_type)
+        source_type = validate_prediction_type(source_type)
+        target_type = validate_prediction_type(target_type)
         if source_type == target_type:
             return prediction
 

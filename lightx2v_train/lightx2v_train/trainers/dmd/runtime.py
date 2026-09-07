@@ -23,7 +23,6 @@ from lightx2v_train.tricks import (
     IdaStepContext,
     ImplicitDistributionAlignmentTrick,
 )
-from lightx2v_train.utils.generation_shapes import parse_generation_shapes
 
 from ..base import BaseTrainer
 from .checkpoint import DmdCheckpointManager
@@ -95,10 +94,7 @@ class _DmdRuntime(BaseTrainer):
     def set_model(self, model):
         super().set_model(model)
         self.student = model.capabilities.require(DistributionMatchingCapability)
-        parse_generation_shapes(
-            self.generation_shapes,
-            expected_dimensions=self.student.generation_shape_dimensions,
-        )
+        self.student.validate_generation_shapes(self.generation_shapes)
         profile = self.student.profile
         if self._configured_latent_dtype is None and profile.default_latent_dtype is not None:
             self.latent_dtype = profile.default_latent_dtype
@@ -131,7 +127,7 @@ class _DmdRuntime(BaseTrainer):
         if not profile.supports_guidance and self.guidance_scale != 1.0:
             raise ValueError(f"model={model_name!r} has no unconditional branch; training.teacher.guidance_scale must be 1.0.")
         if getattr(self, "warp_denoising_step", False) and not profile.supports_warped_denoising_schedule:
-            raise ValueError(f"model={model_name!r} requires an unwarped base denoising schedule; set training.dmd.warp_denoising_step=false.")
+            raise ValueError(f"model={model_name!r} requires an unshifted base denoising schedule; set scheduler.time_shift_settings.do_time_shift=false.")
 
     def _get_optimizer_config(self):
         return self.training_config["student"]["optimizer"]
@@ -240,7 +236,7 @@ class _DmdRuntime(BaseTrainer):
             num_training_steps=max(1, self.max_train_iters * self.fake_update_ratio),
         )
 
-        self.scheduler = DMDFlowMatchingScheduler(self.config, self.dmd_config)
+        self.scheduler = DMDFlowMatchingScheduler(self.config)
 
         if resume_ckpt_path is not None:
             self._load_resume_state(resume_ckpt_path)
@@ -321,16 +317,8 @@ class _DmdRuntime(BaseTrainer):
                 num_steps=num_steps,
             )
             return
-        sigma_values = self.dmd_config.get("denoising_sigma_values")
-        if sigma_values is not None:
-            sigma_values = tuple(float(value) for value in sigma_values)
-            expected = self.num_inference_steps + 1
-            if len(sigma_values) != expected:
-                raise ValueError(f"training.dmd.denoising_sigma_values must contain {expected} values, got {len(sigma_values)}.")
-            sigma_values = sigma_values[:-1]
         self.scheduler.set_timesteps(
             self.num_inference_steps,
-            sigmas=sigma_values,
             latent_hw=latent_hw,
             device=self.student.device,
         )
@@ -406,14 +394,8 @@ class _DmdRuntime(BaseTrainer):
     def _trick_checkpoint_metadata(self):
         return self.checkpoint_manager._trick_checkpoint_metadata()
 
-    def _validate_optional_trick_metadata(self, state, state_path):
-        return self.checkpoint_manager._validate_optional_trick_metadata(state, state_path)
-
     def _load_resume_state(self, resume_ckpt_path):
         return self.checkpoint_manager._load_resume_state(resume_ckpt_path)
-
-    def _validate_dmd_checkpoint_metadata(self, state, state_path, resume_ckpt_path):
-        return self.checkpoint_manager._validate_dmd_checkpoint_metadata(state, state_path, resume_ckpt_path)
 
     def _load_single_process_state(self, resume_ckpt_path):
         return self.checkpoint_manager._load_single_process_state(resume_ckpt_path)
