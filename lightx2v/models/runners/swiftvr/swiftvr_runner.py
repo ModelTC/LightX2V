@@ -237,7 +237,7 @@ class SwiftVRRunner(DefaultRunner):
         codec = self.config.get("video_codec", "libx265")
         ffmpeg_params = ["-crf", str(round((100 - quality) * 51 / 100)), "-movflags", "+faststart"]
         if codec == "libx265":
-            ffmpeg_params.extend(["-x265-params", "log-level=warning"])
+            ffmpeg_params.extend(["-x265-params", "log-level=warning", "-tag:v", "hvc1"])
         # Common x264/x265 presets from fastest to slowest:
         # ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow, placebo.
         preset = self.config.get("ffmpeg_preset", "")
