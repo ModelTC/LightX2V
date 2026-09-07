@@ -180,14 +180,21 @@ class MiniMaxH3Runner(DefaultRunner):
         else:
             self.input_info = Ref2AVInputInfo(**common, image_path=image)
 
-    def clear_warmup_state(self):
-        self.scheduler.clear()
+    def clear_conditioning_state(self):
         self.condition_video_latents = []
         self.condition_audio_latents = []
         self.keyframe_anchors = ()
         self.prepared_references = None
+
+    def clear_warmup_state(self):
+        self.scheduler.clear()
+        self.clear_conditioning_state()
         self.input_info = None
         self.__dict__.pop("inputs", None)
+
+    def end_run(self):
+        self.clear_conditioning_state()
+        super().end_run()
 
     def init_scheduler(self):
         self.scheduler = MiniMaxH3Scheduler(self.config)
@@ -501,10 +508,7 @@ class MiniMaxH3Runner(DefaultRunner):
                 f"loaded {self.loaded_transformer_partition!r}, requested {requested_partition!r}. "
                 "Create a separate LightX2VPipeline for ref2av."
             )
-        self.condition_video_latents = []
-        self.condition_audio_latents = []
-        self.keyframe_anchors = ()
-        self.prepared_references = None
+        self.clear_conditioning_state()
         if task == "ref2av":
             self._resolve_request_geometry()
             self.prepared_references = self._prepare_references()

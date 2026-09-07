@@ -220,10 +220,11 @@ class NeoppRunner(DefaultRunner):
                 timestep_shift=3.0,
             )
 
-        self.inputs = self.run_input_encoder()
-        gen_result = self.run_main()
-        self.clear_kvcache()
-        return gen_result
+        try:
+            self.inputs = self.run_input_encoder()
+            return self.run_main()
+        finally:
+            self.clear_kvcache()
 
     def load_kvcache(self, to_x2v_cond_kv_path, to_x2v_uncond_kv_path=None):
         cfg_p_rank = self._get_cfg_p_rank()
@@ -262,6 +263,7 @@ class NeoppRunner(DefaultRunner):
     def clear_kvcache(self):
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
+        self.inputs = {}
         self.model.transformer_infer.kv_cache.clear()
 
     def init_run(self):

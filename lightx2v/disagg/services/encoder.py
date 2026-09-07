@@ -378,10 +378,6 @@ class EncoderService(BaseService):
         self._phase1_slots = shared_slots
         self._phase1_slot_size = shared_slot_size
 
-        # Seed everything if seed is in config
-        if "seed" in self.config:
-            seed_all(self.config["seed"])
-
         data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
         data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
 
@@ -517,6 +513,7 @@ class EncoderService(BaseService):
         """
         Generates encoder outputs from prompt and image input.
         """
+        seed_all(config["seed"])
         self.logger.info("Starting processing in EncoderService...")
         room = int(config.get("data_bootstrap_room", 0))
         encoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("encoder", {})

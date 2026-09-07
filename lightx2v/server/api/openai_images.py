@@ -2,7 +2,6 @@ import asyncio
 import base64
 import re
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional
@@ -12,6 +11,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..schema import ImageTaskRequest, Usage
+from ..services.file_service import FileService
 from ..task_manager import TaskStatus, task_manager
 from .deps import get_services
 
@@ -37,11 +37,6 @@ class OpenAIImageResponse(BaseModel):
     output_format: Optional[Literal["png", "webp", "jpeg"]] = None
     size: Optional[str] = None
     usage: Optional[Usage] = None
-
-
-def _write_file_sync(file_path: Path, content: bytes) -> None:
-    with open(file_path, "wb") as buffer:
-        buffer.write(content)
 
 
 def _shape_from_size(size: str) -> tuple[int, int]:
@@ -152,7 +147,7 @@ def _build_url_response(request: Request, task_id: str, image_bytes: bytes) -> s
     file_name = f"{task_id}.png"
     output_path = services.file_service.output_video_dir / file_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_file_sync(output_path, image_bytes)
+    output_path.write_bytes(image_bytes)
 
     base = str(request.base_url).rstrip("/")
     return f"{base}/v1/files/download/{file_name}"
@@ -231,18 +226,16 @@ async def create_openai_image_generation(request: Request, body: OpenAIImageGene
     return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
 
 
-async def _save_upload_file(file: UploadFile, target_dir: Path) -> str:
+async def _save_upload_file(file: UploadFile, file_service: FileService) -> str:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Uploaded file has no filename")
 
-    file_extension = Path(file.filename).suffix or ".png"
-    unique_filename = f"{uuid.uuid4()}{file_extension}"
-    file_path = target_dir / unique_filename
+    filename = file.filename if Path(file.filename).suffix else file.filename + ".png"
 
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail=f"Uploaded file is empty: {file.filename}")
-    await asyncio.to_thread(_write_file_sync, file_path, content)
+    file_path = await asyncio.to_thread(file_service.save_uploaded_file, content, filename)
     return str(file_path)
 
 
@@ -290,12 +283,12 @@ async def create_openai_image_edit(
 
     image_paths = []
     for image_upload in image_uploads:
-        image_paths.append(await _save_upload_file(image_upload, services.file_service.input_image_dir))
+        image_paths.append(await _save_upload_file(image_upload, services.file_service))
     image_path = ",".join(image_paths)
 
     image_mask_path = ""
     if mask is not None:
-        image_mask_path = await _save_upload_file(mask, services.file_service.input_image_dir)
+        image_mask_path = await _save_upload_file(mask, services.file_service)
 
     message = _build_image_task_request(
         prompt=prompt,
