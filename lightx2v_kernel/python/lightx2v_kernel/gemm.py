@@ -8,6 +8,101 @@ def cutlass_scaled_nvfp4_mm(mat_a, mat_b, scales_a, scales_b, alpha, bias=None):
     return out
 
 
+def cublaslt_scaled_nvfp4_mm_bias(
+    mat_a,
+    mat_b,
+    scales_a,
+    scales_b,
+    alpha,
+    bias,
+    algorithm_index=-1,
+):
+    if bias is None:
+        raise ValueError("cuBLASLt NVFP4 requires a bias tensor")
+    m, n = mat_a.shape[0], mat_b.shape[0]
+    out = torch.empty((m, n), dtype=torch.bfloat16, device=mat_a.device)
+    torch.ops.lightx2v_kernel.cublaslt_scaled_nvfp4_mm_bias_sm120.default(
+        out,
+        mat_a,
+        mat_b,
+        scales_a,
+        scales_b,
+        alpha,
+        bias,
+        algorithm_index,
+    )
+    return out
+
+
+def cublaslt_scaled_nvfp4_mm_bias_algo_count(
+    mat_a, mat_b, scales_a, scales_b, alpha, bias
+):
+    """Return the cached cuBLASLt heuristic count for this exact M/N/K shape."""
+    m, n = mat_a.shape[0], mat_b.shape[0]
+    out = torch.empty((m, n), dtype=torch.bfloat16, device=mat_a.device)
+    return torch.ops.lightx2v_kernel.cublaslt_scaled_nvfp4_mm_bias_algo_count_sm120.default(
+        out, mat_a, mat_b, scales_a, scales_b, alpha, bias
+    )
+
+
+def cutlass_scaled_nvfp4_mm_split_n_stride(mat_a, mat_b, scales_a, scales_b, alpha, bias=None, split_n_parts=2):
+    m, n = mat_a.shape[0], mat_b.shape[0]
+    out = torch.empty((m, n), dtype=torch.bfloat16, device=mat_a.device)
+    torch.ops.lightx2v_kernel.cutlass_scaled_nvfp4_mm_split_n_stride_sm120.default(
+        out,
+        mat_a,
+        mat_b,
+        scales_a,
+        scales_b,
+        alpha,
+        bias,
+        split_n_parts,
+    )
+    return out
+
+
+def cutlass_scaled_nvfp4_mm_split_n_stride_gelu(
+    mat_a,
+    mat_b,
+    scales_a,
+    scales_b,
+    alpha,
+    bias=None,
+    split_n_parts=2,
+):
+    m, n = mat_a.shape[0], mat_b.shape[0]
+    out = torch.empty((m, n), dtype=torch.bfloat16, device=mat_a.device)
+    torch.ops.lightx2v_kernel.cutlass_scaled_nvfp4_mm_split_n_stride_gelu_sm120.default(
+        out, mat_a, mat_b, scales_a, scales_b, alpha, bias, split_n_parts
+    )
+    return out
+
+
+def cutlass_scaled_nvfp4_mm_split_n_stride_residual_gate(
+    mat_a,
+    mat_b,
+    scales_a,
+    scales_b,
+    alpha,
+    residual,
+    gate,
+    bias=None,
+    split_n_parts=2,
+):
+    torch.ops.lightx2v_kernel.cutlass_scaled_nvfp4_mm_split_n_stride_residual_gate_sm120.default(
+        residual,
+        mat_a,
+        mat_b,
+        scales_a,
+        scales_b,
+        alpha,
+        bias,
+        gate.contiguous(),
+        split_n_parts,
+    )
+    return residual
+
+
 def scaled_nvfp4_quant(input: torch.Tensor, input_global_scale: torch.Tensor):
     """
     Quantize input tensor to FP4 and return quantized tensor and scale.
@@ -48,7 +143,11 @@ def scaled_nvfp4_quant(input: torch.Tensor, input_global_scale: torch.Tensor):
     # rounded_m = ((m + 128 - 1) // 128) * 128
     # scale_n = n // block_size
     # rounded_n = ((scale_n + 4 - 1) // 4) * 4
-    output_scale = torch.zeros((((m + 128 - 1) // 128) * 128, (n // block_size + 4 - 1) // 4), device=device, dtype=torch.int32)
+    rounded_m = ((m + 128 - 1) // 128) * 128
+    scale_shape = (rounded_m, (n // block_size + 4 - 1) // 4)
+    # The kernel writes every logical SF element for complete 128-row tiles.
+    # Keep zeros only for a partial tile, where swizzled padding must remain 0.
+    output_scale = torch.empty(scale_shape, device=device, dtype=torch.int32) if rounded_m == m else torch.zeros(scale_shape, device=device, dtype=torch.int32)
 
     torch.ops.lightx2v_kernel.scaled_nvfp4_quant_sm120.default(output, input, output_scale, input_global_scale)
     output_scale = output_scale.view(torch.float8_e4m3fn)

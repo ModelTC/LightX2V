@@ -44,6 +44,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             self.modulate_func = modulate
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.mxfp8_fuse_enable = self.config.get("mxfp8_fuse_enable", True)
+        self.thor = self.config.get("thor", False)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
 
@@ -302,7 +303,21 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
             norm1_out = norm1_out.to(self.infer_dtype)
 
         s, n, d = *norm1_out.shape[:1], self.num_heads, self.head_dim
-        if norm1_quant is not None:
+        if self.thor:
+            q_proj = phase.self_attn_q
+            k_proj = phase.self_attn_k
+            v_proj = phase.self_attn_v
+            if not getattr(phase, "_nvfp4_qkv_cublaslt_scale_checked", False):
+                reference_scale = q_proj.input_global_scale
+                if not torch.equal(reference_scale, k_proj.input_global_scale) or not torch.equal(reference_scale, v_proj.input_global_scale):
+                    raise ValueError("Thor mode requires identical Q/K/V input_global_scale values")
+                phase._nvfp4_qkv_cublaslt_scale_checked = True
+            qkv_quant, qkv_scale = q_proj.act_quant_func(norm1_out)
+            algorithm_index = -1
+            q = phase.self_attn_norm_q.apply(q_proj.apply_quantized_cublaslt(qkv_quant, qkv_scale, algorithm_index)).view(s, n, d)
+            k = phase.self_attn_norm_k.apply(k_proj.apply_quantized_cublaslt(qkv_quant, qkv_scale, algorithm_index)).view(s, n, d)
+            v = v_proj.apply_quantized_cublaslt(qkv_quant, qkv_scale, algorithm_index).view(s, n, d)
+        elif norm1_quant is not None:
             q = phase.self_attn_norm_q.apply(self._mxfp8_apply_quantized(phase.self_attn_q, norm1_quant, norm1_scale)).view(s, n, d)
             k = phase.self_attn_norm_k.apply(self._mxfp8_apply_quantized(phase.self_attn_k, norm1_quant, norm1_scale)).view(s, n, d)
             v = self._mxfp8_apply_quantized(phase.self_attn_v, norm1_quant, norm1_scale).view(s, n, d)
@@ -376,7 +391,13 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                 **attn_running_args,
             )
 
-        y = phase.self_attn_o.apply(attn_out)
+        if self.thor:
+            y = phase.self_attn_o.apply_cublaslt(
+                attn_out,
+                -1,
+            )
+        else:
+            y = phase.self_attn_o.apply(attn_out)
 
         if self.clean_cuda_cache:
             del q, k, v, attn_out
@@ -403,7 +424,14 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                 context_img = context_img.to(self.infer_dtype)
 
         n, d = self.num_heads, self.head_dim
-        q = phase.cross_attn_norm_q.apply(phase.cross_attn_q.apply(norm3_out)).view(-1, n, d)
+        if self.thor:
+            q = phase.cross_attn_q.apply_cublaslt(
+                norm3_out,
+                -1,
+            )
+        else:
+            q = phase.cross_attn_q.apply(norm3_out)
+        q = phase.cross_attn_norm_q.apply(q).view(-1, n, d)
         k = phase.cross_attn_norm_k.apply(phase.cross_attn_k.apply(context)).view(-1, n, d)
         v = phase.cross_attn_v.apply(context).view(-1, n, d)
 
@@ -436,7 +464,13 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                 del k_img, v_img, img_attn_out
                 torch_device_module.empty_cache()
 
-        attn_out = phase.cross_attn_o.apply(attn_out)
+        if self.thor:
+            attn_out = phase.cross_attn_o.apply_cublaslt(
+                attn_out,
+                -1,
+            )
+        else:
+            attn_out = phase.cross_attn_o.apply(attn_out)
 
         if self.clean_cuda_cache:
             del q, k, v, norm3_out, context, context_img
@@ -484,13 +518,23 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
                 c_shift_msa=mxfp8_modulate_shift,
             )
 
-        y = phase.ffn_0.apply(norm2_out)
+        if self.thor:
+            y = phase.ffn_0.apply_gelu(norm2_out)
+        else:
+            y = phase.ffn_0.apply(norm2_out)
         if self.clean_cuda_cache:
-            del norm2_out, x
+            del norm2_out
+            if not self.thor:
+                del x
             torch_device_module.empty_cache()
-        y = torch.nn.functional.gelu(y, approximate="tanh")
+        if not self.thor:
+            y = torch.nn.functional.gelu(y, approximate="tanh")
         if self.clean_cuda_cache:
             torch_device_module.empty_cache()
+        if self.thor:
+            phase.ffn_2.apply_residual_gate(y, x, c_gate_msa.squeeze())
+            return None
+
         y = phase.ffn_2.apply(y)
 
         return y

@@ -1,6 +1,9 @@
 import ctypes
 import os
 import platform
+
+import torch  # noqa: F401
+
 from lightx2v_kernel import common_ops  # noqa: F401
 from lightx2v_kernel.version import __version__
 

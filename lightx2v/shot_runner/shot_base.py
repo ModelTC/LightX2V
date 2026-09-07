@@ -10,7 +10,7 @@ from loguru import logger
 from lightx2v.utils.input_info import fill_input_info_from_defaults
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
+from lightx2v.utils.set_config import print_config, set_config, set_parallel_config, validate_thor_config
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
@@ -59,6 +59,7 @@ def load_clip_configs(main_json_path):
             config["parallel"] = cfg["parallel"]
             set_parallel_config(config)
 
+        validate_thor_config(config)
         clip_configs.append(ClipConfig(name=item["name"], config_json=config))
     return clip_configs
 

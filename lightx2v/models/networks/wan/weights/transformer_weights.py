@@ -52,6 +52,7 @@ def _mm_weight(
     lora_prefix="",
     lora_path="",
     mm_type_override=None,
+    mm_kwargs=None,
 ):
     mm_type = mm_type_override
     if mm_type is None:
@@ -75,6 +76,7 @@ def _mm_weight(
             lazy_load_file=lazy_load_file,
             lora_prefix=lora_prefix,
             lora_path=lora_path,
+            mm_kwargs=mm_kwargs,
         )
     return MM_WEIGHT_REGISTER[mm_type](
         weight_name,
@@ -85,6 +87,7 @@ def _mm_weight(
         lazy_load_file,
         lora_prefix=lora_prefix,
         lora_path=lora_path,
+        **(mm_kwargs or {}),
     )
 
 
@@ -432,6 +435,20 @@ class WanSelfAttention(WeightModule):
                 lora_path=lora_path,
             ),
         )
+        if config.get("thor", False):
+            if mm_type != "nvfp4":
+                raise ValueError("thor=true requires dit_quant_scheme='nvfp4'")
+            if config.get("tensor_parallel", False):
+                raise NotImplementedError("Thor mode does not support tensor parallelism")
+            if config.get("cpu_offload", False) or create_cuda_buffer or create_cpu_buffer:
+                raise NotImplementedError("Thor mode does not support CPU offload")
+            if lazy_load:
+                raise NotImplementedError("Thor mode does not support lazy loading")
+            if lora_path or config.get("lora_configs"):
+                raise NotImplementedError("Thor mode does not support LoRA")
+            if config.get("feature_caching", "NoCaching") != "NoCaching":
+                raise NotImplementedError("Thor mode requires feature_caching='NoCaching'")
+
         self.add_module(
             "self_attn_o",
             _mm_weight(
@@ -798,12 +815,28 @@ class WanFFN(WeightModule):
             LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](),
         )
 
+        thor = config.get("thor", False)
+        if thor:
+            if self.mm_type != "nvfp4":
+                raise ValueError("thor=true requires dit_quant_scheme='nvfp4'")
+            if config.get("tensor_parallel", False):
+                raise NotImplementedError("Thor mode does not support tensor parallelism")
+            if config.get("cpu_offload", False) or create_cuda_buffer or create_cpu_buffer:
+                raise NotImplementedError("Thor mode does not support CPU offload")
+            if self.lazy_load:
+                raise NotImplementedError("Thor mode does not support lazy loading")
+            if lora_path or config.get("lora_configs"):
+                raise NotImplementedError("Thor mode does not support LoRA")
+
         split_n = config.get("nvfp4_ffn_split_n_workaround", False)
         if not isinstance(split_n, bool):
             raise TypeError("nvfp4_ffn_split_n_workaround must be a boolean")
-        # Temporary and intentionally scoped to Wan FFN. The checkpoint format
-        # remains ``nvfp4``; only the execution implementation changes.
-        ffn_mm_type = "nvfp4-split-n-workaround" if self.mm_type == "nvfp4" and split_n else self.mm_type
+        # The checkpoint format remains ``nvfp4``; only Wan FFN execution changes.
+        if thor:
+            ffn_mm_type = "nvfp4-split-n-stride-workaround"
+        else:
+            ffn_mm_type = "nvfp4-split-n-workaround" if self.mm_type == "nvfp4" and split_n else self.mm_type
+        ffn_mm_kwargs = {"split_n_parts": 2} if thor else None
 
         fp = f"{block_prefix}.{self.block_index}"
         self.add_module(
@@ -817,6 +850,7 @@ class WanFFN(WeightModule):
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=self.lazy_load,
                 lazy_load_file=self.lazy_load_file,
+                mm_kwargs=ffn_mm_kwargs,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
                 mm_type_override=ffn_mm_type,
@@ -833,6 +867,7 @@ class WanFFN(WeightModule):
                 create_cpu_buffer=create_cpu_buffer,
                 lazy_load=self.lazy_load,
                 lazy_load_file=self.lazy_load_file,
+                mm_kwargs=ffn_mm_kwargs,
                 lora_prefix=block_prefix,
                 lora_path=lora_path,
                 mm_type_override=ffn_mm_type,

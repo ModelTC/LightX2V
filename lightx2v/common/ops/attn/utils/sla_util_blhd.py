@@ -2,6 +2,8 @@ import torch
 import triton
 import triton.language as tl
 
+from .sla_util import _get_block_lut
+
 
 @triton.jit
 def compress_kernel(
@@ -30,6 +32,42 @@ def compress_kernel(
     tl.store(XM + xm_offset + idx_l * D + offs_d, x_mean.to(XM.dtype.element_ty))
 
 
+@triton.jit
+def centered_compress_kernel(
+    X,
+    CENTER,
+    XM,
+    L: tl.constexpr,
+    H: tl.constexpr,
+    D: tl.constexpr,
+    BLOCK_L: tl.constexpr,
+):
+    idx_l = tl.program_id(0)
+    idx_bh = tl.program_id(1)
+
+    idx_b = idx_bh // H
+    idx_h = idx_bh - idx_b * H
+
+    offs_l = idx_l * BLOCK_L + tl.arange(0, BLOCK_L)
+    offs_d = tl.arange(0, D)
+    valid_l = offs_l[:, None] < L
+
+    x_offset = idx_b * L * H * D + idx_h * D
+    xm_offset = idx_bh * ((L + BLOCK_L - 1) // BLOCK_L) * D
+    center_offset = idx_bh * D
+    x = tl.load(
+        X + x_offset + offs_l[:, None] * (H * D) + offs_d[None, :],
+        mask=valid_l,
+    )
+    center = tl.load(CENTER + center_offset + offs_d)
+    centered_x = (x - center[None, :]).to(XM.dtype.element_ty)
+    centered_x = tl.where(valid_l, centered_x, 0.0)
+
+    nx = min(BLOCK_L, L - idx_l * BLOCK_L)
+    x_mean = tl.sum(centered_x, axis=0, dtype=tl.float32) / nx
+    tl.store(XM + xm_offset + idx_l * D + offs_d, x_mean.to(XM.dtype.element_ty))
+
+
 def mean_pool(x, BLK):
     assert x.is_contiguous()
     B, L, H, D = x.shape
@@ -39,6 +77,26 @@ def mean_pool(x, BLK):
     grid = (L_BLOCKS, B * H)
     compress_kernel[grid](x, x_mean, L, H, D, BLK)
     return x_mean
+
+
+def centered_mean_pool(x, center, BLK):
+    assert x.is_contiguous()
+    assert center.is_contiguous()
+
+    B, L, H, D = x.shape
+    L_BLOCKS = (L + BLK - 1) // BLK
+    x_mean = torch.empty((B, H, L_BLOCKS, D), device=x.device, dtype=x.dtype)
+
+    grid = (L_BLOCKS, B * H)
+    centered_compress_kernel[grid](x, center, x_mean, L, H, D, BLK)
+    return x_mean
+
+
+def get_block_lut_blhd(q, k, topk_ratio, BLKQ=64, BLKK=64):
+    pooled_qblocks = mean_pool(q, BLKQ)
+    k_mean = torch.mean(k, dim=1, keepdim=True)
+    pooled_kblocks = centered_mean_pool(k, k_mean, BLKK)
+    return _get_block_lut(pooled_qblocks, pooled_kblocks, topk_ratio)
 
 
 def get_block_map_blhd(q, k, topk_ratio, BLKQ=64, BLKK=64):
