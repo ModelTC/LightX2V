@@ -1,0 +1,4 @@
+# FastWAM issue #23: newer SAPIEN rendering changes affect evaluation scores.
+sapien==3.0.0b1
+# Keep pkg_resources, required by the SAPIEN beta wheel.
+setuptools==69.5.1
