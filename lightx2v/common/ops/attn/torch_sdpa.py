@@ -14,14 +14,10 @@ class TorchSDPAWeight(AttnWeightTemplate):
         self.config = {}
 
     @staticmethod
-    def _cu_bounds(cu_seqlens, sequence_length, name):
-        if cu_seqlens.ndim != 1:
-            raise ValueError(f"cu_seqlens_{name} must be one-dimensional, got shape {tuple(cu_seqlens.shape)}")
-        bounds = tuple(int(value) for value in cu_seqlens.tolist())
-        if len(bounds) < 2 or bounds[0] != 0 or bounds[-1] != sequence_length:
-            raise ValueError(f"cu_seqlens_{name} must start at 0 and end at {sequence_length}, got {bounds}")
-        if any(start > stop for start, stop in zip(bounds[:-1], bounds[1:])):
-            raise ValueError(f"cu_seqlens_{name} must be nondecreasing, got {bounds}")
+    def _cu_bounds(cu_seqlens, seq_len, name):
+        bounds = cu_seqlens.tolist()
+        if len(bounds) < 2 or bounds[0] != 0 or bounds[-1] != seq_len or any(start > stop for start, stop in zip(bounds, bounds[1:])):
+            raise ValueError(f"Invalid cu_seqlens_{name}")
         return bounds
 
     def apply(
@@ -71,27 +67,26 @@ class TorchSDPAWeight(AttnWeightTemplate):
                 )
             return output.transpose(1, 2)
 
-        packed_varlen = cu_seqlens_q is not None or cu_seqlens_kv is not None
-        if not packed_varlen:
+        if (cu_seqlens_q is None) != (cu_seqlens_kv is None):
+            raise ValueError("cu_seqlens_q and cu_seqlens_kv must either both be set or both be None")
+
+        if cu_seqlens_q is None:
             if q.ndim == 3:
                 q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
-            x = run_sdpa(q, k, v, attn_mask)
-            b, s, a, d = x.shape
-            return x.reshape(b, s, a * d).squeeze(0)
+            return run_sdpa(q, k, v, attn_mask).flatten(2).squeeze(0)
 
-        if cu_seqlens_q is None or cu_seqlens_kv is None:
-            raise ValueError("cu_seqlens_q and cu_seqlens_kv must either both be set or both be None")
-        if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
-            raise ValueError("Packed varlen Torch SDPA expects unbatched q/k/v tensors shaped [tokens, heads, dim]")
+        if any(x.ndim != 3 for x in (q, k, v)):
+            raise ValueError("Packed Torch SDPA expects 3D q/k/v")
+
         q_bounds = self._cu_bounds(cu_seqlens_q, q.shape[0], "q")
         kv_bounds = self._cu_bounds(cu_seqlens_kv, k.shape[0], "kv")
         if len(q_bounds) != len(kv_bounds):
-            raise ValueError(f"Packed q and kv must contain the same number of sequences, got {q_bounds} and {kv_bounds}")
+            raise ValueError("Packed q and kv must contain the same number of sequences")
         if v.shape[0] != k.shape[0]:
-            raise ValueError(f"Packed k and v sequence lengths must match, got {k.shape[0]} and {v.shape[0]}")
+            raise ValueError("Packed k and v sequence lengths must match")
 
         output = q.new_empty((q.shape[0], q.shape[1], v.shape[-1]))
-        for q_start, q_stop, kv_start, kv_stop in zip(q_bounds[:-1], q_bounds[1:], kv_bounds[:-1], kv_bounds[1:]):
+        for q_start, q_stop, kv_start, kv_stop in zip(q_bounds, q_bounds[1:], kv_bounds, kv_bounds[1:]):
             if q_start == q_stop:
                 continue
             segment_mask = None if attn_mask is None else attn_mask[..., q_start:q_stop, kv_start:kv_stop]

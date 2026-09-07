@@ -36,13 +36,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.infer_dtype = GET_DTYPE()
         self.sglang_parity_ops = resolve_minimax_h3_sgl_alignment(config).parity_ops
-        if self.sglang_parity_ops:
-            if config.get("dit_quant_scheme", "Default") != "Default":
-                raise NotImplementedError("MiniMax-H3 SGLang parity ops currently require unquantized DiT weights")
-            if config.get("cpu_offload", False) and config.get("offload_granularity", "model") != "model":
-                raise NotImplementedError("MiniMax-H3 SGLang parity ops only support model CPU offload")
-            if config.get("use_compile", False):
-                raise NotImplementedError("MiniMax-H3 SGLang parity ops currently require use_compile=false")
+        if self.sglang_parity_ops and config.get("cpu_offload") and config.get("offload_granularity") == "block":
+            raise NotImplementedError("SGLang parity ops do not support block CPU offload")
         if config.get("seq_parallel", False):
             self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
             parallel = config.get("parallel", {})
