@@ -39,8 +39,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         if self.sglang_parity_ops:
             if config.get("dit_quant_scheme", "Default") != "Default":
                 raise NotImplementedError("MiniMax-H3 SGLang parity ops currently require unquantized DiT weights")
-            if config.get("cpu_offload", False):
-                raise NotImplementedError("MiniMax-H3 SGLang parity ops currently require resident DiT weights")
+            if config.get("cpu_offload", False) and config.get("offload_granularity", "model") != "model":
+                raise NotImplementedError("MiniMax-H3 SGLang parity ops only support model CPU offload")
             if config.get("use_compile", False):
                 raise NotImplementedError("MiniMax-H3 SGLang parity ops currently require use_compile=false")
         if config.get("seq_parallel", False):

@@ -14,6 +14,7 @@ from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3Sequenc
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import MiniMaxH3PreInfer
+from lightx2v.models.networks.minimax_h3.infer.sglang_parity import clear_sglang_parity_weight_caches
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
 from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3PostWeights,
@@ -608,6 +609,10 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def to_cpu(self):
         super().to_cpu()
+        if self.cpu_offload and self.sglang_parity_ops:
+            clear_sglang_parity_weight_caches(self.pre_weight.refiner_blocks)
+            clear_sglang_parity_weight_caches(self.transformer_weights.blocks)
+            self.transformer_infer._clear_adaln_cache()
         if hasattr(self.transformer_infer, "offload_manager"):
             # Full teardown moves the active aliases away from the persistent
             # device buffers. Force buffer 0 to be populated again next run.

@@ -35,6 +35,12 @@ def tp_all_gather_last_dim(tensor, group, world_size):
     return gathered.reshape(output_shape)
 
 
+def clear_sglang_parity_weight_caches(blocks) -> None:
+    for block in blocks:
+        block.attn._sglang_parity_qkv_cache = None
+        block.ff._sglang_parity_mlp_cache = None
+
+
 def project_merged_qkv(weights, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if hidden_states.dtype != torch.bfloat16 or not hidden_states.is_cuda:
         raise TypeError(f"MiniMax-H3 merged-QKV parity requires a CUDA BF16 activation, got device={hidden_states.device}, dtype={hidden_states.dtype}")

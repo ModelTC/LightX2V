@@ -620,20 +620,6 @@ class MiniMaxH3Runner(DefaultRunner):
         torch_device_module.synchronize()
         self.maybe_empty_cache(force=True, collect_garbage=True)
 
-    @ProfilingContext4DebugL2("Release DiT before VAE")
-    def _release_transformer_before_vae(self):
-        if not self.config.get("h3_release_transformer_before_vae", False):
-            return
-
-        logger.info("Releasing the resident MiniMax-H3 transformer before VAE decode")
-        torch_device_module.synchronize()
-        model = self.model
-        self.model = None
-        self.scheduler.transformer_infer = None
-        del self.inputs
-        del model
-        self.maybe_empty_cache(force=True, collect_garbage=True)
-
     @ProfilingContext4DebugL1(
         "Run VAE Decoder",
         recorder_mode=GET_RECORDER_MODE(),
@@ -739,7 +725,6 @@ class MiniMaxH3Runner(DefaultRunner):
                     self._offload_transformer()
                     transformer_offloaded = True
 
-            self._release_transformer_before_vae()
             self.gen_video, self.gen_audio = self.run_vae_decoder(video_rows, audio_rows)
             return self.process_images_after_vae_decoder()
         finally:
