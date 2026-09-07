@@ -1,6 +1,5 @@
 {
     "version": "dense",
-    "load_kv_cache_in_pipeline_for_debug": false,
     "infer_steps": 50,
     "attn_type": "npu_flash_attn",
     "use_triton_qknorm_rope": false,
