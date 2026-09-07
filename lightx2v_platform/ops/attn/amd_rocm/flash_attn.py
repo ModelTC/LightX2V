@@ -90,6 +90,13 @@ class AiterAttnWeight(AttnWeightTemplate):
             k = k.reshape(-1, k.shape[-2], k.shape[-1])
             v = v.reshape(-1, v.shape[-2], v.shape[-1])
 
+        # Callers may build cu_seqlens on CPU; the varlen kernel requires them on
+        # the compute device, same as the flash_attn2/flash_attn3 paths do.
+        if cu_seqlens_q is not None and cu_seqlens_q.is_cpu:
+            cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
+        if cu_seqlens_kv is not None and cu_seqlens_kv.is_cpu:
+            cu_seqlens_kv = cu_seqlens_kv.to(k.device, non_blocking=True)
+
         x = aiter_flash_attn_varlen_func(
             q,
             k,
