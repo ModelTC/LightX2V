@@ -3,15 +3,10 @@ from typing import Any, Optional
 from loguru import logger
 
 from ...schema import TaskResponse
-from ..file_service import FileService
-from ..inference import DistributedInferenceService
 from .base import BaseGenerationService
 
 
 class ImageGenerationService(BaseGenerationService):
-    def __init__(self, file_service: FileService, inference_service: DistributedInferenceService):
-        super().__init__(file_service, inference_service)
-
     def get_output_extension(self) -> str:
         return ".png"
 
@@ -34,11 +29,11 @@ class ImageGenerationService(BaseGenerationService):
                 return None
 
             if hasattr(message, "image_path") and message.image_path:
-                await self._process_image_path(message.image_path, task_data)
+                task_data["image_path"] = await self._resolve_image_path(message.image_path)
                 logger.info(f"Task {message.task_id} image path: {task_data.get('image_path')}")
 
             if hasattr(message, "image_mask_path") and message.image_mask_path:
-                await self._process_image_mask_path(message.image_mask_path, task_data)
+                task_data["image_mask_path"] = await self._resolve_image_path(message.image_mask_path)
                 logger.info(f"Task {message.task_id} image mask path: {task_data.get('image_mask_path')}")
                 self._pack_image_and_mask_as_dir(task_data)
                 logger.info(f"Task {message.task_id} packed image+mask dir: {task_data.get('image_path')}")
@@ -90,6 +85,3 @@ class ImageGenerationService(BaseGenerationService):
         except Exception as e:
             logger.exception(f"Task {message.task_id} processing failed: {str(e)}")
             raise
-
-    async def generate_image_with_stop_event(self, message: Any, stop_event) -> Optional[Any]:
-        return await self.generate_with_stop_event(message, stop_event)

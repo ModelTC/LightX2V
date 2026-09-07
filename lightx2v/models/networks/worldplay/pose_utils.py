@@ -278,7 +278,8 @@ def pose_to_input(pose_data, latent_num, tps=False):
 
     pose_keys = list(pose_json.keys())
     latent_num_from_pose = len(pose_keys)
-    assert latent_num_from_pose == latent_num, f"pose corresponds to {latent_num_from_pose * 4 - 3} frames, num_frames must be set to {latent_num_from_pose * 4 - 3} to ensure alignment."
+    if latent_num_from_pose != latent_num:
+        raise ValueError(f"pose corresponds to {latent_num_from_pose * 4 - 3} frames, num_frames must be set to {latent_num_from_pose * 4 - 3} to ensure alignment.")
 
     intrinsic_list = []
     w2c_list = []

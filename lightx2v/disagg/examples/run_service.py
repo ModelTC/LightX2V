@@ -17,7 +17,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
 
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument(
         "--prompt",
         type=str,
@@ -100,7 +100,10 @@ def _build_runtime_config(args: argparse.Namespace) -> tuple[dict, dict]:
     config = _normalize_disagg_config(config)
     raw_cfg = _normalize_disagg_config(raw_cfg)
 
-    config["seed"] = args.seed
+    if args.seed is not None:
+        config["seed"] = args.seed
+    elif config.get("seed") is None:
+        config["seed"] = 42
     config["prompt"] = args.prompt
     config["negative_prompt"] = args.negative_prompt
     config["save_path"] = args.save_result_path
@@ -116,7 +119,7 @@ def main():
         rank_key = f"{service_mode}_engine_rank"
         config[rank_key] = int(args.engine_rank)
 
-    seed_all(args.seed)
+    seed_all(config["seed"])
     logger.info("Starting disagg service mode={}", service_mode)
 
     if service_mode == "encoder":

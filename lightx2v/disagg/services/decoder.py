@@ -134,9 +134,6 @@ class DecoderService(BaseService):
         self._phase2_slots = shared_slots
         self._phase2_slot_size = shared_slot_size
 
-        if "seed" in self.config:
-            seed_all(self.config["seed"])
-
         data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
         data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
 
@@ -192,6 +189,7 @@ class DecoderService(BaseService):
         return MemoryHandle(buffers=buffers)
 
     def process(self, config):
+        seed_all(config["seed"])
         self.logger.info("Starting processing in DecoderService...")
         room = config.get("data_bootstrap_room", 0)
         decoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("decoder", {})

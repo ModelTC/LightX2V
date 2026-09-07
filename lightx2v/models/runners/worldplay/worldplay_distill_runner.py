@@ -1,7 +1,6 @@
 import gc
 
 import torch
-from loguru import logger
 
 from lightx2v.models.networks.worldplay.model import WorldPlayModel
 from lightx2v.models.networks.worldplay.pose_utils import pose_to_input
@@ -140,22 +139,12 @@ class WorldPlayDistillRunner(HunyuanVideo15Runner):
         Returns:
             Dict with viewmats, Ks, action tensors
         """
-        try:
-            viewmats, Ks, action = pose_to_input(pose_data, latent_num)
-
-            # Move to device and add batch dimension
-            viewmats = viewmats.unsqueeze(0).to(device=AI_DEVICE, dtype=torch.float32)
-            Ks = Ks.unsqueeze(0).to(device=AI_DEVICE, dtype=torch.float32)
-            action = action.unsqueeze(0).to(device=AI_DEVICE, dtype=torch.long)
-
-            return {
-                "viewmats": viewmats,
-                "Ks": Ks,
-                "action": action,
-            }
-        except Exception as e:
-            logger.warning(f"Failed to process pose input: {e}. Continuing without pose conditioning.")
-            return None
+        viewmats, Ks, action = pose_to_input(pose_data, latent_num)
+        return {
+            "viewmats": viewmats.unsqueeze(0).to(device=AI_DEVICE, dtype=torch.float32),
+            "Ks": Ks.unsqueeze(0).to(device=AI_DEVICE, dtype=torch.float32),
+            "action": action.unsqueeze(0).to(device=AI_DEVICE, dtype=torch.long),
+        }
 
     def init_run(self):
         """Initialize run with pose conditioning support."""

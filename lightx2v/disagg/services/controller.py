@@ -164,8 +164,6 @@ class ControllerService(BaseService):
             str(instance_cfg.get("model_path")),
             "--config_json",
             service_config_json,
-            "--seed",
-            str(instance_cfg.get("seed", 42)),
             "--prompt",
             str(instance_cfg.get("prompt", "")),
             "--negative_prompt",
@@ -2083,6 +2081,9 @@ class ControllerService(BaseService):
 
                 request_config = dict(config)
                 request_config.update(self._to_plain(workload_config))
+                if request_config.get("seed") is None:
+                    seed = config.get("seed")
+                    request_config["seed"] = 42 if seed is None else seed
 
                 room = request_config.get("data_bootstrap_room", next_room)
                 try:

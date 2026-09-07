@@ -7,7 +7,6 @@ export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 # Model paths
 MODEL_PATH=/data/nvme1/models/hunyuan/HunyuanVideo-1.5
-AR_ACTION_MODEL_PATH=/data/nvme1/models/hunyuan/HY-WorldPlay/ar_model/diffusion_pytorch_model.safetensors
 
 # Input parameters
 PROMPT='A paved pathway leads towards a stone arch bridge spanning a calm body of water. Lush green trees and foliage line the path and the far bank of the water.'
@@ -28,7 +27,6 @@ torchrun --nproc_per_node=4 -m lightx2v.infer \
     --prompt "$PROMPT" \
     --image_path $IMAGE_PATH \
     --pose "$POSE" \
-    --action_ckpt $AR_ACTION_MODEL_PATH \
     --seed $SEED \
     --save_result_path $OUTPUT_PATH
 

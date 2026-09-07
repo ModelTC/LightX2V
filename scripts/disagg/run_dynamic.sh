@@ -98,7 +98,10 @@ else
     user_max_requests=${DISAGG_AUTO_REQUEST_COUNT}
 fi
 
-seed=${SEED:-42}
+seed_args=()
+if [[ -v SEED ]]; then
+    seed_args=(--seed "${SEED}")
+fi
 prompt=${PROMPT:-"Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard."}
 negative_prompt=${NEGATIVE_PROMPT:-"镜头晃动，色调艳丽，过曝，静态"}
 save_result_path=${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/wan22_i2v_dynamic.mp4}
@@ -477,7 +480,7 @@ python -m lightx2v.disagg.examples.run_service \
     --task i2v \
     --model_path ${model_path} \
     --config_json ${controller_cfg} \
-    --seed ${seed} \
+    "${seed_args[@]}" \
     --prompt "${prompt}" \
     --negative_prompt "${negative_prompt}" \
     --save_result_path ${save_result_path} \

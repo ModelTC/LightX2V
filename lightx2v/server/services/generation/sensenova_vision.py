@@ -25,8 +25,6 @@ from ...schema import (
     SenseNovaVisionTaskRequest,
     SenseNovaVisionTaskResult,
 )
-from ..file_service import FileService
-from ..inference import DistributedInferenceService
 from .base import BaseGenerationService
 
 SenseNovaTaskSpec = OmniVisionTaskSpec
@@ -115,9 +113,6 @@ def validate_sensenova_request(message: SenseNovaVisionTaskRequest) -> tuple[str
 
 
 class SenseNovaVisionGenerationService(BaseGenerationService):
-    def __init__(self, file_service: FileService, inference_service: DistributedInferenceService):
-        super().__init__(file_service, inference_service)
-
     def get_output_extension(self) -> str:
         return ".json"
 
