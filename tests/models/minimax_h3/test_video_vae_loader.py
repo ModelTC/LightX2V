@@ -242,3 +242,44 @@ def test_from_pretrained_quantized_path_bypasses_official_adapter(video_vae_modu
     model = TinyQuantizedVAE.from_pretrained(tmp_path, checkpoint_path=tmp_path / "quant.safetensors", quant_scheme="fp8-sgl", cpu_offload=True)
     assert model.load_report == "quant-report"
     assert calls == ["legacy", "pack"]
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+@pytest.mark.parametrize("dtype_name", ["float32", "float16"])
+@pytest.mark.parametrize("size", [64, 258])
+def test_causal_temporal_padding_preserves_interior(video_vae_module, device, dtype_name, size):
+    import torch
+    import torch.nn.functional as F
+
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("MPS is unavailable")
+    dtype = getattr(torch, dtype_name)
+    source = torch.randn((1, 3, 17, size, size), generator=torch.Generator().manual_seed(123)).to(dtype)
+    conv = video_vae_module.MiniMaxH3VideoCausalConv3d(3, 3, 1, temporal_padding=2)
+    actual_device = conv._pad_temporal(source.to(device))
+    actual = actual_device.cpu()
+    expected = F.pad(source, (0, 0, 0, 0, 2, 0))
+
+    assert actual.shape == (1, 3, 19, size, size)
+    assert actual_device.device.type == device
+    assert actual.dtype == dtype
+    assert torch.count_nonzero(actual[:, :, :2]) == 0
+    assert torch.equal(actual[:, :, 2:], source)
+    assert torch.equal(actual, expected)
+    assert torch.isfinite(actual).all()
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+def test_causal_conv_forward_uses_temporal_padding(video_vae_module, device):
+    import torch
+    import torch.nn.functional as F
+
+    if device == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("MPS is unavailable")
+    conv = video_vae_module.MiniMaxH3VideoCausalConv3d(1, 1, 1, temporal_padding=2).to(device)
+    with torch.no_grad():
+        conv.weight.fill_(1)
+        conv.bias.zero_()
+        source = torch.randn((1, 1, 3, 258, 258), generator=torch.Generator().manual_seed(123))
+        actual = conv(source.to(device)).cpu()
+    assert torch.equal(actual, F.pad(source, (0, 0, 0, 0, 2, 0)))

@@ -217,12 +217,21 @@ class MiniMaxH3VideoCausalConv3d(nn.Conv3d):
         self.temporal_padding = temporal_padding
         self.spatial_padding_mode = spatial_padding_mode
 
+    def _pad_temporal(self, hidden_states):
+        if hidden_states.device.type == "mps":
+            # pytorch/pytorch#194922: rank-5 MPS constant padding can corrupt data.
+            # Fixed upstream on main, but supported stable versions may still be affected.
+            batch, channels, _, height, width = hidden_states.shape
+            zeros = hidden_states.new_zeros((batch, channels, self.temporal_padding, height, width))
+            return torch.cat((zeros, hidden_states), dim=2)
+        return F.pad(hidden_states, (0, 0, 0, 0, self.temporal_padding, 0))
+
     def forward(self, hidden_states):
         if self.spatial_padding > 0:
             p = self.spatial_padding
             hidden_states = F.pad(hidden_states, (p, p, p, p, 0, 0), mode=self.spatial_padding_mode)
         if self.temporal_padding > 0:
-            hidden_states = F.pad(hidden_states, (0, 0, 0, 0, self.temporal_padding, 0))
+            hidden_states = self._pad_temporal(hidden_states)
         return F.conv3d(hidden_states, self.weight, self.bias, stride=self.stride, dilation=self.dilation)
 
 
