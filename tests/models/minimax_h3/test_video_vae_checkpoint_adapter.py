@@ -32,6 +32,10 @@ def _parameter_module(specs):
                 parent.add_module(part, _IndexedModule())
             parent = getattr(parent, part)
         parent.register_parameter(parts[-1], nn.Parameter(torch.empty_like(tensor, device="meta")))
+    if hasattr(root, "decoder") and hasattr(root.decoder, "transformer_blocks"):
+        attention = root.decoder.transformer_blocks[0].attn
+        attention.heads = 2
+        attention.dim_head = 2
     return root
 
 
@@ -101,8 +105,8 @@ def test_official_mapping_qkv_ffn_and_mask_token(tmp_path):
     assert torch.equal(state["decoder.transformer_blocks.0.attn.to_out.0.weight"], tensors["decoder.transformer_blocks.0.attn.to_out.weight"])
     assert torch.equal(state["decoder.transformer_blocks.0.ff.net.2.weight"], tensors["decoder.transformer_blocks.0.ff.w2.weight"])
     for index, name in enumerate(("q", "k", "v")):
-        assert torch.equal(state[f"decoder.transformer_blocks.0.attn.to_{name}.weight"], tensors["decoder.transformer_blocks.0.attn.to_qkv.weight"][index * 4 : (index + 1) * 4])
-        assert torch.equal(state[f"decoder.transformer_blocks.0.attn.to_{name}.bias"], tensors["decoder.transformer_blocks.0.attn.to_qkv.bias"][index * 4 : (index + 1) * 4])
+        assert torch.equal(state[f"decoder.transformer_blocks.0.attn.to_{name}.weight"], tensors["decoder.transformer_blocks.0.attn.to_qkv.weight"].reshape(2, 3, 2, 4)[:, index].reshape(4, 4))
+        assert torch.equal(state[f"decoder.transformer_blocks.0.attn.to_{name}.bias"], tensors["decoder.transformer_blocks.0.attn.to_qkv.bias"].reshape(2, 3, 2)[:, index].reshape(4))
     assert torch.all(state["decoder.transformer_blocks.0.ff.net.0.proj.weight"][:4] == 2)
     assert torch.all(state["decoder.transformer_blocks.0.ff.net.0.proj.weight"][4:] == 1)
     assert torch.all(state["decoder.transformer_blocks.0.ff.net.0.proj.bias"][:4] == 2)
@@ -145,3 +149,35 @@ def test_legacy_subset_loader_regression(tmp_path):
     report = load_safetensors_subset(module, path)
     assert report.loaded_keys == ("layer.weight",)
     assert torch.equal(module.state_dict()["layer.weight"], expected["layer.weight"])
+
+
+@pytest.mark.parametrize("is_weight", [False, True])
+def test_qkv_per_head_components_and_reinterleave(is_weight):
+    heads, head_dim = 3, 2
+    rows = torch.tensor([100 * h + 10 * c + d for h in range(heads) for c in range(3) for d in range(head_dim)])
+    source = rows.float()
+    if is_weight:
+        source = source[:, None] * 10 + torch.arange(5)
+    parts = _WEIGHTS._split_video_vae_qkv(source, heads, head_dim)
+    for c, part in enumerate(parts):
+        expected = torch.tensor([100 * h + 10 * c + d for h in range(heads) for d in range(head_dim)]).float()
+        if is_weight:
+            expected = expected[:, None] * 10 + torch.arange(5)
+        assert torch.equal(part, expected)
+        assert not torch.equal(part, source.chunk(3)[c])
+        assert part.dtype == source.dtype and part.device == source.device and part.is_contiguous()
+    rebuilt = torch.stack([p.reshape(heads, head_dim, *source.shape[1:]) for p in parts], dim=1).reshape_as(source)
+    assert torch.equal(rebuilt, source)
+
+
+@pytest.mark.parametrize("shape,heads,dim", [((11,), 2, 2), ((12,), 3, 2), ((12,), 2, 0), ((12, 2, 2), 2, 2)])
+def test_qkv_invalid_geometry_rejected(shape, heads, dim):
+    with pytest.raises(ValueError, match="Video VAE fused QKV"):
+        _WEIGHTS._split_video_vae_qkv(torch.empty(shape), heads, dim)
+
+
+def test_loader_rejects_incompatible_attention_geometry(tmp_path):
+    module = _parameter_module(_native_specs())
+    module.decoder.transformer_blocks[0].attn.heads = 3
+    with pytest.raises(ValueError, match="target num_heads"):
+        load_minimax_h3_video_vae_checkpoint(module, _write(tmp_path / "model.safetensors"))

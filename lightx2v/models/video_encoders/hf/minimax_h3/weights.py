@@ -287,6 +287,18 @@ def validate_minimax_h3_video_vae_checkpoint(module: nn.Module, component_dir: s
     return SafetensorsSubsetReport(Path(component_dir), files, tuple(sorted(assigned)), ignored)
 
 
+def _split_video_vae_qkv(tensor: torch.Tensor, num_heads: int, head_dim: int) -> tuple[torch.Tensor, ...]:
+    """Extract released per-head Q/K/V components for a weight or bias."""
+    if tensor.ndim not in (1, 2) or tensor.shape[0] % 3:
+        raise ValueError("Video VAE fused QKV must be a weight/bias with rows divisible by 3")
+    if num_heads <= 0 or head_dim <= 0 or tensor.shape[0] != num_heads * 3 * head_dim:
+        raise ValueError("Video VAE fused QKV rows do not match target num_heads * 3 * head_dim")
+    # Released rows flatten [num_heads, 3, head_dim, ...], not [3, num_heads, head_dim, ...].
+    # Both conventions have identical shapes, so shape-only validation cannot distinguish them.
+    view = tensor.reshape(num_heads, 3, head_dim, *tensor.shape[1:])
+    return tuple(view[:, component].reshape(num_heads * head_dim, *tensor.shape[1:]).contiguous() for component in range(3))
+
+
 def load_minimax_h3_video_vae_checkpoint(module: nn.Module, component_dir: str | Path) -> SafetensorsSubsetReport:
     """Stream the released official Video VAE schema into the native module."""
     report = validate_minimax_h3_video_vae_checkpoint(module, component_dir)
@@ -299,9 +311,10 @@ def load_minimax_h3_video_vae_checkpoint(module: nn.Module, component_dir: str |
                     continue
                 tensor_slice = checkpoint.get_slice(source_key)
                 if len(targets) == 3:
-                    chunk_size = tensor_slice.get_shape()[0] // 3
-                    for index, target in enumerate(targets):
-                        _assign_tensor(module, target, tensor_slice[index * chunk_size : (index + 1) * chunk_size])
+                    attention, _ = _get_parent(module, targets[0].rsplit(".", 1)[0])
+                    components = _split_video_vae_qkv(checkpoint.get_tensor(source_key), attention.heads, attention.dim_head)
+                    for target, component in zip(targets, components):
+                        _assign_tensor(module, target, component)
                         loaded.add(target)
                 elif ".ff.w1." in source_key:
                     target = targets[0]
