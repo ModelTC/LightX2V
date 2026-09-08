@@ -3,6 +3,8 @@ import shutil
 
 
 def _is_complete_checkpoint(checkpoint_dir):
+    if os.path.exists(os.path.join(checkpoint_dir, ".incomplete")):
+        return False
     return any(
         os.path.isfile(os.path.join(checkpoint_dir, marker))
         for marker in (

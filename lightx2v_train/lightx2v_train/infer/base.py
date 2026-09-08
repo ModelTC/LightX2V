@@ -6,6 +6,8 @@ from lightx2v_train.schedulers.flow_matching import RectifiedFlowMatchingSchedul
 
 
 class BaseInferencer:
+    scheduler_cls = RectifiedFlowMatchingScheduler
+
     def __init__(self, config):
         self.config = config
         self.infer_config = config.get("inference", {})
@@ -18,7 +20,7 @@ class BaseInferencer:
         self.enable_cfg = True
         self.guidance_scale = None
 
-        self.scheduler = RectifiedFlowMatchingScheduler(config)
+        self.scheduler = self.scheduler_cls(config) if self.scheduler_cls is not None else None
 
     def set_data(self, dataloader_val):
         self.dataloader_eval = dataloader_val

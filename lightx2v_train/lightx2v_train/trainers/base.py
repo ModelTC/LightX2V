@@ -18,7 +18,6 @@ from lightx2v_train.model_capabilities import (
 from lightx2v_train.runtime.checkpoint import find_latest_checkpoint, parse_checkpoint_iteration, prune_checkpoints
 from lightx2v_train.runtime.distributed import barrier, get_world_size, is_main_process
 from lightx2v_train.runtime.monitor import build_monitor
-from lightx2v_train.schedulers.flow_matching import RectifiedFlowMatchingScheduler
 from lightx2v_train.utils.utils import get_running_dtype
 
 
@@ -35,7 +34,6 @@ class BaseTrainer:
         self.training_config = self.config["training"]
         self.infer_config = self.config["inference"]
 
-        self.noise_scheduler = RectifiedFlowMatchingScheduler(config)
         self.running_dtype = get_running_dtype(self.model_config["running_dtype"])
         self.train_type = self._resolve_train_type()
         if self.train_type is not None:
@@ -202,6 +200,7 @@ class BaseTrainer:
         self._load_model_weights(self.model, resume_ckpt_path)
         self.optimizer.load_state_dict(state["optimizer"])
         self.lr_scheduler.load_state_dict(state["lr_scheduler"])
+        self._load_extra_checkpoint_state(state.get("extra_state", {}))
         logger.info("Restored training state from {}", training_state_path)
 
     def _load_distributed_state(self, resume_ckpt_path):
@@ -233,6 +232,7 @@ class BaseTrainer:
         )
 
         self.lr_scheduler.load_state_dict(trainer_state["lr_scheduler"])
+        self._load_extra_checkpoint_state(trainer_state.get("extra_state", {}))
         logger.info("Restored distributed training state from {}", resume_ckpt_path)
 
     def _validate_checkpoint_metadata(self, state, state_path, resume_ckpt_path):
@@ -262,6 +262,12 @@ class BaseTrainer:
     def _after_backward(self):
         pass
 
+    def _extra_checkpoint_state(self):
+        return {}
+
+    def _load_extra_checkpoint_state(self, state):
+        del state
+
     def run_inference(self, current_iter):
         base_output_dir = self.infer_config.get("output_dir", "./output_infer")
         iter_output_dir = os.path.join(base_output_dir, f"iter-{current_iter:09d}")
@@ -286,6 +292,8 @@ class BaseTrainer:
         logger.info("[train] saving checkpoint iter={} path={}", iteration, save_dir)
         if is_main_process():
             os.makedirs(save_dir, exist_ok=True)
+            with open(os.path.join(save_dir, ".incomplete"), "w", encoding="utf-8"):
+                pass
         barrier()
 
         save_standalone_weights = self.train_type == "lora" or not self.parallel.is_fsdp()
@@ -300,21 +308,31 @@ class BaseTrainer:
         if self.parallel.is_fsdp():
             self._save_distributed_state(save_dir, iteration)
             self._save_consolidated_weights(save_dir)
-            barrier()
+            self._mark_checkpoint_complete(save_dir)
             logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
             return
 
-        training_state = {
-            "iteration": iteration,
-            "world_size": get_world_size(),
-            "optimizer": self.optimizer.state_dict(),
-            "lr_scheduler": self.lr_scheduler.state_dict(),
-        }
         if is_main_process():
+            training_state = {
+                "iteration": iteration,
+                "world_size": get_world_size(),
+                "optimizer": self.optimizer.state_dict(),
+                "lr_scheduler": self.lr_scheduler.state_dict(),
+                "extra_state": self._extra_checkpoint_state(),
+            }
             torch.save(training_state, os.path.join(save_dir, "training_state.pt"))
         self._save_consolidated_weights(save_dir)
-        barrier()
+        self._mark_checkpoint_complete(save_dir)
         logger.info("[train] saved checkpoint iter={} path={}", iteration, save_dir)
+
+    @staticmethod
+    def _mark_checkpoint_complete(save_dir):
+        barrier()
+        if is_main_process():
+            with open(os.path.join(save_dir, "_SUCCESS"), "w", encoding="utf-8"):
+                pass
+            os.remove(os.path.join(save_dir, ".incomplete"))
+        barrier()
 
     def _save_consolidated_weights(self, save_dir):
         if not self.save_consolidated_weights:
@@ -335,6 +353,7 @@ class BaseTrainer:
                     "iteration": iteration,
                     "world_size": get_world_size(),
                     "lr_scheduler": self.lr_scheduler.state_dict(),
+                    "extra_state": self._extra_checkpoint_state(),
                 },
                 os.path.join(save_dir, "trainer_state.pt"),
             )

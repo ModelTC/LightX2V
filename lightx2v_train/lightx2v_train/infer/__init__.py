@@ -8,6 +8,10 @@ _LAZY_EXPORTS = {
         ".video",
         "LingBotVideoT2VInferencer",
     ),
+    "MiniMaxH3VAEReconstructionInferencer": (
+        ".vae",
+        "MiniMaxH3VAEReconstructionInferencer",
+    ),
     "WanT2VDualInferencer": (
         ".video",
         "WanT2VDualInferencer",
@@ -31,6 +35,7 @@ __all__ = [
     "build_inferencer",
     "ImageInferencer",
     "LingBotVideoT2VInferencer",
+    "MiniMaxH3VAEReconstructionInferencer",
     "WanT2VDualInferencer",
     "WanT2VInferencer",
     "WanT2VARInferencer",

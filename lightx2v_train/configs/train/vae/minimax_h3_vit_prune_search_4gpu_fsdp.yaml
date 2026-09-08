@@ -1,0 +1,117 @@
+model:
+    name: minimax_h3_pruned_vae
+    pretrained_model_name_or_path: /data/nvme6/gushiqiao/models/MiniMax-H3
+    running_dtype: bf16
+    student_param_dtype: fp32
+    teacher_encoder_dtype: fp32
+    teacher_autocast_dtype: fp16
+    student_autocast: true
+    load_teacher_encoder: false
+    load_teacher_decoder: false
+    local_files_only: true
+    pruned_decoder:
+        use_tiling: true
+        tile_sample_min_height: 256
+        tile_sample_min_width: 256
+        tile_sample_min_overlap_height: 64
+        tile_sample_min_overlap_width: 64
+        search:
+            group_size: 3
+            lora_rank: 8
+            lora_alpha: 16
+            gate_scale: 100.0
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel: {enabled: false, size: 1}
+    dp: {enabled: false}
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,4}
+        reshard_after_forward:
+            root_reshard: false
+            block_reshard: true
+        mixed_precision:
+            param_dtype: null
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    processor: {name: minimax_h3_pruned_vae}
+    train:
+        name: video_dataset
+        data_path:
+            - /data/nvme6/gushiqiao/datasets/minimax_h3_teacher_latents_5s/metadata.jsonl
+            - /data/nvme6/gushiqiao/datasets/minimax_h3_teacher_latents_5s_768p/i2av/landscape/metadata.jsonl
+            - /data/nvme6/gushiqiao/datasets/minimax_h3_turbo_vae_latents_5s_768p/fl2av/landscape/metadata.jsonl
+            - /data/nvme6/gushiqiao/datasets/minimax_h3_turbo_vae_latents_5s_768p/l2av/landscape/metadata.jsonl
+        latent_column: video_latent_path
+        height: 768
+        width: 1344
+        num_frames: 362
+        frame_rate: 24
+        fix_frame_rate: false
+        time_division_factor: 1
+        time_division_remainder: 0
+        geometry_from_metadata: true
+        random_start: false
+        num_workers: 4
+        pin_memory: false
+        shuffle: true
+        drop_last: true
+
+training:
+    method: vae_pruning
+    train_type: full
+    max_train_iters: 1000
+    gradient_accumulation_iters: 4
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: cosine
+    lr_warmup_iters: 50
+    save_every_iters: 100
+    save_total_limit: 3
+    save_consolidated_weights: false
+    optimizer:
+        learning_rate: 0.0001
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.0
+        adam_epsilon: 0.00000001
+    pruning:
+        tau_start: 4.0
+        tau_end: 0.1
+        gate_lr_multiplier: 10.0
+        ema_decay: 0.999
+        export_dir: ${training.output_dir}/export
+    vae_distillation:
+        use_spatial_tiling: true
+        student_tile_batch_size: 1
+        student_window_checkpointing: true
+        route_seed: 2026
+        charbonnier_epsilon: 0.001
+        teacher_output_weight: 0.0
+        temporal_velocity_weight: 0.0
+        perceptual_network: vgg
+        perceptual_num_frames: 32
+        perceptual_frame_batch_size: 2
+        perceptual_gradient_checkpointing: true
+        stages:
+            - name: layer_search
+              start_iter: 0
+              routes: {single: 0.75, temporal_pair: 0.25}
+              weights: {reconstruction: 1.0, perceptual: 0.05}
+        gan: {enabled: false}
+    output_dir: ${oc.env:H3_VAE_PRUNE_SEARCH_OUTPUT,/data/nvme6/gushiqiao/codes/latest/vae/LightX2V/lightx2v_train/output_train/minimax_h3_vit_prune_search_4gpu_fsdp}
+
+inference:
+    infer_every_iters: 0
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+
+resume:
+    auto_resume: true

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import torch
 from loguru import logger
+from safetensors import safe_open
+from safetensors.torch import load_file
 
 from lightx2v_train.data import build_data, build_sample_processor
 from lightx2v_train.infer import build_inferencer
@@ -29,7 +31,15 @@ def _load_full_checkpoint_for_infer(model, model_config):
     if not path.exists():
         raise FileNotFoundError(f"checkpoint_path not found: {path}")
 
-    state_dict = torch.load(str(path), map_location="cpu", weights_only=False)
+    if path.suffix == ".safetensors":
+        with safe_open(str(path), framework="pt", device="cpu") as handle:
+            metadata = handle.metadata() or {}
+        validator = getattr(model, "validate_consolidated_metadata", None)
+        if validator is not None:
+            validator(metadata, path)
+        state_dict = load_file(str(path), device="cpu")
+    else:
+        state_dict = torch.load(str(path), map_location="cpu", weights_only=False)
     if isinstance(state_dict, dict):
         for key in ("model", "generator", "state_dict"):
             value = state_dict.get(key)

@@ -67,6 +67,27 @@ class TeacherForcingCapability(ModelCapability):
         """Compute a differentiable teacher-forcing loss."""
 
 
+@dataclass(frozen=True)
+class VAEDistillationStepContext:
+    running_dtype: torch.dtype
+    iteration: int = 0
+    micro_step: int = 0
+    adversarial_objective: Callable[
+        [Tensor, Tensor, Tensor, int],
+        tuple[Tensor, Mapping[str, Tensor | float]],
+    ] | None = None
+
+
+class VAEDistillationCapability(ModelCapability):
+    @abstractmethod
+    def compute_loss(
+        self,
+        batch: Mapping[str, Any],
+        context: VAEDistillationStepContext,
+    ) -> LossResult:
+        """Distill a VAE student from one source-video batch."""
+
+
 class ConsistencyModelCapability(ModelCapability):
     def encode_training_cache(self, batch: Mapping[str, Any]) -> TrainingCachePayload:
         """Encode the static sample data consumed by consistency training."""

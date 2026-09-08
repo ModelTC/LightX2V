@@ -20,6 +20,8 @@ from .training import (
     TeacherForcingStepContext,
     TrainableModelCapability,
     TrainingCachePayload,
+    VAEDistillationCapability,
+    VAEDistillationStepContext,
 )
 
 __all__ = [
@@ -41,5 +43,7 @@ __all__ = [
     "TeacherForcingCapability",
     "TeacherForcingStepContext",
     "TrainingCachePayload",
+    "VAEDistillationCapability",
+    "VAEDistillationStepContext",
     "TrainableModelCapability",
 ]

@@ -48,16 +48,21 @@ class VideoDataset(torch.utils.data.Dataset):
         video_column="video",
         audio_column="audio",
         image_column="image",
+        latent_column="latent",
         prompt_column="caption",
         video_root=None,
         audio_root=None,
         image_root=None,
+        latent_root=None,
         media_root=None,
         skip_missing=True,
         max_samples=None,
         random_start=False,
         frame_rate=24,
         fix_frame_rate=False,
+        time_division_factor=4,
+        time_division_remainder=1,
+        geometry_from_metadata=False,
         decode_retries=3,
         preserve_records=False,
         sample_processor=None,
@@ -73,18 +78,23 @@ class VideoDataset(torch.utils.data.Dataset):
         self.video_column = video_column
         self.audio_column = audio_column
         self.image_column = image_column
+        self.latent_column = latent_column
         self.prompt_column = prompt_column
         self.video_roots = [Path(path) for path in to_list(video_root)] + [Path(path) for path in to_list(media_root)]
         self.audio_roots = [Path(path) for path in to_list(audio_root)] + [Path(path) for path in to_list(media_root)]
         self.image_roots = [Path(path) for path in to_list(image_root)] + [Path(path) for path in to_list(media_root)]
+        self.latent_roots = [Path(path) for path in to_list(latent_root)] + [Path(path) for path in to_list(media_root)]
         self.skip_missing = bool(skip_missing)
         self.max_samples = max_samples
         self.decode_retries = max(1, int(decode_retries))
         self.preserve_records = bool(preserve_records)
+        self.geometry_from_metadata = bool(geometry_from_metadata)
         self.sample_processor = sample_processor
         self.unconditional_prompt = unconditional_prompt
         self.frame_sampler = VideoFrameSampler(
             num_frames=num_frames,
+            time_division_factor=time_division_factor,
+            time_division_remainder=time_division_remainder,
             frame_rate=frame_rate,
             fix_frame_rate=fix_frame_rate,
             random_start=random_start,
@@ -129,6 +139,19 @@ class VideoDataset(torch.utils.data.Dataset):
                 if image_path is not None:
                     meta["image_path"] = str(image_path)
 
+                latent_value = (
+                    record_value(row, self.latent_column, "latent_path")
+                    if getattr(self.sample_processor, "load_cached_latents", True)
+                    else None
+                )
+                latent_path = resolve_data_path(latent_value, metadata_path.parent, self.latent_roots, subdirs=("latent", "latents"))
+                if latent_value is not None and (latent_path is None or not latent_path.is_file()):
+                    if self.skip_missing:
+                        continue
+                    raise FileNotFoundError(f"Latent path points to a missing file: {latent_path or latent_value}")
+                if latent_path is not None:
+                    meta["latent_path"] = str(latent_path)
+
                 prompt = prompt_text(row, self.prompt_column)
                 prompt_path_value = record_value(
                     row,
@@ -156,13 +179,20 @@ class VideoDataset(torch.utils.data.Dataset):
                     return samples
         return samples
 
-    def _load_video(self, video_path):
+    def _load_video(self, video_path, meta):
+        height, width = self.height, self.width
+        if self.geometry_from_metadata:
+            try:
+                height = int(meta["target_height"])
+                width = int(meta["target_width"])
+            except KeyError as error:
+                raise ValueError("geometry_from_metadata requires target_height and target_width on every record.") from error
         return load_video_tensor(
             video_path,
-            self.height,
-            self.width,
+            height,
+            width,
             self.frame_sampler,
-            return_start_time=True,
+            return_selection=True,
         )
 
     def __getitem__(self, index):
@@ -176,8 +206,9 @@ class VideoDataset(torch.utils.data.Dataset):
                 prompt = record["prompt"]
                 if random.random() < self.prompt_dropout_rate:
                     prompt = self.unconditional_prompt
-                video, video_start_time = self._load_video(meta["video_path"])
-                meta["video_start_time"] = video_start_time
+                video, selection = self._load_video(meta["video_path"], meta)
+                meta["video_start_time"] = selection.start_time
+                meta["source_frame_rate"] = selection.source_frame_rate
                 sample = {
                     "inputs": {"video": video},
                     "conditioning": {"prompt": prompt},
@@ -504,7 +535,12 @@ def _build_dataloader(dataset, data_config, train_or_val):
 
 
 @DATA_REGISTER("video_dataset")
-def build_video_dataset(data_config, train_or_val="train", sample_processor=None):
+def build_video_dataset(
+    data_config,
+    train_or_val="train",
+    sample_processor=None,
+    unconditional_prompt=" ",
+):
     dataset = VideoDataset(
         metadata_paths=data_config["data_path"],
         height=data_config.get("height", 480),
@@ -515,20 +551,25 @@ def build_video_dataset(data_config, train_or_val="train", sample_processor=None
         video_column=data_config.get("video_column", "video"),
         audio_column=data_config.get("audio_column", "audio"),
         image_column=data_config.get("image_column", "image"),
+        latent_column=data_config.get("latent_column", "latent"),
         prompt_column=data_config.get("prompt_column", "caption"),
         video_root=data_config.get("video_root"),
         audio_root=data_config.get("audio_root"),
         image_root=data_config.get("image_root"),
+        latent_root=data_config.get("latent_root"),
         media_root=data_config.get("media_root"),
         skip_missing=data_config.get("skip_missing", True),
         max_samples=data_config.get("max_samples"),
         random_start=data_config.get("random_start", False),
         frame_rate=data_config.get("frame_rate", 24),
         fix_frame_rate=data_config.get("fix_frame_rate", False),
+        time_division_factor=data_config.get("time_division_factor", 4),
+        time_division_remainder=data_config.get("time_division_remainder", 1),
+        geometry_from_metadata=data_config.get("geometry_from_metadata", False),
         decode_retries=data_config.get("decode_retries", 3),
         preserve_records=data_config.get("preserve_records", False),
         sample_processor=sample_processor,
-        unconditional_prompt=getattr(sample_processor, "unconditional_prompt", " "),
+        unconditional_prompt=unconditional_prompt,
     )
     return _build_dataloader(dataset, data_config, train_or_val)
 

@@ -81,9 +81,13 @@ _MODEL_MODULES = {
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.longcat_image",
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.longcat_image_edit",
     "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_t2av",
+    "minimax_h3_pruned_vae": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_pruned_vae",
+    "minimax_h3_pruned_encoder": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_pruned_encoder",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.qwen_image",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.qwen_image_edit",
     "wan_t2v": "lightx2v_train.model_zoo.wan.wan_t2v",
+    "wan21_pruned_encoder": "lightx2v_train.model_zoo.wan.wan_pruned_vae",
+    "wan21_pruned_decoder": "lightx2v_train.model_zoo.wan.wan_pruned_vae",
     "wan_t2v_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
     "wan_t2v_14b": "lightx2v_train.model_zoo.wan.wan_t2v",
     "wan_t2v_14b_ar": "lightx2v_train.model_zoo.wan.wan_t2v",
@@ -98,6 +102,11 @@ _TRAINER_MODULES = {
     "sgmd": "lightx2v_train.trainers.sgmd",
     "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",
     "training_cache": "lightx2v_train.trainers.training_cache",
+    "vae_distillation": "lightx2v_train.trainers.vae.distillation",
+    "vae_pruning": "lightx2v_train.trainers.vae.pruning",
+    "vae_encoder_pruning": "lightx2v_train.trainers.vae.encoder_pruning",
+    "wan21_encoder_pruning": "lightx2v_train.trainers.vae.wan_pruning",
+    "wan21_decoder_pruning": "lightx2v_train.trainers.vae.wan_pruning",
 }
 
 _INFERENCER_MODULES = {
@@ -107,6 +116,8 @@ _INFERENCER_MODULES = {
     "wan_t2v_14b_infer": "lightx2v_train.infer.video",
     "wan_t2v_dual_infer": "lightx2v_train.infer.video",
     "wan_t2v_ar_infer": "lightx2v_train.infer.video",
+    "minimax_h3_vae_reconstruction": "lightx2v_train.infer.vae",
+    "wan21_vae_reconstruction": "lightx2v_train.infer.vae",
     "wan_t2v_14b_ar_infer": "lightx2v_train.infer.video",
 }
 
@@ -118,6 +129,11 @@ _SAMPLE_PROCESSOR_MODULES = {
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.data_process",
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.data_process",
     "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.data_process",
+    "minimax_h3_turbo_vae": "lightx2v_train.model_zoo.minimax_h3.vae_data_process",
+    "minimax_h3_pruned_vae": "lightx2v_train.model_zoo.minimax_h3.vae_data_process",
+    "minimax_h3_pruned_encoder": "lightx2v_train.model_zoo.minimax_h3.vae_data_process",
+    "wan21_pruned_encoder": "lightx2v_train.model_zoo.wan.vae_data_process",
+    "wan21_pruned_decoder": "lightx2v_train.model_zoo.wan.vae_data_process",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.data_process",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.data_process",
 }

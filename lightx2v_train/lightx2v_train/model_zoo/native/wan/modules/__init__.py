@@ -1,9 +1,17 @@
-from .attention import flash_attention
-from .causal_model import CausalWanModel
-from .model import WanModel
-from .t5 import T5Decoder, T5Encoder, T5EncoderModel, T5Model
-from .tokenizers import HuggingfaceTokenizer
-from .vae import WanVAE
+from importlib import import_module
+
+
+_MODULES = {
+    "flash_attention": ".attention",
+    "CausalWanModel": ".causal_model",
+    "WanModel": ".model",
+    "T5Decoder": ".t5",
+    "T5Encoder": ".t5",
+    "T5EncoderModel": ".t5",
+    "T5Model": ".t5",
+    "HuggingfaceTokenizer": ".tokenizers",
+    "WanVAE": ".vae",
+}
 
 __all__ = [
     "WanVAE",
@@ -16,3 +24,11 @@ __all__ = [
     "HuggingfaceTokenizer",
     "flash_attention",
 ]
+
+
+def __getattr__(name):
+    if name not in _MODULES:
+        raise AttributeError(name)
+    value = getattr(import_module(_MODULES[name], __name__), name)
+    globals()[name] = value
+    return value

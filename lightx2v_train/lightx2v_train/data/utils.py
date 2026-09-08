@@ -19,6 +19,7 @@ _BILINEAR = getattr(Image, "Resampling", Image).BILINEAR
 class VideoFrameSelection:
     frame_ids: tuple[int, ...]
     start_time: float
+    source_frame_rate: float
 
 
 def require_singleton_dataloader(dataloader, name):
@@ -173,9 +174,10 @@ class VideoFrameSampler:
         duration = meta_data.get("duration") or total_raw_frames / meta_data["fps"]
         return int(math.floor(duration * self.frame_rate))
 
-    def sample_count(self, reader):
+    def sample_count(self, reader, total_frames=None):
         num_frames = self.num_frames
-        total_frames = self.available_frames(reader)
+        if total_frames is None:
+            total_frames = self.available_frames(reader)
         if total_frames < num_frames:
             num_frames = total_frames
             while num_frames > 1 and num_frames % self.time_division_factor != self.time_division_remainder:
@@ -190,42 +192,55 @@ class VideoFrameSampler:
         return min(frame_id, total_raw_frames - 1)
 
     def sample(self, reader):
-        raw_frame_rate = float(reader.get_meta_data().get("fps") or self.frame_rate)
+        meta_data = reader.get_meta_data()
+        raw_frame_rate = float(meta_data.get("fps") or self.frame_rate)
         if raw_frame_rate <= 0:
             raise ValueError(f"Video frame rate must be positive, got {raw_frame_rate}.")
         total_raw_frames = int(reader.count_frames())
-        num_frames = self.sample_count(reader)
-        max_start = max(0, self.available_frames(reader) - num_frames)
+        if self.fix_frame_rate:
+            duration = meta_data.get("duration") or total_raw_frames / raw_frame_rate
+            total_frames = int(math.floor(duration * self.frame_rate))
+        else:
+            total_frames = total_raw_frames
+        num_frames = self.sample_count(reader, total_frames=total_frames)
+        max_start = max(0, total_frames - num_frames)
         start = random.randint(0, max_start) if self.random_start and max_start > 0 else 0
         frame_ids = tuple(self.raw_frame_id(start + frame_id, raw_frame_rate, total_raw_frames) for frame_id in range(num_frames))
         sampling_frame_rate = self.frame_rate if self.fix_frame_rate else raw_frame_rate
         return VideoFrameSelection(
             frame_ids=frame_ids,
             start_time=start / sampling_frame_rate,
+            source_frame_rate=raw_frame_rate,
         )
 
     def frame_ids(self, reader):
         return list(self.sample(reader).frame_ids)
 
 
-def load_video_tensor(video_path, height, width, frame_sampler, *, return_start_time=False):
+def load_video_tensor(video_path, height, width, frame_sampler, *, return_start_time=False, return_selection=False):
     reader = imageio.get_reader(video_path)
     try:
         selection = frame_sampler.sample(reader)
         frames = []
         for frame_id in selection.frame_ids:
-            frame = Image.fromarray(reader.get_data(frame_id)).convert("RGB")
-            frame_width, frame_height = frame.size
-            scale = max(width / frame_width, height / frame_height)
-            resized_width = round(frame_width * scale)
-            resized_height = round(frame_height * scale)
-            frame = frame.resize((resized_width, resized_height), _BILINEAR)
-            left = max(0, (resized_width - width) // 2)
-            top = max(0, (resized_height - height) // 2)
-            frame = frame.crop((left, top, left + width, top + height))
-            array = np.asarray(frame, dtype=np.float32) / 127.5 - 1.0
+            array = reader.get_data(frame_id)
+            frame_height, frame_width = array.shape[:2]
+            if (frame_height, frame_width) == (height, width) and array.ndim == 3 and array.shape[-1] == 3:
+                array = np.ascontiguousarray(array)
+            else:
+                frame = Image.fromarray(array).convert("RGB")
+                scale = max(width / frame_width, height / frame_height)
+                resized_width = round(frame_width * scale)
+                resized_height = round(frame_height * scale)
+                frame = frame.resize((resized_width, resized_height), _BILINEAR)
+                left = max(0, (resized_width - width) // 2)
+                top = max(0, (resized_height - height) // 2)
+                frame = frame.crop((left, top, left + width, top + height))
+                array = np.array(frame, dtype=np.uint8, copy=True)
             frames.append(torch.from_numpy(array).permute(2, 0, 1))
     finally:
         reader.close()
-    video = torch.stack(frames, dim=1)
+    video = torch.stack(frames, dim=1).to(dtype=torch.float32).div_(127.5).sub_(1.0)
+    if return_selection:
+        return video, selection
     return (video, selection.start_time) if return_start_time else video

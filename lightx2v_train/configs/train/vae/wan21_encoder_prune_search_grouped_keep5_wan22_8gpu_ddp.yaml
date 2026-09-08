@@ -1,0 +1,121 @@
+model:
+    name: wan21_pruned_encoder
+    pretrained_model_name_or_path: ${oc.env:WAN_VAE_GROUPED_PATH,/mnt/devsft_afs_1/gushiqiao/Wan2.1_VAE.pth}
+    running_dtype: bf16
+    student_param_dtype: fp32
+    teacher_autocast_dtype: fp32
+    student_autocast: true
+    pruned_encoder:
+        search:
+            grouping: stage
+            keep_per_group: 1
+            lora_rank: 16
+            lora_alpha: 32
+            gate_scale: 100.0
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel: {enabled: false, size: 1}
+    dp:
+        enabled: true
+        broadcast_buffers: false
+        find_unused_parameters: false
+        gradient_as_bucket_view: true
+    fsdp2: {enabled: false}
+
+data:
+    processor: {name: wan21_pruned_encoder, min_source_frames: 81}
+    train:
+        name: video_dataset
+        data_path: ${oc.env:WAN_VAE_METADATA,/mnt/lm_data_afs/wuzhuguanyu/LightX2V_train/lightx2v_train/data/wan22/metadata_vae.jsonl}
+        skip_missing: false
+        height: 480
+        width: 832
+        num_frames: 81
+        frame_rate: 16
+        fix_frame_rate: false
+        time_division_factor: 4
+        time_division_remainder: 1
+        geometry_from_metadata: false
+        random_start: true
+        num_workers: 4
+        pin_memory: true
+        shuffle: true
+        drop_last: true
+    val:
+        name: video_dataset
+        data_path: ${oc.env:WAN_VAE_METADATA,/mnt/lm_data_afs/wuzhuguanyu/LightX2V_train/lightx2v_train/data/wan22/metadata_vae.jsonl}
+        skip_missing: false
+        height: 480
+        width: 832
+        num_frames: 81
+        frame_rate: 16
+        fix_frame_rate: false
+        time_division_factor: 4
+        time_division_remainder: 1
+        geometry_from_metadata: false
+        random_start: false
+        max_samples: 1
+        num_workers: 2
+        pin_memory: false
+        shuffle: false
+        drop_last: false
+
+training:
+    method: wan21_encoder_pruning
+    train_type: full
+    max_train_iters: 1000
+    gradient_accumulation_iters: 4
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: cosine
+    lr_warmup_iters: 50
+    save_every_iters: 100
+    save_total_limit: 5
+    save_consolidated_weights: false
+    consolidated_weights_name: wan21_pruned_encoder.safetensors
+    optimizer:
+        learning_rate: 0.0001
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.0
+        adam_epsilon: 0.00000001
+    pruning:
+        tau_start: 4.0
+        tau_end: 0.1
+        gate_lr_multiplier: 10.0
+        ema_decay: 0.999
+        export_dir: ${training.output_dir}/export
+    vae_distillation:
+        crop_seed: 2026
+        charbonnier_epsilon: 0.001
+        perceptual_network: vgg
+        perceptual_num_frames: 32
+        perceptual_frame_batch_size: 2
+        perceptual_gradient_checkpointing: true
+        stages:
+            - name: structure_search
+              start_iter: 0
+              crop_num_frames: 33
+              crop_size: 256
+              weights: {reconstruction: 1.0, perceptual: 0.05, posterior: 1.0}
+        gan: {enabled: false}
+    output_dir: ${oc.env:WAN_VAE_ENCODER_WAN22_SEARCH_OUTPUT,output_train/wan21_encoder_prune_search_grouped_keep5_wan22_8gpu_ddp}
+
+inference:
+    method: wan21_vae_reconstruction
+    infer_every_iters: 100
+    output_dir: ${training.output_dir}/previews
+    fps: 16
+    metric_frame_batch_size: 4
+    max_samples: 1
+    save_comparison: true
+    save_png_frame_count: 6
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+
+resume:
+    auto_resume: true

@@ -29,6 +29,10 @@ _LAZY_EXPORTS = {
         ".training_cache",
         "TrainingCacheTrainer",
     ),
+    "VAEDistillationTrainer": (
+        ".vae.distillation",
+        "VAEDistillationTrainer",
+    ),
 }
 
 

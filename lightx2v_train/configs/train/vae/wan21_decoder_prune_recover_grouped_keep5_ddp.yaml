@@ -1,0 +1,161 @@
+model:
+    name: wan21_pruned_decoder
+    pretrained_model_name_or_path: ${oc.env:WAN_VAE_GROUPED_PATH,/data/nvme6/gushiqiao/models/Sekotalk-ar-2step/Wan2.1_VAE.pth}
+    running_dtype: bf16
+    student_param_dtype: fp32
+    teacher_autocast_dtype: fp32
+    student_autocast: true
+    pruned_decoder:
+        selection_path: ${oc.env:WAN_VAE_DECODER_GROUPED_SELECTION,${oc.env:WAN_VAE_DECODER_GROUPED_SEARCH_OUTPUT,/data/nvme6/gushiqiao/codes/latest/vae/LightX2V/lightx2v_train/output_train/wan21_decoder_prune_search_grouped_keep5_ddp}/export/kept_layers.json}
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel: {enabled: false, size: 1}
+    dp:
+        enabled: true
+        broadcast_buffers: false
+        find_unused_parameters: false
+        gradient_as_bucket_view: true
+    fsdp2: {enabled: false}
+
+data:
+    processor: {name: wan21_pruned_decoder, min_source_frames: 65}
+    train:
+        name: video_dataset
+        data_path:
+            - /data/nvme6/gushiqiao/datasets/minimax_h3_teacher_latents_5s/metadata.jsonl
+            - /data/nvme6/gushiqiao/datasets/minimax_h3_teacher_latents_5s_768p/i2av/landscape/metadata.jsonl
+            - /data/nvme6/gushiqiao/datasets/minimax_h3_turbo_vae_latents_5s_768p/fl2av/landscape/metadata.jsonl
+            - /data/nvme6/gushiqiao/datasets/minimax_h3_turbo_vae_latents_5s_768p/l2av/landscape/metadata.jsonl
+        height: 384
+        width: 384
+        num_frames: 65
+        frame_rate: 24
+        fix_frame_rate: true
+        time_division_factor: 4
+        time_division_remainder: 1
+        geometry_from_metadata: false
+        random_start: true
+        num_workers: 4
+        pin_memory: true
+        shuffle: true
+        drop_last: true
+    val:
+        name: video_dataset
+        data_path: /data/nvme6/gushiqiao/datasets/minimax_h3_teacher_latents_5s/metadata.jsonl
+        height: 512
+        width: 512
+        num_frames: 65
+        frame_rate: 24
+        fix_frame_rate: true
+        time_division_factor: 4
+        time_division_remainder: 1
+        geometry_from_metadata: false
+        random_start: false
+        max_samples: 1
+        num_workers: 2
+        pin_memory: false
+        shuffle: false
+        drop_last: false
+
+training:
+    method: vae_distillation
+    train_type: full
+    max_train_iters: 3000
+    gradient_accumulation_iters: 4
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: cosine
+    lr_warmup_iters: 200
+    save_every_iters: 100
+    save_total_limit: 5
+    save_consolidated_weights: true
+    consolidated_weights_name: wan21_pruned_decoder.safetensors
+    optimizer:
+        learning_rate: 0.00005
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.0
+        adam_epsilon: 0.00000001
+    vae_distillation:
+        crop_seed: 2026
+        charbonnier_epsilon: 0.001
+        perceptual_network: vgg
+        perceptual_num_frames: 64
+        perceptual_frame_batch_size: 2
+        perceptual_gradient_checkpointing: true
+        auxiliary_decoder:
+            # Original residual-block indices, including retained shortcut outputs.
+            student_feature_indices: [8, 11, 12]
+            reconstruction_weight: 1.0
+            spatial_gradient_weight: 0.1
+            spatiotemporal_weight: 0.1
+            ramp_iters: 200
+            gradient_checkpointing: true
+        stages:
+            - name: reconstruction
+              start_iter: 0
+              crop_num_frames: 33
+              crop_size: 256
+              weights: {reconstruction: 1.0, perceptual: 0.1, feature: 0.01}
+            - name: reconstruction_aware_detail
+              start_iter: 600
+              crop_num_frames: 65
+              crop_size: 384
+              weights: {reconstruction: 1.0, perceptual: 0.2, feature: 0.005, adversarial: 0.5, auxiliary: 0.1}
+        gan:
+            enabled: true
+            spatial_compression_ratio: 8
+            seed: 2026
+            crop_specs:
+                - {crop_size: 256, max_frames: 32, weight: 0.75}
+                - {crop_size: 384, max_frames: 32, weight: 0.25}
+            correction_scale: 0.05
+            correction_clamp: 4.0
+            discriminator_warmup_iters: 100
+            generator_ramp_iters: 300
+            max_grad_norm: 1.0
+            discriminator:
+                condition_channels: 8
+                base_channels: 32
+                channel_multipliers: [1, 2, 4, 8]
+                temporal_strides: [1, 1, 2, 2]
+                group_norm_groups: 16
+                spectral_normalization: true
+                gradient_checkpointing: true
+            frame_discriminator:
+                enabled: true
+                weight: 1.0
+                condition_channels: 16
+                base_channels: 64
+                channel_multipliers: [1, 2, 4, 8, 8]
+                spatial_strides: [2, 2, 2, 1, 1]
+                group_norm_groups: 32
+                spectral_normalization: true
+                gradient_checkpointing: true
+            optimizer:
+                learning_rate: 0.00002
+                adam_beta1: 0.5
+                adam_beta2: 0.9
+                weight_decay: 0.0
+                adam_epsilon: 0.00000001
+    output_dir: ${oc.env:WAN_VAE_DECODER_GROUPED_RECOVER_OUTPUT,/data/nvme6/gushiqiao/codes/latest/vae/LightX2V/lightx2v_train/output_train/wan21_decoder_prune_recover_grouped_keep5_ddp}
+
+inference:
+    method: wan21_vae_reconstruction
+    infer_every_iters: 100
+    output_dir: ${training.output_dir}/previews
+    fps: 24
+    metric_frame_batch_size: 4
+    max_samples: 1
+    save_comparison: true
+    save_png_frame_count: 6
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+
+resume:
+    auto_resume: true
+

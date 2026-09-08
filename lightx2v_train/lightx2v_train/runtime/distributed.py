@@ -75,7 +75,7 @@ def _resolve_fsdp_size(config):
         if "size" in fsdp_config:
             return _positive_int(fsdp_config["size"], "distributed.fsdp2.size")
         if not fsdp_config.get("enabled", False):
-            return 1
+            return None
 
     fsdp_size = _get_int_config(
         config,
