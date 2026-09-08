@@ -59,6 +59,7 @@ def set_config(
     vae_offload=False,
     resident_blocks=None,
     use_event_offload=False,
+    offload_plan=None,
     **kwargs,
 ):
     """
@@ -128,11 +129,11 @@ def set_config(
 
     args_dict.update(kwargs)
     if "offload_plan" not in args_dict:
-        args_dict["offload_plan"] = {
-            "offload_granularity": args_dict.pop("offload_granularity", "block"),
-            "resident_blocks": {} if resident_blocks is None else resident_blocks,
-            "use_event_offload": args_dict.pop("use_event_offload", use_event_offload),
-        }
+        plan = {} if offload_plan is None else dict(offload_plan)
+        plan.setdefault("offload_granularity", args_dict.pop("offload_granularity", "block"))
+        plan.setdefault("resident_blocks", {} if resident_blocks is None else resident_blocks)
+        plan.setdefault("use_event_offload", args_dict.pop("use_event_offload", use_event_offload))
+        args_dict["offload_plan"] = plan
 
     # Convert to object for set_config compatibility
     args = ConfigObj(**args_dict)

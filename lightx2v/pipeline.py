@@ -358,13 +358,13 @@ class LightX2VPipeline:
         vae_offload=False,
         resident_blocks=None,
         use_event_offload=False,
+        offload_plan=None,
     ):
         self.cpu_offload = cpu_offload
-        self.offload_plan = {
-            "offload_granularity": offload_granularity,
-            "resident_blocks": {} if resident_blocks is None else resident_blocks,
-            "use_event_offload": use_event_offload,
-        }
+        self.offload_plan = {} if offload_plan is None else dict(offload_plan)
+        self.offload_plan.setdefault("offload_granularity", offload_granularity)
+        self.offload_plan.setdefault("resident_blocks", {} if resident_blocks is None else resident_blocks)
+        self.offload_plan.setdefault("use_event_offload", use_event_offload)
         self.vae_cpu_offload = vae_offload
         if self.model_cls in [
             "wan2.1",
