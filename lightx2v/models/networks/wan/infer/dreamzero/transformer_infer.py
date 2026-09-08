@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from lightx2v.common.ops.rope import FlashInferRope, RopeTemplate, TorchRealRope
 from lightx2v.models.networks.wan.infer.dreamzero.pre_infer import _category_linear
-from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.models.networks.wan.infer.triton_ops import apply_rotary_embedding
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import ROPE_REGISTER
@@ -63,7 +63,7 @@ class DreamZeroRope(RopeTemplate):
         return output
 
 
-class DreamZeroTransformerInfer(WanTransformerInfer):
+class DreamZeroTransformerInfer(WanOffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
         self.num_action_per_block = int(config.get("num_action_per_block", config.get("action_horizon", 24)))
@@ -362,9 +362,14 @@ class DreamZeroTransformerInfer(WanTransformerInfer):
 
     def infer_main_blocks(self, blocks, pre_infer_out, kv_cache):
         x = pre_infer_out.x
-        for block_idx in range(len(blocks)):
+
+        def run_dreamzero_block(block_idx, block):
+            nonlocal x
             self.block_idx = block_idx
-            x = self.infer_block(blocks[block_idx], x, pre_infer_out, kv_cache)
+            x = self.infer_block(block, x, pre_infer_out, kv_cache)
+            return x
+
+        self.run_blocks_with_offload(blocks, run_dreamzero_block)
         return x
 
     def infer_action_decoder(self, weights, x, pre_infer_out):

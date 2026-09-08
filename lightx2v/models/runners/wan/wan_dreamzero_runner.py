@@ -571,12 +571,19 @@ class WanDreamZeroRunner(WanRunner):
             self.model.clear_cache(self.cache_name, clear_pre_infer=False)
 
         observed_latents = None
+        image_latent = None
         if self.current_start_frame == 0:
             self.clip_feas, self.ys, image_latent = self._encode_first_frame_condition(videos)
-            self._run_cache_warmup(image_latent, 0, 1)
-            self.current_start_frame += 1
         else:
             observed_latents = self._encode_observed_latents(videos)
+
+        with self.transformer_offload_session():
+            return self._run_chunk_dit(image_latent, observed_latents)
+
+    def _run_chunk_dit(self, image_latent, observed_latents):
+        if self.current_start_frame == 0:
+            self._run_cache_warmup(image_latent, 0, 1)
+            self.current_start_frame += 1
 
         if self.current_start_frame != 1 and observed_latents is not None:
             current_ref_latents = observed_latents[:, :, -self.num_frame_per_block :]
