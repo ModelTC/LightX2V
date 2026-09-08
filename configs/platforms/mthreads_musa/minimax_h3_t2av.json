@@ -20,6 +20,7 @@
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
   "use_compile": true,
+  "warmup": true,
   "vae_use_compile": true,
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,

@@ -1,6 +1,6 @@
 {
     "dancer_stage": "local",
-    "dit_original_ckpt": "/data/nvme1/yongyang/dan/Wan-Dancer/models/Wan-AI/Wan-Dancer-14B/local_model.safetensors",
+    "dit_original_ckpt": "/path/to/local_model.safetensors",
     "infer_steps": 24,
     "target_video_length": 149,
     "target_height": 1280,

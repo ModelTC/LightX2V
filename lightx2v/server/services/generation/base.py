@@ -45,15 +45,6 @@ class BaseGenerationService(ABC):
         else:
             return image_path
 
-    async def _process_image_path(self, image_path: str, task_data: Dict[str, Any]) -> None:
-        task_data["image_path"] = await self._resolve_image_path(image_path)
-
-    async def _process_image_mask_path(self, image_mask_path: str, task_data: Dict[str, Any]) -> None:
-        if not image_mask_path:
-            return
-
-        task_data["image_mask_path"] = await self._resolve_image_path(image_mask_path)
-
     def _pack_image_and_mask_as_dir(self, task_data: Dict[str, Any]) -> None:
         image_path = task_data.get("image_path", "")
         image_mask_path = task_data.get("image_mask_path", "")
@@ -117,14 +108,7 @@ class BaseGenerationService(ABC):
             else:
                 task_data["talk_objects"][index]["audio"] = talk_object.audio
 
-            if talk_object.mask.startswith("http"):
-                mask_path = await self.file_service.download_image(talk_object.mask)
-                task_data["talk_objects"][index]["mask"] = str(mask_path)
-            elif is_base64_image(talk_object.mask):
-                mask_path = save_base64_image(talk_object.mask, str(self.file_service.input_image_dir))
-                task_data["talk_objects"][index]["mask"] = str(mask_path)
-            else:
-                task_data["talk_objects"][index]["mask"] = talk_object.mask
+            task_data["talk_objects"][index]["mask"] = await self._resolve_image_path(talk_object.mask)
 
         temp_path = self.file_service.cache_dir / uuid.uuid4().hex[:8]
         temp_path.mkdir(parents=True, exist_ok=True)
@@ -151,11 +135,15 @@ class BaseGenerationService(ABC):
                 return None
 
             if hasattr(message, "image_path") and message.image_path:
-                await self._process_image_path(message.image_path, task_data)
+                task_data["image_path"] = await self._resolve_image_path(message.image_path)
                 logger.info(f"Task {message.task_id} image path: {task_data.get('image_path')}")
 
+            if message.last_frame_path:
+                task_data["last_frame_path"] = await self._resolve_image_path(message.last_frame_path)
+                logger.info(f"Task {message.task_id} last frame path: {task_data.get('last_frame_path')}")
+
             if hasattr(message, "image_mask_path") and message.image_mask_path:
-                await self._process_image_mask_path(message.image_mask_path, task_data)
+                task_data["image_mask_path"] = await self._resolve_image_path(message.image_mask_path)
                 logger.info(f"Task {message.task_id} image mask path: {task_data.get('image_mask_path')}")
                 self._pack_image_and_mask_as_dir(task_data)
                 logger.info(f"Task {message.task_id} packed image+mask dir: {task_data.get('image_path')}")

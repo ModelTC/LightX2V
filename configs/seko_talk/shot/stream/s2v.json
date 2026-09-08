@@ -1,7 +1,7 @@
 {
     "model_cls": "seko_talk",
     "task": "s2v",
-    "model_path":"/data/temp/Wan2.1-R2V721-Audio-14B-720P/",
+    "model_path":"/path/to/Wan2.1-R2V721-Audio-14B-720P",
     "target_fps": 16,
     "audio_sr": 16000,
     "self_attn_1_type": "flash_attn3",

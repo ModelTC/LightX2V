@@ -21,10 +21,12 @@ from lightx2v.models.networks.minimax_h3.packing import (
     validate_t2av_geometry,
 )
 from lightx2v.models.networks.minimax_h3.packing_ref2av import (
+    DEFAULT_REFERENCE_IMAGE_RESIZE_MODE,
     MAX_REFERENCES,
     MAX_REFERENCE_AUDIOS,
     MAX_REFERENCE_IMAGES,
     MAX_REFERENCE_VIDEOS,
+    REFERENCE_IMAGE_RESIZE_MODES,
     MiniMaxH3PreparedReference,
     decode_reference_audio,
     decode_reference_video,
@@ -106,6 +108,10 @@ class MiniMaxH3Runner(DefaultRunner):
     def init_modules(self):
         super().init_modules()
         self.run_input_encoder = self._run_input_encoder_local_h3
+        if self.model.prepost_resident:
+            self.model.pre_weight.to_cuda()
+            self.model.post_weight.to_cuda()
+            logger.info("MiniMax-H3 pre/post weights will remain on the accelerator across requests")
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
@@ -174,14 +180,21 @@ class MiniMaxH3Runner(DefaultRunner):
         else:
             self.input_info = Ref2AVInputInfo(**common, image_path=image)
 
-    def clear_warmup_state(self):
-        self.scheduler.clear()
+    def clear_conditioning_state(self):
         self.condition_video_latents = []
         self.condition_audio_latents = []
         self.keyframe_anchors = ()
         self.prepared_references = None
+
+    def clear_warmup_state(self):
+        self.scheduler.clear()
+        self.clear_conditioning_state()
         self.input_info = None
         self.__dict__.pop("inputs", None)
+
+    def end_run(self):
+        self.clear_conditioning_state()
+        super().end_run()
 
     def init_scheduler(self):
         self.scheduler = MiniMaxH3Scheduler(self.config)
@@ -392,13 +405,23 @@ class MiniMaxH3Runner(DefaultRunner):
         if all(kind == "audio" for kind in kinds):
             raise ValueError("MiniMax-H3 ref2av does not allow audio-only references")
 
+        resize_mode = self.config.get("reference_image_resize_mode", DEFAULT_REFERENCE_IMAGE_RESIZE_MODE)
+        if resize_mode not in REFERENCE_IMAGE_RESIZE_MODES:
+            raise ValueError(f"reference_image_resize_mode must be one of {REFERENCE_IMAGE_RESIZE_MODES}, got {resize_mode!r}")
+
         references = []
         audio_count = 0
         max_duration = self.request_num_frames / 24.0
         for entry, kind in zip(entries, kinds):
             if kind == "image":
                 image = self._load_rgb_image(entry["image"])
-                height, width = resolve_reference_image_size(*image.size)
+                height, width = resolve_reference_image_size(
+                    *image.size,
+                    target_width=self.request_width,
+                    target_height=self.request_height,
+                    mode=resize_mode,
+                )
+                logger.info(f"MiniMax-H3 reference image resized with {resize_mode!r}: {image.width}x{image.height} -> {width}x{height}")
                 references.append(MiniMaxH3PreparedReference("image", image=prepare_reference_image(image, height, width)))
                 continue
             if kind == "video":
@@ -485,10 +508,7 @@ class MiniMaxH3Runner(DefaultRunner):
                 f"loaded {self.loaded_transformer_partition!r}, requested {requested_partition!r}. "
                 "Create a separate LightX2VPipeline for ref2av."
             )
-        self.condition_video_latents = []
-        self.condition_audio_latents = []
-        self.keyframe_anchors = ()
-        self.prepared_references = None
+        self.clear_conditioning_state()
         if task == "ref2av":
             self._resolve_request_geometry()
             self.prepared_references = self._prepare_references()
@@ -577,10 +597,11 @@ class MiniMaxH3Runner(DefaultRunner):
     def _offload_transformer(self):
         if not self.config.get("cpu_offload", False):
             return
-        if self.config.get("offload_granularity", "model") == "block":
-            logger.info("Offloading MiniMax-H3 pre/post weights; retaining the two block-offload device buffers")
-            self.model.pre_weight.to_cpu()
-            self.model.post_weight.to_cpu()
+        if self.model.block_offload:
+            if not self.model.prepost_resident:
+                logger.info("Offloading MiniMax-H3 pre/post weights; retaining the two block-offload device buffers")
+                self.model.pre_weight.to_cpu()
+                self.model.post_weight.to_cpu()
         else:
             logger.info("Offloading MiniMax-H3 transformer before VAE decode")
             self.model.to_cpu()

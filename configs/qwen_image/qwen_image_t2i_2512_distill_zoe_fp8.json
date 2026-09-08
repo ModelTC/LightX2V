@@ -6,7 +6,7 @@
     "attn_type": "sage_attn2",
     "enable_cfg": false,
     "dit_quantized": true,
-    "dit_quantized_ckpt": "/data/nvme1/yongyang/ccc/models/distill_zoe_diff_qwen_image_data_680w_neo_prompt_res2k_3kiter_multi_large_char_200iter_step4_fp8_mix.safetensors",
+    "dit_quantized_ckpt": "/path/to/distill_zoe_diff_qwen_image_data_680w_neo_prompt_res2k_3kiter_multi_large_char_200iter_step4_fp8_mix.safetensors",
     "dit_quant_scheme": "fp8-sgl",
     "sample_shift": 5.0,
     "zoe_style_noise": true

@@ -19,12 +19,7 @@ class AutoregressiveDmdTrainer(DmdTrainer):
 
     def __init__(self, config):
         super().__init__(config)
-        self.num_frame_per_chunk = int(
-            self.dmd_config.get(
-                "num_frame_per_chunk",
-                self.model_config.get("num_frame_per_chunk", 3),
-            )
-        )
+        self.num_frame_per_chunk = int(self.model_config.get("num_frame_per_chunk", 3))
         self.same_step_across_blocks = bool(self.dmd_config.get("same_step_across_blocks", True))
         self.context_noise = float(self.dmd_config.get("context_noise", 0.0))
         self.sequence_parallel_cache = bool(self.dmd_config.get("sp_cache", False))
@@ -40,11 +35,11 @@ class AutoregressiveDmdTrainer(DmdTrainer):
         grad_enabled,
         xt=None,
     ):
+        self._prepare_timestep_lookup(self.student.latent_hw(latent_shape))
         if xt is None:
             xt = self.sample_initial_latents(latent_shape)
         self.scheduler.set_timesteps(
             self.num_inference_steps,
-            sigmas=[float(sigma) for sigma in self.denoising_sigmas.detach().cpu()],
             latent_hw=self.student.latent_hw(latent_shape),
             device=self.student.device,
         )
@@ -53,8 +48,6 @@ class AutoregressiveDmdTrainer(DmdTrainer):
             latent_shape,
             xt,
             AutoregressiveRolloutContext(
-                denoising_steps=self.denoising_steps,
-                denoising_scheduler=self.denoising_scheduler,
                 trajectory_scheduler=self.scheduler,
                 running_dtype=self.latent_dtype,
                 frames_per_chunk=self.num_frame_per_chunk,

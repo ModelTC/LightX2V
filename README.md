@@ -7,7 +7,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ModelTC/lightx2v)
 [![Doc](https://img.shields.io/badge/docs-English-99cc2)](https://lightx2v-en.readthedocs.io/en/latest)
 [![Doc](https://img.shields.io/badge/文档-中文-99cc2)](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest)
-[![Papers](https://img.shields.io/badge/论文集-中文-99cc2)](https://lightx2v-papers-zhcn.readthedocs.io/zh-cn/latest)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/lightx2v/lightx2v/tags)
 
 **\[ English | [中文](README_zh.md) \]**
@@ -18,7 +17,7 @@
 
 **LightX2V** is an advanced lightweight image/video generation inference framework engineered to deliver efficient, high-performance image/video synthesis solutions. This unified platform integrates multiple state-of-the-art image/video generation techniques, supporting diverse generation tasks including text-to-video (T2V), image-to-video (I2V), text-to-image (T2I), image-editing (I2I). **X2V represents the transformation of different input modalities (X, such as text or images) into vision output (Vision)**.
 
-> 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Studio](https://x2v.light-ai.top/)** — a free, lightweight AI video platform with **LTX 2.3**, **Wan 2.2**, **SekoTalk**, **Qwen-Image**, **SeedVR2**, and more models and tasks.
+> 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Studio](https://x2v.light-ai.top/)** — a free, lightweight AI video platform with **Minimax H3**, **Wan 2.2**, **SekoTalk**, **Qwen-Image**, **SwiftVR**, and more models and tasks.
 
 > 🤗 **HuggingFace Model Repository: [LightX2V HuggingFace](https://huggingface.co/lightx2v)**
 
@@ -51,6 +50,8 @@ Besides the contributions from the LightX2V team, we have received contributions
 - [qiuxin2012](https://github.com/qiuxin2012)
 
 ## :fire: Latest News
+
+- **August 27, 2026:** 🚀 We release the [MiniMax-H3 Turbo 8-step v1.0 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors) for fast 768p audio-video generation with MiniMax-H3, delivering improved video and audio quality.
 
 - **August 11, 2026:** 🚀 We release and support the [MiniMax-H3 Turbo 4-step v1.0 768p distilled LoRA](https://huggingface.co/lightx2v/Minimax-h3-Turbo/blob/main/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors). The released DMD configs under `configs/minimax_h3/dmd` run H3 at 1344x768 with `video_flow_shift=6`, `audio_flow_shift=3`, LoRA alpha 128, and 4-step guidance-free inference.
 
@@ -220,12 +221,13 @@ pipe.generate(
 ## 🤖 Supported Model Ecosystem
 
 ### Official Open-Source Models
+- ✅ [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
 - ✅ [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)
 - ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2)
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
 - ✅ [Wan2.1 & Wan2.2](https://huggingface.co/Wan-AI/)
 - ✅ [SeedVR2](https://huggingface.co/ByteDance-Seed/SeedVR2-3B)
-- ✅ [SwiftVR](https://huggingface.co/H-oliday/SwiftVR); convert the checkpoint with [convert_swiftvr.py](tools/convert/examples/convert_swiftvr.py), then run the [SR script](scripts/swiftvr/run_swiftvr_sr.sh).
+- ✅ [SwiftVR](https://huggingface.co/H-oliday/SwiftVR); convert the checkpoint with [convert_swiftvr.py](tools/convert/examples/convert_swiftvr.py), then run the [image or video SR scripts](scripts/swiftvr/inference).
 - ✅ [Qwen-Image](https://huggingface.co/Qwen/Qwen-Image)
 - ✅ [Qwen-Image-Edit](https://huggingface.co/spaces/Qwen/Qwen-Image-Edit)
 - ✅ [Qwen-Image-Edit-2509](https://huggingface.co/Qwen/Qwen-Image-Edit-2509)
@@ -245,7 +247,6 @@ pipe.generate(
 - ✅ [Autoencoders](https://huggingface.co/lightx2v/Autoencoders)
 
 ### Autoregressive Models
-- ✅ [Wan2.1-T2V-CausVid](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-CausVid)
 - ✅ [Self-Forcing](https://github.com/guandeh17/Self-Forcing)
 - ✅ [Matrix-Game-2.0](https://huggingface.co/Skywork/Matrix-Game-2.0)
 
@@ -315,6 +316,7 @@ We sincerely thank all the model repositories and research communities that insp
 - [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan)
 - [Wan-Video](https://github.com/Wan-Video)
 - [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
+- [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
 - [LightLLM](https://github.com/ModelTC/LightLLM)
 - [sglang](https://github.com/sgl-project/sglang)
 - [vllm](https://github.com/vllm-project/vllm)

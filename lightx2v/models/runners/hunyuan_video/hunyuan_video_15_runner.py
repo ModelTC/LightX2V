@@ -15,6 +15,7 @@ from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.hunyuan_video.feature_caching.scheduler import HunyuanVideo15SchedulerCaching
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15SRScheduler, HunyuanVideo15Scheduler
+from lightx2v.models.schedulers.hunyuan_video.step_distill.scheduler import HunyuanVideo15StepDistillScheduler
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.hunyuanvideo_15_vae import HunyuanVideo15VAE
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.lighttae_hy15 import LightTaeHy15
 from lightx2v.server.metrics import monitor_cli
@@ -38,6 +39,8 @@ class HunyuanVideo15Runner(DefaultRunner):
 
         if self.sr_version is not None:
             self.config_sr = copy.deepcopy(config)
+            self.config_sr.pop("dit_original_ckpt", None)
+            self.config_sr["transformer_model_path"] = os.path.join(os.path.dirname(config["transformer_model_path"]), self.sr_version)
             self.config_sr["is_sr_running"] = False
             self.config_sr["sample_shift"] = config["video_super_resolution"]["flow_shift"]  # for SR model
             self.config_sr["sample_guide_scale"] = config["video_super_resolution"]["guidance_scale"]  # for SR model
@@ -56,12 +59,22 @@ class HunyuanVideo15Runner(DefaultRunner):
         self.tae_cls = LightTaeHy15
 
     def init_scheduler(self):
-        if self.config["feature_caching"] == "NoCaching":
-            scheduler_class = HunyuanVideo15Scheduler
-        elif self.config.feature_caching in ["Mag", "Tea"]:
-            scheduler_class = HunyuanVideo15SchedulerCaching
+        distill_method = self.config.get("distill_method")
+        feature_caching = self.config["feature_caching"]
+
+        if distill_method == "dmd2":
+            if feature_caching != "NoCaching":
+                raise NotImplementedError("HunyuanVideo-1.5 DMD2 does not support feature caching")
+            scheduler_class = HunyuanVideo15StepDistillScheduler
+        elif distill_method is None:
+            if feature_caching == "NoCaching":
+                scheduler_class = HunyuanVideo15Scheduler
+            elif feature_caching in ["Mag", "Tea"]:
+                scheduler_class = HunyuanVideo15SchedulerCaching
+            else:
+                raise NotImplementedError(f"Unsupported feature_caching type: {feature_caching}")
         else:
-            raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
+            raise NotImplementedError(f"hunyuan_video_1.5 does not support distill_method {distill_method!r}")
         self.scheduler = scheduler_class(self.config)
 
         if self.sr_version is not None:
@@ -102,17 +115,18 @@ class HunyuanVideo15Runner(DefaultRunner):
         text_encoders = [text_encoder, byt5]
         return text_encoders
 
+    def load_sr_transformer(self):
+        if self.sr_version is None:
+            return None
+
+        self.config_sr["is_sr_running"] = True
+        model = HunyuanVideo15Model(self.config_sr["model_path"], self.config_sr, self.init_device)
+        self.config_sr["is_sr_running"] = False
+        return model
+
     def load_transformer(self):
         model = HunyuanVideo15Model(self.config["model_path"], self.config, self.init_device)
-        if self.sr_version is not None:
-            self.config_sr["transformer_model_path"] = os.path.join(os.path.dirname(self.config.transformer_model_path), self.sr_version)
-            self.config_sr["is_sr_running"] = True
-            model_sr = HunyuanVideo15Model(self.config_sr["model_path"], self.config_sr, self.init_device)
-            self.config_sr["is_sr_running"] = False
-        else:
-            model_sr = None
-
-        self.model_sr = model_sr
+        self.model_sr = self.load_sr_transformer()
         return model
 
     def get_latent_shape_with_target_hw(self, origin_size=None):
@@ -269,7 +283,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         return closest_size, closest_ratio
 
     def run_text_encoder(self, input_info):
-        prompt = input_info.prompt_enhanced if self.config["use_prompt_enhancer"] else input_info.prompt
+        prompt = input_info.prompt
         neg_prompt = input_info.negative_prompt
 
         # run qwen25vl

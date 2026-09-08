@@ -14,6 +14,6 @@
     "video_frame_interpolation": {
         "algo": "rife",
         "target_fps": 24,
-        "model_path": "/path to flownet.pkl"
+        "model_path": "/path/to/flownet.pkl"
     }
 }

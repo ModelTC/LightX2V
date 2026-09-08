@@ -134,8 +134,8 @@ num_disk_workers = 2         # 磁盘I/O工作线程数
 ```python
 # CUDA内存清理配置
 clean_cuda_cache = True        # 及时清理GPU缓存
-rotary_chunk = True            # 旋转位置编码分块计算
-rotary_chunk_size = 100        # 分块大小，可根据显存调整
+rope_chunk = True              # 旋转位置编码分块计算
+rope_chunk_size = 100          # 分块大小，可根据显存调整
 ```
 
 #### 分块计算策略

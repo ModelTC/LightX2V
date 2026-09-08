@@ -4,16 +4,17 @@ from .flow_matching import RectifiedFlowMatchingScheduler
 
 
 class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
-    def __init__(self, config, dmd_config={}):
-        super().__init__(config)
-        self.renoise_shift = float(dmd_config.get("renoise_shift", 5.0))
-        self.renoise_sigma_min = float(dmd_config.get("renoise_sigma_min", dmd_config.get("sigma_min", 0.02)))
-        self.renoise_sigma_max = float(dmd_config.get("renoise_sigma_max", dmd_config.get("sigma_max", 1.0)))
-        self.renoise_discrete_samples = int(dmd_config.get("renoise_discrete_samples", dmd_config.get("discrete_samples", 1000)))
-
-    @staticmethod
-    def linear_shift(mu, t):
-        return mu / (mu + (1 / t - 1))
+    def set_training_timesteps(self, *, latent_hw=None, num_steps=None):
+        """Build the dense DMD lookup table using the shared scheduler shift."""
+        settings = self.config["scheduler"].get("time_shift_settings") or {}
+        sigma_min = float(settings.get("sigma_min", 0.0))
+        extra_one_step = bool(settings.get("extra_one_step", True))
+        count = self.num_train_timesteps + int(extra_one_step)
+        sigmas = torch.linspace(1.0, sigma_min, count, device=self.device)
+        if extra_one_step:
+            sigmas = sigmas[:-1]
+        self.sigmas = self.time_shift(sigmas, latent_hw=latent_hw, num_steps=num_steps)
+        self.timesteps = self.sigmas * self.num_train_timesteps
 
     def set_timesteps(self, num_inference_steps, sigmas=None, latent_hw=None, device=None):
         super().set_timesteps(num_inference_steps, sigmas=sigmas, latent_hw=latent_hw)
@@ -75,17 +76,6 @@ class DMDFlowMatchingScheduler(RectifiedFlowMatchingScheduler):
         sigma = self.sigmas[int(step_idx)].reshape(1)
         if device is not None or dtype is not None:
             sigma = sigma.to(device=device, dtype=dtype)
-        return sigma
-
-    def sample_renoise_sigma(self, device=None, dtype=None):
-        device = device or self.device
-        raw = torch.rand((1,), device=device, dtype=torch.float32)
-        if self.renoise_discrete_samples > 0:
-            raw = torch.ceil(raw * self.renoise_discrete_samples) / self.renoise_discrete_samples
-        raw = torch.clamp(raw, 1e-7, 1 - 1e-7)
-        sigma = torch.clamp(self.linear_shift(self.renoise_shift, raw), self.renoise_sigma_min, self.renoise_sigma_max)
-        if dtype is not None:
-            sigma = sigma.to(dtype=dtype)
         return sigma
 
     def add_noise(self, latent, noise, sigmas):

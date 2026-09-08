@@ -1,5 +1,4 @@
 {
-  "task_hint": "motion",
   "infer_steps": 8,
   "target_video_length": 241,
   "target_height": 768,

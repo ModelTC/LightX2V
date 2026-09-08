@@ -9,6 +9,7 @@ from lightx2v_train.model_zoo.capability_adapters import SpatialLatentGeometry
 from lightx2v_train.model_zoo.capability_adapters.common import GenericDistributionMatchingCapability, GenericFlowMatchingCapability
 from lightx2v_train.model_zoo.qwen_image.capability_adapters import QwenImageConsistencyModelCapability
 from lightx2v_train.utils.registry import MODEL_REGISTER
+from lightx2v_train.utils.utils import is_cache_build, is_train_cache_dataset
 
 from ..base import BaseModel
 
@@ -82,7 +83,13 @@ class QwenImageModel(BaseModel):
         self.text_pipeline.text_encoder.eval()
 
     def _load_vae(self, model_path):
-        self.vae = AutoencoderKLQwenImage.from_pretrained(model_path, subfolder="vae").to(self.device, dtype=self.running_dtype)
+        use_cpu = not is_cache_build(self.config) and is_train_cache_dataset(self.config) and self.config.get("inference", {}).get("vae_cpu_offload", False)
+        device = torch.device("cpu") if use_cpu else self.device
+        self.vae = AutoencoderKLQwenImage.from_pretrained(
+            model_path,
+            subfolder="vae",
+            torch_dtype=self.running_dtype,
+        ).to(device)
         self.vae_config = self.vae.config
         self.vae.requires_grad_(False)
         self.vae.eval()

@@ -32,6 +32,8 @@ class WanAutoregressiveDistributionMatchingCapability(
         context: AutoregressiveRolloutContext,
     ):
         latents = initial_latents
+        scheduler = context.trajectory_scheduler
+        timesteps = scheduler.timesteps
         _, _, num_frames, _, _ = latents.shape
         if latents.shape[0] != 1:
             raise ValueError("Wan autoregressive DMD only supports physical batch size 1.")
@@ -63,7 +65,7 @@ class WanAutoregressiveDistributionMatchingCapability(
         num_blocks = num_frames // context.frames_per_chunk
         exit_indices = self._sample_exit_indices(
             1 if context.same_step_across_blocks else num_blocks,
-            len(context.denoising_steps),
+            len(timesteps),
             latents.device,
         )
 
@@ -80,7 +82,7 @@ class WanAutoregressiveDistributionMatchingCapability(
             exit_index = int(exit_indices[0] if context.same_step_across_blocks else exit_indices[block_index])
 
             x0 = None
-            for step_index, current_timestep in enumerate(context.denoising_steps):
+            for step_index, current_timestep in enumerate(timesteps):
                 timestep = torch.full(
                     (1, local_frames),
                     float(current_timestep),
@@ -105,13 +107,13 @@ class WanAutoregressiveDistributionMatchingCapability(
                         block_latents,
                         flow,
                         timestep,
-                        context.denoising_scheduler,
+                        scheduler,
                     )
                 if step_index == exit_index:
                     break
                 next_timestep = torch.full(
                     (1, local_frames),
-                    float(context.denoising_steps[step_index + 1]),
+                    float(timesteps[step_index + 1]),
                     device=latents.device,
                     dtype=torch.float32,
                 )
@@ -120,7 +122,7 @@ class WanAutoregressiveDistributionMatchingCapability(
                         x0,
                         torch.randn_like(x0),
                         next_timestep,
-                        context.denoising_scheduler,
+                        scheduler,
                     )
 
             output_chunks.append(all_gather_sequence(x0, dim=2) if use_sp_cache else x0)
@@ -136,7 +138,7 @@ class WanAutoregressiveDistributionMatchingCapability(
                     cache_latents,
                     torch.randn_like(cache_latents),
                     cache_timestep,
-                    context.denoising_scheduler,
+                    scheduler,
                 )
             with torch.no_grad():
                 self._forward_chunk(
@@ -268,17 +270,7 @@ class WanAutoregressiveDistributionMatchingCapability(
 
     @staticmethod
     def _sigma_from_timestep(timestep, dtype, scheduler):
-        timesteps = scheduler.timesteps.to(
-            device=timestep.device,
-            dtype=torch.float32,
-        )
-        sigmas = scheduler.sigmas.to(device=timestep.device, dtype=dtype)
-        flat = timestep.flatten().float()
-        indices = torch.argmin(
-            (timesteps.unsqueeze(0) - flat.unsqueeze(1)).abs(),
-            dim=1,
-        )
-        return sigmas[indices].reshape(timestep.shape)
+        return (timestep.float() / scheduler.num_train_timesteps).to(dtype=dtype)
 
     @classmethod
     def _flow_to_x0(cls, sample, flow, timestep, scheduler):

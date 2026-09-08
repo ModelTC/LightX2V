@@ -18,7 +18,8 @@ class WanPreInfer:
         self.task = config["task"]
         self.freq_dim = config["freq_dim"]
         self.dim = config["dim"]
-        self.enable_dynamic_cfg = config.get("enable_dynamic_cfg", False)
+        self.wan21_distill_method = config.get("distill_method") if config["model_cls"] == "wan2.1" else None
+        self.enable_dynamic_cfg = self.wan21_distill_method == "dmd2" and config.get("enable_dynamic_cfg", False)
         self.cfg_scale = config.get("cfg_scale", 4.0)
         self.infer_dtype = GET_DTYPE()
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
@@ -96,7 +97,7 @@ class WanPreInfer:
         x = self.scheduler.latents
         t = self.scheduler.timestep_input
 
-        if self.config["model_cls"] == "wan2.1_mean_flow_distill":
+        if self.wan21_distill_method == "mean_flow":
             t_r = self.scheduler.timestep_input_r
 
         if self.scheduler.infer_condition:
@@ -114,13 +115,7 @@ class WanPreInfer:
                 image_encoder = inputs["image_encoder_output"]["vae_encoder_out"]
 
             if image_encoder is not None:
-                frame_seq_length = (image_encoder.size(2) // 2) * (image_encoder.size(3) // 2)
-                if kv_end - kv_start >= frame_seq_length:  # 如果是CausalVid, image_encoder取片段
-                    idx_s = kv_start // frame_seq_length
-                    idx_e = kv_end // frame_seq_length
-                    image_encoder = image_encoder[:, idx_s:idx_e, :, :]
-                y = image_encoder
-                x = torch.cat([x, y], dim=0)
+                x = torch.cat([x, image_encoder], dim=0)
 
         # embeddings
         x = weights.patch_embedding.apply(x.unsqueeze(0))
@@ -150,7 +145,7 @@ class WanPreInfer:
         embed = weights.time_embedding_2.apply(embed)
         embed0 = torch.nn.functional.silu(embed)
 
-        if self.config["model_cls"] == "wan2.1_mean_flow_distill":
+        if self.wan21_distill_method == "mean_flow":
             embed_r = sinusoidal_embedding_1d(self.freq_dim, t_r.flatten())
             if self.sensitive_layer_dtype != self.infer_dtype:
                 embed_r = weights.time_embedding_r_0.apply(embed_r.to(self.sensitive_layer_dtype))

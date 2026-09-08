@@ -236,4 +236,4 @@ class Wan22MoeVaceRunner(WanVaceRunner):
             high_noise_model = build_wan_model_with_lora(WanVaceModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
             low_noise_model = build_wan_model_with_lora(WanVaceModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
 
-        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
+        return MultiModelStruct([high_noise_model, low_noise_model], self.config)

@@ -1,0 +1,24 @@
+ARG BASE_IMAGE=registry.cn-sh-01.sensecore.cn/devsft-ccr-2/lightx2v:26062001-cu130-5090
+FROM ${BASE_IMAGE} AS base
+
+ARG SOL_ATTN_REF=71350faed59a6865173ddfd5a7d4471da4bde328
+ARG CUTLASS_DSL_VERSION=4.5.2
+
+# This image is a thin Sol-Attn extension of the existing CUDA 13 / RTX 5090
+# base image. Reuse its CUTLASS DSL installation when it is already the pinned
+# version and importable; reinstall only when it is missing or incomplete.
+RUN --mount=type=cache,target=/root/.cache/pip set -eux; \
+    python -c 'import torch; assert torch.version.cuda and torch.version.cuda.split(".", 1)[0] == "13", f"CUDA 13 PyTorch is required, found {torch.version.cuda}"'; \
+    if python -c 'import importlib.metadata as metadata, sys; assert metadata.version("nvidia-cutlass-dsl") == sys.argv[1]; import cutlass.cute' "${CUTLASS_DSL_VERSION}"; then \
+        echo "Reusing CUTLASS DSL ${CUTLASS_DSL_VERSION} from the base image"; \
+    else \
+        python -m pip install --force-reinstall \
+            "nvidia-cutlass-dsl[cu13]==${CUTLASS_DSL_VERSION}"; \
+    fi; \
+    git clone --branch sol-engine --single-branch --filter=blob:none --no-checkout \
+        https://github.com/NVlabs/Sana.git /opt/Sana-sol-engine; \
+    git -C /opt/Sana-sol-engine checkout "${SOL_ATTN_REF}"; \
+    python -m pip install --no-cache-dir \
+        /opt/Sana-sol-engine/techniques/sparse_backends; \
+    python -c 'import cutlass.cute; import sol_attn; print("Sol-Attn SM120 dependencies import successfully")'; \
+    rm -rf /opt/Sana-sol-engine

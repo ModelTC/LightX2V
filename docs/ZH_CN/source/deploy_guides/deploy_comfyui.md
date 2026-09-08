@@ -18,7 +18,6 @@ LightX2V 的官方 ComfyUI 集成节点已经发布在独立仓库中，提供�
   - CPU 卸载内存优化
   - 轻量级 VAE 选项
 - LoRA 支持：可链式组合多个 LoRA 模型
-- 多模型支持：wan2.1、hunyuan 等架构
 
 ### 安装和使用
 

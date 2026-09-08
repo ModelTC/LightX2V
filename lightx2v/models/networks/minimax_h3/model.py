@@ -35,6 +35,7 @@ H3_CHANNEL_QUANT_SCHEMES = {
     "int8-triton",
     "int8-vllm",
     "int8-intel-xpu",
+    "int8-convrot",
 }
 
 
@@ -47,6 +48,10 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block"
+        # Model offload moves pre/blocks/post together. Pre/post residency only applies
+        # to block offload and is ignored otherwise.
+        self.prepost_resident = self.block_offload and config.get("dit_prepost_resident", False)
         if GET_DTYPE() != torch.bfloat16:
             raise ValueError(
                 "MiniMax-H3 requires DTYPE=BF16. The native loader preserves the released checkpoint's 626 BF16 tensors and 12 FP32 projection/time/head tensors without dtype conversion."
@@ -320,11 +325,19 @@ class MiniMaxH3Model(BaseTransformerModel):
         split_type = self._tp_split_type(key)
         if split_type is None:
             return tensor
+        # Scalar metadata such as ConvRot's group size is shared by all TP
+        # ranks.  One-dimensional column biases/scales still need sharding.
+        if tensor.ndim == 0:
+            return tensor
 
         if split_type == "row":
+            # Row-parallel biases belong to the fully reduced output and stay
+            # replicated.  Other one-dimensional metadata is replicated too.
+            if tensor.ndim < 2:
+                return tensor
             # Per-output-channel quantization scales remain replicated for a
             # row-parallel weight; only the weight's input dimension is split.
-            if key.endswith(".weight_scale") or tensor.ndim < 2:
+            if key.endswith(".weight_scale"):
                 return tensor
             split_dim = 1
             if tensor.shape[split_dim] % self.tp_size:
@@ -481,14 +494,14 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        block_offload = self.cpu_offload and self.offload_granularity == "block"
-        if block_offload and self.scheduler.step_index == 0:
+        prepost_offload = self.block_offload and not self.prepost_resident
+        if prepost_offload and self.scheduler.step_index == 0:
             self.pre_weight.to_cuda()
             self.post_weight.to_cuda()
         output = self._infer_cond_uncond(inputs, infer_condition=True)
         self.scheduler.video_noise_pred = output.video
         self.scheduler.audio_noise_pred = output.audio
-        if block_offload and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+        if prepost_offload and self.scheduler.step_index == self.scheduler.infer_steps - 1:
             self.pre_weight.to_cpu()
             self.post_weight.to_cpu()
 

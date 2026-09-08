@@ -25,9 +25,9 @@ _LAZY_EXPORTS = {
         ".teacher_forcing",
         "TeacherForcingTrainer",
     ),
-    "TrainingCacheTrainer": (
-        ".training_cache",
-        "TrainingCacheTrainer",
+    "CacheBuildTrainer": (
+        ".cache_build",
+        "CacheBuildTrainer",
     ),
 }
 

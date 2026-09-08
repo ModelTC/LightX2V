@@ -21,7 +21,6 @@ import triton.language as tl
 try:
     import spas_sage_attn._fused as fused
     import spas_sage_attn._qattn as qattn
-    from spas_sage_attn.utils import get_vanilla_qk_quant
 except ImportError:
     print("spas_sage_attn is not installed.")
 
@@ -30,6 +29,63 @@ try:
     from spas_sage_attn._qattn import qk_int8_sv_f8_accum_f16_block_sparse_attn_inst_buf_fuse_v_scale_with_pv_threshold
 except ImportError:
     SAGE2PP_ENABLED = False
+
+
+@triton.jit(do_not_specialize=("seq_len",))
+def dynamic_qk_quantize_kernel(
+    x_ptr,
+    x_mean_ptr,
+    x_quant_ptr,
+    scale_ptr,
+    seq_len,
+    head_dim: tl.constexpr,
+    block_size: tl.constexpr,
+    subtract_mean: tl.constexpr,
+):
+    batch = tl.program_id(0)
+    head = tl.program_id(1)
+    block = tl.program_id(2)
+    heads = tl.num_programs(1)
+    blocks = tl.num_programs(2)
+
+    row_offsets = block * block_size + tl.arange(0, block_size)
+    dim_offsets = tl.arange(0, head_dim)
+    mask = row_offsets[:, None] < seq_len
+    tensor_offset = (batch * heads + head) * seq_len * head_dim
+    x_ptrs = x_ptr + tensor_offset + row_offsets[:, None] * head_dim + dim_offsets[None, :]
+    x = tl.load(x_ptrs, mask=mask, other=0.0)
+
+    if subtract_mean:
+        mean_ptrs = x_mean_ptr + (batch * heads + head) * head_dim + dim_offsets
+        x = tl.where(mask, x - tl.load(mean_ptrs)[None, :], 0.0)
+
+    x_fp32 = x.to(tl.float32)
+    scale = tl.max(tl.abs(x_fp32)) / 127.0 + 1e-7
+    x_scaled = x_fp32 / scale
+    x_quant = (x_scaled + 0.5 * tl.where(x_scaled >= 0, 1, -1)).to(tl.int8)
+
+    x_quant_ptrs = x_quant_ptr + tensor_offset + row_offsets[:, None] * head_dim + dim_offsets[None, :]
+    tl.store(x_quant_ptrs, x_quant, mask=mask)
+    tl.store(scale_ptr + (batch * heads + head) * blocks + block, scale)
+
+
+def quantize_qk_blocks(x, x_mean, block_size):
+    x = x.contiguous()
+    batch, heads, seq_len, head_dim = x.shape
+    blocks = triton.cdiv(seq_len, block_size)
+    x_quant = torch.empty_like(x, dtype=torch.int8)
+    x_scale = torch.empty((batch, heads, blocks), device=x.device, dtype=torch.float32)
+    dynamic_qk_quantize_kernel[(batch, heads, blocks)](
+        x,
+        x_mean,
+        x_quant,
+        x_scale,
+        seq_len,
+        head_dim,
+        block_size,
+        x_mean is not None,
+    )
+    return x_quant, x_scale
 
 
 def hyperparameter_check(hyper, H, device):
@@ -265,7 +321,8 @@ def sage2_block_sparse_attn(q, k, v, lut, valid_block_num, BLKQ, BLKK, arch):
     assert headdim in [64, 128], "headdim should be in [64, 128]. For other headdim, you can use padding and specify the softmax scale."
 
     km = k.mean(dim=-2, keepdim=True)
-    q_int8, q_scale, k_int8, k_scale = get_vanilla_qk_quant(q, k, km, BLKQ, BLKK)
+    q_int8, q_scale = quantize_qk_blocks(q, None, BLKQ)
+    k_int8, k_scale = quantize_qk_blocks(k, km, BLKK)
     scale = 1.0 / (headdim**0.5)
 
     o_s = torch.empty_like(q)

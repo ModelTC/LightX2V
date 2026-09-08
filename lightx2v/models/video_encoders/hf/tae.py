@@ -174,7 +174,6 @@ class TAEHV(nn.Module):
         self.patch_size = patch_size
         self.latent_channels = latent_channels
         self.image_channels = 3
-        self.is_cogvideox = checkpoint_path is not None and "taecvx" in checkpoint_path
         # if checkpoint_path is not None and "taew2_2" in checkpoint_path:
         #     self.patch_size, self.latent_channels = 2, 48
         self.model_type = model_type
@@ -288,7 +287,6 @@ class TAEHV(nn.Module):
               if False, frames will be processed sequentially.
         Returns NTCHW RGB tensor with ~[0, 1] values.
         """
-        skip_trim = self.is_cogvideox and x.shape[1] % 2 == 0
         x = apply_model_with_memblocks(self.decoder, x, parallel, show_progress_bar)
         if self.model_type == "hy15":
             x = x.clamp_(-1, 1)
@@ -296,9 +294,4 @@ class TAEHV(nn.Module):
             x = x.clamp_(0, 1)
         if self.patch_size > 1:
             x = F.pixel_shuffle(x, self.patch_size)
-        if skip_trim:
-            # skip trimming for cogvideox to make frame counts match.
-            # this still doesn't have correct temporal alignment for certain frame counts
-            # (cogvideox seems to pad at the start?), but for multiple-of-4 it's fine.
-            return x
         return x[:, self.frames_to_trim :]

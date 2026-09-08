@@ -14,7 +14,6 @@ python -m lightx2v.infer \
 --task i2v \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/matrix_game2/matrix_game2_gta_drive.json \
---prompt '' \
 --image_path /data/nvme4/gushiqiao/0003.png \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_matrix_game2_gta_drive.mp4 \
 --seed 42

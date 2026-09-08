@@ -122,6 +122,7 @@ class LingbotVAFlowMatchScheduler(BaseScheduler):
         return data_patch.flatten(6, 7).flatten(4, 5).flatten(2, 3)
 
     def clear(self):
+        self.generator = None
         self.sigmas = None
         self.timesteps = None
         self.loop_timesteps = None

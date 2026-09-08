@@ -14,6 +14,7 @@ from lightx2v_train.trainers.phased_dmd.math import (
     phased_coefficients,
     phased_forward,
     phased_velocity_target,
+    sample_score_sigma_range,
 )
 
 from .base import TrainerTrick, TrickLossResult
@@ -54,14 +55,9 @@ class RealDataFakeSetupContext:
     denoising_scheduler: Any
     num_train_timestep: int
     warp_denoising_step: bool
-    score_timestep_shift: float = 1.0
-    min_step: int = 0
-    max_step: int = 1000
-    min_score_timestep: int = 0
+    num_inference_steps: int = 4
     match_timestep: int = 0
     score_timestep_margin: int = 0
-    score_timestep_min: int = 1
-    score_timestep_max: int = 1000
     phased_eps: float = 1.0e-8
 
 
@@ -75,6 +71,7 @@ class RealDataFakeStepContext:
     device: torch.device
     dtype: torch.dtype
     extract_real_latents: Callable[[Mapping[str, Any]], torch.Tensor]
+    prepare_timestep_lookup: Callable[..., None]
     sample_synced_int: Callable[[int, int], int]
     broadcast_noise: Callable[[torch.Tensor], torch.Tensor]
     predict_student_velocity: Callable[
@@ -290,28 +287,19 @@ class RealDataFakeTrick(
     def _sample_score_sigma(
         self,
         context: RealDataFakeStepContext,
+        latent_hw: tuple[int, int],
     ) -> torch.Tensor:
         setup = self.setup_context
         if setup.mode == "standard":
-            min_timestep = max(0, int(setup.min_score_timestep))
-            max_timestep = setup.num_train_timestep
-            if max_timestep <= min_timestep:
-                max_timestep = min(
-                    setup.num_train_timestep,
-                    min_timestep + 1,
-                )
             timestep = torch.randint(
-                min_timestep,
-                max_timestep,
+                0,
+                setup.num_train_timestep,
                 (1,),
                 device=context.device,
                 dtype=torch.long,
             ).float()
-            if setup.score_timestep_shift > 1:
-                normalized = timestep / setup.num_train_timestep
-                timestep = setup.score_timestep_shift * normalized / (1 + (setup.score_timestep_shift - 1) * normalized) * setup.num_train_timestep
-            timestep = timestep.clamp(setup.min_step, setup.max_step)
-            sigma = timestep / setup.num_train_timestep
+            sigma = setup.scheduler.time_shift(timestep / setup.num_train_timestep, latent_hw=latent_hw, num_steps=setup.num_inference_steps)
+            sigma = setup.scheduler.clamp_training_sigma(sigma)
         else:
             if context.region == "high":
                 raw_min = setup.match_timestep + setup.score_timestep_margin
@@ -319,32 +307,16 @@ class RealDataFakeTrick(
             else:
                 raw_min = 1
                 raw_max = setup.match_timestep
-            raw_min = max(1, int(raw_min), setup.score_timestep_min)
-            raw_max = min(
-                setup.num_train_timestep,
-                int(raw_max),
-                setup.score_timestep_max + 1,
-            )
-            raw_candidates = torch.arange(
+            return sample_score_sigma_range(
                 raw_min,
                 raw_max,
                 device=context.device,
-                dtype=torch.long,
+                dtype=context.dtype,
+                scheduler=setup.scheduler,
+                num_train_timestep=setup.num_train_timestep,
+                convert_timesteps=self.raw_timesteps_to_sigmas,
+                broadcast_value=context.broadcast_noise,
             )
-            candidate_sigmas = self.raw_timesteps_to_sigmas(
-                raw_candidates,
-                dtype=torch.float32,
-            )
-            if candidate_sigmas.numel() == 0:
-                raise RuntimeError(f"No valid real-data fake score timesteps remain in raw range [{raw_min}, {raw_max}).")
-            candidate_indices = torch.randint(
-                0,
-                candidate_sigmas.numel(),
-                (1,),
-                device=context.device,
-                dtype=torch.long,
-            )
-            sigma = candidate_sigmas[candidate_indices]
         return context.broadcast_noise(sigma.to(dtype=context.dtype))
 
     def _phased_coefficients(
@@ -420,6 +392,7 @@ class RealDataFakeTrick(
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         config = self._region_config(context.region)
         real_latents = context.extract_real_latents(context.sample)
+        context.prepare_timestep_lookup(real_latents.shape[-2:])
         if real_latents.shape[0] != 1:
             raise ValueError("Real-data DMD only supports physical batch size 1.")
         timestep_index = context.sample_synced_int(
@@ -468,7 +441,7 @@ class RealDataFakeTrick(
             context,
             grad_enabled=True,
         )
-        sigma_t = self._sample_score_sigma(context)
+        sigma_t = self._sample_score_sigma(context, anchor.shape[-2:])
         noise = context.broadcast_noise(torch.randn_like(anchor, dtype=torch.float32))
         with torch.no_grad():
             score_xt = self._score_forward(
@@ -522,7 +495,7 @@ class RealDataFakeTrick(
             context,
             grad_enabled=False,
         )
-        sigma_t = self._sample_score_sigma(context)
+        sigma_t = self._sample_score_sigma(context, anchor.shape[-2:])
         noise = context.broadcast_noise(torch.randn_like(anchor, dtype=torch.float32))
         with torch.no_grad():
             score_xt = self._score_forward(

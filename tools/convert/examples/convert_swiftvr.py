@@ -19,6 +19,11 @@ from safetensors import safe_open
 
 CONVERTER = Path(__file__).resolve().parents[1] / "converter.py"
 TRANSFORMER_PATH = Path("transformer/diffusion_pytorch_model.safetensors")
+RUNTIME_FILES = (
+    Path("reae.safetensors"),
+    Path("prompt_embedding.safetensors"),
+    Path("transformer/config.json"),
+)
 REQUIRED_KEYS = {
     "blocks.0.self_attn.q.weight",
     "blocks.0.cross_attn.q.weight",
@@ -64,11 +69,10 @@ def convert_swiftvr(source: Path, output: Path):
     output.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix=f".{output.name}.", dir=output.parent) as workspace:
         converted_model = Path(workspace) / output.name
-        shutil.copytree(
-            source,
-            converted_model,
-            ignore=shutil.ignore_patterns(TRANSFORMER_PATH.name),
-        )
+        for model_file in RUNTIME_FILES:
+            destination = converted_model / model_file
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / model_file, destination)
         converted_transformer = converted_model / TRANSFORMER_PATH
         subprocess.run(
             [

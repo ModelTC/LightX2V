@@ -9,6 +9,7 @@ from lightx2v import LightX2VPipeline
 pipe = LightX2VPipeline(
     model_path="/path/to/ckpts/hunyuanvideo-1.5/",
     model_cls="hunyuan_video_1.5",
+    distill_method="dmd2",
     transformer_model_name="480p_t2v",
     task="t2v",
     # 4-step distilled model ckpt
@@ -16,7 +17,7 @@ pipe = LightX2VPipeline(
 )
 
 # Alternative: create generator from config JSON file
-# pipe.create_generator(config_json="../configs/hunyuan_video_15/hunyuan_video_t2v_720p.json")
+# pipe.create_generator(config_json="configs/hunyuan_video_15/hunyuan_video_t2v_480p_distill.json")
 
 # Enable offloading to significantly reduce VRAM usage with minimal speed impact
 # Suitable for RTX 30/40/50 consumer GPUs
@@ -37,19 +38,26 @@ pipe.enable_lightvae(
 )
 
 # Create generator with specified parameters
-pipe.create_generator(attn_mode="sage_attn2", infer_steps=4, num_frames=81, guidance_scale=1, sample_shift=9.0, aspect_ratio="16:9", fps=16, denoising_step_list=[1000, 750, 500, 250])
+pipe.create_generator(
+    attn_mode="sage_attn2",
+    infer_steps=4,
+    num_frames=81,
+    guidance_scale=1,
+    sample_shift=5.0,
+    aspect_ratio="16:9",
+    fps=16,
+    denoising_step_list=[1000, 750, 500, 250],
+)
 
 
 # Generation parameters
 seed = 123
 prompt = "A close-up shot captures a scene on a polished, light-colored granite kitchen counter, illuminated by soft natural light from an unseen window. Initially, the frame focuses on a tall, clear glass filled with golden, translucent apple juice standing next to a single, shiny red apple with a green leaf still attached to its stem. The camera moves horizontally to the right. As the shot progresses, a white ceramic plate smoothly enters the frame, revealing a fresh arrangement of about seven or eight more apples, a mix of vibrant reds and greens, piled neatly upon it. A shallow depth of field keeps the focus sharply on the fruit and glass, while the kitchen backsplash in the background remains softly blurred. The scene is in a realistic style."
-negative_prompt = ""
-save_result_path = "/data/nvme0/gushiqiao/LightX2V/save_results/output.mp4"
+save_result_path = "./output_hunyuan_video_15_t2v_distill.mp4"
 
 # Generate video
 pipe.generate(
     seed=seed,
     prompt=prompt,
-    negative_prompt=negative_prompt,
     save_result_path=save_result_path,
 )

@@ -27,7 +27,6 @@ def calculate_dimensions(target_area, ratio, multiple_of):
     return int(width), int(height)
 
 
-@RUNNER_REGISTER("ernie_image_turbo")
 @RUNNER_REGISTER("ernie_image")
 class ErnieImageRunner(DefaultRunner):
     model_cpu_offload_seq = "pe->text_encoder->transformer->vae"

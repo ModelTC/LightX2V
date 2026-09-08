@@ -18,6 +18,7 @@
   "rope_type": "metax_rope",
   "feature_caching": "NoCaching",
   "use_compile": true,
+  "warmup": true,
   "use_adaln_cache": true,
   "vae_use_compile": true,
   "video_flow_shift": 12.0,

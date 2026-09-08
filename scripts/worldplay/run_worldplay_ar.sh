@@ -6,7 +6,6 @@ export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 # Model paths
 MODEL_PATH=/data/nvme1/models/hunyuan/HunyuanVideo-1.5
-AR_ACTION_MODEL_PATH=/data/nvme1/models/hunyuan/HY-WorldPlay/ar_model/diffusion_pytorch_model.safetensors
 
 # Input parameters
 PROMPT='A paved pathway leads towards a stone arch bridge spanning a calm body of water. Lush green trees and foliage line the path and the far bank of the water. A traditional-style pavilion with a tiered, reddish-brown roof sits on the far shore. The water reflects the surrounding greenery and the sky. The scene is bathed in soft, natural light, creating a tranquil and serene atmosphere.'
@@ -29,7 +28,6 @@ python /workspace/LightX2V/lightx2v/infer.py \
     --prompt "$PROMPT" \
     --image_path $IMAGE_PATH \
     --pose "$POSE" \
-    --action_ckpt $AR_ACTION_MODEL_PATH \
     --seed $SEED \
     --save_result_path $OUTPUT_PATH
 

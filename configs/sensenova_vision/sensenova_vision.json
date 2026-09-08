@@ -13,7 +13,7 @@
     },
     "text_temperature": 0.3,
     "enable_vision_context": true,
-    "sensenova_source_path": "/data/nvme0/lhd_codes/sensenova-vision-v2",
+    "sensenova_source_path": "/path/to/sensenova-vision-v2",
     "llm_config_update": {
         "dtype": "bfloat16",
         "freeze_und": false,

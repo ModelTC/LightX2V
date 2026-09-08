@@ -121,7 +121,7 @@ def _load_sol_attn():
     try:
         module = importlib.import_module("sol_attn")
     except ImportError as exc:
-        raise ImportError("Sol-Attn is not installed. Run scripts/install_sol_attn.sh, then restart the LightX2V process.") from exc
+        raise ImportError("Sol-Attn is not installed. Use a LightX2V image built with Sol-Attn support.") from exc
     interface = importlib.import_module("sol_attn.interface")
     _install_sol_attn_runtime_compat(interface)
     return module.sol_attn
@@ -452,6 +452,7 @@ class SolAttnWeight(AttnWeightTemplate):
             _FALLBACK_WARNINGS.add(reason)
         return _dense_attention(q, k, v, **dense_kwargs)
 
+    @torch.compiler.disable
     def apply(
         self,
         q,

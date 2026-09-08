@@ -85,7 +85,6 @@ def build_sync_payload(args: argparse.Namespace, presigned_url: str = "") -> Dic
         "seed": args.seed,
         "aspect_ratio": args.aspect_ratio,
         "save_result_path": args.save_result_path,
-        "use_prompt_enhancer": args.use_prompt_enhancer,
     }
     if args.target_shape:
         payload["target_shape"] = args.target_shape
@@ -183,7 +182,6 @@ def main() -> None:
     parser.add_argument("--aspect_ratio", type=str, default="16:9", help="Aspect ratio")
     parser.add_argument("--target_shape", type=int, nargs="+", default=None, help="Target shape, e.g. 1536 2752")
     parser.add_argument("--save_result_path", type=str, default="", help="Server-side save_result_path")
-    parser.add_argument("--use_prompt_enhancer", action="store_true")
     parser.add_argument("--timeout_seconds", type=int, default=600)
     parser.add_argument("--poll_interval_seconds", type=float, default=0.5)
 

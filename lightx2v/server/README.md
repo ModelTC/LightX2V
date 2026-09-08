@@ -304,7 +304,6 @@ stateDiagram-v2
 
 ```python
 class VideoTaskRequest(BaseTaskRequest):
-    num_fragments: int = 1
     target_video_length: int = 81
     audio_path: str = ""
     video_duration: int = 5
@@ -324,7 +323,6 @@ class ImageTaskRequest(BaseTaskRequest):
 class BaseTaskRequest(BaseModel):
     task_id: str  # auto-generated
     prompt: str = ""
-    use_prompt_enhancer: bool = False
     negative_prompt: str = ""
     image_path: str = ""  # URL, base64, or local path
     save_result_path: str = ""
@@ -344,7 +342,7 @@ see `lightx2v/server/config.py`
 # Single GPU
 python -m lightx2v.server \
     --model_path /path/to/model \
-    --model_cls wan2.1_distill \
+    --model_cls wan2.1 \
     --task i2v \
     --host 0.0.0.0 \
     --port 8000 \
@@ -355,7 +353,7 @@ python -m lightx2v.server \
 # Multi-GPU with torchrun
 torchrun --nproc_per_node=2 -m lightx2v.server \
     --model_path /path/to/model \
-    --model_cls wan2.1_distill \
+    --model_cls wan2.1 \
     --task i2v \
     --host 0.0.0.0 \
     --port 8000 \

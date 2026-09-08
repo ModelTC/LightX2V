@@ -9,7 +9,6 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
-from loguru import logger
 from torch import nn
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
@@ -361,10 +360,7 @@ class LongCatImageScheduler(BaseScheduler):
 
     def prepare(self, input_info):
         """Prepare scheduler for inference."""
-        if self.generator is None:
-            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
-        else:
-            logger.info(f"Generator is not None, using existing generator for latents")
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
         self.prepare_latents(input_info)
         self.set_timesteps()
 
@@ -420,10 +416,7 @@ class LongCatImageScheduler(BaseScheduler):
             input_image: Input image tensor [B, C, H, W] (preprocessed)
             vae: VAE model for encoding
         """
-        if self.generator is None:
-            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
-        else:
-            logger.info(f"Generator is not None, using existing generator for latents")
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
         self.vae = vae
         self.prepare_latents(input_info)
         self.set_timesteps()

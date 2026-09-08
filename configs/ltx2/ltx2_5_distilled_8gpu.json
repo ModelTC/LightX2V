@@ -35,10 +35,10 @@
     "use_upsampler": true,
     "distilled_sigma_values_upsample": [0.909375, 0.725, 0.421875, 0.0],
     "use_tiling_vae": true,
-    "dit_original_ckpt": "/data/nvme0/gushiqiao/models/LTX-2.5/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors",
-    "text_encoder_original_ckpt": "/data/nvme0/gushiqiao/models/LTX-2.5/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
-    "video_vae_original_ckpt": "/data/nvme0/gushiqiao/models/LTX-2.5/vae/ltx-2.5-video-vae-bf16.safetensors",
-    "audio_vae_original_ckpt": "/data/nvme0/gushiqiao/models/LTX-2.5/vae/ltx-2.5-audio-vae-bf16.safetensors",
-    "duration_head_original_ckpt": "/data/nvme0/gushiqiao/models/LTX-2.5/model_patches/ltx-2.5-duration-head-bf16.safetensors",
-    "upsampler_original_ckpt": "/data/nvme0/gushiqiao/models/LTX-2.5/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+    "dit_original_ckpt": "/path/to/ltx-2.5-22b-distilled-transformer-bf16.safetensors",
+    "text_encoder_original_ckpt": "/path/to/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
+    "video_vae_original_ckpt": "/path/to/ltx-2.5-video-vae-bf16.safetensors",
+    "audio_vae_original_ckpt": "/path/to/ltx-2.5-audio-vae-bf16.safetensors",
+    "duration_head_original_ckpt": "/path/to/ltx-2.5-duration-head-bf16.safetensors",
+    "upsampler_original_ckpt": "/path/to/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
 }

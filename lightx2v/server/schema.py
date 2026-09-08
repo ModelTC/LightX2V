@@ -48,7 +48,6 @@ class DisaggOverrideRequest(BaseModel):
 class BaseTaskRequest(DisaggOverrideRequest):
     task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
     prompt: str = Field("", description="Generation prompt")
-    use_prompt_enhancer: bool = Field(False, description="Whether to use prompt enhancer")
     negative_prompt: str = Field("", description="Negative prompt")
     image_path: str = Field("", description="Base64 encoded image or URL")
     last_frame_path: str = Field("", description="Last frame image path (base64, or local path)")
@@ -74,7 +73,6 @@ class BaseTaskRequest(DisaggOverrideRequest):
 
 
 class VideoTaskRequest(BaseTaskRequest):
-    num_fragments: int = Field(1, description="Number of fragments")
     target_video_length: int = Field(81, description="Target video length")
     reuse_prefix_segments: int = Field(
         0,
@@ -93,6 +91,7 @@ class VideoTaskRequest(BaseTaskRequest):
 class ImageTaskRequest(BaseTaskRequest):
     aspect_ratio: str = Field("16:9", description="Output aspect ratio")
     i2i_denoise_strength: Optional[float] = Field(None, description="Single-image I2I edit denoising strength in [0.0, 1.0]; omit to keep existing behavior")
+    sr_ratio: float = Field(2.0, gt=0, description="Super-resolution scale factor used when target_shape is not set")
 
 
 class SenseNovaVisionTaskRequest(BaseModel):
@@ -149,7 +148,6 @@ class SenseNovaVisionGenerationResponse(BaseModel):
 
 
 class TaskRequest(BaseTaskRequest):
-    num_fragments: int = Field(1, description="Number of fragments")
     target_video_length: int = Field(81, description="Target video length (video only)")
     audio_path: str = Field("", description="Input audio path (Wan-Audio)")
     video_duration: int = Field(5, description="Video duration (Wan-Audio)")

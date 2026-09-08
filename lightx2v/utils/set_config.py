@@ -24,12 +24,12 @@ def get_default_config():
         "use_ret_steps": False,
         "use_bfloat16": True,
         "lora_configs": None,  # List of dicts with 'path' and 'strength' keys
-        "use_prompt_enhancer": False,
         "parallel": False,
         "seq_parallel": False,
         "cfg_parallel": False,
         "pipefusion_parallel": False,
         "enable_cfg": False,
+        "warmup": False,
         "use_image_encoder": True,
     }
     default_config = LockableDict(default_config)
@@ -124,7 +124,7 @@ def auto_calc_config(config):
 
     assert os.path.exists(config["model_path"]), f"Model path not found: {config['model_path']}"
 
-    if config["model_cls"] in ["hunyuan_video_1.5", "hunyuan_video_1.5_distill"]:  # Special config for hunyuan video 1.5 model folder structure
+    if config["model_cls"] == "hunyuan_video_1.5":  # Special config for hunyuan video 1.5 model folder structure
         config["transformer_model_path"] = os.path.join(config["model_path"], "transformer", config["transformer_model_name"])  # transformer_model_name: [480p_t2v, 480p_i2v, 720p_t2v, 720p_i2v]
         if os.path.exists(os.path.join(config["transformer_model_path"], "config.json")):
             with open(os.path.join(config["transformer_model_path"], "config.json"), "r") as f:
@@ -375,7 +375,7 @@ def auto_calc_config(config):
                 config["vae_scale_factor"] = 2 ** len(vae_config["temperal_downsample"])
             elif "block_out_channels" in vae_config:
                 config["vae_scale_factor"] = 2 ** (len(vae_config["block_out_channels"]) - 1)
-            if config["model_cls"] in ["ernie_image", "ernie_image_turbo"]:
+            if config["model_cls"] == "ernie_image":
                 config["vae_scale_factor"] = 2 ** len(vae_config["block_out_channels"])
 
     if config["model_cls"] == "cosmos3" and os.path.exists(os.path.join(config["model_path"], "vae", "config.json")):

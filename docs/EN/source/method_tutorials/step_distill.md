@@ -84,10 +84,10 @@ Multiple configuration options are provided in the [configs/distill/](https://gi
 
 | Configuration File | Purpose | Model Address |
 |-------------------|---------|---------------|
-| [wan_t2v_distill_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan_t2v_distill_4step_cfg.json) | Load T2V 4-step distillation complete model | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/distill_models/distill_model.safetensors) |
+| [wan_t2v_distill_model_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_model_4step_cfg.json) | Load T2V 4-step distillation complete model | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/distill_models/distill_model.safetensors) |
 | [wan_i2v_distill_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan_i2v_distill_4step_cfg.json) | Load I2V 4-step distillation complete model | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/blob/main/distill_models/distill_model.safetensors) |
-| [wan_t2v_distill_4step_cfg_lora.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan_t2v_distill_4step_cfg_lora.json) | Load Wan-T2V model and step distillation LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
-| [wan_i2v_distill_4step_cfg_lora.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan_i2v_distill_4step_cfg_lora.json) | Load Wan-I2V model and step distillation LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
+| [wan_t2v_distill_lora_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json) | Load Wan-T2V model and step distillation LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-T2V-14B-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
+| [wan_i2v_distill_lora_4step_cfg.json](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_i2v_distill_lora_4step_cfg.json) | Load Wan-I2V model and step distillation LoRA | [hugging-face](https://huggingface.co/lightx2v/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v/blob/main/loras/Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors) |
 
 ### Key Configuration Parameters
 
@@ -131,13 +131,13 @@ Place the downloaded model (`distill_model.pt` or `distill_model.safetensors`) i
 **T2V Complete Model:**
 
 ```bash
-bash scripts/wan/run_wan_t2v_distill_4step_cfg.sh
+bash scripts/wan/distill/run_wan_t2v_distill_model_4step_cfg.sh
 ```
 
 **I2V Complete Model:**
 
 ```bash
-bash scripts/wan/run_wan_i2v_distill_4step_cfg.sh
+bash scripts/wan/distill/run_wan_i2v_distill_4step_cfg.sh
 ```
 
 ### Step Distillation LoRA Inference Scripts
@@ -145,13 +145,13 @@ bash scripts/wan/run_wan_i2v_distill_4step_cfg.sh
 **T2V LoRA:**
 
 ```bash
-bash scripts/wan/run_wan_t2v_distill_4step_cfg_lora.sh
+bash scripts/wan/distill/run_wan_t2v_distill_lora_4step_cfg.sh
 ```
 
 **I2V LoRA:**
 
 ```bash
-bash scripts/wan/run_wan_i2v_distill_4step_cfg_lora.sh
+bash scripts/wan/distill/run_wan_i2v_distill_lora_4step_cfg.sh
 ```
 
 ## 🔧 Service Deployment
@@ -162,10 +162,10 @@ Modify the startup command in [scripts/server/start_server.sh](https://github.co
 
 ```bash
 python -m lightx2v.api_server \
-  --model_cls wan2.1_distill \
+  --model_cls wan2.1 \
   --task t2v \
   --model_path $model_path \
-  --config_json ${lightx2v_path}/configs/distill/wan_t2v_distill_4step_cfg.json \
+  --config_json ${lightx2v_path}/configs/distill/wan21/wan_t2v_distill_model_4step_cfg.json \
   --port 8000 \
   --nproc_per_node 1
 ```

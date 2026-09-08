@@ -389,6 +389,10 @@ class SeedVRRunner(DefaultRunner):
         self.gen_video_final = raw_video
         return self.process_images_after_vae_decoder()
 
+    def end_run(self):
+        self._input = None
+        super().end_run()
+
     def _save_sr_segment_video(self, raw_video, output_path, fps):
         video = wan_vae_to_comfy(raw_video).float().clamp(0.0, 1.0)
         save_to_video(video, output_path, fps=fps, method="ffmpeg")
@@ -800,9 +804,6 @@ class SeedVRRunner(DefaultRunner):
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
-        if self.config["use_prompt_enhancer"]:
-            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
-
         video_path = getattr(self.input_info, "video_path", "")
         if self._seedvr_sp_size > 1 and not video_path:
             raise ValueError("SeedVR VAE sequence parallel currently supports video SR input only")
@@ -875,7 +876,6 @@ class SeedVRRunner(DefaultRunner):
                             del raw
                         self.gen_video = None
                         self.gen_video_final = None
-                        self._input = None
                         torch.cuda.empty_cache()
                         gc.collect()
                     elif is_sp_root:

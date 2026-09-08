@@ -99,10 +99,9 @@ class TorchrunInferenceWorker:
                 else:
                     logger.warning(f"Target FPS {target_fps} is set, but video frame interpolation is not configured")
 
-            if self.runner.config.get("model_cls") == "sensenova_vision":
-                # SenseNova reuses one loaded runner across heterogeneous tasks.
-                # A fresh, lightweight InputInfo prevents mode/output fields from
-                # leaking from the previous request; model weights stay resident.
+            if self.runner.config.get("model_cls") in {"sensenova_vision", "swiftvr"}:
+                # These services accept different input modes through one runner.
+                # Recreate request state so fields cannot leak between requests.
                 self.input_info = init_empty_input_info(self.runner.config["task"])
             update_input_info_from_dict(self.input_info, task_data)
 

@@ -352,7 +352,7 @@ def save_to_image(images: torch.Tensor, output_path: str) -> None:
     Used for ``task=sr`` when conditioning comes from ``image_path`` only (no ``video_path``).
     """
     assert images.dim() == 4 and images.shape[-1] == 3, "Input must be [N, H, W, C] with C=3"
-    frame = images[0].clamp(0, 1).cpu().numpy()
+    frame = images[0].clamp(0, 1).to(device="cpu", dtype=torch.float32).numpy()
     frame_u8 = (frame * 255.0).round().astype(np.uint8)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     Image.fromarray(frame_u8).save(output_path)
@@ -412,7 +412,7 @@ def mux_audio_from_video(
         if trim_to_shortest:
             cmd.append("-shortest")
         # Be explicit about container format in case ffmpeg can't infer it
-        cmd += ["-f", "mp4"]
+        cmd += ["-movflags", "+faststart", "-f", "mp4"]
         if extra_args:
             cmd += extra_args
         cmd.append(tmp_path)

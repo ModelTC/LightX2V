@@ -15,5 +15,5 @@
     "double_precision_rope": true,
     "rope_type": "torch_real_rope",
     "use_tiling_vae": false,
-    "dit_original_ckpt": "/LTX-2/ltx-2-19b-dev.safetensors"
+    "dit_original_ckpt": "/path/to/ltx-2-19b-dev.safetensors"
 }

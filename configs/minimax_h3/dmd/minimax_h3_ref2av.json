@@ -1,0 +1,40 @@
+{
+  "infer_steps": 5,
+  "target_video_length": 362,
+  "target_height": 768,
+  "target_width": 1344,
+  "fps": 24,
+  "enable_cfg": false,
+  "cpu_offload": true,
+  "reference_image_resize_mode": "match",
+  "offload_granularity": "model",
+  "text_encoder_cpu_offload": true,
+  "vae_cpu_offload": true,
+  "lazy_load": false,
+  "unload_modules": false,
+  "attn_type": "sage_attn2",
+  "rms_type": "sgl-kernel",
+  "rope_type": "minimax_h3_triton_rope",
+  "feature_caching": "NoCaching",
+  "use_compile": false,
+  "video_flow_shift": 12.0,
+  "audio_flow_shift": 3.0,
+  "h3_step_update": "training_euler",
+  "vae_spatial_scale_factor": 16,
+  "audio_sampling_rate": 32000,
+  "audio_latents_per_second": 40,
+  "audio_channels": 2,
+  "keep_latents_dtype_in_scheduler": true,
+  "text_encoder_tensor_parallel": true,
+  "lora_configs": [
+    {
+      "path": "/path/to/minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors",
+      "strength": 1.0,
+      "alpha": 8
+    }
+  ],
+  "parallel": {
+    "seq_p_size": 8,
+    "seq_p_attn_type": "ulysses"
+  }
+}

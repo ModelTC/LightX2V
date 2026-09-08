@@ -8,6 +8,7 @@
   "enable_cfg": false,
   "cpu_offload": true,
   "offload_granularity": "block",
+  "dit_prepost_resident": true,
   "text_encoder_cpu_offload": true,
   "text_encoder_offload_granularity": "block",
   "vae_cpu_offload": false,

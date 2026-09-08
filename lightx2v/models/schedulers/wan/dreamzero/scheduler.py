@@ -350,13 +350,7 @@ class DreamZeroFlowUniPCScheduler(WanScheduler):
         self.latents = prev_sample
 
     def clear(self):
-        self.latents = None
-        self.noise_pred = None
+        super().clear()
         self.loop_inputs = None
         self.step_input_builder = None
         self.noise_pred_processor = None
-        self.model_outputs = [None] * self.solver_order
-        self.timestep_list = [None] * self.solver_order
-        self.last_sample = None
-        self.lower_order_nums = 0
-        self.this_order = None

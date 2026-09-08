@@ -18,7 +18,6 @@ python -m lightx2v.infer \
 --task t2av \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/minimax_h3/minimax_h3_t2av_compile.json \
---warmup \
 --prompt "$prompt" \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av10.mp4 \
 --seed 0

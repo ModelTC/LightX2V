@@ -29,16 +29,12 @@ def shrinkMaskStrict(mask, block_size=128):
 def get_window_width(i, j, token_per_frame, sparse_type, num_frame, decay_factor=1, block_size=128, model_type=None):
     assert sparse_type in ["radial"]
     dist = abs(i - j)
-    if model_type == "wan":
-        if dist < 1:
-            return token_per_frame
-        if dist == 1:
-            return token_per_frame // 2
-    elif model_type == "hunyuan":
-        if dist <= 1:
-            return token_per_frame
-    else:
+    if model_type != "wan":
         raise ValueError(f"Unknown model type: {model_type}")
+    if dist < 1:
+        return token_per_frame
+    if dist == 1:
+        return token_per_frame // 2
     group = dist.bit_length()
     decay_length = 2 ** token_per_frame.bit_length() / 2**group * decay_factor
     threshold = block_size

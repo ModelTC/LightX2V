@@ -6,7 +6,6 @@
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
-    "sample_guide_scale": 5,
     "sample_shift": 5,
     "enable_cfg": false,
     "cpu_offload": true,
@@ -25,6 +24,6 @@
     "use_tae": true,
     "tae_path": "/path/to/taew2_1.pth",
     "lazy_load": true,
-    "rotary_chunk": true,
+    "rope_chunk": true,
     "clean_cuda_cache": true
 }

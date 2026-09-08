@@ -1604,7 +1604,7 @@ class HunyuanImage3Runner(DefaultRunner):
     @torch.no_grad()
     def generate_t2i(self, input_info):
         self._ensure_pipeline_modules()
-        prompt = getattr(input_info, "prompt_enhanced", None) or getattr(input_info, "prompt", "")
+        prompt = getattr(input_info, "prompt", "")
         image_size = self._resolve_image_size(input_info)
         seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
         cot_text = self._generate_cot_text(prompt, image_size)
@@ -1622,7 +1622,7 @@ class HunyuanImage3Runner(DefaultRunner):
     @torch.no_grad()
     def generate_ti2i(self, input_info):
         self._ensure_pipeline_modules()
-        prompt = getattr(input_info, "prompt_enhanced", None) or getattr(input_info, "prompt", "")
+        prompt = getattr(input_info, "prompt", "")
         seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
         image_paths = self._split_image_paths(getattr(input_info, "image_path", None) or self.config.get("image_path"))
         infer_align_image_size = getattr(input_info, "infer_align_image_size", None)

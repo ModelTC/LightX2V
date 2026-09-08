@@ -51,6 +51,7 @@ dependencies = [
     "peft",
     "swanlab",
     "qtorch",
+    "comfy-kitchen>=0.2.15",
     "ftfy",
     "gradio",
     "aiohttp",

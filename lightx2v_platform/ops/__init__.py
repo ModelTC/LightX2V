@@ -14,9 +14,11 @@ elif PLATFORM == "hygon_dcu":
 elif PLATFORM == "amd_rocm":
     from .attn.amd_rocm import *
 elif PLATFORM == "ascend_npu":
-    # Keep MoE before MM: MM imports common utilities that snapshot the
-    # platform registries during lightx2v initialization.
+    # Register A2A first because Ascend attention may import the common
+    # Ulysses backend factory. Keep MoE before MM: MM imports common utilities
+    # that snapshot the platform registries during lightx2v initialization.
     # isort: off
+    from .a2a.ascend_npu import *
     from .attn.ascend_npu import *
     from .moe.ascend_npu import *
     from .mm.ascend_npu import *

@@ -120,8 +120,13 @@ class AmdRocmDevice:
         # Inject aiter as sgl_kernel compatibility layer (REQUIRED)
         sgl_kernel = _get_aiter_sgl_kernel()
         sys.modules["sgl_kernel"] = sgl_kernel
-        # Update any module that already imported sgl_kernel
+        # Update any module that already imported sgl_kernel. torch.ops and
+        # torch.classes are ModuleType subclasses living in sys.modules whose
+        # attributes are operator namespaces rather than imported modules, so
+        # overwriting them would replace torch.ops.sgl_kernel itself.
         for mod_name, mod in list(sys.modules.items()):
+            if mod_name in ("torch.ops", "torch.classes"):
+                continue
             if mod is not None and hasattr(mod, "sgl_kernel"):
                 setattr(mod, "sgl_kernel", sgl_kernel)
         logger.info("  - aiter sgl_kernel compatibility layer enabled (RMSNorm, GEMM)")

@@ -24,7 +24,7 @@ from lightx2v.disagg.utils import (
     estimate_transformer_buffer_sizes,
     load_wan_transformer,
 )
-from lightx2v.models.schedulers.wan.scheduler import WanScheduler
+from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -388,13 +388,6 @@ class TransformerService(BaseService):
         self._phase2_slots = shared_slots
         self._phase2_slot_size = shared_slot_size
 
-        if self.scheduler is not None:
-            self.scheduler.refresh_from_config(self.config)
-
-        # Set global seed if present in config, though specific process calls might reuse it
-        if "seed" in self.config:
-            seed_all(self.config["seed"])
-
         data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
         data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
 
@@ -504,7 +497,7 @@ class TransformerService(BaseService):
         self.transformer = load_wan_transformer(self.config)
 
         # Initialize scheduler
-        self.scheduler = WanScheduler(self.config)
+        self.scheduler = create_wan_scheduler(self.config)
         self.transformer.set_scheduler(self.scheduler)
 
         self.logger.info("Transformer Models loaded successfully.")
@@ -550,9 +543,12 @@ class TransformerService(BaseService):
         """
         Executes the diffusion process and video decoding.
         """
+        seed = config["seed"]
+        seed_all(seed)
         self.logger.info("Starting processing in TransformerService...")
         # Re-sync scheduler with the current request to avoid cross-request config bleed.
         if self.scheduler is not None:
+            self.scheduler.clear()
             self.scheduler.refresh_from_config(config)
         room = config.get("data_bootstrap_room", 0)
         transformer_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("transformer", {})
@@ -805,10 +801,6 @@ class TransformerService(BaseService):
             "image_encoder_output": image_encoder_output,
             "latent_shape": latent_shape,
         }
-
-        seed = config.get("seed")
-        if seed is None:
-            raise ValueError("seed is required in config.")
 
         if latent_shape is None:
             raise ValueError("latent_shape is required in inputs.")

@@ -25,5 +25,5 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "fp8-sgl",
-  "dit_quantized_ckpt": "/data/nvme6/gushiqiao/models/MiniMax-H3/quantized/fp8/minimax_h3_fp8.safetensors"
+  "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors"
 }

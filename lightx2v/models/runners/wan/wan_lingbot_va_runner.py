@@ -583,12 +583,8 @@ class LingbotVARunner(Wan22DenseRunner):
             self._streaming_vae_encoder.reset()
         self.scheduler.clear()
         self.action_scheduler.clear()
-        self.scheduler.generator = None
-        self.action_scheduler.generator = None
 
     def _run_pipeline_local(self):
-        if self.config["use_prompt_enhancer"]:
-            self.input_info.prompt_enhanced = self.post_prompt_enhancer()
         self.inputs = self.run_input_encoder()
         return self.run_main()
 

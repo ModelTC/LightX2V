@@ -24,7 +24,7 @@
     "use_31_block": false,
     "lora_configs": [
         {
-            "path": "/mnt/aigc/rtxiang/pretrain/qianhai_weights/lora_model.safetensors",
+            "path": "/path/to/lora_model.safetensors",
             "strength": 0.125
         }
     ]

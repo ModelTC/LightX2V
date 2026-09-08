@@ -26,4 +26,4 @@ nohup torchrun --standalone --nproc_per_node=8 -m lightx2v.infer \
     --prompt "$prompt" \
     --save_result_path ${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av.mp4 \
     --seed 0 \
-    --warmup > ${lightx2v_path}/save_results/minimax_h3_t2av_544p_124_8gpu_sp8_comile_torch_real.log 2>&1 &
+     > ${lightx2v_path}/save_results/minimax_h3_t2av_544p_124_8gpu_sp8_comile_torch_real.log 2>&1 &
