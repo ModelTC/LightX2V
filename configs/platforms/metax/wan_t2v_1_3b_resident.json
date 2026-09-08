@@ -1,0 +1,27 @@
+{
+    "infer_steps": 4,
+    "target_video_length": 81,
+    "text_len": 512,
+    "target_height": 480,
+    "target_width": 832,
+    "self_attn_1_type": "metax_sage_attn2",
+    "cross_attn_1_type": "metax_sage_attn2",
+    "cross_attn_2_type": "metax_sage_attn2",
+    "sample_guide_scale": 6.0,
+    "sample_shift": 8,
+    "enable_cfg": true,
+    "cpu_offload": true,
+    "offload_plan": {
+        "offload_granularity": "block",
+        "resident_blocks": {
+            "blocks": 28
+        },
+        "use_event_offload": true
+    },
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
+    "modulate_type": "torch",
+    "rope_type": "torch_complex_rope",
+    "layer_norm_type": "torch",
+    "rms_norm_type": "torch"
+}
