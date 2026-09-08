@@ -22,6 +22,8 @@ from einops import rearrange
 from loguru import logger
 from torch import Tensor
 
+from lightx2v.common.offload.config import get_offload_granularity
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.seedvr.scheduler import SeedVRScheduler
 from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
@@ -355,6 +357,7 @@ class SeedVRRunner(DefaultRunner):
         self.input_info = cached_input_info
         return raw_video
 
+    @keep_transformer_weights_loaded
     def run_segment(self, segment_idx=0):
         """Run SeedVR diffusion steps under the single outer DiT profile."""
         infer_steps = self.model.scheduler.infer_steps
@@ -462,7 +465,7 @@ class SeedVRRunner(DefaultRunner):
         logger.info(
             f"[SeedVRRunner] DiT config: model_size={self.config.get('model_size', '3b')}, "
             f"cpu_offload={self.config.get('cpu_offload', False)}, "
-            f"offload_granularity={self.config.get('offload_granularity', 'block')}, "
+            f"offload_granularity={get_offload_granularity(self.config)}, "
             f"quant_scheme={self.config.get('dit_quant_scheme', 'Default')}"
         )
         model = SeedVRNaDiTModel(

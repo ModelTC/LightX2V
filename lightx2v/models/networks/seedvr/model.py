@@ -106,8 +106,7 @@ class SeedVRNaDiTModel(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
-        if hasattr(self.transformer_infer, "offload_manager"):
-            self._init_offload_manager()
+        self._init_offload_manager()
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         # SeedVR weights are typically in .pth/.pt format, not safetensors.
@@ -196,17 +195,9 @@ class SeedVRNaDiTModel(BaseTransformerModel):
         texts_pos = inputs["text_encoder_output"]["texts_pos"]
         texts_neg = inputs["text_encoder_output"]["texts_neg"]
 
-        if self.cpu_offload and self.offload_granularity == "block":
-            # Each request/segment must begin with block 0 even if a previous
-            # inference was interrupted before the final buffer swap.
-            self.transformer_infer.offload_manager.need_init_first_buffer = True
-
         if self.cpu_offload:
             if self.offload_granularity == "model":
                 self.to_cuda()
-            else:
-                self.pre_weight.to_cuda()
-                self.post_weight.to_cuda()
             texts_pos[0] = texts_pos[0].to(AI_DEVICE)
             texts_neg[0] = texts_neg[0].to(AI_DEVICE)
 
@@ -244,10 +235,5 @@ class SeedVRNaDiTModel(BaseTransformerModel):
 
         latents_list = na_utils.unflatten(latents, latents_shapes)
         self.scheduler.latents = latents_list
-        if self.cpu_offload:
-            if self.offload_granularity == "model":
-                self.to_cpu()
-            else:
-                self.pre_weight.to_cpu()
-                self.post_weight.to_cpu()
-        return
+        if self.cpu_offload and self.offload_granularity == "model":
+            self.to_cpu()

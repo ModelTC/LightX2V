@@ -28,8 +28,10 @@ class SeedVRTransformerWeights(WeightModule):
         self.mm_layers = config.get("mm_layers", self.blocks_num)
         self.last_layer_vid_only = bool(config.get("last_layer_vid_only"))
 
-        self.register_offload_buffers()
         blocks = WeightModuleList(self._make_block(i) for i in range(self.blocks_num))
+        slot_count = self.register_offload_block_group(config, "blocks", blocks)
+        self.register_offload_buffers(slot_count)
+        # Buffer allocation consumes checkpoint metadata, so it must load before the source blocks.
         self.add_module("blocks", blocks)
 
     def _block_uses_shared_weights(self, block_index):
@@ -54,10 +56,10 @@ class SeedVRTransformerWeights(WeightModule):
             alias_shared_to_vid=alias_shared_to_vid,
         )
 
-    def register_offload_buffers(self):
+    def register_offload_buffers(self, slot_count):
         self.offload_block_cuda_buffers = None
         self.offload_phase_cuda_buffers = None
-        if not self.config.get("cpu_offload", False) or self.config.get("offload_granularity", "block") != "block":
+        if slot_count == 0:
             return
 
         split_block_indices = [i for i in range(self.blocks_num) if not self._block_uses_shared_weights(i)]
@@ -77,9 +79,10 @@ class SeedVRTransformerWeights(WeightModule):
                 branches=branches,
                 alias_shared_to_vid=alias_shared_to_vid,
             )
-            for _ in range(2)
+            for _ in range(slot_count)
         )
         self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
+        self.register_offload_block_buffers("blocks", self.offload_block_cuda_buffers)
 
 
 class SeedVRTransformerBlockWeights(WeightModule):
