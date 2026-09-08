@@ -10,9 +10,9 @@ torch_device_module = getattr(torch, AI_DEVICE)
 class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
     """Weight offload with reusable buffers protected by device events."""
 
-    _EVENT_SLOT_COUNT = 2
+    uses_events = True
 
-    def __init__(self, offload_granularity, load_stream=None, compute_stream=None):
+    def __init__(self, offload_granularity, slot_count=2, load_stream=None, compute_stream=None):
         if offload_granularity != "block":
             raise ValueError("Event-slot weight offload only supports block granularity")
 
@@ -22,17 +22,24 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
         if compute_stream is not None:
             self.compute_stream = compute_stream
 
-        self.device_module = torch_device_module
-        self._ready_events = [torch_device_module.Event() for _ in range(self._EVENT_SLOT_COUNT)]
-        self._free_events = [torch_device_module.Event() for _ in range(self._EVENT_SLOT_COUNT)]
+        self._slot_count = slot_count
+        self._ready_events = []
+        self._free_events = []
+        self.reset_slots()
+
+    def init_cuda_buffer(self, blocks_cuda_buffer=None, phases_cuda_buffer=None):
+        super().init_cuda_buffer(blocks_cuda_buffer, phases_cuda_buffer)
+        self._slot_count = len(self.cuda_buffers)
+        self._ready_events = [torch_device_module.Event() for _ in range(self.slot_count)]
+        self._free_events = [torch_device_module.Event() for _ in range(self.slot_count)]
         self.reset_slots()
 
     @property
     def slot_count(self):
-        return self._EVENT_SLOT_COUNT
+        return self._slot_count
 
     def reset_slots(self):
-        """Reset slot bookkeeping; synchronize pending device work first."""
+        """Reset slot bookkeeping after pending device work has completed."""
         self._slot_pending = [False] * self.slot_count
         self._slot_ready_waited = [False] * self.slot_count
         self._slot_free_recorded = [False] * self.slot_count
@@ -45,7 +52,7 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
         if len(self.cuda_buffers) < self.slot_count:
             raise RuntimeError(f"Event-slot weight offload requires {self.slot_count} device buffers")
 
-    def _load_block_to_buffer(self, target_buffer, block_idx, blocks, adapter_block_idx):
+    def _load_block_to_buffer(self, target_buffer, block_idx, blocks, adapter_block_idx, state_dict_transform):
         block_slab = getattr(self, "block_slabs", {}).get(block_idx)
         if block_slab is not None:
             copy_block_slab_(
@@ -67,9 +74,12 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
             if blocks is None:
                 raise ValueError("blocks must be provided when CPU buffers have not been initialized")
             source = blocks[block_idx]
-        target_buffer.load_state_dict(source.state_dict(), block_idx, adapter_block_idx)
+        state_dict = source.state_dict()
+        if state_dict_transform is not None:
+            state_dict = state_dict_transform(block_idx, state_dict)
+        target_buffer.load_state_dict(state_dict, block_idx, adapter_block_idx)
 
-    def prefetch_to_slot(self, slot_idx, block_idx, blocks=None, adapter_block_idx=None):
+    def prefetch_to_slot(self, slot_idx, block_idx, blocks=None, adapter_block_idx=None, state_dict_transform=None):
         """Enqueue one block copy into a fixed staging slot."""
         self._validate_slot(slot_idx)
         if self._slot_pending[slot_idx]:
@@ -83,6 +93,7 @@ class EventSlotWeightAsyncStreamManager(WeightAsyncStreamManager):
                 block_idx,
                 blocks,
                 adapter_block_idx,
+                state_dict_transform,
             )
             self._ready_events[slot_idx].record(self.cuda_load_stream)
 

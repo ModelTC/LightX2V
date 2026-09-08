@@ -12,10 +12,14 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class WeightAsyncStreamManager(object):
+    uses_events = False
+
     def __init__(self, offload_granularity):
         self.offload_granularity = offload_granularity
         self.init_stream = torch_device_module.Stream(priority=0)
         self.need_init_first_buffer = True
+        self.loaded_state_dict_transform = None
+        self.loaded_first_adapter_block_index = None
         self.lazy_load = False
         torch_version = parse(torch.__version__.split("+")[0])
         # Legacy name: this is the active device backend's weight-loading stream, not a CUDA-only stream.
@@ -60,27 +64,34 @@ class WeightAsyncStreamManager(object):
         else:
             self.init_stream.synchronize()
 
-    def init_first_buffer(self, blocks, adapter_block_idx=None):
+    def init_first_buffer(self, blocks, adapter_block_idx=None, block_idx=0, state_dict_transform=None):
         with torch_device_module.stream(self.init_stream):
             if hasattr(self, "cpu_buffers"):
                 if self.offload_granularity == "block":
-                    self.cuda_buffers[0].load_state_dict(self.cpu_buffers[0].state_dict(), 0, adapter_block_idx)
+                    state_dict = self.cpu_buffers[0].state_dict()
                 else:
-                    self.cuda_buffers[0].load_state_dict(self.cpu_buffers[0][0].state_dict(), 0, adapter_block_idx)
+                    state_dict = self.cpu_buffers[0][0].state_dict()
             else:
                 if self.offload_granularity == "block":
-                    self.cuda_buffers[0].load_state_dict(blocks[0].state_dict(), 0, adapter_block_idx)
+                    state_dict = blocks[block_idx].state_dict()
                 else:
-                    self.cuda_buffers[0].load_state_dict(blocks[0].compute_phases[0].state_dict(), 0, adapter_block_idx)
+                    state_dict = blocks[block_idx].compute_phases[0].state_dict()
+            if state_dict_transform is not None:
+                state_dict = state_dict_transform(block_idx, state_dict)
+            self.cuda_buffers[0].load_state_dict(state_dict, block_idx, adapter_block_idx)
         self._sync()
         self.need_init_first_buffer = False
 
     def prefetch_weights(self, block_idx, blocks, adapter_block_idx=None):
+        self.prefetch_weights_to_buffer(1, block_idx, blocks, adapter_block_idx)
+
+    def prefetch_weights_to_buffer(self, buffer_idx, block_idx, blocks, adapter_block_idx=None, state_dict_transform=None):
         with torch_device_module.stream(self.cuda_load_stream):
-            if hasattr(self, "cpu_buffers"):
-                self.cuda_buffers[1].load_state_dict(self.cpu_buffers[0].state_dict(), block_idx, adapter_block_idx)
-            else:
-                self.cuda_buffers[1].load_state_dict(blocks[block_idx].state_dict(), block_idx, adapter_block_idx)
+            source = self.cpu_buffers[0] if hasattr(self, "cpu_buffers") else blocks[block_idx]
+            state_dict = source.state_dict()
+            if state_dict_transform is not None:
+                state_dict = state_dict_transform(block_idx, state_dict)
+            self.cuda_buffers[buffer_idx].load_state_dict(state_dict, block_idx, adapter_block_idx)
 
     def prefetch_phase(self, block_idx, phase_idx, blocks, adapter_block_idx=None):
         with torch_device_module.stream(self.cuda_load_stream):
@@ -89,16 +100,25 @@ class WeightAsyncStreamManager(object):
             else:
                 self.cuda_buffers[phase_idx].load_state_dict(blocks[block_idx].compute_phases[phase_idx].state_dict(), block_idx, adapter_block_idx)
 
-    def swap_blocks(self):
+    def synchronize_block_streams(self):
         if AI_DEVICE == "xpu":
             torch_device_module.synchronize()
         else:
             self.cuda_load_stream.synchronize()
             self.compute_stream.synchronize()
+
+    def swap_blocks(self):
+        self.synchronize_block_streams()
         self.cuda_buffers[0], self.cuda_buffers[1] = (
             self.cuda_buffers[1],
             self.cuda_buffers[0],
         )
+
+    def wait_for_block_compute(self):
+        if AI_DEVICE == "xpu":
+            torch_device_module.synchronize()
+        else:
+            self.compute_stream.synchronize()
 
     def swap_phases(self):
         if AI_DEVICE == "xpu":

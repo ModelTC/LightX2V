@@ -57,6 +57,8 @@ def set_config(
     text_encoder_offload=False,
     image_encoder_offload=False,
     vae_offload=False,
+    resident_blocks=None,
+    use_event_offload=False,
     **kwargs,
 ):
     """
@@ -125,6 +127,12 @@ def set_config(
         args_dict["norm_modulate_backend"] = norm_modulate_backend
 
     args_dict.update(kwargs)
+    if "offload_plan" not in args_dict:
+        args_dict["offload_plan"] = {
+            "offload_granularity": args_dict.pop("offload_granularity", "block"),
+            "resident_blocks": {} if resident_blocks is None else resident_blocks,
+            "use_event_offload": args_dict.pop("use_event_offload", use_event_offload),
+        }
 
     # Convert to object for set_config compatibility
     args = ConfigObj(**args_dict)

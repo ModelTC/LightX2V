@@ -21,6 +21,7 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.offload.config import get_offload_granularity, get_offload_plan
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import load_gguf_sd_ckpt
 from lightx2v.utils.utils import *
@@ -80,12 +81,17 @@ class BaseTransformerModel(ABC):
 
         self.config = config
         self.cpu_offload = self.config.get("cpu_offload", False)
-        self.offload_granularity = self.config.get("offload_granularity", "block")
+        self.offload_granularity = get_offload_granularity(self.config)
+        self.lazy_load = self.config.get("lazy_load", False)
+        if self.lazy_load and self.cpu_offload and self.offload_granularity == "block":
+            offload_plan = get_offload_plan(self.config)
+            if offload_plan.get("use_event_offload", False) or any(offload_plan.get("resident_blocks", {}).values()):
+                raise NotImplementedError("lazy_load does not support resident blocks or event offload")
+        self._offload_weights_active = False
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
             self.seq_p_group = None
-        self.lazy_load = self.config.get("lazy_load", False)
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.dit_quantized = self.config.get("dit_quantized", False)
         if self.dit_quantized:
@@ -267,6 +273,7 @@ class BaseTransformerModel(ABC):
             self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path, self.lora_path)
         else:
             self.transformer_weights = self.transformer_weight_class(self.config)
+        self.transformer_weights.validate_offload_block_groups(self.config)
         if hasattr(self, "post_weight_class") and self.post_weight_class is not None:
             self.post_weight = self.post_weight_class(self.config)
 
@@ -282,6 +289,17 @@ class BaseTransformerModel(ABC):
         pass
 
     def _init_offload_manager(self):
+        block_groups = self.transformer_weights.get_offload_block_groups()
+        if block_groups:
+            self.transformer_infer.init_block_offload(self.config, self.transformer_weights)
+
+        if (
+            not self.cpu_offload
+            or self.offload_granularity == "model"
+            or (block_groups and self.offload_granularity == "block")
+        ):
+            return
+
         self.transformer_infer.offload_manager.init_cuda_buffer(self.transformer_weights.offload_block_cuda_buffers, self.transformer_weights.offload_phase_cuda_buffers)
         if self.lazy_load:
             self.transformer_infer.offload_manager.init_cpu_buffer(self.transformer_weights.offload_block_cpu_buffers, self.transformer_weights.offload_phase_cpu_buffers)
@@ -695,6 +713,42 @@ class BaseTransformerModel(ABC):
         self.transformer_weights.to_cuda()
         if hasattr(self, "post_weight"):
             self.post_weight.to_cuda()
+
+    def prepare_offload_weights(self):
+        if not self.cpu_offload or self.offload_granularity != "block" or not self.transformer_weights.get_offload_block_groups() or self._offload_weights_active:
+            return False
+
+        self._offload_weights_active = True
+        try:
+            self.pre_weight.to_cuda()
+            if hasattr(self, "post_weight"):
+                self.post_weight.to_cuda()
+            if hasattr(self.transformer_weights, "non_block_weights_to_cuda"):
+                self.transformer_weights.non_block_weights_to_cuda()
+            self.transformer_weights.resident_blocks_to_cuda()
+        except BaseException:
+            self.cleanup_offload_weights()
+            raise
+        return True
+
+    def cleanup_offload_weights(self):
+        if not self._offload_weights_active:
+            return
+
+        device_module = getattr(torch, AI_DEVICE)
+        device_module.synchronize()
+        for manager in self.transformer_infer.get_offload_managers():
+            manager.need_init_first_buffer = True
+            if manager.uses_events:
+                manager.reset_slots()
+
+        self.pre_weight.release_device_weights()
+        if hasattr(self, "post_weight"):
+            self.post_weight.release_device_weights()
+        self.transformer_weights.release_non_block_weights()
+        self.transformer_weights.release_resident_blocks()
+        self._offload_weights_active = False
+        device_module.empty_cache()
 
     @abstractmethod
     @torch.no_grad()

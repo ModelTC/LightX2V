@@ -6,6 +6,7 @@ import torch.distributed as dist
 from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
+from lightx2v.common.offload.config import normalize_offload_plan
 from lightx2v.utils.input_info import ALL_INPUT_INFO_KEYS
 from lightx2v.utils.lockable_dict import LockableDict
 from lightx2v.utils.utils import find_torch_model_path, is_main_process
@@ -404,6 +405,7 @@ def set_config(args):
     validate_model_task_args(args)
     config = set_args2config(args)
     config = auto_calc_config(config)
+    normalize_offload_plan(config)
     return config
 
 

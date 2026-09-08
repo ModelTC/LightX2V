@@ -2,12 +2,22 @@ import functools
 import gc
 import os
 from abc import ABC
+from contextlib import contextmanager
 
 import torch
 import torch.distributed as dist
 from loguru import logger
 
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+def keep_transformer_weights_loaded(run):
+    @functools.wraps(run)
+    def wrapped(self, *args, **kwargs):
+        with self.transformer_offload_session():
+            return run(self, *args, **kwargs)
+
+    return wrapped
 
 
 class BaseRunner(ABC):
@@ -67,6 +77,20 @@ class BaseRunner(ABC):
         """Reject explicit warmup when a runner has no implementation."""
         if self.config.get("warmup", False):
             raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
+
+    @contextmanager
+    def transformer_offload_session(self, model=None):
+        model = getattr(self, "model", None) if model is None else model
+        if model is None:
+            yield
+            return
+        prepare = getattr(model, "prepare_offload_weights", None)
+        owner = prepare() if prepare is not None else False
+        try:
+            yield
+        finally:
+            if owner:
+                model.cleanup_offload_weights()
 
     def set_reuse(self, reuse, reuse_prefix_segments=0):
         if reuse and not self.enable_reuse:

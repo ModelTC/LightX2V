@@ -10,7 +10,7 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
-from lightx2v.models.runners.base_runner import BaseRunner
+from lightx2v.models.runners.base_runner import BaseRunner, keep_transformer_weights_loaded
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
 from lightx2v.utils.global_paras import CALIB
@@ -315,6 +315,7 @@ class DefaultRunner(BaseRunner):
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
+    @keep_transformer_weights_loaded
     def run_segment(self, segment_idx=0):
         infer_steps = self.model.scheduler.infer_steps
 
@@ -390,7 +391,10 @@ class DefaultRunner(BaseRunner):
             self.scheduler.transformer_infer = None
             models = self.model.model if hasattr(self.model, "model") and len(self.model.model) == 2 else (self.model,)
             for model in filter(None, models):
-                if hasattr(model.transformer_infer, "offload_manager"):
+                clear_offload_managers = getattr(model.transformer_infer, "clear_offload_managers", None)
+                if clear_offload_managers is not None:
+                    clear_offload_managers()
+                elif hasattr(model.transformer_infer, "offload_manager"):
                     del model.transformer_infer.offload_manager
             self.model = None
             models = model = None

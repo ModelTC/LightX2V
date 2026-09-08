@@ -1,4 +1,16 @@
+from loguru import logger
+
+from lightx2v.common.offload.config import get_offload_granularity, get_offload_plan
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+def resolve_resident_block_indices(resident_count, blocks_num):
+    count = blocks_num if resident_count == "all" else resident_count
+    if not 0 <= count <= blocks_num:
+        raise ValueError(f"resident block count must be between 0 and {blocks_num}, got {count}")
+    if count == 0:
+        return frozenset()
+    return frozenset((index * blocks_num) // count for index in range(count))
 
 
 class WeightModule:
@@ -187,10 +199,98 @@ class WeightModule:
                 if module is not None and hasattr(module, "to_cuda"):
                     module.to_cuda(non_blocking=True)
 
+    def release_device_weights(self):
+        self.to_cpu()
+
+    def release_non_block_weights(self):
+        block_groups = tuple(self.get_offload_block_groups().values())
+        excluded_modules = {id(blocks) for blocks in block_groups}
+        for blocks in block_groups:
+            for name in ("offload_cuda_buffers", "offload_cpu_buffers"):
+                buffers = getattr(blocks, name, None)
+                if buffers is not None:
+                    excluded_modules.add(id(buffers))
+
+        for module in self._modules.values():
+            if module is not None and id(module) not in excluded_modules and hasattr(module, "to_cpu"):
+                module.to_cpu()
+        for name, parameter in self._parameters.items():
+            if parameter is None or id(parameter) in excluded_modules:
+                continue
+            if hasattr(parameter, "cpu"):
+                self._parameters[name] = parameter.to("cpu")
+                setattr(self, name, self._parameters[name])
+            elif hasattr(parameter, "to_cpu"):
+                parameter.to_cpu()
+
+    def register_offload_block_group(self, config, name, blocks):
+        granularity = get_offload_granularity(config)
+        if not config.get("cpu_offload", False):
+            resident_count = "all"
+        elif granularity == "block":
+            resident_count = get_offload_plan(config).get("resident_blocks", {}).get(name, 0)
+        else:
+            resident_count = 0
+
+        resident_indices = resolve_resident_block_indices(resident_count, len(blocks))
+        blocks.offload_group_name = name
+        blocks.resident_block_indices = resident_indices
+        blocks.offload_block_indices = tuple(index for index in range(len(blocks)) if index not in resident_indices)
+
+        if not hasattr(self, "_offload_block_groups"):
+            self._offload_block_groups = {}
+        self._offload_block_groups[name] = blocks
+        slot_count = min(2, len(blocks.offload_block_indices)) if granularity == "block" and config.get("cpu_offload", False) else 0
+        if config.get("cpu_offload", False) and granularity == "block":
+            logger.info(
+                "Block offload group '{}': resident={}/{}, indices={}, staging_slots={}",
+                name,
+                len(resident_indices),
+                len(blocks),
+                tuple(sorted(resident_indices)),
+                slot_count,
+            )
+        return slot_count
+
+    def register_offload_block_buffers(self, name, cuda_buffers, cpu_buffers=None):
+        blocks = self._offload_block_groups[name]
+        blocks.offload_cuda_buffers = cuda_buffers
+        blocks.offload_cpu_buffers = cpu_buffers
+
+    def validate_offload_block_groups(self, config):
+        if not config.get("cpu_offload", False) or get_offload_granularity(config) != "block":
+            return
+
+        plan = get_offload_plan(config)
+        configured_groups = set(plan.get("resident_blocks", {}))
+        registered_groups = set(self.get_offload_block_groups())
+        unknown_groups = configured_groups - registered_groups
+        if unknown_groups:
+            raise ValueError(f"Unknown resident block groups {sorted(unknown_groups)}; available groups are {sorted(registered_groups)}")
+
+    def get_offload_block_groups(self):
+        return getattr(self, "_offload_block_groups", {})
+
+    def resident_blocks_to_cuda(self, non_blocking=True):
+        for blocks in self.get_offload_block_groups().values():
+            for block_index in blocks.resident_block_indices:
+                blocks[block_index].to_cuda(non_blocking=non_blocking)
+
+    def release_resident_blocks(self):
+        for blocks in self.get_offload_block_groups().values():
+            for block_index in blocks.resident_block_indices:
+                blocks[block_index].release_device_weights()
+
 
 class WeightModuleList(WeightModule):
     def __init__(self, modules=None):
         super().__init__()
+        # Transformer block lists receive these values when registered for offload.
+        self.offload_group_name = None
+        self.resident_block_indices = frozenset()
+        self.offload_block_indices = ()
+        self.offload_cuda_buffers = None
+        self.offload_cpu_buffers = None
         self._list = []
         if modules is not None:
             for idx, module in enumerate(modules):

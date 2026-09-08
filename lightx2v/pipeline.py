@@ -356,9 +356,15 @@ class LightX2VPipeline:
         text_encoder_offload=False,
         image_encoder_offload=False,
         vae_offload=False,
+        resident_blocks=None,
+        use_event_offload=False,
     ):
         self.cpu_offload = cpu_offload
-        self.offload_granularity = offload_granularity
+        self.offload_plan = {
+            "offload_granularity": offload_granularity,
+            "resident_blocks": {} if resident_blocks is None else resident_blocks,
+            "use_event_offload": use_event_offload,
+        }
         self.vae_cpu_offload = vae_offload
         if self.model_cls in [
             "wan2.1",
