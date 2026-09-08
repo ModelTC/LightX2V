@@ -300,7 +300,12 @@ class MiniMaxH3SelectedSourceReader:
             entry = self.plan.entries[name]
             with self._source(name) as source:
                 for target, start, out_start, rows in self._ranges(entry, requested):
-                    tile = source[start : start + rows].clone()
+                    # Source slices reference safetensors mmap-backed storage.
+                    # Consume this temporary view immediately while source is alive;
+                    # never cache, return, or retain it for asynchronous use.
+                    # copy_ must finish consuming CPU data before tile is released.
+                    # Async copy would require redesigning source lifetime management.
+                    tile = source[start : start + rows]
                     destination, transpose = destinations[target]
                     if transpose:
                         destination[:, out_start : out_start + rows].copy_(tile.t())

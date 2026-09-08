@@ -55,10 +55,17 @@ def raw(tmp_path):
     return config, tensors, weight_map, plan, C.MiniMaxH3SelectedSourceReader(plan, row_chunk_size=2)
 
 
-def destinations(plan, names, transpose=False):
+@pytest.fixture(params=["cpu", "mps"])
+def destination_device(request):
+    if request.param == "mps" and not torch.backends.mps.is_available():
+        pytest.skip("MPS is not available")
+    return request.param
+
+
+def destinations(plan, names, transpose=False, device="cpu"):
     return {
         name: (
-            torch.empty(tuple(reversed(plan.targets[name][1].shape)) if transpose else plan.targets[name][1].shape, dtype=torch.float32 if plan.targets[name][1].dtype == "F32" else torch.bfloat16),
+            torch.empty(tuple(reversed(plan.targets[name][1].shape)) if transpose else plan.targets[name][1].shape, dtype=torch.float32 if plan.targets[name][1].dtype == "F32" else torch.bfloat16, device=device),
             transpose,
         )
         for name in names
@@ -90,16 +97,16 @@ def test_mixed_format_rejected(raw, tmp_path):
 
 
 @pytest.mark.parametrize("prefix,target", [("blocks.0", "transformer_blocks.0"), ("token_refiner.blocks.0", "token_refiner.refiner_blocks.0")])
-def test_qkv_head_interleave_and_transpose(raw, prefix, target):
+def test_qkv_head_interleave_and_transpose(raw, prefix, target, destination_device):
     _, tensors, _, plan, reader = raw
     names = [f"{target}.attn.to_{q}.weight" for q in "qkv"]
     raw_qkv = tensors[f"{prefix}.attn.qkv_proj.weight"]
     for transpose in (False, True):
-        dest = destinations(plan, names, transpose)
+        dest = destinations(plan, names, transpose, device=destination_device)
         reader.write_targets(dest)
         for component, name in enumerate(names):
             expected = torch.vstack([raw_qkv[component * 2 : component * 2 + 2], raw_qkv[6 + component * 2 : 8 + component * 2]])
-            actual = dest[name][0].t() if transpose else dest[name][0]
+            actual = (dest[name][0].t() if transpose else dest[name][0]).cpu()
             assert actual.shape == (4, 3)
             assert torch.equal(actual, expected)
             assert not torch.equal(actual, raw_qkv.chunk(3, dim=0)[component])
@@ -151,16 +158,55 @@ def test_slice_only_reading_and_owned_slice_storage(raw, monkeypatch):
 
 
 @pytest.mark.parametrize("prefix,target", [("blocks.0", "transformer_blocks.0"), ("token_refiner.blocks.0", "token_refiner.refiner_blocks.0")])
-def test_fc1_swap_without_full_cat(raw, monkeypatch, prefix, target):
+def test_fc1_swap_without_full_cat(raw, monkeypatch, prefix, target, destination_device):
     _, tensors, _, plan, reader = raw
     name = target + ".ff.net.0.proj.weight"
     source = tensors[prefix + ".mlp.fc1.weight"]
-    dest = destinations(plan, [name], transpose=True)
+    dest = destinations(plan, [name], transpose=True, device=destination_device)
     monkeypatch.setattr(torch, "cat", lambda *a, **k: pytest.fail("no full fused cat"))
     reader.write_targets(dest)
-    actual = dest[name][0].t()
+    actual = dest[name][0].t().cpu()
     assert torch.equal(actual[:4], source[4:])
     assert torch.equal(actual[4:], source[:4])
+
+
+@pytest.mark.parametrize("transpose", [False, True])
+@pytest.mark.parametrize("strided", [False, True])
+def test_written_targets_outlive_source_and_own_storage(raw, destination_device, transpose, strided):
+    _, tensors, _, plan, reader = raw
+    mapping = {
+        "proj_in.weight": "video_patch_proj.weight",
+        "context_embedder.weight": "condition_proj.weight",
+        "transformer_blocks.0.attn.to_out.0.weight": "blocks.0.attn.out_proj.weight",
+        "norm_out.norm.weight": "final_layer.norm.weight",
+    }
+    dest = {}
+    expected = {}
+    for target, source in mapping.items():
+        value = tensors[source]
+        transposed = transpose and value.ndim == 2
+        expected[target] = value.t() if transposed else value
+        if strided:
+            tensor = torch.empty((*expected[target].shape, 2), dtype=value.dtype, device=destination_device)[..., 0]
+        else:
+            tensor = torch.empty_like(value, device=destination_device)
+            if transposed:
+                tensor = tensor.t()
+        dest[target] = (tensor, transposed)
+    pointers = {name: tensor.data_ptr() for name, (tensor, _) in dest.items()}
+    reader.write_targets(dest)
+    # write_targets has closed every source context; only destinations survive.
+    del reader
+    for target, (tensor, _) in dest.items():
+        assert tensor.data_ptr() == pointers[target]
+        assert torch.equal(tensor.cpu(), expected[target])
+        tensor.zero_()
+    # Mutating a destination must not modify or alias the checkpoint storage.
+    reader = C.MiniMaxH3SelectedSourceReader(plan, row_chunk_size=2)
+    reader.write_targets(dest)
+    for target, (tensor, _) in dest.items():
+        assert tensor.data_ptr() == pointers[target]
+        assert torch.equal(tensor.cpu(), expected[target])
 
 
 def test_norm_refiner_and_nonblock_mapping_and_fp32(raw):
