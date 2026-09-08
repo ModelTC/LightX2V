@@ -17,22 +17,21 @@ class WanLingbotFastModel(WanLingbotModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == 0:
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
-
-        current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_chunk
-        current_end_frame = (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_chunk
-        noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
-
-        self.scheduler.noise_pred[:, current_start_frame:current_end_frame] = noise_pred
-
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
-                self.to_cpu()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cpu()
-                self.transformer_weights.non_block_weights_to_cpu()
+        try:
+            current_start_frame = self.scheduler.seg_index * self.scheduler.num_frame_per_chunk
+            current_end_frame = (self.scheduler.seg_index + 1) * self.scheduler.num_frame_per_chunk
+            noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+            self.scheduler.noise_pred[:, current_start_frame:current_end_frame] = noise_pred
+        finally:
+            if self.cpu_offload and self.offload_granularity != "block":
+                if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+                    self.to_cpu()
+                elif self.offload_granularity != "model":
+                    self.pre_weight.to_cpu()
+                    self.transformer_weights.non_block_weights_to_cpu()

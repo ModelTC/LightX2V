@@ -127,18 +127,19 @@ class LingbotFastRunner(LingbotRunner):
                             metrics_func=monitor_cli.lightx2v_run_segments_end2end_duration,
                             metrics_labels=["DefaultRunner"],
                         ):
-                            self.check_stop()
-                            self.init_run_segment(segment_idx)
-                            latents = self.run_segment(segment_idx)
+                            with self.transformer_offload_session():
+                                self.check_stop()
+                                self.init_run_segment(segment_idx)
+                                latents = self.run_segment(segment_idx)
 
-                            with ProfilingContext4DebugL1("step_pre_in_rerun"):
-                                self.model.scheduler.step_pre(
-                                    seg_index=segment_idx,
-                                    step_index=self.model.scheduler.infer_steps - 1,
-                                    is_rerun=True,
-                                )
-                            with ProfilingContext4DebugL1("infer_main_in_rerun"):
-                                self.model.infer(self.inputs)
+                                with ProfilingContext4DebugL1("step_pre_in_rerun"):
+                                    self.model.scheduler.step_pre(
+                                        seg_index=segment_idx,
+                                        step_index=self.model.scheduler.infer_steps - 1,
+                                        is_rerun=True,
+                                    )
+                                with ProfilingContext4DebugL1("infer_main_in_rerun"):
+                                    self.model.infer(self.inputs)
 
                         vae_decoder.submit(self.decode_segment_latents, segment_idx, latents)
                         torch.cuda.empty_cache()
