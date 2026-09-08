@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
@@ -19,14 +20,20 @@ class HunyuanVideo15TransformerWeights(WeightModule):
         self.layer_norm_type = config.get("layer_norm_type", "Triton")
         self.rms_norm_type = config.get("rms_norm_type", "sgl-kernel")
         self.double_blocks_num = config["mm_double_blocks_depth"]
-        self.register_offload_buffers(config)
-        self.add_module("double_blocks", WeightModuleList([MMDoubleStreamBlock(i, self.task, self.config, block_prefix="double_blocks") for i in range(self.double_blocks_num)]))
+        self.double_blocks = WeightModuleList([MMDoubleStreamBlock(i, self.task, self.config, block_prefix="double_blocks") for i in range(self.double_blocks_num)])
+        slot_count = self.register_offload_block_group(config, "double_blocks", self.double_blocks)
+        self.register_offload_buffers(config, slot_count)
+        self.add_module("double_blocks", self.double_blocks)
         self.add_module("final_layer", FinalLayerWeights(self.config))
 
-    def register_offload_buffers(self, config):
+    def register_offload_buffers(self, config, slot_count):
         if config["cpu_offload"]:
-            if config.get("offload_granularity", "block") == "block":
-                self.offload_blocks_num = 2
+            if get_offload_granularity(config) == "block":
+                self.offload_blocks_num = slot_count
+                self.offload_block_cuda_buffers = None
+                self.offload_phase_cuda_buffers = None
+                if slot_count == 0:
+                    return
                 self.offload_block_cuda_buffers = WeightModuleList(
                     [
                         MMDoubleStreamBlock(
@@ -40,7 +47,7 @@ class HunyuanVideo15TransformerWeights(WeightModule):
                     ]
                 )
                 self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
-                self.offload_phase_cuda_buffers = None
+                self.register_offload_block_buffers("double_blocks", self.offload_block_cuda_buffers)
 
     def non_block_weights_to_cuda(self):
         self.final_layer.to_cuda()

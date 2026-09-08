@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.hunyuan_video.infer.offload.transformer_infer import HunyuanVideo15OffloadTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -142,14 +143,18 @@ class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
         self.previous_modulated_input_even = None
         self.previous_residual_even = None
 
-    def calculate_should_calc(self, img, vec, block):
+    def calculate_should_calc(self, img, vec, block, release_img_mod=False):
         inp = img.clone()
         vec_ = vec.clone()
         img_mod_layer = block.img_branch.img_mod
         if self.config["cpu_offload"]:
             img_mod_layer.to_cuda()
 
-        img_mod1_shift, img_mod1_scale, _, _, _, _ = img_mod_layer.apply(vec_).chunk(6, dim=-1)
+        try:
+            img_mod1_shift, img_mod1_scale, _, _, _, _ = img_mod_layer.apply(vec_).chunk(6, dim=-1)
+        finally:
+            if release_img_mod:
+                img_mod_layer.to_cpu()
         inp = inp.squeeze(0)
         normed_inp = block.img_branch.img_norm1.apply(inp)
         modulated_inp = normed_inp * (1 + img_mod1_scale) + img_mod1_shift
@@ -190,7 +195,18 @@ class HunyuanTransformerInferTeaCaching(HunyuanVideo15OffloadTransformerInfer):
         return should_calc
 
     def infer(self, weights, infer_module_out):
-        should_calc = self.calculate_should_calc(infer_module_out.img, infer_module_out.vec, weights.double_blocks[0])
+        double_blocks = weights.double_blocks
+        release_img_mod = (
+            self.config["cpu_offload"]
+            and get_offload_granularity(self.config) == "block"
+            and 0 not in double_blocks.resident_block_indices
+        )
+        should_calc = self.calculate_should_calc(
+            infer_module_out.img,
+            infer_module_out.vec,
+            double_blocks[0],
+            release_img_mod,
+        )
         if not should_calc:
             if self.scheduler.infer_condition:
                 infer_module_out.img += self.previous_residual_odd

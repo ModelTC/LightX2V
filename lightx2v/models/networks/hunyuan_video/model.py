@@ -19,6 +19,8 @@ class HunyuanVideo15Model(BaseTransformerModel):
     post_weight_class = HunyuanVideo15PostWeights
 
     def __init__(self, model_path, config, device):
+        if config.get("lazy_load", False):
+            raise NotImplementedError("HunyuanVideo 1.5 transformer does not support lazy_load.")
         super().__init__(model_path, config, device)
         self.remove_keys.extend(["byt5_in", "vision_in"])
         self._init_infer_class()
@@ -42,8 +44,7 @@ class HunyuanVideo15Model(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.pre_infer.set_rope(self.transformer_weights.double_blocks[0].rope)
-        if hasattr(self.transformer_infer, "offload_manager"):
-            self._init_offload_manager()
+        self._init_offload_manager()
 
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):
@@ -86,7 +87,7 @@ class HunyuanVideo15Model(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cuda()
             elif self.offload_granularity != "model":
@@ -119,7 +120,7 @@ class HunyuanVideo15Model(BaseTransformerModel):
             # ==================== No CFG ====================
             self.scheduler.noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
 
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cpu()
             elif self.offload_granularity != "model":
