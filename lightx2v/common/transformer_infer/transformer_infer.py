@@ -61,7 +61,7 @@ class BaseTransformerInfer(ABC):
             logger.info(f"[Compile] Using torch.compile for {type(self).__name__}")
 
     def get_compiled_block(self, block_idx, block):
-        key = self.get_compile_block_key(block_idx, block)
+        key = self.get_compile_block_key(block_idx, block), id(block)
         cached = self.compiled_blocks.get(key)
         if cached is not None and cached[0] is block:
             return cached[1]

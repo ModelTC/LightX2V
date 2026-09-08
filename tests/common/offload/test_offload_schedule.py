@@ -203,6 +203,26 @@ def _block_offload_config(use_events=False):
     }
 
 
+def test_compiled_blocks_are_cached_for_each_staging_slot(monkeypatch):
+    compiled = []
+
+    def compile_block(block_runner, dynamic):
+        compiled.append((block_runner, dynamic))
+        return block_runner
+
+    monkeypatch.setattr(transformer_infer_module.torch, "compile", compile_block)
+    infer = _Infer()
+    infer.compiled_blocks = {}
+    first_slot = object()
+    second_slot = object()
+
+    first_compiled = infer.get_compiled_block(0, first_slot)
+    infer.get_compiled_block(0, second_slot)
+
+    assert infer.get_compiled_block(0, first_slot) is first_compiled
+    assert len(compiled) == 2
+
+
 def test_single_block_group_is_bound_to_its_buffers():
     blocks = _make_blocks()
     buffers = [_Buffer(0), _Buffer(1)]
