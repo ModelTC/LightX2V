@@ -41,8 +41,7 @@ class ZImageTransformerModel(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.pre_infer.set_rope(self.transformer_weights.blocks[0].compute_phases[1].rope)
-        if hasattr(self.transformer_infer, "offload_manager"):
-            self._init_offload_manager()
+        self._init_offload_manager()
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
@@ -97,7 +96,7 @@ class ZImageTransformerModel(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == 0:
                 self.to_cuda()
             elif self.offload_granularity != "model":
@@ -150,7 +149,7 @@ class ZImageTransformerModel(BaseTransformerModel):
 
             self.scheduler.noise_pred = noise_pred
 
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cpu()
             elif self.offload_granularity != "model":

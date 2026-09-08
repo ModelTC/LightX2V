@@ -9,6 +9,7 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.z_image.qwen3_model import Qwen3Model_TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.z_image.model import ZImageTransformerModel
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.z_image.scheduler import ZImageScheduler
 from lightx2v.models.video_encoders.hf.z_image.vae import AutoencoderKLZImageVAE
@@ -258,6 +259,7 @@ class ZImageRunner(DefaultRunner):
             gc.collect()
         return {"image_latents": image_latents}
 
+    @keep_transformer_weights_loaded
     def run(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps

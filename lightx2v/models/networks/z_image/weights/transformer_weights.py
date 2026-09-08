@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
@@ -20,13 +21,12 @@ class ZImageTransformerWeights(WeightModule):
             assert config.get("dit_quantized") is True
         self.lazy_load = self.config.get("lazy_load", False)
         self.n_refiner_layers = config.get("n_refiner_layers", 0)
-        self.register_offload_buffers(config, lazy_load_path, lora_path)
-        self.add_module(
-            "blocks",
-            WeightModuleList(
-                ZImageTransformerBlock(i, self.task, self.mm_type, self.config, False, False, "layers", lazy_load=self.lazy_load, lazy_load_path=lazy_load_path) for i in range(self.blocks_num)
-            ),
+        self.blocks = WeightModuleList(
+            ZImageTransformerBlock(i, self.task, self.mm_type, self.config, False, False, "layers", lazy_load=self.lazy_load, lazy_load_path=lazy_load_path) for i in range(self.blocks_num)
         )
+        slot_count = self.register_offload_block_group(config, "blocks", self.blocks)
+        self.register_offload_buffers(config, lazy_load_path, lora_path, slot_count)
+        self.add_module("blocks", self.blocks)
 
         self.add_module(
             "noise_refiner",
@@ -62,10 +62,16 @@ class ZImageTransformerWeights(WeightModule):
             ),
         )
 
-    def register_offload_buffers(self, config, lazy_load_path, lora_path):
+    def register_offload_buffers(self, config, lazy_load_path, lora_path, slot_count):
         if config["cpu_offload"]:
-            if config["offload_granularity"] == "block":
-                self.offload_blocks_num = 2
+            if get_offload_granularity(config) == "block":
+                self.offload_blocks_num = slot_count
+                self.offload_block_cuda_buffers = None
+                self.offload_block_cpu_buffers = None
+                self.offload_phase_cuda_buffers = None
+                self.offload_phase_cpu_buffers = None
+                if slot_count == 0:
+                    return
                 self.offload_block_cuda_buffers = WeightModuleList(
                     [
                         ZImageTransformerBlock(
@@ -83,9 +89,7 @@ class ZImageTransformerWeights(WeightModule):
                     ]
                 )
                 self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
-                self.offload_phase_cuda_buffers = None
                 if self.lazy_load:
-                    self.offload_blocks_num = 2
                     self.offload_block_cpu_buffers = WeightModuleList(
                         [
                             ZImageTransformerBlock(
@@ -104,7 +108,11 @@ class ZImageTransformerWeights(WeightModule):
                         ]
                     )
                     self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
-                    self.offload_phase_cpu_buffers = None
+                self.register_offload_block_buffers(
+                    "blocks",
+                    self.offload_block_cuda_buffers,
+                    self.offload_block_cpu_buffers,
+                )
 
     def non_block_weights_to_cuda(self):
         self.noise_refiner.to_cuda()
