@@ -17,7 +17,13 @@
     "clip_quantized": true,
     "clip_quant_scheme": "fp8-q8f",
     "cpu_offload": true,
-    "offload_granularity": "block",
+    "offload_plan": {
+        "offload_granularity": "block",
+        "resident_blocks": {
+            "blocks": 20
+        },
+        "use_event_offload": false
+    },
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
     "clip_cpu_offload": false

@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.wan.infer.utils import WanCausalRope  # noqa: F401
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
@@ -144,7 +145,8 @@ class WanTransformerWeights(WeightModule):
                 for i in range(self.blocks_num)
             ]
         )
-        self.register_offload_buffers(config, lazy_load_path, lora_path)
+        slot_count = self.register_offload_block_group(config, "blocks", self.blocks)
+        self._register_main_offload_buffers(config, lazy_load_path, lora_path, slot_count)
         self.add_module("blocks", self.blocks)
 
         # non blocks weights
@@ -159,10 +161,16 @@ class WanTransformerWeights(WeightModule):
         )
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
-    def register_offload_buffers(self, config, lazy_load_path, lora_path):
+    def _register_main_offload_buffers(self, config, lazy_load_path, lora_path, slot_count):
         if config["cpu_offload"]:
-            if config["offload_granularity"] == "block":
-                self.offload_blocks_num = 2
+            if get_offload_granularity(config) == "block":
+                self.offload_blocks_num = slot_count
+                self.offload_phase_cuda_buffers = None
+                self.offload_block_cuda_buffers = None
+                self.offload_block_cpu_buffers = None
+                self.offload_phase_cpu_buffers = None
+                if slot_count == 0:
+                    return
                 self.offload_block_cuda_buffers = WeightModuleList(
                     [
                         WanTransformerAttentionBlock(
@@ -180,10 +188,8 @@ class WanTransformerWeights(WeightModule):
                     ]
                 )
                 self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
-                self.offload_phase_cuda_buffers = None
 
                 if self.lazy_load:
-                    self.offload_blocks_num = 2
                     self.offload_block_cpu_buffers = WeightModuleList(
                         [
                             WanTransformerAttentionBlock(
@@ -201,9 +207,13 @@ class WanTransformerWeights(WeightModule):
                         ]
                     )
                     self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
-                    self.offload_phase_cpu_buffers = None
+                self.register_offload_block_buffers(
+                    "blocks",
+                    self.offload_block_cuda_buffers,
+                    self.offload_block_cpu_buffers,
+                )
 
-            elif config["offload_granularity"] == "phase":
+            elif get_offload_granularity(config) == "phase":
                 self.offload_phase_cuda_buffers = WanTransformerAttentionBlock(
                     block_index=0,
                     task=self.task,

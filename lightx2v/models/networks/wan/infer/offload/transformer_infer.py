@@ -1,5 +1,6 @@
 import torch
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -11,7 +12,7 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
         if self.config.get("cpu_offload", False):
-            offload_granularity = self.config.get("offload_granularity", "block")
+            offload_granularity = get_offload_granularity(self.config)
             if offload_granularity == "block":
                 self.infer_func = self.infer_with_blocks_offload
             elif offload_granularity == "phase":
@@ -31,44 +32,63 @@ class WanOffloadTransformerInfer(WanTransformerInfer):
             elif offload_granularity == "model":
                 self.infer_func = self.infer_without_offload
 
-            if offload_granularity != "model":
+            if offload_granularity not in ("block", "model"):
                 self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
             self.lazy_load = self.config.get("lazy_load", False)
-            if self.lazy_load:
+            if self.lazy_load and offload_granularity == "phase":
                 self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 4))
 
+    def infer(self, weights, pre_infer_out):
+        try:
+            return super().infer(weights, pre_infer_out)
+        finally:
+            if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "block":
+                self.clear_block_offload_inputs(pre_infer_out)
+
     def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
+        if self.lazy_load:
+            return self.infer_with_lazy_blocks_offload(blocks, x, pre_infer_out)
+
+        def run_wan_block(block_idx, block):
+            nonlocal x
+            self.block_idx = block_idx
+            x = self.run_block(block_idx, block, x, pre_infer_out)
+            return x
+
+        self.run_blocks_with_offload(blocks, run_wan_block)
+        return x
+
+    def infer_with_lazy_blocks_offload(self, blocks, x, pre_infer_out):
+        manager = self.get_block_offload_manager(blocks)
         for block_idx in range(len(blocks)):
             self.block_idx = block_idx
             if self.lazy_load:
                 next_prefetch = (block_idx + 1) % len(blocks)
-                self.offload_manager.start_prefetch_block(next_prefetch)
+                manager.start_prefetch_block(next_prefetch)
 
-            if self.offload_manager.need_init_first_buffer:
-                self.offload_manager.init_first_buffer(blocks)
+            if manager.need_init_first_buffer:
+                manager.init_first_buffer(blocks)
 
             if self.lazy_load:
-                self.offload_manager.swap_cpu_buffers()
+                manager.swap_cpu_buffers()
 
-            self.offload_manager.prefetch_weights((block_idx + 1) % len(blocks), blocks)
+            manager.prefetch_weights((block_idx + 1) % len(blocks), blocks)
             if AI_DEVICE == "xpu":
                 # XPU streams do not guarantee cross-stream memory visibility even
                 # after a device-wide sync, so run compute on the default stream.
-                x = self.run_block(block_idx, self.offload_manager.cuda_buffers[0], x, pre_infer_out)
+                x = self.run_block(block_idx, manager.cuda_buffers[0], x, pre_infer_out)
             else:
-                with torch_device_module.stream(self.offload_manager.compute_stream):
-                    x = self.run_block(block_idx, self.offload_manager.cuda_buffers[0], x, pre_infer_out)
+                with torch_device_module.stream(manager.compute_stream):
+                    x = self.run_block(block_idx, manager.cuda_buffers[0], x, pre_infer_out)
 
-            self.offload_manager.swap_blocks()
-
-        if self.clean_cuda_cache:
-            del (
-                pre_infer_out.embed0,
-                pre_infer_out.context,
-            )
-            torch_device_module.empty_cache()
+            manager.swap_blocks()
 
         return x
+
+    def clear_block_offload_inputs(self, pre_infer_out):
+        if self.clean_cuda_cache:
+            del pre_infer_out.embed0, pre_infer_out.context
+            torch_device_module.empty_cache()
 
     def infer_with_phases_offload(self, blocks, x, pre_infer_out):
         for block_idx in range(len(blocks)):

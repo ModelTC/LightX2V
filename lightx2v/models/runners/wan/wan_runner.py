@@ -15,6 +15,7 @@ except ImportError:
     Rotation = None
     Slerp = None
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
@@ -132,16 +133,17 @@ class WanRunner(DisaggMixin, DefaultRunner):
                     if self.config.get("model_cls") == "wan2.2" and self.config["task"] == "i2v":
                         inputs["image_encoder_output"]["vae_encoder_out"] = None
                     try:
-                        previous_step_index = None
-                        for step_index in self.get_warmup_step_indices(scheduler):
-                            if previous_step_index is not None and step_index != previous_step_index + 1:
-                                scheduler.reset(seed=input_info.seed, latent_shape=latent_shape, step_index=step_index)
-                            scheduler.step_pre(step_index=step_index)
-                            self.model.infer(inputs)
-                            scheduler.step_post()
-                            previous_step_index = step_index
+                        with self.transformer_offload_session():
+                            previous_step_index = None
+                            for step_index in self.get_warmup_step_indices(scheduler):
+                                if previous_step_index is not None and step_index != previous_step_index + 1:
+                                    scheduler.reset(seed=input_info.seed, latent_shape=latent_shape, step_index=step_index)
+                                scheduler.step_pre(step_index=step_index)
+                                self.model.infer(inputs)
+                                scheduler.step_post()
+                                previous_step_index = step_index
                     finally:
-                        if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
+                        if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "model":
                             for model in filter(None, self.get_warmup_models()):
                                 model.to_cpu()
                     self.run_vae_decoder(scheduler.latents)
@@ -217,8 +219,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if models:
             torch_device_module.synchronize()
         for model in models:
-            if hasattr(getattr(model, "transformer_infer", None), "offload_manager"):
-                del model.transformer_infer.offload_manager
+            model.transformer_infer.clear_offload_managers()
         self.scheduler.transformer_infer = None
         self.model = None
         for name in ("text_encoders", "image_encoder", "vae_encoder", "vae_decoder"):
@@ -918,6 +919,7 @@ class MultiModelStruct:
         assert len(self.model) == 2, "MultiModelStruct only supports 2 models now."
         self.config = config
         self.cur_model_index = -1
+        self._offload_weights_active = False
         self.distill_method = get_wan_distill_method(config)
         if self.distill_method not in (None, "dmd2"):
             raise NotImplementedError(f"MultiModelStruct does not support distill_method {self.distill_method!r}")
@@ -953,7 +955,13 @@ class MultiModelStruct:
                 model.set_scheduler(shared_scheduler)
 
     def infer(self, inputs):
+        previous_model_index = self.cur_model_index
         self.get_current_model_index()
+        if self._offload_weights_active and self.cur_model_index != previous_model_index:
+            if previous_model_index >= 0 and self.model[previous_model_index] is not None:
+                self.model[previous_model_index].cleanup_offload_weights()
+            if self.model[self.cur_model_index] is not None:
+                self.model[self.cur_model_index].prepare_offload_weights()
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             self.model[self.cur_model_index].infer(inputs)
         else:
@@ -975,6 +983,8 @@ class MultiModelStruct:
                         high_noise_model = build_wan_model_with_lora(WanModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
                     high_noise_model.set_scheduler(self.scheduler)
                     self.model[0] = high_noise_model
+                    if self._offload_weights_active:
+                        high_noise_model.prepare_offload_weights()
                     self.model[0].infer(inputs)
                 elif self.cur_model_index == 1:
                     lora_configs = self.config.get("lora_configs")
@@ -991,7 +1001,25 @@ class MultiModelStruct:
                         low_noise_model = build_wan_model_with_lora(WanModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
                     low_noise_model.set_scheduler(self.scheduler)
                     self.model[1] = low_noise_model
+                    if self._offload_weights_active:
+                        low_noise_model.prepare_offload_weights()
                     self.model[1].infer(inputs)
+
+    def prepare_offload_weights(self):
+        if not self.config.get("cpu_offload", False) or get_offload_granularity(self.config) != "block" or self._offload_weights_active:
+            return False
+        self.cur_model_index = -1
+        self._offload_weights_active = True
+        return True
+
+    def cleanup_offload_weights(self):
+        if not self._offload_weights_active:
+            return
+        for model in self.model:
+            if model is not None:
+                model.cleanup_offload_weights()
+        self.cur_model_index = -1
+        self._offload_weights_active = False
 
     @ProfilingContext4DebugL2("Switch models in infer_main costs")
     def get_current_model_index(self):
@@ -999,7 +1027,7 @@ class MultiModelStruct:
             logger.info(f"using - HIGH - noise model at step_index {self.scheduler.step_index + 1}")
             if self.config["enable_cfg"]:
                 self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][0]
-            if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
+            if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=0)
                 elif self.cur_model_index == 1:  # 1 -> 0
@@ -1010,7 +1038,7 @@ class MultiModelStruct:
             logger.info(f"using - LOW - noise model at step_index {self.scheduler.step_index + 1}")
             if self.config["enable_cfg"]:
                 self.scheduler.sample_guide_scale = self.config["sample_guide_scale"][1]
-            if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "model":
+            if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "model":
                 if self.cur_model_index == -1:
                     self.to_cuda(model_index=1)
                 elif self.cur_model_index == 0:  # 0 -> 1

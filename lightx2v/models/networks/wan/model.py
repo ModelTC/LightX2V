@@ -193,26 +193,38 @@ class WanModel(BaseTransformerModel):
         self.pre_infer_class = WanPreInfer
         self.post_infer_class = WanPostInfer
 
-        if self.config["feature_caching"] == "NoCaching":
+        feature_caching = self.config["feature_caching"]
+        unsupported_block_caching = {
+            "TaylorSeer",
+            "Ada",
+            "Custom",
+            "FirstBlock",
+            "DualBlock",
+            "DynamicBlock",
+        }
+        if self.cpu_offload and self.offload_granularity == "block" and feature_caching in unsupported_block_caching:
+            raise NotImplementedError(f"Wan block offload does not support feature_caching={feature_caching!r}")
+
+        if feature_caching == "NoCaching":
             self.transformer_infer_class = WanTransformerInfer if not self.cpu_offload else WanOffloadTransformerInfer
-        elif self.config["feature_caching"] == "Tea":
+        elif feature_caching == "Tea":
             self.transformer_infer_class = WanTransformerInferTeaCaching
-        elif self.config["feature_caching"] == "TaylorSeer":
+        elif feature_caching == "TaylorSeer":
             self.transformer_infer_class = WanTransformerInferTaylorCaching
-        elif self.config["feature_caching"] == "Ada":
+        elif feature_caching == "Ada":
             self.transformer_infer_class = WanTransformerInferAdaCaching
-        elif self.config["feature_caching"] == "Custom":
+        elif feature_caching == "Custom":
             self.transformer_infer_class = WanTransformerInferCustomCaching
-        elif self.config["feature_caching"] == "FirstBlock":
+        elif feature_caching == "FirstBlock":
             self.transformer_infer_class = WanTransformerInferFirstBlock
-        elif self.config["feature_caching"] == "DualBlock":
+        elif feature_caching == "DualBlock":
             self.transformer_infer_class = WanTransformerInferDualBlock
-        elif self.config["feature_caching"] == "DynamicBlock":
+        elif feature_caching == "DynamicBlock":
             self.transformer_infer_class = WanTransformerInferDynamicBlock
-        elif self.config["feature_caching"] == "Mag":
+        elif feature_caching == "Mag":
             self.transformer_infer_class = WanTransformerInferMagCaching
         else:
-            raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
+            raise NotImplementedError(f"Unsupported feature_caching type: {feature_caching}")
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)
@@ -224,8 +236,7 @@ class WanModel(BaseTransformerModel):
             self.pre_infer.set_rope(rope if rope is not None else first_attn.rope)
         if hasattr(self.pre_infer, "set_audio_rope"):
             self.pre_infer.set_audio_rope(self.transformer_weights.blocks[0].compute_phases[2].rope_1d)
-        if hasattr(self.transformer_infer, "offload_manager"):
-            self._init_offload_manager()
+        self._init_offload_manager()
 
     def _should_init_empty_model(self):
         if self.config.get("lora_configs") and self.config["lora_configs"] and not self.config.get("lora_dynamic_apply", False):
@@ -297,12 +308,23 @@ class WanModel(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config["model_cls"]:
-                self.to_cuda()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cuda()
-                self.transformer_weights.non_block_weights_to_cuda()
+        try:
+            if self.cpu_offload and self.offload_granularity != "block":
+                if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config["model_cls"]:
+                    self.to_cuda()
+                elif self.offload_granularity != "model":
+                    self.pre_weight.to_cuda()
+                    self.transformer_weights.non_block_weights_to_cuda()
+            self._infer(inputs)
+        finally:
+            if self.cpu_offload and self.offload_granularity != "block":
+                if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
+                    self.to_cpu()
+                elif self.offload_granularity != "model":
+                    self.pre_weight.to_cpu()
+                    self.transformer_weights.non_block_weights_to_cpu()
+
+    def _infer(self, inputs):
 
         if self.config["enable_cfg"]:
             if self.config["cfg_parallel"]:
@@ -337,10 +359,3 @@ class WanModel(BaseTransformerModel):
             self.scheduler.noise_pred_uncond = None
             self.scheduler.noise_pred_guided = noise_pred
             self.scheduler.noise_pred = noise_pred
-
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
-                self.to_cpu()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cpu()
-                self.transformer_weights.non_block_weights_to_cpu()
