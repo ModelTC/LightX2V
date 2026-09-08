@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     LN_WEIGHT_REGISTER,
@@ -36,13 +37,21 @@ class QwenImageTransformerWeights(WeightModule):
             )
             for i in range(self.blocks_num)
         )
-        self.register_offload_buffers(config, lazy_load_path, lora_path)
+        slot_count = self.register_offload_block_group(config, "blocks", blocks)
+        self.register_offload_buffers(config, lazy_load_path, lora_path, slot_count)
         self.add_module("blocks", blocks)
 
-    def register_offload_buffers(self, config, lazy_load_path, lora_path):
+    def register_offload_buffers(self, config, lazy_load_path, lora_path, slot_count):
         if config["cpu_offload"]:
-            if config["offload_granularity"] == "block":
-                self.offload_blocks_num = 2
+            offload_granularity = get_offload_granularity(config)
+            if offload_granularity == "block":
+                self.offload_blocks_num = slot_count
+                self.offload_block_cuda_buffers = None
+                self.offload_block_cpu_buffers = None
+                self.offload_phase_cuda_buffers = None
+                self.offload_phase_cpu_buffers = None
+                if slot_count == 0:
+                    return
                 self.offload_block_cuda_buffers = WeightModuleList(
                     [
                         QwenImageTransformerAttentionBlock(
@@ -60,9 +69,7 @@ class QwenImageTransformerWeights(WeightModule):
                     ]
                 )
                 self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
-                self.offload_phase_cuda_buffers = None
                 if self.lazy_load:
-                    self.offload_blocks_num = 2
                     self.offload_block_cpu_buffers = WeightModuleList(
                         [
                             QwenImageTransformerAttentionBlock(
@@ -81,9 +88,13 @@ class QwenImageTransformerWeights(WeightModule):
                         ]
                     )
                     self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
-                    self.offload_phase_cpu_buffers = None
+                self.register_offload_block_buffers(
+                    "blocks",
+                    self.offload_block_cuda_buffers,
+                    self.offload_block_cpu_buffers,
+                )
 
-            elif config["offload_granularity"] == "phase":
+            elif offload_granularity == "phase":
                 self.offload_phase_cuda_buffers = QwenImageTransformerAttentionBlock(
                     0,
                     self.task,

@@ -1,5 +1,6 @@
 import torch
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.common.offload.manager import WeightAsyncStreamManager
 from lightx2v.models.networks.qwen_image.infer.transformer_infer import (
     QwenImageTransformerInfer,
@@ -16,17 +17,16 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
         self.phases_num = 4
         if self.config.get("cpu_offload", False):
             self.offload_ratio = self.config.get("offload_ratio", 1)
-            offload_granularity = self.config.get("offload_granularity", "block")
+            offload_granularity = get_offload_granularity(self.config)
             if offload_granularity == "block":
                 self.infer_func = self.infer_with_blocks_offload
-                self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
             elif offload_granularity == "phase":
                 self.infer_func = self.infer_with_phases_offload
                 self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
                 self.compiled_phases = {}
 
             self.lazy_load = self.config.get("lazy_load", False)
-            if self.lazy_load:
+            if self.lazy_load and offload_granularity == "phase":
                 self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 4))
 
     def get_compile_block_key(self, _block_idx, block):
@@ -145,22 +145,64 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
         image_rotary_positions,
         modulate_index,
     ):
+        if self.lazy_load:
+            return self.infer_with_lazy_blocks_offload(
+                blocks,
+                hidden_states,
+                encoder_hidden_states,
+                temb_img_silu,
+                temb_txt_silu,
+                image_rotary_emb,
+                image_rotary_positions,
+                modulate_index,
+            )
+
+        def run_qwen_block(block_idx, block):
+            nonlocal encoder_hidden_states, hidden_states
+            encoder_hidden_states, hidden_states = self.run_block(
+                block_idx,
+                block,
+                hidden_states,
+                encoder_hidden_states,
+                temb_img_silu,
+                temb_txt_silu,
+                image_rotary_emb,
+                image_rotary_positions,
+                modulate_index,
+            )
+            return encoder_hidden_states, hidden_states
+
+        self.run_blocks_with_offload(blocks, run_qwen_block)
+        return hidden_states
+
+    def infer_with_lazy_blocks_offload(
+        self,
+        blocks,
+        hidden_states,
+        encoder_hidden_states,
+        temb_img_silu,
+        temb_txt_silu,
+        image_rotary_emb,
+        image_rotary_positions,
+        modulate_index,
+    ):
+        manager = self.get_block_offload_manager(blocks)
         for block_idx in range(self.num_blocks):
             if self.lazy_load:
                 next_prefetch = (block_idx + 1) % self.num_blocks
-                self.offload_manager.start_prefetch_block(next_prefetch)
+                manager.start_prefetch_block(next_prefetch)
 
             if block_idx == 0:
-                self.offload_manager.init_first_buffer(blocks)
+                manager.init_first_buffer(blocks)
 
             if self.lazy_load:
-                self.offload_manager.swap_cpu_buffers()
-            self.offload_manager.prefetch_weights((block_idx + 1) % self.num_blocks, blocks)
+                manager.swap_cpu_buffers()
+            manager.prefetch_weights((block_idx + 1) % self.num_blocks, blocks)
 
-            with torch_device_module.stream(self.offload_manager.compute_stream):
+            with torch_device_module.stream(manager.compute_stream):
                 encoder_hidden_states, hidden_states = self.run_block(
                     block_idx,
-                    self.offload_manager.cuda_buffers[0],
+                    manager.cuda_buffers[0],
                     hidden_states,
                     encoder_hidden_states,
                     temb_img_silu,
@@ -170,6 +212,6 @@ class QwenImageOffloadTransformerInfer(QwenImageTransformerInfer):
                     modulate_index,
                 )
 
-            self.offload_manager.swap_blocks()
+            manager.swap_blocks()
 
         return hidden_states

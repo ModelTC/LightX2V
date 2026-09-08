@@ -46,8 +46,7 @@ class QwenImageTransformerModel(BaseTransformerModel):
             img_rope=first_block.compute_phases[0].rope,
             txt_rope=first_block.compute_phases[1].rope,
         )
-        if hasattr(self.transformer_infer, "offload_manager"):
-            self._init_offload_manager()
+        self._init_offload_manager()
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
@@ -93,7 +92,7 @@ class QwenImageTransformerModel(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == 0:
                 self.to_cuda()
             elif self.offload_granularity != "model":
@@ -147,7 +146,7 @@ class QwenImageTransformerModel(BaseTransformerModel):
                 noise_pred = noise_pred[:, : latents.size(1)]
             self.scheduler.noise_pred = noise_pred
 
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
                 self.to_cpu()
             elif self.offload_granularity != "model":

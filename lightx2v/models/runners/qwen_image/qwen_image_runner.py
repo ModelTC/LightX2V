@@ -6,10 +6,12 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.disagg.disagg_mixin import DisaggMixin
 from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration import Qwen25_VLForConditionalGeneration_TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
@@ -107,13 +109,14 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 t2i_text_cache = self._prepare_warmup_inputs(height, width, t2i_text_cache)
                 scheduler.generator = None
                 scheduler.prepare(self.input_info)
-                scheduler.step_pre(step_index=0)
-                self.model.infer(self.inputs)
-                scheduler.step_post()
+                with self.transformer_offload_session():
+                    scheduler.step_pre(step_index=0)
+                    self.model.infer(self.inputs)
+                    scheduler.step_post()
                 self.run_vae_decoder(scheduler.latents)
                 torch_device_module.synchronize()
             finally:
-                if self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model":
+                if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "model":
                     self.model.to_cpu()
                 self.clear_warmup_state()
                 self.input_info = None
@@ -161,8 +164,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         model = getattr(self, "model", None)
         if model is not None:
             torch_device_module.synchronize()
-            if hasattr(getattr(model, "transformer_infer", None), "offload_manager"):
-                del model.transformer_infer.offload_manager
+            model.transformer_infer.clear_offload_managers()
 
         self.scheduler.transformer_infer = None
         self.model = None
@@ -413,6 +415,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             self.maybe_empty_cache()
         return images
 
+    @keep_transformer_weights_loaded
     def run(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
