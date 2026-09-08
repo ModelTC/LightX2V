@@ -3,6 +3,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from einops import rearrange
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import GET_DTYPE
 
@@ -24,7 +25,7 @@ def normalize_and_scale(column, source_range, target_range, epsilon=1e-8):
 
 class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
     def __init__(self, config):
-        offload_granularity = config.get("offload_granularity", "block")
+        offload_granularity = get_offload_granularity(config)
         if config.get("cpu_offload", False) and offload_granularity not in {"block", "model"}:
             raise NotImplementedError(f"InfiniteTalk currently supports block/model offload, not {offload_granularity} offload.")
         super().__init__(config)

@@ -16,6 +16,7 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.infinitetalk.audio_encoder import InfiniteTalkAudioEncoder
 from lightx2v.models.networks.wan.infinitetalk_model import WanInfiniteTalkModel
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
 from lightx2v.server.metrics import monitor_cli
@@ -998,6 +999,7 @@ class InfiniteTalkRunner(WanRunner):
             "ref_target_masks": ref_target_masks,
         }
 
+    @keep_transformer_weights_loaded
     def run_segment(self, segment_idx=0):
         self._run_dit_clip(self.dit_inputs)
         return self.scheduler.latents

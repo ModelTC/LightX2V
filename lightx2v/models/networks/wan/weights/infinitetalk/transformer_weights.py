@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.wan.weights.transformer_weights import WanCrossAttention, WanFFN, WanSelfAttention
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, ROPE_REGISTER, TENSOR_REGISTER
 
@@ -28,7 +29,8 @@ class WanInfiniteTalkTransformerWeights(WeightModule):
                 for i in range(self.blocks_num)
             ]
         )
-        self.register_offload_buffers(config, lazy_load_path, lora_path)
+        slot_count = self.register_offload_block_group(config, "blocks", self.blocks)
+        self.register_offload_buffers(config, lazy_load_path, lora_path, slot_count)
         self.add_module("blocks", self.blocks)
 
         self.register_parameter("norm", LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")]())
@@ -42,17 +44,24 @@ class WanInfiniteTalkTransformerWeights(WeightModule):
         )
         self.register_parameter("head_modulation", TENSOR_REGISTER["Default"]("head.modulation"))
 
-    def register_offload_buffers(self, config, lazy_load_path, lora_path):
+    def register_offload_buffers(self, config, lazy_load_path, lora_path, slot_count):
         if not config.get("cpu_offload", False):
             return
 
-        offload_granularity = config.get("offload_granularity", "block")
+        offload_granularity = get_offload_granularity(config)
         if offload_granularity == "model":
             return
         if offload_granularity != "block":
             raise NotImplementedError(f"InfiniteTalk currently supports block/model offload, not {offload_granularity} offload.")
 
-        self.offload_blocks_num = 2
+        self.offload_blocks_num = slot_count
+        self.offload_block_cuda_buffers = None
+        self.offload_block_cpu_buffers = None
+        self.offload_phase_cuda_buffers = None
+        self.offload_phase_cpu_buffers = None
+        if slot_count == 0:
+            return
+
         self.offload_block_cuda_buffers = WeightModuleList(
             [
                 WanInfiniteTalkTransformerAttentionBlock(
@@ -71,7 +80,6 @@ class WanInfiniteTalkTransformerWeights(WeightModule):
             ]
         )
         self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
-        self.offload_phase_cuda_buffers = None
 
         if self.lazy_load:
             self.offload_block_cpu_buffers = WeightModuleList(
@@ -92,7 +100,11 @@ class WanInfiniteTalkTransformerWeights(WeightModule):
                 ]
             )
             self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
-            self.offload_phase_cpu_buffers = None
+        self.register_offload_block_buffers(
+            "blocks",
+            self.offload_block_cuda_buffers,
+            self.offload_block_cpu_buffers,
+        )
 
     def non_block_weights_to_cuda(self):
         self.norm.to_cuda()

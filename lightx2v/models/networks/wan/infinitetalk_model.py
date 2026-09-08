@@ -3,6 +3,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from loguru import logger
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.wan.infer.infinitetalk.pre_infer import WanInfiniteTalkPreInfer
 from lightx2v.models.networks.wan.infer.infinitetalk.transformer_infer import WanInfiniteTalkTransformerInfer
 from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
@@ -24,7 +25,7 @@ class WanInfiniteTalkModel(WanModel):
     def _init_infer_class(self):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("InfiniteTalk parity path requires feature_caching=NoCaching.")
-        offload_granularity = self.config.get("offload_granularity", "block")
+        offload_granularity = get_offload_granularity(self.config)
         if self.config.get("cpu_offload", False) and offload_granularity not in {"block", "model"}:
             raise NotImplementedError(f"InfiniteTalk currently supports block/model offload, not {offload_granularity} offload.")
         self.pre_infer_class = WanInfiniteTalkPreInfer
@@ -116,15 +117,25 @@ class WanInfiniteTalkModel(WanModel):
 
     @torch.no_grad()
     def infer(self, inputs):
+        try:
+            if self.cpu_offload and self.offload_granularity != "block":
+                if self.offload_granularity == "model" and self.scheduler.step_index == 0:
+                    self.to_cuda()
+                elif self.offload_granularity != "model":
+                    self.pre_weight.to_cuda()
+                    self.transformer_weights.non_block_weights_to_cuda()
+            self._infer(inputs)
+        finally:
+            if self.cpu_offload and self.offload_granularity != "block":
+                if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+                    self.to_cpu()
+                elif self.offload_granularity != "model":
+                    self.pre_weight.to_cpu()
+                    self.transformer_weights.non_block_weights_to_cpu()
+
+    def _infer(self, inputs):
         if self.config.get("use_apg", False):
             raise NotImplementedError("InfiniteTalk APG is not implemented in the LightX2V parity path yet.")
-
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == 0:
-                self.to_cuda()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cuda()
-                self.transformer_weights.non_block_weights_to_cuda()
 
         if not self.config["enable_cfg"]:
             noise_pred_cond = self._infer_infinitetalk_branch(inputs, infer_condition=True, use_audio=True)
@@ -173,13 +184,6 @@ class WanInfiniteTalkModel(WanModel):
         self.scheduler.noise_pred_cond = noise_pred_cond
         self.scheduler.noise_pred_guided = noise_pred_guided
         self.scheduler.noise_pred = -noise_pred_guided
-
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
-                self.to_cpu()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cpu()
-                self.transformer_weights.non_block_weights_to_cpu()
 
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
