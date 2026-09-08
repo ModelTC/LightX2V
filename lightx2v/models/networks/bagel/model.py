@@ -8,6 +8,7 @@ from PIL import Image
 from loguru import logger
 from torch.nn import functional as F
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.bagel.data_utils import add_special_tokens, patchify
 from lightx2v.models.networks.bagel.infer.post_infer import BagelPostInfer
 from lightx2v.models.networks.bagel.infer.pre_infer import BagelPreInfer
@@ -58,7 +59,7 @@ class BagelModel:
         self.enable_vision_context = config.get("enable_vision_context", config.get("task", "t2i") == "i2i")
 
         self.cpu_offload = config.get("cpu_offload", False)
-        self.offload_granularity = self.config.get("offload_granularity", "block")
+        self.offload_granularity = get_offload_granularity(self.config)
         self.device = torch.device("cpu") if self.cpu_offload else torch.device(AI_DEVICE)
         self._init_infer_class()
         self._init_weights()
