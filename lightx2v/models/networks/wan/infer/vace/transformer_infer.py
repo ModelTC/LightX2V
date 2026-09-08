@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import *
 
@@ -21,9 +22,13 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
         if self.config.get("seq_parallel", False):
             pre_infer_out.c = self._chunk_c_for_seq_parallel(pre_infer_out.c, pre_infer_out.x)
 
-        self.infer_vace_blocks(weights.vace_blocks, pre_infer_out)
-        x = self.infer_main_blocks(weights.blocks, pre_infer_out)
-        return self.infer_non_blocks(weights, x, pre_infer_out.embed)
+        try:
+            self.infer_vace_blocks(weights.vace_blocks, pre_infer_out)
+            x = self.infer_main_blocks(weights.blocks, pre_infer_out)
+            return self.infer_non_blocks(weights, x, pre_infer_out.embed)
+        finally:
+            if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "block":
+                self.clear_block_offload_inputs(pre_infer_out)
 
     def _chunk_c_for_seq_parallel(self, c, x):
         """Chunk c along sequence dimension to match x in seq parallel mode."""
@@ -53,12 +58,25 @@ class WanVaceTransformerInfer(WanOffloadTransformerInfer):
     def infer_vace_blocks(self, vace_blocks, pre_infer_out):
         pre_infer_out.adapter_args["hints"] = []
         self.infer_state = "vace"
-        if hasattr(self, "offload_manager"):
-            self.offload_manager.init_cuda_buffer(self.vace_offload_block_cuda_buffers, self.vace_offload_phase_cuda_buffers)
-        self.infer_func(vace_blocks, pre_infer_out.c, pre_infer_out)
-        self.infer_state = "base"
-        if hasattr(self, "offload_manager"):
-            self.offload_manager.init_cuda_buffer(self.offload_block_cuda_buffers, self.offload_phase_cuda_buffers)
+        try:
+            if not self.config.get("cpu_offload", False) or get_offload_granularity(self.config) != "block":
+                self.infer_func(vace_blocks, pre_infer_out.c, pre_infer_out)
+                return
+
+            c = pre_infer_out.c
+
+            def run_vace_block(block_idx, block):
+                nonlocal c
+                self.block_idx = block_idx
+                c = self.run_block(block_idx, block, c, pre_infer_out)
+                return c
+
+            self.run_blocks_with_offload(vace_blocks, run_vace_block)
+        finally:
+            self.infer_state = "base"
+
+    def get_compile_block_key(self, block_idx, block):
+        return self.infer_state, super().get_compile_block_key(block_idx, block)
 
     def post_process(self, x, y, c_gate_msa, pre_infer_out):
         x = super().post_process(x, y, c_gate_msa, pre_infer_out)
