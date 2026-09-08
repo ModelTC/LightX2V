@@ -1,0 +1,92 @@
+--- xe_fmha_fwd_mainloop.hpp
++++ xe_fmha_fwd_mainloop.hpp
+@@ -150,6 +150,11 @@
+     int const* ptr_page_table = nullptr;
+     int page_size = 0;
+     int const* num_pages_per_seq = nullptr;
++    int const* ptr_block_lut = nullptr;
++    int lut_num_heads = 0;
++    int lut_q_blocks = 0;
++    int lut_topk = 0;
++    int lut_block_tiles = 0;
+   };
+ 
+   // Kernel-facing parameters
+@@ -172,7 +177,9 @@
+   Params to_underlying_arguments(Arguments const &args, void * /* workspace */) {
+     constexpr double kLog2e = 1.4426950408889634074;            // log_2(e)
+     ElementS val = args.scale * static_cast<ElementS>(kLog2e);
+-    return Params{val, args.ptr_page_table, args.page_size, args.num_pages_per_seq};
++    return Params{val, args.ptr_page_table, args.page_size, args.num_pages_per_seq,
++                  args.ptr_block_lut, args.lut_num_heads, args.lut_q_blocks,
++                  args.lut_topk, args.lut_block_tiles};
+   }
+ 
+   CUTLASS_HOST_DEVICE static
+@@ -211,6 +218,7 @@
+              int              seq_len,
+              int              seq_len_kv_cache,
+              int              l_coord,
++             int              head_q,
+              int              full_tile_offset,
+              int              discard_seq_coord,
+             TensorK_cache2D const& K_cache_2D = TensorK_cache2D{},
+@@ -308,6 +316,15 @@
+     /* Initialization steps for first block: Q/K prefetch, O init */
+     /* TODO: limit D prefetch for large head size, and reorder K prefetches */
+     int kblocks_cache = ceil_div(seq_len_kv_cache, get<1>(TileShapeQK{}));
++    auto physical_k_tile = [&](int logical_k) {
++      if (params.ptr_block_lut == nullptr) return logical_k;
++      int slot = logical_k / params.lut_block_tiles;
++      int sub_tile = logical_k - slot * params.lut_block_tiles;
++      int q_block = get<0>(blk_qv);
++      int lut_offset = ((l_coord * params.lut_num_heads + head_q) *
++                        params.lut_q_blocks + q_block) * params.lut_topk;
++      return params.ptr_block_lut[lut_offset + slot] * params.lut_block_tiles + sub_tile;
++    };
+     for (int D = 0; D < size<3>(pQgQ); D++) {
+       prefetch(prefetch_q, pQgQ(_,_,_,D));
+     }
+@@ -323,7 +340,9 @@
+             prefetch(prefetch_k_cache, pKgK_cache(_,_,_,K,D));
+           }
+         } else {
+-          prefetch(prefetch_k, pKgK(_,_,_,K - kblocks_cache,D));
++          int physical_K = physical_k_tile(K - kblocks_cache);
++          if (physical_K < ceil_div(seq_len, get<1>(TileShapeQK{})))
++            prefetch(prefetch_k, pKgK(_,_,_,physical_K,D));
+         }
+       }
+     }
+@@ -355 +374 @@
+-        k_idx = K - kblocks_cache;
++        k_idx = physical_k_tile(K - kblocks_cache);
+@@ -356,0 +376,7 @@
++      if constexpr (!is_cache) {
++        if (params.ptr_block_lut != nullptr &&
++            k_idx >= ceil_div(seq_len, get<1>(TileShapeQK{}))) {
++          barrier_wait(ScopeWorkgroup);
++          return;
++        }
++      }
+@@ -399 +425,2 @@
+-        if (check_remainder_k && K == total_blk - 1) {
++        int dense_total_blk = ceil_div(seq_len, get<1>(TileShapeQK{}));
++        if (check_remainder_k && k_idx == dense_total_blk - 1) {
+@@ -401,2 +428 @@
+-          int k_val = get<0>(tKgK_cur(0,0,0,k_idx,0)) + kblocks_cache * get<1>(TileShapeQK{});
+-          int k = k_val + get_sub_group().get_local_id()[0];
++          int k = k_idx * get<1>(TileShapeQK{}) + get_sub_group().get_local_id()[0];
+@@ -449,8 +476,10 @@
+           } else {
+             prefetch(prefetch_k, pKgK(_,_,_,K_next-kblocks_cache,D));
+           }
+-        } else {
+-          prefetch(prefetch_k, pKgK(_,_,_,K_next-kblocks_cache,D));
++        } else if (K_next < blk_k1) {
++          int physical_K_next = physical_k_tile(K_next-kblocks_cache);
++          if (physical_K_next < ceil_div(seq_len, get<1>(TileShapeQK{})))
++            prefetch(prefetch_k, pKgK(_,_,_,physical_K_next,D));
+         }
+       }
+       barrier_wait(ScopeWorkgroup);

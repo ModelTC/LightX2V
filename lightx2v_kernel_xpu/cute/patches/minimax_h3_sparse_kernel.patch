@@ -1,0 +1,21 @@
+--- xe_fmha_fwd_kernel.hpp
++++ xe_fmha_fwd_kernel.hpp
+@@ -226,7 +226,9 @@
+       if (CollectiveMainloop::CausalMask && seq_coord < discard_seq_coord) continue;
+       const int seq_len_new = CollectiveMainloop::CausalMask ? full_tile_offset + cute::min(seq_len_kv, seq_coord - discard_seq_coord) + q_sg_tile : seq_len_kv;
+       const int seq_len = seq_len_new + seq_len_kv_cache;
+-      const int k_blocks = cute::ceil_div(seq_len, get<1>(TileShapeQK{}));
++      const int k_blocks = params.mainloop.ptr_block_lut
++          ? params.mainloop.lut_topk * params.mainloop.lut_block_tiles
++          : cute::ceil_div(seq_len, get<1>(TileShapeQK{}));
+ 
+       int offset_q = 0, offset_k = 0, offset_v = 0, offset_o = 0;
+       int offset_k_cache = 0, offset_v_cache = 0;
+@@ -287,7 +289,7 @@
+                tArA, tA_max, tA_sum,
+                blk_qv, 0, k_blocks, k_blocks,
+-               thr_id, seq_len, seq_len_kv_cache, idx_b,
++               thr_id, seq_len, seq_len_kv_cache, idx_b, head_q,
+                full_tile_offset, discard_seq_coord,
+                K_cache(_,_,head,l_coord),
+                V_cache(_,_,head,l_coord));

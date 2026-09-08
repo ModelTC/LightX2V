@@ -284,6 +284,9 @@ if(ENABLE_CUTE_FMHA)
     set(H3_OVERLAY_ROOT "${CMAKE_BINARY_DIR}/minimax_h3_cute_overlay")
     set(H3_OVERLAY_DIR "${H3_OVERLAY_ROOT}/flash_attention_v2/collective")
     file(MAKE_DIRECTORY "${H3_OVERLAY_DIR}")
+    # Remove a stale sparse kernel overlay left by older build trees.  The
+    # dense target must resolve the upstream kernel header unchanged.
+    file(REMOVE "${H3_OVERLAY_ROOT}/flash_attention_v2/kernel/xe_fmha_fwd_kernel.hpp")
     set(H3_MAINLOOP_SOURCE
         "${CUTLASS_SYCL_ROOT}/applications/flash_attention_v2/collective/xe_fmha_fwd_mainloop.hpp")
     set(H3_MAINLOOP_PATCH
@@ -306,9 +309,69 @@ if(ENABLE_CUTE_FMHA)
         "${H3_OVERLAY_DIR}/xe_fmha_fwd_mainloop.hpp"
         COPYONLY)
     file(REMOVE "${H3_MAINLOOP_TEMP}")
+
+    set(H3_SPARSE_OVERLAY_ROOT "${CMAKE_BINARY_DIR}/minimax_h3_sparse_cute_overlay")
+    set(H3_SPARSE_OVERLAY_DIR "${H3_SPARSE_OVERLAY_ROOT}/flash_attention_v2/collective")
+    file(MAKE_DIRECTORY "${H3_SPARSE_OVERLAY_DIR}")
+    configure_file(
+        "${H3_OVERLAY_DIR}/xe_fmha_fwd_mainloop.hpp"
+        "${H3_SPARSE_OVERLAY_DIR}/xe_fmha_fwd_mainloop.hpp"
+        COPYONLY)
+
+    # Add block-LUT traversal after the long-sequence dataflow patch.  The
+    # sparse path keeps CUTE's DPAS/online-softmax implementation and changes
+    # only which physical K/V tiles each Q workgroup visits.
+    set(H3_SPARSE_MAINLOOP_PATCH
+        "${CMAKE_CURRENT_SOURCE_DIR}/cute/patches/minimax_h3_sparse_lut.patch")
+    execute_process(
+        COMMAND patch --batch --forward --fuzz=0
+            ${H3_SPARSE_OVERLAY_DIR}/xe_fmha_fwd_mainloop.hpp
+            ${H3_SPARSE_MAINLOOP_PATCH}
+        RESULT_VARIABLE H3_SPARSE_MAINLOOP_RESULT
+        OUTPUT_VARIABLE H3_SPARSE_MAINLOOP_STDOUT
+        ERROR_VARIABLE H3_SPARSE_MAINLOOP_STDERR)
+    if(NOT H3_SPARSE_MAINLOOP_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "Failed to apply MiniMax-H3 sparse mainloop patch:\n${H3_SPARSE_MAINLOOP_STDOUT}${H3_SPARSE_MAINLOOP_STDERR}")
+    endif()
+    set(H3_SPARSE_TAIL_PATCH
+        "${CMAKE_CURRENT_SOURCE_DIR}/cute/patches/minimax_h3_sparse_tail.patch")
+    execute_process(
+        COMMAND patch --batch --forward --fuzz=0
+            ${H3_SPARSE_OVERLAY_DIR}/xe_fmha_fwd_mainloop.hpp ${H3_SPARSE_TAIL_PATCH}
+        RESULT_VARIABLE H3_SPARSE_TAIL_RESULT
+        OUTPUT_VARIABLE H3_SPARSE_TAIL_STDOUT
+        ERROR_VARIABLE H3_SPARSE_TAIL_STDERR)
+    if(NOT H3_SPARSE_TAIL_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "Failed to apply MiniMax-H3 sparse tail patch:\n${H3_SPARSE_TAIL_STDOUT}${H3_SPARSE_TAIL_STDERR}")
+    endif()
+
+    set(H3_KERNEL_DIR "${H3_SPARSE_OVERLAY_ROOT}/flash_attention_v2/kernel")
+    file(MAKE_DIRECTORY "${H3_KERNEL_DIR}")
+    set(H3_KERNEL_SOURCE
+        "${CUTLASS_SYCL_ROOT}/applications/flash_attention_v2/kernel/xe_fmha_fwd_kernel.hpp")
+    set(H3_KERNEL_PATCH
+        "${CMAKE_CURRENT_SOURCE_DIR}/cute/patches/minimax_h3_sparse_kernel.patch")
+    set(H3_KERNEL_TEMP "${H3_KERNEL_DIR}/xe_fmha_fwd_kernel.hpp.new")
+    execute_process(
+        COMMAND patch --batch --forward --fuzz=0
+            --output=${H3_KERNEL_TEMP} ${H3_KERNEL_SOURCE} ${H3_KERNEL_PATCH}
+        RESULT_VARIABLE H3_KERNEL_PATCH_RESULT
+        OUTPUT_VARIABLE H3_KERNEL_PATCH_STDOUT
+        ERROR_VARIABLE H3_KERNEL_PATCH_STDERR)
+    if(NOT H3_KERNEL_PATCH_RESULT EQUAL 0)
+        message(FATAL_ERROR
+            "Failed to apply MiniMax-H3 sparse kernel patch:\n${H3_KERNEL_PATCH_STDOUT}${H3_KERNEL_PATCH_STDERR}")
+    endif()
+    configure_file("${H3_KERNEL_TEMP}" "${H3_KERNEL_DIR}/xe_fmha_fwd_kernel.hpp" COPYONLY)
+    file(REMOVE "${H3_KERNEL_TEMP}")
     file(COPY
         "${CUTLASS_SYCL_ROOT}/applications/flash_attention_v2/collective/fmha_fusion.hpp"
         DESTINATION "${H3_OVERLAY_DIR}")
+    file(COPY
+        "${CUTLASS_SYCL_ROOT}/applications/flash_attention_v2/collective/fmha_fusion.hpp"
+        DESTINATION "${H3_SPARSE_OVERLAY_DIR}")
 
     add_library(cute_fmha_minimax_h3_torch SHARED cute/cute_fmha_torch.cpp)
     set_target_properties(cute_fmha_minimax_h3_torch PROPERTIES
@@ -341,6 +404,39 @@ if(ENABLE_CUTE_FMHA)
         "-spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
     target_link_libraries(cute_fmha_minimax_h3_torch PRIVATE
         ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
+
+    add_library(cute_fmha_minimax_h3_sparse_torch SHARED cute/cute_fmha_torch.cpp)
+    set_target_properties(cute_fmha_minimax_h3_sparse_torch PROPERTIES
+        PREFIX ""
+        BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+        INSTALL_RPATH "\$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+    target_compile_features(cute_fmha_minimax_h3_sparse_torch PRIVATE cxx_std_17)
+    target_compile_definitions(cute_fmha_minimax_h3_sparse_torch PRIVATE
+        CUTLASS_ENABLE_SYCL SYCL_INTEL_TARGET ${XPU_ARCH_DEFINE}
+        CUTE_FMHA_TORCH_LIBRARY=sycl_kernels_cute_minimax_h3_sparse
+        CUTE_FMHA_SPARSE=1)
+    target_include_directories(cute_fmha_minimax_h3_sparse_torch PRIVATE
+        "${CUTLASS_SYCL_ROOT}/include"
+        "${CUTLASS_SYCL_ROOT}/tools/util/include"
+        "${CUTLASS_SYCL_ROOT}/examples/common"
+        "${H3_SPARSE_OVERLAY_ROOT}"
+        "${CUTLASS_SYCL_ROOT}/applications"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cute"
+        ${TORCH_INCLUDE_DIRS})
+    target_compile_options(cute_fmha_minimax_h3_sparse_torch PRIVATE
+        -O3 -fsycl -fsycl-targets=spir64_gen
+        -Xsycl-target-backend "-device ${XPU_TARGET}"
+        -fno-sycl-instrument-device-code -Wno-unknown-pragmas
+        -Wno-unused-variable -Wno-unused-but-set-variable
+        -Wno-unused-local-typedef -Wno-uninitialized -Wno-reorder-ctor
+        -Wno-logical-op-parentheses -Wno-unused-function -Wno-deprecated-copy)
+    target_link_options(cute_fmha_minimax_h3_sparse_torch PRIVATE
+        -fsycl -fsycl-targets=spir64_gen
+        -Xsycl-target-backend "-device ${XPU_TARGET}"
+        -Xspirv-translator
+        "-spirv-ext=+SPV_INTEL_split_barrier,+SPV_INTEL_2d_block_io,+SPV_INTEL_subgroup_matrix_multiply_accumulate")
+    target_link_libraries(cute_fmha_minimax_h3_sparse_torch PRIVATE
+        ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
 endif()
 
 # ── Install targets for wheel assembly ────────────────────────────────────────
@@ -352,4 +448,5 @@ install(FILES "${ESIMD_RUNTIME}" DESTINATION sycl_kernels)
 if(ENABLE_CUTE_FMHA)
     install(TARGETS cute_fmha_torch LIBRARY DESTINATION sycl_kernels)
     install(TARGETS cute_fmha_minimax_h3_torch LIBRARY DESTINATION sycl_kernels)
+    install(TARGETS cute_fmha_minimax_h3_sparse_torch LIBRARY DESTINATION sycl_kernels)
 endif()

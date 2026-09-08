@@ -74,7 +74,10 @@ class MiniMaxH3AttentionWeights(WeightModule):
         attn_type = config.get("attn_type", "flash_attn3")
         attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
         if attn_type == "dynamic_sparse_attn":
-            calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
+            sparse_config = config.get("dynamic_sparse_attn_setting", {})
+            if sparse_config.get("operator") == "intel_xpu" and config.get("seq_parallel", False):
+                raise NotImplementedError("Intel XPU SLA does not yet support MiniMax-H3 sequence parallelism")
+            calculate = attention_cls(sparse_config)
         else:
             calculate = attention_cls()
         if attn_type == "sol_attn":

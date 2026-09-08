@@ -77,9 +77,18 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         if not 0.0 <= self.sparsity_ratio < 1.0:
             raise ValueError(f"dynamic sparse attention sparsity_ratio must be in [0, 1), got {self.sparsity_ratio}")
 
-        self.arch = get_cuda_arch(torch.cuda.current_device())
         self.topk = 1 - self.sparsity_ratio
-        if self.operator == "triton":
+        self.arch = None
+        if self.operator != "intel_xpu":
+            self.arch = get_cuda_arch(torch.cuda.current_device())
+
+        if self.operator == "intel_xpu":
+            # The optimized MiniMax-H3 kernel consumes BLHD directly.  Keep
+            # this branch ahead of CUDA architecture discovery so merely
+            # constructing the XPU backend never touches torch.cuda.
+            self.BLKQ, self.BLKK = 128, 128
+            self.apply_func = self.apply_intel_xpu
+        elif self.operator == "triton":
             self.BLKQ, self.BLKK = 64, 64
             self.apply_func = self.apply_triton
         elif self.operator == "triton_ar":  # triton for AR models
@@ -104,6 +113,41 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
 
         # logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
+
+    def apply_intel_xpu(
+        self,
+        q,
+        k,
+        v,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        **kwargs,
+    ):
+        """Run the XPU SLA router and fused sparse attention on one sequence."""
+        if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
+            raise ValueError("Intel XPU SLA expects q, k and v in [L, H, D] layout")
+        if q.shape != k.shape or k.shape != v.shape:
+            raise ValueError("Intel XPU SLA currently requires self-attention with matching q/k/v shapes")
+        if max_seqlen_q != q.shape[0] or max_seqlen_kv != k.shape[0]:
+            raise ValueError("Intel XPU SLA currently supports one unpadded sequence per call")
+        if cu_seqlens_q is not None and cu_seqlens_q.numel() != 2:
+            raise ValueError("Intel XPU SLA currently supports one sequence per call")
+        if cu_seqlens_kv is not None and cu_seqlens_kv.numel() != 2:
+            raise ValueError("Intel XPU SLA currently supports one sequence per call")
+
+        from lightx2v_platform.ops.attn.intel_xpu.xpu_sla_attn import sla_sparse_attention
+
+        out = sla_sparse_attention(
+            q.unsqueeze(0),
+            k.unsqueeze(0),
+            v.unsqueeze(0),
+            keep_ratio=self.topk,
+            block_q=self.BLKQ,
+            block_k=self.BLKK,
+        )
+        return out.reshape(max_seqlen_q, -1)
 
     def apply(
         self,
