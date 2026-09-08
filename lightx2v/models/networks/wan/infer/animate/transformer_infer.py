@@ -15,17 +15,22 @@ class WanAnimateTransformerInfer(WanOffloadTransformerInfer):
         self.adapter_cu_seqlens_kv = None
         self._adapter_cu_seqlens_key = None
 
-    def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
-        for block_idx in range(len(blocks)):
-            self.block_idx = block_idx
-            if block_idx == 0:
-                self.offload_manager.init_first_buffer(blocks, block_idx // 5)
-            if block_idx < len(blocks) - 1:
-                self.offload_manager.prefetch_weights(block_idx + 1, blocks, (block_idx + 1) // 5)
+    @staticmethod
+    def get_adapter_block_index(block_idx):
+        return block_idx // 5
 
-            with torch.cuda.stream(self.offload_manager.compute_stream):
-                x = self.infer_block(self.offload_manager.cuda_buffers[0], x, pre_infer_out)
-            self.offload_manager.swap_blocks()
+    def infer_with_blocks_offload(self, blocks, x, pre_infer_out):
+        def run_animate_block(block_idx, block):
+            nonlocal x
+            self.block_idx = block_idx
+            x = self.run_block(block_idx, block, x, pre_infer_out)
+            return x
+
+        self.run_blocks_with_offload(
+            blocks,
+            run_animate_block,
+            adapter_block_index=self.get_adapter_block_index,
+        )
         return x
 
     def infer_phases(self, block_idx, blocks, x, pre_infer_out, lazy=None):
