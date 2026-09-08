@@ -59,7 +59,7 @@ class WanAnimate2Model(WanModel):
     @torch.no_grad()
     def prepare_reference(self, inputs):
         """Prefill every layer's immutable driving-reference K/V once per clip."""
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model":
                 self.to_cuda()
             else:
@@ -71,9 +71,7 @@ class WanAnimate2Model(WanModel):
                 pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
             self.transformer_infer.infer_reference(self.transformer_weights, pre_infer_out)
         finally:
-            # Resident runners must restore their requested offload state even
-            # when a prefill is cancelled or raises partway through a block.
-            if self.cpu_offload:
+            if self.cpu_offload and self.offload_granularity != "block":
                 if self.offload_granularity == "model":
                     self.to_cpu()
                 else:

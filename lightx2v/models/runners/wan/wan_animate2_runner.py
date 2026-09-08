@@ -16,6 +16,7 @@ except ImportError:
     VideoReader = None
 
 from lightx2v.common.kvcache import KVCacheManager
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.wan.animate2_identity import WAN_ANIMATE2_MODEL_ID
 from lightx2v.models.networks.wan.animate2_model import WanAnimate2Model
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
@@ -184,7 +185,7 @@ class WanAnimate2Runner(WanRunner):
             raise NotImplementedError("Wan-Animate-2 does not support disaggregated inference yet.")
         if self.config.get("lazy_load", False):
             raise NotImplementedError("Wan-Animate-2 does not support lazy loading yet.")
-        if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") == "phase":
+        if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "phase":
             raise NotImplementedError("Wan-Animate-2 supports model/block offload, not phase offload.")
         if self.config.get("enable_reuse", False):
             raise NotImplementedError("Wan-Animate-2 request reuse is not implemented for autoregressive inputs.")
@@ -650,7 +651,8 @@ class WanAnimate2Runner(WanRunner):
     def init_run_segment(self, segment_idx):
         try:
             self._build_segment_inputs(segment_idx)
-            self.model.prepare_reference(self.inputs)
+            with self.transformer_offload_session():
+                self.model.prepare_reference(self.inputs)
 
             if segment_idx == 0:
                 self.model.scheduler.prepare(self.input_info.seed, self.input_info.latent_shape)

@@ -1,5 +1,6 @@
 import torch
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.common.ops.attn.flex_attn import FlexAttnWeight
 from lightx2v.common.ops.attn.utils.all2all import all2all_head2seq, all2all_seq2head
 from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
@@ -12,7 +13,7 @@ class WanAnimate2TransformerInfer(WanOffloadTransformerInfer):
         super().__init__(config)
         if config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("Wan-Animate-2 does not support feature caching.")
-        if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "phase":
+        if config.get("cpu_offload", False) and get_offload_granularity(config) == "phase":
             raise NotImplementedError("Wan-Animate-2 supports model/block offload, not phase offload.")
         if config.get("use_compile", False):
             raise NotImplementedError("Wan-Animate-2 block compilation is disabled; its FlexAttention kernel is compiled internally.")
