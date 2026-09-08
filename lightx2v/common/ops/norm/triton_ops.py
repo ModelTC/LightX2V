@@ -993,6 +993,51 @@ def rms_norm_kernel(
 
 
 @triton.jit
+def _rms_norm_legacy_scale_kernel(
+    output,
+    x,
+    inverse_rms,
+    weight,
+    n_elements,
+    HIDDEN_SIZE: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    columns = offsets % HIDDEN_SIZE
+    rows = offsets // HIDDEN_SIZE
+    values = tl.load(x + offsets, mask=mask)
+    scales = tl.load(inverse_rms + rows, mask=mask)
+    weights = tl.load(weight + columns, mask=mask)
+    normalized = (values * scales).to(tl.bfloat16)
+    tl.store(output + offsets, (normalized * weights).to(tl.bfloat16), mask=mask)
+
+
+def rms_norm_legacy_scale(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    inverse_rms: torch.Tensor,
+) -> torch.Tensor:
+    x = x.contiguous()
+    output = torch.empty_like(x)
+    block_size = 1024
+    grid = (triton.cdiv(x.numel(), block_size),)
+    device_module = torch.cuda if x.device.type == "cuda" else torch.musa
+    with device_module.device(x.device):
+        torch.library.wrap_triton(_rms_norm_legacy_scale_kernel)[grid](
+            output,
+            x,
+            inverse_rms,
+            weight,
+            x.numel(),
+            HIDDEN_SIZE=x.shape[-1],
+            BLOCK_SIZE=block_size,
+            num_warps=8,
+        )
+    return output
+
+
+@triton.jit
 def _fused_qk_rms_norm_kernel(
     q_ptr,
     k_ptr,

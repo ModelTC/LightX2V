@@ -3,6 +3,11 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.models.networks.minimax_h3.infer.triton_ops import (
+    apply_h3_gate_triton,
+    apply_h3_scale_shift_triton,
+    apply_h3_swiglu_triton,
+)
 from lightx2v.utils.envs import GET_DTYPE
 
 
@@ -36,6 +41,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             self.seq_p_group = None
         self.infer_func = self.infer_without_offload
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
+        self.use_triton_modulation = bool(config.get("use_triton_modulation", False))
+        self.use_triton_swiglu = bool(config.get("use_triton_swiglu", False))
         self._adaln_cache = {}
         self._current_adaln_tables = None
         self._adaln_cache_hit = False
@@ -102,10 +109,24 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
                 out = torch.cat((aux_out, out), dim=0)
         return weights.to_out.apply(out.to(self.infer_dtype))
 
-    @staticmethod
-    def _ff(weights, hidden_states):
-        value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
-        return weights.out_proj.apply(value * F.silu(gate))
+    def _ff(self, weights, hidden_states):
+        projected = weights.in_proj.apply(hidden_states)
+        if self.use_triton_swiglu:
+            activated = apply_h3_swiglu_triton(projected)
+        else:
+            value, gate = projected.chunk(2, dim=-1)
+            activated = value * F.silu(gate)
+        return weights.out_proj.apply(activated)
+
+    def _scale_shift(self, hidden_states, shift, scale, indices):
+        if self.use_triton_modulation:
+            return apply_h3_scale_shift_triton(hidden_states, shift, scale, indices)
+        return hidden_states * (1.0 + scale.index_select(0, indices)) + shift.index_select(0, indices)
+
+    def _gate(self, residual, gate, hidden_states, indices):
+        if self.use_triton_modulation:
+            return apply_h3_gate_triton(residual, gate, hidden_states, indices)
+        return residual + gate.index_select(0, indices) * hidden_states
 
     def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None):
         # Keep the Python cache lookup outside the compiled block.
@@ -116,15 +137,13 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
 
         residual = hidden_states
         normed = weights.norm1.apply(hidden_states)
-        normed = normed * (1.0 + scale_msa.index_select(0, indices))
-        normed = normed + shift_msa.index_select(0, indices)
-        hidden_states = residual + gate_msa.index_select(0, indices) * self._attention(weights.attn, normed, pre_infer_out)
+        normed = self._scale_shift(normed, shift_msa, scale_msa, indices)
+        hidden_states = self._gate(residual, gate_msa, self._attention(weights.attn, normed, pre_infer_out), indices)
 
         residual = hidden_states
         normed = weights.norm2.apply(hidden_states)
-        normed = normed * (1.0 + scale_mlp.index_select(0, indices))
-        normed = normed + shift_mlp.index_select(0, indices)
-        hidden_states = residual + gate_mlp.index_select(0, indices) * self._ff(weights.ff, normed)
+        normed = self._scale_shift(normed, shift_mlp, scale_mlp, indices)
+        hidden_states = self._gate(residual, gate_mlp, self._ff(weights.ff, normed), indices)
         return hidden_states
 
     def _compute_adaln_table(self, weights, pre_infer_out):

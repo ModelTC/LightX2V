@@ -91,6 +91,8 @@ class MiniMaxH3PreInfer:
         freqs_t, freqs_h, freqs_w = freqs.unbind(dim=1)
         freqs = torch.cat((freqs_t, freqs_h, freqs_w), dim=-1)
         freqs = torch.cat((freqs, freqs), dim=-1)
+        if self.config.get("rope_type") == "minimax_h3_musa_rope_bf16":
+            return freqs.cos().to(GET_DTYPE()), freqs.sin().to(GET_DTYPE())
         return freqs.cos(), freqs.sin()
 
     def infer(self, weights, prompt_embeds):
