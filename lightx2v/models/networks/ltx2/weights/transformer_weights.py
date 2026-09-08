@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.utils.registry_factory import (
     ATTN_WEIGHT_REGISTER,
     MM_WEIGHT_REGISTER,
@@ -30,7 +31,6 @@ class LTX2TransformerWeights(WeightModule):
             assert not config["cpu_offload"]
         self.lazy_load = self.config.get("lazy_load", False)
         self.skip_fp8_block_index = self.config.get("skip_fp8_block_index", [])
-        self.register_offload_buffers(config, lazy_load_path, lora_path)
         self.blocks = WeightModuleList(
             [
                 LTX2TransformerBlock(
@@ -47,18 +47,31 @@ class LTX2TransformerWeights(WeightModule):
                 for i in range(self.blocks_num)
             ]
         )
+        slot_count = self.register_offload_block_group(config, "blocks", self.blocks)
+        self.register_offload_buffers(config, lazy_load_path, lora_path, slot_count)
         self.add_module("blocks", self.blocks)
 
-    def register_offload_buffers(self, config, lazy_load_path, lora_path):
+    def register_offload_buffers(self, config, lazy_load_path, lora_path, slot_count):
         if config["cpu_offload"]:
-            if config["offload_granularity"] == "block":
-                self.offload_blocks_num = 2
+            if get_offload_granularity(config) == "block":
+                self.offload_blocks_num = slot_count
+                self.offload_block_cuda_buffers = None
+                self.offload_block_cpu_buffers = None
+                self.offload_phase_cuda_buffers = None
+                self.offload_phase_cpu_buffers = None
+                if slot_count == 0:
+                    return
+                offloaded_indices = self.blocks.offload_block_indices
+                offloaded_mm_types = {self.mm_type if block_index not in self.skip_fp8_block_index else "Default" for block_index in offloaded_indices}
+                if len(offloaded_mm_types) > 1:
+                    raise NotImplementedError("LTX2 block offload requires all non-resident blocks to use the same weight type")
+                offloaded_mm_type = next(iter(offloaded_mm_types))
                 self.offload_block_cuda_buffers = WeightModuleList(
                     [
                         LTX2TransformerBlock(
-                            block_index=i,
+                            block_index=offloaded_indices[i],
                             task=self.task,
-                            mm_type=self.mm_type if i not in self.skip_fp8_block_index else "Default",
+                            mm_type=offloaded_mm_type,
                             config=self.config,
                             create_cuda_buffer=True,
                             create_cpu_buffer=False,
@@ -70,7 +83,30 @@ class LTX2TransformerWeights(WeightModule):
                     ]
                 )
                 self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
-                self.offload_phase_cuda_buffers = None
+                if self.lazy_load:
+                    self.offload_block_cpu_buffers = WeightModuleList(
+                        [
+                            LTX2TransformerBlock(
+                                block_index=offloaded_indices[i],
+                                task=self.task,
+                                mm_type=offloaded_mm_type,
+                                config=self.config,
+                                create_cuda_buffer=False,
+                                create_cpu_buffer=True,
+                                block_prefix="transformer_blocks",
+                                lazy_load=self.lazy_load,
+                                lazy_load_path=lazy_load_path,
+                                lora_path=lora_path,
+                            )
+                            for i in range(self.offload_blocks_num)
+                        ]
+                    )
+                    self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
+                self.register_offload_block_buffers(
+                    "blocks",
+                    self.offload_block_cuda_buffers,
+                    self.offload_block_cpu_buffers,
+                )
 
 
 class LTX2TransformerBlock(WeightModule):

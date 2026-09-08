@@ -6,7 +6,7 @@ This module implements block-level CPU offloading to reduce GPU memory usage.
 
 import torch
 
-from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.ltx2.infer.module_io import LTX2PreInferModuleOutput
 from lightx2v.models.networks.ltx2.infer.transformer_infer import LTX2TransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -37,23 +37,18 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
         super().__init__(config)
 
         if self.config.get("cpu_offload", False):
-            offload_granularity = self.config.get("offload_granularity", "block")
+            offload_granularity = get_offload_granularity(self.config)
 
             if offload_granularity == "block":
                 # Use block-level offloading
                 self.infer_func = self.infer_with_blocks_offload
-                self.offload_manager = WeightAsyncStreamManager(offload_granularity="block")
             elif offload_granularity == "model":
                 # Model movement is handled by LTX2Model.
                 self.infer_func = self.infer_without_offload
             else:
                 raise ValueError(f"Unsupported offload_granularity: {offload_granularity}")
 
-            # Initialize lazy loading if enabled
             self.lazy_load = self.config.get("lazy_load", False)
-            if self.lazy_load and offload_granularity == "block":
-                num_workers = self.config.get("num_disk_workers", 4)
-                self.offload_manager.init_lazy_load(num_workers=num_workers)
         else:
             # No offloading
             self.infer_func = self.infer_without_offload
@@ -100,24 +95,15 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
 
         blocks = weights.blocks
 
-        # Process all transformer blocks with offloading
-        for block_idx in range(len(blocks)):
-            # Initialize first buffer on first iteration
-            if self.offload_manager.need_init_first_buffer:
-                self.offload_manager.init_first_buffer(blocks)
+        if self.lazy_load:
+            vx, ax = self.infer_with_lazy_blocks_offload(blocks, vx, ax, pre_infer_out)
+        else:
 
-            # Prefetch next block to GPU (async, in background stream)
-            # Use modulo to handle wrap-around for warmup
-            next_block_idx = (block_idx + 1) % len(blocks)
-            self.offload_manager.prefetch_weights(next_block_idx, blocks)
-
-            # Compute current block (using compute stream)
-            with torch_device_module.stream(self.offload_manager.compute_stream):
-                # Use the block currently in cuda_buffers[0]
-                current_block = self.offload_manager.cuda_buffers[0]
+            def run_ltx_block(block_idx, block):
+                nonlocal vx, ax
                 vx, ax = self.run_block(
                     block_idx,
-                    current_block,
+                    block,
                     vx,
                     ax,
                     pre_infer_out,
@@ -126,9 +112,9 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
                     self._mm_skip_a2v,
                     self._mm_skip_v2a,
                 )
+                return vx, ax
 
-            # Swap buffers: cuda_buffers[1] (prefetched) -> cuda_buffers[0] (current)
-            self.offload_manager.swap_blocks()
+            self.run_blocks_with_offload(blocks, run_ltx_block)
 
         # Clean up if needed
         if self.clean_cuda_cache:
@@ -139,6 +125,30 @@ class LTX2OffloadTransformerInfer(LTX2TransformerInfer):
             torch_device_module.empty_cache()
 
         return vx, ax, pre_infer_out.video_args.embedded_timestep, pre_infer_out.audio_args.embedded_timestep
+
+    def infer_with_lazy_blocks_offload(self, blocks, vx, ax, pre_infer_out):
+        manager = self.get_block_offload_manager(blocks)
+        for block_idx in range(len(blocks)):
+            next_block_idx = (block_idx + 1) % len(blocks)
+            manager.start_prefetch_block(next_block_idx)
+            if manager.need_init_first_buffer:
+                manager.init_first_buffer(blocks)
+            manager.swap_cpu_buffers()
+            manager.prefetch_weights(next_block_idx, blocks)
+            with torch_device_module.stream(manager.compute_stream):
+                vx, ax = self.run_block(
+                    block_idx,
+                    manager.cuda_buffers[0],
+                    vx,
+                    ax,
+                    pre_infer_out,
+                    block_idx in self._mm_skip_video_self_blocks,
+                    block_idx in self._mm_skip_audio_self_blocks,
+                    self._mm_skip_a2v,
+                    self._mm_skip_v2a,
+                )
+            manager.swap_blocks()
+        return vx, ax
 
     def infer(self, weights, pre_infer_out: LTX2PreInferModuleOutput):
         """

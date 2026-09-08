@@ -6,9 +6,11 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.kvcache.utils import causal_chunk_token_range
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX2TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.ltx2.model import LTX2ARModel, LTX2Model
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.ltx2.scheduler import LTX2ARScheduler, LTX2Scheduler, LatentState
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.audio_vae import encode_audio
@@ -120,7 +122,7 @@ class LTX2Runner(DefaultRunner):
         scheduler = self.model.scheduler
         stage1_infer_steps = scheduler.infer_steps
         use_upsampler = bool(self.config.get("use_upsampler"))
-        model_offload = self.config.get("cpu_offload", False) and self.config.get("offload_granularity") == "model"
+        model_offload = self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "model"
         _, spatial_scale_h, spatial_scale_w = self.config["vae_scale_factors"]
         upsample_scale = 2 if use_upsampler else 1
         stage_count = 2 if use_upsampler else 1
@@ -155,10 +157,11 @@ class LTX2Runner(DefaultRunner):
                         # unpatchifies latents so they can continue to Stage 2/VAE.
                         last_step = scheduler.infer_steps - 1
                         step_indices = (0,) if last_step == 0 else (0, last_step)
-                        for step_index in step_indices:
-                            scheduler.step_pre(step_index=step_index)
-                            self.model.infer(self.inputs)
-                            scheduler.step_post()
+                        with self.transformer_offload_session():
+                            for step_index in step_indices:
+                                scheduler.step_pre(step_index=step_index)
+                                self.model.infer(self.inputs)
+                                scheduler.step_post()
                         v_latent = scheduler.video_latent_state.latent
                         a_latent = scheduler.audio_latent_state.latent
 
@@ -1121,6 +1124,7 @@ class LTX2Runner(DefaultRunner):
                 logger.info(f"✅ Video saved successfully to: {out_path} ✅")
             return {"video": None}
 
+    @keep_transformer_weights_loaded
     def run_segment(self, segment_idx=0, stage_name=None, cleanup_inputs=None):
         """
         Run denoising loop for a segment.
@@ -1306,6 +1310,7 @@ class LTX2ARRunner(LTX2Runner):
         self.model.scheduler.mm_last_a_pred = None
         self.model.set_ar_chunk(video_start=video_start, audio_start=audio_start)
 
+    @keep_transformer_weights_loaded
     def run_segment(self, segment_idx=0, stage_name=None, cleanup_inputs=None):
         infer_steps = self.model.scheduler.infer_steps
         video_chunks = []

@@ -343,8 +343,7 @@ class LTX2Model(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
-        if hasattr(self.transformer_infer, "offload_manager"):
-            self._init_offload_manager()
+        self._init_offload_manager()
 
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True, mm_perturb=None):
@@ -667,7 +666,7 @@ class LTX2Model(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == 0 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cuda()
             elif self.offload_granularity != "model":
@@ -713,7 +712,7 @@ class LTX2Model(BaseTransformerModel):
             self.scheduler.v_noise_pred = v_noise_pred
             self.scheduler.a_noise_pred = a_noise_pred
 
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1 and "wan2.2_moe" not in self.config["model_cls"]:
                 self.to_cpu()
             elif self.offload_granularity != "model":
