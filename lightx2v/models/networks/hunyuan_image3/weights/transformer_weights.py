@@ -1,4 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.hunyuan_image3.weights.common import (
     HunyuanImage3AttentionWeights,
     HunyuanImage3MLPPhaseWeights,
@@ -41,7 +42,8 @@ class HunyuanImage3TransformerWeights(WeightModule):
         if not config.get("cpu_offload", False):
             return
 
-        if config.get("offload_granularity", "block") == "block":
+        offload_granularity = get_offload_granularity(config)
+        if offload_granularity == "block":
             self.offload_blocks_num = 2
             self.offload_block_cuda_buffers = WeightModuleList(
                 [
@@ -78,7 +80,7 @@ class HunyuanImage3TransformerWeights(WeightModule):
                     ]
                 )
                 self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
-        elif config.get("offload_granularity") == "phase":
+        elif offload_granularity == "phase":
             self.offload_phase_cuda_buffers = HunyuanImage3TransformerBlock(
                 0,
                 config,
