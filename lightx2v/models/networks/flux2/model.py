@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 from torch.nn import functional as F
 
+from lightx2v.common.offload.config import get_offload_plan
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.flux2.infer.feature_caching.transformer_infer import Flux2TransformerInferAdaCaching
 from lightx2v.models.networks.flux2.infer.offload.transformer_infer import Flux2OffloadTransformerInfer
@@ -10,11 +11,7 @@ from lightx2v.models.networks.flux2.infer.pre_infer import Flux2DevPreInfer, Flu
 from lightx2v.models.networks.flux2.infer.transformer_infer import Flux2TransformerInfer
 from lightx2v.models.networks.flux2.weights.post_weights import Flux2PostWeights
 from lightx2v.models.networks.flux2.weights.pre_weights import Flux2DevPreWeights, Flux2PreWeights
-from lightx2v.models.networks.flux2.weights.transformer_weights import (
-    Flux2TransformerWeights,
-    preserve_weight_module_cpu_tensors,
-    release_weight_module_device_tensors,
-)
+from lightx2v.models.networks.flux2.weights.transformer_weights import Flux2TransformerWeights
 from lightx2v_platform.base import global_var
 
 
@@ -29,8 +26,10 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         # Block-slab packing is platform-agnostic. Enable it only on backends that support
         # event offload, with block-level CPU offload, BF16 Default weights, and no LoRA,
         # lazy loading, or tensor parallelism.
-        self.use_block_slab_offload = self.config.get("offload_use_block_slab", False)
-        self._offload_weights_active = False
+        offload_plan = get_offload_plan(self.config)
+        self.use_block_slab_offload = offload_plan.get("use_block_slab", False)
+        if self.use_block_slab_offload and not offload_plan.get("use_event_offload", False):
+            raise ValueError("Flux2 block slab offload requires offload_plan.use_event_offload=true")
         self.in_channels = self.config.get("transformer_in_channels", self.config.get("in_channels", 64))
         self.attention_kwargs = {}
         self._combined_img_ids_cache = None
@@ -281,66 +280,44 @@ class _Flux2TransformerModelBase(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.pre_infer.set_rope(self.transformer_weights.double_blocks[0].rope)
-        if hasattr(self.transformer_infer, "offload_manager_double") and hasattr(self.transformer_infer, "offload_manager_single"):
-            self._init_offload_manager()
+        self._init_offload_manager()
 
     def _init_offload_manager(self):
-        if hasattr(self.transformer_weights, "offload_double_block_cuda_buffers"):
-            self.transformer_infer.offload_manager_double.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_double_block_cuda_buffers)
-        if hasattr(self.transformer_weights, "offload_single_block_cuda_buffers"):
-            self.transformer_infer.offload_manager_single.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_single_block_cuda_buffers)
-        if self.use_block_slab_offload:
-            double_slabs, single_slabs = self.transformer_weights.prepare_offload_block_slabs()
-            if double_slabs:
-                self.transformer_infer.offload_manager_double.init_block_slabs(double_slabs)
-            if single_slabs:
-                self.transformer_infer.offload_manager_single.init_block_slabs(single_slabs)
+        super()._init_offload_manager()
+        if not self.cpu_offload or self.offload_granularity != "block" or not self.use_block_slab_offload:
+            return
+
+        double_slabs, single_slabs = self.transformer_weights.prepare_offload_block_slabs()
+        double_manager = self.transformer_infer.get_block_offload_manager(self.transformer_weights.double_blocks)
+        single_manager = self.transformer_infer.get_block_offload_manager(self.transformer_weights.single_blocks)
+        if double_manager is not None:
+            double_manager.init_block_slabs(double_slabs)
+        if single_manager is not None:
+            single_manager.init_block_slabs(single_slabs)
 
     def prepare_offload_weights(self):
-        """Load weights kept resident for one runner invocation."""
-        if not self.cpu_offload:
-            return
+        if not self.cpu_offload or self.offload_granularity != "model":
+            return super().prepare_offload_weights()
         if self._offload_weights_active:
-            raise RuntimeError("Flux2 offload weights are already active")
+            return False
 
-        # Mark the model active before moving weights so runner cleanup also
-        # handles a partially completed preparation.
         self._offload_weights_active = True
-        if self.offload_granularity == "model":
+        try:
             self.to_cuda()
-        else:
-            # These weights are used on every diffusion step, so keep them
-            # resident for the complete denoising loop.
-            preserve_weight_module_cpu_tensors(self.pre_weight)
-            preserve_weight_module_cpu_tensors(self.post_weight)
-            self.pre_weight.to_cuda()
-            self.post_weight.to_cuda()
-            self.transformer_weights.non_block_weights_to_cuda()
-            self.transformer_weights.resident_blocks_to_cuda()
+        except BaseException:
+            self.cleanup_offload_weights()
+            raise
+        return True
 
-    def force_cleanup_offload_weights(self):
-        """Release loaded offload weights and reset event-slot state.
-
-        This method is intentionally idempotent and may be called from a
-        runner ``finally`` block after a short run, cancellation, or error.
-        """
-        if not self.cpu_offload or not self._offload_weights_active:
+    def cleanup_offload_weights(self):
+        if self.offload_granularity != "model":
+            super().cleanup_offload_weights()
+            return
+        if not self._offload_weights_active:
             return
 
-        # Device execution and non-blocking H2D copies are asynchronous.
         self._sync_device()
-        if getattr(self.transformer_infer, "use_event_offload", False):
-            self.transformer_infer.offload_manager_double.reset_slots()
-            self.transformer_infer.offload_manager_single.reset_slots()
-
-        if self.offload_granularity == "model":
-            self.to_cpu()
-        else:
-            release_weight_module_device_tensors(self.pre_weight)
-            release_weight_module_device_tensors(self.post_weight)
-            self.transformer_weights.release_non_block_weights()
-            self.transformer_weights.release_resident_blocks()
-
+        self.to_cpu()
         self._offload_weights_active = False
 
     def _get_combined_img_ids(self, img_ids, input_image_ids):

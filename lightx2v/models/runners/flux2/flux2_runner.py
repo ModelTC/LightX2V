@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.flux2.feature_caching.scheduler import Flux2DevSchedulerCaching, Flux2SchedulerCaching
 from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2Scheduler
@@ -295,11 +296,10 @@ class Flux2Runner(DefaultRunner):
         latents, generator = self.run(total_steps)
         return latents, generator
 
+    @keep_transformer_weights_loaded
     def run(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
-
-        self.model.prepare_offload_weights()
 
         for step_index in range(total_steps):
             logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
@@ -315,8 +315,6 @@ class Flux2Runner(DefaultRunner):
 
             if self.progress_callback:
                 self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
-
-        self.model.force_cleanup_offload_weights()
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 

@@ -13,12 +13,15 @@
     "text_encoder_out_layers": [10, 20, 30],
     "attn_type": "npu_flash_attn",
     "cpu_offload": true,
-    "offload_granularity": "block",
-    "use_event_offload": true,
-    "offload_use_block_slab": true,
-    "offload_resident_double_blocks": "all",
-    "offload_resident_single_blocks": 36,
-    "offload_resident_policy": "interleaved",
+    "offload_plan": {
+        "offload_granularity": "block",
+        "resident_blocks": {
+            "double_blocks": "all",
+            "single_blocks": 36
+        },
+        "use_event_offload": true,
+        "use_block_slab": true
+    },
     "modulate_type": "torch",
     "rope_type": "npu_rope",
     "layer_norm_type": "npu_layer_norm",

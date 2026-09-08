@@ -3,44 +3,9 @@ import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.offload.block_slab import pack_cpu_block_slab
+from lightx2v.common.offload.config import get_offload_plan
 from lightx2v.common.ops.utils import move_transposed_weight_module_to_device
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
-
-
-def _resolve_resident_block_indices(value, num_blocks, policy, config_key):
-    """Resolve a resident-block count into deterministic block indices.
-
-    Resident blocks are opt-in.  A count of zero therefore preserves the
-    original full block-streaming behaviour.  ``interleaved`` spreads the
-    resident blocks over the whole transformer instead of concentrating them
-    at the front, which gives the offload stream regular compute windows in
-    which to prefetch the next non-resident block.
-    """
-    if value is None:
-        value = 0
-    if isinstance(value, str):
-        if value.lower() != "all":
-            raise ValueError(f"{config_key} must be an integer or 'all', got {value!r}")
-        count = num_blocks
-    elif isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{config_key} must be an integer or 'all', got {value!r}")
-    else:
-        count = value
-
-    if not 0 <= count <= num_blocks:
-        raise ValueError(f"{config_key} must be between 0 and {num_blocks}, got {count}")
-    if count == 0:
-        return frozenset()
-    if count == num_blocks:
-        return frozenset(range(num_blocks))
-
-    if policy == "prefix":
-        return frozenset(range(count))
-    if policy == "interleaved":
-        # floor(k * N / K) is duplicate-free for K <= N.  For example,
-        # K=36 and N=48 leaves blocks 3, 7, ..., 47 for streaming.
-        return frozenset((idx * num_blocks) // count for idx in range(count))
-    raise ValueError(f"offload_resident_policy must be 'prefix' or 'interleaved', got {policy!r}")
 
 
 def preserve_weight_module_cpu_tensors(module):
@@ -256,87 +221,38 @@ class Flux2TransformerWeights(WeightModule):
         self.num_layers = config.get("num_layers", 10)
         self.num_single_layers = config.get("num_single_layers", 20)
         self.mm_type = config.get("dit_quant_scheme", "Default")
-        self._configure_resident_blocks(config)
 
         self.double_blocks = WeightModuleList([Flux2DoubleBlockWeights(config, i) for i in range(self.num_layers)])
         self.single_blocks = WeightModuleList([Flux2SingleBlockWeights(config, i) for i in range(self.num_single_layers)])
-        self.register_offload_buffers(config)
 
+        double_buffer_count = self.register_offload_block_group(config, "double_blocks", self.double_blocks)
+        single_buffer_count = self.register_offload_block_group(config, "single_blocks", self.single_blocks)
+        has_resident_blocks = (
+            config.get("cpu_offload", False)
+            and get_offload_plan(config).get("offload_granularity", "block") == "block"
+            and bool(self.double_blocks.resident_block_indices or self.single_blocks.resident_block_indices)
+        )
+        if has_resident_blocks and config.get("dit_quantized", False):
+            raise NotImplementedError("Flux2 resident block offload currently supports unquantized weights only")
+        if has_resident_blocks and config.get("lora_configs"):
+            raise NotImplementedError("Flux2 resident block offload currently does not support LoRA weights")
+        if double_buffer_count:
+            self.offload_double_block_cuda_buffers = WeightModuleList([Flux2DoubleBlockWeights(config, i, create_cuda_buffer=True) for i in range(double_buffer_count)])
+            self.add_module("offload_double_block_cuda_buffers", self.offload_double_block_cuda_buffers)
+            self.register_offload_block_buffers("double_blocks", self.offload_double_block_cuda_buffers)
+        if single_buffer_count:
+            self.offload_single_block_cuda_buffers = WeightModuleList([Flux2SingleBlockWeights(config, i, create_cuda_buffer=True) for i in range(single_buffer_count)])
+            self.add_module("offload_single_block_cuda_buffers", self.offload_single_block_cuda_buffers)
+            self.register_offload_block_buffers("single_blocks", self.offload_single_block_cuda_buffers)
+
+        # Staging buffers must be loaded before the source blocks consume their
+        # entries from the shared checkpoint state dict.
         self.add_module("double_blocks", self.double_blocks)
         self.add_module("single_blocks", self.single_blocks)
 
         self.add_module("double_stream_modulation_img_linear", _mm_weight(config, "double_stream_modulation_img.linear.weight"))
         self.add_module("double_stream_modulation_txt_linear", _mm_weight(config, "double_stream_modulation_txt.linear.weight"))
         self.add_module("single_stream_modulation_linear", _mm_weight(config, "single_stream_modulation.linear.weight"))
-
-    def _configure_resident_blocks(self, config):
-        block_offload_enabled = config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block"
-        if not block_offload_enabled:
-            double_setting = 0
-            single_setting = 0
-        else:
-            double_setting = config.get("offload_resident_double_blocks", 0)
-            single_setting = config.get("offload_resident_single_blocks", 0)
-
-        resident_blocks_requested = double_setting not in (None, 0) or single_setting not in (None, 0)
-        if resident_blocks_requested and config.get("dit_quantized", False):
-            raise NotImplementedError("Flux2 resident block offload currently supports unquantized weights only")
-        if resident_blocks_requested and config.get("lora_configs"):
-            raise NotImplementedError("Flux2 resident block offload currently does not support LoRA weights")
-
-        policy = config.get("offload_resident_policy", "prefix")
-        self.resident_double_block_indices = _resolve_resident_block_indices(
-            double_setting,
-            self.num_layers,
-            policy,
-            "offload_resident_double_blocks",
-        )
-        self.resident_single_block_indices = _resolve_resident_block_indices(
-            single_setting,
-            self.num_single_layers,
-            policy,
-            "offload_resident_single_blocks",
-        )
-
-    def register_offload_buffers(self, config):
-        if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block":
-            if len(self.resident_double_block_indices) < self.num_layers:
-                self.offload_double_block_cuda_buffers = WeightModuleList([Flux2DoubleBlockWeights(config, i, create_cuda_buffer=True) for i in range(2)])
-                self.add_module("offload_double_block_cuda_buffers", self.offload_double_block_cuda_buffers)
-
-            if len(self.resident_single_block_indices) < self.num_single_layers:
-                self.offload_single_block_cuda_buffers = WeightModuleList([Flux2SingleBlockWeights(config, i, create_cuda_buffer=True) for i in range(2)])
-                self.add_module("offload_single_block_cuda_buffers", self.offload_single_block_cuda_buffers)
-
-    def is_double_block_resident(self, block_idx):
-        return block_idx in self.resident_double_block_indices
-
-    def is_single_block_resident(self, block_idx):
-        return block_idx in self.resident_single_block_indices
-
-    def get_resident_double_block(self, block_idx):
-        if not self.is_double_block_resident(block_idx):
-            return None
-        return self.double_blocks[block_idx]
-
-    def get_resident_single_block(self, block_idx):
-        if not self.is_single_block_resident(block_idx):
-            return None
-        return self.single_blocks[block_idx]
-
-    def resident_blocks_to_cuda(self, non_blocking=True):
-        for block_idx in sorted(self.resident_double_block_indices):
-            preserve_weight_module_cpu_tensors(self.double_blocks[block_idx])
-            self.double_blocks[block_idx].to_cuda(non_blocking=non_blocking)
-        for block_idx in sorted(self.resident_single_block_indices):
-            preserve_weight_module_cpu_tensors(self.single_blocks[block_idx])
-            self.single_blocks[block_idx].to_cuda(non_blocking=non_blocking)
-
-    def release_resident_blocks(self):
-        for block_idx in sorted(self.resident_double_block_indices):
-            release_weight_module_device_tensors(self.double_blocks[block_idx])
-        for block_idx in sorted(self.resident_single_block_indices):
-            release_weight_module_device_tensors(self.single_blocks[block_idx])
 
     @staticmethod
     def _pack_offload_block_slabs(blocks, resident_indices):
@@ -399,18 +315,18 @@ class Flux2TransformerWeights(WeightModule):
 
     def prepare_offload_block_slabs(self):
         """Pack non-resident block weights after checkpoint loading."""
-        if not self.config.get("offload_use_block_slab", False):
+        if not get_offload_plan(self.config).get("use_block_slab", False):
             return {}, {}
         if hasattr(self, "offload_double_block_slabs"):
             return self.offload_double_block_slabs, self.offload_single_block_slabs
 
         double_slabs = self._pack_offload_block_slabs(
             self.double_blocks,
-            self.resident_double_block_indices,
+            self.double_blocks.resident_block_indices,
         )
         single_slabs = self._pack_offload_block_slabs(
             self.single_blocks,
-            self.resident_single_block_indices,
+            self.single_blocks.resident_block_indices,
         )
         self.offload_double_block_slabs = double_slabs
         self.offload_single_block_slabs = single_slabs
@@ -438,6 +354,11 @@ class Flux2TransformerWeights(WeightModule):
         release_weight_module_device_tensors(self.double_stream_modulation_img_linear)
         release_weight_module_device_tensors(self.double_stream_modulation_txt_linear)
         release_weight_module_device_tensors(self.single_stream_modulation_linear)
+
+    def release_resident_blocks(self):
+        for blocks in (self.double_blocks, self.single_blocks):
+            for block_index in blocks.resident_block_indices:
+                release_weight_module_device_tensors(blocks[block_index])
 
     def to_cuda(self, non_blocking=True):
         for block in self.double_blocks:
