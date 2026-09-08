@@ -61,7 +61,7 @@ def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
         if not lora_config.get("path"):
             raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].path")
         if lora_config.get("alpha") is None:
-            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].alpha (use the alpha published with the checkpoint)")
+            raise ValueError("MiniMax-H3 dynamic LoRA requires lora_configs[0].alpha (use 8 for the MiniMax-H3 Turbo LoRA)")
         model_kwargs.update(
             lora_path=lora_config["path"],
             lora_strength=lora_config.get("strength", 1.0),

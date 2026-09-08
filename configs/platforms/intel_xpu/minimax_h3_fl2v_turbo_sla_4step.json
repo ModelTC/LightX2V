@@ -19,7 +19,7 @@
   "refiner_attn_type": "intel_xpu_cute_attn",
   "dynamic_sparse_attn_setting": {
     "sparsity_ratio": 0.85,
-    "operator": "intel_xpu"
+    "operator": "intel_xpu_cute_attn"
   },
   "rms_type": "intel_xpu",
   "rope_type": "minimax_h3_xpu_rope",

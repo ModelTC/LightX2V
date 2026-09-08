@@ -78,17 +78,9 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
             raise ValueError(f"dynamic sparse attention sparsity_ratio must be in [0, 1), got {self.sparsity_ratio}")
 
         self.topk = 1 - self.sparsity_ratio
-        self.arch = None
-        if self.operator != "intel_xpu":
-            self.arch = get_cuda_arch(torch.cuda.current_device())
+        self.arch = get_cuda_arch(torch.cuda.current_device()) if torch.cuda.is_available() else None
 
-        if self.operator == "intel_xpu":
-            # The optimized MiniMax-H3 kernel consumes BLHD directly.  Keep
-            # this branch ahead of CUDA architecture discovery so merely
-            # constructing the XPU backend never touches torch.cuda.
-            self.BLKQ, self.BLKK = 128, 128
-            self.apply_func = self.apply_intel_xpu
-        elif self.operator == "triton":
+        if self.operator == "triton":
             self.BLKQ, self.BLKK = 64, 64
             self.apply_func = self.apply_triton
         elif self.operator == "triton_ar":  # triton for AR models
@@ -109,12 +101,15 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         elif self.operator == "magi":
             self.BLKQ, self.BLKK = 128, 128
             self.apply_func = self.apply_magi
+        elif self.operator == "intel_xpu_cute_attn":
+            self.BLKQ, self.BLKK = 128, 128
+            self.apply_func = self.apply_intel_xpu_cute_attn
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
 
         # logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
 
-    def apply_intel_xpu(
+    def apply_intel_xpu_cute_attn(
         self,
         q,
         k,
