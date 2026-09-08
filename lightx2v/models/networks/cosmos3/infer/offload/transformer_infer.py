@@ -1,6 +1,6 @@
 import torch
 
-from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.cosmos3.infer.transformer_infer import Cosmos3TransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -12,43 +12,53 @@ class Cosmos3OffloadTransformerInfer(Cosmos3TransformerInfer):
         super().__init__(config)
         if not self.config.get("cpu_offload", False):
             return
-        offload_granularity = self.config.get("offload_granularity", "block")
+        offload_granularity = get_offload_granularity(self.config)
         if offload_granularity != "block":
             raise NotImplementedError("Cosmos3 transformer supports only block-level cpu_offload.")
-        self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
         self.lazy_load = self.config.get("lazy_load", False)
-        if self.lazy_load:
-            self.offload_manager.init_lazy_load(num_workers=self.config.get("num_disk_workers", 4))
 
     def infer_layers(self, layers, und_seq, gen_seq, rotary_emb):
+        if self.lazy_load:
+            return self.infer_layers_with_lazy_offload(layers, und_seq, gen_seq, rotary_emb)
+
+        def run_cosmos_block(_block_idx, block):
+            nonlocal und_seq, gen_seq
+            und_seq, gen_seq = self._infer_block(block, und_seq, gen_seq, rotary_emb)
+            return und_seq, gen_seq
+
+        self.run_blocks_with_offload(layers, run_cosmos_block)
+        return und_seq, gen_seq
+
+    def infer_layers_with_lazy_offload(self, layers, und_seq, gen_seq, rotary_emb):
+        manager = self.get_block_offload_manager(layers)
         current_stream = torch_device_module.current_stream()
-        self.offload_manager.compute_stream.wait_stream(current_stream)
+        manager.compute_stream.wait_stream(current_stream)
         for block_idx in range(len(layers)):
             if self.lazy_load:
                 next_prefetch = (block_idx + 1) % len(layers)
-                self.offload_manager.start_prefetch_block(next_prefetch)
+                manager.start_prefetch_block(next_prefetch)
 
-            if self.offload_manager.need_init_first_buffer:
-                self.offload_manager.init_first_buffer(layers)
+            if manager.need_init_first_buffer:
+                manager.init_first_buffer(layers)
 
             if self.lazy_load:
-                self.offload_manager.swap_cpu_buffers()
+                manager.swap_cpu_buffers()
 
-            self.offload_manager.prefetch_weights((block_idx + 1) % len(layers), layers)
+            manager.prefetch_weights((block_idx + 1) % len(layers), layers)
             if AI_DEVICE == "xpu":
                 und_seq, gen_seq = self._infer_block(
-                    self.offload_manager.cuda_buffers[0],
+                    manager.cuda_buffers[0],
                     und_seq,
                     gen_seq,
                     rotary_emb,
                 )
             else:
-                with torch_device_module.stream(self.offload_manager.compute_stream):
+                with torch_device_module.stream(manager.compute_stream):
                     und_seq, gen_seq = self._infer_block(
-                        self.offload_manager.cuda_buffers[0],
+                        manager.cuda_buffers[0],
                         und_seq,
                         gen_seq,
                         rotary_emb,
                     )
-            self.offload_manager.swap_blocks()
+            manager.swap_blocks()
         return und_seq, gen_seq

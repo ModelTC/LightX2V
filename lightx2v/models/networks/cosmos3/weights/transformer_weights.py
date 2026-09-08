@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.cosmos3.infer.utils import Cosmos3Rope  # noqa: F401
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
@@ -18,7 +19,7 @@ class Cosmos3TransformerWeights(WeightModule):
             self.lazy_load_file = lazy_load_path
         else:
             self.lazy_load_file = None
-        layers = WeightModuleList(
+        self.layers = WeightModuleList(
             Cosmos3TransformerLayerWeights(
                 layer_idx,
                 self.mm_type,
@@ -31,16 +32,23 @@ class Cosmos3TransformerWeights(WeightModule):
             )
             for layer_idx in range(self.layers_num)
         )
-        self.register_offload_buffers(config, lazy_load_path, lora_path)
-        self.add_module("layers", layers)
+        slot_count = self.register_offload_block_group(config, "layers", self.layers)
+        self.register_offload_buffers(config, lazy_load_path, lora_path, slot_count)
+        self.add_module("layers", self.layers)
 
-    def register_offload_buffers(self, config, lazy_load_path, lora_path):
+    def register_offload_buffers(self, config, lazy_load_path, lora_path, slot_count):
         if not config.get("cpu_offload", False):
             return
-        if config.get("offload_granularity", "block") != "block":
-            raise NotImplementedError("Cosmos3 transformer supports only block-level cpu_offload.")
+        if get_offload_granularity(config) == "model":
+            return
 
-        self.offload_blocks_num = 2
+        self.offload_blocks_num = slot_count
+        self.offload_block_cuda_buffers = None
+        self.offload_block_cpu_buffers = None
+        self.offload_phase_cuda_buffers = None
+        self.offload_phase_cpu_buffers = None
+        if slot_count == 0:
+            return
         self.offload_block_cuda_buffers = WeightModuleList(
             [
                 Cosmos3TransformerLayerWeights(
@@ -59,7 +67,6 @@ class Cosmos3TransformerWeights(WeightModule):
             ]
         )
         self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
-        self.offload_phase_cuda_buffers = None
 
         if self.lazy_load:
             self.offload_block_cpu_buffers = WeightModuleList(
@@ -80,7 +87,11 @@ class Cosmos3TransformerWeights(WeightModule):
                 ]
             )
             self.add_module("offload_block_cpu_buffers", self.offload_block_cpu_buffers)
-            self.offload_phase_cpu_buffers = None
+        self.register_offload_block_buffers(
+            "layers",
+            self.offload_block_cuda_buffers,
+            self.offload_block_cpu_buffers,
+        )
 
     def non_block_weights_to_cuda(self):
         return None

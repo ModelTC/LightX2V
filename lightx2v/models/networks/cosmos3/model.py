@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 from torch.nn import functional as F
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.cosmos3.infer.module_io import Cosmos3PostInferModuleOutput, Cosmos3TransformerInferModuleOutput
 from lightx2v.models.networks.cosmos3.infer.offload.transformer_infer import Cosmos3OffloadTransformerInfer
@@ -21,8 +22,8 @@ class Cosmos3TransformerModel(BaseTransformerModel):
     def __init__(self, model_path, config, device):
         if config.get("lazy_load", False):
             raise NotImplementedError("Cosmos3 LightX2V native transformer does not support lazy_load yet.")
-        if config.get("cpu_offload", False) and config.get("offload_granularity", "block") != "block":
-            raise NotImplementedError("Cosmos3 LightX2V native transformer supports only block-level cpu_offload.")
+        if config.get("cpu_offload", False) and get_offload_granularity(config) not in ("block", "model"):
+            raise NotImplementedError("Cosmos3 LightX2V native transformer supports block- and model-level cpu_offload.")
         super().__init__(model_path, config, device)
         self._init_infer_class()
         self._init_weights()
@@ -30,15 +31,15 @@ class Cosmos3TransformerModel(BaseTransformerModel):
 
     def _init_infer_class(self):
         self.pre_infer_class = Cosmos3PreInfer
-        self.transformer_infer_class = Cosmos3OffloadTransformerInfer if self.cpu_offload else Cosmos3TransformerInfer
+        use_block_offload = self.cpu_offload and self.offload_granularity == "block"
+        self.transformer_infer_class = Cosmos3OffloadTransformerInfer if use_block_offload else Cosmos3TransformerInfer
         self.post_infer_class = Cosmos3PostInfer
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
-        if hasattr(self.transformer_infer, "offload_manager"):
-            self._init_offload_manager()
+        self._init_offload_manager()
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -149,9 +150,9 @@ class Cosmos3TransformerModel(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
-            self.pre_weight.to_cuda()
-            self.post_weight.to_cuda()
+        if self.cpu_offload and self.offload_granularity != "block":
+            if self.offload_granularity == "model" and self.scheduler.step_index == 0:
+                self.to_cuda()
 
         text_encoder_output = inputs["text_encoder_output"]
         do_cfg = self.config.get("enable_cfg", True) and self.scheduler.sample_guide_scale != 1.0
@@ -171,6 +172,6 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             cond = self._infer_cond_uncond(text_encoder_output["cond_input_ids"])
             self._set_scheduler_noise_pred(self._detach_cfg_output(cond))
 
-        if self.cpu_offload:
-            self.pre_weight.to_cpu()
-            self.post_weight.to_cpu()
+        if self.cpu_offload and self.offload_granularity != "block":
+            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+                self.to_cpu()

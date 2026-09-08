@@ -17,6 +17,7 @@ from transformers import AutoTokenizer
 
 from lightx2v.models.audio_encoders.hf.cosmos3.sound_tokenizer import Cosmos3SoundTokenizer
 from lightx2v.models.networks.cosmos3.model import Cosmos3TransformerModel
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.cosmos3.policy_runtime import (
     PolicySeedSequence,
     build_json_policy_prompt,
@@ -849,6 +850,7 @@ class Cosmos3Runner(DefaultRunner):
                 json.dump(action.tolist(), f)
         logger.info(f"Action saved: {save_action_path}")
 
+    @keep_transformer_weights_loaded
     def run(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
