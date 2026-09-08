@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 
-from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.hunyuan_video.infer.module_io import (
     HunyuanVideo15ImgBranchOutput,
     HunyuanVideo15TxtBranchOutput,
@@ -13,9 +13,6 @@ from lightx2v.models.networks.hunyuan_video.infer.transformer_infer import (
     apply_gate,
 )
 from lightx2v.models.networks.worldplay.prope.camera_rope import prope_qkv
-from lightx2v_platform.base.global_var import AI_DEVICE
-
-torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def modulate_per_token(x, scale, shift):
@@ -55,15 +52,13 @@ class WorldPlayTransformerInfer(HunyuanVideo15TransformerInfer):
 
         # Setup offload if enabled
         if self.config.get("cpu_offload", False):
-            offload_granularity = self.config.get("offload_granularity", "block")
+            offload_granularity = get_offload_granularity(self.config)
             if offload_granularity == "block":
                 self.infer_func = self.infer_with_blocks_offload
             elif offload_granularity == "model":
                 self.infer_func = self.infer_without_offload
             else:
                 raise NotImplementedError
-            if offload_granularity != "model":
-                self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
 
     @property
     def _vec_is_per_token(self):
@@ -395,15 +390,13 @@ class WorldPlayTransformerInfer(HunyuanVideo15TransformerInfer):
     @torch.no_grad()
     def infer_with_blocks_offload(self, weights, infer_module_out):
         """Inference with block-level CPU offload."""
-        for block_idx in range(self.double_blocks_num):
+
+        def infer_block(block_idx, block_weights):
             self.block_idx = block_idx
-            if block_idx == 0:
-                self.offload_manager.init_first_buffer(weights.double_blocks)
-            if block_idx < self.double_blocks_num - 1:
-                self.offload_manager.prefetch_weights(block_idx + 1, weights.double_blocks)
-            with torch_device_module.stream(self.offload_manager.compute_stream):
-                infer_module_out.img, infer_module_out.txt = self.infer_double_block(self.offload_manager.cuda_buffers[0], infer_module_out, block_idx=block_idx)
-            self.offload_manager.swap_blocks()
+            infer_module_out.img, infer_module_out.txt = self.infer_double_block(block_weights, infer_module_out, block_idx=block_idx)
+            return infer_module_out.img, infer_module_out.txt
+
+        self.run_blocks_with_offload(weights.double_blocks, infer_block)
 
     def set_action_weights(self, action_weights):
         """Set action weights for ProPE projection access."""

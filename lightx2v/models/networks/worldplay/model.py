@@ -67,6 +67,7 @@ class WorldPlayModel(HunyuanVideo15Model):
         self.original_weight_dict = weight_dict
         self.pre_weight = WorldPlayPreWeights(self.config)
         self.transformer_weights = WorldPlayTransformerWeights(self.config)
+        self.transformer_weights.validate_offload_block_groups(self.config)
         self.post_weight = WorldPlayPostWeights(self.config)
         self._apply_weights()
 
