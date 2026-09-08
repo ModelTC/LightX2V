@@ -58,7 +58,7 @@ class WanLingbotVAModel(WanModel):
         return (cache_name, cls.cfg_cache_name(cache_name, True), cls.cfg_cache_name(cache_name, False))
 
     def _to_cuda_for_lingbot_va(self):
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model":
                 self.to_cuda()
             else:
@@ -66,7 +66,7 @@ class WanLingbotVAModel(WanModel):
                 self.transformer_weights.non_block_weights_to_cuda()
 
     def _to_cpu_for_lingbot_va(self):
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model":
                 self.to_cpu()
             else:

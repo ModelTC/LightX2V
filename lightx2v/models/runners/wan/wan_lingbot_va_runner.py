@@ -408,24 +408,25 @@ class LingbotVARunner(Wan22DenseRunner):
         self.scheduler.bind_step_inputs(self.inputs, self._build_video_step_inputs)
         self.scheduler.bind_noise_pred_processor(self._postprocess_video_noise_pred)
         self.model.set_scheduler(self.scheduler)
-        self._run_scheduler_loop(self.scheduler)
-        latents = self.scheduler.latents
+        with self.transformer_offload_session():
+            self._run_scheduler_loop(self.scheduler)
+            latents = self.scheduler.latents
 
-        action_cond = torch.zeros([1, self.config["action_dim"], 1, self.num_action_per_frame, 1], device=AI_DEVICE, dtype=GET_DTYPE()) if self.frame_st_id == 0 else None
-        self.action_scheduler.generator = self.scheduler.generator
-        self.action_scheduler.prepare_loop(
-            infer_steps=self.config["action_infer_steps"],
-            device=AI_DEVICE,
-            latent_shape=action_shape,
-            seed=self.input_info.seed,
-            dtype=GET_DTYPE(),
-            cond_latent=action_cond,
-        )
-        self.action_scheduler.bind_step_inputs(self.inputs, self._build_action_step_inputs)
-        self.action_scheduler.bind_noise_pred_processor(self._postprocess_action_noise_pred)
-        self.model.set_scheduler(self.action_scheduler)
-        self._run_scheduler_loop(self.action_scheduler)
-        actions = self.action_scheduler.latents
+            action_cond = torch.zeros([1, self.config["action_dim"], 1, self.num_action_per_frame, 1], device=AI_DEVICE, dtype=GET_DTYPE()) if self.frame_st_id == 0 else None
+            self.action_scheduler.generator = self.scheduler.generator
+            self.action_scheduler.prepare_loop(
+                infer_steps=self.config["action_infer_steps"],
+                device=AI_DEVICE,
+                latent_shape=action_shape,
+                seed=self.input_info.seed,
+                dtype=GET_DTYPE(),
+                cond_latent=action_cond,
+            )
+            self.action_scheduler.bind_step_inputs(self.inputs, self._build_action_step_inputs)
+            self.action_scheduler.bind_noise_pred_processor(self._postprocess_action_noise_pred)
+            self.model.set_scheduler(self.action_scheduler)
+            self._run_scheduler_loop(self.action_scheduler)
+            actions = self.action_scheduler.latents
 
         actions[:, ~self.action_mask] *= 0
         self.model.set_scheduler(self.scheduler)
@@ -511,8 +512,7 @@ class LingbotVARunner(Wan22DenseRunner):
             del self.inputs
         self.input_info = None
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            if hasattr(self.model.transformer_infer, "offload_manager"):
-                del self.model.transformer_infer.offload_manager
+            self.model.transformer_infer.clear_offload_managers()
             del self.model
         torch_device_module.empty_cache()
         gc.collect()

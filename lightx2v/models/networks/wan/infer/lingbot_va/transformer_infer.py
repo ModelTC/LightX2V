@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn.functional as F
 
-from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
+from lightx2v.models.networks.wan.infer.offload.transformer_infer import WanOffloadTransformerInfer
 from lightx2v.utils.envs import GET_DTYPE
 
 
@@ -11,7 +11,7 @@ def _token_modulation(x: torch.Tensor) -> torch.Tensor:
     return x.reshape(-1, x.shape[-1])
 
 
-class LingbotVATransformerInfer(WanTransformerInfer):
+class LingbotVATransformerInfer(WanOffloadTransformerInfer):
     def __init__(self, config):
         super().__init__(config)
         self.kv_cache_manager = None
@@ -96,9 +96,14 @@ class LingbotVATransformerInfer(WanTransformerInfer):
 
     def infer_main_blocks(self, blocks, pre_infer_out, update_cache=0, cache_name="pos"):
         x = pre_infer_out.x
-        for block_idx in range(len(blocks)):
+
+        def run_lingbot_va_block(block_idx, block):
+            nonlocal x
             self.block_idx = block_idx
-            x = self.infer_block(blocks[block_idx], x, pre_infer_out, update_cache=update_cache, cache_name=cache_name)
+            x = self.infer_block(block, x, pre_infer_out, update_cache=update_cache, cache_name=cache_name)
+            return x
+
+        self.run_blocks_with_offload(blocks, run_lingbot_va_block)
         return x
 
     def infer_non_blocks(self, weights, x, pre_infer_out, action_mode=False):
