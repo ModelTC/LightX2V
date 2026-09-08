@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from einops import rearrange
 
-from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.hunyuan_video.infer.module_io import (
     HunyuanVideo15ImgBranchOutput,
     HunyuanVideo15TxtBranchOutput,
@@ -17,9 +17,6 @@ from lightx2v.models.networks.hunyuan_video.infer.transformer_infer import (
 )
 from lightx2v.models.networks.worldplay.prope.camera_rope import prope_qkv
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
-
-torch_device_module = getattr(torch, AI_DEVICE)
 
 
 class KVCache:
@@ -145,15 +142,13 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
 
         # Setup offload if enabled
         if self.config.get("cpu_offload", False):
-            offload_granularity = self.config.get("offload_granularity", "block")
+            offload_granularity = get_offload_granularity(self.config)
             if offload_granularity == "block":
                 self.infer_func = self.infer_with_blocks_offload
             elif offload_granularity == "model":
                 self.infer_func = self.infer_without_offload
             else:
                 raise NotImplementedError
-            if offload_granularity != "model":
-                self.offload_manager = WeightAsyncStreamManager(offload_granularity=offload_granularity)
 
     @property
     def _vec_is_per_token(self):
@@ -520,42 +515,37 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
     @torch.no_grad()
     def infer_with_blocks_offload(self, weights, infer_module_out):
         """Inference with block-level CPU offload."""
-        for block_idx in range(self.double_blocks_num):
+
+        def infer_block(block_idx, block_weights):
             self.block_idx = block_idx
-            if block_idx == 0:
-                self.offload_manager.init_first_buffer(weights.double_blocks)
-            if block_idx < self.double_blocks_num - 1:
-                self.offload_manager.prefetch_weights(block_idx + 1, weights.double_blocks)
-            with torch_device_module.stream(self.offload_manager.compute_stream):
-                infer_module_out.img, infer_module_out.txt = self.infer_double_block(self.offload_manager.cuda_buffers[0], infer_module_out, block_idx=block_idx)
-            self.offload_manager.swap_blocks()
+            infer_module_out.img, infer_module_out.txt = self.infer_double_block(block_weights, infer_module_out, block_idx=block_idx)
+            return infer_module_out.img, infer_module_out.txt
+
+        self.run_blocks_with_offload(weights.double_blocks, infer_block)
 
     @torch.no_grad()
     def infer_txt_with_offload(self, weights, infer_module_out, cache_txt=True):
         """Text KV caching inference using block-level CPU offload."""
-        for block_idx in range(self.double_blocks_num):
-            if block_idx == 0:
-                self.offload_manager.init_first_buffer(weights.double_blocks)
-            if block_idx < self.double_blocks_num - 1:
-                self.offload_manager.prefetch_weights(block_idx + 1, weights.double_blocks)
-            with torch_device_module.stream(self.offload_manager.compute_stream):
-                block_weights = self.offload_manager.cuda_buffers[0]
-                txt_q, txt_k, txt_v, txt_branch_out = self._infer_txt_branch_before_attn(block_weights, infer_module_out)
-                txt_seqlen = txt_q.shape[1]
-                cu_seqlens_qkv = torch.tensor([0, txt_seqlen], dtype=torch.int32, device="cpu")
-                txt_attn = block_weights.self_attention.apply(
-                    q=txt_q,
-                    k=txt_k,
-                    v=txt_v,
-                    cu_seqlens_q=cu_seqlens_qkv,
-                    cu_seqlens_kv=cu_seqlens_qkv,
-                    max_seqlen_q=txt_seqlen,
-                    max_seqlen_kv=txt_seqlen,
-                )
-                if cache_txt and self._kv_cache is not None:
-                    self._kv_cache.set_txt_cache(block_idx, txt_k.transpose(1, 2), txt_v.transpose(1, 2))
-                infer_module_out.txt = self._infer_txt_branch_after_attn(block_weights, txt_attn, infer_module_out.txt, txt_branch_out)
-            self.offload_manager.swap_blocks()
+
+        def infer_block(block_idx, block_weights):
+            txt_q, txt_k, txt_v, txt_branch_out = self._infer_txt_branch_before_attn(block_weights, infer_module_out)
+            txt_seqlen = txt_q.shape[1]
+            cu_seqlens_qkv = torch.tensor([0, txt_seqlen], dtype=torch.int32, device="cpu")
+            txt_attn = block_weights.self_attention.apply(
+                q=txt_q,
+                k=txt_k,
+                v=txt_v,
+                cu_seqlens_q=cu_seqlens_qkv,
+                cu_seqlens_kv=cu_seqlens_qkv,
+                max_seqlen_q=txt_seqlen,
+                max_seqlen_kv=txt_seqlen,
+            )
+            if cache_txt and self._kv_cache is not None:
+                self._kv_cache.set_txt_cache(block_idx, txt_k.transpose(1, 2), txt_v.transpose(1, 2))
+            infer_module_out.txt = self._infer_txt_branch_after_attn(block_weights, txt_attn, infer_module_out.txt, txt_branch_out)
+            return infer_module_out.img, infer_module_out.txt
+
+        self.run_blocks_with_offload(weights.double_blocks, infer_block)
         return self._kv_cache
 
     @torch.no_grad()
@@ -564,106 +554,98 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
         use_prope = self.use_prope and hasattr(self.scheduler, "viewmats") and self.scheduler.viewmats is not None
         use_seq_parallel = self.seq_p_group is not None and self.config.get("seq_parallel", False)
 
-        for block_idx in range(self.double_blocks_num):
-            if block_idx == 0:
-                self.offload_manager.init_first_buffer(weights.double_blocks)
-            if block_idx < self.double_blocks_num - 1:
-                self.offload_manager.prefetch_weights(block_idx + 1, weights.double_blocks)
-            with torch_device_module.stream(self.offload_manager.compute_stream):
-                block_weights = self.offload_manager.cuda_buffers[0]
+        def infer_block(block_idx, block_weights):
+            (img_q, img_k, img_v, img_q_pre_rope, img_k_pre_rope, img_branch_out) = self._infer_img_branch_before_attn(block_weights, infer_module_out)
+            txt_k_cached, txt_v_cached = self._kv_cache.get_txt_cache(block_idx)
+            vision_k_cached, vision_v_cached = self._kv_cache.get_vision_cache(block_idx)
+            img_attn_prope = None
+            apply_fn_o = None
 
-                (img_q, img_k, img_v, img_q_pre_rope, img_k_pre_rope, img_branch_out) = self._infer_img_branch_before_attn(block_weights, infer_module_out)
-                txt_k_cached, txt_v_cached = self._kv_cache.get_txt_cache(block_idx)
-                vision_k_cached, vision_v_cached = self._kv_cache.get_vision_cache(block_idx)
-                img_attn_prope = None
-                apply_fn_o = None
-
-                if use_prope:
-                    img_q_prope, img_k_prope, img_v_prope, apply_fn_o = self._apply_prope(
-                        img_q_pre_rope, img_k_pre_rope, img_v, self.scheduler.viewmats, self.scheduler.Ks, infer_module_out.grid_sizes
-                    )
-                    query = torch.cat([img_q, img_q_prope], dim=0)
-                    key_current = torch.cat([img_k, img_k_prope], dim=0)
-                    value_current = torch.cat([img_v, img_v_prope], dim=0)
-                    if use_seq_parallel:
-                        key_current = self._all_gather_seq(key_current, self.seq_p_group)
-                        value_current = self._all_gather_seq(value_current, self.seq_p_group)
-                    key_current_t = key_current.transpose(1, 2)
-                    value_current_t = value_current.transpose(1, 2)
-                    if cache_vision:
-                        self._kv_cache.set_vision_cache(block_idx, key_current_t, value_current_t)
-                    txt_k_repeated = txt_k_cached.repeat(2, 1, 1, 1)
-                    txt_v_repeated = txt_v_cached.repeat(2, 1, 1, 1)
-                    if vision_k_cached is not None and not cache_vision:
-                        key_full = torch.cat([txt_k_repeated, vision_k_cached, key_current_t], dim=2)
-                        value_full = torch.cat([txt_v_repeated, vision_v_cached, value_current_t], dim=2)
-                    else:
-                        key_full = torch.cat([txt_k_repeated, key_current_t], dim=2)
-                        value_full = torch.cat([txt_v_repeated, value_current_t], dim=2)
-                    key_full = key_full.transpose(1, 2)
-                    value_full = value_full.transpose(1, 2)
-                    img_seqlen = query.shape[1]
-                    kv_seqlen = key_full.shape[1]
-                    cu_seqlens_q = torch.tensor([0, img_seqlen, 2 * img_seqlen], dtype=torch.int32, device="cpu")
-                    cu_seqlens_kv = torch.tensor([0, kv_seqlen, 2 * kv_seqlen], dtype=torch.int32, device="cpu")
-                    attn_out = block_weights.self_attention.apply(
-                        q=query,
-                        k=key_full,
-                        v=value_full,
-                        cu_seqlens_q=cu_seqlens_q,
-                        cu_seqlens_kv=cu_seqlens_kv,
-                        max_seqlen_q=img_seqlen,
-                        max_seqlen_kv=kv_seqlen,
-                    )
-                    total_len = attn_out.shape[0]
-                    img_attn = attn_out[: total_len // 2]
-                    img_attn_prope = attn_out[total_len // 2 :]
-                    if apply_fn_o is not None:
-                        prope_proj_weight = getattr(self.action_weights, f"img_attn_prope_proj_{block_idx}", None)
-                        if prope_proj_weight is not None:
-                            L, C = img_attn_prope.shape
-                            head_dim = C // self.heads_num
-                            img_attn_prope_4d = img_attn_prope.reshape(1, L, self.heads_num, head_dim).transpose(1, 2)
-                            img_attn_prope_transformed = apply_fn_o(img_attn_prope_4d)
-                            img_attn_prope = img_attn_prope_transformed.transpose(1, 2).reshape(L, C)
-                            img_attn_prope = prope_proj_weight.apply(img_attn_prope)
+            if use_prope:
+                img_q_prope, img_k_prope, img_v_prope, apply_fn_o = self._apply_prope(img_q_pre_rope, img_k_pre_rope, img_v, self.scheduler.viewmats, self.scheduler.Ks, infer_module_out.grid_sizes)
+                query = torch.cat([img_q, img_q_prope], dim=0)
+                key_current = torch.cat([img_k, img_k_prope], dim=0)
+                value_current = torch.cat([img_v, img_v_prope], dim=0)
+                if use_seq_parallel:
+                    key_current = self._all_gather_seq(key_current, self.seq_p_group)
+                    value_current = self._all_gather_seq(value_current, self.seq_p_group)
+                key_current_t = key_current.transpose(1, 2)
+                value_current_t = value_current.transpose(1, 2)
+                if cache_vision:
+                    self._kv_cache.set_vision_cache(block_idx, key_current_t, value_current_t)
+                txt_k_repeated = txt_k_cached.repeat(2, 1, 1, 1)
+                txt_v_repeated = txt_v_cached.repeat(2, 1, 1, 1)
+                if vision_k_cached is not None and not cache_vision:
+                    key_full = torch.cat([txt_k_repeated, vision_k_cached, key_current_t], dim=2)
+                    value_full = torch.cat([txt_v_repeated, vision_v_cached, value_current_t], dim=2)
                 else:
-                    if use_seq_parallel:
-                        img_k = self._all_gather_seq(img_k, self.seq_p_group)
-                        img_v = self._all_gather_seq(img_v, self.seq_p_group)
-                    img_k_t = img_k.transpose(1, 2)
-                    img_v_t = img_v.transpose(1, 2)
-                    if cache_vision:
-                        self._kv_cache.set_vision_cache(block_idx, img_k_t, img_v_t)
-                    if vision_k_cached is not None and not cache_vision:
-                        key = torch.cat([txt_k_cached, vision_k_cached, img_k_t], dim=2)
-                        value = torch.cat([txt_v_cached, vision_v_cached, img_v_t], dim=2)
-                    else:
-                        key = torch.cat([txt_k_cached, img_k_t], dim=2)
-                        value = torch.cat([txt_v_cached, img_v_t], dim=2)
-                    key = key.transpose(1, 2)
-                    value = value.transpose(1, 2)
-                    img_seqlen = img_q.shape[1]
-                    kv_seqlen = key.shape[1]
-                    cu_seqlens_q = torch.tensor([0, img_seqlen], dtype=torch.int32, device="cpu")
-                    cu_seqlens_kv = torch.tensor([0, kv_seqlen], dtype=torch.int32, device="cpu")
-                    img_attn = block_weights.self_attention.apply(
-                        q=img_q,
-                        k=key,
-                        v=value,
-                        cu_seqlens_q=cu_seqlens_q,
-                        cu_seqlens_kv=cu_seqlens_kv,
-                        max_seqlen_q=img_seqlen,
-                        max_seqlen_kv=kv_seqlen,
-                    )
+                    key_full = torch.cat([txt_k_repeated, key_current_t], dim=2)
+                    value_full = torch.cat([txt_v_repeated, value_current_t], dim=2)
+                key_full = key_full.transpose(1, 2)
+                value_full = value_full.transpose(1, 2)
+                img_seqlen = query.shape[1]
+                kv_seqlen = key_full.shape[1]
+                cu_seqlens_q = torch.tensor([0, img_seqlen, 2 * img_seqlen], dtype=torch.int32, device="cpu")
+                cu_seqlens_kv = torch.tensor([0, kv_seqlen, 2 * kv_seqlen], dtype=torch.int32, device="cpu")
+                attn_out = block_weights.self_attention.apply(
+                    q=query,
+                    k=key_full,
+                    v=value_full,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_kv=cu_seqlens_kv,
+                    max_seqlen_q=img_seqlen,
+                    max_seqlen_kv=kv_seqlen,
+                )
+                total_len = attn_out.shape[0]
+                img_attn = attn_out[: total_len // 2]
+                img_attn_prope = attn_out[total_len // 2 :]
+                if apply_fn_o is not None:
+                    prope_proj_weight = getattr(self.action_weights, f"img_attn_prope_proj_{block_idx}", None)
+                    if prope_proj_weight is not None:
+                        L, C = img_attn_prope.shape
+                        head_dim = C // self.heads_num
+                        img_attn_prope_4d = img_attn_prope.reshape(1, L, self.heads_num, head_dim).transpose(1, 2)
+                        img_attn_prope_transformed = apply_fn_o(img_attn_prope_4d)
+                        img_attn_prope = img_attn_prope_transformed.transpose(1, 2).reshape(L, C)
+                        img_attn_prope = prope_proj_weight.apply(img_attn_prope)
+            else:
+                if use_seq_parallel:
+                    img_k = self._all_gather_seq(img_k, self.seq_p_group)
+                    img_v = self._all_gather_seq(img_v, self.seq_p_group)
+                img_k_t = img_k.transpose(1, 2)
+                img_v_t = img_v.transpose(1, 2)
+                if cache_vision:
+                    self._kv_cache.set_vision_cache(block_idx, img_k_t, img_v_t)
+                if vision_k_cached is not None and not cache_vision:
+                    key = torch.cat([txt_k_cached, vision_k_cached, img_k_t], dim=2)
+                    value = torch.cat([txt_v_cached, vision_v_cached, img_v_t], dim=2)
+                else:
+                    key = torch.cat([txt_k_cached, img_k_t], dim=2)
+                    value = torch.cat([txt_v_cached, img_v_t], dim=2)
+                key = key.transpose(1, 2)
+                value = value.transpose(1, 2)
+                img_seqlen = img_q.shape[1]
+                kv_seqlen = key.shape[1]
+                cu_seqlens_q = torch.tensor([0, img_seqlen], dtype=torch.int32, device="cpu")
+                cu_seqlens_kv = torch.tensor([0, kv_seqlen], dtype=torch.int32, device="cpu")
+                img_attn = block_weights.self_attention.apply(
+                    q=img_q,
+                    k=key,
+                    v=value,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_kv=cu_seqlens_kv,
+                    max_seqlen_q=img_seqlen,
+                    max_seqlen_kv=kv_seqlen,
+                )
 
-                infer_module_out.img = self._infer_img_branch_after_attn(block_weights, img_attn, infer_module_out.img, img_branch_out, img_attn_prope)
-            self.offload_manager.swap_blocks()
+            infer_module_out.img = self._infer_img_branch_after_attn(block_weights, img_attn, infer_module_out.img, img_branch_out, img_attn_prope)
+            return infer_module_out.img, infer_module_out.txt
+
+        self.run_blocks_with_offload(weights.double_blocks, infer_block)
 
         if cache_vision:
             return self._kv_cache
-        else:
-            return self.infer_final_layer(weights, infer_module_out)
+        return self.infer_final_layer(weights, infer_module_out)
 
     def set_action_weights(self, action_weights):
         """Set action weights for ProPE projection access."""
@@ -692,7 +674,7 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
         Returns:
             KV cache reference
         """
-        if hasattr(self, "offload_manager"):
+        if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "block":
             return self.infer_txt_with_offload(weights, infer_module_out, cache_txt=cache_txt)
 
         for block_idx in range(self.double_blocks_num):
@@ -745,7 +727,7 @@ class WorldPlayARTransformerInfer(HunyuanVideo15TransformerInfer):
             If cache_vision=True: KV cache reference
             If cache_vision=False: Final layer output (noise prediction)
         """
-        if hasattr(self, "offload_manager"):
+        if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) == "block":
             return self.infer_vision_with_offload(weights, infer_module_out, cache_vision=cache_vision)
 
         # Check if ProPE is enabled

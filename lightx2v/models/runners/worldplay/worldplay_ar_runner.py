@@ -199,7 +199,8 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     def run_main(self):
         """Override to use chunk-based AR generation instead of run_segment()."""
         self.init_run()
-        self.run_denoising_loop()
+        with self.transformer_offload_session():
+            self.run_denoising_loop()
         latents = self.scheduler.latents
         if self.config.get("use_stream_vae", False):
             frames = []

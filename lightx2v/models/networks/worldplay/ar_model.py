@@ -65,6 +65,7 @@ class WorldPlayARModel(HunyuanVideo15Model):
         self.original_weight_dict = weight_dict
         self.pre_weight = WorldPlayPreWeights(self.config)
         self.transformer_weights = WorldPlayTransformerWeights(self.config)
+        self.transformer_weights.validate_offload_block_groups(self.config)
         self.post_weight = WorldPlayPostWeights(self.config)
         self._apply_weights()
 
@@ -135,19 +136,11 @@ class WorldPlayARModel(HunyuanVideo15Model):
         if not hasattr(self.transformer_infer, "_kv_cache") or self.transformer_infer._kv_cache is None:
             self.init_kv_cache()
 
-        if self.cpu_offload and self.offload_granularity != "model":
-            self.pre_weight.to_cuda()
-            self.transformer_weights.non_block_weights_to_cuda()
-
         # Run text-only pre-processing
         infer_module_out = self.pre_infer.infer_txt_only(self.pre_weight, inputs)
 
         # Cache text KV
         result = self.transformer_infer.infer_txt(self.transformer_weights, infer_module_out, cache_txt=cache_txt)
-
-        if self.cpu_offload and self.offload_granularity != "model":
-            self.pre_weight.to_cpu()
-            self.transformer_weights.non_block_weights_to_cpu()
 
         return result
 
@@ -175,11 +168,6 @@ class WorldPlayARModel(HunyuanVideo15Model):
             if "action" in pose_output:
                 self.scheduler.action = pose_output["action"]
 
-        # Run pre-inference (full, including image)
-        if self.cpu_offload and self.offload_granularity != "model":
-            self.pre_weight.to_cuda()
-            self.transformer_weights.non_block_weights_to_cuda()
-
         infer_module_out = self.pre_infer.infer(self.pre_weight, inputs)
 
         if self.config["seq_parallel"]:
@@ -192,10 +180,6 @@ class WorldPlayARModel(HunyuanVideo15Model):
 
         # Vision inference with KV cache
         output = self.transformer_infer.infer_vision(self.transformer_weights, infer_module_out, cache_vision=cache_vision)
-
-        if self.cpu_offload and self.offload_granularity != "model":
-            self.pre_weight.to_cpu()
-            self.transformer_weights.non_block_weights_to_cpu()
 
         if self.config["seq_parallel"]:
             # Restore full chunk cos_sin so next denoising step starts from unsplit data
