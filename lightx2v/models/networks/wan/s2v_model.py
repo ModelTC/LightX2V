@@ -26,6 +26,8 @@ class WanS2VModel(WanModel):
         )
 
     def _init_infer_class(self):
+        if self.cpu_offload and self.offload_granularity == "block":
+            raise NotImplementedError("Wan S2V does not support block offload")
         super()._init_infer_class()
         self.pre_infer_class = WanS2VPreInfer
         self.post_infer_class = WanS2VPostInfer
