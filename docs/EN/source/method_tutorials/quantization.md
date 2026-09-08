@@ -143,13 +143,10 @@ Initialization logs report the effective scope or fallback reason. All other pip
 independent of this quantization mode.
 
 The kernel automatically tunes its CUTLASS tile and swizzle for each exact GEMM shape. The first use
-of an unseen shape benchmarks the built-in candidates in C++; later calls perform only a C++ cache
-lookup. After warmup or a request, the runner merges new winners into a persistent, device-specific
-cache under `$XDG_CACHE_HOME/lightx2v/autotune/fp8_f16_accum` or
-`~/.cache/lightx2v/autotune/fp8_f16_accum`. A later process loads compatible entries automatically.
-Enabling `warmup` moves the tuning cost out of the first request when warmup covers the production
-shapes. The optional `fp8_f16_accum_autotune_cache` setting overrides the cache file location. Cache
-entries are rejected when the device, CUDA, PyTorch, or kernel ABI differs.
+of an unseen shape benchmarks the built-in candidates in C++ and keeps the winner in a process-local
+C++ cache; later calls in the same process perform only a cache lookup. Enabling `warmup` moves the
+tuning cost out of the first request when warmup covers the production shapes. A restarted process
+tunes its shapes again and does not write to the user's cache directory.
 
 ### T5 Model Quantization
 

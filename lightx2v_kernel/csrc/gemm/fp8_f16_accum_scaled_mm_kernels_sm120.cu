@@ -7,13 +7,11 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
-#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -183,25 +181,20 @@ using NarrowGemmFp16WithBias =
 using WideGemmFp16WithBias =
     GemmDefinition<Shape<_128, _256, _64>, cutlass::half_t, true>;
 
-// Bump the ABI whenever a config mapping or candidate implementation changes.
-constexpr int64_t kAutotuneCacheAbi = 1;
-constexpr int64_t kFallbackConfigId = 0;
-
 struct KernelConfig {
   bool wide_tile;
   int swizzle;
-  char const* name;
 };
 
 constexpr std::array<KernelConfig, 8> kKernelConfigs = {{
-    {false, 1, "tile_128x128x64_swizzle_1"},
-    {false, 2, "tile_128x128x64_swizzle_2"},
-    {false, 4, "tile_128x128x64_swizzle_4"},
-    {false, 8, "tile_128x128x64_swizzle_8"},
-    {true, 1, "tile_128x256x64_swizzle_1"},
-    {true, 2, "tile_128x256x64_swizzle_2"},
-    {true, 4, "tile_128x256x64_swizzle_4"},
-    {true, 8, "tile_128x256x64_swizzle_8"},
+    {false, 1},
+    {false, 2},
+    {false, 4},
+    {false, 8},
+    {true, 1},
+    {true, 2},
+    {true, 4},
+    {true, 8},
 }};
 
 KernelConfig const& kernel_config(int64_t config_id) {
@@ -257,11 +250,6 @@ std::shared_mutex& autotune_cache_mutex() {
 std::mutex& autotune_measurement_mutex() {
   static std::mutex mutex;
   return mutex;
-}
-
-std::atomic<bool>& autotune_enabled() {
-  static std::atomic<bool> enabled{false};
-  return enabled;
 }
 
 std::optional<int64_t> cached_config_id(AutotuneKey const& key) {
@@ -518,7 +506,7 @@ int64_t tune_config(
     }
   }
 
-  int64_t best_config_id = kFallbackConfigId;
+  int64_t best_config_id = 0;
   float best_time = std::numeric_limits<float>::max();
   for (int config_id = 0; config_id < kConfigCount; ++config_id) {
     auto samples = timings[config_id];
@@ -571,7 +559,7 @@ torch::Tensor run(
     };
     if (auto cached = cached_config_id(key)) {
       config_id = *cached;
-    } else if (autotune_enabled().load(std::memory_order_relaxed)) {
+    } else {
       config_id = tune_config<
           NarrowDefinition,
           NarrowDefinitionWithBias,
@@ -584,8 +572,6 @@ torch::Tensor run(
           activation_scale,
           weight_scale,
           bias);
-    } else {
-      config_id = kFallbackConfigId;
     }
   }
 
@@ -684,118 +670,4 @@ torch::Tensor cutlass_scaled_fp8_mm_f16_accum_with_config_sm120(
       out_dtype,
       bias,
       config_id);
-}
-
-int64_t fp8_f16_accum_autotune_cache_abi_sm120() {
-  return kAutotuneCacheAbi;
-}
-
-std::vector<std::string> fp8_f16_accum_autotune_configs_sm120() {
-  std::vector<std::string> names;
-  names.reserve(kKernelConfigs.size());
-  for (KernelConfig const& config : kKernelConfigs) {
-    names.emplace_back(config.name);
-  }
-  return names;
-}
-
-void set_fp8_f16_accum_autotune_config_sm120(
-    int64_t device_index,
-    int64_t m,
-    int64_t n,
-    int64_t k,
-    torch::ScalarType out_dtype,
-    bool has_bias,
-    int64_t config_id) {
-  TORCH_CHECK(device_index >= 0, "device_index must be non-negative");
-  TORCH_CHECK(
-      m > 0 && m <= std::numeric_limits<int32_t>::max() &&
-          n > 0 && n <= std::numeric_limits<int32_t>::max() &&
-          k > 0 && k <= std::numeric_limits<int32_t>::max(),
-      "M, N and K must be positive int32 values");
-  TORCH_CHECK(
-      out_dtype == torch::kBFloat16 || out_dtype == torch::kFloat16,
-      "output dtype must be bfloat16 or float16");
-  kernel_config(config_id);
-
-  AutotuneKey key{
-      static_cast<int>(device_index),
-      static_cast<int32_t>(m),
-      static_cast<int32_t>(n),
-      static_cast<int32_t>(k),
-      out_dtype,
-      has_bias,
-  };
-  cache_config(key, config_id);
-}
-
-void set_fp8_f16_accum_autotune_enabled_sm120(bool enabled) {
-  autotune_enabled().store(enabled, std::memory_order_relaxed);
-}
-
-torch::Tensor get_fp8_f16_accum_autotune_cache_sm120(
-    int64_t device_index) {
-  TORCH_CHECK(device_index >= 0, "device_index must be non-negative");
-  std::vector<std::pair<AutotuneKey, int64_t>> entries;
-  {
-    std::shared_lock lock(autotune_cache_mutex());
-    entries.reserve(autotune_cache().size());
-    for (auto const& entry : autotune_cache()) {
-      if (entry.first.device_index == device_index) {
-        entries.push_back(entry);
-      }
-    }
-  }
-  std::sort(
-      entries.begin(),
-      entries.end(),
-      [](auto const& left, auto const& right) {
-        auto const& a = left.first;
-        auto const& b = right.first;
-        return std::tie(
-                   a.device_index,
-                   a.m,
-                   a.n,
-                   a.k,
-                   a.output_dtype,
-                   a.has_bias) <
-            std::tie(
-                   b.device_index,
-                   b.m,
-                   b.n,
-                   b.k,
-                   b.output_dtype,
-                   b.has_bias);
-      });
-
-  auto result = torch::empty(
-      {static_cast<int64_t>(entries.size()), 6},
-      torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
-  auto rows = result.accessor<int64_t, 2>();
-  for (int64_t index = 0; index < static_cast<int64_t>(entries.size()); ++index) {
-    auto const& [key, config_id] = entries[index];
-    rows[index][0] = key.m;
-    rows[index][1] = key.n;
-    rows[index][2] = key.k;
-    rows[index][3] = key.output_dtype == torch::kBFloat16 ? 0 : 1;
-    rows[index][4] = key.has_bias;
-    rows[index][5] = config_id;
-  }
-  return result;
-}
-
-void clear_fp8_f16_accum_autotune_cache_sm120(int64_t device_index) {
-  std::unique_lock lock(autotune_cache_mutex());
-  if (device_index < 0) {
-    autotune_cache().clear();
-    return;
-  }
-
-  for (auto entry = autotune_cache().begin(); entry != autotune_cache().end();) {
-    if (entry->first.device_index == device_index) {
-      entry = autotune_cache().erase(entry);
-    } else {
-      ++entry;
-    }
-  }
 }

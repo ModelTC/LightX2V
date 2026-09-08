@@ -86,7 +86,6 @@ class DefaultRunner(BaseRunner):
     def __init__(self, config):
         super().__init__(config)
         self.progress_callback = None
-        self._fp8_f16_accum_autotuner = None
         self.reuse_cache_path = self.config.get("reuse_cache_path")
         if self.enable_reuse and not self.reuse_cache_path:
             raise ValueError("enable_reuse requires reuse_cache_path")
@@ -224,9 +223,6 @@ class DefaultRunner(BaseRunner):
         if dist.is_initialized() and dist.get_world_size() > 1:
             dist.barrier()
 
-        if self._fp8_f16_accum_autotuner:
-            self._fp8_f16_accum_autotuner.save()
-
     def run_warmup(self):
         raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
 
@@ -257,16 +253,6 @@ class DefaultRunner(BaseRunner):
         elif self.config["task"] == "sr":
             self.run_input_encoder = self._run_input_encoder_local_sr
 
-        uses_fp8_f16_accum = any(self.config.get(key) == "fp8-f16-accum" for key in ("dit_quant_scheme", "video_vae_quant_scheme"))
-        if uses_fp8_f16_accum:
-            try:
-                from lightx2v_kernel.fp8_f16_autotune import Fp8F16AccumAutotuner
-
-                self._fp8_f16_accum_autotuner = Fp8F16AccumAutotuner(self.config.get("fp8_f16_accum_autotune_cache"))
-                entry_count = self._fp8_f16_accum_autotuner.start()
-                logger.info(f"FP8-F16 GEMM autotune loaded {entry_count} entries from {self._fp8_f16_accum_autotuner.cache_path}")
-            except (ImportError, ValueError) as error:
-                logger.warning(f"FP8-F16 GEMM autotune is unavailable: {error}")
         self.config.lock()  # lock config to avoid modification
 
     def set_init_device(self):
@@ -664,8 +650,6 @@ class DefaultRunner(BaseRunner):
 
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
-        if self._fp8_f16_accum_autotuner:
-            self._fp8_f16_accum_autotuner.save()
         return gen_video_final
 
     def switch_lora(self, lora_path: str, strength: float = 1.0):

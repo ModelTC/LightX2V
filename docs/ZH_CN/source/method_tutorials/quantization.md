@@ -140,12 +140,8 @@ DiT tensor parallel 当前也回退到 `fp8-sgl`。初始化日志会打印实�
 其他 pipeline 配置与该量化模式相互独立。
 
 该内核会按精确 GEMM shape 自动调优 CUTLASS tile 和 swizzle。首次遇到新 shape 时在 C++ 内遍历
-内置候选；后续调用只执行 C++ cache 查询。warmup 或请求结束后，runner 会把新增结果合并进与设备
-绑定的持久化 cache。默认路径为 `$XDG_CACHE_HOME/lightx2v/autotune/fp8_f16_accum`，未设置
-`XDG_CACHE_HOME` 时则使用 `~/.cache/lightx2v/autotune/fp8_f16_accum`。后续进程会自动加载兼容
-结果；若 warmup 覆盖正式请求的 shape，首次调优开销也会在请求前完成。高级用户可通过
-`fp8_f16_accum_autotune_cache` 指定其他 cache 文件。设备、CUDA、PyTorch 或 kernel ABI 不一致时，
-已有条目不会被复用。
+内置候选，winner 保存在当前进程的 C++ cache 中；同一进程的后续调用只执行 cache 查询。若 warmup
+覆盖正式请求的 shape，首次调优开销会在请求前完成。进程重启后会重新调优一次，不写用户目录。
 
 ### T5 模型量化
 
