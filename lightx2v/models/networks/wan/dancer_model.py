@@ -1,3 +1,4 @@
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.wan.infer.dancer import (
     WanDancerPostInfer,
@@ -65,7 +66,7 @@ class WanDancerModel(WanModel):
     def _init_infer_class(self):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("Wan-Dancer parity mode requires feature_caching=NoCaching.")
-        if self.config.get("cpu_offload", False) and self.config.get("offload_granularity", "block") not in {"block", "model"}:
+        if self.config.get("cpu_offload", False) and get_offload_granularity(self.config) not in {"block", "model"}:
             raise NotImplementedError("Wan-Dancer supports block/model offload.")
         self.pre_infer_class = WanDancerPreInfer
         self.post_infer_class = WanDancerPostInfer
