@@ -17,15 +17,16 @@ data:
     text_embedding_cache_dir: /mnt/miaohua/charles/codes/LightX2V_fastwam/lightx2v_train/runs/fastwam_libero_action_1step_dmd_lora_only/text_embeds_cache
     observation_only_video: true
     val_set_proportion: 0.01
-    batch_size: 48
+    batch_size: 16
     num_workers: 8
   val:
     <<: *libero_data
     batch_size: 4
 
 training:
-  method: fastwam_action_consistency
-  output_dir: runs/fastwam_libero_action_1step_consistency
+  method: fastwam_joint_consistency
+  train_video: true
+  output_dir: runs/fastwam_libero_action_1step_consistency_joint_ts10
   max_train_iters: 30000
   gradient_accumulation_iters: 1
   gradient_checkpointing: false
@@ -69,10 +70,10 @@ logging:
   wandb:
     enable: true
     project: fastwam-action-consistency
-    name: libero-action-1step-consistency
-    group: libero-action-1step-consistency
+    name: libero-joint-1step-consistency-ts10
+    group: libero-joint-1step-consistency
     job_type: train
-    tags: [fastwam, libero, action-consistency, 1step, lora-only, 30k]
+    tags: [fastwam, libero, action-consistency, joint, 1step, lora-only, 30k]
 
 resume:
   auto_resume: false

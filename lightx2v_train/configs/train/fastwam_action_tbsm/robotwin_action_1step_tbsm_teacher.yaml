@@ -57,8 +57,8 @@ data:
     is_training_set: false
 
 training:
-  method: fastwam_action_consistency
-  output_dir: runs/fastwam_robotwin_action_1step_consistency_ts10
+  method: fastwam_action_tbsm
+  output_dir: runs/fastwam_robotwin_action_1step_tbsm_teacher
   max_train_iters: 30000
   gradient_accumulation_iters: 1
   gradient_checkpointing: false
@@ -82,15 +82,12 @@ training:
       adam_beta1: 0.9
       adam_beta2: 0.95
       adam_epsilon: 1.0e-8
-  action_consistency:
-    flow_target: data  # data | teacher
-    target_steps: 10
-    # Used only by the periodic diagnostic; training uses one teacher Euler bridge.
-    teacher_reference_steps: 10
+  action_tbsm:
+    # Instant scattering (lambda=1, rho=0); no consistency or flow loss.
+    positive_source: teacher
+    # Teacher-mode labels and periodic reference evaluation; data training skips teacher.
+    teacher_steps: 20
     ema_decay: 0.995
-    consistency_loss_weight: 1.0
-    flow_loss_weight: 0.2
-    huber_c: 0.001
 
 inference:
   infer_every_iters: 500
@@ -101,11 +98,11 @@ logging:
   train_log_every_iters: 10
   wandb:
     enable: true
-    project: fastwam-action-consistency
-    name: robotwin-action-1step-consistency-ts10
-    group: robotwin-action-1step-consistency
+    project: fastwam-action-tbsm
+    name: fastwam_robotwin_action_1step_tbsm_teacher
+    group: robotwin-action-1step-tbsm
     job_type: train
-    tags: [fastwam, robotwin, action-consistency, 1step, lora-only, 30k]
+    tags: [fastwam, robotwin, action-tbsm, teacher, 1step, lora-only, 30k]
 
 resume:
   auto_resume: false

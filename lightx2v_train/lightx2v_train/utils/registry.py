@@ -94,6 +94,8 @@ _TRAINER_MODULES = {
     "dopsd": "lightx2v_train.trainers.dopsd",
     "fastwam": "lightx2v_train.trainers.fastwam",
     "fastwam_action_consistency": "lightx2v_train.trainers.fastwam_action_consistency.trainer",
+    "fastwam_action_tbsm": "lightx2v_train.trainers.fastwam_action_tbsm.trainer",
+    "fastwam_joint_consistency": "lightx2v_train.trainers.fastwam_joint_consistency.trainer",
     "fastwam_action_dmd": "lightx2v_train.trainers.fastwam_action_dmd.trainer",
     "flow": "lightx2v_train.trainers.flow",
     "lingbot_video_dmd": "lightx2v_train.trainers.dmd.video_trainer",

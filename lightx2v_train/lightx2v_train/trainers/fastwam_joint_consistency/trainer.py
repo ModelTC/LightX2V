@@ -26,9 +26,9 @@ from lightx2v_train.runtime.distributed import (
 from lightx2v_train.runtime.monitor import build_monitor
 from lightx2v_train.utils.registry import TRAINER_REGISTER
 
-from .checkpoint import ActionConsistencyCheckpointManager
-from .config import FastWAMActionConsistencyConfig
-from .roles import ActionConsistencyRoles
+from .checkpoint import JointConsistencyCheckpointManager
+from .config import FastWAMJointConsistencyConfig
+from .roles import ConsistencyRoles, JointConsistencyDenoiser
 
 
 def shifted_consistency_pair(base_sigma, shift, target_steps):
@@ -80,17 +80,15 @@ def _slice_batch(value, size):
     return value
 
 
-@TRAINER_REGISTER("fastwam_action_consistency")
-class FastWAMActionConsistencyTrainer:
-    config_class = FastWAMActionConsistencyConfig
-
+@TRAINER_REGISTER("fastwam_joint_consistency")
+class FastWAMJointConsistencyTrainer:
     def __init__(self, config):
         self.config = config
         self.runtime_config = deepcopy(config)
         self.training_config = config["training"]
         self.inference_config = config.get("inference", {})
         self.logging_config = config.get("logging", {})
-        self.parsed = self.config_class.from_mapping(config)
+        self.parsed = FastWAMJointConsistencyConfig.from_mapping(config)
         self.output_dir = self.training_config["output_dir"]
         self.max_train_iters = int(self.training_config["max_train_iters"])
         self.gradient_accumulation_iters = max(1, int(self.training_config.get("gradient_accumulation_iters", 1)))
@@ -102,7 +100,7 @@ class FastWAMActionConsistencyTrainer:
         self.eval_every_iters = int(self.inference_config.get("infer_every_iters", 0) or 0)
         self.eval_num_samples = max(1, int(self.inference_config.get("num_samples", 1)))
         self.eval_seed = int(self.inference_config.get("seed", 42))
-        self.checkpoints = ActionConsistencyCheckpointManager(self)
+        self.checkpoints = JointConsistencyCheckpointManager(self)
         if is_main_process():
             os.makedirs(self.output_dir, exist_ok=True)
         self.monitor = build_monitor(config)
@@ -118,20 +116,31 @@ class FastWAMActionConsistencyTrainer:
         sequence_parallel = self.config.get("distributed", {}).get("sequence_parallel", {})
         sequence_parallel_enabled = sequence_parallel.get("enabled", False) if isinstance(sequence_parallel, dict) else bool(sequence_parallel)
         if sequence_parallel_enabled or is_sequence_parallel_enabled():
-            raise ValueError(f"{self.training_config['method']} does not support sequence parallelism.")
+            raise ValueError("fastwam_joint_consistency does not support sequence parallelism.")
 
         module = self.model.unwrap_module()
         module.eval().requires_grad_(False)
-        self.roles = ActionConsistencyRoles.build(module.action_expert, self.parsed.student)
-        self.student_denoiser = CachedActionDenoiser(self.roles.student, module.mot)
-        self.target_denoiser = CachedActionDenoiser(self.roles.target, module.mot).eval()
-        self.teacher_denoiser = CachedActionDenoiser(self.roles.teacher, module.mot).eval()
+        self.roles = ConsistencyRoles.build(module.action_expert, self.parsed.student)
+        self.video_roles = ConsistencyRoles.build(module.video_expert, self.parsed.student) if self.parsed.train_video else None
+        for name in ("student", "target", "teacher"):
+            expert = getattr(self.roles, name)
+            denoiser = JointConsistencyDenoiser(expert, getattr(self.video_roles, name), module) if self.video_roles is not None else CachedActionDenoiser(expert, module.mot)
+            if name != "student":
+                denoiser.eval()
+            setattr(self, f"{name}_denoiser", denoiser)
         if self.training_config.get("gradient_checkpointing", False):
             self.student_denoiser.action_module().use_gradient_checkpointing = True
+            if self.video_roles is not None:
+                video = self.video_roles.student
+                video = video.get_base_model() if hasattr(video, "get_base_model") else video
+                video.use_gradient_checkpointing = True
+                self.student_denoiser.mot.mot_checkpoint_mixed_attn = True
 
         self.student_params = self.roles.trainable_parameters
+        if self.video_roles is not None:
+            self.student_params += self.video_roles.trainable_parameters
         if not self.student_params:
-            raise RuntimeError("FastWAM action training has no trainable student parameters.")
+            raise RuntimeError("FastWAM joint consistency has no trainable student parameters.")
         optimizer_config = self.parsed.student.optimizer
         self.optimizer = torch.optim.AdamW(
             self.student_params,
@@ -151,22 +160,25 @@ class FastWAMActionConsistencyTrainer:
                 self.student_denoiser,
                 device_ids=[torch.cuda.current_device()] if torch.cuda.is_available() else None,
                 process_group=get_data_parallel_group(),
-                find_unused_parameters=False,
+                find_unused_parameters=self.parsed.train_video,
             )
         # DDP broadcasts the online student; initialize every rank's EMA from it.
         self.roles.copy_student_to_target()
+        if self.video_roles is not None:
+            self.video_roles.copy_student_to_target()
 
         resume_path, current_iter = self.checkpoints.resolve_resume()
         if resume_path is not None:
             current_iter = self.checkpoints.load(resume_path)
-            logger.info("[resume] restored {} from {} at iteration {}", self.training_config["method"], resume_path, current_iter)
+            logger.info("[resume] restored FastWAM joint consistency from {} at iteration {}", resume_path, current_iter)
         return current_iter
 
     def _prepare_batch(self, sample):
         module = self.model.unwrap_module()
         with torch.no_grad(), self.model.autocast_context():
             inputs = module.build_action_distill_inputs(sample)
-            condition = build_action_distill_condition(module, inputs)
+            # Joint denoisers build their own cache inside each role's forward.
+            condition = inputs if self.parsed.train_video else build_action_distill_condition(module, inputs)
         valid_mask = None if inputs["action_is_pad"] is None else ~inputs["action_is_pad"]
         return inputs, condition, valid_mask
 
@@ -175,25 +187,6 @@ class FastWAMActionConsistencyTrainer:
         base_sigma = torch.rand(action.shape[0], device=action.device, dtype=torch.float32)
         sigma_start, sigma_end = shifted_consistency_pair(base_sigma, scheduler.shift, self.parsed.target_steps)
         return sigma_start.to(action.dtype), sigma_end.to(action.dtype)
-
-    @torch.no_grad()
-    def _teacher_flow_target(self, noisy_action, sigma_start, condition, teacher_velocity):
-        """Average teacher velocities over uniform Euler steps from sigma_start to zero."""
-        steps = self.parsed.teacher_reference_steps
-        num_timesteps = self.model.unwrap_module().train_action_scheduler.num_train_timesteps
-        action = noisy_action.float()
-        sigma = sigma_start.float()
-        delta = _expand_sigma(sigma / steps, action)
-        velocity = teacher_velocity.float()
-        velocity_sum = torch.zeros_like(action)
-        for index in range(steps):
-            if index:
-                timestep = (sigma * (1.0 - index / steps) * num_timesteps).to(sigma_start.dtype)
-                velocity = self.teacher_denoiser(action.to(noisy_action.dtype), timestep, condition).float()
-            velocity_sum += velocity
-            action = action - delta * velocity
-        # Equals (noisy_action - clean_action) / sigma, without cancellation or division by zero.
-        return velocity_sum / steps
 
     def _loss(self, inputs, condition, valid_mask):
         action = inputs["action"]
@@ -205,13 +198,10 @@ class FastWAMActionConsistencyTrainer:
         num_timesteps = float(self.model.unwrap_module().train_action_scheduler.num_train_timesteps)
         timestep_start = sigma_start * num_timesteps
         timestep_end = sigma_end * num_timesteps
-        flow_target = noise - action
 
         with torch.no_grad():
             teacher_velocity = self.teacher_denoiser(noisy_action, timestep_start, condition)
             endpoint_action = noisy_action + (sigma_end_expanded - sigma_start_expanded) * teacher_velocity
-            if self.parsed.flow_target == "teacher":
-                flow_target = self._teacher_flow_target(noisy_action, sigma_start, condition, teacher_velocity)
 
         student_velocity = self.student_denoiser(noisy_action, timestep_start, condition)
         student_x0 = noisy_action - sigma_start_expanded * student_velocity
@@ -220,7 +210,7 @@ class FastWAMActionConsistencyTrainer:
             target_x0 = endpoint_action - sigma_end_expanded * target_velocity
 
         consistency_loss = _masked_pseudo_huber(student_x0, target_x0, valid_mask, self.parsed.huber_c)
-        flow_loss = _masked_mse(student_velocity, flow_target, valid_mask)
+        flow_loss = _masked_mse(student_velocity, noise - action, valid_mask)
         loss = self.parsed.consistency_loss_weight * consistency_loss + self.parsed.flow_loss_weight * flow_loss
         return loss, {"consistency": consistency_loss.detach(), "flow": flow_loss.detach()}
 
@@ -250,8 +240,10 @@ class FastWAMActionConsistencyTrainer:
             noise = torch.randn(inputs["action"].shape, generator=generator, device=inputs["action"].device, dtype=inputs["action"].dtype)
             module = self.model.unwrap_module()
             with self.model.autocast_context():
-                ema_action = sample_action_one_step(self.target_denoiser, noise, condition, module.train_action_scheduler.num_train_timesteps)
-                teacher_action = sample_action_teacher(self.teacher_denoiser, noise, condition, module.infer_action_scheduler, self.parsed.teacher_reference_steps)
+                target_condition = self.target_denoiser.build_condition(inputs) if self.parsed.train_video else condition
+                teacher_condition = self.teacher_denoiser.build_condition(inputs) if self.parsed.train_video else condition
+                ema_action = sample_action_one_step(self.target_denoiser, noise, target_condition, module.train_action_scheduler.num_train_timesteps)
+                teacher_action = sample_action_teacher(self.teacher_denoiser, noise, teacher_condition, module.infer_action_scheduler, self.parsed.teacher_reference_steps)
             totals["ema_teacher_l1"] += float(_masked_l1_per_sample(ema_action, teacher_action, valid_mask).sum().item())
             totals["ema_gt_l1"] += float(_masked_l1_per_sample(ema_action, inputs["action"], valid_mask).sum().item())
             count += batch_size
@@ -262,12 +254,6 @@ class FastWAMActionConsistencyTrainer:
             logger.info("[eval] iter={} ema_teacher_l1={:.6f} ema_gt_l1={:.6f}", current_iter, metrics["eval/ema_teacher_l1"], metrics["eval/ema_gt_l1"])
             self.monitor.log_metrics(metrics, step=current_iter)
 
-    def _training_details(self):
-        return (
-            f"target_steps={self.parsed.target_steps} ema_decay={self.parsed.ema_decay} "
-            f"flow_target={self.parsed.flow_target} teacher_reference_steps={self.parsed.teacher_reference_steps}"
-        )
-
     def train(self):
         current_iter = self.setup()
         start_iter = current_iter
@@ -277,35 +263,39 @@ class FastWAMActionConsistencyTrainer:
         samples = self._iter_train_samples()
         started_at = time.perf_counter()
         logger.info(
-            "[train] start method={} iter={}/{} world_size={} global_batch={} {}",
-            self.training_config["method"],
+            "[train] start method=fastwam_joint_consistency iter={}/{} world_size={} global_batch={} target_steps={} ema_decay={} train_video={}",
             current_iter,
             self.max_train_iters,
             get_world_size(),
             int(self.config["data"]["train"]["batch_size"]) * get_world_size() * self.gradient_accumulation_iters,
-            self._training_details(),
+            self.parsed.target_steps,
+            self.parsed.ema_decay,
+            self.parsed.train_video,
         )
         while current_iter < self.max_train_iters:
             self.optimizer.zero_grad(set_to_none=True)
-            accumulated = {}
+            accumulated = {"consistency": 0.0, "flow": 0.0}
             for _ in range(self.gradient_accumulation_iters):
                 inputs, condition, valid_mask = self._prepare_batch(next(samples))
                 with self.model.autocast_context():
                     loss, metrics = self._loss(inputs, condition, valid_mask)
                 (loss / self.gradient_accumulation_iters).backward()
-                for name, value in metrics.items():
-                    accumulated[name] = accumulated.get(name, 0.0) + float(value.item()) / self.gradient_accumulation_iters
+                for name in accumulated:
+                    accumulated[name] += float(metrics[name].item()) / self.gradient_accumulation_iters
 
             grad_norm = torch.nn.utils.clip_grad_norm_(self.student_params, self.max_grad_norm)
             self.optimizer.step()
             self.scheduler.step()
             self.roles.update_target(self.parsed.ema_decay)
+            if self.video_roles is not None:
+                self.video_roles.update_target(self.parsed.ema_decay)
             current_iter += 1
 
             if current_iter == 1 or current_iter % self.log_every_iters == 0:
                 elapsed = max(time.perf_counter() - started_at, 1e-6)
                 metrics = {
-                    **{f"train/{name}_loss": reduce_mean(value) for name, value in accumulated.items()},
+                    "train/consistency_loss": reduce_mean(accumulated["consistency"]),
+                    "train/flow_loss": reduce_mean(accumulated["flow"]),
                     "train/grad_norm": reduce_mean(float(grad_norm)),
                     "train/lr": self.scheduler.get_last_lr()[0],
                     "train/iters_per_second": (current_iter - start_iter) / elapsed,
@@ -313,10 +303,11 @@ class FastWAMActionConsistencyTrainer:
                 if torch.cuda.is_available():
                     metrics["system/gpu_max_memory_allocated_gib"] = torch.cuda.max_memory_allocated() / 1024**3
                 logger.info(
-                    "[train] iter={}/{} {} grad={:.4f} speed={:.3f} it/s max_mem={:.2f}GiB",
+                    "[train] iter={}/{} consistency={:.6f} flow={:.6f} grad={:.4f} speed={:.3f} it/s max_mem={:.2f}GiB",
                     current_iter,
                     self.max_train_iters,
-                    " ".join(f"{name}={metrics[f'train/{name}_loss']:.6f}" for name in accumulated),
+                    metrics["train/consistency_loss"],
+                    metrics["train/flow_loss"],
                     metrics["train/grad_norm"],
                     metrics["train/iters_per_second"],
                     metrics.get("system/gpu_max_memory_allocated_gib", 0.0),
@@ -329,5 +320,5 @@ class FastWAMActionConsistencyTrainer:
 
         if self.save_final and (not self.save_every_iters or current_iter % self.save_every_iters):
             self.checkpoints.save(current_iter)
-        logger.info("[train] finished {} iter={}", self.training_config["method"], current_iter)
+        logger.info("[train] finished FastWAM joint consistency iter={}", current_iter)
         self.monitor.finish()

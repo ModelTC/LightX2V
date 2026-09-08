@@ -57,8 +57,9 @@ data:
     is_training_set: false
 
 training:
-  method: fastwam_action_consistency
-  output_dir: runs/fastwam_robotwin_action_1step_consistency_ts10
+  method: fastwam_joint_consistency
+  train_video: true
+  output_dir: runs/fastwam_robotwin_action_1step_consistency_joint_ts10
   max_train_iters: 30000
   gradient_accumulation_iters: 1
   gradient_checkpointing: false
@@ -83,7 +84,6 @@ training:
       adam_beta2: 0.95
       adam_epsilon: 1.0e-8
   action_consistency:
-    flow_target: data  # data | teacher
     target_steps: 10
     # Used only by the periodic diagnostic; training uses one teacher Euler bridge.
     teacher_reference_steps: 10
@@ -102,10 +102,10 @@ logging:
   wandb:
     enable: true
     project: fastwam-action-consistency
-    name: robotwin-action-1step-consistency-ts10
-    group: robotwin-action-1step-consistency
+    name: robotwin-joint-1step-consistency-ts10
+    group: robotwin-joint-1step-consistency
     job_type: train
-    tags: [fastwam, robotwin, action-consistency, 1step, lora-only, 30k]
+    tags: [fastwam, robotwin, action-consistency, joint, 1step, lora-only, 30k]
 
 resume:
   auto_resume: false
