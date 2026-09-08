@@ -1,6 +1,7 @@
 import torch
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
@@ -349,19 +350,22 @@ class LongCatImageTransformerWeights(WeightModule):
         # Create weight containers for each block
         self.double_blocks = WeightModuleList([LongCatImageDoubleBlockWeights(config, i) for i in range(self.num_layers)])
         self.single_blocks = WeightModuleList([LongCatImageSingleBlockWeights(config, i) for i in range(self.num_single_layers)])
-        self.register_offload_buffers(config)
+        double_slot_count = self.register_offload_block_group(config, "double_blocks", self.double_blocks)
+        single_slot_count = self.register_offload_block_group(config, "single_blocks", self.single_blocks)
+        self.register_offload_buffers(config, double_slot_count, single_slot_count)
         self.add_module("double_blocks", self.double_blocks)
         self.add_module("single_blocks", self.single_blocks)
 
-    def register_offload_buffers(self, config):
-        if config.get("cpu_offload", False) and config.get("offload_granularity", "block") == "block":
-            # Create 2 cuda buffer blocks for double_blocks
-            self.offload_double_block_cuda_buffers = WeightModuleList([LongCatImageDoubleBlockWeights(config, i, create_cuda_buffer=True) for i in range(2)])
-            self.add_module("offload_double_block_cuda_buffers", self.offload_double_block_cuda_buffers)
-
-            # Create 2 cuda buffer blocks for single_blocks
-            self.offload_single_block_cuda_buffers = WeightModuleList([LongCatImageSingleBlockWeights(config, i, create_cuda_buffer=True) for i in range(2)])
-            self.add_module("offload_single_block_cuda_buffers", self.offload_single_block_cuda_buffers)
+    def register_offload_buffers(self, config, double_slot_count, single_slot_count):
+        if config.get("cpu_offload", False) and get_offload_granularity(config) == "block":
+            if double_slot_count:
+                self.offload_double_block_cuda_buffers = WeightModuleList([LongCatImageDoubleBlockWeights(config, i, create_cuda_buffer=True) for i in range(double_slot_count)])
+                self.add_module("offload_double_block_cuda_buffers", self.offload_double_block_cuda_buffers)
+                self.register_offload_block_buffers("double_blocks", self.offload_double_block_cuda_buffers)
+            if single_slot_count:
+                self.offload_single_block_cuda_buffers = WeightModuleList([LongCatImageSingleBlockWeights(config, i, create_cuda_buffer=True) for i in range(single_slot_count)])
+                self.add_module("offload_single_block_cuda_buffers", self.offload_single_block_cuda_buffers)
+                self.register_offload_block_buffers("single_blocks", self.offload_single_block_cuda_buffers)
 
     def to_cuda(self, non_blocking=True):
         for block in self.double_blocks:

@@ -7,6 +7,7 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.longcat.longcat_text_encoder import LongCatImageTextEncoder
 from lightx2v.models.networks.longcat_image.model import LongCatImageTransformerModel
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.longcat_image.scheduler import LongCatImageScheduler
 from lightx2v.models.video_encoders.hf.longcat_image.vae import LongCatImageVAE
@@ -279,6 +280,7 @@ class LongCatImageRunner(DefaultRunner):
             gc.collect()
         return images
 
+    @keep_transformer_weights_loaded
     def run(self, total_steps=None):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps

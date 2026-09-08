@@ -46,13 +46,7 @@ class LongCatImageTransformerModel(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.pre_infer.set_rope(self.transformer_weights.double_blocks[0].rope)
-        if hasattr(self.transformer_infer, "offload_manager_double") and hasattr(self.transformer_infer, "offload_manager_single"):
-            self._init_offload_manager()
-
-    def _init_offload_manager(self):
-        """Initialize offload managers for double and single block buffers."""
-        self.transformer_infer.offload_manager_double.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_double_block_cuda_buffers)
-        self.transformer_infer.offload_manager_single.init_cuda_buffer(blocks_cuda_buffer=self.transformer_weights.offload_single_block_cuda_buffers)
+        self._init_offload_manager()
 
     @torch.no_grad()
     def _infer_cond_uncond(self, latents_input, prompt_embeds, infer_condition=True):
@@ -108,12 +102,8 @@ class LongCatImageTransformerModel(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
-            if self.offload_granularity == "model":
-                self.to_cuda()
-            elif self.offload_granularity == "block":
-                self.pre_weight.to_cuda()
-                self.post_weight.to_cuda()
+        if self.cpu_offload and self.offload_granularity == "model":
+            self.to_cuda()
 
         latents = self.scheduler.latents
 
@@ -166,9 +156,5 @@ class LongCatImageTransformerModel(BaseTransformerModel):
             noise_pred = self._infer_cond_uncond(latents, inputs["text_encoder_output"]["prompt_embeds"], infer_condition=True)
             self.scheduler.noise_pred = noise_pred
 
-        if self.cpu_offload:
-            if self.offload_granularity == "model":
-                self.to_cpu()
-            elif self.offload_granularity == "block":
-                self.pre_weight.to_cpu()
-                self.post_weight.to_cpu()
+        if self.cpu_offload and self.offload_granularity == "model":
+            self.to_cpu()
