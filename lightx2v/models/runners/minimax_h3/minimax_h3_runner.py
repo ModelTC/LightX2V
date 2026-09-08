@@ -7,6 +7,7 @@ import torch.distributed as dist
 from PIL import Image, ImageOps
 from loguru import logger
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
 from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
 from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
@@ -37,6 +38,7 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     resolve_reference_image_size,
     trim_reference_num_frames,
 )
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.default_runner import DefaultRunner
 from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
@@ -108,10 +110,6 @@ class MiniMaxH3Runner(DefaultRunner):
     def init_modules(self):
         super().init_modules()
         self.run_input_encoder = self._run_input_encoder_local_h3
-        if self.model.prepost_resident:
-            self.model.pre_weight.to_cuda()
-            self.model.post_weight.to_cuda()
-            logger.info("MiniMax-H3 pre/post weights will remain on the accelerator across requests")
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
@@ -135,10 +133,11 @@ class MiniMaxH3Runner(DefaultRunner):
                 self.inputs = self._run_input_encoder_local_h3()
                 self.init_run()
 
-                for step_index in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
-                    self.scheduler.step_pre(step_index)
-                    self.model.infer(self.inputs)
-                    self.scheduler.step_post()
+                with self.transformer_offload_session():
+                    for step_index in range(min(self._WARMUP_STEP_COUNT, self.scheduler.infer_steps)):
+                        self.scheduler.step_pre(step_index)
+                        self.model.infer(self.inputs)
+                        self.scheduler.step_post()
                 video_rows = self.scheduler.video_latents
                 audio_rows = self.scheduler.audio_latents
 
@@ -561,13 +560,14 @@ class MiniMaxH3Runner(DefaultRunner):
         )
         if not self.config.get("cpu_offload", False):
             logger.info("MiniMax-H3 transformer is resident on the accelerator")
-        elif self.config.get("offload_granularity", "model") == "model":
+        elif get_offload_granularity(self.config) == "model":
             logger.info("Moving the native MiniMax-H3 transformer to the accelerator")
             self.model.to_cuda()
         else:
             logger.info("MiniMax-H3 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
         torch_device_module.synchronize()
 
+    @keep_transformer_weights_loaded
     def run_segment(self, segment_idx=0):
         infer_steps = self.scheduler.infer_steps
         for step_index in range(infer_steps):
@@ -593,11 +593,8 @@ class MiniMaxH3Runner(DefaultRunner):
     def _offload_transformer(self):
         if not self.config.get("cpu_offload", False):
             return
-        if self.model.block_offload:
-            if not self.model.prepost_resident:
-                logger.info("Offloading MiniMax-H3 pre/post weights; retaining the two block-offload device buffers")
-                self.model.pre_weight.to_cpu()
-                self.model.post_weight.to_cpu()
+        if get_offload_granularity(self.config) == "block":
+            logger.info("MiniMax-H3 block-offload session released resident weights; retaining staging buffers")
         else:
             logger.info("Offloading MiniMax-H3 transformer before VAE decode")
             self.model.to_cpu()

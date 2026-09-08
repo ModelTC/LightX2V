@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
@@ -134,10 +135,12 @@ class MiniMaxH3TransformerWeights(WeightModule):
                 "MiniMax-H3 reads the official sharded checkpoint directly; disk lazy_load requires a converted block-sharded checkpoint and is not supported yet. Use lazy_load=false with model or block CPU offload."
             )
         self.blocks = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config) for i in range(int(config.get("num_layers", 50)))])
-        if config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block":
-            self.offload_block_cuda_buffers = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config, create_cuda_buffer=True) for i in range(2)])
-            # Register device buffers before source blocks: buffer allocation
-            # needs checkpoint metadata that normal CPU loading consumes.
-            self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
+        slot_count = self.register_offload_block_group(config, "blocks", self.blocks)
+        if config.get("cpu_offload", False) and get_offload_granularity(config) == "block":
             self.offload_phase_cuda_buffers = None
+            if slot_count:
+                self.offload_block_cuda_buffers = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config, create_cuda_buffer=True) for i in range(slot_count)])
+                # Buffer allocation needs checkpoint metadata that normal CPU loading consumes.
+                self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
+                self.register_offload_block_buffers("blocks", self.offload_block_cuda_buffers)
         self.add_module("blocks", self.blocks)

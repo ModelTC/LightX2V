@@ -7,6 +7,7 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
@@ -48,10 +49,6 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
-        self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block"
-        # Model offload moves pre/blocks/post together. Pre/post residency only applies
-        # to block offload and is ignored otherwise.
-        self.prepost_resident = self.block_offload and config.get("dit_prepost_resident", False)
         if GET_DTYPE() != torch.bfloat16:
             raise ValueError(
                 "MiniMax-H3 requires DTYPE=BF16. The native loader preserves the released checkpoint's 626 BF16 tensors and 12 FP32 projection/time/head tensors without dtype conversion."
@@ -66,7 +63,7 @@ class MiniMaxH3Model(BaseTransformerModel):
                 raise ValueError("MiniMax-H3 quantized inference requires dit_quantized_ckpt")
         elif config.get("dit_quant_scheme", "Default") != "Default":
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")
-        if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
+        if config.get("cpu_offload", False) and get_offload_granularity(config) not in {"model", "block"}:
             raise NotImplementedError("MiniMax-H3 supports model and block CPU offload")
         if config.get("attn_type") == "sol_attn":
             reorder = str(config.get("sol_attn_setting", {}).get("reorder", "none")).lower()
@@ -269,9 +266,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         self._register_dynamic_lora_weights(lora_weights, strength)
         self.lora_path = lora_path
         self.lora_strength = float(strength)
-        offload_manager = getattr(getattr(self, "transformer_infer", None), "offload_manager", None)
-        if offload_manager is not None:
-            offload_manager.need_init_first_buffer = True
+        self._reset_offload_staging_buffers()
 
     def _remove_lora(self):
         super()._remove_lora()
@@ -287,9 +282,14 @@ class MiniMaxH3Model(BaseTransformerModel):
         self._register_dynamic_lora_weights(lora_weights, strength)
         self.lora_path = lora_path
         self.lora_strength = float(strength)
-        offload_manager = getattr(getattr(self, "transformer_infer", None), "offload_manager", None)
-        if offload_manager is not None:
-            offload_manager.need_init_first_buffer = True
+        self._reset_offload_staging_buffers()
+
+    def _reset_offload_staging_buffers(self):
+        transformer_infer = getattr(self, "transformer_infer", None)
+        if transformer_infer is None:
+            return
+        for manager in transformer_infer.get_offload_managers():
+            manager.need_init_first_buffer = True
 
     def _validate_tensor_parallel_config(self):
         if not self.use_tp:
@@ -476,8 +476,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         self.pre_infer = self.pre_infer_class(self.config)
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
-        if hasattr(self.transformer_infer, "offload_manager"):
-            self._init_offload_manager()
+        self._init_offload_manager()
 
     @torch.no_grad()
     def _infer_cond_uncond(self, inputs, infer_condition=True):
@@ -494,16 +493,9 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        prepost_offload = self.block_offload and not self.prepost_resident
-        if prepost_offload and self.scheduler.step_index == 0:
-            self.pre_weight.to_cuda()
-            self.post_weight.to_cuda()
         output = self._infer_cond_uncond(inputs, infer_condition=True)
         self.scheduler.video_noise_pred = output.video
         self.scheduler.audio_noise_pred = output.audio
-        if prepost_offload and self.scheduler.step_index == self.scheduler.infer_steps - 1:
-            self.pre_weight.to_cpu()
-            self.post_weight.to_cpu()
 
     @torch.no_grad()
     def _seq_parallel_pre_process(self, pre_infer_out):
@@ -565,7 +557,4 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def to_cpu(self):
         super().to_cpu()
-        if hasattr(self.transformer_infer, "offload_manager"):
-            # Full teardown moves the active aliases away from the persistent
-            # device buffers. Force buffer 0 to be populated again next run.
-            self.transformer_infer.offload_manager.need_init_first_buffer = True
+        self._reset_offload_staging_buffers()
