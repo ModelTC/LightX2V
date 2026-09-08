@@ -10,6 +10,7 @@ from lightx2v.common.ops.norm.triton_ops import (
     fused_qk_norm_3drope,
     fused_qk_rms_norm,
     rms_norm_kernel,
+    rms_norm_legacy_scale,
 )
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
@@ -373,6 +374,16 @@ class RMSWeightSgl(RMSWeight):
                 input_tensor = (input_tensor * weight).to(self.infer_dtype)
 
         return input_tensor
+
+
+@RMS_WEIGHT_REGISTER("h3_legacy_triton")
+class RMSWeightH3LegacyTriton(RMSWeight):
+    def apply(self, input_tensor):
+        weight = self._get_actual_weight()
+        if weight is None or self.sensitive_layer_dtype != self.infer_dtype:
+            return super().apply(input_tensor)
+        inverse_rms = torch.rsqrt(input_tensor.pow(2).mean(-1, keepdim=True) + self.eps)
+        return rms_norm_legacy_scale(input_tensor, weight, inverse_rms)
 
 
 @RMS_WEIGHT_REGISTER("fp32_variance")

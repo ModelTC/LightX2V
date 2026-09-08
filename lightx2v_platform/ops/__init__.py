@@ -51,4 +51,7 @@ elif PLATFORM == "iluvatar_cuda":
     from .norm.iluvatar_cuda import *
     from .rope.iluvatar_cuda import *
 elif PLATFORM == "musa":
+    # Register platform attention operators before the framework registries
+    # take their one-time snapshot.
+    from .attn.mthreads_musa import *
     from .mm.mthreads_musa import *

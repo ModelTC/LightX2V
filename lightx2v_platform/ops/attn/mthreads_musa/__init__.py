@@ -1,0 +1,1 @@
+from .moorcat_sparse import MusaMoorcatSparseOperator

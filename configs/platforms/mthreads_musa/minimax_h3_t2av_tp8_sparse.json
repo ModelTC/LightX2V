@@ -13,8 +13,16 @@
   "vae_decode_parallel": true,
   "lazy_load": false,
   "unload_modules": false,
-  "attn_type": "sage_attn2",
+  "attn_type": "dynamic_sparse_attn",
   "refiner_attn_type": "flash_attn3",
+  "dynamic_sparse_attn_setting": {
+    "topk": 15,
+    "force_local_blocks": 2,
+    "operator": "musa_moorcat_sparse",
+    "operator_setting": {
+      "validate_lut": true
+    }
+  },
   "rms_type": "sgl-kernel",
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
