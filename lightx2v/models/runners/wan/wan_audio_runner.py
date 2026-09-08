@@ -20,6 +20,7 @@ from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter, CausalAudioSlidingProcessor
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioARModel, WanAudioModel
+from lightx2v.models.runners.base_runner import keep_transformer_weights_loaded
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler, WanAudioARScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
@@ -882,14 +883,15 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     def run_clip(self):
         infer_steps = self.model.scheduler.infer_steps
-        for step_index in range(infer_steps):
-            logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
-            with ProfilingContext4DebugL1("step_pre"):
-                self.model.scheduler.step_pre(step_index=step_index)
-            with ProfilingContext4DebugL1("🚀 infer_main"):
-                self.model.infer(self.inputs)
-            with ProfilingContext4DebugL1("step_post"):
-                self.model.scheduler.step_post()
+        with self.transformer_offload_session():
+            for step_index in range(infer_steps):
+                logger.info(f"==> step_index: {step_index + 1} / {infer_steps}")
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.model.scheduler.step_pre(step_index=step_index)
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    self.model.infer(self.inputs)
+                with ProfilingContext4DebugL1("step_post"):
+                    self.model.scheduler.step_post()
 
         return self.model.scheduler.latents
 
@@ -1326,13 +1328,15 @@ class WanAudioARRunner(WanAudioRunner):
         ref_frames = 1 if ref_latents is None else int(ref_latents.shape[1])
         self.inputs["_ar_ref_prefill"] = True
         try:
-            for step_index in range(self.model.scheduler.infer_steps):
-                self.model.kv_cache_manager.current_step = step_index
-                self.model.scheduler.step_pre_ref(step_index, ref_frames)
-                self.model.infer(self.inputs)
+            with self.transformer_offload_session():
+                for step_index in range(self.model.scheduler.infer_steps):
+                    self.model.kv_cache_manager.current_step = step_index
+                    self.model.scheduler.step_pre_ref(step_index, ref_frames)
+                    self.model.infer(self.inputs)
         finally:
             self.inputs.pop("_ar_ref_prefill", None)
 
+    @keep_transformer_weights_loaded
     def run_segment(self, segment_idx=0):
         infer_steps = self.model.scheduler.infer_steps
         chunk_size = int(self.model.scheduler.chunk_size)
@@ -1360,25 +1364,26 @@ class WanAudioARRunner(WanAudioRunner):
         return xt
 
     def run_stream_segment(self, segment_idx=0):
-        infer_steps = self.model.scheduler.infer_steps
-        self.model.scheduler.set_timesteps(infer_steps, device=AI_DEVICE)
-        chunk_noise = self._make_ar_chunk_noise(segment_idx)
-        if chunk_noise is None:
-            xt = self.model.scheduler.noise.to(AI_DEVICE)
-        else:
-            xt = chunk_noise.to(AI_DEVICE)
-        for step_index in range(infer_steps):
-            # logger.info(f"==> stream chunk: {segment_idx + 1}, step_index: {step_index + 1} / {infer_steps}")
-            self.model.kv_cache_manager.current_step = step_index
-            with ProfilingContext4DebugL1("step_pre"):
-                self.model.scheduler.step_pre(segment_idx, step_index, xt)
-            with ProfilingContext4DebugL1("🚀 infer_main"):
-                self.model.infer(self.inputs)
-            with ProfilingContext4DebugL1("step_post"):
-                xt = self.model.scheduler.step_post(xt)
-            if self.progress_callback:
-                self.progress_callback(((step_index + 1) / infer_steps) * 100, 100)
-        return xt
+        with self.transformer_offload_session():
+            infer_steps = self.model.scheduler.infer_steps
+            self.model.scheduler.set_timesteps(infer_steps, device=AI_DEVICE)
+            chunk_noise = self._make_ar_chunk_noise(segment_idx)
+            if chunk_noise is None:
+                xt = self.model.scheduler.noise.to(AI_DEVICE)
+            else:
+                xt = chunk_noise.to(AI_DEVICE)
+            for step_index in range(infer_steps):
+                # logger.info(f"==> stream chunk: {segment_idx + 1}, step_index: {step_index + 1} / {infer_steps}")
+                self.model.kv_cache_manager.current_step = step_index
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.model.scheduler.step_pre(segment_idx, step_index, xt)
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    self.model.infer(self.inputs)
+                with ProfilingContext4DebugL1("step_post"):
+                    xt = self.model.scheduler.step_post(xt)
+                if self.progress_callback:
+                    self.progress_callback(((step_index + 1) / infer_steps) * 100, 100)
+            return xt
 
     def decode_segment_latents(self, segment_idx: int, segment_latents: torch.Tensor) -> torch.Tensor:
         is_first = segment_idx == 0

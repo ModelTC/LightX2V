@@ -116,31 +116,30 @@ class WanAudioARModel(WanAudioModel):
 
     @torch.no_grad()
     def infer(self, inputs):
-        if self.cpu_offload:
+        if self.cpu_offload and self.offload_granularity != "block":
             if self.offload_granularity == "model" and self.scheduler.step_index == 0:
                 self.to_cuda()
             elif self.offload_granularity != "model":
                 self.pre_weight.to_cuda()
                 self.transformer_weights.non_block_weights_to_cuda()
+        try:
+            pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
+            if self.config["seq_parallel"] and not inputs.get("_ar_ref_prefill", False):
+                pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
 
-        pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs)
-        if self.config["seq_parallel"] and not inputs.get("_ar_ref_prefill", False):
-            pre_infer_out = self._seq_parallel_pre_process(pre_infer_out)
+            x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
 
-        x = self.transformer_infer.infer(self.transformer_weights, pre_infer_out)
-
-        if inputs.get("_ar_ref_prefill", False):
-            noise_pred = None
-        else:
+            if inputs.get("_ar_ref_prefill", False):
+                return None
             if self.config["seq_parallel"]:
                 x = self._seq_parallel_post_process(x)
             noise_pred = self.post_infer.infer(x, pre_infer_out)[0]
             self.scheduler.noise_pred = noise_pred
-
-        if self.cpu_offload:
-            if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
-                self.to_cpu()
-            elif self.offload_granularity != "model":
-                self.pre_weight.to_cpu()
-                self.transformer_weights.non_block_weights_to_cpu()
-        return noise_pred
+            return noise_pred
+        finally:
+            if self.cpu_offload and self.offload_granularity != "block":
+                if self.offload_granularity == "model" and self.scheduler.step_index == self.scheduler.infer_steps - 1:
+                    self.to_cpu()
+                elif self.offload_granularity != "model":
+                    self.pre_weight.to_cpu()
+                    self.transformer_weights.non_block_weights_to_cpu()
