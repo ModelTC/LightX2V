@@ -3,7 +3,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from loguru import logger
 
-from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.common.offload.config import get_offload_granularity
 from lightx2v.common.ops.attn.utils.all2all import all2all_seq2head
 from lightx2v.models.networks.wan.infer.transformer_infer import WanTransformerInfer
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -26,14 +26,8 @@ class WanSFTransformerInfer(WanTransformerInfer):
         # ``infer_block_func`` (KV cache CPU offload vs on-GPU).
         self._weight_offload_block_compute = False
         cpu_off = self.config.get("cpu_offload", False)
-        gran = self.config.get("offload_granularity", "block")
+        gran = get_offload_granularity(self.config)
         if cpu_off and gran == "block":
-            self.offload_manager = WeightAsyncStreamManager(offload_granularity="block")
-            self.lazy_load = self.config.get("lazy_load", False)
-            if self.lazy_load:
-                self.offload_manager.init_lazy_load(
-                    num_workers=self.config.get("num_disk_workers", 4),
-                )
             self.infer_func = self.infer_with_kvcache_blocks_offload
             self._weight_offload_block_compute = True
         elif cpu_off:
@@ -106,39 +100,33 @@ class WanSFTransformerInfer(WanTransformerInfer):
 
     def infer_with_kvcache_blocks_offload(self, blocks, x, pre_infer_out):
         """Run transformer blocks with both weight offload and KV cache support."""
+        block_manager = self.get_block_offload_manager(blocks)
         mgr = self.kv_cache_manager
         self.kv_cache_size = mgr.kv_size
         self.max_attention_size = mgr.max_attention_size
         self._kv_offload = self._ar_kv_offload
         kv_cache = mgr.self_attn_kv_cache
-        num_blocks = len(blocks)
 
-        for block_idx in range(num_blocks):
+        def run_kvcache_block(block_idx, block):
+            nonlocal x
             self.block_idx = block_idx
             self._set_layer_cache_limits(block_idx)
             if self._kv_offload:
                 self._next_prefetch = None
+            x = self.infer_block_func(block, x, pre_infer_out)
+            return x
 
-            if self.offload_manager.need_init_first_buffer:
-                self.offload_manager.init_first_buffer(blocks)
-
-            self.offload_manager.prefetch_weights((block_idx + 1) % num_blocks, blocks)
-            gpu_block = self.offload_manager.cuda_buffers[0]
-            if AI_DEVICE == "xpu":
-                x = self.infer_block_func(gpu_block, x, pre_infer_out)
-            else:
-                with torch_device_module.stream(self.offload_manager.compute_stream):
-                    x = self.infer_block_func(gpu_block, x, pre_infer_out)
-
-            self.offload_manager.swap_blocks()
+        self.run_blocks_with_offload(blocks, run_kvcache_block)
 
         if self.clean_cuda_cache:
             del pre_infer_out.embed0, pre_infer_out.context
             torch_device_module.empty_cache()
 
         if self._kv_offload:
-            if self._weight_offload_block_compute and AI_DEVICE == "cuda":
-                self.offload_manager.compute_stream.synchronize()
+            if self._weight_offload_block_compute and block_manager is not None and block_manager.uses_events:
+                torch_device_module.current_stream().synchronize()
+            elif self._weight_offload_block_compute and block_manager is not None and AI_DEVICE == "cuda":
+                block_manager.compute_stream.synchronize()
             else:
                 comp = getattr(kv_cache, "compute_stream", None)
                 if comp is not None:
