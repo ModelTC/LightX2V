@@ -179,19 +179,22 @@ def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, r
 def _build_image_task_request(
     prompt: str,
     *,
-    negative_prompt: str = "",
+    task: str,
+    negative_prompt: Optional[str] = None,
     seed: Optional[int] = None,
     target_shape: Optional[list[int]] = None,
     image_path: str = "",
     image_mask_path: str = "",
     i2i_denoise_strength: Optional[float] = None,
 ) -> ImageTaskRequest:
-    payload = {
-        "prompt": prompt,
-        "negative_prompt": negative_prompt,
-        "image_path": image_path,
+    payload = {"task": task, "prompt": prompt}
+    optional_fields = {
         "image_mask_path": image_mask_path,
+        "image_path": image_path,
     }
+    payload.update({key: value for key, value in optional_fields.items() if value})
+    if negative_prompt is not None:
+        payload["negative_prompt"] = negative_prompt
     if target_shape:
         payload["target_shape"] = target_shape
     if seed is not None:
@@ -217,6 +220,7 @@ async def create_openai_image_generation(request: Request, body: OpenAIImageGene
             raise HTTPException(status_code=400, detail=str(e))
 
     message = _build_image_task_request(
+        task="t2i",
         prompt=body.prompt,
         seed=body.seed,
         target_shape=target_shape,
@@ -254,9 +258,9 @@ async def create_openai_image_edit(
     seed: int | None = Form(default=None),
     i2i_denoise_strength: float | None = Form(default=None),
 ):
+    form = await request.form()
     image_uploads = list(image or [])
     if not image_uploads:
-        form = await request.form()
         image_uploads = [upload for upload in form.getlist("image[]") if hasattr(upload, "filename") and hasattr(upload, "read")]
 
     _ = model, user
@@ -291,8 +295,9 @@ async def create_openai_image_edit(
         image_mask_path = await _save_upload_file(mask, services.file_service)
 
     message = _build_image_task_request(
+        task="i2i",
         prompt=prompt,
-        negative_prompt=negative_prompt,
+        negative_prompt=form.get("negative_prompt"),
         seed=seed,
         target_shape=target_shape,
         image_path=image_path,

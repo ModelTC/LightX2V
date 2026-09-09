@@ -65,7 +65,7 @@ class Hunyuan3DShapeScheduler(BaseScheduler):
         self.dtype = GET_DTYPE()
         self.current_timestep = None
 
-    def prepare(self, seed=None, batch_size=1, latent_shape=None):
+    def prepare(self, seed, batch_size=1, latent_shape=None):
         infer_steps = int(self.config.get("infer_steps", 50))
         self.infer_steps = infer_steps
 
@@ -78,10 +78,7 @@ class Hunyuan3DShapeScheduler(BaseScheduler):
         )
         self.timesteps = timesteps
 
-        if seed is not None:
-            self.generator = torch.Generator(device=self.device).manual_seed(int(seed))
-        else:
-            self.generator = None
+        self.generator = torch.Generator(device=self.device).manual_seed(seed)
 
         if latent_shape is None:
             raise ValueError("latent_shape must be provided to Hunyuan3DShapeScheduler.prepare")

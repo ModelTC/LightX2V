@@ -22,7 +22,9 @@ from lightx2v.models.runners.hunyuan_image3.flashinfer_autotune import (
     DistributedAutotuneContext,
     FlashInferAutotuneController,
 )
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.hunyuan_image3.scheduler import HunyuanImage3Scheduler
+from lightx2v.utils.input_info import TI2IInputInfo
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 
@@ -36,6 +38,21 @@ class HunyuanImage3TextGenerationPlan:
 @RUNNER_REGISTER("hunyuan_image3")
 class HunyuanImage3Runner(DefaultRunner):
     model_cpu_offload_seq = "transformer"
+    TEXT_REQUEST_FIELDS = COMMON_REQUEST_FIELDS | {"bot_task", "max_new_tokens", "prompt", "stream_callback", "system_prompt", "text_do_sample", "text_temperature", "text_top_k", "text_top_p"}
+    input_info_cls_by_task = {"i2i": TI2IInputInfo}
+    supported_request_fields_by_task = {
+        "t2t": TEXT_REQUEST_FIELDS,
+        "ti2t": TEXT_REQUEST_FIELDS | {"image_path", "infer_align_image_size"},
+        "t2i": COMMON_REQUEST_FIELDS | {"prompt", "target_shape"},
+        "ti2i": COMMON_REQUEST_FIELDS | {"image_path", "infer_align_image_size", "prompt", "target_shape"},
+        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "infer_align_image_size", "prompt", "target_shape"},
+    }
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if self.config.get("image_size"):
+            supported_request_fields -= {"target_shape"}
+        return supported_request_fields
 
     def __init__(self, config):
         super().__init__(config)
@@ -984,7 +1001,7 @@ class HunyuanImage3Runner(DefaultRunner):
     ):
         generation_options = generation_options or {}
         device = input_ids.device
-        seed = int(generation_options.get("text_seed", self.config.get("text_seed", self.config.get("seed", 42))))
+        seed = int(generation_options.get("text_seed", self.config.get("text_seed", self.input_info.seed)))
         generator = torch.Generator(device=device).manual_seed(seed)
         max_new_tokens = int(generation_options.get("max_new_tokens", self.config.get("max_new_tokens", getattr(self.hunyuan_generation_config, "max_new_tokens", 2048))))
         transition_map = {stop_id: list(append_ids) for stop_id, append_ids in plan.stage_transitions}
@@ -1589,9 +1606,7 @@ class HunyuanImage3Runner(DefaultRunner):
     @torch.no_grad()
     def generate_ti2t(self, input_info):
         self._ensure_pipeline_modules()
-        seed = getattr(input_info, "seed", None)
-        if seed is None:
-            seed = self.config.get("seed", 42)
+        seed = input_info.seed
         image_paths = self._split_image_paths(getattr(input_info, "image_path", None) or self.config.get("image_path"))
         infer_align_image_size = getattr(input_info, "infer_align_image_size", None)
         if infer_align_image_size is None:
@@ -1606,7 +1621,7 @@ class HunyuanImage3Runner(DefaultRunner):
         self._ensure_pipeline_modules()
         prompt = getattr(input_info, "prompt", "")
         image_size = self._resolve_image_size(input_info)
-        seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
+        seed = input_info.seed
         cot_text = self._generate_cot_text(prompt, image_size)
         prepared_inputs = self._prepare_text_to_image_inputs(
             prompt,
@@ -1623,7 +1638,7 @@ class HunyuanImage3Runner(DefaultRunner):
     def generate_ti2i(self, input_info):
         self._ensure_pipeline_modules()
         prompt = getattr(input_info, "prompt", "")
-        seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
+        seed = input_info.seed
         image_paths = self._split_image_paths(getattr(input_info, "image_path", None) or self.config.get("image_path"))
         infer_align_image_size = getattr(input_info, "infer_align_image_size", None)
         if infer_align_image_size is None:

@@ -30,6 +30,10 @@ class LingbotFastRunner(LingbotRunner):
     Adds SF scheduling and segment-based inference.
     """
 
+    supported_request_fields_by_task = {
+        "i2v": LingbotRunner.supported_request_fields_by_task["i2v"] - {"target_video_length"},
+    }
+
     def __init__(self, config):
         WanRunner.__init__(self, config)
         self.control_type = config.get("control_type", "cam")

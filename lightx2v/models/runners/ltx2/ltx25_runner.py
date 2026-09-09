@@ -10,6 +10,7 @@ from lightx2v.models.input_encoders.hf.ltx2.duration_head import LTX25DurationPr
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX25TextEncoder
 from lightx2v.models.networks.ltx2.ltx25_model import LTX25Model
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.ltx2.ltx25_scheduler import LTX25Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX25AudioVAE, LTX25VideoVAE
 from lightx2v.utils.envs import GET_DTYPE
@@ -36,11 +37,12 @@ class LTX25Runner(LTX2Runner):
     text_encoder_root_key = "text_encoder_original_ckpt"
     video_vae_checkpoint_key = "video_vae_original_ckpt"
     audio_vae_checkpoint_key = "audio_vae_original_ckpt"
+    supported_request_fields_by_task = {
+        "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"},
+        "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_frame_idx", "image_path", "image_strength", "prompt"},
+    }
 
     def __init__(self, config):
-        task = config.get("task")
-        if task not in ("t2av", "i2av"):
-            raise NotImplementedError(f"LTX-2.5 currently supports t2av and i2av, got {task!r}")
         if config.get("enable_cfg", False) or float(config.get("sample_guide_scale", 1.0)) != 1.0:
             raise ValueError("The LTX-2.5 distilled pipeline requires CFG=1 (enable_cfg=false)")
         if config.get("disagg_mode"):
@@ -123,7 +125,7 @@ class LTX25Runner(LTX2Runner):
         logger.info(f"LTX-2.5 target video length: {num_frames} frames ({source})")
         return num_frames
 
-    def _prepare_stage1_target_shape(self) -> None:
+    def prepare_stage1_target_shape(self) -> None:
         """Interpret request/config dimensions as final two-stage dimensions."""
         if self.input_info.target_shape:
             if len(self.input_info.target_shape) != 2:
@@ -134,7 +136,8 @@ class LTX25Runner(LTX2Runner):
             final_width = int(self.config["target_width"])
         if final_height % 64 != 0 or final_width % 64 != 0:
             raise ValueError(f"LTX-2.5 distilled two-stage output height and width must be divisible by 64, got {final_height}x{final_width}")
-        self.input_info.target_shape = [final_height // 2, final_width // 2]
+        self.input_info.target_shape = [final_height, final_width]
+        super().prepare_stage1_target_shape()
 
     def _validate_sequence_parallel_shape(self, num_frames: int, guiding_keyframes: int = 0) -> None:
         """Reject SP layouts that would introduce unmasked video tokens.
@@ -171,7 +174,7 @@ class LTX25Runner(LTX2Runner):
         self._clear_ltx2_reference_video_state()
         self.video_denoise_mask = None
         self.initial_video_latent = None
-        self._prepare_stage1_target_shape()
+        self.prepare_stage1_target_shape()
         text_encoder_output = self.run_text_encoder(self.input_info)
         num_frames = self._resolve_target_video_length(text_encoder_output)
         self._validate_sequence_parallel_shape(num_frames)
@@ -183,7 +186,7 @@ class LTX25Runner(LTX2Runner):
         self._clear_ltx2_reference_audio_state()
         self._clear_ltx2_reference_video_state()
         self._normalize_i2av_input_fields()
-        self._prepare_stage1_target_shape()
+        self.prepare_stage1_target_shape()
         text_encoder_output = self.run_text_encoder(self.input_info)
         num_frames = self._resolve_target_video_length(text_encoder_output)
         image_paths = [path.strip() for path in (self.input_info.image_path or "").split(",") if path.strip()]

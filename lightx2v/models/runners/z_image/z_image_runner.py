@@ -1,5 +1,4 @@
 import gc
-import math
 
 import torch
 import torchvision.transforms.functional as TF
@@ -10,6 +9,7 @@ from lightx2v.models.input_encoders.hf.z_image.qwen3_model import Qwen3Model_Tex
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.z_image.model import ZImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.z_image.scheduler import ZImageScheduler
 from lightx2v.models.video_encoders.hf.z_image.vae import AutoencoderKLZImageVAE
 from lightx2v.server.metrics import monitor_cli
@@ -20,16 +20,6 @@ from lightx2v.utils.utils import is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 torch_device_module = getattr(torch, AI_DEVICE)
-
-
-def calculate_dimensions(target_area, ratio):
-    width = math.sqrt(target_area * ratio)
-    height = width / ratio
-
-    width = round(width / 32) * 32
-    height = round(height / 32) * 32
-
-    return width, height, None
 
 
 def build_z_image_model_with_lora(z_image_module, config, model_kwargs, lora_configs):
@@ -54,15 +44,10 @@ def build_z_image_model_with_lora(z_image_module, config, model_kwargs, lora_con
 class ZImageRunner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-
-    def __init__(self, config):
-        super().__init__(config)
-
-    @ProfilingContext4DebugL2("Load models")
-    def load_model(self):
-        self.model = self.load_transformer()
-        self.text_encoders = self.load_text_encoder()
-        self.vae = self.load_vae()
+    supported_request_fields_by_task = {
+        "t2i": IMAGE_REQUEST_FIELDS,
+        "i2i": IMAGE_REQUEST_FIELDS | {"i2i_denoise_strength", "image_path"},
+    }
 
     def load_transformer(self):
         z_image_model_kwargs = {
@@ -324,8 +309,9 @@ class ZImageRunner(DefaultRunner):
 
         raise NotImplementedError
 
-    def set_target_shape(self):
+    def set_latent_shape(self):
         width, height = self.get_input_target_shape()
+        self.input_info.target_shape = [height, width]
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
@@ -334,26 +320,10 @@ class ZImageRunner(DefaultRunner):
         height = 2 * (int(height) // (vae_scale_factor * 2))
         width = 2 * (int(width) // (vae_scale_factor * 2))
         num_channels_latents = self.config.get("num_channels_latents", 16)
-        self.input_info.target_shape = (1, num_channels_latents, height, width)
-
-    def set_img_shapes(self):
-        if hasattr(self.input_info, "target_shape") and self.input_info.target_shape is not None:
-            if len(self.input_info.target_shape) != 4:
-                raise ValueError(f"target_shape must be 4D [B, C, H, W], got {len(self.input_info.target_shape)}D: {self.input_info.target_shape}")
-            _, _, latent_height, latent_width = self.input_info.target_shape
-        else:
-            width, height = self.get_input_target_shape()
-
-            vae_scale_factor = self.config["vae_scale_factor"]
-            latent_height = 2 * (int(height) // (vae_scale_factor * 2))
-            latent_width = 2 * (int(width) // (vae_scale_factor * 2))
+        self.input_info.latent_shape = (1, num_channels_latents, height, width)
 
         patch_size = self.config.get("patch_size", 2)
-        patch_height = latent_height // patch_size
-        patch_width = latent_width // patch_size
-
-        image_shapes = [(1, patch_height, patch_width)]
-        self.input_info.image_shapes = image_shapes
+        self.input_info.image_shapes = [(1, height // patch_size, width // patch_size)]
 
     def init_scheduler(self):
         self.scheduler = ZImageScheduler(self.config)
@@ -395,15 +365,14 @@ class ZImageRunner(DefaultRunner):
         if self.config["task"] == "i2i" and "image_encoder_output" in self.inputs:
             self.input_info.image_encoder_output = self.inputs["image_encoder_output"]
 
-        self.set_target_shape()
-        self.set_img_shapes()
+        self.set_latent_shape()
         logger.info(f"input_info: {self.input_info}")
 
         latents, generator = self.run_dit()
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor and is_main_process():
+        if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
             image = images[0]
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")

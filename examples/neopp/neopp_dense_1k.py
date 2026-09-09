@@ -35,6 +35,7 @@ pipe.runner.set_inference_params(
 )
 
 pipe.generate(
+    task="t2i",
     seed=200,
     save_result_path="/path/to/save_results/output_lightx2v_neopp_dense_1k_0.png",
     target_shape=[1024, 1024],  # Height, Width
@@ -58,6 +59,7 @@ pipe.runner.set_inference_params(
 )
 
 pipe.generate(
+    task="t2i",
     seed=201,
     save_result_path="/path/to/save_results/output_lightx2v_neopp_dense_1k_1.png",
     target_shape=[1024, 1024],  # Height, Width
@@ -81,6 +83,7 @@ pipe.runner.set_inference_params(
 )
 
 pipe.generate(
+    task="t2i",
     seed=202,
     save_result_path="/path/to/save_results/output_lightx2v_neopp_dense_1k_2.png",
     target_shape=[1024, 1024],  # Height, Width

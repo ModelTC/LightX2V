@@ -23,13 +23,14 @@ from lightx2v.models.networks.wan.distill_model import WanDistillModel
 from lightx2v.models.networks.wan.lingbot_model import WanLingbotModel
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler, get_wan_distill_method
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny, WanVAE_tiny
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import T2VInputInfo
+from lightx2v.utils.input_info import ActionI2VInputInfo, T2VInputInfo, align_target_video_length
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -37,29 +38,20 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, model_type="high_noise_model"):
-    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
+    if model_type in ["high_noise_model", "low_noise_model"]:
+        lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
+    if not lora_configs:
+        return wan_module(**model_kwargs)
 
-    if lora_dynamic_apply:
-        if model_type in ["high_noise_model", "low_noise_model"]:
-            # For wan2.2
-            lora_name_to_info = {item["name"]: item for item in lora_configs}
-            lora_path = lora_name_to_info[model_type]["path"]
-            lora_strength = lora_name_to_info[model_type]["strength"]
-        else:
-            # For wan2.1
-            lora_path = lora_configs[0]["path"]
-            lora_strength = lora_configs[0]["strength"]
-
-        model_kwargs["lora_path"] = lora_path
-        model_kwargs["lora_strength"] = lora_strength
+    if config.get("lora_dynamic_apply", False):
+        model_kwargs["lora_path"] = lora_configs[0]["path"]
+        model_kwargs["lora_strength"] = lora_configs[0]["strength"]
         model = wan_module(**model_kwargs)
     else:
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
         model = wan_module(**model_kwargs)
         lora_adapter = LoraAdapter(model)
-        if model_type in ["high_noise_model", "low_noise_model"]:
-            lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
         lora_adapter.apply_lora(lora_configs, model_type=model_type)
     return model
 
@@ -72,6 +64,18 @@ def get_wan_model_class(distill_method):
 
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DisaggMixin, DefaultRunner):
+    supported_request_fields_by_task = {
+        "t2v": VIDEO_REQUEST_FIELDS,
+        "i2v": VIDEO_REQUEST_FIELDS | {"image_path"},
+        "flf2v": VIDEO_REQUEST_FIELDS | {"image_path", "last_frame_path"},
+    }
+    FIXED_FRAME_ATTENTION_TYPES = {
+        "svg_attn",
+        "radial_attn",
+        "nbhd_attn",
+        "nbhd_attn_flashinfer",
+        "general_sparse_attn",
+    }
     _WARMUP_RESOLUTIONS = ((480, 480), (720, 1280))
     _WARMUP_TASKS = ("t2v", "i2v", "flf2v")
     _SUPPORTS_GENERIC_WARMUP = True
@@ -83,6 +87,44 @@ class WanRunner(DisaggMixin, DefaultRunner):
         self.tiny_vae_cls = WanVAE_tiny
         self.vae_name = config.get("vae_name", "Wan2.1_VAE.pth")
         self.tiny_vae_name = "taew2_1.pth"
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if self.config.get("self_attn_1_type") in self.FIXED_FRAME_ATTENTION_TYPES:
+            supported_request_fields -= {"target_video_length"}
+        if task in ("i2v", "flf2v") and self.config.get("resize_mode") and type(self).read_image_input is DefaultRunner.read_image_input:
+            supported_request_fields -= {"target_shape"}
+        return supported_request_fields
+
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        num_frames = getattr(input_info, "target_video_length", None)
+        if "target_video_length" in self.get_supported_request_fields(input_info.task) and num_frames is not None:
+            if num_frames < 1:
+                raise ValueError(f"num_frames must be positive, got {num_frames}")
+            temporal_stride = int(self.config["vae_stride"][0])
+            if (num_frames - 1) % temporal_stride != 0:
+                aligned_frames = align_target_video_length(num_frames, temporal_stride)
+                if not dist.is_initialized() or dist.get_rank() == 0:
+                    logger.warning(f"Wan num_frames must satisfy {temporal_stride}n+1; using {aligned_frames} instead of {num_frames}.")
+                input_info.target_video_length = aligned_frames
+
+        if self.config.get("disagg_mode") in ("transformer", "decode"):
+            return input_info
+
+        task = self.config["task"]
+        if task == "i2v":
+            if not input_info.image_path:
+                raise ValueError("Wan i2v requires image_path")
+        elif task == "flf2v":
+            if not input_info.image_path:
+                raise ValueError("Wan flf2v requires image_path")
+            if not input_info.last_frame_path:
+                raise ValueError("Wan flf2v requires last_frame_path")
+        elif task == "vace":
+            if not (input_info.video_path or input_info.src_ref_images):
+                raise ValueError("Wan VACE requires video_path or src_ref_images")
+        return input_info
 
     def check_reuse_support(self):
         model_cls = self.config["model_cls"]
@@ -479,27 +521,18 @@ class WanRunner(DisaggMixin, DefaultRunner):
         reuse_key = {
             "prompt": self.input_info.prompt,
             "negative_prompt": self.input_info.negative_prompt,
-            "target_video_length": self.config["target_video_length"],
+            "target_video_length": self.get_target_video_length(),
         }
+        if "target_shape" in self.get_supported_request_fields(self.config["task"]):
+            reuse_key["target_shape"] = list(self.get_target_size())
         if self.config["task"] == "i2v":
-            reuse_key.update(
-                {
-                    "image_path": self.input_info.image_path.split(","),
-                    "resize_mode": self.config.get("resize_mode"),
-                }
-            )
-        elif self.config["task"] == "t2v":
-            target_shape = self.input_info.target_shape or (
-                self.config["target_height"],
-                self.config["target_width"],
-            )
-            reuse_key["target_shape"] = list(target_shape)
+            reuse_key["image_path"] = self.input_info.image_path.split(",")
         return reuse_key
 
     def reuse_input_info(self):
         return {
-            "latent_shape": list(self.input_info.latent_shape),
-            "target_shape": list(self.input_info.target_shape),
+            "latent_shape": [int(dim) for dim in self.input_info.latent_shape],
+            "target_shape": [int(dim) for dim in self.input_info.target_shape],
         }
 
     def _run_pipeline_local(self):
@@ -517,23 +550,24 @@ class WanRunner(DisaggMixin, DefaultRunner):
             if self.input_info is not None:
                 self.end_run()
 
-    def _run_pipeline_disagg_encoder(self):
+    def _run_pipeline_disagg_encoder(self, request_config):
         self.inputs = self.run_input_encoder()
+        request_config = self.build_disagg_request_config(self.input_info, request_config)
         latent_shape = list(self.input_info.latent_shape)
-        self.send_encoder_outputs(self.inputs, latent_shape)
+        self.send_encoder_outputs(self.inputs, latent_shape, request_config)
         logger.info("[Disagg] Encoder role completed.")
         return None
 
-    def _run_pipeline_disagg_transformer(self):
-        self.inputs = self.receive_encoder_outputs()
+    def _run_pipeline_disagg_transformer(self, request_config):
+        self.inputs = self.receive_encoder_outputs(request_config)
         latent_shape = self.inputs.get("latent_shape")
         if latent_shape:
             self.input_info.latent_shape = latent_shape
         return self._run_transformer_role()
 
-    def _run_pipeline_disagg_decode(self):
+    def _run_pipeline_disagg_decode(self, request_config):
         # Decoder role: receive DiT latents, run VAE, save video
-        latents = self.receive_transformer_outputs()
+        latents = self.receive_transformer_outputs(request_config)
         self.gen_video = self.run_vae_decoder(latents)
         self.gen_video_final = self.gen_video
         return self.process_images_after_vae_decoder()
@@ -542,18 +576,24 @@ class WanRunner(DisaggMixin, DefaultRunner):
     def run_pipeline(self, input_info):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_count.inc()
-        self.input_info = input_info
         disagg_mode = self.config.get("disagg_mode")
+        if disagg_mode in ("transformer", "decode"):
+            input_info.update(self._disagg_request_config or {})
+        self.input_info = input_info
+        request_config = self.build_disagg_request_config(input_info) if disagg_mode else None
 
-        if disagg_mode == "encoder":
-            gen_video_final = self._run_pipeline_disagg_encoder()
-        elif disagg_mode == "transformer":
-            gen_video_final = self._run_pipeline_disagg_transformer()
-        elif disagg_mode == "decode":
-            gen_video_final = self._run_pipeline_disagg_decode()
-        else:
-            # Keep default runner pipeline behavior unchanged in local mode.
-            gen_video_final = self._run_pipeline_local()
+        try:
+            if disagg_mode == "encoder":
+                gen_video_final = self._run_pipeline_disagg_encoder(request_config)
+            elif disagg_mode == "transformer":
+                gen_video_final = self._run_pipeline_disagg_transformer(request_config)
+            elif disagg_mode == "decode":
+                gen_video_final = self._run_pipeline_disagg_decode(request_config)
+            else:
+                gen_video_final = self._run_pipeline_local()
+        finally:
+            if disagg_mode:
+                self._disagg_request_config = None
 
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
@@ -761,7 +801,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
             h_start, h_end = 0, height
             w_start, w_end = 0, width
 
-        target_video_length = self.config["target_video_length"]
+        target_video_length = self.get_target_video_length()
         if target_video_length < 1:
             raise ValueError(f"target_video_length must be positive, got {target_video_length}")
         if last_frame is not None and target_video_length < 2:
@@ -793,7 +833,8 @@ class WanRunner(DisaggMixin, DefaultRunner):
         if self.config.get("resize_mode", None) is None:
             h, w = first_frame.shape[2:]
             aspect_ratio = h / w
-            max_area = self.config["target_height"] * self.config["target_width"]
+            target_height, target_width = self.get_target_size()
+            max_area = target_height * target_width
 
             # Calculate initial latent dimensions
             ori_latent_h = round(np.sqrt(max_area * aspect_ratio) // self.config["vae_stride"][1] // self.config["patch_size"][1] * self.config["patch_size"][1])
@@ -845,7 +886,7 @@ class WanRunner(DisaggMixin, DefaultRunner):
         world_size_h, world_size_w = self._resolve_vae_encode_grid(lat_h, lat_w)
         msk = torch.ones(
             1,
-            self.config["target_video_length"],
+            self.get_target_video_length(),
             lat_h,
             lat_w,
             device=torch.device(AI_DEVICE),
@@ -893,19 +934,18 @@ class WanRunner(DisaggMixin, DefaultRunner):
     def get_latent_shape_with_lat_hw(self, latent_h, latent_w):
         latent_shape = [
             self.config.get("num_channels_latents", 16),
-            (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+            (self.get_target_video_length() - 1) // self.config["vae_stride"][0] + 1,
             latent_h,
             latent_w,
         ]
         return latent_shape
 
     def get_latent_shape_with_target_hw(self):
-        target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
-        target_width = self.input_info.target_shape[1] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_width"]
+        target_height, target_width = self.get_target_size()
 
         latent_shape = [
             self.config.get("num_channels_latents", 16),
-            (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+            (self.get_target_video_length() - 1) // self.config["vae_stride"][0] + 1,
             int(target_height) // self.config["vae_stride"][1],
             int(target_width) // self.config["vae_stride"][2],
         ]
@@ -1125,6 +1165,7 @@ class Wan22MoeRunner(WanRunner):
 
 @RUNNER_REGISTER("wan2.2")
 class Wan22DenseRunner(WanRunner):
+    supported_request_fields_by_task = {task: WanRunner.supported_request_fields_by_task[task] for task in ("t2v", "i2v")}
     _SUPPORTS_GENERIC_WARMUP = True
 
     def __init__(self, config):
@@ -1217,7 +1258,8 @@ class Wan22DenseRunner(WanRunner):
         metrics_labels=["Wan22DenseRunner"],
     )
     def run_vae_encoder(self, img):
-        max_area = self.config.target_height * self.config.target_width
+        target_height, target_width = self.get_target_size()
+        max_area = target_height * target_width
         ih, iw = img.height, img.width
         dh, dw = self.config.patch_size[1] * self.config.vae_stride[1], self.config.patch_size[2] * self.config.vae_stride[2]
         ow, oh = best_output_size(iw, ih, dw, dh, max_area)
@@ -1252,14 +1294,14 @@ class Wan22DenseRunner(WanRunner):
 
 @RUNNER_REGISTER("lingbot_world")
 class LingbotRunner(Wan22MoeRunner):
+    input_info_cls_by_task = {"i2v": ActionI2VInputInfo}
+    supported_request_fields_by_task = {
+        "i2v": WanRunner.supported_request_fields_by_task["i2v"] | {"action_path", "pose"},
+    }
+
     def __init__(self, config):
         super().__init__(config)
         self.control_type = config.get("control_type", "cam")
-
-    def set_inputs(self, inputs):
-        super().set_inputs(inputs)
-        if "pose" in self.input_info.__dataclass_fields__:
-            self.input_info.pose = inputs.get("action_path", inputs.get("pose", ""))
 
     def load_image_encoder(self):
         if self.config.get("use_image_encoder", True):
@@ -1421,7 +1463,7 @@ class LingbotRunner(Wan22MoeRunner):
             logger.warning("unexpected poses.npy shape: {}", c2ws_np.shape)
             return {}
         len_c2ws = ((len(c2ws_np) - 1) // 4) * 4 + 1
-        frame_num = min(int(self.config["target_video_length"]), len_c2ws)
+        frame_num = min(self.get_target_video_length(), len_c2ws)
         c2ws_np = c2ws_np[:frame_num]
         c2ws_np = self._interp_c2ws_to_latf(c2ws_np, lat_f)
         c2ws = torch.from_numpy(c2ws_np).to(torch.device(AI_DEVICE))

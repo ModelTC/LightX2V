@@ -22,6 +22,7 @@ from lightx2v.models.networks.swiftvr import (
     padded_frame_count,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
@@ -57,12 +58,14 @@ class PendingVideoWrite:
 class SwiftVRRunner(DefaultRunner):
     """Native LightX2V runner for SwiftVR image and video restoration."""
 
+    supported_request_fields_by_task = {
+        "sr": COMMON_REQUEST_FIELDS | {"image_path", "sr_ratio", "target_shape", "video_path"},
+    }
+
     # Two spatial shapes trigger dynamic compilation before serving requests.
     WARMUP_RESOLUTIONS = ((720, 1280), (2048, 1536))
 
     def __init__(self, config):
-        if config["task"] != "sr":
-            raise ValueError("SwiftVR only supports the `sr` task.")
         if config.get("parallel"):
             raise ValueError("SwiftVR currently supports single-GPU inference only.")
         if config.get("cpu_offload"):

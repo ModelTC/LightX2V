@@ -12,6 +12,7 @@ python -m lightx2v.infer \
   --model_path $model_path \
   --config_json ${lightx2v_path}/configs/distill/wan_t2v_distill_4step_cfg_dynamic.json \
   --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage." \
+  --num_frames 81 \
   --target_shape 480 832 \
   --seed 42 \
   --save_result_path ${lightx2v_path}/save_results/output_lightx2v_wan_t2v_distill_4step_cfg_dynamic.mp4
