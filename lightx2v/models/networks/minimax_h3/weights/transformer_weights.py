@@ -3,7 +3,7 @@ import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.ops.norm import MiniMaxH3SGLQKRMSNorm  # noqa: F401
-from lightx2v.common.ops.rope import MiniMaxH3SGLRope  # noqa: F401
+from lightx2v.common.ops.rope import SGLExactNeoXRope  # noqa: F401
 from lightx2v.models.networks.minimax_h3.weights.merged_qkv import MiniMaxH3MergedQKVWeight
 from lightx2v.models.networks.minimax_h3.weights.reordered_mlp import MiniMaxH3ReorderedMLPWeight
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
@@ -94,7 +94,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 kind=qk_norm_kind,
             ),
         )
-        rope_kind = config.get("rope_type", "h3_sgl_rope")
+        rope_kind = config.get("rope_type", "sgl_exact_neox_rope")
         self.add_module(
             "rope",
             ROPE_REGISTER[rope_kind](

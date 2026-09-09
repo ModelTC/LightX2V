@@ -40,7 +40,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
 
-from lightx2v.common.ops.rope import MiniMaxH3SGLRope as _registered_rope  # noqa: F401
+from lightx2v.common.ops.rope import SGLExactNeoXRope as _registered_rope  # noqa: F401
 from lightx2v.models.video_encoders.hf.minimax_h3.sglang_fused import (
     apply_vae_silu_mul_sglang,
     scaled_residual_add_vae_sglang,
@@ -316,7 +316,7 @@ class MiniMaxH3VideoEncoder3d(nn.Module):
 class MiniMaxH3VideoRotaryPosEmbed(nn.Module):
     """Three-axis rotary embedding used by the non-causal ViT decoder."""
 
-    def __init__(self, dim: int, theta: float = 100.0, num_axes: int = 3, rope_type: str = "h3_sgl_rope") -> None:
+    def __init__(self, dim: int, theta: float = 100.0, num_axes: int = 3, rope_type: str = "sgl_exact_neox_rope") -> None:
         super().__init__()
         if dim % (2 * num_axes) != 0:
             raise ValueError(f"dim={dim} must be divisible by 2 * num_axes={2 * num_axes}")
@@ -350,6 +350,10 @@ class MiniMaxH3VideoRotaryPosEmbed(nn.Module):
         *,
         dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        cos, sin = rotary_emb
+        if cos.ndim != 4 or cos.shape[0] != 1 or cos.shape[2] != 1:
+            raise ValueError(f"Expected MiniMax-H3 VAE RoPE frequencies [1, tokens, 1, rotary_dim], got {cos.shape}")
+        rotary_emb = cos[0, :, 0], sin[0, :, 0]
         rope = ROPE_REGISTER[self.rope_type](compute_dtype=dtype)
         return rope.prepare_freqs(rotary_emb, rotary_dim=rotary_emb[0].shape[-1])
 
@@ -364,7 +368,7 @@ class MiniMaxH3VideoAttention(nn.Module):
         bias: bool = True,
         sensitive_layer_dtype: torch.dtype = torch.float32,
         attn_type: str = "torch_sdpa",
-        rope_type: str = "h3_sgl_rope",
+        rope_type: str = "sgl_exact_neox_rope",
     ) -> None:
         super().__init__()
         self.heads = heads
@@ -465,7 +469,7 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
         infer_dtype: torch.dtype = torch.float16,
         sensitive_layer_dtype: torch.dtype = torch.float32,
         attn_type: str = "torch_sdpa",
-        rope_type: str = "h3_sgl_rope",
+        rope_type: str = "sgl_exact_neox_rope",
     ) -> None:
         super().__init__()
         self.infer_dtype = infer_dtype
@@ -524,7 +528,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
-        rope_type: str = "h3_sgl_rope",
+        rope_type: str = "sgl_exact_neox_rope",
     ) -> None:
         super().__init__()
         dim = num_attention_heads * attention_head_dim
@@ -661,7 +665,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
-        rope_type: str = "h3_sgl_rope",
+        rope_type: str = "sgl_exact_neox_rope",
     ) -> None:
         super().__init__()
         if quant_scheme not in {None, "fp8-musa", "fp8-sgl"}:
@@ -822,7 +826,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
-        rope_type: str = "h3_sgl_rope",
+        rope_type: str = "sgl_exact_neox_rope",
     ) -> "MiniMaxH3VideoVAE":
         vae_dir = _component_dir(model_path, "vae")
         if (checkpoint_path is None) != (quant_scheme is None):

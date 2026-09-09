@@ -13,7 +13,7 @@ from .template import RopeTemplate
 
 def _require_nvidia_triton(tensor: torch.Tensor) -> None:
     if tensor.device.type == "cuda" and getattr(torch.version, "hip", None) is not None:
-        raise RuntimeError("H3 RoPE exact parity kernel supports NVIDIA CUDA only")
+        raise RuntimeError("SGL exact NeoX RoPE kernel supports NVIDIA CUDA only")
 
 
 @triton.jit
@@ -129,22 +129,22 @@ def _prepare_qk_neox_rope_inputs(
     positions: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if q.ndim < 2 or k.ndim < 2 or cache.ndim != 2 or positions.ndim != 1:
-        raise ValueError(f"H3 RoPE expects Q/K [..., heads, dim], cache [positions, rotary_dim], and positions [tokens]; got {q.shape}, {k.shape}, {cache.shape}, and {positions.shape}")
+        raise ValueError(f"SGL exact NeoX RoPE expects Q/K [..., heads, dim], cache [positions, rotary_dim], and positions [tokens]; got {q.shape}, {k.shape}, {cache.shape}, and {positions.shape}")
     if q.dtype not in (torch.float16, torch.bfloat16) or k.dtype != q.dtype or cache.dtype != q.dtype:
-        raise TypeError(f"H3 RoPE requires matching FP16/BF16 Q/K/cache tensors, got {q.dtype}, {k.dtype}, and {cache.dtype}")
+        raise TypeError(f"SGL exact NeoX RoPE requires matching FP16/BF16 Q/K/cache tensors, got {q.dtype}, {k.dtype}, and {cache.dtype}")
     if positions.dtype is not torch.long:
-        raise TypeError(f"H3 RoPE positions must use torch.long, got {positions.dtype}")
+        raise TypeError(f"SGL exact NeoX RoPE positions must use torch.long, got {positions.dtype}")
     if q.device != k.device or q.device != cache.device or q.device != positions.device:
-        raise ValueError("H3 RoPE tensors must be on one device")
+        raise ValueError("SGL exact NeoX RoPE tensors must be on one device")
     if q.shape[-1] != k.shape[-1] or q.shape[-2] <= 0 or k.shape[-2] <= 0:
-        raise ValueError(f"Invalid Q/K shapes for H3 RoPE: {q.shape}, {k.shape}")
+        raise ValueError(f"Invalid Q/K shapes for SGL exact NeoX RoPE: {q.shape}, {k.shape}")
     rotary_dim = cache.shape[-1]
     if cache.shape[0] == 0:
-        raise ValueError("H3 RoPE cache must contain at least one position")
+        raise ValueError("SGL exact NeoX RoPE cache must contain at least one position")
     if rotary_dim <= 0 or rotary_dim % 2 or rotary_dim > q.shape[-1]:
         raise ValueError(f"Invalid rotary dimension {rotary_dim} for head dimension {q.shape[-1]}")
     if positions.numel() == 0:
-        raise ValueError("H3 RoPE positions must not be empty")
+        raise ValueError("SGL exact NeoX RoPE positions must not be empty")
     q_tokens = q.numel() // (q.shape[-2] * q.shape[-1])
     k_tokens = k.numel() // (k.shape[-2] * k.shape[-1])
     if q_tokens % positions.numel() or k_tokens % positions.numel():
@@ -206,31 +206,33 @@ def _apply_qk_neox_rope(
     return q.reshape(q_shape), k.reshape(k_shape)
 
 
-@ROPE_REGISTER("h3_sgl_rope")
-class MiniMaxH3SGLRope(RopeTemplate):
+@ROPE_REGISTER("sgl_exact_neox_rope")
+class SGLExactNeoXRope(RopeTemplate):
     def __init__(self, layout="split_half", compute_dtype=torch.bfloat16):
         if layout != "split_half":
-            raise ValueError("MiniMax-H3 SGL RoPE requires split_half layout")
+            raise ValueError("SGL exact NeoX RoPE requires split_half layout")
         super().__init__(layout=layout, compute_dtype=compute_dtype)
 
     def prepare_freqs(self, freqs, rotary_dim: int | None = None):
         if not isinstance(freqs, tuple) or len(freqs) != 2:
-            raise TypeError("MiniMax-H3 SGL RoPE expects a (cos, sin) tuple")
+            raise TypeError("SGL exact NeoX RoPE expects a (cos, sin) tuple")
+        if rotary_dim is None:
+            raise ValueError("rotary_dim is required for tuple RoPE frequencies")
+        if rotary_dim <= 0 or rotary_dim % 2:
+            raise ValueError(f"rotary_dim must be a positive even integer, got {rotary_dim}")
         cos, sin = freqs
+        if not torch.is_tensor(cos) or not torch.is_tensor(sin):
+            raise TypeError("SGL exact NeoX RoPE cos/sin entries must be tensors")
+        if cos.ndim != 2 or sin.ndim != 2:
+            raise ValueError(f"SGL exact NeoX RoPE expects 2D cos/sin tensors, got {cos.shape} and {sin.shape}")
         if cos.shape != sin.shape or cos.device != sin.device:
-            raise ValueError(f"MiniMax-H3 RoPE cos/sin tensors must match, got {cos.shape} and {sin.shape}")
-        if cos.ndim == 2:
-            if cos.shape[-1] % 2:
-                raise ValueError(f"MiniMax-H3 RoPE width must be even, got {cos.shape[-1]}")
-            half = cos.shape[-1] // 2
-            cache = torch.cat((cos[:, :half], sin[:, :half]), dim=-1)
-        elif cos.ndim == 4 and cos.shape[0] == 1 and cos.shape[2] == 1:
-            if cos.shape[-1] % 2:
-                raise ValueError(f"MiniMax-H3 VAE RoPE width must be even, got {cos.shape[-1]}")
-            half = cos.shape[-1] // 2
-            cache = torch.cat((cos[0, :, 0, :half], sin[0, :, 0, :half]), dim=-1)
-        else:
-            raise ValueError(f"Unsupported MiniMax-H3 RoPE frequency shape {cos.shape}")
+            raise ValueError(f"SGL exact NeoX RoPE cos/sin tensors must match, got {cos.shape} and {sin.shape}")
+        if cos.shape[-1] == rotary_dim:
+            half = rotary_dim // 2
+            cos, sin = cos[:, :half], sin[:, :half]
+        elif cos.shape[-1] != rotary_dim // 2:
+            raise ValueError(f"RoPE frequency width must be {rotary_dim // 2} or {rotary_dim}, got {cos.shape[-1]}")
+        cache = torch.cat((cos, sin), dim=-1)
         cache = cache.to(dtype=self.compute_dtype).contiguous()
         positions = torch.arange(cache.shape[0], device=cache.device, dtype=torch.long)
         return cache, positions
@@ -257,4 +259,4 @@ class MiniMaxH3SGLRope(RopeTemplate):
         return self.apply(x, torch.empty_like(x), freqs, **kwargs)[0]
 
 
-__all__ = ["MiniMaxH3SGLRope"]
+__all__ = ["SGLExactNeoXRope"]
