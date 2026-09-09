@@ -2,9 +2,9 @@ import os
 import re
 from pathlib import Path
 
-import torch
 from safetensors import safe_open
 
+from lightx2v.common.ops.utils import create_pin_tensor, move_tensor_back_to_cpu
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import TENSOR_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -48,25 +48,22 @@ class DefaultTensor:
                 lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{self.tensor_name.split('.')[1]}.safetensors")
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
                 tensor = lazy_load_file.get_tensor(self.tensor_name)
-                if use_infer_dtype:
-                    tensor = tensor.to(self.infer_dtype)
         else:
             tensor = weight_dict[self.tensor_name]
+        if use_infer_dtype:
+            tensor = tensor.to(self.infer_dtype)
         return tensor
 
-    def _create_cpu_pin_tensor(self, tensor):
-        pin_tensor = torch.empty(tensor.shape, pin_memory=True, dtype=tensor.dtype)
-        pin_tensor.copy_(tensor)
-        del tensor
-        return pin_tensor
+    def _create_cpu_pin_tensor(self, tensor, dtype=None):
+        return create_pin_tensor(tensor, dtype=dtype)
 
     def _load_cuda_buffer(self, weight_dict):
         tensor = self._get_tensor(weight_dict, use_infer_dtype=self.lazy_load)
         self.tensor_cuda_buffer = tensor.to(AI_DEVICE)
 
     def _load_cpu_pin_buffer(self):
-        tensor = self._get_tensor(use_infer_dtype=True)
-        self.pin_tensor = self._create_cpu_pin_tensor(tensor)
+        tensor = self._get_tensor()
+        self.pin_tensor = self._create_cpu_pin_tensor(tensor, dtype=self.infer_dtype)
 
     def to_cuda(self, non_blocking=False):
         if hasattr(self, "pin_tensor"):
@@ -78,7 +75,7 @@ class DefaultTensor:
 
     def to_cpu(self, non_blocking=False):
         if hasattr(self, "pin_tensor"):
-            self.tensor = self.pin_tensor.copy_(self.tensor, non_blocking=non_blocking).cpu()
+            move_tensor_back_to_cpu(self, "tensor", non_blocking=non_blocking)
         else:
             self.tensor = self.tensor.to("cpu", non_blocking=non_blocking)
 
@@ -110,6 +107,5 @@ class DefaultTensor:
         else:
             lazy_load_file_path = os.path.join(self.lazy_load_file, f"block_{block_index}.safetensors")
         with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-            tensor = lazy_load_file.get_tensor(self.tensor_name).to(self.infer_dtype)
-            self.pin_tensor = self.pin_tensor.copy_(tensor)
-        del tensor
+            tensor = lazy_load_file.get_tensor(self.tensor_name)
+            self.pin_tensor = create_pin_tensor(tensor, dtype=self.infer_dtype)

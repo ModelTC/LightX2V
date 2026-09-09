@@ -1,5 +1,7 @@
 import os
 import re
+import threading
+import weakref
 from pathlib import Path
 
 import torch
@@ -8,6 +10,154 @@ from safetensors import safe_open
 
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+_CUDA_HOST_REGISTER_DEFAULT = 0
+_CUDA_HOST_REGISTER_FINALIZER_ATTR = "_lightx2v_cuda_host_register_finalizer"
+_READONLY_PINNED_SOURCE_ATTR = "_lightx2v_readonly_pinned_source"
+_PINNED_WEIGHT_STATS = {
+    "registered_count": 0,
+    "registered_bytes": 0,
+    "fallback_count": 0,
+    "fallback_bytes": 0,
+}
+_PINNED_WEIGHT_FALLBACK_WARNED = False
+_PINNED_WEIGHT_STATS_LOCK = threading.Lock()
+
+
+def reset_pinned_weight_stats():
+    """Reset mmap pinned weight registration counters.
+
+    This helper is used by tests and validation scripts before measuring the
+    registration/fallback path of weight loading.
+    """
+    global _PINNED_WEIGHT_FALLBACK_WARNED
+    with _PINNED_WEIGHT_STATS_LOCK:
+        for key in _PINNED_WEIGHT_STATS:
+            _PINNED_WEIGHT_STATS[key] = 0
+        _PINNED_WEIGHT_FALLBACK_WARNED = False
+
+
+def get_pinned_weight_stats():
+    """Get mmap pinned weight registration counters.
+
+    Returns:
+        dict: Snapshot of registration and fallback counters.
+    """
+    with _PINNED_WEIGHT_STATS_LOCK:
+        return dict(_PINNED_WEIGHT_STATS)
+
+
+def _record_pinned_weight_fallback(tensor):
+    """Record one fallback from host registration to copy-based pinning.
+
+    Args:
+        tensor: Source tensor that could not be registered in place.
+    """
+    with _PINNED_WEIGHT_STATS_LOCK:
+        _PINNED_WEIGHT_STATS["fallback_count"] += 1
+    fallback_bytes = tensor.numel() * tensor.element_size()
+    try:
+        fallback_bytes = tensor.untyped_storage().nbytes()
+    except Exception:
+        pass
+    with _PINNED_WEIGHT_STATS_LOCK:
+        _PINNED_WEIGHT_STATS["fallback_bytes"] += fallback_bytes
+
+
+def _cuda_error_text(error):
+    """Convert a CUDA runtime error code to readable text.
+
+    Args:
+        error: CUDA runtime error code returned by cudart.
+
+    Returns:
+        Error message from CUDA runtime, or the raw error converted to string
+        if CUDA error text lookup is unavailable.
+    """
+    try:
+        return torch.cuda.cudart().cudaGetErrorString(error)
+    except Exception:
+        return str(error)
+
+
+def cuda_register_host_tensor(tensor):
+    """Register an existing CPU tensor storage as CUDA pinned host memory.
+
+    Args:
+        tensor: CPU tensor whose underlying storage should be registered with
+                ``cudaHostRegister``.
+
+    Returns:
+        The input tensor after its storage has been registered as pinned host
+        memory. The returned tensor is marked as a read-only pinned source so
+        offload code will not write GPU data back into mmap-backed storage.
+
+    Raises:
+        RuntimeError: If the tensor is not on CPU, CUDA is unavailable, the
+                    current AI device is not CUDA, or CUDA registration fails.
+    """
+    if tensor.device.type != "cpu":
+        raise RuntimeError(f"cudaHostRegister requires a CPU tensor, got {tensor.device}")
+    if tensor.numel() == 0:
+        return tensor
+    if AI_DEVICE != "cuda":
+        raise RuntimeError(f"cudaHostRegister is only enabled for cuda AI_DEVICE, got {AI_DEVICE}")
+    if not torch.cuda.is_available():
+        raise RuntimeError("cudaHostRegister requires CUDA to be available")
+
+    storage = tensor.untyped_storage()
+    finalizer = getattr(storage, _CUDA_HOST_REGISTER_FINALIZER_ATTR, None)
+    if finalizer is not None and finalizer.alive:
+        if not tensor.is_pinned():
+            raise RuntimeError("storage has a cudaHostRegister marker but tensor.is_pinned() is false")
+        # Keep a Python reference to the registered storage for async H2D users.
+        tensor._lightx2v_cuda_host_registered_storage = storage
+        setattr(tensor, _READONLY_PINNED_SOURCE_ATTR, True)
+        return tensor
+    if tensor.is_pinned():
+        return tensor
+
+    ptr = storage.data_ptr()
+    nbytes = storage.nbytes()
+    cudart = torch.cuda.cudart()
+    error = cudart.cudaHostRegister(ptr, nbytes, _CUDA_HOST_REGISTER_DEFAULT)
+    if error != 0:
+        raise RuntimeError(f"cudaHostRegister failed for {nbytes} bytes at 0x{ptr:x}: {_cuda_error_text(error)}")
+
+    def unregister(address, is_available=torch.cuda.is_available, cudart=torch.cuda.cudart):
+        try:
+            if is_available():
+                cudart().cudaHostUnregister(address)
+        except Exception:
+            pass
+
+    # Tie cudaHostUnregister to storage lifetime, not to a temporary tensor view.
+    finalizer = weakref.finalize(storage, unregister, ptr)
+    setattr(storage, _CUDA_HOST_REGISTER_FINALIZER_ATTR, finalizer)
+    # The tensor attribute keeps storage alive after safetensors safe_open closes.
+    tensor._lightx2v_cuda_host_registered_storage = storage
+    setattr(tensor, _READONLY_PINNED_SOURCE_ATTR, True)
+    if not tensor.is_pinned():
+        finalizer.detach()
+        cudart.cudaHostUnregister(ptr)
+        raise RuntimeError("cudaHostRegister succeeded but tensor.is_pinned() is false")
+
+    with _PINNED_WEIGHT_STATS_LOCK:
+        _PINNED_WEIGHT_STATS["registered_count"] += 1
+        _PINNED_WEIGHT_STATS["registered_bytes"] += nbytes
+    return tensor
+
+
+def is_readonly_pinned_source(tensor):
+    """Check whether a tensor is a registered read-only pinned source.
+
+    Args:
+        tensor: Tensor to inspect.
+
+    Returns:
+        bool: True if the tensor should only be used as a CPU-to-device source.
+    """
+    return bool(getattr(tensor, _READONLY_PINNED_SOURCE_ATTR, False))
 
 
 def resolve_block_name(name, block_index, adapter_block_index=None, is_post_adapter=False):
@@ -74,16 +224,59 @@ def get_source_tensor(source_name, weight_dict, lazy_load, lazy_load_file, use_i
 
 
 def create_pin_tensor(tensor, transpose=False, dtype=None):
-    """Create a tensor with pinned memory for faster data transfer to GPU.
+    """Create a CPU tensor with pinned memory for faster data transfer to GPU.
 
     Args:
-        tensor: Source tensor to be converted to pinned memory
-        transpose: Whether to transpose the tensor after creating pinned memory (optional)
-        dtype: Target data type of the pinned tensor (optional, defaults to source tensor's dtype)
+        tensor: Source tensor to be converted to pinned memory.
+        transpose: Whether to transpose the pinned tensor (optional).
+        dtype: Target data type of the pinned tensor (optional, defaults to
+               source tensor's dtype).
 
     Returns:
-        Pinned memory tensor (on CPU) with optional transposition applied.
-        Falls back to regular CPU tensor if pinned memory allocation fails.
+        Pinned memory tensor on CPU with optional transposition applied. When
+        the source tensor is a CPU tensor and no dtype conversion is needed, the
+        source storage is registered in place with ``cudaHostRegister``. If
+        registration fails or dtype conversion is required, a writable pinned
+        copy is created instead. The copy path falls back to regular CPU memory
+        if pinned allocation fails.
+    """
+    global _PINNED_WEIGHT_FALLBACK_WARNED
+
+    dtype = dtype or tensor.dtype
+    if tensor.device.type == "cpu" and dtype == tensor.dtype:
+        try:
+            pin_tensor = cuda_register_host_tensor(tensor)
+        except Exception as e:
+            _record_pinned_weight_fallback(tensor)
+            if not _PINNED_WEIGHT_FALLBACK_WARNED:
+                logger.warning(f"Failed to register mmap-backed pinned weight; falling back to copy-based pinned memory. First error: {e}")
+                _PINNED_WEIGHT_FALLBACK_WARNED = True
+        else:
+            if transpose:
+                base_tensor = pin_tensor
+                pin_tensor = base_tensor.t()
+                # A transposed view does not own storage; keep the registered
+                # base tensor alive for async H2D copies.
+                pin_tensor._lightx2v_cuda_host_registered_base = base_tensor
+                if is_readonly_pinned_source(base_tensor):
+                    setattr(pin_tensor, _READONLY_PINNED_SOURCE_ATTR, True)
+            return pin_tensor
+
+    return create_writable_pin_tensor(tensor, transpose=transpose, dtype=dtype)
+
+
+def create_writable_pin_tensor(tensor, transpose=False, dtype=None):
+    """Create a copy-based CPU buffer that may be written by later copy_ calls.
+
+    Args:
+        tensor: Source tensor to copy into the new buffer.
+        transpose: Whether to transpose the copied tensor (optional).
+        dtype: Target data type of the copied tensor (optional, defaults to
+               source tensor's dtype).
+
+    Returns:
+        Writable pinned CPU tensor. Falls back to regular CPU memory if pinned
+        allocation fails.
     """
     dtype = dtype or tensor.dtype
     try:
@@ -96,6 +289,34 @@ def create_pin_tensor(tensor, transpose=False, dtype=None):
         pin_tensor = pin_tensor.t()
     del tensor
     return pin_tensor
+
+
+def move_tensor_back_to_cpu(obj, attr_name, non_blocking=False):
+    """Move a device tensor attribute back to its CPU-side attribute.
+
+    Args:
+        obj: Object containing ``attr_name`` and optional ``pin_<attr_name>``.
+        attr_name: Name of the tensor attribute to move back to CPU.
+        non_blocking: Whether to perform non-blocking data transfer (optional).
+
+    Notes:
+        Read-only pinned sources are mmap-backed canonical CPU weights. They
+        are reused directly on CPU and are not overwritten by GPU results.
+        Copy-based pinned buffers remain writable and keep the previous
+        offload behavior of copying the device tensor back into ``pin_*``.
+    """
+    pin_attr_name = f"pin_{attr_name}"
+    value = getattr(obj, attr_name, None)
+    if hasattr(obj, pin_attr_name) and getattr(obj, pin_attr_name) is not None:
+        pin_tensor = getattr(obj, pin_attr_name)
+        if is_readonly_pinned_source(pin_tensor):
+            setattr(obj, attr_name, pin_tensor)
+        elif value is not None:
+            setattr(obj, attr_name, pin_tensor.copy_(value, non_blocking=non_blocking).cpu())
+        else:
+            setattr(obj, attr_name, pin_tensor)
+    elif value is not None:
+        setattr(obj, attr_name, value.to("cpu", non_blocking=non_blocking))
 
 
 def get_lazy_load_file_path(lazy_load_file, weight_name_for_block=None):
@@ -161,10 +382,16 @@ def create_cpu_buffers(base_attrs, lazy_load_file, use_infer_dtype=False, scale_
     """
     result = {}
 
-    # Use get_source_tensor to load the tensor (weight_dict is not required when lazy_load=True)
     for name, attr_name, transpose in base_attrs:
-        tensor = get_source_tensor(name, {}, lazy_load=True, lazy_load_file=lazy_load_file, use_infer_dtype=use_infer_dtype, scale_force_fp32=scale_force_fp32, bias_force_fp32=bias_force_fp32)
-        result[attr_name] = create_pin_tensor(tensor, transpose=transpose)
+        tensor = get_source_tensor(name, {}, lazy_load=True, lazy_load_file=lazy_load_file, use_infer_dtype=False, scale_force_fp32=False, bias_force_fp32=False)
+        dtype = None
+        if use_infer_dtype:
+            dtype = GET_DTYPE()
+        elif scale_force_fp32 and "weight_scale" in name:
+            dtype = torch.float32
+        elif bias_force_fp32 and "bias" in name:
+            dtype = torch.float32
+        result[attr_name] = create_pin_tensor(tensor, transpose=transpose, dtype=dtype)
 
     return result
 
@@ -223,7 +450,10 @@ def move_tensor_to_device(obj, attr_name, target_device, non_blocking=False, use
     if hasattr(obj, pin_attr_name) and getattr(obj, pin_attr_name) is not None:
         pin_tensor = getattr(obj, pin_attr_name)
         if hasattr(obj, attr_name) and getattr(obj, attr_name) is not None and use_copy:
-            setattr(obj, attr_name, pin_tensor.copy_(getattr(obj, attr_name), non_blocking=non_blocking).to(target_device))
+            if target_device == "cpu":
+                move_tensor_back_to_cpu(obj, attr_name, non_blocking=non_blocking)
+            else:
+                setattr(obj, attr_name, pin_tensor.copy_(getattr(obj, attr_name), non_blocking=non_blocking).to(target_device))
         else:
             setattr(obj, attr_name, pin_tensor.to(target_device, non_blocking=non_blocking))
     elif hasattr(obj, attr_name) and getattr(obj, attr_name) is not None:
