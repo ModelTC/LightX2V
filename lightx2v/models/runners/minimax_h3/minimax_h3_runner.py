@@ -107,6 +107,12 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def __init__(self, config):
         self.sgl_alignment = resolve_minimax_h3_sgl_alignment(config)
+        if self.sgl_alignment.aligned:
+            from lightx2v.models.video_encoders.hf.minimax_h3.sgl import MiniMaxH3SGLVideoVAE
+
+            self.video_vae_class = MiniMaxH3SGLVideoVAE
+        else:
+            self.video_vae_class = MiniMaxH3VideoVAE
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
@@ -269,7 +275,7 @@ class MiniMaxH3Runner(DefaultRunner):
         video_vae_quant_scheme = self.config["video_vae_quant_scheme"] if video_vae_quantized else None
         video_vae_quantized_ckpt = self.config["video_vae_quantized_ckpt"] if video_vae_quantized else None
         vae_sensitive_layer_dtype = DTYPE_MAP[self.config.get("vae_sensitive_layer_dtype", "fp32")]
-        video_vae = MiniMaxH3VideoVAE.from_pretrained(
+        video_vae = self.video_vae_class.from_pretrained(
             self.config["model_path"],
             device=AI_DEVICE,
             cpu_offload=cpu_offload,
@@ -278,8 +284,6 @@ class MiniMaxH3Runner(DefaultRunner):
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
-            encode_fp32=self.config.get("vae_encode_fp32", False),
-            sglang_parity_ops=self.sgl_alignment.parity_ops,
         )
         self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
         self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
@@ -479,9 +483,7 @@ class MiniMaxH3Runner(DefaultRunner):
             pixels = pixels.permute(3, 0, 1, 2)[None]
         else:
             pixels = pixels.permute(2, 0, 1)[None, :, None]
-        if not self.sgl_alignment.parity_ops:
-            pixels = pixels.float().div_(255.0)
-        return pixels
+        return self.video_vae.prepare_reference_pixels(pixels)
 
     def _encode_keyframes(self, keyframes):
         latents = []
@@ -649,8 +651,7 @@ class MiniMaxH3Runner(DefaultRunner):
             logger.info(f"MiniMax-H3 Video VAE decode tile shape for {resolution}: {tile_shape[0]}x{tile_shape[1]}")
 
         with ProfilingContext4DebugL1("Run Video VAE Decoder"):
-            return_video_cpu = False if self.sgl_alignment.compatible_export else None
-            video = self.video_vae.decode(video_latents, return_cpu=return_video_cpu)
+            video = self.video_vae.decode(video_latents)
         audio = None
         if not self.video_vae.decode_parallel or dist.get_rank() == 0:
             with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
@@ -658,12 +659,7 @@ class MiniMaxH3Runner(DefaultRunner):
         return video, audio
 
     def _video_to_uint8_frames(self, video):
-        if video.ndim != 5 or video.shape[0] != 1 or video.shape[1] != 3:
-            raise ValueError(f"decoded H3 video must be [1,3,F,H,W], got {tuple(video.shape)}")
-        pixels = video[0].permute(1, 2, 3, 0).float() * 255.0
-        if self.sgl_alignment.compatible_export:
-            return pixels.clamp_(0, 255).to(torch.uint8).contiguous().cpu()
-        return pixels.round().to(torch.uint8).contiguous().cpu()
+        return self.video_vae.to_uint8_frames(video)
 
     def process_images_after_vae_decoder(self):
         if self.video_vae.decode_parallel and dist.get_rank() != 0:

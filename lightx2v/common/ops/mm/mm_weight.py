@@ -2592,6 +2592,7 @@ class MMWeightTP(MMWeightTemplate):
         lora_path="",
         reduce_output=True,
         lora_column_chunks=1,
+        fp32_reduce=False,
     ):
         super().__init__(
             weight_name,
@@ -2610,6 +2611,7 @@ class MMWeightTP(MMWeightTemplate):
         self.split_dim = split_dim  # "col" for column split, "row" for row split
         self.reduce_output = reduce_output
         self.lora_column_chunks = lora_column_chunks
+        self.fp32_reduce = bool(fp32_reduce)
         assert split_dim in ["col", "row"], f"split_dim must be 'col' or 'row', got {split_dim}"
         assert lora_column_chunks >= 1, f"lora_column_chunks must be positive, got {lora_column_chunks}"
 
@@ -2727,7 +2729,12 @@ class MMWeightTP(MMWeightTemplate):
 
         # For row split, need all-reduce to combine results from all ranks
         if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
+            output_dtype = output.dtype
+            if self.fp32_reduce:
+                output = output.float()
             dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
+            if self.fp32_reduce:
+                output = output.to(output_dtype)
             # Add bias after all-reduce (bias is not split for row split)
             if self._row_split_bias is not None:
                 output = output + self._row_split_bias

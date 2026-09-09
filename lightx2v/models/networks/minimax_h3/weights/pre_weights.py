@@ -5,6 +5,12 @@ from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_al
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
+def _ensure_sgl_leaf_weights_registered():
+    from lightx2v.models.networks.minimax_h3.weights.merged_qkv import MiniMaxH3SGLMergedQKVWeight  # noqa: F401
+    from lightx2v.models.networks.minimax_h3.weights.qk_norm import MiniMaxH3SGLQKRMSNorm  # noqa: F401
+    from lightx2v.models.networks.minimax_h3.weights.reordered_mlp import MiniMaxH3SGLReorderedMLPWeight  # noqa: F401
+
+
 def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
     kind = "Default-ForceFp32" if force_fp32 else "Default"
     lora_kwargs = {"lora_prefix": "token_refiner"} if name.startswith("token_refiner.") else {}
@@ -25,28 +31,46 @@ def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
     return MM_WEIGHT_REGISTER[kind](f"{name}.weight", f"{name}.bias" if bias else None, **lora_kwargs)
 
 
-def _rms(config, name, eps):
-    return RMS_WEIGHT_REGISTER[config.get("rms_type", "torch_native")](name, eps=eps)
+def _rms(config, name, eps, kind=None):
+    return RMS_WEIGHT_REGISTER[kind or config.get("rms_type", "torch_native")](name, eps=eps)
 
 
 class MiniMaxH3RefinerAttentionWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
-        self.add_module("to_q", _linear(f"{prefix}.to_q", config=config, tp_split="col"))
-        self.add_module("to_k", _linear(f"{prefix}.to_k", config=config, tp_split="col"))
-        self.add_module("to_v", _linear(f"{prefix}.to_v", config=config, tp_split="col"))
+        aligned = resolve_minimax_h3_sgl_alignment(config).aligned
+        if aligned:
+            _ensure_sgl_leaf_weights_registered()
+            self.add_module(
+                "qkv",
+                MM_WEIGHT_REGISTER["h3ref_sgl_merged_qkv"](
+                    weight_names=tuple(f"{prefix}.to_{name}.weight" for name in ("q", "k", "v")),
+                    lora_prefix="token_refiner",
+                ),
+            )
+        else:
+            self.add_module("to_q", _linear(f"{prefix}.to_q", config=config, tp_split="col"))
+            self.add_module("to_k", _linear(f"{prefix}.to_k", config=config, tp_split="col"))
+            self.add_module("to_v", _linear(f"{prefix}.to_v", config=config, tp_split="col"))
+        qk_norm_kind = "h3ref_sgl_qk_rms_norm" if aligned else None
         self.add_module(
             "norm_q",
-            _rms(config, f"{prefix}.norm_q.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
+            _rms(
+                config,
+                f"{prefix}.norm_q.weight",
+                eps=float(config.get("qk_norm_eps", 1e-5)),
+                kind=qk_norm_kind,
+            ),
         )
         self.add_module(
             "norm_k",
-            _rms(config, f"{prefix}.norm_k.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
+            _rms(
+                config,
+                f"{prefix}.norm_k.weight",
+                eps=float(config.get("qk_norm_eps", 1e-5)),
+                kind=qk_norm_kind,
+            ),
         )
-        # H3's text refiner attends over a short text-only sequence, while the
-        # main transformer attends over the much longer packed AV sequence.
-        # Allow sparse main attention without paying its setup/quality cost in
-        # the refiner. Existing configs retain their previous shared backend.
         attn_type = config.get("refiner_attn_type", config.get("attn_type", "flash_attn3"))
         attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
         if attn_type == "dynamic_sparse_attn":
@@ -62,7 +86,15 @@ class MiniMaxH3RefinerAttentionWeights(WeightModule):
 class MiniMaxH3FeedForwardWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
-        self.add_module("in_proj", _linear(f"{prefix}.net.0.proj", config=config, tp_split="col"))
+        if resolve_minimax_h3_sgl_alignment(config).aligned:
+            _ensure_sgl_leaf_weights_registered()
+            in_proj = MM_WEIGHT_REGISTER["h3ref_sgl_reordered_mlp"](
+                weight_name=f"{prefix}.net.0.proj.weight",
+                lora_prefix="token_refiner",
+            )
+        else:
+            in_proj = _linear(f"{prefix}.net.0.proj", config=config, tp_split="col")
+        self.add_module("in_proj", in_proj)
         self.add_module("out_proj", _linear(f"{prefix}.net.2", config=config, tp_split="row"))
 
 
@@ -80,12 +112,9 @@ class MiniMaxH3TokenRefinerBlockWeights(WeightModule):
 class MiniMaxH3PreWeights(WeightModule):
     def __init__(self, config):
         super().__init__()
-        # The released checkpoint deliberately keeps the two media projections
-        # and timestep MLP in fp32.  The text projection/refiner stay bf16.
-        # SGLang uses column-parallel inputs and a column-to-row timestep MLP.
-        parity = resolve_minimax_h3_sgl_alignment(config).parity_ops
-        col = "col" if parity else None
-        row = "row" if parity else None
+        tp_layout = resolve_minimax_h3_sgl_alignment(config).tp_layout
+        col = "col" if tp_layout == "h3ref_sgl" else None
+        row = "row" if tp_layout == "h3ref_sgl" else None
         self.add_module("proj_in", _linear("proj_in", bias=True, force_fp32=True, config=config, tp_split=col))
         self.add_module(
             "audio_proj_in",

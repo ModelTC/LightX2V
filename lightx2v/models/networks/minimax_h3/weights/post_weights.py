@@ -29,8 +29,8 @@ def _rms(config, name, eps):
 class MiniMaxH3PostWeights(WeightModule):
     def __init__(self, config):
         super().__init__()
-        parity = resolve_minimax_h3_sgl_alignment(config).parity_ops
-        col = "col" if parity else None
+        tp_layout = resolve_minimax_h3_sgl_alignment(config).tp_layout
+        col = "col" if tp_layout == "h3ref_sgl" else None
         self.add_module(
             "norm_out",
             _rms(config, "norm_out.norm.weight", eps=float(config.get("final_norm_eps", 1e-5))),

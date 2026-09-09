@@ -14,7 +14,6 @@ from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3Sequenc
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import MiniMaxH3PreInfer
-from lightx2v.models.networks.minimax_h3.infer.sglang_parity import clear_sglang_parity_weight_caches
 from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH3TransformerInfer
 from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3PostWeights,
@@ -41,7 +40,7 @@ H3_CHANNEL_QUANT_SCHEMES = {
     "int8-convrot",
 }
 
-_SGLANG_PARITY_TP_SPLITS = {
+_H3REF_SGL_TP_SPLITS = {
     "proj_in": "col",
     "audio_proj_in": "col",
     "context_embedder": "col",
@@ -62,7 +61,9 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
-        self.sglang_parity_ops = resolve_minimax_h3_sgl_alignment(config).parity_ops
+        alignment = resolve_minimax_h3_sgl_alignment(config)
+        self.sgl_aligned = alignment.aligned
+        self.tp_layout = alignment.tp_layout
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not self.use_adaln_cache:
             separator = "=" * 88
@@ -98,6 +99,8 @@ class MiniMaxH3Model(BaseTransformerModel):
             )
         if config.get("cfg_parallel", False) or config.get("enable_cfg", False):
             raise ValueError("MiniMax-H3 is guidance-distilled and does not have a CFG/unconditional branch")
+        if config.get("dit_quantized", False) and self.sgl_aligned:
+            raise ValueError("MiniMax-H3 h3ref_sgl packed QKV/SwiGLU operators require resident BF16 weights and cannot be combined with dit_quantized=true")
         if config.get("dit_quantized", False):
             quant_scheme = config.get("dit_quant_scheme", "Default")
             if quant_scheme not in H3_CHANNEL_QUANT_SCHEMES:
@@ -346,8 +349,8 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError(f"MiniMax-H3 TP size {self.tp_size} must divide {details}")
 
     def _tp_split_type(self, key):
-        if self.sglang_parity_ops:
-            for prefix, split_type in _SGLANG_PARITY_TP_SPLITS.items():
+        if self.tp_layout == "h3ref_sgl":
+            for prefix, split_type in _H3REF_SGL_TP_SPLITS.items():
                 if key == prefix or key.startswith(f"{prefix}."):
                     return split_type
         if ".attn.to_q." in key or ".attn.to_k." in key or ".attn.to_v." in key:
@@ -512,9 +515,21 @@ class MiniMaxH3Model(BaseTransformerModel):
     def _init_infer_class(self):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("MiniMax-H3 feature caching is not implemented")
-        self.pre_infer_class = MiniMaxH3PreInfer
-        self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
-        self.post_infer_class = MiniMaxH3PostInfer
+        if self.sgl_aligned:
+            from lightx2v.models.networks.minimax_h3.infer.sgl import (
+                MiniMaxH3SGLOffloadTransformerInfer,
+                MiniMaxH3SGLPostInfer,
+                MiniMaxH3SGLPreInfer,
+                MiniMaxH3SGLTransformerInfer,
+            )
+
+            self.pre_infer_class = MiniMaxH3SGLPreInfer
+            self.transformer_infer_class = MiniMaxH3SGLOffloadTransformerInfer if self.cpu_offload else MiniMaxH3SGLTransformerInfer
+            self.post_infer_class = MiniMaxH3SGLPostInfer
+        else:
+            self.pre_infer_class = MiniMaxH3PreInfer
+            self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
+            self.post_infer_class = MiniMaxH3PostInfer
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)
@@ -609,9 +624,7 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def to_cpu(self):
         super().to_cpu()
-        if self.cpu_offload and self.sglang_parity_ops:
-            clear_sglang_parity_weight_caches(self.pre_weight.refiner_blocks)
-            clear_sglang_parity_weight_caches(self.transformer_weights.blocks)
+        if self.cpu_offload:
             self.transformer_infer._clear_adaln_cache()
         if hasattr(self.transformer_infer, "offload_manager"):
             # Full teardown moves the active aliases away from the persistent

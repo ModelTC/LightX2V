@@ -85,13 +85,18 @@ def _row_shard(value, tp_rank, tp_size):
     return value.narrow(1, tp_rank * shard_size, shard_size)
 
 
-def _row_parallel_linear(module, hidden_states, tp_group, tp_rank, tp_size):
+def _row_parallel_linear(module, hidden_states, tp_group, tp_rank, tp_size, fp32_reduce=False):
     if tp_size == 1:
         return module(hidden_states)
     # SGLang adds row-parallel bias on rank 0 before the reduction.
     bias = module.bias if tp_rank == 0 else None
     output = F.linear(hidden_states, module.weight, bias)
+    output_dtype = output.dtype
+    if fp32_reduce:
+        output = output.float()
     dist.all_reduce(output, op=dist.ReduceOp.SUM, group=tp_group)
+    if fp32_reduce:
+        output = output.to(output_dtype)
     return output
 
 
@@ -110,11 +115,12 @@ class _PatchEmbed(nn.Module):
 
 
 class _VisionAttention(nn.Module):
-    def __init__(self, config, tp_group=None, tp_rank=0, tp_size=1):
+    def __init__(self, config, tp_group=None, tp_rank=0, tp_size=1, fp32_reduce=False):
         super().__init__()
         self.tp_group = tp_group
         self.tp_rank = tp_rank
         self.tp_size = tp_size
+        self.fp32_reduce = bool(fp32_reduce)
         self.total_num_heads = config["num_heads"]
         if self.total_num_heads % tp_size:
             raise ValueError(f"Qwen3-VL vision heads ({self.total_num_heads}) must be divisible by TP size ({tp_size})")
@@ -164,15 +170,23 @@ class _VisionAttention(nn.Module):
                 scale=self.scaling,
             )
             outputs.append(out.transpose(1, 2).reshape(end - start, -1))
-        return _row_parallel_linear(self.proj, torch.cat(outputs, dim=0), self.tp_group, self.tp_rank, self.tp_size)
+        return _row_parallel_linear(
+            self.proj,
+            torch.cat(outputs, dim=0),
+            self.tp_group,
+            self.tp_rank,
+            self.tp_size,
+            self.fp32_reduce,
+        )
 
 
 class _VisionMLP(nn.Module):
-    def __init__(self, config, tp_group=None, tp_rank=0, tp_size=1):
+    def __init__(self, config, tp_group=None, tp_rank=0, tp_size=1, fp32_reduce=False):
         super().__init__()
         self.tp_group = tp_group
         self.tp_rank = tp_rank
         self.tp_size = tp_size
+        self.fp32_reduce = bool(fp32_reduce)
         self.linear_fc1 = nn.Linear(config["hidden_size"], config["intermediate_size"], bias=True)
         self.linear_fc2 = nn.Linear(config["intermediate_size"], config["hidden_size"], bias=True)
 
@@ -185,16 +199,23 @@ class _VisionMLP(nn.Module):
 
     def forward(self, hidden_states):
         hidden_states = F.gelu(self.linear_fc1(hidden_states), approximate="tanh")
-        return _row_parallel_linear(self.linear_fc2, hidden_states, self.tp_group, self.tp_rank, self.tp_size)
+        return _row_parallel_linear(
+            self.linear_fc2,
+            hidden_states,
+            self.tp_group,
+            self.tp_rank,
+            self.tp_size,
+            self.fp32_reduce,
+        )
 
 
 class _VisionBlock(nn.Module):
-    def __init__(self, config, tp_group=None, tp_rank=0, tp_size=1):
+    def __init__(self, config, tp_group=None, tp_rank=0, tp_size=1, fp32_reduce=False):
         super().__init__()
         self.norm1 = nn.LayerNorm(config["hidden_size"], eps=1e-6)
         self.norm2 = nn.LayerNorm(config["hidden_size"], eps=1e-6)
-        self.attn = _VisionAttention(config, tp_group, tp_rank, tp_size)
-        self.mlp = _VisionMLP(config, tp_group, tp_rank, tp_size)
+        self.attn = _VisionAttention(config, tp_group, tp_rank, tp_size, fp32_reduce)
+        self.mlp = _VisionMLP(config, tp_group, tp_rank, tp_size, fp32_reduce)
 
     def shard_for_tensor_parallel(self):
         self.attn.shard_for_tensor_parallel()
@@ -206,11 +227,12 @@ class _VisionBlock(nn.Module):
 
 
 class _PatchMerger(nn.Module):
-    def __init__(self, config, postshuffle=False, tp_group=None, tp_rank=0, tp_size=1):
+    def __init__(self, config, postshuffle=False, tp_group=None, tp_rank=0, tp_size=1, fp32_reduce=False):
         super().__init__()
         self.tp_group = tp_group
         self.tp_rank = tp_rank
         self.tp_size = tp_size
+        self.fp32_reduce = bool(fp32_reduce)
         merged_size = config["hidden_size"] * config["spatial_merge_size"] ** 2
         self.merged_size = merged_size
         self.postshuffle = postshuffle
@@ -231,23 +253,51 @@ class _PatchMerger(nn.Module):
         else:
             hidden_states = self.norm(hidden_states).view(-1, self.merged_size)
         hidden_states = F.gelu(self.linear_fc1(hidden_states))
-        return _row_parallel_linear(self.linear_fc2, hidden_states, self.tp_group, self.tp_rank, self.tp_size)
+        return _row_parallel_linear(
+            self.linear_fc2,
+            hidden_states,
+            self.tp_group,
+            self.tp_rank,
+            self.tp_size,
+            self.fp32_reduce,
+        )
 
 
 class MiniMaxH3Qwen3VLVisionTower(nn.Module):
-    def __init__(self, config, tp_group=None):
+    def __init__(self, config, tp_group=None, fp32_reduce=False):
         super().__init__()
         self.config = dict(config)
         self.tp_group = tp_group
         self.tp_size = dist.get_world_size(tp_group) if tp_group is not None else 1
         self.tp_rank = dist.get_rank(tp_group) if tp_group is not None else 0
+        self.fp32_reduce = bool(fp32_reduce)
         self.spatial_merge_size = int(config["spatial_merge_size"])
         self.patch_embed = _PatchEmbed(config)
         self.pos_embed = nn.Embedding(config["num_position_embeddings"], config["hidden_size"])
-        self.blocks = nn.ModuleList([_VisionBlock(config, tp_group, self.tp_rank, self.tp_size) for _ in range(config["depth"])])
-        self.merger = _PatchMerger(config, tp_group=tp_group, tp_rank=self.tp_rank, tp_size=self.tp_size)
+        self.blocks = nn.ModuleList(
+            [_VisionBlock(config, tp_group, self.tp_rank, self.tp_size, self.fp32_reduce) for _ in range(config["depth"])]
+        )
+        self.merger = _PatchMerger(
+            config,
+            tp_group=tp_group,
+            tp_rank=self.tp_rank,
+            tp_size=self.tp_size,
+            fp32_reduce=self.fp32_reduce,
+        )
         self.deepstack_visual_indexes = list(config["deepstack_visual_indexes"])
-        self.deepstack_merger_list = nn.ModuleList([_PatchMerger(config, postshuffle=True, tp_group=tp_group, tp_rank=self.tp_rank, tp_size=self.tp_size) for _ in self.deepstack_visual_indexes])
+        self.deepstack_merger_list = nn.ModuleList(
+            [
+                _PatchMerger(
+                    config,
+                    postshuffle=True,
+                    tp_group=tp_group,
+                    tp_rank=self.tp_rank,
+                    tp_size=self.tp_size,
+                    fp32_reduce=self.fp32_reduce,
+                )
+                for _ in self.deepstack_visual_indexes
+            ]
+        )
         head_dim = config["hidden_size"] // config["num_heads"]
         self.register_buffer("rotary_inv_freq", 1.0 / (10000.0 ** (torch.arange(0, head_dim // 2, 2).float() / (head_dim // 2))), persistent=False)
 
@@ -281,10 +331,10 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
         return self.merger(hidden_states), deepstack
 
     @classmethod
-    def from_pretrained(cls, text_encoder_path, vision_config, tp_group=None):
+    def from_pretrained(cls, text_encoder_path, vision_config, tp_group=None, fp32_reduce=False):
         root = Path(text_encoder_path)
         with torch.device("meta"):
-            model = cls(vision_config, tp_group=tp_group)
+            model = cls(vision_config, tp_group=tp_group, fp32_reduce=fp32_reduce)
         with (root / "model.safetensors.index.json").open("r", encoding="utf-8") as handle:
             weight_map = json.load(handle)["weight_map"]
         prefix = "model.visual."

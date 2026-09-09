@@ -26,7 +26,7 @@ class MiniMaxH3PreInferOutput:
     text_indices: torch.Tensor
     cu_seqlens: torch.Tensor
     norm_out_modulation: torch.Tensor | None = None
-    sglang_rope_cache: tuple[torch.Tensor, torch.Tensor] | None = None
+    prepared_rotary_emb: object | None = None
     sequence_parallel_state: MiniMaxH3SequenceParallelState | None = None
 
 

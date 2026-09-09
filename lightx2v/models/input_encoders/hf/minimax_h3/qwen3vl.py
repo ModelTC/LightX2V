@@ -139,6 +139,7 @@ def _qwen_linear(config, weight_name, *, tp_group, tp_rank, tp_size, split_dim, 
         tp_size=tp_size,
         split_dim=split_dim,
         create_cuda_buffer=create_cuda_buffer,
+        fp32_reduce=bool(config.get("qwen3vl_fp32_reduce", False)),
     )
 
 
@@ -1027,7 +1028,12 @@ class MiniMaxH3Qwen3VLTextEncoder:
         model_config = self._read_model_config(text_encoder_path)
         vision_config = dict(model_config["vision_config"])
         logger.info(f"Building native MiniMax-H3 Qwen3-VL vision tower from {text_encoder_path}")
-        self.vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config, tp_group=self.tp_group)
+        self.vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(
+            text_encoder_path,
+            vision_config,
+            tp_group=self.tp_group,
+            fp32_reduce=bool(self.config.get("qwen3vl_fp32_reduce", False)),
+        )
         return self.vision_encoder
 
     def unload_text_encoder(self):

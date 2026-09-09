@@ -4,29 +4,8 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from lightx2v.common.ops.mm.mm_weight import unwrap_tp_weight
-from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3PreInferOutput
-from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
-    apply_mlp_sglang,
-    apply_qk_norm_sglang,
-)
-from lightx2v.models.networks.minimax_h3.infer.sglang_parity import project_merged_qkv, tp_all_gather_last_dim
 from lightx2v.utils.envs import GET_DTYPE
-
-
-def _row_parallel_linear_sglang(module, tensor, group, rank, world_size):
-    if world_size == 1:
-        return module.apply(tensor)
-    concrete = unwrap_tp_weight(module)
-    if concrete.has_lora_branch or concrete.has_diff:
-        raise NotImplementedError("MiniMax-H3 SGLang parity does not support LoRA/diff row projections")
-    weight = concrete._get_actual_weight()
-    bias = module._row_split_bias if rank == 0 else None
-    # Light stores [in, out]; SGLang calls F.linear with [out, in].
-    output = F.linear(tensor, weight.t(), bias)
-    dist.all_reduce(output, op=dist.ReduceOp.SUM, group=group)
-    return output
 
 
 def timestep_embedding(timesteps: torch.Tensor, embedding_dim: int = 256) -> torch.Tensor:
@@ -62,26 +41,25 @@ class MiniMaxH3PreInfer:
         self.rope_theta = float(config.get("rope_theta", 10000.0))
         self.freq_dim = int(config.get("freq_dim", 256))
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
-        self.sglang_parity_ops = resolve_minimax_h3_sgl_alignment(config).parity_ops
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    @staticmethod
+    def _project_qkv(weights, hidden_states):
+        return (
+            weights.to_q.apply(hidden_states),
+            weights.to_k.apply(hidden_states),
+            weights.to_v.apply(hidden_states),
+        )
+
     def _attention(self, weights, hidden_states):
-        if self.sglang_parity_ops:
-            q, k, v = project_merged_qkv(weights, hidden_states)
-        else:
-            q = weights.to_q.apply(hidden_states)
-            k = weights.to_k.apply(hidden_states)
-            v = weights.to_v.apply(hidden_states)
+        q, k, v = self._project_qkv(weights, hidden_states)
         q = q.unflatten(-1, (self.num_heads, self.head_dim))
         k = k.unflatten(-1, (self.num_heads, self.head_dim))
         v = v.unflatten(-1, (self.num_heads, self.head_dim))
-        if self.sglang_parity_ops:
-            q, k = apply_qk_norm_sglang(q, k, weights.norm_q, weights.norm_k)
-        else:
-            q = weights.norm_q.apply(q)
-            k = weights.norm_k.apply(k)
+        q = weights.norm_q.apply(q)
+        k = weights.norm_k.apply(k)
         seq_len = q.shape[0]
         cu_seqlens = torch.tensor((0, seq_len), dtype=torch.int32, device=q.device)
         out = weights.calculate.apply(
@@ -97,11 +75,18 @@ class MiniMaxH3PreInfer:
         )
         return weights.to_out.apply(out.to(GET_DTYPE()))
 
-    def _ff(self, weights, hidden_states):
-        if self.sglang_parity_ops:
-            return apply_mlp_sglang(weights, hidden_states)
+    @staticmethod
+    def _ff(weights, hidden_states):
         value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
         return weights.out_proj.apply(value * F.silu(gate))
+
+    @staticmethod
+    def _gather_tp_last_dim(tensor):
+        return tensor
+
+    @staticmethod
+    def _apply_time_linear_2(module, hidden_states):
+        return module.apply(hidden_states)
 
     def _refine_text(self, weights, text_embeds):
         for block in weights.refiner_blocks:
@@ -137,10 +122,9 @@ class MiniMaxH3PreInfer:
         video_embeds = weights.proj_in.apply(self.scheduler.video_latents.float())
         audio_embeds = weights.audio_proj_in.apply(self.scheduler.audio_latents.float())
         text_embeds = weights.context_embedder.apply(prompt_embeds.to(bulk_dtype))
-        if self.sglang_parity_ops:
-            video_embeds = tp_all_gather_last_dim(video_embeds, self.tp_group, self.tp_size)
-            audio_embeds = tp_all_gather_last_dim(audio_embeds, self.tp_group, self.tp_size)
-            text_embeds = tp_all_gather_last_dim(text_embeds, self.tp_group, self.tp_size)
+        video_embeds = self._gather_tp_last_dim(video_embeds)
+        audio_embeds = self._gather_tp_last_dim(audio_embeds)
+        text_embeds = self._gather_tp_last_dim(text_embeds)
         video_embeds = video_embeds.to(bulk_dtype)
         audio_embeds = audio_embeds.to(bulk_dtype)
         text_embeds = self._refine_text(weights, text_embeds)
@@ -157,10 +141,7 @@ class MiniMaxH3PreInfer:
             # followed by regenerating the cache when cached values can change.
             temb = timestep_embedding(self.scheduler.unique_timesteps, self.freq_dim)
             time_hidden = F.silu(weights.time_linear_1.apply(temb.float()))
-            if self.sglang_parity_ops:
-                temb = _row_parallel_linear_sglang(weights.time_linear_2, time_hidden, self.tp_group, self.tp_rank, self.tp_size)
-            else:
-                temb = weights.time_linear_2.apply(time_hidden)
+            temb = self._apply_time_linear_2(weights.time_linear_2, time_hidden)
         timestep_indices = self.scheduler.timestep_indices
         adaln_indices = timestep_indices * 3 + layout.token_tags.clamp(min=0)
 

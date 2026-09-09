@@ -6,9 +6,6 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-from lightx2v.common.ops.mm.mm_weight import unwrap_tp_weight
-from lightx2v.models.networks.minimax_h3.infer.sglang_parity import _linear_weight
-
 # The numerical kernels below are adapted from SGLang commit
 # 8ef646a5c65bd2f8922483057dddc02e2b0de18c (Apache-2.0). Keeping the
 # H3-specific subset here avoids importing an SGLang checkout at runtime.
@@ -282,55 +279,41 @@ def _scaled_residual_add_exact_kernel(
     tl.store(output_ptr + offsets, residual + _mul_rn_f32(x, scale), mask=mask)
 
 
-def _apply_qk_norm_local(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    q_weight: torch.Tensor,
-    k_weight: torch.Tensor,
+def apply_qk_rms_norm_sglang(
+    hidden_states: torch.Tensor,
+    weight: torch.Tensor,
     eps: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> torch.Tensor:
     head_dim = 128
-    if q.ndim != 3 or k.ndim != 3 or q.shape[-1] != head_dim or k.shape[-1] != head_dim:
-        raise ValueError(f"H3 parity Q/K normalization expects [tokens, heads, 128], got {q.shape} and {k.shape}")
-    if q.device != k.device or q.device != q_weight.device or q.device != k_weight.device:
-        raise ValueError("H3 parity Q/K normalization tensors must be on one device")
-    if q.device.type != "cuda":
-        q = F.rms_norm(q.float(), (head_dim,), q_weight.float(), eps).to(q.dtype)
-        k = F.rms_norm(k.float(), (head_dim,), k_weight.float(), eps).to(k.dtype)
-        return q, k
-    _require_nvidia_triton(q, "H3 Q/K normalization")
-    if q.dtype is not torch.bfloat16 or k.dtype is not torch.bfloat16 or q_weight.dtype is not torch.bfloat16 or k_weight.dtype is not torch.bfloat16:
-        raise TypeError("H3 parity Q/K normalization requires BF16 activations and weights")
-    if q.shape[1] <= 0 or k.shape[1] <= 0:
-        raise ValueError(f"H3 parity Q/K normalization requires at least one head, got {q.shape} and {k.shape}")
-    if q.stride(-1) != 1 or k.stride(-1) != 1 or q.stride(-2) != head_dim or k.stride(-2) != head_dim:
-        raise ValueError(f"Unsupported H3 parity Q/K strides: {q.stride()} and {k.stride()}")
-    if (q.shape[0] > 1 and q.stride(0) < q.shape[1] * head_dim) or (k.shape[0] > 1 and k.stride(0) < k.shape[1] * head_dim):
-        raise ValueError(f"Overlapping H3 parity Q/K token strides: {q.stride()} and {k.stride()}")
-    if q_weight.shape != (head_dim,) or k_weight.shape != (head_dim,) or not q_weight.is_contiguous() or not k_weight.is_contiguous():
-        raise ValueError("H3 parity Q/K normalization weights must be contiguous [128] tensors")
-    with torch.cuda.device(q.device):
-        if q.numel():
-            _h3_qknorm_128_kernel[(q.shape[0] * q.shape[1],)](
-                q,
-                q_weight,
-                q.shape[1],
-                q.stride(0),
-                q.stride(1),
+    if hidden_states.ndim != 3 or hidden_states.shape[-1] != head_dim:
+        raise ValueError(f"H3 reference Q/K normalization expects [tokens, heads, 128], got {hidden_states.shape}")
+    if hidden_states.device != weight.device:
+        raise ValueError("H3 reference Q/K normalization tensors must be on one device")
+    if hidden_states.device.type != "cuda":
+        return F.rms_norm(hidden_states.float(), (head_dim,), weight.float(), eps).to(hidden_states.dtype)
+    _require_nvidia_triton(hidden_states, "H3 Q/K normalization")
+    if hidden_states.dtype is not torch.bfloat16 or weight.dtype is not torch.bfloat16:
+        raise TypeError("H3 reference Q/K normalization requires BF16 activations and weights")
+    if hidden_states.shape[1] <= 0:
+        raise ValueError(f"H3 reference Q/K normalization requires at least one head, got {hidden_states.shape}")
+    if hidden_states.stride(-1) != 1 or hidden_states.stride(-2) != head_dim:
+        raise ValueError(f"Unsupported H3 reference Q/K strides: {hidden_states.stride()}")
+    if hidden_states.shape[0] > 1 and hidden_states.stride(0) < hidden_states.shape[1] * head_dim:
+        raise ValueError(f"Overlapping H3 reference Q/K token strides: {hidden_states.stride()}")
+    if weight.shape != (head_dim,) or not weight.is_contiguous():
+        raise ValueError("H3 reference Q/K normalization weights must be a contiguous [128] tensor")
+    with torch.cuda.device(hidden_states.device):
+        if hidden_states.numel():
+            _h3_qknorm_128_kernel[(hidden_states.shape[0] * hidden_states.shape[1],)](
+                hidden_states,
+                weight,
+                hidden_states.shape[1],
+                hidden_states.stride(0),
+                hidden_states.stride(1),
                 EPS=float(eps),
                 num_warps=1,
             )
-        if k.numel():
-            _h3_qknorm_128_kernel[(k.shape[0] * k.shape[1],)](
-                k,
-                k_weight,
-                k.shape[1],
-                k.stride(0),
-                k.stride(1),
-                EPS=float(eps),
-                num_warps=1,
-            )
-    return q, k
+    return hidden_states
 
 
 def _apply_neox_rope_fallback(
@@ -532,31 +515,6 @@ def _silu_mul_with_activation_rounding(hidden_states: torch.Tensor) -> torch.Ten
     return F.silu(gate).mul_(value)
 
 
-def _norm_weights(q_norm, k_norm) -> tuple[torch.Tensor, torch.Tensor]:
-    return q_norm._get_actual_weight(), k_norm._get_actual_weight()
-
-
-def apply_qk_norm_sglang(q: torch.Tensor, k: torch.Tensor, q_norm, k_norm) -> tuple[torch.Tensor, torch.Tensor]:
-    q_weight, k_weight = _norm_weights(q_norm, k_norm)
-    return _apply_qk_norm_local(q, k, q_weight, k_weight, q_norm.eps)
-
-
-def apply_qk_norm_rope_sglang(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    q_norm,
-    k_norm,
-    rope_cache: tuple[torch.Tensor, torch.Tensor],
-) -> tuple[torch.Tensor, torch.Tensor]:
-    q_weight, k_weight = _norm_weights(q_norm, k_norm)
-    cos_sin_cache, positions = rope_cache
-    # Validate RoPE metadata and shapes before Q/K normalization mutates its
-    # merged-QKV views in place. Position values come from the trusted producer.
-    cos_sin_cache, positions = _prepare_qk_neox_rope_inputs(q, k, cos_sin_cache, positions)
-    q, k = _apply_qk_norm_local(q, k, q_weight, k_weight, q_norm.eps)
-    return _apply_qk_neox_rope_local(q, k, cos_sin_cache, positions)
-
-
 def _validate_indexed_modulation_inputs(
     operation: str,
     x: torch.Tensor,
@@ -666,23 +624,6 @@ def indexed_gate_sglang(x: torch.Tensor, gate: torch.Tensor, other: torch.Tensor
     return x
 
 
-def apply_mlp_sglang(weights, hidden_states: torch.Tensor) -> torch.Tensor:
-    cache = getattr(weights, "_sglang_parity_mlp_cache", None)
-    if cache is None:
-        source_weight = _linear_weight(weights.in_proj)
-        if source_weight.shape[1] % 2:
-            raise ValueError(f"Invalid H3 fused MLP weight shape {tuple(source_weight.shape)}")
-        value_weight, gate_weight = source_weight.chunk(2, dim=1)
-        fused_weight = torch.cat((gate_weight.t(), value_weight.t()), dim=0).contiguous()
-        cache = fused_weight
-        weights._sglang_parity_mlp_cache = cache
-        # The merged matrix replaces the Diffusers [value, gate] weight.
-        unwrap_tp_weight(weights.in_proj).weight = None
-    hidden = F.linear(hidden_states, cache)
-    hidden = _silu_mul_with_activation_rounding_inplace(hidden)
-    return weights.out_proj.apply(hidden)
-
-
 def apply_vae_silu_mul_sglang(hidden_states: torch.Tensor) -> torch.Tensor:
     return _silu_mul_with_activation_rounding(hidden_states)
 
@@ -694,65 +635,3 @@ def scaled_residual_add_vae_sglang(
 ) -> torch.Tensor:
     fused = _try_scaled_residual_add_exact(residual, hidden_states, scale)
     return residual + hidden_states * scale if fused is None else fused
-
-
-def prepare_vae_rope_sglang(
-    rotary_emb: tuple[torch.Tensor, torch.Tensor],
-    *,
-    dtype: torch.dtype,
-) -> tuple[torch.Tensor, ...]:
-    cos, sin = rotary_emb
-    if (
-        not cos.is_cuda
-        or dtype not in (torch.float16, torch.bfloat16)
-        or cos.shape != sin.shape
-        or cos.device != sin.device
-        or cos.dim() != 4
-        or cos.shape[0] != 1
-        or cos.shape[2] != 1
-        or cos.shape[-1] % 2
-        or not _supports_nvidia_triton(cos)
-        or torch.compiler.is_compiling()
-    ):
-        return cos, sin
-
-    cos = cos.to(dtype=dtype)
-    sin = sin.to(dtype=dtype)
-    half = cos.shape[-1] // 2
-    cache = torch.cat((cos[0, :, 0, :half], sin[0, :, 0, :half]), dim=-1).contiguous()
-    positions = torch.arange(cos.shape[1], dtype=torch.long, device=cos.device)
-    return cos, sin, cache, positions
-
-
-def _apply_vae_rope_fallback(
-    hidden_states: torch.Tensor,
-    rotary_emb: tuple[torch.Tensor, ...],
-) -> torch.Tensor:
-    cos, sin = rotary_emb[:2]
-    cos = cos.to(hidden_states.dtype)
-    sin = sin.to(hidden_states.dtype)
-    rotary_dim = cos.shape[-1]
-    rotary, passthrough = hidden_states[..., :rotary_dim], hidden_states[..., rotary_dim:]
-    first, second = rotary.chunk(2, dim=-1)
-    scaled = rotary * cos
-    scaled.add_(torch.cat((-second, first), dim=-1) * sin)
-    if rotary_dim < hidden_states.shape[-1]:
-        return torch.cat((scaled, passthrough), dim=-1)
-    return scaled
-
-
-def apply_vae_rope_sglang(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    rotary_emb: tuple[torch.Tensor, ...],
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if len(rotary_emb) == 4:
-        _, _, cache, positions = rotary_emb
-        # The previous sgl_kernel wrapper materialized Q/K before rotating.
-        # Preserve that output layout because it can affect SDPA dispatch.
-        return _apply_qk_neox_rope_local(query.contiguous(), key.contiguous(), cache, positions)
-
-    return (
-        _apply_vae_rope_fallback(query, rotary_emb),
-        _apply_vae_rope_fallback(key, rotary_emb),
-    )
