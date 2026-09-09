@@ -32,7 +32,6 @@
     "strict": true
   },
   "rms_type": "sgl-kernel",
-  "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
   "use_compile": true,
   "warmup": true,
@@ -47,7 +46,7 @@
   "vae_attn_type": "sage_attn2",
   "video_flow_shift": 6.0,
   "audio_flow_shift": 3.0,
-  "h3_step_update": "training_euler",
+  "h3_sampling_profile": "dmd",
   "vae_spatial_scale_factor": 16,
   "audio_sampling_rate": 32000,
   "dit_quantized": true,

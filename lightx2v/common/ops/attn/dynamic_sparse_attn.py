@@ -129,6 +129,35 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         max_seqlen_kv=None,
         **kwargs,
     ):
+        if (cu_seqlens_q is None) != (cu_seqlens_kv is None):
+            raise ValueError("cu_seqlens_q and cu_seqlens_kv must either both be set or both be None")
+        if q.ndim == 3 and cu_seqlens_q is not None and cu_seqlens_q.numel() > 2:
+            q_bounds = cu_seqlens_q.tolist()
+            kv_bounds = cu_seqlens_kv.tolist()
+            if (
+                len(q_bounds) != len(kv_bounds)
+                or q_bounds[0] != 0
+                or kv_bounds[0] != 0
+                or q_bounds[-1] != q.shape[0]
+                or kv_bounds[-1] != k.shape[0]
+            ):
+                raise ValueError("Invalid packed dynamic sparse attention boundaries")
+            output = q.new_empty((q.shape[0], q.shape[1] * v.shape[-1]))
+            for q_start, q_stop, kv_start, kv_stop in zip(q_bounds, q_bounds[1:], kv_bounds, kv_bounds[1:]):
+                if q_start == q_stop:
+                    continue
+                segment = self.apply_func(
+                    q[q_start:q_stop],
+                    k[kv_start:kv_stop],
+                    v[kv_start:kv_stop],
+                    None,
+                    None,
+                    q_stop - q_start,
+                    kv_stop - kv_start,
+                    **kwargs,
+                )
+                output[q_start:q_stop].copy_(segment)
+            return output
         if max_seqlen_q is None:
             max_seqlen_q = q.shape[0]
         if max_seqlen_kv is None:

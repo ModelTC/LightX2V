@@ -42,8 +42,7 @@ class TorchSDPAWeight(AttnWeightTemplate):
             query = query.transpose(1, 2)
             key = key.transpose(1, 2)
             value = value.transpose(1, 2)
-            # Hunyuan3D upstream Attention uses SDPA flash kernel (see hy3dshape hunyuandit.py).
-            # Matching this context is required for bit-identical attention vs the reference.
+            # Match Hunyuan3D's flash-only upstream dispatch.
             sdpa_ctx = nullcontext()
             if kwargs.get("model_cls") == "hunyuan3d":
                 sdpa_ctx = torch.backends.cuda.sdp_kernel(
@@ -52,10 +51,7 @@ class TorchSDPAWeight(AttnWeightTemplate):
                     enable_mem_efficient=True,
                 )
             with sdpa_ctx:
-                # query/key/value are (B, H, S, D) here, so head count is dim 1.
-                # GQA models such as neopp (32 q heads, 8 kv heads) need SDPA to
-                # broadcast the kv groups.
-                output = F.scaled_dot_product_attention(
+                return F.scaled_dot_product_attention(
                     query,
                     key,
                     value,
@@ -64,8 +60,7 @@ class TorchSDPAWeight(AttnWeightTemplate):
                     is_causal=causal,
                     scale=softmax_scale,
                     enable_gqa=query.shape[1] != key.shape[1],
-                )
-            return output.transpose(1, 2)
+                ).transpose(1, 2)
 
         if (cu_seqlens_q is None) != (cu_seqlens_kv is None):
             raise ValueError("cu_seqlens_q and cu_seqlens_kv must either both be set or both be None")
@@ -85,6 +80,7 @@ class TorchSDPAWeight(AttnWeightTemplate):
         if v.shape[0] != k.shape[0]:
             raise ValueError("Packed k and v sequence lengths must match")
 
+        # PyTorch SDPA has no varlen API, so process each cu_seqlens segment independently.
         output = q.new_empty((q.shape[0], q.shape[1], v.shape[-1]))
         for q_start, q_stop, kv_start, kv_stop in zip(q_bounds, q_bounds[1:], kv_bounds, kv_bounds[1:]):
             if q_start == q_stop:

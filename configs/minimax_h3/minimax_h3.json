@@ -17,8 +17,6 @@
   "unload_modules": false,
   "attn_type": "torch_sdpa",
   "rms_type": "torch_native",
-  "rope_type": "minimax_h3_triton_rope",
-  "sgl_aligned": true,
   "feature_caching": "NoCaching",
   "use_compile": false,
   "video_flow_shift": 12.0,

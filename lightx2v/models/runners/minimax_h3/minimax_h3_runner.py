@@ -9,7 +9,7 @@ from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
 from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
-from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_execution_profile
 from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
@@ -46,7 +46,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
-from lightx2v.utils.ltx2_media_io import encode_video, encode_video_sglang_compatible
+from lightx2v.utils.ltx2_media_io import encode_video_sglang_compatible
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -82,12 +82,12 @@ def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
 
 @RUNNER_REGISTER("minimax_h3")
 class MiniMaxH3Runner(DefaultRunner):
-    """Native MiniMax-H3 audio-video runner.
+    """MiniMax-H3 audio-video runner.
 
     Transformer, text-encoder, and VAE residency are configured independently.
     ``cpu_offload`` controls only the transformer, while
-    ``text_encoder_cpu_offload`` and ``vae_cpu_offload`` control the native
-    Qwen3-VL conditioner and both native VAEs. This mirrors Wan's component
+    ``text_encoder_cpu_offload`` and ``vae_cpu_offload`` control the
+    Qwen3-VL conditioner and both VAEs. This mirrors Wan's component
     offload behavior while keeping Diffusers out of the runtime dependency
     graph.
     """
@@ -106,13 +106,8 @@ class MiniMaxH3Runner(DefaultRunner):
     }
 
     def __init__(self, config):
-        self.sgl_alignment = resolve_minimax_h3_sgl_alignment(config)
-        if self.sgl_alignment.aligned:
-            from lightx2v.models.video_encoders.hf.minimax_h3.sgl import MiniMaxH3SGLVideoVAE
-
-            self.video_vae_class = MiniMaxH3SGLVideoVAE
-        else:
-            self.video_vae_class = MiniMaxH3VideoVAE
+        self.execution_profile = resolve_minimax_h3_execution_profile(config)
+        self.video_vae_class = MiniMaxH3VideoVAE
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
@@ -580,7 +575,7 @@ class MiniMaxH3Runner(DefaultRunner):
         if not self.config.get("cpu_offload", False):
             logger.info("MiniMax-H3 transformer is resident on the accelerator")
         elif self.config.get("offload_granularity", "model") == "model":
-            logger.info("Moving the native MiniMax-H3 transformer to the accelerator")
+            logger.info("Moving the MiniMax-H3 transformer to the accelerator")
             self.model.to_cuda()
         else:
             logger.info("MiniMax-H3 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
@@ -687,24 +682,14 @@ class MiniMaxH3Runner(DefaultRunner):
             )
             logger.info(f"Saving MiniMax-H3 audio-video output to {output_path}")
             with ProfilingContext4DebugL2("Save Audio-Video Output"):
-                if self.sgl_alignment.compatible_export:
-                    encode_video_sglang_compatible(
-                        video=frames,
-                        fps=int(self.config.get("fps", 24)),
-                        audio=audio,
-                        output_path=output_path,
-                        crf=self.config.get("sglang_export_crf", 25),
-                        threads=self.config.get("sglang_export_threads", 24),
-                    )
-                else:
-                    encode_video(
-                        video=frames,
-                        fps=int(self.config.get("fps", 24)),
-                        audio=audio,
-                        output_path=output_path,
-                        video_chunks_number=1,
-                        video_codec_options=self.config.get("video_codec_options"),
-                    )
+                encode_video_sglang_compatible(
+                    video=frames,
+                    fps=int(self.config.get("fps", 24)),
+                    audio=audio,
+                    output_path=output_path,
+                    crf=self.config.get("sglang_export_crf", 25),
+                    threads=self.config.get("sglang_export_threads", 24),
+                )
             logger.info(f"MiniMax-H3 output saved to {output_path}")
         return {"video": None, "audio": None}
 

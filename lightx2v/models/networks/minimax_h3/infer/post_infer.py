@@ -2,6 +2,8 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3VelocityOutput
+from lightx2v.models.networks.minimax_h3.infer.sglang_fused import indexed_scale_shift_sglang
+from lightx2v.models.networks.minimax_h3.infer.tensor_parallel import all_gather_last_dim
 from lightx2v.utils.envs import GET_DTYPE
 
 
@@ -17,14 +19,12 @@ class MiniMaxH3PostInfer:
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
-    @staticmethod
-    def _gather_tp_last_dim(tensor):
-        return tensor
+    def _gather_tp_last_dim(self, tensor):
+        return all_gather_last_dim(tensor, self.tp_group, self.tp_size)
 
     @staticmethod
     def _apply_modulation(hidden_states, shift, scale, indices):
-        hidden_states = hidden_states * (1.0 + scale.index_select(0, indices))
-        return hidden_states + shift.index_select(0, indices)
+        return indexed_scale_shift_sglang(hidden_states, shift, scale, indices)
 
     def infer(self, weights, hidden_states, pre_infer_out):
         modulation = pre_infer_out.norm_out_modulation

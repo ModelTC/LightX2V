@@ -113,8 +113,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         ``None`` selects QKV-only attention; passing only ``aux_q=None`` selects
         the q-only cross-attention form. Set ``aux_first=True`` when auxiliary
         tokens precede the A2A tokens in the attention sequence.
-        This interface supports one logical Q sequence and one logical KV
-        sequence only. Packed-varlen batches are not supported.
+        Packed boundaries in ``attention_kwargs`` must describe the full
+        sequence reconstructed after A2A, including the auxiliary prefix when
+        ``aux_first=True``.
         ``tensor_fusion`` packs Q/K/V into one Ulysses communication payload.
         The return value is ``(output, aux_output)``.
         """

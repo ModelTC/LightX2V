@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import torch
 
-from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_execution_profile
 from lightx2v.models.networks.minimax_h3.packing import (
     AUDIO_CHANNELS,
     KEYFRAME_NOISE_AUG,
@@ -44,19 +44,12 @@ class MiniMaxH3Scheduler(BaseScheduler):
 
     def __init__(self, config):
         super().__init__(config)
-        sgl_alignment = resolve_minimax_h3_sgl_alignment(config)
+        execution_profile = resolve_minimax_h3_execution_profile(config)
         infer_steps = int(config["infer_steps"])
         self.video_shift = float(config.get("video_flow_shift", 12.0))
         self.audio_shift = float(config.get("audio_flow_shift", 3.0))
-        self.packed_sequence_alignment = sgl_alignment.packed_sequence_alignment
-        if self.packed_sequence_alignment < 1:
-            raise ValueError(f"MiniMax-H3 h3_packed_sequence_alignment must be positive, got {self.packed_sequence_alignment}")
-        self.rng_mode = sgl_alignment.rng_mode
-        if self.rng_mode not in {"legacy_stream", "sglang"}:
-            raise ValueError(f"MiniMax-H3 h3_rng_mode must be 'legacy_stream' or 'sglang', got {self.rng_mode!r}")
-        self.step_update = sgl_alignment.step_update
-        if self.step_update not in {"reference_blend", "sglang_reference_blend", "training_euler"}:
-            raise ValueError(f"MiniMax-H3 h3_step_update must be 'reference_blend', 'sglang_reference_blend', or 'training_euler', got {self.step_update!r}")
+        self.packed_sequence_alignment = execution_profile.packed_sequence_alignment
+        self.sampling_profile = execution_profile.sampling_profile
         if self.video_shift <= 0 or self.audio_shift <= 0:
             raise ValueError("MiniMax-H3 flow shifts must be positive")
         self.video_sigmas, self.video_timesteps = _make_schedule(infer_steps, self.video_shift, AI_DEVICE)
@@ -93,82 +86,54 @@ class MiniMaxH3Scheduler(BaseScheduler):
 
         condition_video_latents = condition_video_latents or []
         condition_audio_latents = condition_audio_latents or []
-        if self.rng_mode == "sglang":
-            # SGLang uses separate seeded CPU FP32 streams for each modality.
-            condition_video_rows = []
-            condition_count = len(condition_video_latents)
-            for clean in condition_video_latents:
-                clean_cpu = clean.detach().to(device="cpu", dtype=torch.float32)
-                condition_t, condition_h, condition_w = clean_cpu.shape[-3:]
-                generator = torch.Generator(device="cpu").manual_seed(int(seed))
-                noise = torch.randn(
-                    (1, int(self.config.get("in_channels", 24)), latent_frames + condition_count, condition_h, condition_w),
-                    generator=generator,
-                    device="cpu",
-                    dtype=torch.float32,
-                )[:, :, :condition_t]
-                clean_rows = patchify_video_latents(clean_cpu, patch_size)
-                noise_rows = patchify_video_latents(noise, patch_size)
-                timestep = torch.tensor(KEYFRAME_NOISE_AUG, dtype=torch.float32, device="cpu")
-                condition_video_rows.append(timestep * clean_rows + (1.0 - timestep) * noise_rows)
+        # Video and audio use separate seeded CPU FP32 streams.
+        condition_video_rows = []
+        condition_count = len(condition_video_latents)
+        for clean in condition_video_latents:
+            clean_cpu = clean.detach().to(device="cpu", dtype=torch.float32)
+            condition_t, condition_h, condition_w = clean_cpu.shape[-3:]
+            generator = torch.Generator(device="cpu").manual_seed(int(seed))
+            noise = torch.randn(
+                (1, int(self.config.get("in_channels", 24)), latent_frames + condition_count, condition_h, condition_w),
+                generator=generator,
+                device="cpu",
+                dtype=torch.float32,
+            )[:, :, :condition_t]
+            clean_rows = patchify_video_latents(clean_cpu, patch_size)
+            noise_rows = patchify_video_latents(noise, patch_size)
+            timestep = torch.tensor(KEYFRAME_NOISE_AUG, dtype=torch.float32, device="cpu")
+            condition_video_rows.append(timestep * clean_rows + (1.0 - timestep) * noise_rows)
 
-            self.generator = torch.Generator(device="cpu").manual_seed(int(seed))
-            video_noise = torch.randn(
-                (1, int(self.config.get("in_channels", 24)), latent_frames, latent_height, latent_width),
-                generator=self.generator,
-                device="cpu",
-                dtype=torch.float32,
-            )
-            target_video_rows = patchify_video_latents(video_noise, patch_size)
-            self.video_latents = torch.cat(condition_video_rows + [target_video_rows]).to(AI_DEVICE)
+        self.generator = torch.Generator(device="cpu").manual_seed(int(seed))
+        video_noise = torch.randn(
+            (1, int(self.config.get("in_channels", 24)), latent_frames, latent_height, latent_width),
+            generator=self.generator,
+            device="cpu",
+            dtype=torch.float32,
+        )
+        target_video_rows = patchify_video_latents(video_noise, patch_size)
+        self.video_latents = torch.cat(condition_video_rows + [target_video_rows]).to(AI_DEVICE)
 
-            audio_generator = torch.Generator(device="cpu").manual_seed(int(seed))
-            target_audio_rows = torch.randn(
-                (num_audio_latents * AUDIO_CHANNELS, int(self.config.get("audio_in_channels", 32))),
-                generator=audio_generator,
-                device="cpu",
-                dtype=torch.float32,
-            )
-            audio_noise_aug = float(self.config.get("audio_condition_noise_aug", 1.0))
-            if not 0.0 <= audio_noise_aug <= 1.0:
-                raise ValueError(f"MiniMax-H3 audio_condition_noise_aug must be in [0, 1], got {audio_noise_aug}")
-            condition_audio_rows = []
-            for latent in condition_audio_latents:
-                clean_rows = latent.detach().transpose(1, 2).reshape(-1, latent.shape[1]).to(device="cpu", dtype=torch.float32)
-                if audio_noise_aug < 1.0:
-                    generator = torch.Generator(device="cpu").manual_seed(int(seed) + 1)
-                    noise_rows = torch.randn(clean_rows.shape, generator=generator, device="cpu", dtype=torch.float32)
-                    timestep = torch.tensor(audio_noise_aug, dtype=torch.float32, device="cpu")
-                    clean_rows = timestep * clean_rows + (1.0 - timestep) * noise_rows
-                condition_audio_rows.append(clean_rows)
-            self.audio_latents = torch.cat(condition_audio_rows + [target_audio_rows]).to(AI_DEVICE)
-        else:
-            # Existing configs retain LightX2V's shared RNG stream.
-            self.generator = torch.Generator(device="cpu").manual_seed(int(seed))
-            condition_video_rows = []
-            for clean in condition_video_latents:
-                noise = torch.randn(clean.shape, generator=self.generator, device="cpu", dtype=torch.float32)
-                clean_rows = patchify_video_latents(clean.float(), patch_size).to(AI_DEVICE)
-                noise_rows = patchify_video_latents(noise.to(AI_DEVICE), patch_size)
-                timestep = torch.tensor(KEYFRAME_NOISE_AUG, dtype=clean_rows.dtype, device=clean_rows.device)
-                condition_video_rows.append(timestep * clean_rows + (1.0 - timestep) * noise_rows)
-
-            video_noise = torch.randn(
-                (1, int(self.config.get("in_channels", 24)), latent_frames, latent_height, latent_width),
-                generator=self.generator,
-                device="cpu",
-                dtype=torch.float32,
-            )
-            target_video_rows = patchify_video_latents(video_noise, patch_size)
-            self.video_latents = torch.cat(condition_video_rows + [target_video_rows.to(AI_DEVICE)])
-            target_audio_rows = torch.randn(
-                (num_audio_latents * AUDIO_CHANNELS, int(self.config.get("audio_in_channels", 32))),
-                generator=self.generator,
-                device="cpu",
-                dtype=torch.float32,
-            )
-            condition_audio_rows = [latent.transpose(1, 2).reshape(-1, latent.shape[1]).float() for latent in condition_audio_latents]
-            self.audio_latents = torch.cat(condition_audio_rows + [target_audio_rows]).to(AI_DEVICE)
+        audio_generator = torch.Generator(device="cpu").manual_seed(int(seed))
+        target_audio_rows = torch.randn(
+            (num_audio_latents * AUDIO_CHANNELS, int(self.config.get("audio_in_channels", 32))),
+            generator=audio_generator,
+            device="cpu",
+            dtype=torch.float32,
+        )
+        audio_noise_aug = float(self.config.get("audio_condition_noise_aug", 1.0))
+        if not 0.0 <= audio_noise_aug <= 1.0:
+            raise ValueError(f"MiniMax-H3 audio_condition_noise_aug must be in [0, 1], got {audio_noise_aug}")
+        condition_audio_rows = []
+        for latent in condition_audio_latents:
+            clean_rows = latent.detach().transpose(1, 2).reshape(-1, latent.shape[1]).to(device="cpu", dtype=torch.float32)
+            if audio_noise_aug < 1.0:
+                generator = torch.Generator(device="cpu").manual_seed(int(seed) + 1)
+                noise_rows = torch.randn(clean_rows.shape, generator=generator, device="cpu", dtype=torch.float32)
+                timestep = torch.tensor(audio_noise_aug, dtype=torch.float32, device="cpu")
+                clean_rows = timestep * clean_rows + (1.0 - timestep) * noise_rows
+            condition_audio_rows.append(clean_rows)
+        self.audio_latents = torch.cat(condition_audio_rows + [target_audio_rows]).to(AI_DEVICE)
 
         if references is None:
             self.layout_cpu = build_packed_sequence(
@@ -216,27 +181,25 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.timestep_indices = inverse.to(AI_DEVICE)
 
     @staticmethod
-    def _step(sample, model_output, timestep, sigmas, step_index, step_update):
-        # Rebuild sigma from the timestep to preserve reference rounding.
-        sigma_from_timestep = 1.0 - timestep.to(device=sample.device, dtype=sample.dtype)
+    def _step(sample, model_output, timestep, sigmas, step_index, sampling_profile):
         sigma = sigmas[step_index].to(device=sample.device, dtype=torch.float32)
         sigma_next = sigmas[step_index + 1].to(device=sample.device, dtype=torch.float32)
-        if step_update == "training_euler":
+        if sampling_profile == "dmd":
             return sample.float() + (sigma - sigma_next) * model_output.float()
+
+        # Rebuild sigma from the timestep to preserve the base model's
+        # reference rounding and operation order.
+        sigma_from_timestep = 1.0 - timestep.to(device=sample.device, dtype=sample.dtype)
         ratio = sigma_next / sigma
-        if step_update == "sglang_reference_blend":
-            # Operation order is bitwise-significant here.
-            state = sample.float()
-            velocity = model_output.float()
-            denoised_scratch = torch.empty_like(state)
-            torch.mul(sigma_from_timestep, velocity, out=denoised_scratch)
-            torch.add(state, denoised_scratch, out=denoised_scratch)
-            torch.mul(1.0 - ratio, denoised_scratch, out=velocity)
-            torch.mul(ratio, state, out=state)
-            torch.add(state, velocity, out=state)
-            return state
-        denoised = sample + sigma_from_timestep * model_output
-        return ratio * sample.float() + (1.0 - ratio) * denoised.float()
+        state = sample.float()
+        velocity = model_output.float()
+        denoised_scratch = torch.empty_like(state)
+        torch.mul(sigma_from_timestep, velocity, out=denoised_scratch)
+        torch.add(state, denoised_scratch, out=denoised_scratch)
+        torch.mul(1.0 - ratio, denoised_scratch, out=velocity)
+        torch.mul(ratio, state, out=state)
+        torch.add(state, velocity, out=state)
+        return state
 
     def step_post(self):
         if self.video_noise_pred is None or self.audio_noise_pred is None:
@@ -249,7 +212,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
             self.video_timesteps[self.step_index],
             self.video_sigmas,
             self.step_index,
-            self.step_update,
+            self.sampling_profile,
         )
         self.audio_latents[condition_audio_rows:] = self._step(
             self.audio_latents[condition_audio_rows:],
@@ -257,7 +220,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
             self.audio_timesteps[self.step_index],
             self.audio_sigmas,
             self.step_index,
-            self.step_update,
+            self.sampling_profile,
         )
 
     def clear(self):

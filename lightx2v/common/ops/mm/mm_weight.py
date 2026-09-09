@@ -628,9 +628,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_fp8_perchannel_sym_sgl(self, x):
+        x = x.contiguous()
         m, k = x.shape
-        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device="cuda", requires_grad=False)
-        input_tensor_scale = torch.empty((m, 1), dtype=torch.float32, device="cuda", requires_grad=False)
+        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=x.device, requires_grad=False)
+        input_tensor_scale = torch.empty((m, 1), dtype=torch.float32, device=x.device, requires_grad=False)
         sgl_kernel.sgl_per_token_quant_fp8(x, input_tensor_quant, input_tensor_scale)
         return input_tensor_quant, input_tensor_scale
 
@@ -659,9 +660,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return (x_view * (448.0 / x_amax.unsqueeze(2))).to(torch.float8_e4m3fn).view(m, n), (x_amax / 448.0).view(m, -1)
 
     def act_quant_fp8_perchannelgroup128_sym_sgl(self, x):
+        x = x.contiguous()
         m, k = x.shape
-        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device="cuda", requires_grad=False)
-        input_tensor_scale = torch.empty((m, k // 128), dtype=torch.float32, device="cuda", requires_grad=False)
+        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=x.device, requires_grad=False)
+        input_tensor_scale = torch.empty((m, k // 128), dtype=torch.float32, device=x.device, requires_grad=False)
         sgl_kernel.sgl_per_token_group_quant_fp8(
             x,
             input_tensor_quant,
@@ -2025,6 +2027,7 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         self.scale_force_fp32 = True
 
     def apply(self, input_tensor):
+        input_tensor = input_tensor.contiguous()
         shape = (input_tensor.shape[0], self.weight.shape[1])
         dtype = input_tensor.dtype
         device = input_tensor.device

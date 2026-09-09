@@ -1,6 +1,5 @@
 """Native Qwen3-VL vision tower used by MiniMax-H3 conditioning."""
 
-import gc
 import json
 import math
 from collections import defaultdict
@@ -75,7 +74,7 @@ def _column_shard(value, tp_rank, tp_size):
     if value.shape[0] % tp_size:
         raise ValueError(f"Cannot column-shard shape {tuple(value.shape)} over vision TP size {tp_size}")
     shard_size = value.shape[0] // tp_size
-    return value.narrow(0, tp_rank * shard_size, shard_size)
+    return value.narrow(0, tp_rank * shard_size, shard_size).clone()
 
 
 def _row_shard(value, tp_rank, tp_size):
@@ -85,10 +84,10 @@ def _row_shard(value, tp_rank, tp_size):
     return value.narrow(1, tp_rank * shard_size, shard_size)
 
 
-def _row_parallel_linear(module, hidden_states, tp_group, tp_rank, tp_size, fp32_reduce=False):
+def _row_parallel_linear(module, hidden_states, tp_group, tp_rank, tp_size, *, fp32_reduce=False):
     if tp_size == 1:
         return module(hidden_states)
-    # SGLang adds row-parallel bias on rank 0 before the reduction.
+    # Add the row-parallel bias once before all-reduce, matching SGLang.
     bias = module.bias if tp_rank == 0 else None
     output = F.linear(hidden_states, module.weight, bias)
     output_dtype = output.dtype
@@ -120,12 +119,12 @@ class _VisionAttention(nn.Module):
         self.tp_group = tp_group
         self.tp_rank = tp_rank
         self.tp_size = tp_size
-        self.fp32_reduce = bool(fp32_reduce)
-        self.total_num_heads = config["num_heads"]
-        if self.total_num_heads % tp_size:
-            raise ValueError(f"Qwen3-VL vision heads ({self.total_num_heads}) must be divisible by TP size ({tp_size})")
-        self.num_heads = self.total_num_heads // tp_size
-        self.head_dim = config["hidden_size"] // self.total_num_heads
+        self.fp32_reduce = fp32_reduce
+        total_num_heads = config["num_heads"]
+        if total_num_heads % tp_size:
+            raise ValueError(f"Qwen3-VL vision heads ({total_num_heads}) must be divisible by TP size ({tp_size})")
+        self.num_heads = total_num_heads // tp_size
+        self.head_dim = config["hidden_size"] // total_num_heads
         self.scaling = self.head_dim**-0.5
         self.qkv = nn.Linear(config["hidden_size"], config["hidden_size"] * 3, bias=True)
         self.proj = nn.Linear(config["hidden_size"], config["hidden_size"], bias=True)
@@ -170,14 +169,7 @@ class _VisionAttention(nn.Module):
                 scale=self.scaling,
             )
             outputs.append(out.transpose(1, 2).reshape(end - start, -1))
-        return _row_parallel_linear(
-            self.proj,
-            torch.cat(outputs, dim=0),
-            self.tp_group,
-            self.tp_rank,
-            self.tp_size,
-            self.fp32_reduce,
-        )
+        return _row_parallel_linear(self.proj, torch.cat(outputs, dim=0), self.tp_group, self.tp_rank, self.tp_size, fp32_reduce=self.fp32_reduce)
 
 
 class _VisionMLP(nn.Module):
@@ -186,7 +178,7 @@ class _VisionMLP(nn.Module):
         self.tp_group = tp_group
         self.tp_rank = tp_rank
         self.tp_size = tp_size
-        self.fp32_reduce = bool(fp32_reduce)
+        self.fp32_reduce = fp32_reduce
         self.linear_fc1 = nn.Linear(config["hidden_size"], config["intermediate_size"], bias=True)
         self.linear_fc2 = nn.Linear(config["intermediate_size"], config["hidden_size"], bias=True)
 
@@ -199,14 +191,7 @@ class _VisionMLP(nn.Module):
 
     def forward(self, hidden_states):
         hidden_states = F.gelu(self.linear_fc1(hidden_states), approximate="tanh")
-        return _row_parallel_linear(
-            self.linear_fc2,
-            hidden_states,
-            self.tp_group,
-            self.tp_rank,
-            self.tp_size,
-            self.fp32_reduce,
-        )
+        return _row_parallel_linear(self.linear_fc2, hidden_states, self.tp_group, self.tp_rank, self.tp_size, fp32_reduce=self.fp32_reduce)
 
 
 class _VisionBlock(nn.Module):
@@ -232,7 +217,7 @@ class _PatchMerger(nn.Module):
         self.tp_group = tp_group
         self.tp_rank = tp_rank
         self.tp_size = tp_size
-        self.fp32_reduce = bool(fp32_reduce)
+        self.fp32_reduce = fp32_reduce
         merged_size = config["hidden_size"] * config["spatial_merge_size"] ** 2
         self.merged_size = merged_size
         self.postshuffle = postshuffle
@@ -253,36 +238,25 @@ class _PatchMerger(nn.Module):
         else:
             hidden_states = self.norm(hidden_states).view(-1, self.merged_size)
         hidden_states = F.gelu(self.linear_fc1(hidden_states))
-        return _row_parallel_linear(
-            self.linear_fc2,
-            hidden_states,
-            self.tp_group,
-            self.tp_rank,
-            self.tp_size,
-            self.fp32_reduce,
-        )
+        return _row_parallel_linear(self.linear_fc2, hidden_states, self.tp_group, self.tp_rank, self.tp_size, fp32_reduce=self.fp32_reduce)
 
 
 class MiniMaxH3Qwen3VLVisionTower(nn.Module):
     def __init__(self, config, tp_group=None, fp32_reduce=False):
         super().__init__()
         self.config = dict(config)
-        self.tp_group = tp_group
         self.tp_size = dist.get_world_size(tp_group) if tp_group is not None else 1
         self.tp_rank = dist.get_rank(tp_group) if tp_group is not None else 0
-        self.fp32_reduce = bool(fp32_reduce)
         self.spatial_merge_size = int(config["spatial_merge_size"])
         self.patch_embed = _PatchEmbed(config)
         self.pos_embed = nn.Embedding(config["num_position_embeddings"], config["hidden_size"])
-        self.blocks = nn.ModuleList(
-            [_VisionBlock(config, tp_group, self.tp_rank, self.tp_size, self.fp32_reduce) for _ in range(config["depth"])]
-        )
+        self.blocks = nn.ModuleList([_VisionBlock(config, tp_group, self.tp_rank, self.tp_size, fp32_reduce) for _ in range(config["depth"])])
         self.merger = _PatchMerger(
             config,
             tp_group=tp_group,
             tp_rank=self.tp_rank,
             tp_size=self.tp_size,
-            fp32_reduce=self.fp32_reduce,
+            fp32_reduce=fp32_reduce,
         )
         self.deepstack_visual_indexes = list(config["deepstack_visual_indexes"])
         self.deepstack_merger_list = nn.ModuleList(
@@ -293,7 +267,7 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
                     tp_group=tp_group,
                     tp_rank=self.tp_rank,
                     tp_size=self.tp_size,
-                    fp32_reduce=self.fp32_reduce,
+                    fp32_reduce=fp32_reduce,
                 )
                 for _ in self.deepstack_visual_indexes
             ]
@@ -303,13 +277,12 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
 
     def shard_for_tensor_parallel(self):
         if self.tp_size == 1:
-            return self
+            return
         for block in self.blocks:
             block.shard_for_tensor_parallel()
         self.merger.shard_for_tensor_parallel()
         for merger in self.deepstack_merger_list:
             merger.shard_for_tensor_parallel()
-        return self
 
     def forward(self, pixels, grid_thw):
         grid_thw = grid_thw.to(device=pixels.device)
@@ -348,13 +321,9 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
             with safe_open(root / shard, framework="pt", device="cpu") as checkpoint:
                 for name in shard_names:
                     state[name[len(prefix) :]] = checkpoint.get_tensor(name)
-        missing, unexpected = model.load_state_dict(state, strict=False, assign=True)
-        # rotary_inv_freq is non-persistent, so every persistent tensor must match.
-        if missing or unexpected:
-            raise RuntimeError(f"Qwen3-VL vision checkpoint mismatch: missing={missing}, unexpected={unexpected}")
+        model.load_state_dict(state, assign=True)
         model.shard_for_tensor_parallel()
-        state.clear()
-        gc.collect()
+        del state
         head_dim = vision_config["hidden_size"] // vision_config["num_heads"]
         model.rotary_inv_freq = 1.0 / (10000.0 ** (torch.arange(0, head_dim // 2, 2, dtype=torch.float32) / (head_dim // 2)))
         if model.tp_size > 1:

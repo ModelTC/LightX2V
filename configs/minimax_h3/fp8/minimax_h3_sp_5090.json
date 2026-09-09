@@ -17,7 +17,6 @@
   "unload_modules": false,
   "attn_type": "sage_attn2",
   "rms_type": "sgl-kernel",
-  "rope_type": "minimax_h3_triton_rope",
   "feature_caching": "NoCaching",
   "use_compile": true,
   "warmup": true,

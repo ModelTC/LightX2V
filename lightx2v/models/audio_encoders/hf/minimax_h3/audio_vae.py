@@ -23,7 +23,6 @@ denormalization and FP32 DAC/BigVGAN execution.
 
 from __future__ import annotations
 
-import gc
 import json
 import math
 from contextlib import contextmanager, nullcontext
@@ -524,16 +523,14 @@ class MiniMaxH3AudioVAE(nn.Module):
     def _activate(self) -> torch.device:
         if self.cpu_offload:
             self.to(self.execution_device)
-        device = next(self.parameters()).device
-        dtype = next(self.parameters()).dtype
-        if dtype != torch.float32:
-            raise RuntimeError(f"MiniMax-H3 audio VAE weights must remain float32 for parity; found {dtype}. Move the module by device only, without a dtype cast.")
-        return device
+        parameter = next(self.parameters())
+        if parameter.dtype != torch.float32:
+            raise RuntimeError(f"MiniMax-H3 audio VAE weights must remain float32 for parity; found {parameter.dtype}. Move the module by device only, without a dtype cast.")
+        return parameter.device
 
     def offload(self) -> None:
         self.to("cpu")
         _empty_device_cache(self.execution_device)
-        gc.collect()
 
     def _prepare_stereo_latents(
         self,

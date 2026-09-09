@@ -4,6 +4,12 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
+from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
+    _silu_mul_with_activation_rounding_inplace,
+    indexed_gate_sglang,
+    indexed_scale_shift_sglang,
+)
+from lightx2v.models.networks.minimax_h3.infer.tensor_parallel import all_gather_last_dim
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -50,27 +56,26 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return torch.device(AI_DEVICE, device_module.current_device())
 
     def _gather_tp_last_dim(self, tensor):
-        if self.tp_size == 1:
-            return tensor
-        gathered = [torch.empty_like(tensor) for _ in range(self.tp_size)]
-        dist.all_gather(gathered, tensor.contiguous(), group=self.tp_group)
-        return torch.cat(gathered, dim=-1)
+        return all_gather_last_dim(tensor, self.tp_group, self.tp_size)
 
     @staticmethod
     def _project_qkv(weights, hidden_states):
-        return (
-            weights.to_q.apply(hidden_states),
-            weights.to_k.apply(hidden_states),
-            weights.to_v.apply(hidden_states),
-        )
+        projected = weights.qkv.apply(hidden_states)
+        return weights.qkv.split_qkv(projected)
 
     def _apply_qk_norm_rope(self, weights, q, k, pre_infer_out):
+        if pre_infer_out.prepared_rotary_emb is None:
+            pre_infer_out.prepared_rotary_emb = weights.rope.prepare_freqs(
+                pre_infer_out.rotary_emb,
+                rotary_dim=pre_infer_out.rotary_emb[0].shape[-1],
+            )
+        pre_infer_out.prepared_rotary_emb = weights.rope.validate_inputs(q, k, pre_infer_out.prepared_rotary_emb)
         q = weights.norm_q.apply(q)
         k = weights.norm_k.apply(k)
         return weights.rope.apply(
             q,
             k,
-            pre_infer_out.rotary_emb,
+            pre_infer_out.prepared_rotary_emb,
             rotary_dim=pre_infer_out.rotary_emb[0].shape[-1],
         )
 
@@ -81,22 +86,22 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         v = v.unflatten(-1, (self.num_heads, self.head_dim))
         q, k = self._apply_qk_norm_rope(weights, q, k, pre_infer_out)
         sp_state = pre_infer_out.sequence_parallel_state
+        used_seq_len = self.scheduler.layout.used_sequence_length
         attention_kwargs = {
             "causal": False,
             "scheduler": self.scheduler,
             "block_idx": self.block_idx,
             "softmax_scale": self.head_dim**-0.5,
+            "cu_seqlens_q": pre_infer_out.cu_seqlens,
+            "cu_seqlens_kv": pre_infer_out.cu_seqlens,
+            "max_seqlen_q": used_seq_len,
+            "max_seqlen_kv": used_seq_len,
         }
         if sp_state is None:
-            used_seq_len = self.scheduler.layout.used_sequence_length
             out = weights.calculate.apply(
                 q=q,
                 k=k,
                 v=v,
-                cu_seqlens_q=pre_infer_out.cu_seqlens,
-                cu_seqlens_kv=pre_infer_out.cu_seqlens,
-                max_seqlen_q=used_seq_len,
-                max_seqlen_kv=used_seq_len,
                 **attention_kwargs,
             )
         else:
@@ -124,17 +129,17 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
 
     @staticmethod
     def _ff(weights, hidden_states):
-        value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
-        return weights.out_proj.apply(value * F.silu(gate))
+        hidden_states = weights.in_proj.apply(hidden_states)
+        hidden_states = _silu_mul_with_activation_rounding_inplace(hidden_states)
+        return weights.out_proj.apply(hidden_states)
 
     @staticmethod
     def _apply_modulation(hidden_states, shift, scale, indices):
-        hidden_states = hidden_states * (1.0 + scale.index_select(0, indices))
-        return hidden_states + shift.index_select(0, indices)
+        return indexed_scale_shift_sglang(hidden_states, shift, scale, indices)
 
     @staticmethod
     def _apply_residual(residual, gate, branch, indices):
-        return residual + gate.index_select(0, indices) * branch
+        return indexed_gate_sglang(residual, gate, branch, indices)
 
     def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None):
         if modulation is None:

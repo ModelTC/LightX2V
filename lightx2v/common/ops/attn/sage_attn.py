@@ -93,23 +93,13 @@ class SageAttn2Weight(AttnWeightTemplate):
         **kwargs,
     ):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
-        packed_varlen = q.ndim == 3 and (
-            (cu_seqlens_q is not None and cu_seqlens_q.numel() > 2) or (cu_seqlens_kv is not None and cu_seqlens_kv.numel() > 2)
-        )
-        if packed_varlen:
-            if cu_seqlens_q is None or cu_seqlens_kv is None:
-                raise ValueError("cu_seqlens_q and cu_seqlens_kv must either both be set or both be None")
-            if cu_seqlens_q.numel() != cu_seqlens_kv.numel():
-                raise ValueError("Packed q and kv must contain the same number of sequences")
+        if (cu_seqlens_q is None) != (cu_seqlens_kv is None):
+            raise ValueError("cu_seqlens_q and cu_seqlens_kv must either both be set or both be None")
+        if q.ndim == 3 and cu_seqlens_q is not None and cu_seqlens_q.numel() > 2:
             if sageattn_varlen is None:
-                raise ImportError("Packed varlen SageAttention2 requires sageattn_varlen.")
-            if k.ndim != 3 or v.ndim != 3:
-                raise ValueError("Packed varlen SageAttention2 expects unbatched q/k/v tensors shaped [tokens, heads, dim]")
-            if v.shape[0] != k.shape[0]:
-                raise ValueError(f"Packed k and v sequence lengths must match, got {k.shape[0]} and {v.shape[0]}")
-
-            cu_seqlens_q = cu_seqlens_q.to(device=q.device).contiguous()
-            cu_seqlens_kv = cu_seqlens_kv.to(device=q.device).contiguous()
+                raise ImportError("Packed SageAttention2 requires sageattn_varlen")
+            cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True).contiguous()
+            cu_seqlens_kv = cu_seqlens_kv.to(k.device, non_blocking=True).contiguous()
             if max_seqlen_q is None:
                 max_seqlen_q = int((cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item())
             if max_seqlen_kv is None:

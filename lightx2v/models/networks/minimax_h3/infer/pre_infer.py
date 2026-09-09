@@ -5,6 +5,8 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3PreInferOutput
+from lightx2v.models.networks.minimax_h3.infer.sglang_fused import _silu_mul_with_activation_rounding_inplace
+from lightx2v.models.networks.minimax_h3.infer.tensor_parallel import all_gather_last_dim, row_parallel_linear
 from lightx2v.utils.envs import GET_DTYPE
 
 
@@ -47,11 +49,8 @@ class MiniMaxH3PreInfer:
 
     @staticmethod
     def _project_qkv(weights, hidden_states):
-        return (
-            weights.to_q.apply(hidden_states),
-            weights.to_k.apply(hidden_states),
-            weights.to_v.apply(hidden_states),
-        )
+        projected = weights.qkv.apply(hidden_states)
+        return weights.qkv.split_qkv(projected)
 
     def _attention(self, weights, hidden_states):
         q, k, v = self._project_qkv(weights, hidden_states)
@@ -77,16 +76,15 @@ class MiniMaxH3PreInfer:
 
     @staticmethod
     def _ff(weights, hidden_states):
-        value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
-        return weights.out_proj.apply(value * F.silu(gate))
+        hidden_states = weights.in_proj.apply(hidden_states)
+        hidden_states = _silu_mul_with_activation_rounding_inplace(hidden_states)
+        return weights.out_proj.apply(hidden_states)
 
-    @staticmethod
-    def _gather_tp_last_dim(tensor):
-        return tensor
+    def _gather_tp_last_dim(self, tensor):
+        return all_gather_last_dim(tensor, self.tp_group, self.tp_size)
 
-    @staticmethod
-    def _apply_time_linear_2(module, hidden_states):
-        return module.apply(hidden_states)
+    def _apply_time_linear_2(self, module, hidden_states):
+        return row_parallel_linear(module, hidden_states, self.tp_group, self.tp_rank, self.tp_size)
 
     def _refine_text(self, weights, text_embeds):
         for block in weights.refiner_blocks:

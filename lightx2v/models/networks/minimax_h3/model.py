@@ -9,7 +9,7 @@ from safetensors import safe_open
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
-from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_execution_profile
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
@@ -40,7 +40,7 @@ H3_CHANNEL_QUANT_SCHEMES = {
     "int8-convrot",
 }
 
-_H3REF_SGL_TP_SPLITS = {
+_H3_TP_SPLITS = {
     "proj_in": "col",
     "audio_proj_in": "col",
     "context_embedder": "col",
@@ -53,7 +53,7 @@ _H3REF_SGL_TP_SPLITS = {
 
 
 class MiniMaxH3Model(BaseTransformerModel):
-    """LightX2V-native MiniMax-H3 joint audio/video transformer."""
+    """MiniMax-H3 joint audio/video transformer."""
 
     pre_weight_class = MiniMaxH3PreWeights
     transformer_weight_class = MiniMaxH3TransformerWeights
@@ -61,9 +61,7 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
-        alignment = resolve_minimax_h3_sgl_alignment(config)
-        self.sgl_aligned = alignment.aligned
-        self.tp_layout = alignment.tp_layout
+        self.execution_profile = resolve_minimax_h3_execution_profile(config)
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not self.use_adaln_cache:
             separator = "=" * 88
@@ -95,12 +93,10 @@ class MiniMaxH3Model(BaseTransformerModel):
         self.prepost_resident = self.block_offload and config.get("dit_prepost_resident", False)
         if GET_DTYPE() != torch.bfloat16:
             raise ValueError(
-                "MiniMax-H3 requires DTYPE=BF16. The native loader preserves the released checkpoint's 626 BF16 tensors and 12 FP32 projection/time/head tensors without dtype conversion."
+                "MiniMax-H3 requires DTYPE=BF16. The loader preserves the released checkpoint's 626 BF16 tensors and 12 FP32 projection/time/head tensors without dtype conversion."
             )
         if config.get("cfg_parallel", False) or config.get("enable_cfg", False):
             raise ValueError("MiniMax-H3 is guidance-distilled and does not have a CFG/unconditional branch")
-        if config.get("dit_quantized", False) and self.sgl_aligned:
-            raise ValueError("MiniMax-H3 h3ref_sgl packed QKV/SwiGLU operators require resident BF16 weights and cannot be combined with dit_quantized=true")
         if config.get("dit_quantized", False):
             quant_scheme = config.get("dit_quant_scheme", "Default")
             if quant_scheme not in H3_CHANNEL_QUANT_SCHEMES:
@@ -300,7 +296,15 @@ class MiniMaxH3Model(BaseTransformerModel):
                     tensor = tensor.to("cpu")
                     setattr(weight, attr_name, tensor.pin_memory())
 
-        registered = {weight.weight_name for weight in weights if getattr(weight, "has_lora_branch", False)}
+        registered = set()
+        for weight in weights:
+            if not getattr(weight, "has_lora_branch", False):
+                continue
+            source_names = getattr(weight, "registered_source_weight_names", None)
+            if source_names is None:
+                registered.add(weight.weight_name)
+            else:
+                registered.update(source_names)
         missing = sorted(self._pending_dynamic_lora_model_keys - registered)
         if missing:
             self._remove_lora()
@@ -349,10 +353,9 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError(f"MiniMax-H3 TP size {self.tp_size} must divide {details}")
 
     def _tp_split_type(self, key):
-        if self.tp_layout == "h3ref_sgl":
-            for prefix, split_type in _H3REF_SGL_TP_SPLITS.items():
-                if key == prefix or key.startswith(f"{prefix}."):
-                    return split_type
+        for prefix, split_type in _H3_TP_SPLITS.items():
+            if key == prefix or key.startswith(f"{prefix}."):
+                return split_type
         if ".attn.to_q." in key or ".attn.to_k." in key or ".attn.to_v." in key:
             return "col"
         if ".attn.to_out.0." in key:
@@ -515,21 +518,9 @@ class MiniMaxH3Model(BaseTransformerModel):
     def _init_infer_class(self):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("MiniMax-H3 feature caching is not implemented")
-        if self.sgl_aligned:
-            from lightx2v.models.networks.minimax_h3.infer.sgl import (
-                MiniMaxH3SGLOffloadTransformerInfer,
-                MiniMaxH3SGLPostInfer,
-                MiniMaxH3SGLPreInfer,
-                MiniMaxH3SGLTransformerInfer,
-            )
-
-            self.pre_infer_class = MiniMaxH3SGLPreInfer
-            self.transformer_infer_class = MiniMaxH3SGLOffloadTransformerInfer if self.cpu_offload else MiniMaxH3SGLTransformerInfer
-            self.post_infer_class = MiniMaxH3SGLPostInfer
-        else:
-            self.pre_infer_class = MiniMaxH3PreInfer
-            self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
-            self.post_infer_class = MiniMaxH3PostInfer
+        self.pre_infer_class = MiniMaxH3PreInfer
+        self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
+        self.post_infer_class = MiniMaxH3PostInfer
 
     def _init_infer(self):
         self.pre_infer = self.pre_infer_class(self.config)

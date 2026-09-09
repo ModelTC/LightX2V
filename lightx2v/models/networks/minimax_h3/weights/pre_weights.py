@@ -1,11 +1,10 @@
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_sgl_alignment
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
-def _ensure_sgl_leaf_weights_registered():
+def _ensure_h3_leaf_weights_registered():
     from lightx2v.models.networks.minimax_h3.weights.merged_qkv import MiniMaxH3SGLMergedQKVWeight  # noqa: F401
     from lightx2v.models.networks.minimax_h3.weights.qk_norm import MiniMaxH3SGLQKRMSNorm  # noqa: F401
     from lightx2v.models.networks.minimax_h3.weights.reordered_mlp import MiniMaxH3SGLReorderedMLPWeight  # noqa: F401
@@ -31,6 +30,24 @@ def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
     return MM_WEIGHT_REGISTER[kind](f"{name}.weight", f"{name}.bias" if bias else None, **lora_kwargs)
 
 
+def _packed_linear_kwargs(config):
+    kwargs = {
+        "mm_type": "Default",
+        "tp_group": None,
+        "tp_rank": 0,
+        "tp_size": 1,
+        "config": config,
+    }
+    if config.get("tensor_parallel", False):
+        group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+        kwargs.update(
+            tp_group=group,
+            tp_rank=dist.get_rank(group),
+            tp_size=dist.get_world_size(group),
+        )
+    return kwargs
+
+
 def _rms(config, name, eps, kind=None):
     return RMS_WEIGHT_REGISTER[kind or config.get("rms_type", "torch_native")](name, eps=eps)
 
@@ -38,21 +55,16 @@ def _rms(config, name, eps, kind=None):
 class MiniMaxH3RefinerAttentionWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
-        aligned = resolve_minimax_h3_sgl_alignment(config).aligned
-        if aligned:
-            _ensure_sgl_leaf_weights_registered()
-            self.add_module(
-                "qkv",
-                MM_WEIGHT_REGISTER["h3ref_sgl_merged_qkv"](
-                    weight_names=tuple(f"{prefix}.to_{name}.weight" for name in ("q", "k", "v")),
-                    lora_prefix="token_refiner",
-                ),
-            )
-        else:
-            self.add_module("to_q", _linear(f"{prefix}.to_q", config=config, tp_split="col"))
-            self.add_module("to_k", _linear(f"{prefix}.to_k", config=config, tp_split="col"))
-            self.add_module("to_v", _linear(f"{prefix}.to_v", config=config, tp_split="col"))
-        qk_norm_kind = "h3ref_sgl_qk_rms_norm" if aligned else None
+        _ensure_h3_leaf_weights_registered()
+        self.add_module(
+            "qkv",
+            MM_WEIGHT_REGISTER["h3ref_sgl_merged_qkv"](
+                weight_names=tuple(f"{prefix}.to_{name}.weight" for name in ("q", "k", "v")),
+                lora_prefix="token_refiner",
+                **_packed_linear_kwargs(config),
+            ),
+        )
+        qk_norm_kind = "h3ref_sgl_qk_rms_norm"
         self.add_module(
             "norm_q",
             _rms(
@@ -86,14 +98,12 @@ class MiniMaxH3RefinerAttentionWeights(WeightModule):
 class MiniMaxH3FeedForwardWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
-        if resolve_minimax_h3_sgl_alignment(config).aligned:
-            _ensure_sgl_leaf_weights_registered()
-            in_proj = MM_WEIGHT_REGISTER["h3ref_sgl_reordered_mlp"](
-                weight_name=f"{prefix}.net.0.proj.weight",
-                lora_prefix="token_refiner",
-            )
-        else:
-            in_proj = _linear(f"{prefix}.net.0.proj", config=config, tp_split="col")
+        _ensure_h3_leaf_weights_registered()
+        in_proj = MM_WEIGHT_REGISTER["h3ref_sgl_reordered_mlp"](
+            weight_name=f"{prefix}.net.0.proj.weight",
+            lora_prefix="token_refiner",
+            **_packed_linear_kwargs(config),
+        )
         self.add_module("in_proj", in_proj)
         self.add_module("out_proj", _linear(f"{prefix}.net.2", config=config, tp_split="row"))
 
@@ -112,9 +122,7 @@ class MiniMaxH3TokenRefinerBlockWeights(WeightModule):
 class MiniMaxH3PreWeights(WeightModule):
     def __init__(self, config):
         super().__init__()
-        tp_layout = resolve_minimax_h3_sgl_alignment(config).tp_layout
-        col = "col" if tp_layout == "h3ref_sgl" else None
-        row = "row" if tp_layout == "h3ref_sgl" else None
+        col, row = "col", "row"
         self.add_module("proj_in", _linear("proj_in", bias=True, force_fp32=True, config=config, tp_split=col))
         self.add_module(
             "audio_proj_in",
