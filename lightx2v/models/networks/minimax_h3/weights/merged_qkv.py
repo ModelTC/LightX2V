@@ -126,8 +126,7 @@ def _validate_tensors(tensors, names, *, output_rows=None):
         raise ValueError(f"Packed metadata must follow the weight output rows: {dict(zip(names, (tuple(tensor.shape) for tensor in tensors)))}")
 
 
-@MM_WEIGHT_REGISTER("h3ref_sgl_merged_qkv")
-class MiniMaxH3SGLMergedQKVWeight:
+class MiniMaxH3MergedQKVWeight:
     """Pack Q/K/V once, then use the selected common matrix-multiply operator."""
 
     supports_block_offload = True
@@ -347,4 +346,4 @@ class MiniMaxH3SGLMergedQKVWeight:
         raise NotImplementedError("Packed MiniMax-H3 QKV does not support disk lazy loading")
 
 
-__all__ = ["MiniMaxH3SGLMergedQKVWeight"]
+__all__ = ["MiniMaxH3MergedQKVWeight"]

@@ -8,8 +8,7 @@ from lightx2v.models.networks.minimax_h3.weights.merged_qkv import (
 from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 
 
-@MM_WEIGHT_REGISTER("h3ref_sgl_reordered_mlp")
-class MiniMaxH3SGLReorderedMLPWeight:
+class MiniMaxH3ReorderedMLPWeight:
     """Store the H3 SwiGLU projection in the runtime's gate/value row order."""
 
     supports_block_offload = True
@@ -187,4 +186,4 @@ class MiniMaxH3SGLReorderedMLPWeight:
         raise NotImplementedError("Packed MiniMax-H3 SwiGLU does not support disk lazy loading")
 
 
-__all__ = ["MiniMaxH3SGLReorderedMLPWeight"]
+__all__ = ["MiniMaxH3ReorderedMLPWeight"]

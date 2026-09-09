@@ -2,14 +2,11 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.norm import MiniMaxH3SGLQKRMSNorm  # noqa: F401
+from lightx2v.common.ops.rope import MiniMaxH3SGLRope  # noqa: F401
+from lightx2v.models.networks.minimax_h3.weights.merged_qkv import MiniMaxH3MergedQKVWeight
+from lightx2v.models.networks.minimax_h3.weights.reordered_mlp import MiniMaxH3ReorderedMLPWeight
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
-
-
-def _ensure_h3_leaf_weights_registered():
-    from lightx2v.common.ops.rope import MiniMaxH3SGLRope  # noqa: F401
-    from lightx2v.models.networks.minimax_h3.weights.merged_qkv import MiniMaxH3SGLMergedQKVWeight  # noqa: F401
-    from lightx2v.models.networks.minimax_h3.weights.qk_norm import MiniMaxH3SGLQKRMSNorm  # noqa: F401
-    from lightx2v.models.networks.minimax_h3.weights.reordered_mlp import MiniMaxH3SGLReorderedMLPWeight  # noqa: F401
 
 
 def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
@@ -66,10 +63,9 @@ def _rms(config, name, eps, create_cuda_buffer=False, kind=None):
 class MiniMaxH3AttentionWeights(WeightModule):
     def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
-        _ensure_h3_leaf_weights_registered()
         self.add_module(
             "qkv",
-            MM_WEIGHT_REGISTER["h3ref_sgl_merged_qkv"](
+            MiniMaxH3MergedQKVWeight(
                 weight_names=tuple(f"{prefix}.to_{name}.weight" for name in ("q", "k", "v")),
                 create_cuda_buffer=create_cuda_buffer,
                 **_packed_linear_kwargs(config),
@@ -77,7 +73,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
         )
 
         qk_eps = float(config.get("qk_norm_eps", 1e-5))
-        qk_norm_kind = "h3ref_sgl_qk_rms_norm"
+        qk_norm_kind = "h3_sgl_rms_norm"
         self.add_module(
             "norm_q",
             _rms(
@@ -127,8 +123,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
 class MiniMaxH3FeedForwardWeights(WeightModule):
     def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
-        _ensure_h3_leaf_weights_registered()
-        in_proj = MM_WEIGHT_REGISTER["h3ref_sgl_reordered_mlp"](
+        in_proj = MiniMaxH3ReorderedMLPWeight(
             weight_name=f"{prefix}.net.0.proj.weight",
             create_cuda_buffer=create_cuda_buffer,
             lora_prefix="transformer_blocks",

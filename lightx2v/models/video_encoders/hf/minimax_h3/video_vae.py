@@ -41,7 +41,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.ops.rope import MiniMaxH3SGLRope as _registered_rope  # noqa: F401
-from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
+from lightx2v.models.video_encoders.hf.minimax_h3.sglang_fused import (
     apply_vae_silu_mul_sglang,
     scaled_residual_add_vae_sglang,
 )
