@@ -23,6 +23,7 @@
     "operator": "sage2"
   },
   "rms_type": "sgl-kernel",
+  "rope_type": "h3_sgl_rope",
   "feature_caching": "NoCaching",
   "use_compile": true,
   "warmup": true,

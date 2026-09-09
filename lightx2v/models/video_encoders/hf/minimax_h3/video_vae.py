@@ -40,7 +40,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
 
-from lightx2v.models.networks.minimax_h3.infer import rope as _registered_rope  # noqa: F401
+from lightx2v.common.ops.rope import MiniMaxH3SGLRope as _registered_rope  # noqa: F401
 from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
     apply_vae_silu_mul_sglang,
     scaled_residual_add_vae_sglang,
@@ -54,7 +54,6 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 
 MINIMAX_H3_PIXEL_MEAN = (0.485, 0.456, 0.406)
 MINIMAX_H3_PIXEL_STD = (0.229, 0.224, 0.225)
-_H3_ROPE_TYPE = "h3ref_sgl_rope"
 
 
 class _SpatialTileLayout(NamedTuple):
@@ -317,10 +316,11 @@ class MiniMaxH3VideoEncoder3d(nn.Module):
 class MiniMaxH3VideoRotaryPosEmbed(nn.Module):
     """Three-axis rotary embedding used by the non-causal ViT decoder."""
 
-    def __init__(self, dim: int, theta: float = 100.0, num_axes: int = 3) -> None:
+    def __init__(self, dim: int, theta: float = 100.0, num_axes: int = 3, rope_type: str = "h3_sgl_rope") -> None:
         super().__init__()
         if dim % (2 * num_axes) != 0:
             raise ValueError(f"dim={dim} must be divisible by 2 * num_axes={2 * num_axes}")
+        self.rope_type = rope_type
         self.dim = dim
         self.theta = theta
         self.num_axes = num_axes
@@ -344,19 +344,17 @@ class MiniMaxH3VideoRotaryPosEmbed(nn.Module):
             sin = torch.sin(angles)
         return cos.to(dtype=position_ids.dtype), sin.to(dtype=position_ids.dtype)
 
-    @staticmethod
     def prepare(
+        self,
         rotary_emb: tuple[torch.Tensor, torch.Tensor],
         *,
         dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        rope = ROPE_REGISTER[_H3_ROPE_TYPE](compute_dtype=dtype)
+        rope = ROPE_REGISTER[self.rope_type](compute_dtype=dtype)
         return rope.prepare_freqs(rotary_emb, rotary_dim=rotary_emb[0].shape[-1])
 
 
 class MiniMaxH3VideoAttention(nn.Module):
-    rope = ROPE_REGISTER[_H3_ROPE_TYPE]()
-
     def __init__(
         self,
         dim: int,
@@ -366,12 +364,14 @@ class MiniMaxH3VideoAttention(nn.Module):
         bias: bool = True,
         sensitive_layer_dtype: torch.dtype = torch.float32,
         attn_type: str = "torch_sdpa",
+        rope_type: str = "h3_sgl_rope",
     ) -> None:
         super().__init__()
         self.heads = heads
         self.dim_head = dim_head
         self.inner_dim = heads * dim_head
         self.sensitive_layer_dtype = sensitive_layer_dtype
+        self.rope = ROPE_REGISTER[rope_type]()
         self.calculate = ATTN_WEIGHT_REGISTER[attn_type]()
 
         self.norm_q = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=False)
@@ -465,6 +465,7 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
         infer_dtype: torch.dtype = torch.float16,
         sensitive_layer_dtype: torch.dtype = torch.float32,
         attn_type: str = "torch_sdpa",
+        rope_type: str = "h3_sgl_rope",
     ) -> None:
         super().__init__()
         self.infer_dtype = infer_dtype
@@ -478,6 +479,7 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
             bias=bias,
             sensitive_layer_dtype=sensitive_layer_dtype,
             attn_type=attn_type,
+            rope_type=rope_type,
         )
         self.scale1 = nn.Parameter(torch.zeros(dim))
         self.norm2 = nn.RMSNorm(dim, eps=eps, elementwise_affine=True)
@@ -522,6 +524,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
+        rope_type: str = "h3_sgl_rope",
     ) -> None:
         super().__init__()
         dim = num_attention_heads * attention_head_dim
@@ -534,7 +537,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         self.use_compile = use_compile
         self.compiled_blocks = {}
 
-        self.rope = self.rope_cls(int(attention_head_dim * rope_dim_ratio), theta=rope_theta)
+        self.rope = self.rope_cls(int(attention_head_dim * rope_dim_ratio), theta=rope_theta, rope_type=rope_type)
         self.proj_in = nn.Linear(in_channels, dim)
         self.register_tokens = nn.Parameter(torch.zeros(1, num_register_tokens, dim))
         self.transformer_blocks = nn.ModuleList(
@@ -548,6 +551,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
                     infer_dtype=infer_dtype,
                     sensitive_layer_dtype=sensitive_layer_dtype,
                     attn_type=attn_type,
+                    rope_type=rope_type,
                 )
                 for _ in range(num_layers)
             ]
@@ -657,6 +661,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
+        rope_type: str = "h3_sgl_rope",
     ) -> None:
         super().__init__()
         if quant_scheme not in {None, "fp8-musa", "fp8-sgl"}:
@@ -716,6 +721,7 @@ class MiniMaxH3VideoVAE(nn.Module):
             sensitive_layer_dtype=self.sensitive_layer_dtype,
             use_compile=use_compile,
             attn_type=attn_type,
+            rope_type=rope_type,
         )
         if quant_scheme is not None:
             self._replace_decoder_linears_with_fp8(self.decoder.transformer_blocks)
@@ -816,6 +822,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
+        rope_type: str = "h3_sgl_rope",
     ) -> "MiniMaxH3VideoVAE":
         vae_dir = _component_dir(model_path, "vae")
         if (checkpoint_path is None) != (quant_scheme is None):
@@ -834,6 +841,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                 sensitive_layer_dtype=sensitive_layer_dtype,
                 use_compile=use_compile,
                 attn_type=attn_type,
+                rope_type=rope_type,
             )
         model._reset_runtime_buffers()
         model.load_report = load_safetensors_subset(model, weight_path)

@@ -6,7 +6,7 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGI
 
 
 def _ensure_h3_leaf_weights_registered():
-    from lightx2v.models.networks.minimax_h3.infer.rope import MiniMaxH3SGLRope  # noqa: F401
+    from lightx2v.common.ops.rope import MiniMaxH3SGLRope  # noqa: F401
     from lightx2v.models.networks.minimax_h3.weights.merged_qkv import MiniMaxH3SGLMergedQKVWeight  # noqa: F401
     from lightx2v.models.networks.minimax_h3.weights.qk_norm import MiniMaxH3SGLQKRMSNorm  # noqa: F401
     from lightx2v.models.networks.minimax_h3.weights.reordered_mlp import MiniMaxH3SGLReorderedMLPWeight  # noqa: F401
@@ -98,7 +98,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 kind=qk_norm_kind,
             ),
         )
-        rope_kind = "h3ref_sgl_rope"
+        rope_kind = config.get("rope_type", "h3_sgl_rope")
         self.add_module(
             "rope",
             ROPE_REGISTER[rope_kind](

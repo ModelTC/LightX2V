@@ -8,7 +8,6 @@ _REMOVED_EXECUTION_OPTIONS = (
     "h3_rng_mode",
     "h3_step_update",
     "sglang_compatible_export",
-    "rope_type",
     "keep_latents_dtype_in_scheduler",
 )
 

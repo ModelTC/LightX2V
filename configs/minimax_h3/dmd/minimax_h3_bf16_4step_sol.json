@@ -27,6 +27,7 @@
     "strict": true
   },
   "rms_type": "torch_native",
+  "rope_type": "h3_sgl_rope",
   "feature_caching": "NoCaching",
   "use_compile": false,
   "video_flow_shift": 6.0,
