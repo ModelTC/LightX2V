@@ -273,6 +273,7 @@ class MiniMaxH3Runner(DefaultRunner):
             cpu_offload=cpu_offload,
             checkpoint_path=video_vae_quantized_ckpt,
             quant_scheme=video_vae_quant_scheme,
+            encoder_conv_mode=self.config.get("vae_encoder_conv_mode", "torch"),
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
