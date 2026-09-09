@@ -1,0 +1,18 @@
+--- xe_fmha_fwd_mainloop.hpp
++++ xe_fmha_fwd_mainloop.hpp
+@@ -427,10 +427,8 @@
+-          FragSRow k_rem_mask;
+-          int k = k_idx * get<1>(TileShapeQK{}) + get_sub_group().get_local_id()[0];
++          Tensor cPgP = make_identity_tensor(make_shape(seq_len, seq_len));
++          Tensor gP = local_tile(cPgP, take<0,2>(TileShapeQK{}), make_coord(get<0>(blk_qv), k_idx));
++          auto cS_thread = thr_mma_qk.partition_C(gP);
+           CUTLASS_PRAGMA_UNROLL
+-          for (int i = 0; i < k_rem_mask.size(); i++, k += intel::sg_size) {
+-            k_rem_mask(i) = (k < seq_len) ? ElementS(sycl::nan(0u)) : ElementS(-INFINITY);
+-          }
+-          CUTLASS_PRAGMA_UNROLL
+           for (int i = 0; i < tSrS.size(); i++) {
+-            tSrS(i) = sycl::fmin(tSrS(i), broadcast<1>(k_rem_mask, tSrS, i));
++            int col_idx = get<1>(cS_thread(i));
++            if (col_idx >= seq_len) tSrS(i) = ElementS(-INFINITY);
+           }

@@ -210,6 +210,8 @@ template <
 void run_d128_tile(
     const void* q_ptr, const void* k_ptr, const void* v_ptr, void* o_ptr,
     int B, int H, int Lq, int Lkv, int D, float scale,
+    const int* block_lut = nullptr, int lut_q_blocks = 0,
+    int lut_topk = 0, int lut_block_tiles = 0,
     int64_t q_stride_seq = -1, int64_t q_stride_head = -1,
     int64_t q_stride_batch = -1, int64_t k_stride_seq = -1,
     int64_t k_stride_head = -1, int64_t k_stride_batch = -1,
@@ -294,7 +296,11 @@ void run_d128_tile(
           nullptr, stride_K,   // k_cache
           nullptr, stride_V,   // v_cache
       },
-      {scale, nullptr, 0, nullptr},
+      {scale, nullptr, 0, nullptr,
+#if defined(CUTE_FMHA_SPARSE)
+       block_lut, H, lut_q_blocks, lut_topk, lut_block_tiles
+#endif
+      },
       {},
       hw_info};
 
@@ -378,12 +384,63 @@ at::Tensor sdp(const at::Tensor& q, const at::Tensor& k, const at::Tensor& v) {
   return o;
 }
 
+#if defined(CUTE_FMHA_SPARSE)
+at::Tensor sparse_sdp(
+    const at::Tensor& q, const at::Tensor& k, const at::Tensor& v,
+    const at::Tensor& block_lut) {
+  TORCH_CHECK(q.dim() == 4 && k.dim() == 4 && v.dim() == 4,
+              "sycl_kernels sparse CUTE FMHA: expect q/k/v [B,L,H,D]");
+  TORCH_CHECK(block_lut.dim() == 4,
+              "sycl_kernels sparse CUTE FMHA: expect LUT [B,H,Qblocks,topk]");
+  TORCH_CHECK(q.device().is_xpu() && k.device().is_xpu() && v.device().is_xpu() &&
+                  block_lut.device().is_xpu(),
+              "sycl_kernels sparse CUTE FMHA: all tensors must be on XPU");
+  TORCH_CHECK(q.scalar_type() == at::kBFloat16 && k.scalar_type() == at::kBFloat16 &&
+                  v.scalar_type() == at::kBFloat16,
+              "sycl_kernels sparse CUTE FMHA: q/k/v must be BF16");
+  TORCH_CHECK(block_lut.scalar_type() == at::kInt,
+              "sycl_kernels sparse CUTE FMHA: LUT must be int32");
+
+  const int B = checked_int(q.size(0), "batch");
+  const int L = checked_int(q.size(1), "sequence length");
+  const int H = checked_int(q.size(2), "head count");
+  const int D = checked_int(q.size(3), "head dimension");
+  constexpr int BlockQ = 128;
+  constexpr int BlockK = 128;
+  constexpr int CuteKvTile = 32;
+  const int q_blocks = (L + BlockQ - 1) / BlockQ;
+  TORCH_CHECK(B == 1 && D == 128,
+              "sycl_kernels sparse CUTE FMHA: only B=1,D=128 are supported");
+  TORCH_CHECK(k.sizes() == q.sizes() && v.sizes() == q.sizes(),
+              "sycl_kernels sparse CUTE FMHA: q/k/v shapes must match");
+  TORCH_CHECK(block_lut.size(0) == B && block_lut.size(1) == H &&
+                  block_lut.size(2) == q_blocks && block_lut.size(3) > 0,
+              "sycl_kernels sparse CUTE FMHA: invalid LUT shape");
+
+  auto qc = q.contiguous(), kc = k.contiguous(), vc = v.contiguous();
+  auto lut = block_lut.contiguous();
+  auto output = at::empty_like(qc);
+  const float scale = 1.0f / std::sqrt(static_cast<float>(D));
+  run_d128_tile<cutlass::bfloat16_t, 0, BlockQ>(
+      qc.data_ptr(), kc.data_ptr(), vc.data_ptr(), output.data_ptr(),
+      B, H, L, L, D, scale, lut.const_data_ptr<int>(), q_blocks,
+      checked_int(lut.size(3), "LUT topk"), BlockK / CuteKvTile);
+  return output;
+}
+#endif
+
 }  // namespace
 
 TORCH_LIBRARY(CUTE_FMHA_TORCH_LIBRARY, m) {
   m.def("sdp(Tensor q, Tensor k, Tensor v) -> Tensor");
+#if defined(CUTE_FMHA_SPARSE)
+  m.def("sparse_sdp(Tensor q, Tensor k, Tensor v, Tensor block_lut) -> Tensor");
+#endif
 }
 
 TORCH_LIBRARY_IMPL(CUTE_FMHA_TORCH_LIBRARY, XPU, m) {
   m.impl("sdp", &sdp);
+#if defined(CUTE_FMHA_SPARSE)
+  m.impl("sparse_sdp", &sparse_sdp);
+#endif
 }
