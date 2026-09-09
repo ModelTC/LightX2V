@@ -31,6 +31,16 @@ MiniMax-H3/
 
 基础 transformer 加载一次即可处理前四种任务。参考生成使用独立的 transformer 和服务。这些权重已经完成 CFG 蒸馏，请勿传入 `negative_prompt`，包括空字符串。
 
+## AdaLN 缓存
+
+MiniMax-H3 开启 CPU offload 时强制要求 `use_adaln_cache: true`。开始推理前，需要使用与推理一致的模型、配置、推理步数和 flow shift 生成持久化缓存：
+
+```bash
+bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
+```
+
+运行前需要在脚本中设置 `lightx2v_path`、`model_path`、`--config_json` 和 `--task`。使用 `--task fl2av` 会生成两套基础 transformer profile，可供 `t2av`、`i2av`、`l2av` 和 `fl2av` 共用。参考任务需要另外使用 `--task ref2av` 生成 `transformer_ref` 缓存。所有设置了 `use_adaln_cache: true` 的 JSON 配置都必须显式设置 `adaln_cache_dir`；仓库自带配置统一写为 `~/.cache/lightx2v/adaln`。最终目录名包含缓存任务组和推理步数，例如 `minimax_h3/fl2av_29steps`、`minimax_h3/fl2av_04steps` 或 `minimax_h3/ref2av_29steps`。各自的 `manifest.json` 只保存必要的缓存规格，推理时直接与当前预期规格比较。离线生成和推理读取同一个 JSON 配置项。缓存生成不会覆盖已经存在的目标目录。推理会严格读取匹配缓存，不会回退到在线 AdaLN 计算。
+
 ## 离线推理
 
 五种任务脚本共用 `configs/minimax_h3/minimax_h3.json`：单 GPU、BF16 权重、模型级 CPU 卸载，默认输出 124 帧，`[高度, 宽度] = [544, 960]`。脚本中的 `--task` 决定加载哪组 transformer 以及如何处理输入，JSON 文件名不决定任务。

@@ -13,10 +13,13 @@ class MiniMaxH3PostWeights(WeightModule):
             "norm_out",
             _rms(config, "norm_out.norm.weight", eps=float(config.get("final_norm_eps", 1e-5))),
         )
-        self.add_module(
-            "norm_out_linear",
-            MM_WEIGHT_REGISTER["Default"]("norm_out.linear.weight", "norm_out.linear.bias"),
-        )
+        if not config.get("use_adaln_cache", False):
+            # ADALN CACHE SYNC: The offline builder reads this key and persists
+            # its output; update the offline builder if its definition changes.
+            self.add_module(
+                "norm_out_linear",
+                MM_WEIGHT_REGISTER["Default"]("norm_out.linear.weight", "norm_out.linear.bias"),
+            )
         self.add_module(
             "proj_out",
             MM_WEIGHT_REGISTER["Default-ForceFp32"]("proj_out.weight", "proj_out.bias"),

@@ -1,5 +1,14 @@
 #!/bin/bash
 
+# AdaLN cache setup:
+# If the inference JSON config enables "use_adaln_cache": true, generate the cache before inference:
+# 1. Set lightx2v_path, model_path, --config_json, and --task in
+#    tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh.
+# 2. Use --task fl2av for t2av/i2av/l2av/fl2av, or --task ref2av for ref2av.
+# 3. From the repository root, run:
+#    bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
+# Cache generation and inference must use the same JSON config and adaln_cache_dir.
+
 lightx2v_path=${LIGHTX2V_PATH:-/data/LightX2V}
 model_path=${MINIMAX_H3_MODEL_PATH:-/data/models/MiniMax-H3}
 save_result_path=${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av_tp_sp.mp4}
