@@ -112,7 +112,7 @@ class MiniMaxH3PreInfer:
         if not self.use_adaln_cache:
             # ADALN CACHE SYNC: Any change to this time-MLP sequence, activation,
             # or dtype must also be made in the offline AdaLN cache builder and
-            # accompanied by a schema bump when cached values can change.
+            # followed by regenerating the cache when cached values can change.
             temb = timestep_embedding(self.scheduler.unique_timesteps, self.freq_dim)
             temb = weights.time_linear_2.apply(F.silu(weights.time_linear_1.apply(temb.float())))
         timestep_indices = self.scheduler.timestep_indices

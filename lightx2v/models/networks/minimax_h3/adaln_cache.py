@@ -112,6 +112,9 @@ def _build_spec(config) -> dict:
     validate_adaln_cache_config(config)
     profiles = _selected_profiles(config)
     return {
+        "infer_steps": int(config["infer_steps"]),
+        "video_flow_shift": float(config.get("video_flow_shift", 12.0)),
+        "audio_flow_shift": float(config.get("audio_flow_shift", 3.0)),
         "num_layers": int(config.get("num_layers", 50)),
         "hidden_size": int(config.get("hidden_size", 5376)),
         "freq_dim": int(config.get("freq_dim", 256)),
@@ -133,30 +136,35 @@ def _expected_norm_out_shape(spec: dict, entry: dict) -> tuple[int, int]:
     return len(entry["timestep_bits"]), 2 * spec["hidden_size"]
 
 
+def _norm_out_key(entry: dict) -> str:
+    return f"norm_out.{entry['name']}"
+
+
+def _block_key(block_index: int, entry: dict) -> str:
+    return f"block_{block_index:03d}.{entry['name']}"
+
+
 def _validate_cache(cache_path: Path, spec: dict) -> bool:
     manifest_path = cache_path / "manifest.json"
-    if not (cache_path / "READY").is_file() or not manifest_path.is_file():
+    if not manifest_path.is_file():
         return False
     try:
         with manifest_path.open(encoding="utf-8") as handle:
             manifest = json.load(handle)
         if manifest != spec:
             return False
-        expected_names = {entry["name"] for entry in spec["entries"]}
-        with safe_open(cache_path / "norm_out.safetensors", framework="pt", device="cpu") as source:
-            if set(source.keys()) != expected_names:
+        expected_keys = {_norm_out_key(entry) for entry in spec["entries"]}
+        expected_keys.update(_block_key(block_index, entry) for block_index in range(spec["num_layers"]) for entry in spec["entries"])
+        with safe_open(cache_path / "adaln_cache.safetensors", framework="pt", device="cpu") as source:
+            if set(source.keys()) != expected_keys:
                 return False
             for entry in spec["entries"]:
-                tensor = source.get_slice(entry["name"])
+                tensor = source.get_slice(_norm_out_key(entry))
                 if tuple(tensor.get_shape()) != _expected_norm_out_shape(spec, entry) or str(tensor.get_dtype()) != "BF16":
                     return False
-        for block_index in range(spec["num_layers"]):
-            block_path = cache_path / f"block_{block_index:03d}.safetensors"
-            with safe_open(block_path, framework="pt", device="cpu") as source:
-                if set(source.keys()) != expected_names:
-                    return False
+            for block_index in range(spec["num_layers"]):
                 for entry in spec["entries"]:
-                    tensor = source.get_slice(entry["name"])
+                    tensor = source.get_slice(_block_key(block_index, entry))
                     if tuple(tensor.get_shape()) != _expected_table_shape(spec, entry) or str(tensor.get_dtype()) != "BF16":
                         return False
     except (KeyError, OSError, RuntimeError, SafetensorError, TypeError, ValueError):
@@ -181,13 +189,11 @@ def load_persistent_adaln_cache(
     keys = [tuple(_timesteps_from_bits(entry["timestep_bits"]).tolist()) for entry in spec["entries"]]
     cache = {key: [None] * spec["num_layers"] for key in keys}
     norm_out_cache = {}
-    with safe_open(cache_path / "norm_out.safetensors", framework="pt", device=str(device)) as source:
+    with safe_open(cache_path / "adaln_cache.safetensors", framework="pt", device=str(device)) as source:
         for entry, key in zip(spec["entries"], keys):
-            norm_out_cache[key] = source.get_tensor(entry["name"])
-    for block_index in range(spec["num_layers"]):
-        block_path = cache_path / f"block_{block_index:03d}.safetensors"
-        with safe_open(block_path, framework="pt", device=str(device)) as source:
+            norm_out_cache[key] = source.get_tensor(_norm_out_key(entry))
+        for block_index in range(spec["num_layers"]):
             for entry, key in zip(spec["entries"], keys):
-                cache[key][block_index] = source.get_tensor(entry["name"])
+                cache[key][block_index] = source.get_tensor(_block_key(block_index, entry))
     logger.success("========== MiniMax-H3 AdaLN cache loaded from {} ==========", cache_path)
     return cache, norm_out_cache

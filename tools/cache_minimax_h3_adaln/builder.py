@@ -1,4 +1,4 @@
-"""Build MiniMax-H3 AdaLN cache files without loading the full model.
+"""Build a MiniMax-H3 AdaLN cache without loading the full model.
 
 ADALN CACHE SYNC CONTRACT:
 The calculations in ``_build_cache`` intentionally mirror the online BF16
@@ -6,7 +6,7 @@ path in ``infer/pre_infer.py``, ``infer/transformer_infer.py``, and
 ``infer/post_infer.py``. If timestep embedding, time-MLP activation/dtype,
 AdaLN projection/reshape, final-norm modulation, or their checkpoint keys are
 changed online, update this builder and the cache tests in the same change.
-Regenerate existing cache files whenever their values can change.
+Regenerate the cache whenever its values can change.
 """
 
 import json
@@ -22,9 +22,11 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 from lightx2v.models.networks.minimax_h3.adaln_cache import (
+    _block_key,
     _build_spec,
     _cache_path,
     _expected_table_shape,
+    _norm_out_key,
     _timesteps_from_bits,
     _validate_cache,
 )
@@ -117,8 +119,8 @@ def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> 
 
             norm_out_weight = checkpoint.get("norm_out.linear.weight").to(AI_DEVICE)
             norm_out_bias = checkpoint.get("norm_out.linear.bias").to(AI_DEVICE)
-            norm_out_tables = {
-                entry["name"]: _linear(
+            cache_tables = {
+                _norm_out_key(entry): _linear(
                     adaln_inputs[entry["name"]],
                     norm_out_weight,
                     norm_out_bias,
@@ -127,8 +129,7 @@ def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> 
                 .contiguous()
                 for entry in spec["entries"]
             }
-            save_file(norm_out_tables, stage_path / "norm_out.safetensors")
-            del norm_out_weight, norm_out_bias, norm_out_tables
+            del norm_out_weight, norm_out_bias
             _empty_device_cache()
 
             # Only one full, unsharded block projection is resident at a time.
@@ -136,16 +137,11 @@ def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> 
                 prefix = f"transformer_blocks.{block_index}.adaln_proj.linear"
                 weight = checkpoint.get(f"{prefix}.weight").to(AI_DEVICE)
                 bias = checkpoint.get(f"{prefix}.bias").to(AI_DEVICE)
-                block_tables = {}
                 for entry in spec["entries"]:
                     modulation = _linear(adaln_inputs[entry["name"]], weight, bias)
                     table = modulation.view(*_expected_table_shape(spec, entry))
-                    block_tables[entry["name"]] = table.to("cpu").contiguous()
-                save_file(
-                    block_tables,
-                    stage_path / f"block_{block_index:03d}.safetensors",
-                )
-                del weight, bias, block_tables, modulation, table
+                    cache_tables[_block_key(block_index, entry)] = table.to("cpu").contiguous()
+                del weight, bias, modulation, table
                 _empty_device_cache()
                 logger.info(
                     "Built MiniMax-H3 AdaLN cache block {}/{}",
@@ -153,9 +149,10 @@ def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> 
                     spec["num_layers"],
                 )
 
+            save_file(cache_tables, stage_path / "adaln_cache.safetensors")
+
         with (stage_path / "manifest.json").open("w", encoding="utf-8") as handle:
             json.dump(spec, handle, ensure_ascii=False, indent=2, sort_keys=True)
-        (stage_path / "READY").touch()
         os.replace(stage_path, cache_path)
     finally:
         if stage_path.exists():
