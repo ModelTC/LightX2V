@@ -9,22 +9,21 @@ import requests
 def submit_t2i_task(
     base_url: str,
     prompt: str,
-    negative_prompt: str,
-    infer_steps: int,
-    seed: int,
-    aspect_ratio: str,
+    negative_prompt: Optional[str],
+    seed: Optional[int],
+    aspect_ratio: Optional[str],
     target_shape: Optional[List[int]],
-    save_result_path: str,
+    save_result_path: Optional[str],
 ) -> str:
     payload = {
         "prompt": prompt,
         "negative_prompt": negative_prompt,
-        "infer_steps": infer_steps,
         "seed": seed,
         "aspect_ratio": aspect_ratio,
         "save_result_path": save_result_path,
     }
-    if target_shape:
+    payload = {key: value for key, value in payload.items() if value is not None}
+    if target_shape is not None:
         payload["target_shape"] = target_shape
 
     submit_url = f"{base_url.rstrip('/')}/v1/tasks/image/"
@@ -78,10 +77,9 @@ def main():
     parser = argparse.ArgumentParser(description="Submit T2I task to /v1/tasks/image/ and wait for final result.")
     parser.add_argument("--url", type=str, default="http://127.0.0.1:8000", help="Server base url")
     parser.add_argument("--prompt", type=str, required=True, help="Prompt text")
-    parser.add_argument("--negative_prompt", type=str, default="", help="Negative prompt text")
-    parser.add_argument("--infer_steps", type=int, default=30, help="Inference steps")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--aspect_ratio", type=str, default="16:9", help="Aspect ratio for image task")
+    parser.add_argument("--negative_prompt", type=str, default=None, help="Negative prompt text")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--aspect_ratio", type=str, default=None, help="Aspect ratio for image task")
     parser.add_argument(
         "--target_shape",
         type=int,
@@ -89,7 +87,7 @@ def main():
         default=None,
         help="Target output shape, e.g. --target_shape 1536 2752",
     )
-    parser.add_argument("--save_result_path", type=str, default="", help="Server-side save_result_path")
+    parser.add_argument("--save_result_path", type=str, default=None, help="Server-side save_result_path")
     parser.add_argument("--timeout_seconds", type=int, default=600, help="Polling timeout in seconds")
     parser.add_argument("--poll_interval", type=float, default=2.0, help="Polling interval in seconds")
     parser.add_argument("--output", type=str, default="save_results/t2i_result.png", help="Local output image path")
@@ -100,7 +98,6 @@ def main():
         base_url=args.url,
         prompt=args.prompt,
         negative_prompt=args.negative_prompt,
-        infer_steps=args.infer_steps,
         seed=args.seed,
         aspect_ratio=args.aspect_ratio,
         target_shape=args.target_shape,
@@ -116,8 +113,11 @@ def main():
     )
     print(f"Task completed: {final_status}")
 
-    output_path = download_result(args.url, task_id, args.output)
-    print(f"Result saved to: {output_path}")
+    if final_status["save_result_path"] is not None:
+        output_path = download_result(args.url, task_id, args.output)
+        print(f"Result saved to: {output_path}")
+    else:
+        print("No file was saved; provide --save_result_path to download a result.")
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@
   "cross_attn_1_type": "dreamzero_cross_fa",
   "cross_attn_2_type": "dreamzero_cross_fa",
   "rms_norm_type": "torch",
-  "negative_prompt": "Vibrant colors, overexposed, static, blurry details, text, subtitles, style, artwork, painting, image, still, grayscale, dull, worst quality, low quality, JPEG artifacts, ugly, mutilated, extra fingers, bad hands, bad face, deformed, disfigured, mutated limbs, fused fingers, stagnant image, cluttered background, three legs, many people in the background, walking backwards.",
   "num_chunks": 15,
   "dit_step_mask": [true, true, true, false, false, false, true, false, false, false, true, false, false, true, true, true],
   "obs_cam_keys": [

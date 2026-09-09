@@ -28,7 +28,6 @@ class InfiniteTalkScheduler(BaseScheduler):
         self.rope_request_id = 0
 
     def seed_everything(self, seed):
-        seed = seed if seed >= 0 else random.randint(0, 99999999)
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
         np.random.seed(seed)

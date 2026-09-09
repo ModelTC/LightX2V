@@ -4,7 +4,6 @@
 import gc
 import json
 import os
-import random
 from pathlib import Path
 
 import numpy as np
@@ -14,17 +13,19 @@ from PIL import Image
 from loguru import logger
 
 from lightx2v.models.networks.bagel.sensenova_tasks import (
+    OMNI_VISION_TASK_SPECS,
     TEXT_OUTPUT_MODES,
     clean_text_output,
     ensure_image_placeholders,
     get_mode_profile,
-    get_omni_vision_task_spec,
+    normalize_omni_vision_subtask,
     resolve_prompt,
 )
 from lightx2v.models.networks.bagel.sensenova_transforms import build_sensenova_transforms
 from lightx2v.models.networks.bagel.sensenova_vision_model import SenseNovaVisionModel
 from lightx2v.models.runners.bagel.bagel_runner import BagelRunner
 from lightx2v.models.runners.bagel.sensenova_postprocess import load_official_postprocess, resolve_pose_string
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.video_encoders.hf.bagel.sensenova_vae import SenseNovaVisionVae
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -36,22 +37,12 @@ def _is_main_process():
     return not dist.is_initialized() or dist.get_rank() == 0
 
 
-def _set_request_seed(seed):
-    if seed is None:
-        return
-    seed = int(seed)
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
 @RUNNER_REGISTER("sensenova_vision")
 class SenseNovaVisionRunner(BagelRunner):
+    supported_request_fields_by_task = {
+        "omni_vision_task": COMMON_REQUEST_FIELDS | {"glb_output_path", "image_path", "omni_vision_subtask", "postprocess_predictions", "prompt", "raw_output_path"},
+    }
+
     def load_bagel_model(self):
         return SenseNovaVisionModel(self.config)
 
@@ -61,6 +52,11 @@ class SenseNovaVisionRunner(BagelRunner):
     def init_modules(self):
         super().init_modules()
         self.sensenova_transforms = build_sensenova_transforms()
+
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        input_info.omni_vision_subtask = normalize_omni_vision_subtask(input_info.omni_vision_subtask)
+        return input_info
 
     def _configure_mode(self, mode):
         profile = get_mode_profile(mode)
@@ -189,11 +185,10 @@ class SenseNovaVisionRunner(BagelRunner):
     def _postprocess_recon3d(self, pointmaps, prepared, input_info, actual_image_count):
         pointmaps = np.asarray(pointmaps[:actual_image_count], dtype=np.float32)
         raw_path = getattr(input_info, "raw_output_path", "")
-        if not raw_path:
-            save_path = getattr(input_info, "save_result_path", "") or "sensenova_recon3d.npy"
-            raw_path = str(self._derive_path(save_path, "_raw", ".npy"))
-        raw_path = Path(raw_path)
-        if _is_main_process():
+        if not raw_path and input_info.save_result_path is not None:
+            raw_path = self._derive_path(input_info.save_result_path, "_raw", ".npy")
+        raw_path = Path(raw_path) if raw_path else None
+        if raw_path is not None and _is_main_process():
             raw_path.parent.mkdir(parents=True, exist_ok=True)
             np.save(raw_path, pointmaps)
             logger.info(f"SenseNova-Vision raw point maps saved: {raw_path}")
@@ -218,19 +213,18 @@ class SenseNovaVisionRunner(BagelRunner):
                 mask_black_bg=False,
                 mask_white_bg=False,
             )
-            if not glb_path:
+            if not glb_path and raw_path is not None:
                 glb_path = str(raw_path.with_name(f"{raw_path.stem}_scene.glb"))
-            if _is_main_process():
+            if glb_path and _is_main_process():
                 Path(glb_path).parent.mkdir(parents=True, exist_ok=True)
                 scene.export(file_obj=glb_path)
                 logger.info(f"SenseNova-Vision reconstructed scene saved: {glb_path}")
-        return pointmaps, scene, str(raw_path), glb_path or None
+        return pointmaps, scene, str(raw_path) if raw_path is not None else None, glb_path or None
 
     def run_pipeline(self, input_info):
         self.input_info = input_info
-        _set_request_seed(getattr(input_info, "seed", 42))
-        subtask, task_spec = get_omni_vision_task_spec(getattr(input_info, "omni_vision_subtask", ""))
-        input_info.omni_vision_subtask = subtask
+        subtask = input_info.omni_vision_subtask
+        task_spec = OMNI_VISION_TASK_SPECS[subtask]
         task = task_spec.runner_task
         mode = task_spec.mode
         self._configure_mode(mode)

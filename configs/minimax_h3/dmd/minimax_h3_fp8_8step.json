@@ -1,5 +1,5 @@
 {
-    "infer_steps": 9,
+    "infer_steps": 8,
     "target_video_length": 362,
     "target_height": 768,
     "target_width": 1344,
@@ -22,9 +22,6 @@
     "h3_step_update": "training_euler",
     "vae_spatial_scale_factor": 16,
     "audio_sampling_rate": 32000,
-    "audio_latents_per_second": 40,
-    "audio_channels": 2,
-    "keep_latents_dtype_in_scheduler": true,
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-sgl",
     "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors",

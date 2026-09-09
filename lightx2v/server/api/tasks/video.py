@@ -1,11 +1,12 @@
 import asyncio
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from loguru import logger
 
 from ...schema import TaskResponse, VideoTaskRequest
 from ...task_manager import task_manager
 from ..deps import get_services, validate_url_async
+from .common import parse_form_request
 
 router = APIRouter()
 
@@ -34,17 +35,17 @@ async def create_video_task(message: VideoTaskRequest):
 
 @router.post("/form", response_model=TaskResponse)
 async def create_video_task_form(
-    image_file: UploadFile = File(...),
+    request: Request,
+    task: str | None = Form(default=None),
+    image_file: UploadFile = File(None),
     last_frame_file: UploadFile = File(None),
     prompt: str = Form(default=""),
     save_result_path: str = Form(default=""),
     negative_prompt: str = Form(default=""),
-    infer_steps: int = Form(default=5),
-    target_video_length: int = Form(default=81),
-    seed: int = Form(default=42),
+    target_video_length: int | None = Form(default=None),
+    seed: int | None = Form(default=None),
     audio_file: UploadFile = File(None),
-    video_duration: int = Form(default=5),
-    target_fps: int = Form(default=16),
+    video_duration: float | None = Form(default=None),
 ):
     services = get_services()
     assert services.file_service is not None, "File service is not initialized"
@@ -64,18 +65,18 @@ async def create_video_task_form(
         content = await audio_file.read()
         audio_path = str(await asyncio.to_thread(services.file_service.save_uploaded_file, content, audio_file.filename, services.file_service.input_audio_dir))
 
-    message = VideoTaskRequest(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        last_frame_path=last_frame_path,
-        image_path=image_path,
-        save_result_path=save_result_path,
-        infer_steps=infer_steps,
-        target_video_length=target_video_length,
-        seed=seed,
-        audio_path=audio_path,
-        video_duration=video_duration,
-        target_fps=target_fps,
-    )
+    request_data = {"seed": seed} if seed is not None else {}
+    optional_fields = {
+        "audio_path": audio_path,
+        "image_path": image_path,
+        "last_frame_path": last_frame_path,
+        "target_video_length": target_video_length,
+        "video_duration": video_duration,
+    }
+    request_data.update({key: value for key, value in optional_fields.items() if value not in (None, "")})
+    # FastAPI replaces empty form strings with defaults; preserve submitted text.
+    form = await request.form()
+    form_data = {key: value for key, value in form.items() if key not in {"image_file", "last_frame_file", "audio_file"}}
+    message = parse_form_request(VideoTaskRequest, form_data | request_data)
 
     return await create_video_task(message)

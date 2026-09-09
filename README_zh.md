@@ -176,6 +176,9 @@ uv pip install -v . # pip install -v .
 注意力算子安装说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html#step-4-install-attention-operators) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id9)**
 
 ### 使用示例
+
+权重目录、本地 LoRA 路径、CLI 配置及服务与 POST 示例见 [MiniMax-H3 使用说明](scripts/minimax_h3/README_zh.md)。
+
 ```python
 # examples/minimax_h3/minimax_h3_t2av_dmd.py
 """
@@ -194,7 +197,7 @@ pipe = LightX2VPipeline(
 # DMD 配置使用已发布的 768p LoRA、4 步推理、
 # video_flow_shift=6、audio_flow_shift=3 和 LoRA alpha=128。
 pipe.create_generator(
-    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step_single_gpu_offload.json"
+    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step.json"
 )
 
 # 生成参数

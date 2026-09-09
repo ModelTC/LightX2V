@@ -21,7 +21,7 @@ class ErnieImageScheduler(BaseScheduler):
         self.rope_request_id = 0
 
     def prepare_latents(self, input_info):
-        shape = tuple(input_info.target_shape)
+        shape = tuple(input_info.latent_shape)
         self.latents = torch.randn(
             shape,
             generator=self.generator,

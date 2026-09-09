@@ -154,18 +154,19 @@ class Cosmos3TransformerModel(BaseTransformerModel):
             self.post_weight.to_cuda()
 
         text_encoder_output = inputs["text_encoder_output"]
-        do_cfg = self.config.get("enable_cfg", True) and self.scheduler.sample_guide_scale != 1.0
-        if do_cfg and self.config.get("cfg_parallel", False):
-            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
-            assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
-            cfg_p_rank = dist.get_rank(cfg_p_group)
-            input_ids = text_encoder_output["cond_input_ids"] if cfg_p_rank == 0 else text_encoder_output["uncond_input_ids"]
-            output = self._infer_cond_uncond(input_ids)
-            cond, uncond = self._gather_cfg_parallel_output(output, cfg_p_group)
-            self._set_scheduler_noise_pred(self._combine_cfg_output(cond, uncond))
-        elif do_cfg:
-            cond = self._infer_cond_uncond(text_encoder_output["cond_input_ids"])
-            uncond = self._infer_cond_uncond(text_encoder_output["uncond_input_ids"])
+        do_cfg = self.config.get("enable_cfg", True)
+        if do_cfg:
+            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
+            if self.config.get("cfg_parallel", False):
+                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+                cfg_p_rank = dist.get_rank(cfg_p_group)
+                input_ids = text_encoder_output["cond_input_ids"] if cfg_p_rank == 0 else text_encoder_output["uncond_input_ids"]
+                output = self._infer_cond_uncond(input_ids)
+                cond, uncond = self._gather_cfg_parallel_output(output, cfg_p_group)
+            else:
+                cond = self._infer_cond_uncond(text_encoder_output["cond_input_ids"])
+                uncond = self._infer_cond_uncond(text_encoder_output["uncond_input_ids"])
             self._set_scheduler_noise_pred(self._combine_cfg_output(cond, uncond))
         else:
             cond = self._infer_cond_uncond(text_encoder_output["cond_input_ids"])

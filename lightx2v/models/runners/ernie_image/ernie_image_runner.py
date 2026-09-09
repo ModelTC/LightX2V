@@ -9,6 +9,7 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.ernie_image.mistral3_model import ErnieImageTextEncoder
 from lightx2v.models.networks.ernie_image.model import ErnieImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.ernie_image.scheduler import ErnieImageScheduler
 from lightx2v.models.video_encoders.hf.ernie_image.vae import ErnieImageVAE
 from lightx2v.utils.envs import GET_DTYPE
@@ -31,6 +32,9 @@ def calculate_dimensions(target_area, ratio, multiple_of):
 class ErnieImageRunner(DefaultRunner):
     model_cpu_offload_seq = "pe->text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
+    supported_request_fields_by_task = {
+        "t2i": IMAGE_REQUEST_FIELDS,
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -69,8 +73,6 @@ class ErnieImageRunner(DefaultRunner):
         elif self.config.get("lazy_load", False):
             assert self.config.get("cpu_offload", False)
         self.run_dit = self._run_dit_local
-        if self.config["task"] != "t2i":
-            raise NotImplementedError(f"ErnieImageRunner only supports t2i, got: {self.config['task']}")
         self.run_input_encoder = self._run_input_encoder_local_t2i
 
     @ProfilingContext4DebugL2("Run DiT")
@@ -101,8 +103,7 @@ class ErnieImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Run Text Encoder")
     def run_text_encoder(self, text, neg_prompt=None):
-        width = getattr(self.input_info, "auto_width", self.config.get("target_width", 1024))
-        height = getattr(self.input_info, "auto_height", self.config.get("target_height", 1024))
+        height, width = self.get_target_size()
         prompt_embeds_list, revised_prompts = self.text_encoders[0].infer(
             [text],
             use_pe=self.config.get("use_pe", True),
@@ -128,40 +129,34 @@ class ErnieImageRunner(DefaultRunner):
             text_encoder_output["negative_prompt_embeds"] = negative_prompt_embeds
         return text_encoder_output
 
-    def set_target_shape(self):
+    def set_latent_shape(self):
         vae_scale_factor = self.config.get("vae_scale_factor", 16)
         if len(self.input_info.target_shape) == 2:
             height, width = [int(v) for v in self.input_info.target_shape]
         else:
-            target_height = self.config.get("target_height", None)
-            target_width = self.config.get("target_width", None)
-            if target_height and target_width:
-                height, width = int(target_height), int(target_width)
+            aspect_ratio = self.input_info.aspect_ratio or self.config.get("aspect_ratio", "1:1")
+            if ":" in aspect_ratio:
+                w_ratio, h_ratio = [float(item) for item in aspect_ratio.split(":", 1)]
+                ratio = w_ratio / h_ratio
             else:
-                aspect_ratio = self.input_info.aspect_ratio or self.config.get("aspect_ratio", "1:1")
-                if ":" in aspect_ratio:
-                    w_ratio, h_ratio = [float(item) for item in aspect_ratio.split(":", 1)]
-                    ratio = w_ratio / h_ratio
-                else:
-                    ratio = float(aspect_ratio)
-                width, height = calculate_dimensions(
-                    self.resolution * self.resolution,
-                    ratio,
-                    vae_scale_factor,
-                )
+                ratio = float(aspect_ratio)
+            width, height = calculate_dimensions(
+                self.resolution * self.resolution,
+                ratio,
+                vae_scale_factor,
+            )
 
         if height % vae_scale_factor != 0 or width % vae_scale_factor != 0:
             raise ValueError(f"Height and width must be divisible by {vae_scale_factor}, got {height}x{width}.")
 
-        self.input_info.auto_width = width
-        self.input_info.auto_height = height
-        self.input_info.target_shape = (
+        self.input_info.target_shape = [height, width]
+        self.input_info.latent_shape = (
             1,
             self.config.get("in_channels", 128),
             height // vae_scale_factor,
             width // vae_scale_factor,
         )
-        logger.info(f"ERNIE-Image target shape: {width}x{height}, latent shape: {self.input_info.target_shape}")
+        logger.info(f"ERNIE-Image target shape: {width}x{height}, latent shape: {self.input_info.latent_shape}")
 
     def run(self, total_steps=None):
         if total_steps is None:
@@ -218,7 +213,7 @@ class ErnieImageRunner(DefaultRunner):
     @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
         self.input_info = input_info
-        self.set_target_shape()
+        self.set_latent_shape()
         self.inputs = self.run_input_encoder()
         logger.info(f"input_info: {self.input_info}")
         latents, generator = self.run_dit()

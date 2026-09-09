@@ -8,12 +8,14 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.networks.motus.model import MotusModel
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner
 from lightx2v.models.schedulers.motus.scheduler import MotusScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.models.video_encoders.hf.wan.vae_tiny import Wan2_2_VAE_tiny
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import MotusInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, save_to_video, wan_vae_to_comfy
@@ -45,6 +47,11 @@ def _merge_wan_dense_defaults(config):
 
 @RUNNER_REGISTER("motus")
 class MotusRunner(Wan22DenseRunner):
+    input_info_cls_by_task = {"i2v": MotusInputInfo}
+    supported_request_fields_by_task = {
+        "i2v": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"image_path", "prompt", "save_action_path", "state_path"},
+    }
+
     def __init__(self, config):
         _merge_wan_dense_defaults(config)
         super().__init__(config)

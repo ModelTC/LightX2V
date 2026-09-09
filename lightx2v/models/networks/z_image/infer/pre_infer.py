@@ -130,10 +130,10 @@ class ZImagePreInfer:
 
         num_tokens, patch_dim = hidden_states.shape
 
-        original_shape = self.scheduler.input_info.target_shape
-        if len(original_shape) >= 2:
-            original_height = original_shape[-2]
-            original_width = original_shape[-1]
+        latent_shape = self.scheduler.input_info.latent_shape
+        if len(latent_shape) >= 2:
+            original_height = latent_shape[-2]
+            original_width = latent_shape[-1]
             original_frames = 1
 
             F_tokens = original_frames // f_patch_size

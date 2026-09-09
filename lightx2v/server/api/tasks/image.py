@@ -8,6 +8,7 @@ from loguru import logger
 from ...schema import ImageTaskRequest, TaskResponse
 from ...task_manager import TaskStatus, task_manager
 from ..deps import get_services, validate_url_async
+from .common import parse_form_request
 
 router = APIRouter()
 
@@ -177,13 +178,14 @@ async def create_image_task_sync(
 
 @router.post("/form", response_model=TaskResponse)
 async def create_image_task_form(
+    request: Request,
+    task: str | None = Form(default=None),
     image_file: UploadFile = File(None),
     prompt: str = Form(default=""),
     save_result_path: str = Form(default=""),
     negative_prompt: str = Form(default=""),
-    infer_steps: int = Form(default=5),
-    seed: int = Form(default=42),
-    aspect_ratio: str = Form(default="16:9"),
+    seed: int | None = Form(default=None),
+    aspect_ratio: str | None = Form(default=None),
 ):
     services = get_services()
     assert services.file_service is not None, "File service is not initialized"
@@ -193,14 +195,12 @@ async def create_image_task_form(
         content = await image_file.read()
         image_path = str(await asyncio.to_thread(services.file_service.save_uploaded_file, content, image_file.filename))
 
-    message = ImageTaskRequest(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        image_path=image_path,
-        save_result_path=save_result_path,
-        infer_steps=infer_steps,
-        seed=seed,
-        aspect_ratio=aspect_ratio,
-    )
+    request_data = {"seed": seed} if seed is not None else {}
+    if image_path:
+        request_data["image_path"] = image_path
+    # FastAPI replaces empty form strings with defaults; preserve submitted text.
+    form = await request.form()
+    form_data = {key: value for key, value in form.items() if key != "image_file"}
+    message = parse_form_request(ImageTaskRequest, form_data | request_data)
 
     return await create_image_task(message)

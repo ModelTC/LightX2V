@@ -11,6 +11,7 @@ from torchvision.transforms import InterpolationMode
 
 from lightx2v.models.input_encoders.hf.wan.wan_dancer.wan_dancer import extract_music_features, split_music_features
 from lightx2v.models.networks.wan.dancer_model import WanDancerModel
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.dancer import WanDancerScheduler, WanDancerStepDistillScheduler
 from lightx2v.models.video_encoders.hf.wan.dancer_vae import WanDancerVAE
@@ -31,6 +32,16 @@ def _barrier():
 
 @RUNNER_REGISTER("wan_dancer")
 class WanDancerRunner(WanRunner):
+    supported_request_fields_by_task = {
+        "s2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"audio_path", "image_path"},
+    }
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if self.config.get("dancer_stage") == "local":
+            return supported_request_fields | {"video_path"}
+        return supported_request_fields
+
     def __init__(self, config):
         super().__init__(config)
         self.vae_cls = WanDancerVAE

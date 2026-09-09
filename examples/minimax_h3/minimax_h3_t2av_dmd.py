@@ -1,6 +1,6 @@
 """MiniMax-H3 4-step 768p T2AV inference with the released DMD LoRA.
 
-Before running, set ``model_path`` to a local MiniMax-H3 model directory and
+Before running, set ``MODEL_PATH`` to a local MiniMax-H3 model directory and
 ensure the LoRA path in the selected config resolves to a local checkpoint.
 """
 
@@ -11,8 +11,8 @@ os.environ["SENSITIVE_LAYER_DTYPE"] = "FP32"
 
 from lightx2v import LightX2VPipeline
 
-MODEL_PATH = "/data/nvme6/gushiqiao/models/MiniMax-H3"
-CONFIG_PATH = "configs/minimax_h3/dmd/minimax_h3_bf16_4step_single_gpu_offload.json"
+MODEL_PATH = "/path/to/MiniMax-H3"
+CONFIG_PATH = "configs/minimax_h3/dmd/minimax_h3_bf16_4step.json"
 OUTPUT_PATH = "save_results/minimax_h3_t2av_dmd_768p.mp4"
 
 
