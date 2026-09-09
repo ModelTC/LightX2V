@@ -16,16 +16,8 @@ def _resolve_resident_block_indices(value, num_blocks, policy, config_key):
     at the front, which gives the offload stream regular compute windows in
     which to prefetch the next non-resident block.
     """
-    if value is None:
-        value = 0
-    if isinstance(value, str):
-        if value.lower() != "all":
-            raise ValueError(f"{config_key} must be an integer or 'all', got {value!r}")
-        count = num_blocks
-    elif isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{config_key} must be an integer or 'all', got {value!r}")
-    else:
-        count = value
+    # Resident block counts are integers or "all".
+    count = num_blocks if value == "all" else value
 
     if not 0 <= count <= num_blocks:
         raise ValueError(f"{config_key} must be between 0 and {num_blocks}, got {count}")
