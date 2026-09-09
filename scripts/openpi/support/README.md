@@ -1,7 +1,7 @@
 # OpenPI π0.5-LIBERO
 
-该目录提供 π0.5-LIBERO 的权重转换、运行环境准备、本地 rollout、定量评测和
-ROS 交互。批量评测从 LightX2V 公共入口启动：
+该目录提供 π0.5-LIBERO 的权重转换、运行环境准备、fine-tuning、本地 rollout、
+定量评测和 ROS 交互。批量评测从 LightX2V 公共入口启动：
 
 ```text
 shell -> python -m lightx2v.infer -> OpenPIRunner
@@ -126,7 +126,7 @@ setup 只安装或修复 OpenPI 所需的小包：base 环境中的 `mujoco==3.2
 Python、PyTorch 或 CUDA。
 
 ```bash
-bash scripts/openpi/1_setup_pytorch_runtime.sh
+bash scripts/openpi/1_setup_pytorch_runtime.sh prepare --component transformers
 ```
 
 训练或评测前可做只读检查：
@@ -504,3 +504,8 @@ RNG 和 5-action replan queue；清理启动脚本时不应改变这些逻辑。
 
 修改 ROS 文件后需要重新构建 `common simulator inference`；LIBERO adapter 会把
 可见的物理 GPU 映射为 EGL 逻辑设备 0。
+
+## 11. π0.5-LIBERO 训练
+
+训练数据、权重、环境准备、fine-tuning、checkpoint resume、数值对齐和评测方法见
+[训练复现文档](../../../lightx2v_train/scripts/openpi/support/README.md)。

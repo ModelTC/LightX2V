@@ -1,6 +1,7 @@
 # Adapted from Physical Intelligence OpenPI (Apache-2.0), commit 15a9616.
 # Localized for the LightX2V OpenPI backend; no runtime OpenPI/JAX dependency.
 
+from contextlib import nullcontext
 from typing import Literal
 
 import torch
@@ -15,12 +16,14 @@ class PaliGemmaWithExpertModel(nn.Module):
         self,
         vlm_config,
         action_expert_config,
-        use_adarms=None,
-        precision: Literal["bfloat16", "float32"] = "bfloat16",
+        use_adarms,
+        *,
+        parameter_precision: Literal["bfloat16", "float32"],
+        compute_precision: Literal["bfloat16", "float32"],
     ):
-        if use_adarms is None:
-            use_adarms = [False, False]
         super().__init__()
+        self.parameter_precision = parameter_precision
+        self.compute_precision = compute_precision
 
         vlm_config_hf = CONFIG_MAPPING["paligemma"]()
         vlm_config_hf._vocab_size = 257152  # noqa: SLF001
@@ -59,9 +62,9 @@ class PaliGemmaWithExpertModel(nn.Module):
         self.gemma_expert = GemmaForCausalLM(config=action_expert_config_hf)
         self.gemma_expert.model.embed_tokens = None
 
-        self.to_bfloat16_for_selected_params(precision)
+        self._apply_parameter_precision(self.parameter_precision)
 
-    def to_bfloat16_for_selected_params(self, precision: Literal["bfloat16", "float32"] = "bfloat16"):
+    def _apply_parameter_precision(self, precision: Literal["bfloat16", "float32"]):
         if precision == "bfloat16":
             self.to(dtype=torch.bfloat16)
         elif precision == "float32":
@@ -83,8 +86,44 @@ class PaliGemmaWithExpertModel(nn.Module):
             if any(selector in name for selector in params_to_keep_float32):
                 param.data = param.data.to(dtype=torch.float32)
 
+    @property
+    def uses_mixed_precision(self) -> bool:
+        return self.parameter_precision == "float32" and self.compute_precision == "bfloat16"
+
+    def _compute_context(self, tensor: torch.Tensor):
+        if self.uses_mixed_precision and tensor.device.type == "cuda":
+            return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        return nullcontext()
+
+    def cast_transformer_activation(self, tensor: torch.Tensor | None):
+        if tensor is None:
+            return None
+        if self.compute_precision == "bfloat16" and not (self.uses_mixed_precision and tensor.device.type == "cpu"):
+            return tensor.to(dtype=torch.bfloat16)
+        return tensor.to(dtype=torch.float32)
+
     def embed_image(self, image: torch.Tensor):
-        return self.paligemma.model.get_image_features(image)
+        if not self.uses_mixed_precision:
+            with self._compute_context(image):
+                return self.paligemma.model.get_image_features(image)
+
+        # OpenPI keeps patch extraction and positional embedding in FP32, then
+        # switches the SigLIP encoder and projector to the configured matmul
+        # dtype.  Wrapping get_image_features() as a whole in autocast would
+        # move the FP32/BF16 boundary ahead of the patch convolution.
+        vision_model = self.paligemma.model.vision_tower.vision_model
+        stem_context = torch.autocast(device_type="cuda", enabled=False) if image.device.type == "cuda" else nullcontext()
+        with stem_context:
+            hidden_states = vision_model.embeddings(image.float(), interpolate_pos_encoding=False)
+        hidden_states = self.cast_transformer_activation(hidden_states)
+        with self._compute_context(hidden_states):
+            encoder_outputs = vision_model.encoder(
+                inputs_embeds=hidden_states,
+                output_attentions=False,
+                output_hidden_states=False,
+            )
+            hidden_states = vision_model.post_layernorm(encoder_outputs.last_hidden_state)
+            return self.paligemma.model.multi_modal_projector(hidden_states)
 
     def embed_language_tokens(self, tokens: torch.Tensor):
         return self.paligemma.language_model.embed_tokens(tokens)
@@ -101,45 +140,45 @@ class PaliGemmaWithExpertModel(nn.Module):
         if adarms_cond is None:
             adarms_cond = [None, None]
         if inputs_embeds[1] is None:
-            prefix_output = self.paligemma.language_model.forward(
-                inputs_embeds=inputs_embeds[0],
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                adarms_cond=adarms_cond[0],
-            )
+            prefix_inputs = self.cast_transformer_activation(inputs_embeds[0])
+            with self._compute_context(prefix_inputs):
+                prefix_output = self.paligemma.language_model.forward(
+                    inputs_embeds=prefix_inputs,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    use_cache=use_cache,
+                    adarms_cond=adarms_cond[0],
+                )
             prefix_past_key_values = prefix_output.past_key_values
             prefix_output = prefix_output.last_hidden_state
             suffix_output = None
         elif inputs_embeds[0] is None:
-            suffix_output = self.gemma_expert.model.forward(
-                inputs_embeds=inputs_embeds[1],
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                use_cache=use_cache,
-                adarms_cond=adarms_cond[1],
-            )
+            suffix_inputs = self.cast_transformer_activation(inputs_embeds[1])
+            with self._compute_context(suffix_inputs):
+                suffix_output = self.gemma_expert.model.forward(
+                    inputs_embeds=suffix_inputs,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    use_cache=use_cache,
+                    adarms_cond=adarms_cond[1],
+                )
             suffix_output = suffix_output.last_hidden_state
             prefix_output = None
             prefix_past_key_values = None
         else:
+            inputs_embeds = [self.cast_transformer_activation(tensor) for tensor in inputs_embeds]
             models = [self.paligemma.language_model, self.gemma_expert.model]
             num_layers = self.paligemma.config.text_config.num_hidden_layers
 
-            use_gradient_checkpointing = (hasattr(self.gemma_expert.model, "gradient_checkpointing") and self.gemma_expert.model.gradient_checkpointing and self.training) or (
-                hasattr(self, "gradient_checkpointing") and self.gradient_checkpointing and self.training
-            )
+            use_gradient_checkpointing = self.gemma_expert.model.gradient_checkpointing and self.training
 
-            if self.training and hasattr(self.gemma_expert.model, "gradient_checkpointing"):
-                if not self.gemma_expert.model.gradient_checkpointing:
-                    self.gemma_expert.model.gradient_checkpointing = True
-                use_gradient_checkpointing = True
+            def compute_layer_with_precision(layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond):
+                with self._compute_context(inputs_embeds[0]):
+                    return compute_layer(layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond)
 
-            def compute_layer_complete(layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond):
-                models = [self.paligemma.language_model, self.gemma_expert.model]
-
+            def compute_layer(layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond):
                 query_states = []
                 key_states = []
                 value_states = []
@@ -213,7 +252,7 @@ class PaliGemmaWithExpertModel(nn.Module):
             for layer_idx in range(num_layers):
                 if use_gradient_checkpointing:
                     inputs_embeds = torch.utils.checkpoint.checkpoint(
-                        compute_layer_complete,
+                        compute_layer_with_precision,
                         layer_idx,
                         inputs_embeds,
                         attention_mask,
@@ -223,14 +262,15 @@ class PaliGemmaWithExpertModel(nn.Module):
                         preserve_rng_state=False,
                     )
                 else:
-                    inputs_embeds = compute_layer_complete(layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond)
+                    inputs_embeds = compute_layer_with_precision(layer_idx, inputs_embeds, attention_mask, position_ids, adarms_cond)
 
             def compute_final_norms(inputs_embeds, adarms_cond):
-                outputs_embeds = []
-                for i, hidden_states in enumerate(inputs_embeds):
-                    out_emb, _ = models[i].norm(hidden_states, cond=adarms_cond[i])
-                    outputs_embeds.append(out_emb)
-                return outputs_embeds
+                with self._compute_context(inputs_embeds[0]):
+                    outputs_embeds = []
+                    for i, hidden_states in enumerate(inputs_embeds):
+                        out_emb, _ = models[i].norm(hidden_states, cond=adarms_cond[i])
+                        outputs_embeds.append(out_emb)
+                    return outputs_embeds
 
             if use_gradient_checkpointing:
                 outputs_embeds = torch.utils.checkpoint.checkpoint(compute_final_norms, inputs_embeds, adarms_cond, use_reentrant=False, preserve_rng_state=False)

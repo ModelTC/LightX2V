@@ -17,12 +17,6 @@ def default_libero_root():
     return Path(__file__).resolve().parent / "LIBERO"
 
 
-def add_python_path(path):
-    path = str(Path(path).expanduser())
-    if path not in sys.path:
-        sys.path.insert(0, path)
-
-
 def setup_libero_config(libero_root):
     benchmark_root = libero_root / "libero" / "libero"
     if not (benchmark_root / "bddl_files").exists():
@@ -50,16 +44,13 @@ def setup_libero_config(libero_root):
 
 
 def load_libero(libero_root):
-    add_python_path(libero_root)
+    python_path = str(Path(libero_root).expanduser())
+    if python_path not in sys.path:
+        sys.path.insert(0, python_path)
     setup_libero_config(libero_root)
 
-    try:
-        from libero.libero import benchmark, get_libero_path
-        from libero.libero.envs import OffScreenRenderEnv
-    except ModuleNotFoundError as exc:
-        if exc.name in {"robosuite", "bddl"}:
-            raise ModuleNotFoundError(f"Missing dependency '{exc.name}'. Activate the LIBERO runtime first.") from exc
-        raise
+    from libero.libero import benchmark, get_libero_path
+    from libero.libero.envs import OffScreenRenderEnv
 
     return benchmark, get_libero_path, OffScreenRenderEnv
 

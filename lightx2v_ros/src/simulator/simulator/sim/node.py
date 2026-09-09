@@ -32,7 +32,7 @@ from typing import Callable
 
 import numpy as np
 import rclpy
-from common.contract import EnvContract
+from common.contract import EnvContract, parse_multiarray_label
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, Float64MultiArray, Int32, MultiArrayDimension, String
@@ -48,18 +48,6 @@ FAILURE = "failure"
 SWITCHING = "switching"
 
 FINISHED_STATES = (SUCCESS, FAILURE)
-
-
-def parse_action_identity(label):
-    fields = {}
-    for item in str(label).split(";"):
-        name, separator, value = item.partition("=")
-        if separator:
-            fields[name] = value
-    try:
-        return int(fields["episode"]), int(fields["observation"]), int(fields["plan_epoch"])
-    except (KeyError, ValueError):
-        return None
 
 
 def rgb_to_image_msg(image, stamp, frame_id, episode_index=None, observation_index=None):
@@ -262,7 +250,7 @@ class SimulatorNode(Node):
         if self.state != RUNNING:
             return
         if msg.layout.dim:
-            action_identity = parse_action_identity(msg.layout.dim[0].label)
+            action_identity = parse_multiarray_label(msg.layout.dim[0].label, "episode", "observation", "plan_epoch")
             expected_identity = (self.episode_index, self.step_index, self.plan_epoch)
             if action_identity != expected_identity:
                 self.get_logger().warning(f"dropping stale action {action_identity}; current observation is {expected_identity}")

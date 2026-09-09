@@ -34,5 +34,4 @@ exec python -m lightx2v.infer \
   --task i2va \
   --model_path "${model_path}" \
   --config_json "${config_json}" \
-  --seed "${OPENPI_POLICY_SEED:-0}" \
   --save_result_path "${output_dir}"

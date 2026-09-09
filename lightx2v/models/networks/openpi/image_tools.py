@@ -1,4 +1,4 @@
-"""Image helpers copied from OpenPI's torch preprocessing path (Apache-2.0)."""
+"""Image resizing used by OpenPI's inference path."""
 
 import torch
 import torch.nn.functional as F  # noqa: N812

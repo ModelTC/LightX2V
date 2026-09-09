@@ -3,10 +3,10 @@ from collections import deque
 
 import numpy as np
 import rclpy
-from common.contract import get_contract
+from common.contract import get_contract, parse_multiarray_label
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32MultiArray, Float64MultiArray, MultiArrayDimension, String
+from std_msgs.msg import Float64MultiArray, MultiArrayDimension, String
 
 from lightx2v.models.runners.openpi.openpi_runner import OpenPIPolicy
 from lightx2v.utils.set_config import auto_calc_config, get_default_config
@@ -20,18 +20,8 @@ class OpenPINode(Node):
         self.declare_parameter("model_path", "")
         self.declare_parameter("seed", 0)
         self.declare_parameter("actions_per_plan", 5)
-        self.declare_parameter("numeric_precision", "float64")
 
         self.contract = get_contract("libero")
-
-        precision = str(self.get_parameter("numeric_precision").value).strip().lower()
-        numeric_types = {
-            "float32": (Float32MultiArray, np.float32),
-            "float64": (Float64MultiArray, np.float64),
-        }
-        if precision not in numeric_types:
-            raise ValueError("numeric_precision must be 'float32' or 'float64'")
-        self.numeric_message_type, self.numeric_dtype = numeric_types[precision]
 
         config = self._policy_config()
         self.actions_per_plan = int(self.get_parameter("actions_per_plan").value)
@@ -52,12 +42,13 @@ class OpenPINode(Node):
         self.last_processed_observation = None
         self.pending_actions = deque()
 
-        self.action_pub = self.create_publisher(self.numeric_message_type, self.contract.action_topic, 10)
-        self._camera_subscriptions = [self.create_subscription(Image, self.contract.camera_topic(camera), self._image_callback(camera), 10) for camera in self.contract.policy_input_cameras]
-        self.state_sub = self.create_subscription(self.numeric_message_type, self.contract.state_topic, self._on_state, 10)
-        self.context_sub = self.create_subscription(String, self.contract.observation_context_topic, self._on_context, 10)
+        self.action_pub = self.create_publisher(Float64MultiArray, self.contract.action_topic, 10)
+        for camera in self.contract.policy_input_cameras:
+            self.create_subscription(Image, self.contract.camera_topic(camera), self._image_callback(camera), 10)
+        self.create_subscription(Float64MultiArray, self.contract.state_topic, self._on_state, 10)
+        self.create_subscription(String, self.contract.observation_context_topic, self._on_context, 10)
 
-        self.get_logger().info(f"OpenPI ready on {self.contract.namespace}: horizon={action_horizon}, actions_per_plan={self.actions_per_plan}, precision={precision}")
+        self.get_logger().info(f"OpenPI ready on {self.contract.namespace}: horizon={action_horizon}, actions_per_plan={self.actions_per_plan}, precision=float64")
 
     def _policy_config(self):
         config_json = str(self.get_parameter("config_json").value).strip()
@@ -100,11 +91,11 @@ class OpenPINode(Node):
     def _on_state(self, msg):
         if not msg.layout.dim:
             return
-        identity = state_identity(msg.layout.dim[0].label)
+        identity = parse_multiarray_label(msg.layout.dim[0].label, "episode", "observation")
         if identity is None:
             return
         episode, observation = identity
-        state = np.asarray(msg.data, dtype=self.numeric_dtype).reshape(-1)
+        state = np.asarray(msg.data, dtype=np.float64).reshape(-1)
         if state.size != self.contract.state_dim:
             self.get_logger().error(f"expected state length {self.contract.state_dim}, got {state.size}")
             return
@@ -164,12 +155,12 @@ class OpenPINode(Node):
         self._publish_action(action, episode, observation)
 
     def _publish_action(self, action, episode, observation):
-        action = np.asarray(action, dtype=self.numeric_dtype).reshape(-1)
+        action = np.asarray(action, dtype=np.float64).reshape(-1)
         if action.size != self.contract.action_dim:
             raise ValueError(f"expected action length {self.contract.action_dim}, got {action.size}")
         if not np.isfinite(action).all():
             raise ValueError("OpenPI produced a non-finite action")
-        msg = self.numeric_message_type()
+        msg = Float64MultiArray()
         msg.layout.dim = [
             MultiArrayDimension(
                 label=f"episode={episode};observation={observation};plan_epoch={self.plan_epoch}",
@@ -188,18 +179,6 @@ def observation_identity(frame_id):
     try:
         return int(parts[1]), int(parts[2])
     except ValueError:
-        return None
-
-
-def state_identity(label):
-    fields = {}
-    for item in str(label).split(";"):
-        name, separator, value = item.partition("=")
-        if separator:
-            fields[name] = value
-    try:
-        return int(fields["episode"]), int(fields["observation"])
-    except (KeyError, ValueError):
         return None
 
 

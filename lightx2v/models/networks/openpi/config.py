@@ -37,7 +37,9 @@ class Pi0Config:
     action_dim: int = 32
     action_horizon: int = 10
     max_token_len: int = 200
-    dtype: Literal["bfloat16", "float32"] = "bfloat16"
+    compute_dtype: Literal["bfloat16", "float32"] = "bfloat16"
+    parameter_dtype: Literal["bfloat16", "float32"] | None = None
+    require_fp32_checkpoint: bool = False
     paligemma_variant: GemmaVariant = "gemma_2b"
     action_expert_variant: GemmaVariant = "gemma_300m"
     pi05: bool = True
@@ -46,17 +48,24 @@ class Pi0Config:
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "Pi0Config":
+        compute_dtype = config.get("compute_dtype", config.get("dtype", "bfloat16"))
         return cls(
             action_dim=config["action_dim"],
             action_horizon=config["action_horizon"],
             max_token_len=config["max_token_len"],
-            dtype=config["dtype"],
+            compute_dtype=compute_dtype,
+            parameter_dtype=config.get("parameter_dtype"),
+            require_fp32_checkpoint=config.get("require_fp32_checkpoint", False),
             paligemma_variant=config["paligemma_variant"],
             action_expert_variant=config["action_expert_variant"],
             pi05=config["pi05"],
             discrete_state_input=config["discrete_state_input"],
-            pytorch_compile_mode=config["pytorch_compile_mode"],
+            pytorch_compile_mode=config.get("pytorch_compile_mode"),
         )
+
+    @property
+    def resolved_parameter_dtype(self) -> Literal["bfloat16", "float32"]:
+        return self.parameter_dtype or self.compute_dtype
 
     def validate_pi05_libero(self) -> None:
         expected = {
@@ -73,5 +82,9 @@ class Pi0Config:
         if wrong:
             details = ", ".join(f"{name}={got!r} (expected {want!r})" for name, (got, want) in wrong.items())
             raise ValueError(f"Configuration does not match the released pi05_libero checkpoint: {details}")
-        if self.dtype not in {"bfloat16", "float32"}:
-            raise ValueError(f"Unsupported OpenPI dtype: {self.dtype!r}")
+        if self.compute_dtype not in {"bfloat16", "float32"}:
+            raise ValueError(f"Unsupported OpenPI compute dtype: {self.compute_dtype!r}")
+        if self.resolved_parameter_dtype not in {"bfloat16", "float32"}:
+            raise ValueError(f"Unsupported OpenPI parameter dtype: {self.resolved_parameter_dtype!r}")
+        if self.require_fp32_checkpoint and self.resolved_parameter_dtype != "float32":
+            raise ValueError("require_fp32_checkpoint=true requires parameter_dtype='float32'")

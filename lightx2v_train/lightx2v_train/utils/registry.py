@@ -81,6 +81,7 @@ _MODEL_MODULES = {
     "longcat_image": "lightx2v_train.model_zoo.longcat_image.longcat_image",
     "longcat_image_edit": "lightx2v_train.model_zoo.longcat_image.longcat_image_edit",
     "minimax_h3_t2av": "lightx2v_train.model_zoo.minimax_h3.minimax_h3_t2av",
+    "openpi_pi05_libero": "lightx2v_train.model_zoo.openpi.pi05_libero",
     "qwen_image": "lightx2v_train.model_zoo.qwen_image.qwen_image",
     "qwen_image_edit": "lightx2v_train.model_zoo.qwen_image.qwen_image_edit",
     "wan_t2v": "lightx2v_train.model_zoo.wan.wan_t2v",
@@ -94,6 +95,7 @@ _TRAINER_MODULES = {
     "consistency": "lightx2v_train.trainers.consistency.trainer",
     "dmd": "lightx2v_train.trainers.dmd.trainer",
     "flow_matching": "lightx2v_train.trainers.flow_matching",
+    "openpi_flow_matching": "lightx2v_train.trainers.openpi",
     "phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
     "sgmd": "lightx2v_train.trainers.sgmd",
     "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",
@@ -140,6 +142,8 @@ def _ensure_data_registered(data_name):
         import lightx2v_train.data.training_cache_dataset  # noqa: F401
     elif data_name in {"prompt_dataset", "video_dataset"}:
         import lightx2v_train.data.video_dataset  # noqa: F401
+    elif data_name == "openpi_libero":
+        import lightx2v_train.data.openpi_libero  # noqa: F401
 
 
 def build_model(config):

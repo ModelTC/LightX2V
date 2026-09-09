@@ -6,11 +6,29 @@ import logging
 from pathlib import Path
 
 import torch
+from safetensors import safe_open
 from safetensors.torch import load_model
 
 from ..config import Pi0Config
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _validate_checkpoint_precision(weight_path: Path, config: Pi0Config) -> None:
+    if not config.require_fp32_checkpoint:
+        return
+
+    lower_precision = []
+    with safe_open(weight_path, framework="pt", device="cpu") as checkpoint:
+        for name in checkpoint.keys():
+            dtype = checkpoint.get_slice(name).get_dtype()
+            if dtype.startswith(("F", "BF")) and dtype != "F32":
+                lower_precision.append((name, dtype))
+                if len(lower_precision) == 8:
+                    break
+    if lower_precision:
+        preview = ", ".join(f"{name}={dtype}" for name, dtype in lower_precision)
+        raise RuntimeError(f"OpenPI fine-tuning requires an FP32 source checkpoint; found {preview}")
 
 
 def _validate_transformers_runtime() -> None:
@@ -43,6 +61,7 @@ def load_pi05_libero_weights(
     weight_path = Path(weight_path).expanduser().resolve()
     if not weight_path.is_file():
         raise FileNotFoundError(f"Converted OpenPI SafeTensors file not found: {weight_path}")
+    _validate_checkpoint_precision(weight_path, config)
 
     # Import only after selecting OpenPI's private Transformers runtime.
     from ..pi0 import PI0Pytorch
@@ -50,9 +69,9 @@ def load_pi05_libero_weights(
     model = PI0Pytorch(config)
     load_model(model, weight_path, strict=True, device="cpu")
 
-    # Match upstream's mixed BF16/FP32 inference policy.
-    model.paligemma_with_expert.to_bfloat16_for_selected_params(config.dtype)
     model.to(torch.device(device))
+    if config.resolved_parameter_dtype == "float32":
+        model.assert_fp32_parameters()
     model.eval()
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
     LOGGER.info("Loaded pi05_libero PyTorch weights strictly: %.3fB parameters", parameter_count / 1e9)

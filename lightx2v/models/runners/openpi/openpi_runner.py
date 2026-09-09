@@ -73,10 +73,6 @@ class OpenPIRunner(BaseRunner):
             raise ValueError(f"Unsupported OpenPI run mode {self.run_mode!r}; expected 'rollout' or 'evaluate'.")
         self.config.lock()
 
-    def warmup(self) -> None:
-        # Model initialization belongs to the isolated worker.
-        pass
-
     def _value(self, config_name: str, *, environment_name: str | None = None, default: Any = None) -> Any:
         if environment_name:
             environment_value = os.environ.get(environment_name)

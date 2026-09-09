@@ -22,7 +22,14 @@ def get_safe_dtype(target_dtype, device_type):
     return target_dtype
 
 
-def create_sinusoidal_pos_embedding(time: torch.tensor, dimension: int, min_period: float, max_period: float, device="cpu") -> Tensor:
+def create_sinusoidal_pos_embedding(
+    time: torch.Tensor,
+    dimension: int,
+    min_period: float,
+    max_period: float,
+    device="cpu",
+    dtype: torch.dtype | None = None,
+) -> Tensor:
     """Computes sine-cosine positional embedding vectors for scalar positions."""
     if dimension % 2 != 0:
         raise ValueError(f"dimension ({dimension}) must be divisible by 2")
@@ -30,7 +37,9 @@ def create_sinusoidal_pos_embedding(time: torch.tensor, dimension: int, min_peri
     if time.ndim != 1:
         raise ValueError("The time tensor is expected to be of shape `(batch_size, )`.")
 
-    dtype = get_safe_dtype(torch.float64, device.type)
+    if dtype is None:
+        dtype = get_safe_dtype(torch.float64, device.type)
+    time = time.to(dtype=dtype)
     fraction = torch.linspace(0.0, 1.0, dimension // 2, dtype=dtype, device=device)
     period = min_period * (max_period / min_period) ** fraction
 
@@ -91,7 +100,8 @@ class PI0Pytorch(nn.Module):
             paligemma_config,
             action_expert_config,
             use_adarms=[False, True] if self.pi05 else [False, False],
-            precision=config.dtype,
+            parameter_precision=config.resolved_parameter_dtype,
+            compute_precision=config.compute_dtype,
         )
 
         self.action_in_proj = nn.Linear(config.action_dim, action_expert_config.width)
@@ -111,6 +121,12 @@ class PI0Pytorch(nn.Module):
 
         self.gradient_checkpointing_enabled = False
 
+    def assert_fp32_parameters(self) -> None:
+        non_fp32 = [(name, parameter.dtype) for name, parameter in self.named_parameters() if parameter.requires_grad and parameter.is_floating_point() and parameter.dtype != torch.float32]
+        if non_fp32:
+            preview = ", ".join(f"{name}={dtype}" for name, dtype in non_fp32[:8])
+            raise RuntimeError(f"OpenPI trainable parameters must remain FP32; found {preview}")
+
     def gradient_checkpointing_enable(self):
         self.gradient_checkpointing_enabled = True
         self.paligemma_with_expert.paligemma.language_model.gradient_checkpointing = True
@@ -118,17 +134,6 @@ class PI0Pytorch(nn.Module):
         self.paligemma_with_expert.gemma_expert.model.gradient_checkpointing = True
 
         logging.info("Enabled gradient checkpointing for PI0Pytorch model")
-
-    def gradient_checkpointing_disable(self):
-        self.gradient_checkpointing_enabled = False
-        self.paligemma_with_expert.paligemma.language_model.gradient_checkpointing = False
-        self.paligemma_with_expert.paligemma.vision_tower.gradient_checkpointing = False
-        self.paligemma_with_expert.gemma_expert.model.gradient_checkpointing = False
-
-        logging.info("Disabled gradient checkpointing for PI0Pytorch model")
-
-    def is_gradient_checkpointing_enabled(self):
-        return self.gradient_checkpointing_enabled
 
     def _apply_checkpoint(self, func, *args, **kwargs):
         if self.gradient_checkpointing_enabled and self.training:
@@ -172,11 +177,7 @@ class PI0Pytorch(nn.Module):
         att_masks = []
 
         for img, img_mask in zip(images, img_masks, strict=True):
-
-            def image_embed_func(img):
-                return self.paligemma_with_expert.embed_image(img)
-
-            img_emb = self._apply_checkpoint(image_embed_func, img)
+            img_emb = self._apply_checkpoint(self.paligemma_with_expert.embed_image, img)
 
             bsize, num_img_embs = img_emb.shape[:2]
 
@@ -185,12 +186,9 @@ class PI0Pytorch(nn.Module):
 
             att_masks += [0] * num_img_embs
 
-        def lang_embed_func(lang_tokens):
-            lang_emb = self.paligemma_with_expert.embed_language_tokens(lang_tokens)
-            lang_emb_dim = lang_emb.shape[-1]
-            return lang_emb * math.sqrt(lang_emb_dim)
-
-        lang_emb = self._apply_checkpoint(lang_embed_func, lang_tokens)
+        lang_emb = self.paligemma_with_expert.embed_language_tokens(lang_tokens)
+        lang_emb = lang_emb * math.sqrt(lang_emb.shape[-1])
+        lang_emb = self.paligemma_with_expert.cast_transformer_activation(lang_emb)
 
         embs.append(lang_emb)
         pad_masks.append(lang_masks)
@@ -209,6 +207,8 @@ class PI0Pytorch(nn.Module):
 
     def embed_suffix(self, state, noisy_actions, timestep):
         """Embed state, noisy_actions, timestep to prepare for Expert Gemma processing."""
+        noisy_actions = noisy_actions.float()
+        timestep = timestep.float()
         embs = []
         pad_masks = []
         att_masks = []
@@ -217,10 +217,7 @@ class PI0Pytorch(nn.Module):
             if self.state_proj.weight.dtype == torch.float32:
                 state = state.to(torch.float32)
 
-            def state_proj_func(state):
-                return self.state_proj(state)
-
-            state_emb = self._apply_checkpoint(state_proj_func, state)
+            state_emb = self.state_proj(state)
 
             embs.append(state_emb[:, None, :])
             bsize = state_emb.shape[0]
@@ -231,34 +228,26 @@ class PI0Pytorch(nn.Module):
 
             att_masks += [1]
 
-        time_emb = create_sinusoidal_pos_embedding(timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0, device=timestep.device)
+        embedding_dtype = torch.float32 if self.paligemma_with_expert.uses_mixed_precision else None
+        time_emb = create_sinusoidal_pos_embedding(
+            timestep,
+            self.action_in_proj.out_features,
+            min_period=4e-3,
+            max_period=4.0,
+            device=timestep.device,
+            dtype=embedding_dtype,
+        )
         time_emb = time_emb.type(dtype=timestep.dtype)
 
-        def action_proj_func(noisy_actions):
-            return self.action_in_proj(noisy_actions)
-
-        action_emb = self._apply_checkpoint(action_proj_func, noisy_actions)
+        action_emb = self.action_in_proj(noisy_actions)
 
         if not self.pi05:
             time_emb = time_emb[:, None, :].expand_as(action_emb)
             action_time_emb = torch.cat([action_emb, time_emb], dim=2)
-
-            def mlp_func(action_time_emb):
-                x = self.action_time_mlp_in(action_time_emb)
-                x = F.silu(x)
-                return self.action_time_mlp_out(x)
-
-            action_time_emb = self._apply_checkpoint(mlp_func, action_time_emb)
+            action_time_emb = self.action_time_mlp_out(F.silu(self.action_time_mlp_in(action_time_emb)))
             adarms_cond = None
         else:
-
-            def time_mlp_func(time_emb):
-                x = self.time_mlp_in(time_emb)
-                x = F.silu(x)
-                x = self.time_mlp_out(x)
-                return F.silu(x)
-
-            time_emb = self._apply_checkpoint(time_mlp_func, time_emb)
+            time_emb = F.silu(self.time_mlp_out(F.silu(self.time_mlp_in(time_emb))))
             action_time_emb = action_emb
             adarms_cond = time_emb
 
@@ -279,13 +268,18 @@ class PI0Pytorch(nn.Module):
 
     def forward(self, observation, actions, noise=None, time=None) -> Tensor:
         """Do a full training forward pass and compute the loss (batch_size x num_steps x num_motors)"""
+        actions = actions.float()
         images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=True)
 
         if noise is None:
             noise = self.sample_noise(actions.shape, actions.device)
+        else:
+            noise = noise.float()
 
         if time is None:
             time = self.sample_time(actions.shape[0], actions.device)
+        else:
+            time = time.float()
 
         time_expanded = time[:, None, None]
         x_t = time_expanded * noise + (1 - time_expanded) * actions
@@ -293,9 +287,8 @@ class PI0Pytorch(nn.Module):
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(state, x_t, time)
-        if self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype == torch.bfloat16:
-            suffix_embs = suffix_embs.to(dtype=torch.bfloat16)
-            prefix_embs = prefix_embs.to(dtype=torch.bfloat16)
+        suffix_embs = self.paligemma_with_expert.cast_transformer_activation(suffix_embs)
+        prefix_embs = self.paligemma_with_expert.cast_transformer_activation(prefix_embs)
 
         pad_masks = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
         att_masks = torch.cat([prefix_att_masks, suffix_att_masks], dim=1)
@@ -305,28 +298,24 @@ class PI0Pytorch(nn.Module):
 
         att_2d_masks_4d = self._prepare_attention_masks_4d(att_2d_masks)
 
-        def forward_func(prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond):
-            (_, suffix_out), _ = self.paligemma_with_expert.forward(
-                attention_mask=att_2d_masks_4d,
-                position_ids=position_ids,
-                past_key_values=None,
-                inputs_embeds=[prefix_embs, suffix_embs],
-                use_cache=False,
-                adarms_cond=[None, adarms_cond],
-            )
-            return suffix_out
-
-        suffix_out = self._apply_checkpoint(forward_func, prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond)
+        # The joint transformer checkpoints each Gemma block internally.
+        # Checkpointing this complete call as well would recompute the entire
+        # stack on top of the per-block recomputation.
+        (_, suffix_out), _ = self.paligemma_with_expert.forward(
+            attention_mask=att_2d_masks_4d,
+            position_ids=position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, suffix_embs],
+            use_cache=False,
+            adarms_cond=[None, adarms_cond],
+        )
 
         suffix_out = suffix_out[:, -self.config.action_horizon :]
         suffix_out = suffix_out.to(dtype=torch.float32)
 
-        def action_out_proj_func(suffix_out):
-            return self.action_out_proj(suffix_out)
+        v_t = self.action_out_proj(suffix_out)
 
-        v_t = self._apply_checkpoint(action_out_proj_func, suffix_out)
-
-        return F.mse_loss(u_t, v_t, reduction="none")
+        return F.mse_loss(u_t.float(), v_t.float(), reduction="none")
 
     @torch.no_grad()
     def sample_actions(self, device, observation, noise=None, num_steps=10) -> Tensor:

@@ -29,6 +29,10 @@ DEFAULT_TRANSFORMERS_OVERLAY = OPENPI_DATA_ROOT / "python_deps/openpi_official_p
 DEFAULT_LIBERO_ROOT = WORKSPACE_ROOT / "openpi/third_party/libero"
 DEFAULT_MODEL_CONFIG = PROJECT_ROOT / "configs/openpi/pi05_libero.json"
 DEFAULT_EVAL_CONFIG = PROJECT_ROOT / "configs/openpi/pi05_libero_eval.json"
+DEFAULT_BASE_MODEL = OPENPI_DATA_ROOT / "openpi-assets/checkpoints/pi05_base_pytorch_fp32"
+DEFAULT_TRAIN_DATASET = OPENPI_DATA_ROOT / "lerobot/physical-intelligence/libero"
+DEFAULT_TRAIN_NORM_STATS = OPENPI_DATA_ROOT / "openpi-assets/checkpoints/pi05_libero/assets/physical-intelligence/libero/norm_stats.json"
+DEFAULT_TRAIN_CONFIG = PROJECT_ROOT / "lightx2v_train/configs/train/openpi/pi05_libero.yaml"
 
 TRANSFORMERS_EXPECTED = {
     "transformers": ("transformers", "4.53.2"),
@@ -49,6 +53,7 @@ PATCH_FILES = (
     "models/siglip/check.py",
     "models/siglip/modeling_siglip.py",
 )
+EXPECTED_TENSORS = 812
 
 
 def _resolved(path: str | Path) -> Path:
@@ -271,6 +276,20 @@ def _load_json(path: Path, label: str) -> dict:
     return value
 
 
+def _checkpoint_dtypes(path: Path) -> dict[str, int]:
+    try:
+        from safetensors import safe_open
+    except ImportError as exc:
+        raise RuntimeError("base environment is missing safetensors") from exc
+
+    dtypes: dict[str, int] = {}
+    with safe_open(path, framework="pt", device="cpu") as checkpoint:
+        for name in checkpoint.keys():
+            dtype = checkpoint.get_slice(name).get_dtype()
+            dtypes[dtype] = dtypes.get(dtype, 0) + 1
+    return dtypes
+
+
 def _check_static_inputs(args: argparse.Namespace) -> None:
     model = _resolved(args.model_path)
     required_model_files = (
@@ -287,19 +306,11 @@ def _check_static_inputs(args: argparse.Namespace) -> None:
     expected_dtype = {"float32": "F32", "bfloat16": "BF16"}.get(precision)
     if expected_dtype is None:
         raise RuntimeError(f"checkpoint precision must be float32 or bfloat16, got {precision!r}")
-    try:
-        from safetensors import safe_open
-    except ImportError as exc:
-        raise RuntimeError("base environment is missing safetensors") from exc
-    tensor_dtypes: dict[str, str] = {}
-    with safe_open(model / "model.safetensors", framework="pt", device="cpu") as checkpoint:
-        for name in checkpoint.keys():
-            dtype = checkpoint.get_slice(name).get_dtype()
-            tensor_dtypes[dtype] = tensor_dtypes.get(dtype, 0) + 1
-    expected_tensors = {expected_dtype: 812}
+    tensor_dtypes = _checkpoint_dtypes(model / "model.safetensors")
+    expected_tensors = {expected_dtype: EXPECTED_TENSORS}
     if tensor_dtypes != expected_tensors:
-        raise RuntimeError(f"expected 812 {precision} checkpoint tensors, got {tensor_dtypes}")
-    print(f"checkpoint tensor manifest: 812/812 {expected_dtype}")
+        raise RuntimeError(f"expected {EXPECTED_TENSORS} {precision} checkpoint tensors, got {tensor_dtypes}")
+    print(f"checkpoint tensor manifest: {EXPECTED_TENSORS}/{EXPECTED_TENSORS} {expected_dtype}")
 
     _load_json(_resolved(args.model_config), "model config")
     _load_json(_resolved(args.eval_config), "evaluation config")
@@ -313,6 +324,134 @@ def _check_static_inputs(args: argparse.Namespace) -> None:
     missing = [str(path) for path in required_libero if not path.is_dir()]
     if missing:
         raise RuntimeError("incomplete official LIBERO checkout:\n- " + "\n- ".join(missing))
+
+
+def _check_training_inputs(args: argparse.Namespace) -> None:
+    checkpoint = _resolved(args.initial_checkpoint)
+    required_checkpoint_files = (
+        checkpoint / "model.safetensors",
+        checkpoint / "config.json",
+        checkpoint / "assets/paligemma_tokenizer.model",
+    )
+    missing = [str(path) for path in required_checkpoint_files if not path.is_file()]
+    if missing:
+        raise RuntimeError("incomplete π0.5 base checkpoint:\n- " + "\n- ".join(missing))
+
+    checkpoint_config = _load_json(checkpoint / "config.json", "base checkpoint config")
+    if checkpoint_config.get("precision") != "float32":
+        raise RuntimeError("OpenPI training requires a lossless float32 base checkpoint")
+    tensor_dtypes = _checkpoint_dtypes(checkpoint / "model.safetensors")
+    expected_tensors = {"F32": EXPECTED_TENSORS}
+    if tensor_dtypes != expected_tensors:
+        raise RuntimeError(f"expected {EXPECTED_TENSORS} float32 base checkpoint tensors, got {tensor_dtypes}")
+    print(f"base checkpoint tensor manifest: {EXPECTED_TENSORS}/{EXPECTED_TENSORS} F32")
+
+    dataset = _resolved(args.dataset_root)
+    info = _load_json(dataset / "meta/info.json", "LeRobot metadata")
+    expected = {
+        "codebase_version": "v2.0",
+        "total_episodes": 1693,
+        "total_frames": 273465,
+        "total_tasks": 40,
+        "fps": 10,
+    }
+    mismatches = {key: (info.get(key), value) for key, value in expected.items() if info.get(key) != value}
+    if mismatches:
+        raise RuntimeError(f"dataset is not the official LIBERO-40 training set: {mismatches}")
+    required_dataset_files = (dataset / "meta/episodes.jsonl", dataset / "meta/tasks.jsonl")
+    missing = [str(path) for path in required_dataset_files if not path.is_file()]
+    if missing or not any((dataset / "data").glob("chunk-*/episode_*.parquet")):
+        raise RuntimeError("LeRobot LIBERO data is incomplete: " + ", ".join(missing or [str(dataset / "data")]))
+    print("LeRobot dataset manifest: 1693 episodes, 273465 frames, 40 tasks, 10 FPS")
+
+    norm_stats_path = _resolved(args.norm_stats_path)
+    norm_stats = _load_json(norm_stats_path, "LIBERO normalization statistics").get("norm_stats", {})
+    for key, size in (("state", 8), ("actions", 7)):
+        values = norm_stats.get(key, {})
+        for statistic in ("q01", "q99"):
+            if len(values.get(statistic, ())) != size:
+                raise RuntimeError(f"{norm_stats_path}: {key}.{statistic} must contain {size} values")
+    print(f"LIBERO quantile statistics: {norm_stats_path}")
+
+    train_config = _resolved(args.train_config)
+    if not train_config.is_file():
+        raise RuntimeError(f"training config is missing: {train_config}")
+
+
+TRAIN_PROBE = r"""
+import importlib
+import importlib.metadata
+import json
+import sys
+from pathlib import Path
+
+runtime = Path(sys.argv[1]).resolve()
+modules = {}
+for distribution, module_name in (
+    ("torch", "torch"),
+    ("numpy", "numpy"),
+    ("Pillow", "PIL"),
+    ("safetensors", "safetensors"),
+    ("sentencepiece", "sentencepiece"),
+    ("lerobot", "lerobot"),
+    ("augmax", "augmax"),
+    ("omegaconf", "omegaconf"),
+):
+    module = importlib.import_module(module_name)
+    origin = Path(module.__file__).resolve()
+    if origin.is_relative_to(runtime):
+        raise RuntimeError(f"base package {module_name} was shadowed by the Transformers overlay: {origin}")
+    modules[distribution] = {"version": importlib.metadata.version(distribution), "origin": str(origin)}
+
+from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+import torch
+import transformers
+
+modules["transformers"] = {
+    "version": transformers.__version__,
+    "origin": str(Path(transformers.__file__).resolve()),
+}
+modules["cuda_available"] = torch.cuda.is_available()
+print(json.dumps(modules, sort_keys=True))
+if sys.argv[2] == "1" and not modules["cuda_available"]:
+    raise RuntimeError("CUDA is not available to the training interpreter")
+"""
+
+
+def _check_training_runtime(args: argparse.Namespace) -> None:
+    expected_python = _resolved(args.expected_python)
+    if _resolved(sys.executable) != expected_python:
+        raise RuntimeError(f"training check must use {expected_python}, got {_resolved(sys.executable)}")
+
+    transformers_runtime = _resolved(args.transformers_runtime)
+    _probe_overlay(transformers_runtime, TRANSFORMERS_EXPECTED)
+    _check_patch_overlay(transformers_runtime)
+    _check_training_inputs(args)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONPATH": os.pathsep.join((str(transformers_runtime), str(PROJECT_ROOT), str(PROJECT_ROOT / "lightx2v_train"))),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+            "USE_FLAX": "0",
+            "TOKENIZERS_PARALLELISM": "false",
+        }
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", TRAIN_PROBE, str(transformers_runtime), "0" if args.no_cuda else "1"],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        if completed.stdout:
+            print(completed.stdout, end="", file=sys.stderr)
+        if completed.stderr:
+            print(completed.stderr, end="", file=sys.stderr)
+        raise RuntimeError(f"OpenPI training runtime probe failed with exit code {completed.returncode}")
+    print(completed.stdout.strip())
+    print("OpenPI training runtime check: OK")
 
 
 COMBINED_PROBE = r"""
@@ -453,6 +592,25 @@ def _add_paths(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_training_paths(parser: argparse.ArgumentParser) -> None:
+    _add_paths(parser)
+    parser.add_argument("--expected-python", default=os.environ.get("OPENPI_TRAIN_PYTHON", sys.executable))
+    parser.add_argument(
+        "--initial-checkpoint",
+        default=os.environ.get("OPENPI_INITIAL_CHECKPOINT", str(DEFAULT_BASE_MODEL)),
+    )
+    parser.add_argument(
+        "--dataset-root",
+        default=os.environ.get("OPENPI_LEROBOT_ROOT", str(DEFAULT_TRAIN_DATASET)),
+    )
+    parser.add_argument(
+        "--norm-stats-path",
+        default=os.environ.get("OPENPI_NORM_STATS_PATH", str(DEFAULT_TRAIN_NORM_STATS)),
+    )
+    parser.add_argument("--train-config", default=os.environ.get("OPENPI_TRAIN_CONFIG", str(DEFAULT_TRAIN_CONFIG)))
+    parser.add_argument("--no-cuda", action="store_true", help="allow validation without a visible CUDA device")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -470,6 +628,12 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--eval-config", default=os.environ.get("OPENPI_EVAL_CONFIG", str(DEFAULT_EVAL_CONFIG)))
     check.add_argument("--libero-root", default=os.environ.get("OPENPI_LIBERO_ROOT", str(DEFAULT_LIBERO_ROOT)))
     check.add_argument("--no-cuda", action="store_true", help="allow validation on a host without a visible CUDA device")
+
+    train_check = subparsers.add_parser(
+        "train-check",
+        help="validate the OpenPI training runtime, FP32 base checkpoint, and LIBERO-40 data",
+    )
+    _add_training_paths(train_check)
     return parser
 
 
@@ -481,8 +645,10 @@ def main() -> int:
                 _prepare_transformers(_resolved(args.transformers_runtime), args.dry_run)
             if args.component in {"all", "mujoco"}:
                 _prepare_base_mujoco(args.dry_run)
-        else:
+        elif args.command == "check":
             _check_runtime(args)
+        else:
+            _check_training_runtime(args)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

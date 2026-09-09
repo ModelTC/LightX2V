@@ -68,8 +68,5 @@ export TOKENIZERS_PARALLELISM=false
 export PYTHONPATH="${OPENPI_TRANSFORMERS_RUNTIME_PATH:-${openpi_data_root}/python_deps/openpi_official_pytorch_runtime}:${lightx2v_path}:${PYTHONPATH:-}"
 
 exec ros2 run inference openpi_node --ros-args \
-  -p numeric_precision:=float64 \
   -p "model_path:=${OPENPI_MODEL_PATH:-${openpi_data_root}/openpi-assets/checkpoints/pi05_libero_pytorch_fp32}" \
-  -p "config_json:=${OPENPI_CONFIG:-${lightx2v_path}/configs/openpi/pi05_libero.json}" \
-  -p seed:=0 \
-  -p actions_per_plan:=5
+  -p "config_json:=${OPENPI_CONFIG:-${lightx2v_path}/configs/openpi/pi05_libero.json}"

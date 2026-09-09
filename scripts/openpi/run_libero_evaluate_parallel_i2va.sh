@@ -49,18 +49,14 @@ run_worker() {
     suite_output="${output_root}/${suite}"
     suite_runtime="${output_root}/runtime/${suite}"
     log_path="${output_root}/logs/${suite}.log"
-    mkdir -p "${suite_runtime}/libero_config" "${suite_runtime}/numba" "${suite_runtime}/matplotlib" "${suite_runtime}/cache"
     printf '\n[%(%Y-%m-%dT%H:%M:%SZ)T] suite=%s gpu=%s\n' -1 "${suite}" "${gpu}" >> "${log_path}"
 
     (
       export CUDA_VISIBLE_DEVICES="${gpu}"
       export OPENPI_EVAL_OUTPUT_DIR="${suite_output}"
       export OPENPI_RUNTIME_DIR="${suite_runtime}"
-      export OPENPI_LIBERO_CONFIG_DIR="${suite_runtime}/libero_config"
       export OPENPI_EVAL_BENCHMARKS="${suite}"
-      export NUMBA_CACHE_DIR="${suite_runtime}/numba"
-      export MPLCONFIGDIR="${suite_runtime}/matplotlib"
-      export XDG_CACHE_HOME="${suite_runtime}/cache"
+      unset OPENPI_LIBERO_CONFIG_DIR NUMBA_CACHE_DIR MPLCONFIGDIR XDG_CACHE_HOME
       exec setsid bash "${script_dir}/run_libero_evaluate_i2va.sh"
     ) >> "${log_path}" 2>&1 &
     child_pid=$!

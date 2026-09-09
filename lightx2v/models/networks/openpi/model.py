@@ -94,28 +94,6 @@ class OpenPIModel(nn.Module):
         )
 
     @torch.no_grad()
-    def predict_normalized_action_chunk(
-        self,
-        images: dict[str, np.ndarray],
-        state: np.ndarray,
-        task_description: str,
-        *,
-        seed: int | None = None,
-        noise: torch.Tensor | np.ndarray | None = None,
-    ) -> torch.Tensor:
-        observation = self.pre_infer.infer(images, state, task_description)
-        if noise is None:
-            noise_tensor = self._sample_noise(seed)
-        else:
-            noise_tensor = torch.as_tensor(noise, dtype=torch.float32, device=self.device)
-            if noise_tensor.ndim == 2:
-                noise_tensor = noise_tensor.unsqueeze(0)
-            expected = (1, self.model_config.action_horizon, self.model_config.action_dim)
-            if tuple(noise_tensor.shape) != expected:
-                raise ValueError(f"Noise must have shape {expected}, got {tuple(noise_tensor.shape)}")
-        return self.transformer_infer.infer(self.core_model, observation, self.device, noise=noise_tensor)
-
-    @torch.no_grad()
     def predict_action_chunk(
         self,
         images: dict[str, np.ndarray],
@@ -123,5 +101,7 @@ class OpenPIModel(nn.Module):
         task_description: str,
         seed: int | None = None,
     ) -> np.ndarray:
-        normalized = self.predict_normalized_action_chunk(images, state, task_description, seed=seed)
+        observation = self.pre_infer.infer(images, state, task_description)
+        noise = self._sample_noise(seed)
+        normalized = self.transformer_infer.infer(self.core_model, observation, self.device, noise=noise)
         return self.post_infer.infer(normalized)
