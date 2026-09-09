@@ -32,11 +32,12 @@ class Flux2TransformerInfer(BaseTransformerInfer):
             self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
 
-    def _maybe_apply_stale_kv(self, key, value, num_txt_tokens, block_idx):
+    def _maybe_apply_stale_kv(self, key, value, num_txt_tokens, block_idx, block_type=None):
         """Hook for stale-KV cache in PipeFusion mode.  No-op in base class.
 
         Subclasses (PipeFusion) override this to cache image KV across patches
-        while keeping text KV fresh.
+        while keeping text KV fresh. ``block_type`` distinguishes double vs
+        single blocks, whose ``block_idx`` both restart from 0.
         """
         return key, value
 
@@ -105,7 +106,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         # Stale-KV hook (no-op in base class; PipeFusion subclass overrides)
         num_txt_tokens = encoder_hidden_states.shape[0]
-        key, value = self._maybe_apply_stale_kv(key, value, num_txt_tokens, block_weights.block_idx)
+        key, value = self._maybe_apply_stale_kv(key, value, num_txt_tokens, block_weights.block_idx, block_type=block_weights.block_type)
 
         total_len = query.shape[0]
         kv_len = key.shape[0]  # may differ from total_len in PipeFusion (stale-KV)
@@ -212,7 +213,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         query, key = block_weights.rope.apply(query, key, image_rotary_emb, positions=image_rotary_positions)
 
         # Stale-KV hook (no-op in base class; PipeFusion subclass overrides)
-        key, value = self._maybe_apply_stale_kv(key, value, num_txt_tokens, block_weights.block_idx)
+        key, value = self._maybe_apply_stale_kv(key, value, num_txt_tokens, block_weights.block_idx, block_type=block_weights.block_type)
 
         total_len = query.shape[0]
         kv_len = key.shape[0]  # may differ from total_len in PipeFusion (stale-KV)

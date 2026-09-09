@@ -19,6 +19,7 @@ from lightx2v.common.distributed import (
     is_pipeline_first_stage,
     is_pipeline_last_stage,
 )
+from lightx2v.utils.envs import GET_DTYPE
 
 
 class Flux2PipelineDriver:
@@ -32,9 +33,7 @@ class Flux2PipelineDriver:
         self._is_first = is_pipeline_first_stage()
         self._is_last = is_pipeline_last_stage()
         self._pp_world_size = get_pipeline_parallel_world_size()
-        self._dtype = config.get("dtype", torch.bfloat16)
-        if isinstance(self._dtype, str):
-            self._dtype = getattr(torch, self._dtype)
+        self._dtype = GET_DTYPE()
 
     # ==================================================================
     # Public entry point
@@ -45,6 +44,11 @@ class Flux2PipelineDriver:
 
         Returns final latents on the last stage, ``None`` on other stages.
         """
+        if do_cfg:
+            # PipeFusion does not maintain separate cond/uncond pipelines and
+            # KV caches, so CFG is not supported. The async path would silently
+            # drop CFG (see set_config validation, which rejects this earlier).
+            raise NotImplementedError("PipeFusion does not support CFG. Set sample_guide_scale <= 1.0 or enable_cfg=False.")
         warmup_steps = self.state.warmup_steps
 
         if self._pp_world_size > 1 and len(timesteps) > warmup_steps:
@@ -109,7 +113,7 @@ class Flux2PipelineDriver:
                 uncond_result = self._sync_pass(
                     latents,
                     negative_prompt_embeds,
-                    negative_text_ids or text_ids,
+                    negative_text_ids if negative_text_ids is not None else text_ids,
                     latent_image_ids,
                     t,
                     scheduler,
@@ -301,6 +305,11 @@ class Flux2PipelineDriver:
                         patch_latents[patch_idx] = self.pp_comm.get_pipeline_recv_data(patch_idx, "latent")
 
                 # ---- 2. Compute (default stream) ----
+                # NOTE: encoder hidden states are only transferred once per
+                # timestep (patch 0) and reused for every subsequent patch.
+                # Flux double blocks update the text stream from the current
+                # image patch, so patch k>0 text states are a stale-text
+                # approximation — an intentional quality/memory trade-off.
                 cur_enc = prompt_embeds if self._is_first else last_encoder_hidden_states
                 result = self._async_backbone(
                     patch_latents[patch_idx],
@@ -311,21 +320,22 @@ class Flux2PipelineDriver:
                 )
 
                 # ---- 3. Send result (default stream, after compute) ----
-                # Store isend request to prevent tensor GC before send completes
+                # Store isend request AND the actual contiguous send buffer to
+                # prevent tensor GC before the send completes.
                 if self._is_last:
                     noise_pred = result
-                    scheduler.scheduler._step_index = i + self.state.warmup_steps
+                    scheduler.set_step_index(i + self.state.warmup_steps)
                     patch_latents[patch_idx] = scheduler.step_post_patch(noise_pred, last_patch_latents[patch_idx], t)
                     if i != total_steps - 1:
-                        req = self.pp_comm.pipeline_isend(patch_latents[patch_idx], name="latent", segment_idx=patch_idx)
-                        pending_isends.append((req, patch_latents[patch_idx]))
+                        req, sent = self.pp_comm.pipeline_isend(patch_latents[patch_idx], name="latent", segment_idx=patch_idx)
+                        pending_isends.append((req, sent))
                 else:
                     hidden_states, next_enc = result
                     if patch_idx == 0:
-                        req = self.pp_comm.pipeline_isend(next_enc, name="encoder_hidden_state", segment_idx=0)
-                        pending_isends.append((req, next_enc))
-                    req = self.pp_comm.pipeline_isend(hidden_states, name="latent", segment_idx=patch_idx)
-                    pending_isends.append((req, hidden_states))
+                        req, sent = self.pp_comm.pipeline_isend(next_enc, name="encoder_hidden_state", segment_idx=0)
+                        pending_isends.append((req, sent))
+                    req, sent = self.pp_comm.pipeline_isend(hidden_states, name="latent", segment_idx=patch_idx)
+                    pending_isends.append((req, sent))
 
                 # ---- 4. Post next irecv (default stream — NCCL internal
                 # stream handles the actual async transfer; no cross-stream

@@ -8,4 +8,5 @@ from .pipeline_state import (
     init_pipeline_parallel_state,
     is_pipeline_first_stage,
     is_pipeline_last_stage,
+    reset_pipeline_parallel_state,
 )

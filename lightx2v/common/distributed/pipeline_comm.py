@@ -15,7 +15,13 @@ import torch.distributed as dist
 
 
 class PipelineComm:
-    """P2P communication between adjacent pipeline stages."""
+    """P2P communication between adjacent pipeline stages.
+
+    CUDA-only: receive buffers are allocated on the current CUDA device via
+    ``torch.cuda.current_device()``. PipeFusion is gated to CUDA at config time
+    (see ``set_config._validate_pipefusion_config``), so this is not reachable
+    on XPU/NPU platforms.
+    """
 
     def __init__(self, pp_group: dist.ProcessGroup):
         self.pp_group = pp_group
@@ -73,13 +79,14 @@ class PipelineComm:
     def pipeline_isend(self, tensor: torch.Tensor, name: str = "latent", segment_idx: int = 0):
         """Non-blocking send on the current (default) stream.
 
-        Returns a Work object that the caller SHOULD store to prevent
-        the tensor from being garbage-collected before the send
-        completes. The Work's wait() only inserts a stream-side
-        dependency — it does not block the CPU thread.
+        Returns ``(Work, actual_send_tensor)``. ``actual_send_tensor`` is the
+        contiguous buffer actually handed to NCCL (``contiguous()`` may copy),
+        so the caller must keep BOTH alive until ``Work.wait()`` completes.
+        The Work's wait() only inserts a stream-side dependency — it does not
+        block the CPU thread.
         """
         tensor = tensor.contiguous()
-        return dist.isend(tensor, dst=self.next_rank, group=self._device_group)
+        return dist.isend(tensor, dst=self.next_rank, group=self._device_group), tensor
 
     def add_pipeline_recv_task(self, idx: int = 0, name: str = "latent", shape=None, dtype=None):
         self._recv_tasks_queue.append((name, idx))

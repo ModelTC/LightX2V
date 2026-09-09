@@ -3,7 +3,10 @@
 Subclasses ``Flux2TransformerInfer`` to:
 1. Run only the current pipeline stage's block subset.
 2. Apply stale-KV caching in async (patched) mode: image KV is cached across
-   patches while text KV stays fresh.
+   patches (stale-KV approximation), while text KV is recomputed from the
+   encoder hidden states it is given. NOTE: on non-first stages the async
+   driver feeds patch-0 text hidden states to every patch (a second,
+   stale-text approximation) — see ``pipeline_driver._async_pipeline``.
 3. Return ``(hidden_states, encoder_hidden_states, num_txt_tokens)`` so the
    pipeline driver can P2P-pass intermediate activations between stages.
 """
@@ -41,12 +44,13 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
     # Stale-KV hook (overrides base class no-op)
     # ------------------------------------------------------------------
 
-    def _maybe_apply_stale_kv(self, key, value, num_txt_tokens, block_idx):
+    def _maybe_apply_stale_kv(self, key, value, num_txt_tokens, block_idx, block_type=None):
         """Per-patch-slot KV cache for PipeFusion.
 
         Semantics:
-        - Cache is indexed by (block_idx, patch_slot). Each slot stores the
-          image K/V computed for that patch when it was last processed.
+        - Cache is indexed by ((block_type, block_idx), patch_slot). Double and
+          single blocks both number their blocks from 0, so ``block_idx`` alone
+          would collide across the two types; ``block_type`` disambiguates.
         - SYNC mode: split full image K/V by patch, populate ALL slots.
           Return input unchanged (full attention runs normally).
         - ASYNC mode: update current patch's slot with fresh K/V; use full
@@ -55,6 +59,7 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
         Optimization: pre-allocated buffers + copy_ instead of torch.cat
         to avoid memory allocations per generation.
         """
+        cache_key = (block_type, block_idx)
         num_patch = self.pipeline_state.num_pipeline_patch
         if num_patch <= 1 or num_txt_tokens <= 0:
             return key, value
@@ -69,12 +74,12 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
             # Sync mode: split full image K/V by patch, populate all slots.
             # .clone() ensures cached tensors own their storage (views of
             # transient QKV would become invalid after this timestep).
-            if block_idx not in self._kv_cache:
-                self._kv_cache[block_idx] = [None] * num_patch
+            if cache_key not in self._kv_cache:
+                self._kv_cache[cache_key] = [None] * num_patch
             split_ks = img_key.split(patch_token_nums, dim=0)
             split_vs = img_value.split(patch_token_nums, dim=0)
             for i in range(num_patch):
-                self._kv_cache[block_idx][i] = [
+                self._kv_cache[cache_key][i] = [
                     split_ks[i].clone(),
                     split_vs[i].clone(),
                 ]
@@ -83,22 +88,22 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
         # ---- Async mode ----
 
         cur_slot = self.pipeline_state.pipeline_patch_idx
-        if block_idx not in self._kv_cache:
-            self._kv_cache[block_idx] = [None] * num_patch
+        if cache_key not in self._kv_cache:
+            self._kv_cache[cache_key] = [None] * num_patch
 
         # Store fresh K/V in cache (clone for persistence across timesteps)
-        self._kv_cache[block_idx][cur_slot] = [img_key.clone(), img_value.clone()]
+        self._kv_cache[cache_key][cur_slot] = [img_key.clone(), img_value.clone()]
 
         # Build full K/V using pre-allocated buffer + copy_ (avoids torch.cat)
         total_img = sum(patch_token_nums)
         full_len = num_txt_tokens + total_img
 
-        if block_idx not in self._full_k_bufs or self._full_k_bufs[block_idx].shape[0] != full_len or self._full_k_bufs[block_idx].dtype != key.dtype:
-            self._full_k_bufs[block_idx] = torch.empty(full_len, *key.shape[1:], dtype=key.dtype, device=key.device)
-            self._full_v_bufs[block_idx] = torch.empty(full_len, *value.shape[1:], dtype=value.dtype, device=value.device)
+        if cache_key not in self._full_k_bufs or self._full_k_bufs[cache_key].shape[0] != full_len or self._full_k_bufs[cache_key].dtype != key.dtype:
+            self._full_k_bufs[cache_key] = torch.empty(full_len, *key.shape[1:], dtype=key.dtype, device=key.device)
+            self._full_v_bufs[cache_key] = torch.empty(full_len, *value.shape[1:], dtype=value.dtype, device=value.device)
 
-        buf_k = self._full_k_bufs[block_idx]
-        buf_v = self._full_v_bufs[block_idx]
+        buf_k = self._full_k_bufs[cache_key]
+        buf_v = self._full_v_bufs[cache_key]
 
         # Copy text K/V (fresh, from current patch's computation)
         buf_k[:num_txt_tokens].copy_(text_key)
@@ -114,7 +119,7 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
                 buf_v[offset : offset + n].copy_(img_value)
             else:
                 # Stale from cache (previous timestep)
-                cached = self._kv_cache[block_idx][slot]
+                cached = self._kv_cache[cache_key][slot]
                 buf_k[offset : offset + n].copy_(cached[0])
                 buf_v[offset : offset + n].copy_(cached[1])
             offset += n

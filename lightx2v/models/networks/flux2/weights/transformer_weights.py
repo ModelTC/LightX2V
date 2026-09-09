@@ -139,6 +139,7 @@ class Flux2DoubleBlockWeights(WeightModule):
         super().__init__()
         self.config = config
         self.block_idx = block_idx
+        self.block_type = "double"
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
         self.layer_norm_type = config.get("layer_norm_type", "torch")
@@ -206,6 +207,7 @@ class Flux2SingleBlockWeights(WeightModule):
         super().__init__()
         self.config = config
         self.block_idx = block_idx
+        self.block_type = "single"
         self.inner_dim = config["num_attention_heads"] * config["attention_head_dim"]
         self.mm_type = config.get("dit_quant_scheme", "Default")
         self.layer_norm_type = config.get("layer_norm_type", "torch")

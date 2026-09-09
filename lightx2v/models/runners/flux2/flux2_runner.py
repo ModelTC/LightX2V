@@ -508,14 +508,27 @@ class Flux2Runner(DefaultRunner):
         if self.config.get("pipefusion_parallel", False):
             from lightx2v.common.distributed import is_pipeline_last_stage
 
+            if input_info.return_result_tensor:
+                # Final latents/images exist only on the last pipeline stage and
+                # there is no cross-rank gather implemented, so rank 0 cannot
+                # return them under the standard tensor-return contract.
+                raise NotImplementedError("PipeFusion does not support return_result_tensor yet; the result exists only on the last pipeline stage.")
+
+            # Clear the stale-KV cache on EVERY rank between requests. Only the
+            # last stage runs VAE decode, but each stage holds its own cache and
+            # must not carry stale KV / full K-V buffers into the next request.
+            if hasattr(self.model.transformer_infer, "clear_kv_cache"):
+                self.model.transformer_infer.clear_kv_cache()
+
             if is_pipeline_last_stage():
-                # Offload transformer weights and clear KV cache before VAE decode to avoid OOM
+                # Offload transformer weights before VAE decode to avoid OOM,
+                # then move them back afterwards so a resident runner (serving)
+                # can process the next request with weights on the device.
                 self.model.transformer_weights.to_cpu()
-                if hasattr(self.model.transformer_infer, "clear_kv_cache"):
-                    self.model.transformer_infer.clear_kv_cache()
                 torch_device_module.empty_cache()
                 gc.collect()
                 images = self.run_vae_decoder(latents)
+                self.model.transformer_weights.to_cuda()
             else:
                 images = None
         else:

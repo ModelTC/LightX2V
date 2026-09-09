@@ -146,6 +146,16 @@ class Flux2Scheduler(BaseScheduler):
         )
         self.latents = latents
 
+    def set_step_index(self, step_index):
+        """Set the diffusers scheduler's internal step index.
+
+        The async PipeFusion driver steps patch-by-patch without going through
+        ``step_pre``/``step_post`` for every patch, so the underlying
+        scheduler's ``_step_index`` (used by ``step()`` to look up the correct
+        sigma) must be advanced explicitly.
+        """
+        self.scheduler._step_index = step_index
+
     def step_post_patch(self, noise_pred, latents, t):
         """Patch-level scheduler step for async PipeFusion mode.
 

@@ -24,6 +24,18 @@ def init_pipeline_parallel_state(pp_group: dist.ProcessGroup):
     _runtime_state = PipelineRuntimeState()
 
 
+def reset_pipeline_parallel_state():
+    """Reset the pipeline-parallel global state.
+
+    Provides an explicit teardown so the same process can rebuild a runner,
+    switch parallel configs, or run multiple tests without carrying stale
+    group/state (see ``init_pipeline_parallel_state``).
+    """
+    global _pp_group, _runtime_state
+    _pp_group = None
+    _runtime_state = None
+
+
 # ---------------------------------------------------------------------------
 # Stage helpers
 # ---------------------------------------------------------------------------
@@ -109,6 +121,8 @@ class PipelineRuntimeState:
         self.vae_scale_factor = vae_scale_factor
         self.patch_size = patch_size
         self.warmup_steps = warmup_steps
+        if warmup_steps <= 0:
+            raise ValueError(f"pipeline_warmup_steps must be >= 1, got {warmup_steps}.")
         if num_pipeline_patch is not None:
             self.num_pipeline_patch = num_pipeline_patch
 
@@ -122,6 +136,11 @@ class PipelineRuntimeState:
             self.packed_h = height // multiple_of
             self.packed_w = width // multiple_of
             tok_count = self.packed_h * self.packed_w
+
+        if self.num_pipeline_patch <= 0:
+            raise ValueError(f"num_pipeline_patch must be >= 1, got {self.num_pipeline_patch}.")
+        if self.num_pipeline_patch > tok_count:
+            raise ValueError(f"num_pipeline_patch ({self.num_pipeline_patch}) exceeds token count ({tok_count}); each patch would be empty.")
 
         # Split tokens evenly across patches
         base = tok_count // self.num_pipeline_patch

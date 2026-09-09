@@ -409,6 +409,45 @@ def set_config(args):
     return config
 
 
+def _validate_pipefusion_config(config):
+    """Reject unsupported PipeFusion combinations instead of silently misbehaving.
+
+    PipeFusion is currently a narrow feature: Flux2 Klein, T2I only, CUDA only,
+    no CFG, and no stacking with SP / TP / feature-caching / cpu-offload. The
+    pipeline driver only implements that slice; anything else must fail loudly
+    at config time rather than run incorrectly (e.g. dropping CFG) or crash.
+    """
+    model_cls = config.get("model_cls")
+    is_klein = model_cls == "flux2_klein" or (model_cls == "flux2" and config.get("model_variant") == "klein")
+    if not is_klein:
+        raise ValueError(
+            "PipeFusion is only supported for the Flux2 Klein model "
+            "(model_cls='flux2_klein', or model_cls='flux2' with model_variant='klein'); "
+            f"got model_cls={model_cls!r}, model_variant={config.get('model_variant')!r}."
+        )
+    if config.get("task", "t2i") != "t2i":
+        raise ValueError(f"PipeFusion currently supports only the 't2i' task, got {config.get('task', 't2i')!r}.")
+    if AI_DEVICE != "cuda":
+        raise ValueError(f"PipeFusion requires CUDA, but AI_DEVICE={AI_DEVICE!r}.")
+    if config.get("feature_caching", "NoCaching") not in ("NoCaching", "None"):
+        raise ValueError(f"PipeFusion cannot be combined with feature_caching={config.get('feature_caching')!r}.")
+    if config.get("cpu_offload", False):
+        raise ValueError("PipeFusion cannot be combined with cpu_offload.")
+    if config.get("enable_cfg", False) and config.get("sample_guide_scale", 1.0) > 1.0:
+        raise ValueError("PipeFusion does not support CFG; set sample_guide_scale <= 1.0 or enable_cfg=False.")
+    if config["parallel"].get("seq_p_size", 1) > 1:
+        raise ValueError("PipeFusion cannot be combined with sequence parallel (seq_p_size > 1).")
+    if config["parallel"].get("cfg_p_size", 1) > 1:
+        raise ValueError("PipeFusion cannot be combined with CFG parallel (cfg_p_size > 1).")
+
+    num_patch = int(config["parallel"].get("num_pipeline_patch", 4))
+    if num_patch <= 0:
+        raise ValueError(f"num_pipeline_patch must be >= 1, got {num_patch}.")
+    warmup_steps = int(config["parallel"].get("pipeline_warmup_steps", 1))
+    if warmup_steps <= 0:
+        raise ValueError(f"pipeline_warmup_steps must be >= 1, got {warmup_steps}.")
+
+
 def set_parallel_config(config):
     if config["parallel"]:
         tensor_p_size = int(config["parallel"].get("tensor_p_size", 1))
@@ -455,18 +494,28 @@ def set_parallel_config(config):
             config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
             config["pipefusion_parallel"] = False
         else:
-            # Multi-dimensional mesh: (cfg_p, pp, seq_p)
-            config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, pp_size, seq_p_size), mesh_dim_names=("cfg_p", "pp", "seq_p"))
-            config["tensor_parallel"] = False
-            config["seq_parallel"] = seq_p_size > 1
-            config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
-
-            config["pipefusion_parallel"] = pp_size > 1
             if pp_size > 1:
+                # PipeFusion pipeline parallelism: 3D mesh (cfg_p, pp, seq_p).
+                config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, pp_size, seq_p_size), mesh_dim_names=("cfg_p", "pp", "seq_p"))
+                config["tensor_parallel"] = False
+                config["seq_parallel"] = seq_p_size > 1
+                config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
+
+                config["pipefusion_parallel"] = True
+                _validate_pipefusion_config(config)
                 from lightx2v.common.distributed import init_pipeline_parallel_state
 
                 pp_group = config["device_mesh"].get_group(mesh_dim="pp")
                 init_pipeline_parallel_state(pp_group)
+            else:
+                # No pipeline parallelism: keep the legacy 2D mesh (cfg_p, seq_p)
+                # unchanged so existing SP/CFG paths don't change shape or rank
+                # layout when pp_size == 1.
+                config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, seq_p_size), mesh_dim_names=("cfg_p", "seq_p"))
+                config["tensor_parallel"] = False
+                config["seq_parallel"] = seq_p_size > 1
+                config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
+                config["pipefusion_parallel"] = False
 
         # warmup dist
         if AI_DEVICE == "cuda":
