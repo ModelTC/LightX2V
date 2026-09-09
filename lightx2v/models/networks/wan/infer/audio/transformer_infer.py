@@ -404,6 +404,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 attn_v = kv_cache.v_cache(self.block_idx, attn_start, local_end_idx)
                 if use_local_cache_rope:
                     attn_k = self._apply_rope_with_cache_range(
+                        phase,
                         attn_k,
                         freqs,
                         h,
