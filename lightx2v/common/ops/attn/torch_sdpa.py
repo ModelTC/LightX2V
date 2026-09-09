@@ -65,7 +65,17 @@ class TorchSDPAWeight(AttnWeightTemplate):
         if (cu_seqlens_q is None) != (cu_seqlens_kv is None):
             raise ValueError("cu_seqlens_q and cu_seqlens_kv must either both be set or both be None")
 
-        if cu_seqlens_q is None:
+        use_packed = q.ndim == 3 and cu_seqlens_q is not None
+        if use_packed:
+            if cu_seqlens_q.numel() != cu_seqlens_kv.numel():
+                raise ValueError("cu_seqlens_q and cu_seqlens_kv must describe the same number of sequences")
+            if cu_seqlens_q.numel() < 2:
+                raise ValueError("cu_seqlens must contain at least two boundaries")
+            use_packed = cu_seqlens_q.numel() > 2
+
+        # A 4D tensor already has an explicit batch dimension. A two-entry
+        # cu_seqlens tensor describes one sequence, so it uses the same dense path.
+        if not use_packed:
             if q.ndim == 3:
                 q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)
             return run_sdpa(q, k, v, attn_mask).flatten(2).squeeze(0)
