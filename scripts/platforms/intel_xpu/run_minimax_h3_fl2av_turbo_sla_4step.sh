@@ -13,12 +13,41 @@ last_frame=${LAST_FRAME:-${lightx2v_path}/assets/inputs/imgs/flf2v_input_last_fr
 output_path=${OUTPUT_PATH:-${lightx2v_path}/save_results/output_lightx2v_minimax_h3_fl2av_turbo_sla_4step.mp4}
 prompt=${PROMPT:-Create a coherent cinematic transition between the two frames with natural synchronized ambient sound.}
 seed=${SEED:-42}
+parallel_mode=${PARALLEL_MODE:-single}
+tp_size=${TP_SIZE:-2}
+sp_size=${SP_SIZE:-2}
 
-export ZE_AFFINITY_MASK=${ZE_AFFINITY_MASK:-0}
+case "${parallel_mode}" in
+  single) tp_size=1; sp_size=1 ;;
+  tp) sp_size=1 ;;
+  sp) tp_size=1 ;;
+  sp_tp) ;;
+  *) echo "PARALLEL_MODE must be one of: single, tp, sp, sp_tp" >&2; exit 1 ;;
+esac
+nproc_per_node=$((tp_size * sp_size))
+if ((tp_size < 1 || sp_size < 1)); then
+  echo "TP_SIZE and SP_SIZE must be positive integers" >&2
+  exit 1
+fi
+
+if [[ -z "${ZE_AFFINITY_MASK:-}" ]]; then
+  ZE_AFFINITY_MASK=$(seq -s, 0 $((nproc_per_node - 1)))
+  export ZE_AFFINITY_MASK
+fi
 export PLATFORM=${PLATFORM:-intel_xpu}
 export PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-1}
 export PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
 export PYTHONPATH=${PYTHONPATH:-}
+
+if ((sp_size > 1)); then
+  # oneCCL settings used by the Ulysses all-to-all path on Intel XPU.
+  export CCL_SYCL_ALLTOALL_ARC_LL=${CCL_SYCL_ALLTOALL_ARC_LL:-1}
+  export CCL_SYCL_ALLTOALL_TMP_BUF=${CCL_SYCL_ALLTOALL_TMP_BUF:-1}
+  export CCL_SYCL_CCL_BARRIER=${CCL_SYCL_CCL_BARRIER:-1}
+  export CCL_SYCL_ALLREDUCE_SIMPLE_THRESHOLD=${CCL_SYCL_ALLREDUCE_SIMPLE_THRESHOLD:-4294967296}
+  export CCL_SYCL_REDUCE_SCATTER_SIMPLE_THRESHOLD=${CCL_SYCL_REDUCE_SCATTER_SIMPLE_THRESHOLD:-4294967296}
+  export CCL_SYCL_ALLGATHERV_SIMPLE_THRESHOLD=${CCL_SYCL_ALLGATHERV_SIMPLE_THRESHOLD:-4294967296}
+fi
 
 [[ -d "${model_path}" ]] || { echo "Model directory not found: ${model_path}" >&2; exit 1; }
 [[ -f "${lora_path}" ]] || { echo "SLA LoRA checkpoint not found: ${lora_path}" >&2; exit 1; }
@@ -32,21 +61,32 @@ trap 'rm -f -- "${runtime_config}"' EXIT
 
 # Keep the checked-in config reusable while allowing LORA_PATH to override the
 # local checkpoint location without editing JSON.
-python - "${config_template}" "${runtime_config}" "${lora_path}" <<'PY'
+python - "${config_template}" "${runtime_config}" "${lora_path}" "${tp_size}" "${sp_size}" <<'PY'
 import json
 import sys
 
-source, destination, lora_path = sys.argv[1:]
+source, destination, lora_path, tp_size, sp_size = sys.argv[1:]
+tp_size, sp_size = int(tp_size), int(sp_size)
 with open(source, encoding="utf-8") as handle:
     config = json.load(handle)
 if config.get("attn_type") != "dynamic_sparse_attn":
     raise ValueError("MiniMax-H3 SLA config must use attn_type=dynamic_sparse_attn")
 settings = config.get("dynamic_sparse_attn_setting", {})
-if settings.get("operator") != "intel_xpu":
-    raise ValueError("MiniMax-H3 SLA config must use operator=intel_xpu")
+if settings.get("operator") != "intel_xpu_cute_attn":
+    raise ValueError("MiniMax-H3 SLA config must use operator=intel_xpu_cute_attn")
 if len(config.get("lora_configs", [])) != 1:
     raise ValueError("MiniMax-H3 SLA config must contain exactly one LoRA entry")
 config["lora_configs"][0]["path"] = lora_path
+if tp_size > 1 or sp_size > 1:
+    parallel = {"tensor_p_size": tp_size, "seq_p_size": sp_size}
+    if sp_size > 1:
+        parallel.update({"seq_p_attn_type": "ulysses", "seq_p_a2a_backend": "torch"})
+    config["parallel"] = parallel
+else:
+    config.pop("parallel", None)
+if tp_size > 1:
+    config["tp_mm_type"] = "IntelTensorParallel"
+    config["text_encoder_tensor_parallel"] = True
 with open(destination, "w", encoding="utf-8") as handle:
     json.dump(config, handle, indent=2, ensure_ascii=False)
 PY
@@ -71,11 +111,12 @@ echo "MiniMax-H3 model: ${model_path}"
 echo "SLA LoRA: ${lora_path}"
 echo "Config: ${config_template}"
 echo "XPU: ${ZE_AFFINITY_MASK}"
+echo "Parallel mode: ${parallel_mode} (TP=${tp_size}, SP=${sp_size}, processes=${nproc_per_node})"
 echo "First frame: ${first_frame}"
 echo "Last frame: ${last_frame}"
 echo "Output: ${output_path}"
 
-torchrun --standalone --nproc_per_node=1 -m lightx2v.infer \
+torchrun --standalone --nproc_per_node="${nproc_per_node}" -m lightx2v.infer \
   --model_cls minimax_h3 \
   --task fl2av \
   --model_path "${model_path}" \

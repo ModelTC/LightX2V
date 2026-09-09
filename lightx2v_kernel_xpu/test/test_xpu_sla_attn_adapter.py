@@ -63,7 +63,7 @@ def test_dynamic_sparse_attention_uses_xpu_combined_api(monkeypatch):
 
     monkeypatch.setattr(torch.cuda, "current_device", fail_if_cuda_is_queried)
     monkeypatch.setattr(xpu_sla_attn, "sla_sparse_attention", fake_sla)
-    attention = DynamicSparseAttnWeight({"operator": "intel_xpu", "sparsity_ratio": 0.85})
+    attention = DynamicSparseAttnWeight({"operator": "intel_xpu_cute_attn", "sparsity_ratio": 0.85})
     q = torch.empty(17, 7, 128, dtype=torch.bfloat16)
     cu_seqlens = torch.tensor([0, 17], dtype=torch.int32)
 
@@ -77,3 +77,31 @@ def test_dynamic_sparse_attention_uses_xpu_combined_api(monkeypatch):
         "block_k": 128,
         "scale": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("sequence_length", "local_heads"),
+    [
+        (19292, 28),  # TP=2: full sequence, head shard
+        (19292, 28),  # SP=2 after Ulysses: global sequence, head shard
+        (19292, 14),  # TP=2 + SP=2 after Ulysses
+    ],
+)
+def test_xpu_sla_accepts_distributed_attention_layout(monkeypatch, sequence_length, local_heads):
+    """TP/SP both enter SLA as global sequence plus rank-local heads."""
+    from lightx2v.common.ops.attn.dynamic_sparse_attn import DynamicSparseAttnWeight
+
+    received = {}
+
+    def fake_sla(q, k, v, keep_ratio, block_q, block_k, scale=None):
+        received["shape"] = tuple(q.shape)
+        return q
+
+    monkeypatch.setattr(xpu_sla_attn, "sla_sparse_attention", fake_sla)
+    attention = DynamicSparseAttnWeight({"operator": "intel_xpu_cute_attn", "sparsity_ratio": 0.85})
+    q = torch.empty(sequence_length, local_heads, 128, dtype=torch.bfloat16, device="meta")
+
+    output = attention.apply(q, q, q)
+
+    assert received["shape"] == (1, sequence_length, local_heads, 128)
+    assert output.shape == (sequence_length, local_heads * 128)
