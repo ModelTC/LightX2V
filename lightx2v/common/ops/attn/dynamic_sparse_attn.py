@@ -1,3 +1,5 @@
+from functools import partial
+
 import torch
 from loguru import logger
 
@@ -103,46 +105,18 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
             self.apply_func = self.apply_magi
         elif self.operator == "intel_xpu_cute_attn":
             self.BLKQ, self.BLKK = 128, 128
-            self.apply_func = self.apply_intel_xpu_cute_attn
+            from lightx2v_platform.ops.attn.intel_xpu.xpu_sla_attn import apply_intel_xpu_cute_attn
+
+            self.apply_func = partial(
+                apply_intel_xpu_cute_attn,
+                keep_ratio=self.topk,
+                block_q=self.BLKQ,
+                block_k=self.BLKK,
+            )
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
 
         # logger.info(f"DynamicSparseAttnWeight: sparsity_ratio={self.sparsity_ratio}, operator={self.operator}, topk={self.topk}, BLKQ={self.BLKQ}, BLKK={self.BLKK}")
-
-    def apply_intel_xpu_cute_attn(
-        self,
-        q,
-        k,
-        v,
-        cu_seqlens_q=None,
-        cu_seqlens_kv=None,
-        max_seqlen_q=None,
-        max_seqlen_kv=None,
-        **kwargs,
-    ):
-        """Run the XPU SLA router and fused sparse attention on one sequence."""
-        if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:
-            raise ValueError("Intel XPU SLA expects q, k and v in [L, H, D] layout")
-        if q.shape != k.shape or k.shape != v.shape:
-            raise ValueError("Intel XPU SLA currently requires self-attention with matching q/k/v shapes")
-        if max_seqlen_q != q.shape[0] or max_seqlen_kv != k.shape[0]:
-            raise ValueError("Intel XPU SLA currently supports one unpadded sequence per call")
-        if cu_seqlens_q is not None and cu_seqlens_q.numel() != 2:
-            raise ValueError("Intel XPU SLA currently supports one sequence per call")
-        if cu_seqlens_kv is not None and cu_seqlens_kv.numel() != 2:
-            raise ValueError("Intel XPU SLA currently supports one sequence per call")
-
-        from lightx2v_platform.ops.attn.intel_xpu.xpu_sla_attn import sla_sparse_attention
-
-        out = sla_sparse_attention(
-            q.unsqueeze(0),
-            k.unsqueeze(0),
-            v.unsqueeze(0),
-            keep_ratio=self.topk,
-            block_q=self.BLKQ,
-            block_k=self.BLKK,
-        )
-        return out.reshape(max_seqlen_q, -1)
 
     def apply(
         self,
