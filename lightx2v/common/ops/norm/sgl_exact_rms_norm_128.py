@@ -14,7 +14,7 @@ from .rms_norm_weight import RMSWeightTemplate
 
 def _require_nvidia_triton(tensor: torch.Tensor) -> None:
     if tensor.device.type == "cuda" and getattr(torch.version, "hip", None) is not None:
-        raise RuntimeError("H3 Q/K normalization exact parity kernel supports NVIDIA CUDA only")
+        raise RuntimeError("SGL exact RMSNorm 128 kernel supports NVIDIA CUDA only")
 
 
 @triton.jit
@@ -54,7 +54,7 @@ def _rsqrt_approx_f32(x):
 
 
 @triton.jit
-def _h3_qknorm_128_kernel(
+def _sgl_exact_rms_norm_128_kernel(
     x_ptr,
     weight_ptr,
     num_heads,
@@ -101,32 +101,32 @@ def _h3_qknorm_128_kernel(
     tl.store(base + 3, y3)
 
 
-def _apply_qk_rms_norm_sglang(
+def _apply_sgl_exact_rms_norm_128(
     hidden_states: torch.Tensor,
     weight: torch.Tensor,
     eps: float,
 ) -> torch.Tensor:
     head_dim = 128
     if hidden_states.ndim != 3 or hidden_states.shape[-1] != head_dim:
-        raise ValueError(f"H3 reference Q/K normalization expects [tokens, heads, 128], got {hidden_states.shape}")
+        raise ValueError(f"SGL exact RMSNorm 128 expects [tokens, heads, 128], got {hidden_states.shape}")
     if hidden_states.device != weight.device:
-        raise ValueError("H3 reference Q/K normalization tensors must be on one device")
+        raise ValueError("SGL exact RMSNorm 128 tensors must be on one device")
     if hidden_states.device.type != "cuda":
         return F.rms_norm(hidden_states.float(), (head_dim,), weight.float(), eps).to(hidden_states.dtype)
     _require_nvidia_triton(hidden_states)
     if hidden_states.dtype is not torch.bfloat16 or weight.dtype is not torch.bfloat16:
-        raise TypeError("H3 reference Q/K normalization requires BF16 activations and weights")
+        raise TypeError("SGL exact RMSNorm 128 requires BF16 activations and weights")
     if hidden_states.shape[1] <= 0:
-        raise ValueError(f"H3 reference Q/K normalization requires at least one head, got {hidden_states.shape}")
+        raise ValueError(f"SGL exact RMSNorm 128 requires at least one head, got {hidden_states.shape}")
     if hidden_states.stride(-1) != 1 or hidden_states.stride(-2) != head_dim:
-        raise ValueError(f"Unsupported H3 reference Q/K strides: {hidden_states.stride()}")
+        raise ValueError(f"Unsupported SGL exact RMSNorm 128 strides: {hidden_states.stride()}")
     if hidden_states.shape[0] > 1 and hidden_states.stride(0) < hidden_states.shape[1] * head_dim:
-        raise ValueError(f"Overlapping H3 reference Q/K token strides: {hidden_states.stride()}")
+        raise ValueError(f"Overlapping SGL exact RMSNorm 128 token strides: {hidden_states.stride()}")
     if weight.shape != (head_dim,) or not weight.is_contiguous():
-        raise ValueError("H3 reference Q/K normalization weights must be a contiguous [128] tensor")
+        raise ValueError("SGL exact RMSNorm 128 weights must be a contiguous [128] tensor")
     with torch.cuda.device(hidden_states.device):
         if hidden_states.numel():
-            _h3_qknorm_128_kernel[(hidden_states.shape[0] * hidden_states.shape[1],)](
+            _sgl_exact_rms_norm_128_kernel[(hidden_states.shape[0] * hidden_states.shape[1],)](
                 hidden_states,
                 weight,
                 hidden_states.shape[1],
@@ -138,10 +138,10 @@ def _apply_qk_rms_norm_sglang(
     return hidden_states
 
 
-@RMS_WEIGHT_REGISTER("h3_sgl_rms_norm")
-class MiniMaxH3SGLQKRMSNorm(RMSWeightTemplate):
+@RMS_WEIGHT_REGISTER("sgl_exact_rms_norm_128")
+class SGLExactRMSNorm128(RMSWeightTemplate):
     def apply(self, input_tensor: torch.Tensor) -> torch.Tensor:
-        return _apply_qk_rms_norm_sglang(input_tensor, self._get_actual_weight(), self.eps)
+        return _apply_sgl_exact_rms_norm_128(input_tensor, self._get_actual_weight(), self.eps)
 
 
-__all__ = ["MiniMaxH3SGLQKRMSNorm"]
+__all__ = ["SGLExactRMSNorm128"]

@@ -2,7 +2,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.common.ops.norm import MiniMaxH3SGLQKRMSNorm  # noqa: F401
+from lightx2v.common.ops.norm import SGLExactRMSNorm128  # noqa: F401
 from lightx2v.common.ops.rope import SGLExactNeoXRope  # noqa: F401
 from lightx2v.models.networks.minimax_h3.weights.merged_qkv import MiniMaxH3MergedQKVWeight
 from lightx2v.models.networks.minimax_h3.weights.reordered_mlp import MiniMaxH3ReorderedMLPWeight
@@ -73,7 +73,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
         )
 
         qk_eps = float(config.get("qk_norm_eps", 1e-5))
-        qk_norm_kind = "h3_sgl_rms_norm"
+        qk_norm_kind = "sgl_exact_rms_norm_128"
         self.add_module(
             "norm_q",
             _rms(
