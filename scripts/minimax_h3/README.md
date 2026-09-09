@@ -31,6 +31,16 @@ Each transformer directory needs its `config.json`, weight index, and checkpoint
 
 The base transformer can serve all four base tasks without reloading. Reference generation uses a separate transformer and service. These checkpoints are CFG-distilled: do not send `negative_prompt`, including an empty string.
 
+## AdaLN cache
+
+MiniMax-H3 CPU offload requires `use_adaln_cache: true`. Before starting inference, generate the persistent cache with the same model, config, inference-step count, and flow shifts that inference will use:
+
+```bash
+bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
+```
+
+Set `lightx2v_path`, `model_path`, `--config_json`, and `--task` in the script before running it. `--task fl2av` creates both base-transformer profiles and serves `t2av`, `i2av`, `l2av`, and `fl2av`. Run the script separately with `--task ref2av` to build the reference-transformer cache. Every JSON config with `use_adaln_cache: true` must explicitly set `adaln_cache_dir`; the bundled configs use `~/.cache/lightx2v/adaln`. Final directory names include the cache group and inference-step count, such as `minimax_h3/fl2av_29steps`, `minimax_h3/fl2av_04steps`, or `minimax_h3/ref2av_29steps`. Each `manifest.json` stores the minimal cache specification, which inference compares directly with its expected specification. Offline generation and inference read this same JSON setting. Cache generation refuses to overwrite an existing target directory. Inference loads a matching cache strictly and does not fall back to online AdaLN computation.
+
 ## Offline inference
 
 The five task scripts share `configs/minimax_h3/minimax_h3.json`: one GPU, BF16 weights, model CPU offload, and 124 frames at `[height, width] = [544, 960]`. The script's `--task` selects the transformer and input handling; the JSON filename does not select a task.

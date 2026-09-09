@@ -8,6 +8,7 @@ from loguru import logger
 from safetensors import safe_open
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
@@ -48,6 +49,31 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
+        if config.get("cpu_offload", False) and not self.use_adaln_cache:
+            separator = "=" * 88
+            message = (
+                f"\n{separator}\n"
+                "MINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n"
+                "cpu_offload=true requires use_adaln_cache=true.\n"
+                "\nACTION REQUIRED\n"
+                "Enable the AdaLN cache and set its root in the inference JSON config:\n"
+                '  "use_adaln_cache": true,\n'
+                '  "adaln_cache_dir": "~/.cache/lightx2v/adaln"\n'
+                "adaln_cache_dir can be any custom cache root; the path above is the recommended default.\n"
+                "\nBefore inference, set lightx2v_path, model_path, --config_json, and "
+                "--task in tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh.\n"
+                "Then generate the cache from the repository root with:\n"
+                "  bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh\n"
+                "Set --task fl2av in that script for t2av/i2av/l2av/fl2av, or "
+                "--task ref2av for ref2av. The generation script and inference must "
+                f"use the same JSON config.\n{separator}"
+            )
+            logger.error(message)
+            raise ValueError(message)
+        if self.use_adaln_cache:
+            validate_adaln_cache_config(config)
+            self.remove_keys = [".adaln_proj.", "time_embedder.", "norm_out.linear."]
         self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block"
         # Model offload moves pre/blocks/post together. Pre/post residency only applies
         # to block offload and is ignored otherwise.
@@ -297,8 +323,9 @@ class MiniMaxH3Model(BaseTransformerModel):
         checks = {
             "num_attention_heads": int(self.config.get("num_attention_heads", 56)),
             "ffn_hidden_size": int(self.config.get("ffn_hidden_size", 14336)),
-            "adaln_output_size": 18 * int(self.config.get("hidden_size", 5376)),
         }
+        if not self.use_adaln_cache:
+            checks["adaln_output_size"] = 18 * int(self.config.get("hidden_size", 5376))
         invalid = {name: value for name, value in checks.items() if value % self.tp_size}
         if invalid:
             details = ", ".join(f"{name}={value}" for name, value in invalid.items())
