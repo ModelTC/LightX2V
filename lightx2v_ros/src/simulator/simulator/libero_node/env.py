@@ -8,14 +8,23 @@ from common.contract import EnvContract
 from ..sim.base_env import BaseSimEnv, Observation
 from .observer import LiberoActionObserver, build_task_catalog, default_libero_root
 
+LIBERO_DUMMY_ACTION = np.asarray([0.0] * 6 + [-1.0])
+MAX_POLICY_STEPS = {
+    "libero_spatial": 220,
+    "libero_object": 280,
+    "libero_goal": 300,
+    "libero_10": 520,
+    "libero_90": 400,
+}
+
 
 def quat_to_axis_angle(quat):
-    quat = np.asarray(quat, dtype=np.float32).copy()
+    quat = np.asarray(quat).copy()
     quat[3] = np.clip(quat[3], -1.0, 1.0)
     den = np.sqrt(1.0 - quat[3] * quat[3])
     if math.isclose(float(den), 0.0):
-        return np.zeros(3, dtype=np.float32)
-    return ((quat[:3] * 2.0 * math.acos(float(quat[3]))) / den).astype(np.float32)
+        return np.zeros(3)
+    return (quat[:3] * 2.0 * math.acos(float(quat[3]))) / den
 
 
 class LiberoEnv(BaseSimEnv):
@@ -36,11 +45,16 @@ class LiberoEnv(BaseSimEnv):
         init_state_id=0,
         image_size=224,
         seed=0,
+        settle_steps=0,
         libero_root=None,
     ):
         super().__init__(contract)
         self.image_size = int(image_size)
+        self.settle_steps = int(settle_steps)
+        if self.settle_steps < 0:
+            raise ValueError("settle_steps must be non-negative")
         self.libero_root = libero_root
+        np.random.seed(int(seed))
         self.observer = LiberoActionObserver(
             benchmark_name=benchmark,
             task_id=int(task_id),
@@ -66,6 +80,8 @@ class LiberoEnv(BaseSimEnv):
 
     def reset(self) -> Observation:
         self.observer.reset()
+        for _ in range(self.settle_steps):
+            self.observer.step(LIBERO_DUMMY_ACTION)
         return self._observation()
 
     def step(self, action):
@@ -80,10 +96,14 @@ class LiberoEnv(BaseSimEnv):
         return Observation(images=images, state=self._state(obs))
 
     def _state(self, obs) -> np.ndarray:
-        pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
-        axis_angle = quat_to_axis_angle(np.asarray(obs["robot0_eef_quat"], dtype=np.float32))
-        gripper = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
-        return np.concatenate([pos, axis_angle, gripper]).astype(np.float32)
+        pos = np.asarray(obs["robot0_eef_pos"])
+        axis_angle = quat_to_axis_angle(obs["robot0_eef_quat"])
+        gripper = np.asarray(obs["robot0_gripper_qpos"])
+        return np.concatenate([pos, axis_angle, gripper])
+
+    @property
+    def max_steps(self):
+        return MAX_POLICY_STEPS[self.benchmark]
 
     @property
     def supports_task_switch(self) -> bool:
@@ -108,7 +128,15 @@ class LiberoEnv(BaseSimEnv):
             raise ValueError(f"unknown LIBERO task {task_key!r}")
 
         init_state_id = self.init_state_id if str(task_config).strip() == "" else int(task_config)
-        new_seed = self.seed + 1 if seed is None or str(seed).strip() == "" else int(seed)
+        new_seed = self.seed if seed is None else int(seed)
+
+        if task_key == self.task_name:
+            self.observer.select_init_state(init_state_id)
+            if seed is not None:
+                self.observer.seed = new_seed
+                self.observer.env.seed(new_seed)
+            self._sync_metadata()
+            return self.reset()
 
         # Construct the replacement first so an invalid task/config leaves the
         # currently displayed environment alive and usable.
@@ -120,13 +148,13 @@ class LiberoEnv(BaseSimEnv):
             seed=new_seed,
             libero_root=self.libero_root,
         )
+        new_observer.reset()
+        for _ in range(self.settle_steps):
+            new_observer.step(LIBERO_DUMMY_ACTION)
         old_observer = self.observer
         self.observer = new_observer
         self._sync_metadata()
-        try:
-            old_observer.close()
-        except Exception:
-            pass
+        old_observer.close()
         return self._observation()
 
     def close(self) -> None:
@@ -141,6 +169,7 @@ def build_libero_env(node) -> LiberoEnv:
     node.declare_parameter("init_state_id", 0)
     node.declare_parameter("image_size", contract.image_size)
     node.declare_parameter("seed", 0)
+    node.declare_parameter("settle_steps", 0)
 
     return LiberoEnv(
         contract,
@@ -149,5 +178,6 @@ def build_libero_env(node) -> LiberoEnv:
         init_state_id=int(node.get_parameter("init_state_id").value),
         image_size=int(node.get_parameter("image_size").value),
         seed=int(node.get_parameter("seed").value),
+        settle_steps=int(node.get_parameter("settle_steps").value),
         libero_root=node.get_parameter("libero_root").value,
     )
