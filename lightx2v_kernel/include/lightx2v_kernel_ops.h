@@ -40,6 +40,23 @@ limitations under the License.
 
 
 /*
+ * From csrc/conv
+ */
+torch::Tensor fp8_conv3d_f16_accum_sm120(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    int64_t stride_d,
+    int64_t stride_h,
+    int64_t stride_w);
+
+torch::Tensor fp8_conv3d_f32_accum_sm120(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    int64_t stride_d,
+    int64_t stride_h,
+    int64_t stride_w);
+
+/*
  * From csrc/gemm
  */
 void scaled_nvfp4_quant_sm120(
