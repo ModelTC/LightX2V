@@ -125,10 +125,7 @@ def _validate_sparse_inputs(q, k, v, lut, block_q: int, block_k: int) -> None:
         raise ValueError("query head count must be divisible by KV head count")
     expected_q_blocks = math.ceil(q.shape[1] / block_q)
     if lut.ndim != 4 or tuple(lut.shape[:3]) != (q.shape[0], q.shape[2], expected_q_blocks):
-        raise ValueError(
-            "lut must have shape [B, Hq, ceil(Lq/block_q), topk], got "
-            f"{tuple(lut.shape)}"
-        )
+        raise ValueError(f"lut must have shape [B, Hq, ceil(Lq/block_q), topk], got {tuple(lut.shape)}")
     if lut.shape[3] == 0:
         raise ValueError("lut topk dimension must be non-zero")
     if block_q <= 0 or block_k <= 0:
@@ -174,8 +171,13 @@ def sparse_block_attention(
     from .sla_triton import launch_sparse_block_attention
 
     return launch_sparse_block_attention(
-        q.contiguous(), k.contiguous(), v.contiguous(), lut.to(torch.int32).contiguous(),
-        block_q, block_k, q.shape[-1] ** -0.5 if scale is None else scale,
+        q.contiguous(),
+        k.contiguous(),
+        v.contiguous(),
+        lut.to(torch.int32).contiguous(),
+        block_q,
+        block_k,
+        q.shape[-1] ** -0.5 if scale is None else scale,
     )
 
 

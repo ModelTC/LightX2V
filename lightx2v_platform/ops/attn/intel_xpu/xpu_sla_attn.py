@@ -13,16 +13,10 @@ else:
 
 def _get_sycl_api(name):
     if _sycl_kernels is None:
-        raise RuntimeError(
-            "Intel XPU SLA requires lightx2v_kernel_xpu's sycl-kernels package "
-            "with SLA/CUTE sparse attention enabled"
-        ) from _IMPORT_ERROR
+        raise RuntimeError("Intel XPU SLA requires lightx2v_kernel_xpu's sycl-kernels package with SLA/CUTE sparse attention enabled") from _IMPORT_ERROR
     api = getattr(_sycl_kernels, name, None)
     if api is None:
-        raise RuntimeError(
-            f"sycl_kernels.{name} is unavailable; rebuild/install "
-            "lightx2v_kernel_xpu with SLA/CUTE sparse attention enabled"
-        )
+        raise RuntimeError(f"sycl_kernels.{name} is unavailable; rebuild/install lightx2v_kernel_xpu with SLA/CUTE sparse attention enabled")
     return api
 
 

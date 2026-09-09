@@ -83,9 +83,22 @@ def launch_sparse_block_attention(q, k, v, lut, block_q, block_k, scale):
     output = torch.empty_like(q_bhld)
     grid = (q_blocks, batch * q_heads)
     _sparse_block_attention_fwd[grid](
-        q_bhld, k_bhld, v_bhld, lut, output,
-        q_len, kv_len, q_heads, kv_heads, q_blocks, topk, scale,
-        BLOCK_Q=block_q, BLOCK_K=block_k, HEAD_DIM=head_dim,
-        num_warps=8, num_stages=3,
+        q_bhld,
+        k_bhld,
+        v_bhld,
+        lut,
+        output,
+        q_len,
+        kv_len,
+        q_heads,
+        kv_heads,
+        q_blocks,
+        topk,
+        scale,
+        BLOCK_Q=block_q,
+        BLOCK_K=block_k,
+        HEAD_DIM=head_dim,
+        num_warps=8,
+        num_stages=3,
     )
     return output.permute(0, 2, 1, 3)

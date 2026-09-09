@@ -10,7 +10,7 @@
 +    int lut_topk = 0;
 +    int lut_block_tiles = 0;
    };
- 
+
    // Kernel-facing parameters
 @@ -172,7 +177,9 @@
    Params to_underlying_arguments(Arguments const &args, void * /* workspace */) {
@@ -21,7 +21,7 @@
 +                  args.ptr_block_lut, args.lut_num_heads, args.lut_q_blocks,
 +                  args.lut_topk, args.lut_block_tiles};
    }
- 
+
    CUTLASS_HOST_DEVICE static
 @@ -211,6 +218,7 @@
               int              seq_len,

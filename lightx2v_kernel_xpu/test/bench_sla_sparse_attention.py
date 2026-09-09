@@ -60,16 +60,21 @@ def main():
     sparse_median = statistics.median(sparse_ms)
     router_median = statistics.median(router_ms)
     dense_median = statistics.median(dense_ms)
-    print(json.dumps({
-        "shape": shape,
-        "keep_ratio": args.keep_ratio,
-        "lut_shape": list(lut.shape),
-        "dense_ms": dense_ms,
-        "sparse_kernel_ms": sparse_ms,
-        "router_ms": router_ms,
-        "kernel_speedup": dense_median / sparse_median,
-        "attention_speedup_including_router": dense_median / (sparse_median + router_median),
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "shape": shape,
+                "keep_ratio": args.keep_ratio,
+                "lut_shape": list(lut.shape),
+                "dense_ms": dense_ms,
+                "sparse_kernel_ms": sparse_ms,
+                "router_ms": router_ms,
+                "kernel_speedup": dense_median / sparse_median,
+                "attention_speedup_including_router": dense_median / (sparse_median + router_median),
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

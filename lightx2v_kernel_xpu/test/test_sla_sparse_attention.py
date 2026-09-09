@@ -2,7 +2,6 @@ import math
 
 import pytest
 import torch
-
 from sycl_kernels.sla import (
     sla_block_map,
     sparse_block_attention,

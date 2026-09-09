@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Usage:
+#   # Single XPU (default)
+#   bash scripts/platforms/intel_xpu/run_minimax_h3_fl2av_turbo_sla_4step.sh
+#
+#   # Tensor parallel on 2 XPUs
+#   PARALLEL_MODE=tp TP_SIZE=2 \
+#     bash scripts/platforms/intel_xpu/run_minimax_h3_fl2av_turbo_sla_4step.sh
+#
+#   # Sequence parallel on 2 XPUs
+#   PARALLEL_MODE=sp SP_SIZE=2 \
+#     bash scripts/platforms/intel_xpu/run_minimax_h3_fl2av_turbo_sla_4step.sh
+#
+#   # Tensor parallel 2 x sequence parallel 2 (4 XPUs)
+#   PARALLEL_MODE=sp_tp TP_SIZE=2 SP_SIZE=2 \
+#     bash scripts/platforms/intel_xpu/run_minimax_h3_fl2av_turbo_sla_4step.sh
+#
+# Optional overrides include ZE_AFFINITY_MASK, MODEL_PATH, LORA_PATH,
+# CONFIG_JSON, FIRST_FRAME, LAST_FRAME, OUTPUT_PATH, PROMPT, and SEED.
+
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../../.." && pwd)
 
