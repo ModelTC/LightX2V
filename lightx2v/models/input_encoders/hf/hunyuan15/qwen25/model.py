@@ -124,7 +124,8 @@ def load_text_encoder(
         config = AutoConfig.from_pretrained(text_encoder_path)
         with init_empty_weights():
             text_encoder = AutoModel.from_config(config)
-        text_encoder = text_encoder.language_model
+        if hasattr(text_encoder, "language_model"):
+            text_encoder = text_encoder.language_model
 
         if text_encoder_quant_scheme in ["int8", "int8-vllm"]:
             linear_cls = VllmQuantLinearInt8
@@ -157,7 +158,8 @@ def load_text_encoder(
 
     else:
         text_encoder = AutoModel.from_pretrained(text_encoder_path, low_cpu_mem_usage=True)
-        text_encoder = text_encoder.language_model
+        if hasattr(text_encoder, "language_model"):
+            text_encoder = text_encoder.language_model
 
     text_encoder.final_layer_norm = text_encoder.norm
 
