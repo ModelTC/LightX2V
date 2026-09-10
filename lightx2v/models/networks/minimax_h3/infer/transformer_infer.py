@@ -4,8 +4,9 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
-from lightx2v.models.networks.minimax_h3.infer.fused_qkv import can_split_qkv_norm, split_qkv_norm
+from lightx2v.models.networks.minimax_h3.infer import fused_qkv  # noqa: F401
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.registry_factory import QKV_NORM_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -26,6 +27,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.infer_dtype = GET_DTYPE()
         self.use_fused_qkv_attn = bool(config.get("use_fused_qkv_attn", False))
+        qkv_norm_type = config.get("qkv_norm_type", "triton")
+        self.qkv_norm = QKV_NORM_REGISTER[qkv_norm_type]()
         if config.get("seq_parallel", False):
             self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
             parallel = config.get("parallel", {})
@@ -59,20 +62,14 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return torch.cat(gathered, dim=-1)
 
     def _attention(self, weights, hidden_states, pre_infer_out):
-        normalized = False
         if self.use_fused_qkv_attn and weights.has_fused_qkv:
             packed = weights.to_qkv.apply(hidden_states)
-            if self.config.get("rms_type") == "intel_xpu" and can_split_qkv_norm(packed, weights.norm_q, weights.norm_k):
-                q, k, v = split_qkv_norm(packed, weights.norm_q.weight, weights.norm_k.weight, weights.norm_q.eps, weights.norm_k.eps)
-                normalized = True
-            else:
-                q, k, v = packed.chunk(3, dim=-1)
+            q, k, v = self.qkv_norm.apply(packed, weights.norm_q, weights.norm_k, self.num_heads, self.head_dim)
             del packed
         else:
             q = weights.to_q.apply(hidden_states)
             k = weights.to_k.apply(hidden_states)
             v = weights.to_v.apply(hidden_states)
-        if not normalized:
             q = q.unflatten(-1, (self.num_heads, self.head_dim))
             k = k.unflatten(-1, (self.num_heads, self.head_dim))
             v = v.unflatten(-1, (self.num_heads, self.head_dim))

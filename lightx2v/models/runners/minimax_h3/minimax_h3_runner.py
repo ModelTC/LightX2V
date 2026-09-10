@@ -91,7 +91,10 @@ class MiniMaxH3Runner(DefaultRunner):
     graph.
     """
 
-    _WARMUP_SHAPES = ((544, 960, 124),)
+    _WARMUP_SHAPES = (
+        (480, 480, 158),  # aligned from a 6-second request
+        (544, 960, 124),
+    )
     _WARMUP_STEP_COUNT = 2
     supported_request_fields_by_task = {
         "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"},
