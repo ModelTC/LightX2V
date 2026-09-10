@@ -15,9 +15,7 @@ if __name__ == "__main__":
         "image_path": base64.b64encode(image_path.read_bytes()).decode("utf-8"),
         "seed": 42,
         "num_frames": 81,
-        "target_shape": [480, 832],
-        # Set to True after one successful request when using start_server_i2v_reuse.sh.
-        "reuse": False,
+        "size": [480, 832],
         "save_result_path": "./output_lightx2v_wan_i2v.mp4",
     }
 

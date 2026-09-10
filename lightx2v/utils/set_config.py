@@ -7,7 +7,7 @@ import torch.distributed as dist
 from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
-from lightx2v.utils.input_info import align_target_video_length
+from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.lockable_dict import LockableDict
 from lightx2v.utils.utils import find_torch_model_path, is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -48,6 +48,8 @@ def build_startup_config(config_data):
     config["task"] = config_data.get("task")
     if config_data.get("model_variant") is not None:
         config["model_variant"] = config_data["model_variant"]
+    if config_data.get("fps") is not None:
+        config["fps"] = config_data["fps"]
 
     load_model_config(config)
     return config
@@ -155,8 +157,6 @@ def load_model_config(config):
             diffusion_model_config = action_head_config.get("diffusion_model_cfg", {})
             config.update(action_head_config)
             config.update(diffusion_model_config)
-            if "num_frames" in config:
-                config["target_video_length"] = config["num_frames"]
             if "out_dim" in config:
                 config["num_channels_latents"] = config["out_dim"]
     elif config["model_cls"] == "longcat_image":
@@ -171,8 +171,8 @@ def load_model_config(config):
             with open(transformer_config_path, "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
-        config.setdefault("target_video_length", 1)
-        config.setdefault("target_fps", config.get("base_fps", 24) if config["model_cls"] == "cosmos3" else 24)
+        config.setdefault("num_frames", 1)
+        config.setdefault("fps", config.get("base_fps", 24) if config["model_cls"] == "cosmos3" else 24)
         if config["model_cls"] == "lingbot_video":
             config.setdefault("vae_scale_factor_spatial", 8)
             config.setdefault("vae_scale_factor_temporal", 4)
@@ -279,35 +279,30 @@ def load_model_config(config):
 
         normalize_hunyuan_image3_config(config)
 
-    if config["model_cls"] == "lingbot_va" and "target_video_length" not in config:
+    if config["model_cls"] == "lingbot_va" and "num_frames" not in config:
         ar_config = config.get("ar_config", {})
         required_keys = ("num_frame_per_chunk", "num_chunks")
         missing_keys = [key for key in required_keys if key not in ar_config]
         if missing_keys:
-            raise ValueError(f"LingBot-VA requires ar_config.{', ar_config.'.join(missing_keys)} to derive target_video_length.")
+            raise ValueError(f"LingBot-VA requires ar_config.{', ar_config.'.join(missing_keys)} to derive num_frames.")
         latent_frames = int(ar_config["num_frame_per_chunk"]) * int(ar_config["num_chunks"])
         temporal_stride = int(config["vae_stride"][0])
         if latent_frames <= 0 or temporal_stride <= 0:
             raise ValueError(f"LingBot-VA requires positive latent frame count and VAE temporal stride, got latent_frames={latent_frames}, temporal_stride={temporal_stride}.")
-        config["target_video_length"] = (latent_frames - 1) * temporal_stride + 1
-        logger.info(f"Auto-set LingBot-VA target_video_length={config['target_video_length']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
+        config["num_frames"] = (latent_frames - 1) * temporal_stride + 1
+        logger.info(f"Auto-set LingBot-VA num_frames={config['num_frames']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
 
-    if (
-        config["model_cls"] != "minimax_h3"
-        and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]
-        and config.get("target_video_length") is not None
-        and "vae_stride" in config
-    ):
+    if config["model_cls"] != "minimax_h3" and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and config.get("num_frames") is not None and "vae_stride" in config:
         temporal_stride = int(config["vae_stride"][0])
-        if (config["target_video_length"] - 1) % temporal_stride != 0:
-            original_length = config["target_video_length"]
-            config["target_video_length"] = align_target_video_length(original_length, temporal_stride)
-            logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {config['target_video_length']} instead of {original_length}.")
+        if (config["num_frames"] - 1) % temporal_stride != 0:
+            original_length = config["num_frames"]
+            config["num_frames"] = align_num_frames(original_length, temporal_stride)
+            logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {config['num_frames']} instead of {original_length}.")
 
 
 def build_cli_inputs(args):
     args_data = {key: value for key, value in vars(args).items() if value is not None}
-    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "sf_model_path", "task"}
+    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "task"}
     startup_args = {key: value for key, value in args_data.items() if key in startup_fields}
     request_data = {key: value for key, value in args_data.items() if key not in startup_fields}
     request_data["task"] = args.task

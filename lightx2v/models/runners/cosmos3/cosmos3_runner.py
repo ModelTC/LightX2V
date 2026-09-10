@@ -132,7 +132,7 @@ def compose_droid_policy_image(images):
 class Cosmos3Runner(DefaultRunner):
     input_info_cls_by_task = {task: Cosmos3InputInfo for task in ("t2i", "t2v", "i2v", "t2av", "i2av", "i2va", "v2av")}
     supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"target_shape"},
+        "t2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"size"},
         "t2v": VIDEO_REQUEST_FIELDS,
         "i2v": VIDEO_REQUEST_FIELDS | {"image_path"},
         "t2av": VIDEO_REQUEST_FIELDS,
@@ -148,7 +148,7 @@ class Cosmos3Runner(DefaultRunner):
             "policy_state",
             "save_action_path",
             "state_path",
-            "target_shape",
+            "size",
             "video_path",
             "view_point",
         },
@@ -160,7 +160,7 @@ class Cosmos3Runner(DefaultRunner):
             "domain_name",
             "image_path",
             "save_action_path",
-            "target_shape",
+            "size",
             "video_path",
             "view_point",
         },
@@ -284,7 +284,7 @@ class Cosmos3Runner(DefaultRunner):
             self.input_info.prompt = spec["prompt"]
         chunk_size = int(self._get_action_value("action_chunk_size", self.config.get("action_chunk_size", 16)))
         self.input_info.action_chunk_size = chunk_size
-        self.input_info.target_video_length = chunk_size + 1
+        self.input_info.num_frames = chunk_size + 1
 
     @staticmethod
     def _build_action_json_prompt(description, view_point, num_frames, fps, height, width, additional_view_description=None):
@@ -347,9 +347,9 @@ class Cosmos3Runner(DefaultRunner):
     def tokenize_prompt(self, prompt, negative_prompt=None):
         prompt = self._resolve_prompt_text(prompt)
         negative_prompt = self._resolve_prompt_text(negative_prompt) if negative_prompt is not None else None
-        height, width = self.input_info.target_shape
-        num_frames = self.get_target_video_length()
-        fps = float(self.config.get("target_fps", 24.0))
+        height, width = self.input_info.size
+        num_frames = self.get_num_frames()
+        fps = float(self.config.get("fps", 24.0))
         is_image = num_frames == 1
         negative_prompt = "" if negative_prompt is None else negative_prompt
 
@@ -422,12 +422,11 @@ class Cosmos3Runner(DefaultRunner):
         }
 
     def set_latent_shape(self):
-        if len(self.input_info.target_shape) == 2:
-            height, width = self.input_info.target_shape
+        if len(self.input_info.size) == 2:
+            height, width = self.input_info.size
             height, width = int(height), int(width)
         else:
-            height = int(self.config.get("target_height", 1024))
-            width = int(self.config.get("target_width", 1024))
+            height, width = map(int, self.config.get("size", (1024, 1024)))
 
         spatial_scale = int(self.config.get("vae_scale_factor_spatial", self.config.get("vae_scale_factor", 16)))
         temporal_scale = int(self.config.get("vae_scale_factor_temporal", 4))
@@ -440,9 +439,9 @@ class Cosmos3Runner(DefaultRunner):
             height, width = rounded_height, rounded_width
 
         latent_channels = int(self.config.get("latent_channel", 48))
-        pixel_frames = self.get_target_video_length()
+        pixel_frames = self.get_num_frames()
         latent_frames = (pixel_frames - 1) // temporal_scale + 1
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
         self.input_info.latent_shape = (1, latent_channels, latent_frames, height // spatial_scale, width // spatial_scale)
         self.input_info.image_shapes = [[(latent_frames, height // spatial_scale, width // spatial_scale)]]
         logger.info(f"Cosmos3 Runner set target shape: {width}x{height}, latent: {self.input_info.latent_shape}")
@@ -453,7 +452,7 @@ class Cosmos3Runner(DefaultRunner):
             raise ValueError("Cosmos3 i2v requires --image_path.")
         if not os.path.isfile(image_path):
             raise FileNotFoundError(f"Cosmos3 i2v image_path does not exist: {image_path}")
-        height, width = self.input_info.target_shape
+        height, width = self.input_info.size
         resample = getattr(Image, "Resampling", Image).BILINEAR
         with Image.open(image_path) as image:
             image = image.convert("RGB").resize((width, height), resample=resample)
@@ -471,7 +470,7 @@ class Cosmos3Runner(DefaultRunner):
         if loaded_vae_here:
             self.vae = self.load_vae()
         frame = self._load_i2v_condition_frame()
-        num_frames = self.get_target_video_length()
+        num_frames = self.get_num_frames()
         video = frame.unsqueeze(2).expand(-1, -1, num_frames, -1, -1).contiguous()
         condition_latents = self.vae.encode(video)
         self.input_info.vision_condition_latents = condition_latents
@@ -659,7 +658,7 @@ class Cosmos3Runner(DefaultRunner):
         if raw_action_dim > action_dim:
             raise ValueError(f"Cosmos3 raw_action_dim={raw_action_dim} exceeds model action_dim={action_dim}")
 
-        height, width = self.input_info.target_shape
+        height, width = self.input_info.size
         num_frames = chunk_size + 1
         image_path = getattr(self.input_info, "image_path", None) or self.config.get("image_path", "")
         video_path = self.input_info.video_path or self.config.get("video_path", "")
@@ -932,7 +931,7 @@ class Cosmos3Runner(DefaultRunner):
             save_to_video(
                 video.clamp(0, 1),
                 save_path,
-                fps=float(self.config.get("target_fps", 24.0)),
+                fps=float(self.config.get("fps", 24.0)),
                 method=self.config.get("save_video_method", "ffmpeg"),
             )
             self._mux_generated_audio(save_path, sound)
@@ -978,7 +977,7 @@ class Cosmos3Runner(DefaultRunner):
         return outputs
 
     def _is_video_output(self):
-        return self.get_target_video_length() > 1
+        return self.get_num_frames() > 1
 
     def end_run(self):
         if hasattr(self, "model") and self.model is not None:

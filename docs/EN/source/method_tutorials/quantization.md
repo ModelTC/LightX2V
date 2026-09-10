@@ -191,7 +191,8 @@ python tools/convert/converter.py \
     --single_file
 ```
 
-Use the same mode at runtime:
+Add the matching mode and checkpoint to the complete startup JSON selected by `--config_json`,
+or by Python `create_generator(config_json=...)`:
 
 ```json
 {
@@ -201,6 +202,12 @@ Use the same mode at runtime:
     "vae_encoder_conv_mode": "cutlass_fp8_f16_accum"
 }
 ```
+
+These settings are loaded once with the VAE and apply to subsequent requests. Keep `model_variant` as the
+startup weight selection (`fl2av` or `ref2av`); choose `task` within that variant in each request. Request
+overrides continue to use `size=[height, width]`, `num_frames`, and `save_result_path`; `fps`, compile,
+warmup, and `vae_encoder_conv_mode` remain startup settings. The conversion command above is an offline
+weight-conversion tool, so its output arguments describe a checkpoint rather than an inference result.
 
 FP8 Conv3D currently supports SM120 only and requires a `lightx2v_kernel` wheel built from a revision containing the
 FP8 Conv3D operator. A new Conv3D shape is tuned automatically on first use and its winner is reused by later calls in

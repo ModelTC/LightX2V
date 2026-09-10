@@ -134,7 +134,7 @@ class TorchrunInferenceWorker:
                         out["result_png"] = png
                     usage = self.runner.compute_usage(
                         prompt=task_data.get("prompt", ""),
-                        target_shape=task_data.get("target_shape", []),
+                        size=task_data.get("size", []),
                         has_input_image=bool(task_data.get("image_path")),
                     )
                     if usage:

@@ -80,7 +80,7 @@ bash scripts/minimax_h3/run_minimax_h3_ref2av.sh
 | `dmd/minimax_h3_int8_convrot_8step.json` | `run_minimax_h3_t2av_parallel.sh` | SP8，INT8 ConvRot + 八步 LoRA |
 | `dmd/minimax_h3_fp8_4step_5090.json` | `run_minimax_h3_t2av_parallel.sh` | SP8，5090，四步 LoRA |
 | `dmd/minimax_h3_fp8_4step_5090_vae_fp8.json` | `run_minimax_h3_t2av_parallel.sh` | SP8，FP8 VAE + 四步 LoRA |
-| `dmd/minimax_h3_fp8_4step_5090_vae_fp8_sla.json` | `run_minimax_h3_t2av_parallel.sh` | SP8，FP8 VAE + 配套的 SLA LoRA |
+| `dmd/minimax_h3_fp8_4step_5090_vae_fp8_sla.json` | `run_minimax_h3_t2av_parallel.sh` | SP8，FP8 VAE Encoder/Decoder + 配套的 SLA LoRA |
 | `dmd/minimax_h3_fp8_4step_5090_vae_fp8_sol.json` | `run_minimax_h3_t2av_parallel.sh` | SP8，FP8 文本编码器/VAE + Sol-Attn + 四步 LoRA |
 | `dmd/minimax_h3_ref2av_4step.json` | `run_minimax_h3_ref2av.sh`，按下文说明使用 8 个进程 | 参考任务四步 LoRA |
 
@@ -98,13 +98,18 @@ bash scripts/minimax_h3/run_minimax_h3_ref2av.sh
 
 所有启用编译的 MiniMax-H3 配置都同时设置了 `warmup: true`。普通配置与编译配置的默认输出规格一致，两份服务启动脚本也都可以使用。
 
+Video VAE Encoder 加速通过启动 JSON 中的 `vae_encoder_conv_mode` 选择，作用于需要编码输入图片或视频的
+`i2av`、`l2av`、`fl2av` 和 `ref2av`；`t2av` 不执行该编码器。默认使用 `torch`，`torch_channels_last`
+使用原始权重，FP8 模式需要转换后的 Encoder 权重和 SM120。通过现有 CLI、Python 或服务入口选择同一份
+JSON 即可，具体见[权重转换与运行配置](../../docs/ZH_CN/source/method_tutorials/quantization.md#minimax-h3-video-vae-encoder-conv3d)。
+
 ### 视频编码
 
 如需使用原先的 362 帧视频编码示例，在 `minimax_h3.json` 的副本中修改以下字段，再让启动脚本指向这份完整的 JSON：
 
 ```json
 {
-  "target_video_length": 362,
+  "num_frames": 362,
   "video_codec_options": {
     "preset": "ultrafast",
     "crf": "18"
@@ -129,7 +134,7 @@ bash scripts/minimax_h3/run_minimax_h3_ref2av.sh
 
 只量化文本编码器或 VAE 不受上述合并限制。动态 LoRA 当前只接受一个适配器，并要求显式提供 `alpha`。现有模型加载器会拒绝不支持的组合。
 
-共用配置 `dmd/minimax_h3_bf16_4step.json` 默认设置 `lora_dynamic_apply: true`，输出 362 帧，尺寸为 `[768, 1344]`。将该字段改为 `false` 即可使用加载时合并。在 `run_minimax_h3_t2av.sh` 中选择这份 JSON；如需更短、更小的输出，在推理命令中添加 `--target_shape 544 960` 和 `--num_frames 124`。
+共用配置 `dmd/minimax_h3_bf16_4step.json` 默认设置 `lora_dynamic_apply: true`，输出 362 帧，尺寸为 `[768, 1344]`。将该字段改为 `false` 即可使用加载时合并。在 `run_minimax_h3_t2av.sh` 中选择这份 JSON；如需更短、更小的输出，在推理命令中添加 `--size 544 960` 和 `--num_frames 124`。
 
 在 JSON 中将 `infer_steps` 设置为实际模型计算次数：四步推理填 `4`，八步推理填 `8`。Scheduler 会自动包含末尾零点。迁移旧版 MiniMax-H3 配置时，将原 `infer_steps` 减一（`5` → `4`、`9` → `8`、`30` → `29`），即可保持原有采样过程。仓库中的配置已完成同步。
 
@@ -198,6 +203,6 @@ curl --fail http://localhost:8000/v1/tasks/TASK_ID/result -o minimax_h3.mp4
 ## 请求参数与启动配置
 
 - 启动配置：模型路径、模型分支、权重/LoRA、算子、卸载、并行、编译和预热。Prompt、媒体路径、seed 和输出路径应放在 Python 调用、CLI 命令或 POST 请求体中。
-- 输出默认值：JSON 设置 `target_video_length` 和 `target_height`/`target_width`。请求可通过 `num_frames` 和 `target_shape`（`[高度, 宽度]`）覆盖。宽高必须是 32 的倍数。帧数向上对齐到 `17*n+5`，支持的对齐后帧数范围为 124 到 362；例如，125 会调整为 141。
+- 输出默认值：JSON 设置 `num_frames` 和 `size`。请求可通过 `num_frames` 和 `size`（`[高度, 宽度]`）覆盖。宽高必须是 32 的倍数。帧数向上对齐到 `17*n+5`，支持的对齐后帧数范围为 124 到 362；例如，125 会调整为 141。
 - Seed：省略或传入 `null` 时默认使用 42；显式提供的非负整数按原值使用，包括 0。
 - 保存：每个 CLI 示例都显式提供输出路径，移除该参数即跳过文件保存，服务采用相同规则。输出为 MP4，包含 24 FPS 视频和 32 kHz 立体声音频。

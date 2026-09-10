@@ -9,7 +9,7 @@ if __name__ == "__main__":
         "prompt": "integrated_multimodal_description: A cinematic fox walks through a snowy pine forest at dawn. overall_soundscape: Soft wind, crunching snow, and distant birds. non_diegetic_music: Quiet warm strings.",
         "seed": 42,
         "num_frames": 124,
-        "target_shape": [544, 960],
+        "size": [544, 960],
         "save_result_path": "./minimax_h3_t2av.mp4",
     }
 

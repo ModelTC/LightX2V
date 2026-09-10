@@ -14,8 +14,7 @@ pipe.create_generator(config_json="/home/user/LightX2V/configs/wan22/wan_moe_t2v
 # pipe.create_generator(
 #   attn_mode="sage_attn2",
 #   infer_steps=50,
-#    height=480,  # Can be set to 720 for higher resolution
-#    width=832,  # Can be set to 1280 for higher resolution
+#    size=(480, 832),  # Height, width; use (720, 1280) for 720p
 #    num_frames=81,
 #    guidance_scale=5.0,
 #    sample_shift=5.0,

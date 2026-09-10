@@ -81,8 +81,8 @@ class SenseNovaVisionModel(BagelModel):
         self.transformer_infer.cfg_text_context = cfg_text_context
         self.transformer_infer.cfg_img_context = cfg_img_context
 
-        target_shape = tuple(getattr(input_info, "target_shape", None) or ())
-        image_shape = target_shape if len(target_shape) == 2 else (1024, 1024)
+        size = tuple(getattr(input_info, "size", None) or ())
+        image_shape = size if len(size) == 2 else (1024, 1024)
         text_outputs = []
         preprocessed_images = []
         device_type = torch.device(AI_DEVICE).type

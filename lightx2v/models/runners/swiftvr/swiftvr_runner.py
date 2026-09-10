@@ -59,7 +59,7 @@ class SwiftVRRunner(DefaultRunner):
     """Native LightX2V runner for SwiftVR image and video restoration."""
 
     supported_request_fields_by_task = {
-        "sr": COMMON_REQUEST_FIELDS | {"image_path", "sr_ratio", "target_shape", "video_path"},
+        "sr": COMMON_REQUEST_FIELDS | {"image_path", "sr_ratio", "size", "video_path"},
     }
 
     # Two spatial shapes trigger dynamic compilation before serving requests.
@@ -137,10 +137,10 @@ class SwiftVRRunner(DefaultRunner):
         *,
         require_even: bool = False,
     ) -> tuple[int, int]:
-        if input_info.target_shape:
-            if len(input_info.target_shape) != 2:
-                raise ValueError(f"SwiftVR target_shape must be [height, width], got {input_info.target_shape}")
-            height, width = input_info.target_shape
+        if input_info.size:
+            if len(input_info.size) != 2:
+                raise ValueError(f"SwiftVR size must be [height, width], got {input_info.size}")
+            height, width = input_info.size
         else:
             ratio = input_info.sr_ratio
             height, width = round(source_height * ratio), round(source_width * ratio)

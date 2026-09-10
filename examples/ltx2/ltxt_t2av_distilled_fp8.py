@@ -19,15 +19,13 @@ pipe.enable_quantize(
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=8,
-    height=512,
-    width=768,
+    size=(512, 768),
     num_frames=121,
     guidance_scale=1,
     sample_shift=[2.05, 0.95],
     fps=24,
-    audio_fps=24000,
     double_precision_rope=True,
-    norm_modulate_backend="triton",  # "torch"
+    modulate_type="triton",  # "torch"
     distilled_sigma_values=[1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0],
 )
 

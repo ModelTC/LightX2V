@@ -31,11 +31,11 @@ class VAController:
             self.world_size = dist.get_world_size()
         self.target_reader_rank = int(os.getenv("READER_RANK", "0")) % self.world_size
         self.target_recorder_rank = int(os.getenv("RECORDER_RANK", "0")) % self.world_size
-        self.init_base(model_runner.config, model_runner.input_info, model_runner.vfi_model is not None, model_runner.vsr_model is not None)
+        self.init_base(model_runner.config, model_runner.input_info, model_runner.vsr_model is not None)
         self.init_recorder()
         self.init_reader(model_runner)
 
-    def init_base(self, config, input_info, has_vfi_model, has_vsr_model):
+    def init_base(self, config, input_info, has_vsr_model):
         self.stream_config = input_info.stream_config
         logger.info(f"VAController init base with stream config: {self.stream_config}")
         self.audio_path = input_info.audio_path
@@ -44,17 +44,14 @@ class VAController:
             self.output_video_path = self.output_video_path["data"]
 
         self.audio_sr = config.get("audio_sr", 16000)
-        self.target_fps = config.get("target_fps", 16)
-        self.max_num_frames = config.get("target_video_length", 81)
+        self.target_fps = config.get("fps", 16)
+        self.max_num_frames = config.get("num_frames", 81)
         self.prev_frame_length = config.get("prev_frame_length", 5)
 
-        self.record_fps = config.get("target_fps", 16)
-        if "video_frame_interpolation" in config and has_vfi_model:
-            self.record_fps = config["video_frame_interpolation"]["target_fps"]
-        self.record_fps = config.get("record_fps", self.record_fps)
+        self.record_fps = config.get("record_fps", self.target_fps)
 
-        self.tgt_h = input_info.target_shape[0]
-        self.tgt_w = input_info.target_shape[1]
+        self.tgt_h = input_info.size[0]
+        self.tgt_w = input_info.size[1]
         self.record_h, self.record_w = self.tgt_h, self.tgt_w
         if "video_super_resolution" in config and has_vsr_model:
             _, _, self.record_w, self.record_h = compute_scaled_and_target_dims(

@@ -1,9 +1,8 @@
 {
     "_comment": "Wan2.1 I2V 480P on 8 Enflame GCUs: 4-way Ulysses + 2-way CFG parallelism.",
     "infer_steps": 40,
-    "target_video_length": 81,
-    "target_height": 480,
-    "target_width": 832,
+    "num_frames": 81,
+    "size": [480, 832],
     "self_attn_1_type": "flash_attn_enflame_gcu",
     "cross_attn_1_type": "flash_attn_enflame_gcu",
     "cross_attn_2_type": "flash_attn_enflame_gcu",

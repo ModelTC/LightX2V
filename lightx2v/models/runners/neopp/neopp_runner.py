@@ -41,8 +41,8 @@ def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs
 class NeoppRunner(DefaultRunner):
     input_info_cls_by_task = {"t2i": NeoppInputInfo, "i2i": NeoppInputInfo}
     supported_request_fields_by_task = {
-        "t2i": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"target_shape"},
-        "i2i": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"target_shape"},
+        "t2i": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"size"},
+        "i2i": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"size"},
     }
 
     def get_supported_tasks(self):
@@ -50,6 +50,15 @@ class NeoppRunner(DefaultRunner):
         return ("t2i", "i2i")
 
     def prepare_request(self, request_data):
+        if "target_shape" in request_data:
+            # LightLLM's existing adapter still sends target_shape.
+            request_data = dict(request_data)
+            legacy_size = request_data.pop("target_shape")
+            if request_data.get("size") is None:
+                request_data["size"] = legacy_size
+        # LightLLM omits task; t2i and i2i share the same generation path.
+        if request_data.get("task") is None:
+            request_data = dict(request_data, task="t2i")
         input_info = super().prepare_request(request_data)
         # LightLLM restores the session RNG before explicitly passing seed=None.
         if "seed" in request_data and request_data["seed"] is None:
@@ -123,8 +132,8 @@ class NeoppRunner(DefaultRunner):
 
     def run_input_encoder(self):
         with ProfilingContext4DebugL1("run_input_encoder"):
-            token_h = self.input_info.target_shape[0] // (self.patch_size * self.merge_size)
-            token_w = self.input_info.target_shape[1] // (self.patch_size * self.merge_size)
+            token_h = self.input_info.size[0] // (self.patch_size * self.merge_size)
+            token_w = self.input_info.size[1] // (self.patch_size * self.merge_size)
             self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
 
             indexes_cond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_cond, device=self.init_device)
@@ -173,8 +182,8 @@ class NeoppRunner(DefaultRunner):
             }
 
     def get_latent_shape_with_target_hw(self):
-        target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
-        target_width = self.input_info.target_shape[1] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_width"]
+        target_height = self.input_info.size[0] if self.input_info.size and len(self.input_info.size) == 2 else self.config["size"][0]
+        target_width = self.input_info.size[1] if self.input_info.size and len(self.input_info.size) == 2 else self.config["size"][1]
         latent_shape = [1, 3, target_height, target_width]
         return latent_shape
 

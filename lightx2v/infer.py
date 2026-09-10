@@ -86,7 +86,7 @@ def main():
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--prompt", type=str, default=None, help="The input prompt for text-to-video generation")
-    parser.add_argument("--prompt_ref", type=str, default=None, help="Reference/driving-video prompt for Wan-Animate-2.")
+    parser.add_argument("--ref_video_prompt", type=str, default=None, help="Reference/driving-video prompt for Wan-Animate-2.")
     parser.add_argument("--negative_prompt", type=str, default=None)
     parser.add_argument("--bot_task", type=str, default=None, help="HunyuanImage3 text generation mode.")
     parser.add_argument("--max_new_tokens", type=int, default=None, help="Maximum number of generated text tokens.")
@@ -119,7 +119,6 @@ def main():
     parser.add_argument("--image_strength", type=str, default=None, help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
     parser.add_argument(
         "--num_frames",
-        dest="target_video_length",
         type=int,
         default=None,
         help="Requested output frame count. Model-specific length constraints apply.",
@@ -133,30 +132,30 @@ def main():
     parser.add_argument("--inpaint_blur_sigma", type=float, default=None, help="Flux2 inpainting mask blur sigma.")
     parser.add_argument("--inpaint_blur_size", type=int, default=None, help="Flux2 inpainting mask blur kernel size.")
     parser.add_argument(
-        "--image_frame_idx", type=str, default=None, help="i2av: comma-separated pixel frame indices (one per image). Omit or empty to evenly space frames in [0, num_frames-1]. Example: 0,40,80"
+        "--image_frame_indices", type=str, default=None, help="i2av: comma-separated pixel frame indices (one per image). Omit or empty to evenly space frames in [0, num_frames-1]. Example: 0,40,80"
     )
     # [Warning] For vace task, need refactor.
     parser.add_argument(
-        "--src_ref_images",
+        "--ref_image_paths",
         type=str,
         default=None,
         help="The file list of the source reference images. Separated by ','. Default None.",
     )
     parser.add_argument("--mask_path", type=str, default=None, help="Input mask path.")
     parser.add_argument(
-        "--src_pose_path",
+        "--pose_video_path",
         type=str,
         default=None,
         help="Pose driving video for Wan s2v / animate (e.g. examples/pose.mp4).",
     )
     parser.add_argument(
-        "--src_face_path",
+        "--face_video_path",
         type=str,
         default=None,
         help="The file of the source face. Default None.",
     )
     parser.add_argument(
-        "--src_bg_path",
+        "--background_video_path",
         type=str,
         default=None,
         help="The file of the source background. Default None.",
@@ -191,11 +190,11 @@ def main():
     parser.add_argument("--raw_output_path", type=str, default=None, help="Raw prediction output path for SenseNova-Vision.")
     parser.add_argument("--glb_output_path", type=str, default=None, help="GLB scene output path for SenseNova-Vision.")
     parser.add_argument("--postprocess_predictions", action=argparse.BooleanOptionalAction, default=None, help="Postprocess SenseNova-Vision predictions.")
-    parser.add_argument("--target_shape", type=int, nargs="+", default=None, help="Set return video or image shape")
+    parser.add_argument("--size", type=int, nargs="+", default=None, help="Output size in pixels: HEIGHT WIDTH")
     parser.add_argument("--aspect_ratio", type=str, default=None)
-    parser.add_argument("--infer_align_image_size", action=argparse.BooleanOptionalAction, default=None, help="Align HunyuanImage3 reference image sizes during inference.")
+    parser.add_argument("--align_image_size", action=argparse.BooleanOptionalAction, default=None, help="Align HunyuanImage3 reference image sizes during inference.")
     parser.add_argument(
-        "--keep_original_aspect",
+        "--keep_aspect_ratio",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="(i2i) When exactly one reference image is provided, preserve its aspect ratio with max_size=2048.",

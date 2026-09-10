@@ -251,10 +251,9 @@ Qwen Image 在 H100 上对 T2I/I2I 任务的测试，Disagg 模式 Text Encoder 
 ```json
 {
     "infer_steps": 50,
-    "target_video_length": 81,
+    "num_frames": 81,
     "text_len": 512,
-    "target_height": 480,
-    "target_width": 832,
+    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",
@@ -321,10 +320,9 @@ I2V 使用 **ViT-H/14** CLIP 图像编码器，其输出为完整序列特征（
 ```json
 {
     "infer_steps": 40,
-    "target_video_length": 81,
+    "num_frames": 81,
     "text_len": 512,
-    "target_height": 480,
-    "target_width": 832,
+    "size": [480, 832],
     "self_attn_1_type": "sage_attn2",
     "sample_guide_scale": 5,
     "sample_shift": 3,
@@ -360,9 +358,8 @@ Wan T2V Decoder 见上文；Qwen Image I2I Decoder 示例（`configs/disagg/qwen
     "infer_steps": 40,
     "vae_z_dim": 16,
     "vae_stride": [1, 8, 8],
-    "target_video_length": 1,
-    "target_height": 1664,
-    "target_width": 1664,
+    "num_frames": 1,
+    "size": [1664, 1664],
     "disagg_config": {
         "bootstrap_addr": "127.0.0.1",
         "bootstrap_room": 2,

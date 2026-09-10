@@ -36,8 +36,7 @@ pipe = LightX2VPipeline(
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=50,
-    height=480,
-    width=832,
+    size=(480, 832),
     num_frames=81,
     guidance_scale=5.0,
     sample_shift=5.0,
@@ -109,8 +108,7 @@ pipe.create_generator(
     attn_mode="flash_attn2",  # 可选: flash_attn2, flash_attn3, sage_attn2, sage_attn3 (B架构显卡适用)
     infer_steps=50,           # 推理步数
     num_frames=81,            # 视频帧数
-    height=480,               # 视频高度
-    width=832,                # 视频宽度
+    size=(480, 832),  # 视频尺寸：(高, 宽)
     guidance_scale=5.0,       # CFG引导强度 (=1时弃用CFG)
     sample_shift=5.0,         # 采样偏移
     fps=16,                   # 帧率

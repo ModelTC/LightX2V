@@ -127,7 +127,7 @@ def main():
             "negative_prompt": args.negative_prompt,
             "image_path": args.image_path,
             "seed": args.seed,
-            "save_path": args.save_result_path,
+            "save_result_path": args.save_result_path,
         }
         ControllerService().run(config, request_data)
     else:

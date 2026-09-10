@@ -1,8 +1,7 @@
 {
     "infer_steps": 8,
-    "target_video_length": 241,
-    "target_height": 1024,
-    "target_width": 1536,
+    "num_frames": 241,
+    "size": [1024, 1536],
     "attn_type": "sage_attn2",
     "sample_guide_scale": 1,
     "sample_shift": [2.05, 0.95],
@@ -11,7 +10,6 @@
     "offload_granularity": "block",
     "num_channels_latents": 128,
     "fps": 24,
-    "audio_fps": 24000,
     "audio_mel_bins":16,
     "double_precision_rope": true,
     "dit_original_ckpt": "/path/to/ltx-2.3-22b-distilled-1.1.safetensors",

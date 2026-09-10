@@ -290,7 +290,6 @@ We provide multiple frontend interface deployment options:
 - **🔄 Parallel Inference**: Multi-GPU parallel processing for enhanced performance
 - **📱 Flexible Deployment Options**: Support for Gradio, service deployment, ComfyUI and other deployment methods
 - **🎛️ Dynamic Resolution Inference**: Adaptive resolution adjustment for optimal generation quality
-- **🎞️ Video Frame Interpolation**: RIFE-based frame interpolation for smooth frame rate enhancement
 
 
 ## 📚 Technical Documentation
@@ -303,7 +302,6 @@ We provide multiple frontend interface deployment options:
 - [Parallel Inference](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/parallel.html) - Multi-GPU acceleration strategies
 - [Changing Resolution Inference](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/changing_resolution.html) - U-shaped resolution strategy
 - [Step Distillation](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/step_distill.html) - 4-step inference technology
-- [Video Frame Interpolation](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/video_frame_interpolation.html) - Base on the RIFE technology
 
 ### 🛠️ **Deployment Guides**
 - [Low-Resource Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_resource.html) - Optimized 8GB VRAM solutions

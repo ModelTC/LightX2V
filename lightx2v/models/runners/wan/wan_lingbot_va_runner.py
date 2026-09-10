@@ -194,7 +194,7 @@ class LingbotVARunner(Wan22DenseRunner):
         self.num_frame_per_chunk = ar_config["num_frame_per_chunk"]
         self.num_action_per_frame = ar_config["num_action_per_frame"]
         self.num_chunks = ar_config["num_chunks"]
-        self.height, self.width = self.config["target_height"], self.config["target_width"]
+        self.height, self.width = self.config["size"][0], self.config["size"][1]
         if self.config["env_type"] == "robotwin_tshape":
             self.latent_height = ((self.height // 16) * 3) // 2
             self.latent_width = self.width // 16
@@ -497,7 +497,7 @@ class LingbotVARunner(Wan22DenseRunner):
             raise ValueError("LingBot-VA requires save_result_path from input_info.")
         video_path = str(video_path)
         action_path = str(Path(video_path).with_suffix(".actions.npy"))
-        save_to_video(self.gen_video_final, video_path, fps=self.config.get("target_fps", 10), method=self.config.get("save_video_method", "imageio"))
+        save_to_video(self.gen_video_final, video_path, fps=self.config.get("fps", 10), method=self.config.get("save_video_method", "imageio"))
         os.makedirs(os.path.dirname(action_path) or ".", exist_ok=True)
         np.save(action_path, self.pred_action.flatten(1).numpy())
         logger.info("Saved LingBot-VA video to {}", video_path)

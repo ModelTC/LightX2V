@@ -159,7 +159,7 @@ I2V uses CLIP ViT-H/14; you must set **`clip_embed_dim`: 329216** (257×1280) so
 
 ### 2.3 Decoder example (Qwen Image I2I)
 
-`configs/disagg/qwen/qwen_image_i2i_disagg_decode.json`: `task: "i2i"`, `disagg_mode: "decode"`, plus `vae_z_dim`, `vae_stride`, `target_video_length`, `target_height`, `target_width`, and `disagg_config` with `bootstrap_room` equal to Transformer’s `decoder_bootstrap_room`.
+`configs/disagg/qwen/qwen_image_i2i_disagg_decode.json`: `task: "i2i"`, `disagg_mode: "decode"`, plus `vae_z_dim`, `vae_stride`, `num_frames`, `size`, and `disagg_config` with `bootstrap_room` equal to Transformer’s `decoder_bootstrap_room`.
 
 ### 2.4 Parameter reference
 

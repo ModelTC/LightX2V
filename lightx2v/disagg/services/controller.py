@@ -196,7 +196,9 @@ class ControllerService(BaseService):
         if output_dir_raw:
             output_dir = Path(output_dir_raw)
         else:
-            base_save_path = instance_cfg.get("save_path") or (self._runtime_config or {}).get("save_path") or str(Path(__file__).resolve().parents[3] / "save_results" / "wan22_i2v_dynamic.mp4")
+            base_save_path = (
+                instance_cfg.get("save_result_path") or (self._runtime_config or {}).get("save_result_path") or str(Path(__file__).resolve().parents[3] / "save_results" / "wan22_i2v_dynamic.mp4")
+            )
             output_dir = Path(str(base_save_path)).parent / "nsys"
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1150,9 +1152,9 @@ class ControllerService(BaseService):
 
         if result.get("ok", False):
             self.logger.info(
-                "Decoder result received room=%s save_path=%s (%s/%s)",
+                "Decoder result received room=%s save_result_path=%s (%s/%s)",
                 room,
-                result.get("save_path"),
+                result.get("save_result_path"),
                 len(received_rooms),
                 len(expected_rooms),
             )
@@ -2100,22 +2102,22 @@ class ControllerService(BaseService):
                     metrics["stages"] = {}
                 request_config["request_metrics"] = metrics
 
-                save_path = workload_config.get("save_path")
-                if not save_path:
-                    error = "save_path is required for disaggregated generation requests"
+                save_result_path = workload_config.get("save_result_path")
+                if not save_result_path:
+                    error = "save_result_path is required for disaggregated generation requests"
                     if not load_from_user:
                         raise ValueError(error)
                     expected_rooms.add(room)
                     self._handle_decoder_result(
-                        {"ok": False, "data_bootstrap_room": room, "save_path": None, "error": error, "request_metrics": metrics},
+                        {"ok": False, "data_bootstrap_room": room, "save_result_path": None, "error": error, "request_metrics": metrics},
                         expected_rooms=expected_rooms,
                         received_rooms=received_rooms,
                         received_results=received_results,
                     )
                     continue
                 if not load_from_user:
-                    output_path = Path(save_path)
-                    request_config["save_path"] = str(output_path.with_name(f"{output_path.stem}{room}{output_path.suffix}"))
+                    output_path = Path(save_result_path)
+                    request_config["save_result_path"] = str(output_path.with_name(f"{output_path.stem}{room}{output_path.suffix}"))
 
                 with self._lock:
                     current_request = request_config
@@ -2125,9 +2127,9 @@ class ControllerService(BaseService):
 
                 self.send_request(current_request)
                 self.logger.info(
-                    "Dispatched request room=%s save_path=%s",
+                    "Dispatched request room=%s save_result_path=%s",
                     room,
-                    request_config.get("save_path"),
+                    request_config.get("save_result_path"),
                 )
                 expected_rooms.add(room)
 

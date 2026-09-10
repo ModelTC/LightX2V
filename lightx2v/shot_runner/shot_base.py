@@ -100,7 +100,7 @@ class ShotPipeline:
             return
 
         # 将外部输入同步到 shot_cfg 和各 clip 的 input_info
-        for key in ["seed", "image_path", "audio_path", "prompt", "negative_prompt", "save_result_path", "target_shape"]:
+        for key in ["seed", "image_path", "audio_path", "prompt", "negative_prompt", "save_result_path", "size"]:
             if key in data and data[key] is not None:
                 setattr(self.shot_cfg, key, data[key])
 

@@ -10,7 +10,7 @@ class DreamZeroFlowUniPCScheduler(WanScheduler):
         scheduler_config = dict(config)
         scheduler_config["infer_steps"] = int(config[infer_steps_key])
         scheduler_config["sample_shift"] = float(config[shift_key])
-        scheduler_config.setdefault("target_video_length", config.get("target_video_length", 1))
+        scheduler_config.setdefault("num_frames", config.get("num_frames", 1))
         scheduler_config.setdefault("sample_guide_scale", config.get("sample_guide_scale", 1.0))
         scheduler_config.setdefault("seq_parallel", False)
         super().__init__(scheduler_config)

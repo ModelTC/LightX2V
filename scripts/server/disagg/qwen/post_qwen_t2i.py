@@ -6,6 +6,9 @@ Request order (same as Wan 3-way):
   2. Send request to Transformer (Phase1 receiver + Phase2 sender)
   3. Send request to Encoder (text encoding + Phase1 send)
   4. Poll Decoder for completion (image saved on Decoder node)
+
+Only Encoder receives the full generation inputs. Downstream stages receive encoded
+inputs, seed and dimensions through Mooncake; Decoder also receives the save path.
 """
 
 import time
@@ -18,14 +21,14 @@ TRANSFORMER_URL = "http://localhost:8003"
 DECODER_URL = "http://localhost:8008"
 ENDPOINT = "/v1/tasks/image/"
 
-# 2K landscape 16:9: width=2752 height=1536; target_shape is [height, width] like disagg JSON.
+# 2K landscape 16:9: width=2752 height=1536; size is [height, width] like disagg JSON.
 PAYLOAD = {
     "prompt": "A cute cat sitting on a wooden table, soft lighting, 4k photo.",
     "negative_prompt": "blurry, low quality, distorted",
     "seed": 42,
     "save_result_path": "save_results/qwen_t2i_disagg_3way_qwen2512.png",
     "aspect_ratio": "16:9",
-    "target_shape": [1536, 2752],
+    "size": [1536, 2752],
 }
 
 
@@ -47,13 +50,13 @@ def poll_task(url, task_id, timeout=300, interval=5):
 if __name__ == "__main__":
     # Step 1: Send to Decoder first (sets up Phase2 receiver)
     logger.info("Step 1: Sending request to Decoder...")
-    resp_d = requests.post(f"{DECODER_URL}{ENDPOINT}", json=PAYLOAD, timeout=30)
+    resp_d = requests.post(f"{DECODER_URL}{ENDPOINT}", json={"save_result_path": PAYLOAD["save_result_path"]}, timeout=30)
     decoder_task_id = resp_d.json().get("task_id")
     logger.info(f"Decoder task_id: {decoder_task_id}")
 
     # Step 2: Send to Transformer (Phase1 receiver + Phase2 sender)
     logger.info("Step 2: Sending request to Transformer...")
-    resp_t = requests.post(f"{TRANSFORMER_URL}{ENDPOINT}", json=PAYLOAD, timeout=30)
+    resp_t = requests.post(f"{TRANSFORMER_URL}{ENDPOINT}", json={}, timeout=30)
     transformer_task_id = resp_t.json().get("task_id")
     logger.info(f"Transformer task_id: {transformer_task_id}")
 

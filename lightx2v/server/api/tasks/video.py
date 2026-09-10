@@ -42,7 +42,7 @@ async def create_video_task_form(
     prompt: str = Form(default=""),
     save_result_path: str = Form(default=""),
     negative_prompt: str = Form(default=""),
-    target_video_length: int | None = Form(default=None),
+    num_frames: int | None = Form(default=None),
     seed: int | None = Form(default=None),
     audio_file: UploadFile = File(None),
     video_duration: float | None = Form(default=None),
@@ -70,7 +70,7 @@ async def create_video_task_form(
         "audio_path": audio_path,
         "image_path": image_path,
         "last_frame_path": last_frame_path,
-        "target_video_length": target_video_length,
+        "num_frames": num_frames,
         "video_duration": video_duration,
     }
     request_data.update({key: value for key, value in optional_fields.items() if value not in (None, "")})
