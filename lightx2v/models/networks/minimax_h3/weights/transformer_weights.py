@@ -62,9 +62,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
         # fused tensor in the released checkpoint. The checkpoint-backed
         # projections become views of its shared storage after loading.
         self.to_qkv = _linear(config, f"{prefix}.to_qkv", create_cuda_buffer=create_cuda_buffer, tp_split="col") if self.use_fused_qkv_attn else None
-        self._qkv_storage = (
-            FusedQKVStorage(tuple(unwrap_tp_weight(module) for module in (self.to_q, self.to_k, self.to_v)), unwrap_tp_weight(self.to_qkv)) if self.to_qkv is not None else None
-        )
+        self._qkv_storage = FusedQKVStorage(tuple(unwrap_tp_weight(module) for module in (self.to_q, self.to_k, self.to_v)), unwrap_tp_weight(self.to_qkv)) if self.to_qkv is not None else None
         qk_eps = float(config.get("qk_norm_eps", 1e-5))
         self.add_module(
             "norm_q",
@@ -155,10 +153,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
     def has_fused_qkv(self):
         if self.to_qkv is None or getattr(unwrap_tp_weight(self.to_qkv), "weight", None) is None:
             return False
-        return not any(
-            getattr(unwrap_tp_weight(module), "has_lora_branch", False) or getattr(unwrap_tp_weight(module), "has_diff", False)
-            for module in (self.to_q, self.to_k, self.to_v)
-        )
+        return not any(getattr(unwrap_tp_weight(module), "has_lora_branch", False) or getattr(unwrap_tp_weight(module), "has_diff", False) for module in (self.to_q, self.to_k, self.to_v))
 
 
 class MiniMaxH3FeedForwardWeights(WeightModule):

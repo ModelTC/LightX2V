@@ -14,9 +14,18 @@ if triton is not None:
 
     @triton.jit
     def _split_qkv_norm_kernel(
-        packed, q_weight, k_weight, q_out, k_out, v_out,
-        HEADS: tl.constexpr, DIM: tl.constexpr, ROW_STRIDE: tl.constexpr,
-        Q_EPS: tl.constexpr, K_EPS: tl.constexpr, BLOCK: tl.constexpr,
+        packed,
+        q_weight,
+        k_weight,
+        q_out,
+        k_out,
+        v_out,
+        HEADS: tl.constexpr,
+        DIM: tl.constexpr,
+        ROW_STRIDE: tl.constexpr,
+        Q_EPS: tl.constexpr,
+        K_EPS: tl.constexpr,
+        BLOCK: tl.constexpr,
     ):
         row = tl.program_id(0)
         component = tl.program_id(1)
@@ -53,9 +62,18 @@ def split_qkv_norm(packed: torch.Tensor, q_weight: torch.Tensor, k_weight: torch
     if packed.shape[0]:
         with getattr(torch, packed.device.type).device(packed.device):
             _split_qkv_norm_kernel[(packed.shape[0] * heads, 3)](
-                packed, q_weight, k_weight, q, k, v,
-                HEADS=heads, DIM=dim, ROW_STRIDE=packed.stride(0),
-                Q_EPS=q_eps, K_EPS=k_eps, BLOCK=triton.next_power_of_2(dim),
+                packed,
+                q_weight,
+                k_weight,
+                q,
+                k,
+                v,
+                HEADS=heads,
+                DIM=dim,
+                ROW_STRIDE=packed.stride(0),
+                Q_EPS=q_eps,
+                K_EPS=k_eps,
+                BLOCK=triton.next_power_of_2(dim),
                 num_warps=4,
             )
     return q, k, v
