@@ -2,19 +2,24 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
+    DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
+    FP8_F16_ACCUM_PROJECTION_SUFFIXES,
+)
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
 def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
     lora_prefix = "transformer_blocks"
+    quant_scheme = config.get("dit_quant_scheme", "Default")
     if config.get("tensor_parallel", False) and tp_split is not None:
         tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
         tp_mm_type = config.get("tp_mm_type", "TensorParallel")
         return MM_WEIGHT_REGISTER[tp_mm_type](
             weight_name=f"{name}.weight",
             bias_name=f"{name}.bias" if bias else None,
-            mm_type=config.get("dit_quant_scheme", "Default"),
+            mm_type=quant_scheme,
             tp_group=tp_group,
             tp_rank=dist.get_rank(tp_group),
             tp_size=dist.get_world_size(tp_group),
@@ -23,12 +28,16 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
             create_cuda_buffer=create_cuda_buffer,
             lora_prefix=lora_prefix,
         )
-    return MM_WEIGHT_REGISTER[config.get("dit_quant_scheme", "Default")](
+
+    linear = MM_WEIGHT_REGISTER[quant_scheme](
         f"{name}.weight",
         f"{name}.bias" if bias else None,
         create_cuda_buffer=create_cuda_buffer,
         lora_prefix=lora_prefix,
     )
+    if quant_scheme == "fp8-f16-accum" and name.endswith(FP8_F16_ACCUM_PROJECTION_SUFFIXES):
+        linear.enable_fp8_f16_accum(DIT_FP8_F16_ACCUM_ACTIVATION_QMAX)
+    return linear
 
 
 def _rms(config, name, eps, create_cuda_buffer=False):

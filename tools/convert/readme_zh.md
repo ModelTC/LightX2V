@@ -41,6 +41,8 @@
   - `int8`（torch.int8）
   - `fp8`（torch.float8_e4m3fn）
   - `nvfp4` / `mxfp4` / `mxfp6` / `mxfp8`
+- `--quantization_profile`：可选的模型专用策略。`h3-fp8-f16-accum` 支持 `h3` 和
+  `h3_video_vae_decoder`，需配合 `--quantized --linear_type fp8 --single_file`。
 - `--non_linear_dtype`：非线性层数据类型（`torch.bfloat16` / `torch.float16` / `torch.float32` 默认）
 - `--device`：量化设备 `cpu` 或 `cuda`（默认）
 - `--comfyui_mode`：ComfyUI 兼容模式（仅 int8、fp8）
