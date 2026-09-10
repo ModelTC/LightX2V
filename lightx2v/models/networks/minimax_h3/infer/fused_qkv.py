@@ -2,6 +2,8 @@
 
 import torch
 
+from lightx2v.utils.registry_factory import QKV_NORM_REGISTER
+
 try:
     import triton
     import triton.language as tl
@@ -54,8 +56,8 @@ def split_qkv_norm(packed: torch.Tensor, q_weight: torch.Tensor, k_weight: torch
         raise ValueError("Expected packed [tokens, 3 * heads * head_dim] QKV with contiguous channels")
     if q_weight.ndim != 1 or k_weight.shape != q_weight.shape or not q_weight.is_contiguous() or not k_weight.is_contiguous():
         raise ValueError("Q/K RMSNorm weights must be contiguous [head_dim] tensors")
-    if packed.device.type not in ("cuda", "xpu") or q_weight.device != packed.device or k_weight.device != packed.device:
-        raise ValueError("QKV and norm weights must be on the same CUDA/XPU device")
+    if q_weight.device != packed.device or k_weight.device != packed.device:
+        raise ValueError("QKV and norm weights must be on the same device")
     heads = packed.shape[1] // (3 * dim)
     shape = (packed.shape[0], heads, dim)
     q, k, v = (torch.empty(shape, device=packed.device, dtype=packed.dtype) for _ in range(3))
@@ -87,11 +89,10 @@ def _split_qkv_norm_fake(packed, q_weight, k_weight, q_eps, k_eps):
 
 
 def can_split_qkv_norm(packed, norm_q, norm_k):
-    # Match Intel ESIMD RMSNorm's FP32 arithmetic and final output cast.
-    # Other norm backends / sensitive FP32 modes retain their own semantics.
+    # Match RMSNorm's FP32 arithmetic and final output cast on any Triton backend.
+    # Sensitive FP32 modes retain their own semantics.
     return (
         triton is not None
-        and packed.device.type == "xpu"
         and packed.dtype in (torch.float16, torch.bfloat16, torch.float32)
         and all(
             getattr(norm, "weight", None) is not None
@@ -102,3 +103,23 @@ def can_split_qkv_norm(packed, norm_q, norm_k):
             for norm in (norm_q, norm_k)
         )
     )
+
+
+@QKV_NORM_REGISTER("torch")
+class TorchQKVNorm:
+    @staticmethod
+    def apply(packed, norm_q, norm_k, num_heads, head_dim):
+        q, k, v = packed.chunk(3, dim=-1)
+        q = norm_q.apply(q.unflatten(-1, (num_heads, head_dim)))
+        k = norm_k.apply(k.unflatten(-1, (num_heads, head_dim)))
+        v = v.unflatten(-1, (num_heads, head_dim))
+        return q, k, v
+
+
+@QKV_NORM_REGISTER("triton")
+class TritonQKVNorm(TorchQKVNorm):
+    @staticmethod
+    def apply(packed, norm_q, norm_k, num_heads, head_dim):
+        if not can_split_qkv_norm(packed, norm_q, norm_k):
+            return TorchQKVNorm.apply(packed, norm_q, norm_k, num_heads, head_dim)
+        return split_qkv_norm(packed, norm_q.weight, norm_k.weight, norm_q.eps, norm_k.eps)
