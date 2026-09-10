@@ -63,7 +63,7 @@ class LTX2TransformerInfer(BaseTransformerInfer):
             self.tp_rank = 0
             self.tp_size = 1
 
-        modulate_type = config.get("modulate_type", config.get("norm_modulate_backend", "triton"))
+        modulate_type = config.get("modulate_type", "triton")
         if modulate_type == "triton":
             self.modulate_func = fuse_scale_shift_kernel
         elif modulate_type == "torch":

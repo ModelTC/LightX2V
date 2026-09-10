@@ -208,8 +208,7 @@ class SeedVRRunner(DefaultRunner):
         from lightx2v.models.video_encoders.hf.seedvr.data.image.transforms.na_resize import NaResize
         from lightx2v.models.video_encoders.hf.seedvr.data.video.transforms.rearrange import Rearrange
 
-        target_height = self.config.get("target_height", 720)
-        target_width = self.config.get("target_width", 1280)
+        target_height, target_width = self.config.get("size", (720, 1280))
         resolution = min((self.ori_h * self.ori_w) ** 0.5 * self.input_info.sr_ratio, (target_height * target_width) ** 0.5)
 
         img = NaResize(
@@ -551,8 +550,9 @@ class SeedVRRunner(DefaultRunner):
     def _restore_target_size(self, sample):
         if self.config.get("resize_mode") == "adaptive":
             return sample
-        target_height = int(self.config.get("target_height", sample.shape[-2]) or sample.shape[-2])
-        target_width = int(self.config.get("target_width", sample.shape[-1]) or sample.shape[-1])
+        target_height, target_width = self.config.get("size", sample.shape[-2:])
+        target_height = int(target_height or sample.shape[-2])
+        target_width = int(target_width or sample.shape[-1])
         if target_height <= 0 or target_width <= 0:
             return sample
 

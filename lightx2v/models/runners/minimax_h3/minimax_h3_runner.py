@@ -173,8 +173,8 @@ class MiniMaxH3Runner(DefaultRunner):
             prompt="A sunrise over distant mountains reflected across a calm lake beneath drifting clouds."
             if (height, width, num_frames) == self._WARMUP_SHAPES[0]
             else "A cinematic fox walking through a snowy forest.",
-            target_shape=[height, width],
-            target_video_length=num_frames,
+            size=[height, width],
+            num_frames=num_frames,
             return_result_tensor=True,
         )
         image = Image.new("RGB", (width, height), color=0)
@@ -300,24 +300,24 @@ class MiniMaxH3Runner(DefaultRunner):
         return video_vae, audio_vae
 
     def _resolve_request_geometry(self, geometry_image=None):
-        if self.input_info.target_shape:
-            if len(self.input_info.target_shape) != 2:
-                raise ValueError(f"MiniMax-H3 target_shape must be [height, width], got {self.input_info.target_shape}")
-            height, width = (int(value) for value in self.input_info.target_shape)
+        if self.input_info.size:
+            if len(self.input_info.size) != 2:
+                raise ValueError(f"MiniMax-H3 size must be [height, width], got {self.input_info.size}")
+            height, width = (int(value) for value in self.input_info.size)
         elif geometry_image is not None:
             height, width = resolve_canvas_size(*geometry_image.size)
-            self.input_info.target_shape = [height, width]
+            self.input_info.size = [height, width]
         else:
-            height = int(self.config["target_height"])
-            width = int(self.config["target_width"])
-            self.input_info.target_shape = [height, width]
+            height = int(self.config["size"][0])
+            width = int(self.config["size"][1])
+            self.input_info.size = [height, width]
 
-        requested_frames = int(self.input_info.target_video_length or self.config.get("target_video_length", 124))
+        requested_frames = int(self.input_info.num_frames or self.config.get("num_frames", 124))
         num_frames = align_num_frames(requested_frames)
         if num_frames != requested_frames:
             logger.warning(f"MiniMax-H3 frame count must be 17*n+5; aligning {requested_frames} upward to {num_frames}")
         validate_t2av_geometry(num_frames, height, width)
-        self.input_info.target_video_length = num_frames
+        self.input_info.num_frames = num_frames
         self.request_height = height
         self.request_width = width
         self.request_num_frames = num_frames

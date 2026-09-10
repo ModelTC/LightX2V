@@ -23,7 +23,7 @@ ts=$(date +"%y%m%d%H%M%S")
 source ${lightx2v_path}/scripts/base/base.sh
 
 torchrun --nproc_per_node=${gpus} -m lightx2v.infer \
---target_shape 720 1280 \
+--size 720 1280 \
 --seed 42 \
 --model_cls ${model_cls} \
 --task ${task} \

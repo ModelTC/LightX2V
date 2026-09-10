@@ -92,10 +92,8 @@ class BaseRunner(ABC):
         input_info.update(self.config)
         input_info.update(request_data)
 
-        if "aspect_ratio" in request_data and "target_shape" not in request_data:
-            input_info.target_shape = []
-        elif "target_shape" not in request_data and "target_shape" not in self.config and "target_height" in self.config and "target_width" in self.config:
-            input_info.update({"target_shape": [self.config["target_height"], self.config["target_width"]]})
+        if "aspect_ratio" in request_data and "size" not in request_data:
+            input_info.size = []
 
         input_info.seed = self.resolve_request_seed(request_data)
         return input_info
@@ -291,7 +289,7 @@ class BaseRunner(ABC):
     def end_run(self):
         pass
 
-    def compute_usage(self, prompt: str, target_shape: list[int], has_input_image: bool = False) -> dict | None:
+    def compute_usage(self, prompt: str, size: list[int], has_input_image: bool = False) -> dict | None:
         """Compute token usage for the current generation.
 
         Returns a dict with fields matching the OpenAI Usage schema, or None if
@@ -304,8 +302,8 @@ class BaseRunner(ABC):
             text_tokens = self._get_text_token_count(prompt)
 
             output_image_tokens = 0
-            if target_shape and len(target_shape) >= 2:
-                h, w = target_shape[0], target_shape[1]
+            if size and len(size) >= 2:
+                h, w = size[0], size[1]
                 patched_h = max(1, h // stride_h // patch_h)
                 patched_w = max(1, w // stride_w // patch_w)
                 output_image_tokens = patched_h * patched_w

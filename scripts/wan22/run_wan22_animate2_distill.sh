@@ -20,6 +20,6 @@ python -m lightx2v.infer \
 --image_path "${image_path}" \
 --video_path "${video_path}" \
 --prompt "人物外观描述：一只银灰色虎斑纹的小猫，拥有圆润的脸庞、竖立的耳朵和巨大的圆形眼睛。它身穿一套深蓝色的制服套装，包括一件带有金色纽扣的西装外套和一条百褶裙。外套里面搭配着白色衬衫，领口处系着一个红色的蝴蝶结，袖口露出白色的衬衫边缘。背景描述：背景为纯白色，光线均匀明亮，无其他杂物或装饰。" \
---prompt_ref "人物动作的参考视频" \
+--ref_video_prompt "人物动作的参考视频" \
 --seed 42 \
 --save_result_path "${lightx2v_path}/save_results/output_lightx2v_wan22_animate2_distill.mp4"

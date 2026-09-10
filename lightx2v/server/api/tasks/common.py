@@ -19,7 +19,7 @@ router = APIRouter()
 
 def parse_form_request(request_cls, request_data):
     """Decode structured form fields and validate them with the JSON request schema."""
-    for field in ("target_shape", "src_ref_images", "image_frame_idx", "image_strength", "pose", "talk_objects"):
+    for field in ("size", "ref_image_paths", "image_frame_indices", "image_strength", "pose", "talk_objects"):
         value = request_data.get(field)
         if isinstance(value, str) and value.lstrip().startswith(("[", "{")):
             try:

@@ -1,5 +1,6 @@
 import torch
 
+
 def _empty_fp8_conv3d_output(
     input_tensor: torch.Tensor,
     weight: torch.Tensor,
@@ -33,9 +34,7 @@ def _fp8_conv3d_f16_accum_sm120_fake(
     stride_h: int,
     stride_w: int,
 ) -> torch.Tensor:
-    return _empty_fp8_conv3d_output(
-        input_tensor, weight, stride_d, stride_h, stride_w, torch.float16
-    )
+    return _empty_fp8_conv3d_output(input_tensor, weight, stride_d, stride_h, stride_w, torch.float16)
 
 
 @torch.library.register_fake("lightx2v_kernel::fp8_conv3d_f32_accum_sm120")
@@ -46,9 +45,7 @@ def _fp8_conv3d_f32_accum_sm120_fake(
     stride_h: int,
     stride_w: int,
 ) -> torch.Tensor:
-    return _empty_fp8_conv3d_output(
-        input_tensor, weight, stride_d, stride_h, stride_w, torch.float32
-    )
+    return _empty_fp8_conv3d_output(input_tensor, weight, stride_d, stride_h, stride_w, torch.float32)
 
 
 def _fp8_conv3d_f16_accum_sm120(

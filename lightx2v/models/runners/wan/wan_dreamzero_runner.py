@@ -372,8 +372,8 @@ class WanDreamZeroRunner(WanRunner):
         return (tensor * 255.0).to(torch.uint8).permute(0, 2, 3, 1).numpy()
 
     def _compose_droid_video(self, camera_sequences, frame_indices):
-        view_height = int(self.config.get("view_height", self.config["target_height"] // 2))
-        view_width = int(self.config.get("view_width", self.config["target_width"] // 2))
+        view_height = int(self.config.get("view_height", self.config["size"][0] // 2))
+        view_width = int(self.config.get("view_width", self.config["size"][1] // 2))
         selected = []
         for seq in camera_sequences:
             idx = np.clip(np.asarray(frame_indices, dtype=np.int64), 0, seq.shape[0] - 1)
@@ -398,7 +398,7 @@ class WanDreamZeroRunner(WanRunner):
         image_zeros = torch.zeros(
             videos.shape[0],
             3,
-            self.get_target_video_length() - 1,
+            self.get_num_frames() - 1,
             height,
             width,
             dtype=videos.dtype,
@@ -693,7 +693,7 @@ class WanDreamZeroRunner(WanRunner):
             action_path = str(Path(video_path).with_suffix(".actions.npy"))
         elif not os.path.isabs(action_path):
             action_path = os.path.join(os.path.dirname(video_path), action_path)
-        save_to_video(self.gen_video_final, video_path, fps=self.config.get("target_fps", 10), method=self.config.get("save_video_method", "imageio"))
+        save_to_video(self.gen_video_final, video_path, fps=self.config.get("fps", 10), method=self.config.get("save_video_method", "imageio"))
         os.makedirs(os.path.dirname(action_path) or ".", exist_ok=True)
         np.save(action_path, self.pred_action.numpy())
         logger.info("Saved DreamZero video to {}", video_path)

@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from ...schema import TaskResponse
+from ...schema import ImageTaskRequest, TaskResponse
 from .base import BaseGenerationService
 
 
@@ -14,7 +14,7 @@ class ImageGenerationService(BaseGenerationService):
     def get_task_type(self) -> str:
         return "t2i,i2i"
 
-    async def generate_with_stop_event(self, message: Any, stop_event) -> Optional[Any]:
+    async def generate_with_stop_event(self, message: ImageTaskRequest, stop_event) -> Optional[Any]:
         try:
             task_data = self.prepare_task_data(message)
 
@@ -33,8 +33,7 @@ class ImageGenerationService(BaseGenerationService):
                 logger.info(f"Task {message.task_id} packed image+mask dir: {task_data.get('image_path')}")
 
             task_data.pop("image_mask_path", None)
-            prefer_memory_result = bool(getattr(message, "prefer_memory_result", False))
-            task_data.pop("prefer_memory_result", None)
+            prefer_memory_result = message._prefer_memory_result
             task_data.pop("presigned_url", None)
             if prefer_memory_result:
                 task_data["return_result_tensor"] = True

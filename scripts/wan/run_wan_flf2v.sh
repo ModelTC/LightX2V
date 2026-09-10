@@ -16,6 +16,6 @@ python -m lightx2v.infer \
   --image_path ${lightx2v_path}/assets/inputs/imgs/flf2v_input_first_frame-fs8.png \
   --last_frame_path ${lightx2v_path}/assets/inputs/imgs/flf2v_input_last_frame-fs8.png \
   --num_frames 81 \
-  --target_shape 720 1280 \
+  --size 720 1280 \
   --seed 42 \
   --save_result_path ${lightx2v_path}/save_results/output_lightx2v_wan_flf2v.mp4

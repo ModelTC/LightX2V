@@ -32,8 +32,7 @@ pipe.enable_offload(
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=40,
-    height=480,  # Can be set to 720 for higher resolution
-    width=832,  # Can be set to 1280 for higher resolution
+    size=(480, 832),  # Height, width; use (720, 1280) for 720p
     num_frames=81,
     guidance_scale=[3.5, 3.5],  # For wan2.1, guidance_scale is a scalar (e.g., 5.0)
     sample_shift=5.0,

@@ -179,7 +179,7 @@ class WanAnimate2Runner(WanRunner):
     """
 
     supported_request_fields_by_task = {
-        "animate": VIDEO_REQUEST_FIELDS | {"image_path", "prompt_ref", "src_pose_path", "src_ref_images", "video_path"},
+        "animate": VIDEO_REQUEST_FIELDS | {"image_path", "ref_video_prompt", "pose_video_path", "ref_image_paths", "video_path"},
     }
 
     def __init__(self, config):
@@ -380,18 +380,17 @@ class WanAnimate2Runner(WanRunner):
         return reader.get_batch(indices).asnumpy()
 
     def prepare_input(self):
-        reference_path = (self.input_info.image_path or self.input_info.src_ref_images or "").split(",")[0].strip()
-        video_path = (self.input_info.video_path or self.input_info.src_pose_path or "").strip()
+        reference_path = (self.input_info.image_path or self.input_info.ref_image_paths or "").split(",")[0].strip()
+        video_path = (self.input_info.video_path or self.input_info.pose_video_path or "").strip()
         if not reference_path:
-            raise ValueError("Wan-Animate-2 requires --image_path (or --src_ref_images).")
+            raise ValueError("Wan-Animate-2 requires --image_path (or --ref_image_paths).")
         if not video_path:
             raise ValueError("Wan-Animate-2 requires --video_path.")
         if not os.path.isfile(reference_path):
             raise FileNotFoundError(f"Reference image not found: {reference_path}")
         if not os.path.isfile(video_path):
             raise FileNotFoundError(f"Driving video not found: {video_path}")
-        # DefaultRunner's audio mux reads video_path. Keep legacy src_pose_path
-        # fallback inputs source-compatible by recording the resolved driver.
+        # Audio muxing reads video_path; record the selected driving video.
         self.input_info.video_path = video_path
 
         reference_bgr = cv2.imread(reference_path, cv2.IMREAD_COLOR)
@@ -414,16 +413,16 @@ class WanAnimate2Runner(WanRunner):
         driving_shape = driving_frames[0].shape[:2]
 
         self.real_frame_len = len(driving_frames)
-        clip_len = self.get_target_video_length()
+        clip_len = self.get_num_frames()
         if clip_len <= 1 or (clip_len - 1) % 4:
-            raise ValueError(f"target_video_length must be 4k+1 and greater than 1, got {clip_len}.")
+            raise ValueError(f"num_frames must be 4k+1 and greater than 1, got {clip_len}.")
         padded_len = self._padding_length(self.real_frame_len, clip_len, overlap=1)
         self.driving_frames = self._zigzag_padding(driving_frames, padded_len)
         self.segment_plan = self._plan_segments(padded_len, clip_len, overlap=1)
 
         height, width = reference_shape
         first_clip_len = self.segment_plan[0][1] - self.segment_plan[0][0]
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
         self.input_info.latent_shape = self._generation_latent_shape(first_clip_len, height, width)
         logger.info(
             "Wan-Animate-2 input: real_frames={}, padded_frames={}, clips={}, generation_canvas={}x{}, driving_canvas={}x{}",
@@ -447,9 +446,9 @@ class WanAnimate2Runner(WanRunner):
             self.text_encoders = self.load_text_encoder()
 
         prompt = input_info.prompt
-        prompt_ref = input_info.prompt_ref or prompt
+        ref_video_prompt = input_info.ref_video_prompt or prompt
         negative_prompt = input_info.negative_prompt or ""
-        context_ref = self._encode_text(prompt_ref)
+        context_ref = self._encode_text(ref_video_prompt)
 
         if self.config.get("enable_cfg", False) and self.config.get("cfg_parallel", False):
             cfg_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")

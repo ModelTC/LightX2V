@@ -45,8 +45,7 @@ pipe.startup_config["replace_flag"] = True  # Set to True for replace mode, Fals
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=20,
-    height=480,  # Can be set to 720 for higher resolution
-    width=832,  # Can be set to 1280 for higher resolution
+    size=(480, 832),  # Height, width; use (720, 1280) for 720p
     num_frames=77,
     guidance_scale=1,
     sample_shift=5.0,
@@ -55,16 +54,16 @@ pipe.create_generator(
 
 seed = 42
 prompt = "视频中的人在做动作"
-src_pose_path = "../save_results/animate/process_results/src_pose.mp4"
-src_face_path = "../save_results/animate/process_results/src_face.mp4"
-src_ref_images = "../save_results/animate/process_results/src_ref.png"
+pose_video_path = "../save_results/animate/process_results/src_pose.mp4"
+face_video_path = "../save_results/animate/process_results/src_face.mp4"
+ref_image_paths = "../save_results/animate/process_results/src_ref.png"
 save_result_path = "/path/to/save_results/output.mp4"
 
 pipe.generate(
     seed=seed,
-    src_pose_path=src_pose_path,
-    src_face_path=src_face_path,
-    src_ref_images=src_ref_images,
+    pose_video_path=pose_video_path,
+    face_video_path=face_video_path,
+    ref_image_paths=ref_image_paths,
     prompt=prompt,
     save_result_path=save_result_path,
 )

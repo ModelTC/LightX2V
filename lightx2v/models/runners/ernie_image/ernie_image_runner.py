@@ -131,8 +131,8 @@ class ErnieImageRunner(DefaultRunner):
 
     def set_latent_shape(self):
         vae_scale_factor = self.config.get("vae_scale_factor", 16)
-        if len(self.input_info.target_shape) == 2:
-            height, width = [int(v) for v in self.input_info.target_shape]
+        if len(self.input_info.size) == 2:
+            height, width = [int(v) for v in self.input_info.size]
         else:
             aspect_ratio = self.input_info.aspect_ratio or self.config.get("aspect_ratio", "1:1")
             if ":" in aspect_ratio:
@@ -149,7 +149,7 @@ class ErnieImageRunner(DefaultRunner):
         if height % vae_scale_factor != 0 or width % vae_scale_factor != 0:
             raise ValueError(f"Height and width must be divisible by {vae_scale_factor}, got {height}x{width}.")
 
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
         self.input_info.latent_shape = (
             1,
             self.config.get("in_channels", 128),

@@ -28,7 +28,7 @@
         "cfg_mode": "batch"
     },
     "enable_cfg": false,
-    "infer_align_image_size": true,
+    "align_image_size": true,
     "bot_task": "auto",
     "use_system_prompt": "en_unified",
     "max_new_tokens": 768,

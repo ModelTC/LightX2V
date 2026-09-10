@@ -51,7 +51,6 @@ Documentation
    Parallel Inference <method_tutorials/parallel.md>
    Changing Resolution Inference <method_tutorials/changing_resolution.md>
    Step Distill <method_tutorials/step_distill.md>
-   Video Frame Interpolation <method_tutorials/video_frame_interpolation.md>
 
 .. toctree::
    :maxdepth: 1

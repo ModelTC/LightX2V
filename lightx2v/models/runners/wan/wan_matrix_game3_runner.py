@@ -1031,7 +1031,7 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
 
     input_info_cls_by_task = {"i2v": ActionI2VInputInfo}
     supported_request_fields_by_task = {
-        "i2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"action_path", "image_path", "pose", "target_shape"},
+        "i2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"action_path", "image_path", "pose", "size"},
     }
 
     def __init__(self, config):

@@ -31,8 +31,8 @@ torch_device_module = getattr(torch, AI_DEVICE)
 @RUNNER_REGISTER("hunyuan_video_1.5")
 class HunyuanVideo15Runner(DefaultRunner):
     supported_request_fields_by_task = {
-        "t2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"target_video_length"},
-        "i2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "target_video_length"},
+        "t2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"num_frames"},
+        "i2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "num_frames"},
     }
 
     def get_supported_request_fields(self, task):
@@ -151,7 +151,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         target_height, target_width = self.get_closest_resolution_given_original_size((int(width), int(height)), target_size)
         latent_shape = [
             self.config.get("in_channels", 32),
-            (self.get_target_video_length() - 1) // self.config["vae_stride"][0] + 1,
+            (self.get_num_frames() - 1) // self.config["vae_stride"][0] + 1,
             target_height // self.config["vae_stride"][1],
             target_width // self.config["vae_stride"][2],
         ]
@@ -243,7 +243,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         target_width, target_height = hr_bucket_map((lr_video_width, lr_video_height))
         latent_shape = [
             self.config_sr.get("in_channels", 32),
-            (self.get_target_video_length() - 1) // self.config_sr["vae_stride"][0] + 1,
+            (self.get_num_frames() - 1) // self.config_sr["vae_stride"][0] + 1,
             target_height // self.config_sr["vae_stride"][1],
             target_width // self.config_sr["vae_stride"][2],
         ]

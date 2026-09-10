@@ -147,7 +147,7 @@ def run_inference(
 
     config_graio = {
         "infer_steps": infer_steps,
-        "target_video_length": num_frames,
+        "num_frames": num_frames,
         "resolution": resolution,
         "resize_mode": "adaptive",
         "self_attn_1_type": attention_type,
@@ -207,7 +207,7 @@ def run_inference(
     logger.info(f"Using model: {model_path}")
     logger.info(f"Inference config:\n{json.dumps(config, indent=4, ensure_ascii=False)}")
 
-    startup_config = {key: value for key, value in config.items() if key not in {"aspect_ratio", "target_video_length", "lora_configs"}}
+    startup_config = {key: value for key, value in config.items() if key not in {"aspect_ratio", "num_frames", "lora_configs"}}
     lora_configs = config.get("lora_configs") or []
 
     current_targets = {item.get("name") for item in current_lora_configs}
@@ -258,7 +258,7 @@ def run_inference(
         "save_result_path": save_result_path,
         "return_result_tensor": False,
         "aspect_ratio": aspect_ratio,
-        "target_video_length": num_frames,
+        "num_frames": num_frames,
     }
     supported_request_fields = runner.get_supported_request_fields(task)
     input_info = runner.prepare_request({key: value for key, value in form_data.items() if key in supported_request_fields})

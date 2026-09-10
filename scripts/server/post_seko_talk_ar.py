@@ -25,8 +25,8 @@ def submit_task(args) -> str:
         "video_duration": args.video_duration,
     }
     message = {key: value for key, value in message.items() if value is not None}
-    if args.target_shape:
-        message["target_shape"] = args.target_shape
+    if args.size:
+        message["size"] = args.size
 
     logger.info(f"submit url: {url}")
     logger.info(f"message: {message}")
@@ -82,7 +82,7 @@ def parse_args():
     parser.add_argument("--output", type=str, default="save_results/seko_talk_ar_server_test.mp4", help="Downloaded result path")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--video_duration", type=int, default=5)
-    parser.add_argument("--target_shape", type=int, nargs=2, default=None, help="Optional target shape: H W")
+    parser.add_argument("--size", type=int, nargs=2, default=None, help="Optional target shape: H W")
     parser.add_argument("--timeout_seconds", type=int, default=1800)
     parser.add_argument("--poll_interval", type=float, default=2.0)
     parser.add_argument("--no_download", action="store_true", help="Only submit and poll status")

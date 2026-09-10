@@ -184,7 +184,8 @@ python tools/convert/converter.py \
     --single_file
 ```
 
-运行时使用相同的 mode：
+将匹配的 mode 和权重路径加入完整的启动 JSON，通过 `--config_json`，或 Python 的
+`create_generator(config_json=...)` 使用：
 
 ```json
 {
@@ -194,6 +195,12 @@ python tools/convert/converter.py \
     "vae_encoder_conv_mode": "cutlass_fp8_f16_accum"
 }
 ```
+
+这些设置在加载 VAE 时确定，供后续请求共用。启动时仍用 `model_variant` 选择权重分支
+（`fl2av` 或 `ref2av`），请求通过 `task` 选择该分支支持的任务。请求覆盖继续使用
+`size=[height, width]`、`num_frames` 和 `save_result_path`；`fps`、compile、warmup 和
+`vae_encoder_conv_mode` 属于启动设置。上面的转换命令是离线权重转换工具，其输出参数描述
+checkpoint 文件，与推理结果的保存参数各有职责。
 
 FP8 Conv3D 当前仅支持 SM120，并要求安装由包含该算子的代码版本构建的 `lightx2v_kernel` wheel。kernel
 会在新 Conv3D shape 首次出现时自动调优，并在当前进程内复用最优配置，不需要额外的离线调优步骤。

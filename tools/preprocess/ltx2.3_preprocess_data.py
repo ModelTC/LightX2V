@@ -427,7 +427,7 @@ def process_input_video(args):
     _save_video(out_frames, out_path, fps=target_fps)
 
     # Sidecar with the on-disk frame count, so launch scripts can derive
-    # `target_video_length` and `fps` exactly from the preprocessed mp4 without
+    # `num_frames` and `fps` exactly from the preprocessed mp4 without
     # having to re-probe it themselves. Format: ``<frames>\n<fps>\n``.
     written_frames = _count_video_frames(out_path)
     sidecar_path = out_path + ".meta"

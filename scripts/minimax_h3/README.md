@@ -80,7 +80,7 @@ To select another mode, change `--config_json` in the listed script to the corre
 | `dmd/minimax_h3_int8_convrot_8step.json` | `run_minimax_h3_t2av_parallel.sh` | SP8, INT8 ConvRot + 8-step LoRA |
 | `dmd/minimax_h3_fp8_4step_5090.json` | `run_minimax_h3_t2av_parallel.sh` | SP8, 5090, 4-step LoRA |
 | `dmd/minimax_h3_fp8_4step_5090_vae_fp8.json` | `run_minimax_h3_t2av_parallel.sh` | SP8, FP8 VAE + 4-step LoRA |
-| `dmd/minimax_h3_fp8_4step_5090_vae_fp8_sla.json` | `run_minimax_h3_t2av_parallel.sh` | SP8, FP8 VAE + matching SLA LoRA |
+| `dmd/minimax_h3_fp8_4step_5090_vae_fp8_sla.json` | `run_minimax_h3_t2av_parallel.sh` | SP8, FP8 VAE Encoder/Decoder + matching SLA LoRA |
 | `dmd/minimax_h3_fp8_4step_5090_vae_fp8_sol.json` | `run_minimax_h3_t2av_parallel.sh` | SP8, FP8 text encoder/VAE + Sol-Attn + 4-step LoRA |
 | `dmd/minimax_h3_ref2av_4step.json` | `run_minimax_h3_ref2av.sh`, with 8 processes as described below | Reference-task 4-step LoRA |
 
@@ -98,13 +98,19 @@ Both single-GPU Sol configs default to 362 frames at `[768, 1344]`. Select the c
 
 All MiniMax-H3 configs that enable compilation also set `warmup: true`. The ordinary and compile configs share the same output defaults and can be used by both service launch scripts as well.
 
+Video VAE Encoder acceleration is selected through startup JSON `vae_encoder_conv_mode`; it applies to `i2av`,
+`l2av`, `fl2av`, and `ref2av`, which encode input images or videos. `t2av` does not run this encoder. The default
+is `torch`; `torch_channels_last` uses the original weights, while FP8 modes require converted Encoder weights
+and SM120. Select the same JSON through the existing CLI, Python, or service entry point. See the
+[conversion and runtime settings](../../docs/EN/source/method_tutorials/quantization.md#minimax-h3-video-vae-encoder-conv3d).
+
 ### Video encoding
 
 To reproduce the 362-frame output encoder example, update these fields in a copy of `minimax_h3.json` and point the launch script at that complete JSON:
 
 ```json
 {
-  "target_video_length": 362,
+  "num_frames": 362,
   "video_codec_options": {
     "preset": "ultrafast",
     "crf": "18"
@@ -129,7 +135,7 @@ Choose `lora_dynamic_apply` in the selected JSON according to the DiT weights:
 
 Quantizing only the encoder or VAE does not impose this restriction. Dynamic LoRA currently accepts one adapter and requires its `alpha` to be explicitly configured. The existing model loader rejects unsupported combinations.
 
-The shared `dmd/minimax_h3_bf16_4step.json` defaults to `lora_dynamic_apply: true`, with 362 frames at `[768, 1344]`. Set the same field to `false` to use merging. Select this JSON in `run_minimax_h3_t2av.sh`; for a shorter, smaller output, add `--target_shape 544 960` and `--num_frames 124` to its inference command.
+The shared `dmd/minimax_h3_bf16_4step.json` defaults to `lora_dynamic_apply: true`, with 362 frames at `[768, 1344]`. Set the same field to `false` to use merging. Select this JSON in `run_minimax_h3_t2av.sh`; for a shorter, smaller output, add `--size 544 960` and `--num_frames 124` to its inference command.
 
 Set `infer_steps` in JSON to the number of model evaluations: `4` for 4-step inference and `8` for 8-step inference. The scheduler includes the terminal zero automatically. When migrating an older MiniMax-H3 config, subtract one from its `infer_steps` value (`5` → `4`, `9` → `8`, `30` → `29`) to preserve the original sampling schedule. The bundled configs already use this convention.
 
@@ -198,6 +204,6 @@ Use a relative path such as `./minimax_h3_t2av.mp4` for `save_result_path`; the 
 ## Request and startup settings
 
 - Startup: model paths, model variant, weights/LoRA, kernels, offload, parallelism, compile, and warmup. Prompt, media paths, seed, and output path belong in the Python call, CLI command, or POST body.
-- Output defaults: JSON sets `target_video_length` and `target_height`/`target_width`. Requests can override them with `num_frames` and `target_shape` (`[height, width]`). Dimensions must be multiples of 32. Frame counts align upward to `17*n+5`, with supported aligned counts from 124 to 362; for example, 125 becomes 141.
+- Output defaults: JSON sets `num_frames` and `size`. Requests can override them with `num_frames` and `size` (`[height, width]`). Dimensions must be multiples of 32. Frame counts align upward to `17*n+5`, with supported aligned counts from 124 to 362; for example, 125 becomes 141.
 - Seed: omitted or `null` defaults to 42; an explicit non-negative value, including 0, is used as supplied.
 - Saving: every CLI example explicitly provides an output path. Removing it skips file saving. The service follows the same rule. Output is MP4 with 24 FPS video and 32 kHz stereo audio.

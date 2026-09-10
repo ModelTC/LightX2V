@@ -13,7 +13,7 @@ parser.add_argument("--uncond_kv")
 parser.add_argument("--index_offset_cond", type=int, required=True)
 parser.add_argument("--index_offset_uncond", type=int)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--target_shape", type=int, nargs=2, required=True, metavar=("HEIGHT", "WIDTH"))
+parser.add_argument("--size", type=int, nargs=2, required=True, metavar=("HEIGHT", "WIDTH"))
 parser.add_argument("--save_result_path", required=True)
 args = parser.parse_args()
 
@@ -35,7 +35,7 @@ pipe.runner.set_inference_params(
 )
 pipe.generate(
     seed=args.seed,
-    target_shape=args.target_shape,
+    size=args.size,
     save_result_path=args.save_result_path,
 )
 

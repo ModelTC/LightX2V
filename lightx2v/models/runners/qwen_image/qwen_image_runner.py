@@ -139,7 +139,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             seed=0,
             prompt="warmup",
             negative_prompt=" " if self.config["enable_cfg"] else None,
-            target_shape=[height, width],
+            size=[height, width],
             return_result_tensor=True,
         )
 
@@ -210,7 +210,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             self.text_encoders = self.load_text_encoder()
             self.image_encoder = self.load_image_encoder()
             self.vae = self.load_vae()
-            self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
     def load_transformer(self):
         qwen_image_model_kwargs = {
@@ -454,8 +453,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.target_shape) == 2:
-            height, width = self.input_info.target_shape
+        if len(self.input_info.size) == 2:
+            height, width = self.input_info.size
             height, width = int(height), int(width)
             if width > max_size or height > max_size:
                 scale = max_size / max(width, height)
@@ -480,7 +479,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             latent_shape = self.inputs["latent_shape"]
             self.input_info.latent_shape = tuple(latent_shape)
             scale_factor = self.config["vae_scale_factor"]
-            self.input_info.target_shape = [latent_shape[-2] * scale_factor, latent_shape[-1] * scale_factor]
+            self.input_info.size = [latent_shape[-2] * scale_factor, latent_shape[-1] * scale_factor]
             logger.info(f"Qwen Image Runner restored latent shape from disagg: {latent_shape}")
         else:
             custom_shape = self.get_custom_shape()
@@ -493,7 +492,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 width = calculated_width // multiple_of * multiple_of
                 height = calculated_height // multiple_of * multiple_of
             logger.info(f"Qwen Image Runner set target shape: {width}x{height}")
-            self.input_info.target_shape = [height, width]
+            self.input_info.size = [height, width]
 
             # VAE applies 8x compression on images but we must also account for packing which requires
             # latent height and width to be divisible by 2.
@@ -505,7 +504,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             else:
                 self.input_info.latent_shape = (1, self.layers + 1, num_channels_latents, height, width)
 
-        height, width = self.input_info.target_shape
+        height, width = self.input_info.size
         if self.config["task"] == "t2i":
             image_shapes = [[(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)]]
         elif self.config["task"] == "i2i":
@@ -654,7 +653,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             latent_w = latents.shape[-1]
             target_height = latent_h * scale_factor * 2
             target_width = latent_w * scale_factor * 2
-        self.input_info.target_shape = [int(target_height), int(target_width)]
+        self.input_info.size = [int(target_height), int(target_width)]
         # Compute image_shapes: number of spatial patches per image
         h_patches = int(target_height) // (scale_factor * 2)
         w_patches = int(target_width) // (scale_factor * 2)

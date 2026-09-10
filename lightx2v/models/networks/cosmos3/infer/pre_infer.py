@@ -100,7 +100,7 @@ class Cosmos3PreInfer:
             frame_start = curr + frame_idx * frame_token_stride
             mse_loss_indexes.extend(range(frame_start, frame_start + frame_token_stride))
 
-        effective_fps = self.config.get("target_fps", 24.0) if self.enable_fps_modulation else None
+        effective_fps = self.config.get("fps", 24.0) if self.enable_fps_modulation else None
         vision_mrope_ids, _ = get_3d_mrope_ids_vae_tokens(
             grid_t=latent_t,
             grid_h=patch_h,
@@ -160,7 +160,7 @@ class Cosmos3PreInfer:
         cond_set = {int(idx) for idx in condition_frame_indexes if 0 <= int(idx) < action_len}
         noisy_frame_indexes = torch.tensor([idx for idx in range(action_len) if idx not in cond_set], device=device, dtype=torch.long)
         curr = text_segment["und_len"] + vision_segment["num_vision_tokens"] + sound_segment.get("sound_len", 0)
-        effective_fps = self.config.get("target_fps", 24.0) if self.enable_fps_modulation else None
+        effective_fps = self.config.get("fps", 24.0) if self.enable_fps_modulation else None
         action_mrope_ids, _ = get_3d_mrope_ids_vae_tokens(
             grid_t=action_len,
             grid_h=1,
