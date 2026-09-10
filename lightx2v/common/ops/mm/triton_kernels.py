@@ -69,6 +69,24 @@ def fp8_quantize_triton(x):
     return quantized.view(x_shape_orig), scales.view(x_shape_orig[:-1])
 
 
+def fp8_quantize_range_triton(x, qmax):
+    x_shape = x.shape
+    x = x.reshape(-1, x_shape[-1]).contiguous()
+    quantized = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    scales = torch.empty(x.shape[0], dtype=torch.float32, device=x.device)
+    block_size = next_power_of_2(x_shape[-1])
+    fp8_quantize_kernel[(x.shape[0],)](
+        x,
+        quantized,
+        scales,
+        x_shape[-1],
+        block_size,
+        FP8_MAX_VAL=qmax,
+        num_warps=8,
+    )
+    return quantized.view(x_shape), scales.view(x_shape[:-1])
+
+
 def upcast_if_fp8(a):
     if "fp8" in str(a):
         return torch.float16

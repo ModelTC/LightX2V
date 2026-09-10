@@ -21,6 +21,7 @@ limitations under the License.
 #include <torch/library.h>
 #include <torch/torch.h>
 
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -42,6 +43,24 @@ limitations under the License.
 /*
  * From csrc/gemm
  */
+torch::Tensor cutlass_scaled_fp8_mm_f16_accum_sm120(
+    torch::Tensor activation,
+    torch::Tensor weight,
+    torch::Tensor activation_scale,
+    torch::Tensor weight_scale,
+    torch::ScalarType out_dtype,
+    c10::optional<torch::Tensor> const& bias = c10::nullopt);
+
+torch::Tensor cutlass_scaled_fp8_mm_f16_accum_with_config_sm120(
+    torch::Tensor activation,
+    torch::Tensor weight,
+    torch::Tensor activation_scale,
+    torch::Tensor weight_scale,
+    torch::ScalarType out_dtype,
+    c10::optional<torch::Tensor> const& bias,
+    int64_t config_id);
+
+
 void scaled_nvfp4_quant_sm120(
     torch::Tensor& output, torch::Tensor const& input, torch::Tensor& output_sf, torch::Tensor const& input_sf);
 

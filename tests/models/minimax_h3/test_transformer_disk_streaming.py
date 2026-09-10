@@ -143,6 +143,16 @@ def h3_modules(monkeypatch):
         package.__path__ = []
         monkeypatch.setitem(sys.modules, package_name, package)
 
+    # Load main's FP8 helpers without importing the full runtime package.
+    for module_name in (
+        "lightx2v.common.ops.mm.fp8_f16_accum",
+        "lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy",
+    ):
+        spec = importlib.util.spec_from_file_location(module_name, REPO_ROOT / (module_name.replace(".", "/") + ".py"))
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, module_name, module)
+        spec.loader.exec_module(module)
+
     # Cache IO is outside these isolated model/streaming tests.
     cache = types.ModuleType("lightx2v.models.networks.minimax_h3.adaln_cache")
     cache.validate_adaln_cache_config = lambda config: None
