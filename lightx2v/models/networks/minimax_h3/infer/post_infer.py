@@ -12,7 +12,14 @@ class MiniMaxH3PostInfer:
         self.scheduler = scheduler
 
     def infer(self, weights, hidden_states, pre_infer_out):
-        shift, scale = weights.norm_out_linear.apply(F.silu(pre_infer_out.temb).to(GET_DTYPE())).chunk(2, dim=-1)
+        modulation = pre_infer_out.norm_out_modulation
+        if modulation is None:
+            # ADALN CACHE SYNC: The offline builder persists this exact
+            # norm_out.linear result. Mirror changes there and regenerate caches.
+            if pre_infer_out.temb is None:
+                raise RuntimeError("MiniMax-H3 final-norm modulation is missing")
+            modulation = weights.norm_out_linear.apply(F.silu(pre_infer_out.temb).to(GET_DTYPE()))
+        shift, scale = modulation.chunk(2, dim=-1)
         indices = pre_infer_out.timestep_indices
         hidden_states = weights.norm_out.apply(hidden_states)
         hidden_states = hidden_states * (1.0 + scale.index_select(0, indices))

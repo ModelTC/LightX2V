@@ -12,6 +12,7 @@ from lightx2v_train.runtime import (
     setup_logger,
 )
 from lightx2v_train.trainers import build_trainer
+from lightx2v_train.utils.utils import check_val_is_enabled, is_train_cache_dataset
 
 
 def parse_args():
@@ -29,24 +30,23 @@ def main():
     setup_logger(config)
 
     try:
-        use_training_cache = config["data"].get("use_training_cache", False)
-        sample_processor = None if use_training_cache else build_sample_processor(config)
+        uses_cache_dataset = is_train_cache_dataset(config)
+        val_is_enabled = check_val_is_enabled(config)
+
+        sample_processor = build_sample_processor(config)
         dataloader_train = build_data(config, train_or_val="train", sample_processor=sample_processor)
+        dataloader_val = build_data(config, train_or_val="val", sample_processor=sample_processor) if val_is_enabled else None
 
         model = build_model(config)
         model.load_components(
             load_transformer=True,
-            load_vae=not use_training_cache,
-            load_condition_encoder=not use_training_cache,
+            load_vae=(not uses_cache_dataset) or val_is_enabled,
+            load_condition_encoder=not uses_cache_dataset,
         )
-
-        dataloader_eval = None
-        if config.get("inference", {}).get("infer_every_iters", None):
-            dataloader_eval = build_data(config, train_or_val="val", sample_processor=sample_processor)
 
         trainer = build_trainer(config)
         trainer.set_model(model)
-        trainer.set_data(dataloader_train, dataloader_eval)
+        trainer.set_data(dataloader_train, dataloader_val)
 
         trainer.train()
     except Exception:

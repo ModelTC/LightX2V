@@ -1,20 +1,21 @@
 #!/bin/bash
 
-# set path firstly
-lightx2v_path=/data/nvme1/wushuo/LightX2V
-model_path=/data/nvme1/models/SenseNova-U1.5-8B-MoT-Preview
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/neopp_moe
 
-export CUDA_VISIBLE_DEVICES=5
+# Set the KV files and offsets below to match a captured LightLLM request.
+export CUDA_VISIBLE_DEVICES=0
+source "${lightx2v_path}/scripts/base/base.sh"
+mkdir -p "${lightx2v_path}/save_results"
 
-# set environment variables
-source ${lightx2v_path}/scripts/base/base.sh
-
-python -m lightx2v.infer \
---seed 200 \
---model_cls neopp \
---task t2i \
---support_tasks t2i i2i \
---model_path $model_path \
---config_json ${lightx2v_path}/configs/neopp/neopp_moe.json \
---target_shape 512 512 \
---save_result_path ${lightx2v_path}/save_results/output_lightx2v_neopp_moe_t2i_512_h100_origin.png
+python "${lightx2v_path}/examples/neopp/replay_kv.py" \
+    --model_path "${model_path}" \
+    --config_json "${lightx2v_path}/configs/neopp/neopp_moe.json" \
+    --task t2i \
+    --cond_kv "/path/to/neopp_moe_kv/cond.pt" \
+    --uncond_kv "/path/to/neopp_moe_kv/uncond.pt" \
+    --index_offset_cond 325 \
+    --index_offset_uncond 9 \
+    --seed 200 \
+    --target_shape 512 512 \
+    --save_result_path "${lightx2v_path}/save_results/output_lightx2v_neopp_moe_t2i_512.png"

@@ -28,13 +28,13 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 # Key parameter affecting model accuracy and performance
 # Available options: [BF16, FP16]
 # If not set, default value: BF16
-export DTYPE=BF16
+export DTYPE="${DTYPE-BF16}"
 
 # Sensitive Layer Data Type Setting (IMPORTANT!)
 # Used for layers requiring higher precision
 # Available options: [FP32, None]
 # If not set, default value: None (follows DTYPE setting)
-export SENSITIVE_LAYER_DTYPE=None
+export SENSITIVE_LAYER_DTYPE="${SENSITIVE_LAYER_DTYPE-None}"
 
 # Performance Profiling Debug Level (Debug Only)
 # Enables detailed performance analysis output, such as time cost and memory usage

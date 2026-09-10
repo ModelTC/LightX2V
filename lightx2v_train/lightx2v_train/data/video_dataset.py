@@ -1,6 +1,5 @@
 import json
 import random
-from collections import defaultdict
 from pathlib import Path
 
 import torch
@@ -17,7 +16,12 @@ from lightx2v_train.data.utils import (
     to_list,
 )
 from lightx2v_train.runtime.distributed import get_data_parallel_rank, get_data_parallel_world_size
-from lightx2v_train.utils.image_size_buckets import parse_image_size_buckets
+from lightx2v_train.utils.generation_shapes import (
+    GenerationShapeSampler,
+    apply_generation_shape,
+    parse_generation_shapes,
+    split_generation_shape_index,
+)
 from lightx2v_train.utils.registry import DATA_REGISTER
 
 METADATA_SUFFIXES = {".jsonl", ".json", ".csv"}
@@ -268,6 +272,7 @@ class PromptDataset(torch.utils.data.Dataset):
         return samples
 
     def __getitem__(self, index):
+        index, generation_shape = split_generation_shape_index(index)
         sample_index = index % len(self.samples)
         sample = self.samples[sample_index]
         prompt = sample["prompt"]
@@ -281,6 +286,7 @@ class PromptDataset(torch.utils.data.Dataset):
             },
             "meta": dict(sample["meta"]),
         }
+        apply_generation_shape(result, generation_shape)
         if self.preserve_records:
             result["meta"]["dataset_index"] = sample_index
         return result
@@ -297,192 +303,29 @@ class PromptDataset(torch.utils.data.Dataset):
     def cache_source_prompt(self, index):
         return self.samples[index]["prompt"]
 
-    def size_bucket(self, index):
-        sample = self.samples[index % len(self.samples)]
-        meta = sample["meta"]
-        height = meta.get("target_height")
-        width = meta.get("target_width")
-        if height is None or width is None:
-            return None
-        return int(height), int(width)
-
-
-class SizeBucketSampler(torch.utils.data.Sampler):
-    """Keep all data-parallel ranks on one exact size bucket per step."""
-
-    def __init__(
-        self,
-        dataset,
-        num_replicas=1,
-        rank=0,
-        shuffle=True,
-        drop_last=False,
-        seed=0,
-        image_sizes=None,
-    ):
-        if not hasattr(dataset, "size_bucket"):
-            raise TypeError("Size-bucket sampling requires dataset.size_bucket(index).")
-        self.dataset = dataset
-        self.num_replicas = int(num_replicas)
-        self.rank = int(rank)
-        self.shuffle = bool(shuffle)
-        self.drop_last = bool(drop_last)
-        self.seed = int(seed)
-        self.epoch = 0
-        self.image_size_buckets = parse_image_size_buckets(image_sizes)
-        if self.num_replicas <= 0:
-            raise ValueError(f"num_replicas must be positive, got {self.num_replicas}.")
-        if self.rank < 0 or self.rank >= self.num_replicas:
-            raise ValueError(f"rank must be in [0, {self.num_replicas}), got {self.rank}.")
-
-        self.buckets = defaultdict(list)
-        for index in range(len(dataset)):
-            bucket = dataset.size_bucket(index)
-            if bucket is None:
-                raise ValueError(f"Size-bucket sampling requires target_height and target_width for every prompt sample; missing at dataset index {index}.")
-            self.buckets[tuple(bucket)].append(index)
-        self._validate_configured_buckets()
-        self.weighted = bool(self.image_size_buckets and self.image_size_buckets[0].ratio is not None)
-        self.num_steps = sum(self._bucket_total(len(indices)) // self.num_replicas for indices in self.buckets.values())
-        self.num_samples = self.num_steps
-        if self.num_samples == 0:
-            raise ValueError("Size-bucket sampling produced no steps. Disable drop_last or add more samples to each size bucket.")
-
-    def _bucket_total(self, size):
-        multiple = self.num_replicas
-        if self.drop_last:
-            return size // multiple * multiple
-        return (size + multiple - 1) // multiple * multiple
-
-    def _validate_configured_buckets(self):
-        if not self.image_size_buckets:
-            return
-        configured = {bucket.spatial_size for bucket in self.image_size_buckets}
-        present = set(self.buckets)
-        unexpected = sorted(present - configured)
-        missing = sorted(configured - present)
-        if unexpected:
-            values = ", ".join(f"{height}x{width}" for height, width in unexpected)
-            raise ValueError(f"Prompt dataset contains target sizes not listed in training.dmd.image_sizes: {values}.")
-        if missing:
-            values = ", ".join(f"{height}x{width}" for height, width in missing)
-            raise ValueError(f"training.dmd.image_sizes contains buckets with no prompt samples: {values}.")
-
-    def set_epoch(self, epoch):
-        self.epoch = int(epoch)
-
-    def __iter__(self):
-        generator = torch.Generator()
-        generator.manual_seed(self.seed + self.epoch)
-        if self.weighted:
-            return iter(self._weighted_indices(generator))
-        return iter(self._natural_indices(generator))
-
-    def _natural_indices(self, generator):
-        local_indices = []
-        for bucket in sorted(self.buckets):
-            indices = list(self.buckets[bucket])
-            if self.shuffle:
-                order = torch.randperm(len(indices), generator=generator).tolist()
-                indices = [indices[position] for position in order]
-
-            total = self._bucket_total(len(indices))
-            if total == 0:
-                continue
-            if total > len(indices):
-                repeat = (total + len(indices) - 1) // len(indices)
-                indices = (indices * repeat)[:total]
-            else:
-                indices = indices[:total]
-
-            for start in range(0, total, self.num_replicas):
-                replica_group = indices[start : start + self.num_replicas]
-                local_indices.append(replica_group[self.rank])
-
-        if self.shuffle and len(local_indices) > 1:
-            order = torch.randperm(len(local_indices), generator=generator).tolist()
-            local_indices = [local_indices[position] for position in order]
-        return local_indices
-
-    def _weighted_indices(self, generator):
-        bucket_order = [bucket.spatial_size for bucket in self.image_size_buckets]
-        weights = torch.tensor(
-            [bucket.ratio for bucket in self.image_size_buckets],
-            dtype=torch.double,
-        )
-        exact_counts = weights / weights.sum() * self.num_steps
-        step_counts_tensor = exact_counts.floor().to(dtype=torch.int64)
-        remainder = self.num_steps - int(step_counts_tensor.sum().item())
-        if remainder:
-            fractions = exact_counts - step_counts_tensor
-            selected = torch.multinomial(
-                fractions,
-                remainder,
-                replacement=False,
-                generator=generator,
-            )
-            step_counts_tensor[selected] += 1
-
-        selected_buckets = []
-        for bucket, step_count in zip(bucket_order, step_counts_tensor.tolist()):
-            selected_buckets.extend([bucket] * step_count)
-        if self.shuffle and len(selected_buckets) > 1:
-            order = torch.randperm(len(selected_buckets), generator=generator).tolist()
-            selected_buckets = [selected_buckets[position] for position in order]
-
-        step_counts = defaultdict(int)
-        for bucket in selected_buckets:
-            step_counts[bucket] += 1
-
-        sampled_indices = {}
-        for bucket, step_count in step_counts.items():
-            needed = step_count * self.num_replicas
-            source = self.buckets[bucket]
-            sampled = []
-            while len(sampled) < needed:
-                if self.shuffle:
-                    order = torch.randperm(len(source), generator=generator).tolist()
-                    cycle = [source[position] for position in order]
-                else:
-                    cycle = list(source)
-                sampled.extend(cycle[: needed - len(sampled)])
-            sampled_indices[bucket] = sampled
-
-        offsets = defaultdict(int)
-        local_indices = []
-        for bucket in selected_buckets:
-            start = offsets[bucket]
-            replica_group = sampled_indices[bucket][start : start + self.num_replicas]
-            offsets[bucket] += self.num_replicas
-            local_indices.append(replica_group[self.rank])
-        return local_indices
-
-    def __len__(self):
-        return self.num_samples
-
 
 def _build_dataloader(dataset, data_config, train_or_val):
     dp_world_size = get_data_parallel_world_size()
     sampler = None
+    distributed_sampling = train_or_val == "train" or data_config.get("distributed_cache_build", False)
     shuffle = data_config.get("shuffle", train_or_val == "train")
     drop_last = data_config.get("drop_last", False)
-    image_size_buckets = parse_image_size_buckets(data_config.get("image_sizes"))
-    if train_or_val == "train" and image_size_buckets and image_size_buckets[0].ratio is not None and not data_config.get("bucket_by_size", False):
-        raise ValueError("training.dmd.image_sizes ratio requires data.train.bucket_by_size=true.")
-    if train_or_val == "train" and data_config.get("bucket_by_size", False):
-        sampler = SizeBucketSampler(
+    generation_shapes = data_config.get("generation_shapes")
+    parsed_generation_shapes = parse_generation_shapes(generation_shapes) if generation_shapes is not None else []
+    has_multiple_generation_shapes = len(parsed_generation_shapes) > 1
+    if train_or_val == "train" and has_multiple_generation_shapes and not data_config.get("distributed_cache_build", False):
+        sampler = GenerationShapeSampler(
             dataset,
             num_replicas=dp_world_size,
             rank=get_data_parallel_rank(),
             shuffle=shuffle,
             drop_last=drop_last,
-            seed=data_config.get("bucket_seed", 0),
-            image_sizes=data_config.get("image_sizes"),
+            generation_shapes=generation_shapes,
         )
         shuffle = False
-        # SizeBucketSampler already pads or truncates every distributed step.
+        # GenerationShapeSampler already pads or truncates every distributed step.
         drop_last = False
-    elif train_or_val == "train" and dp_world_size > 1:
+    elif distributed_sampling and dp_world_size > 1:
         sampler = DistributedSampler(
             dataset,
             num_replicas=dp_world_size,

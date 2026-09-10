@@ -101,6 +101,7 @@ class SgmdTrainer(DmdTrainer):
             denoised_timestep_to=denoised_timestep_to,
             device=self.student.device,
             dtype=self.latent_dtype,
+            latent_hw=self.student.latent_hw(latent_shape),
         )
         noise = broadcast_sequence_parallel_value(
             torch.randn(
@@ -235,7 +236,7 @@ class SgmdTrainer(DmdTrainer):
             self.diversity_trick.config.anchor_step,
         )
         if self.infer_every_iters:
-            self.inferencer.set_data(self.dataloader_eval)
+            self.inferencer.set_data(self.dataloader_val)
             if current_iter == 0:
                 self.run_inference(current_iter)
 

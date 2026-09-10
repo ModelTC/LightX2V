@@ -1,0 +1,154 @@
+model:
+    name: qwen_image
+    pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
+    fake:
+        name: qwen_image
+        pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
+    teacher:
+        name: qwen_image
+        pretrained_model_name_or_path: /root/yongyang/models/Qwen/Qwen-Image-2512
+    max_sequence_length: 1024
+    running_dtype: bf16
+
+distributed:
+    backend: nccl
+    timeout_minutes: 120
+    sequence_parallel:
+        enabled: false
+        size: 1
+    fsdp2:
+        enabled: true
+        size: ${oc.env:WORLD_SIZE,1}
+        log_memory: true
+        reshard_after_forward:
+            root_reshard: true
+            block_reshard: true
+        mixed_precision:
+            param_dtype: bf16
+            reduce_dtype: fp32
+            output_dtype: null
+            cast_forward_inputs: false
+
+data:
+    train:
+        name: cache_dataset
+        num_workers: 8
+        prompt_dropout_rate: 0.0
+        shuffle: true
+        data_path:
+            - /root/yongyang/data/image_dmd_cache/train/cache_data.jsonl
+    val:
+        name: cache_dataset
+        num_workers: 8
+        shuffle: false
+        data_path:
+            - /root/yongyang/data/image_dmd_cache/val/cache_data.jsonl
+
+scheduler:
+    min_sigma: 0.02
+    max_sigma: 0.98
+    num_train_timesteps: 1000
+    time_shift_settings:
+        do_time_shift: true
+        shift_type: exponential
+        time_shift_power: 1.0
+        dynamic_shift: true
+        shift_mu_strategy: linear
+        patch_size: [2, 2]
+        shift_x1: 256
+        shift_x2: 8192
+        shift_y1: 0.5
+        shift_y2: 0.9
+
+training:
+    method: dmd
+    max_train_iters: 1000
+    gradient_accumulation_iters: 1
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    lr_scheduler: constant
+    lr_warmup_iters: 10
+    save_every_iters: 20
+    save_total_limit: 10
+    dmd:
+        num_inference_steps: 4
+        fake_update_ratio: 2
+        generation_shapes:
+            - {value: [1024, 1024], ratio: 5}
+            - {value: [768, 1344], ratio: 3}
+            - {value: [1344, 768], ratio: 2}
+    student:
+        train_type: lora
+        lora:
+            rank: 32
+            alpha: 32
+            target_modules:
+                - to_k
+                - to_q
+                - to_v
+                - to_out.0
+                # - add_q_proj
+                # - add_k_proj
+                # - add_v_proj
+                # - to_add_out
+                # - img_mlp.net.0.proj
+                # - img_mlp.net.2
+                # - txt_mlp.net.0.proj
+                # - txt_mlp.net.2
+        optimizer:
+            learning_rate: 0.0001
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.001
+            adam_epsilon: 0.00000001
+    fake:
+        train_type: lora
+        lora:
+            rank: 32
+            alpha: 32
+            target_modules:
+                - to_k
+                - to_q
+                - to_v
+                - to_out.0
+                # - add_q_proj
+                # - add_k_proj
+                # - add_v_proj
+                # - to_add_out
+                # - img_mlp.net.0.proj
+                # - img_mlp.net.2
+                # - txt_mlp.net.0.proj
+                # - txt_mlp.net.2
+        optimizer:
+            learning_rate: 0.00002
+            adam_beta1: 0.9
+            adam_beta2: 0.999
+            weight_decay: 0.001
+            adam_epsilon: 0.00000001
+    teacher:
+        guidance_scale: 4.0
+        negative_prompt: " "
+        cfg_norm: layer_norm
+    output_dir: ./output_train/qwen_image_dmd_lora
+
+inference:
+    method: image_infer
+    default_width: 1024
+    default_height: 1024
+    num_inference_steps: ${training.dmd.num_inference_steps}
+    cfg_guidance_scale: 4.0
+    negative_prompt: " "
+    enable_cfg: false
+    seed: 42
+    vae_cpu_offload: true
+    vae_tiling: true
+    output_dir: ./output_infer/qwen_image_dmd_lora
+    infer_every_iters: ${training.save_every_iters}
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: 10
+    infer_log_every_steps: 10
+
+resume:
+    auto_resume: true

@@ -8,9 +8,11 @@ from transformers import AutoProcessor
 
 from lightx2v.models.networks.hidream_o1_image.model import HidreamO1ImageModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.hidream_o1_image.scheduler import HidreamO1ImageScheduler
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import HidreamI2IInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
@@ -35,6 +37,20 @@ def _add_special_tokens(tokenizer):
 class HidreamO1ImageRunner(DefaultRunner):
     """LightX2V runner for HiDream-O1-Image t2i / i2i."""
 
+    input_info_cls_by_task = {"i2i": HidreamI2IInputInfo}
+    supported_request_fields_by_task = {
+        "t2i": COMMON_REQUEST_FIELDS | {"prompt", "target_shape"},
+        "i2i": COMMON_REQUEST_FIELDS
+        | {
+            "i2i_denoise_strength",
+            "image_path",
+            "keep_original_aspect",
+            "layout_bboxes",
+            "prompt",
+            "target_shape",
+        },
+    }
+
     def __init__(self, config):
         super().__init__(config)
         self.processor = None
@@ -54,9 +70,6 @@ class HidreamO1ImageRunner(DefaultRunner):
 
     def init_modules(self):
         task = self.config["task"]
-        if task not in ("t2i", "i2i"):
-            raise NotImplementedError(f"HidreamO1ImageRunner supports t2i and i2i, got: {task}")
-
         logger.info(f"Initializing HiDream-O1-Image {task} runner...")
         self.load_model()
         self.run_input_encoder = self._run_input_encoder_local_t2i if task == "t2i" else self._run_input_encoder_local_i2i
@@ -173,10 +186,6 @@ class HidreamO1ImageRunner(DefaultRunner):
         if not ref_image_paths:
             raise ValueError("HiDream i2i requires --image_path with one or more reference image paths.")
 
-        layout_bboxes = getattr(self.input_info, "layout_bboxes", "") or self.config.get("layout_bboxes")
-        if layout_bboxes in ("", None):
-            layout_bboxes = None
-
         from lightx2v.models.networks.hidream_o1_image.i2i_utils import build_i2i_samples
 
         generation_config = self._resolve_generation_config()
@@ -185,15 +194,15 @@ class HidreamO1ImageRunner(DefaultRunner):
             ref_image_paths=ref_image_paths,
             height=self._resolve_size("height", "target_height", 2048),
             width=self._resolve_size("width", "target_width", 2048),
-            keep_original_aspect=getattr(self.input_info, "keep_original_aspect", False) or self.config.get("keep_original_aspect", False),
-            layout_bboxes=layout_bboxes,
+            keep_original_aspect=self.input_info.keep_original_aspect,
+            layout_bboxes=self.input_info.layout_bboxes or None,
             tokenizer=self.tokenizer,
             processor=self.processor,
             model_config=self.model.model_config,
             device=self.model.device,
             dtype=self.dtype,
             enable_cfg=generation_config["enable_cfg"],
-            i2i_denoise_strength=getattr(self.input_info, "i2i_denoise_strength", None),
+            i2i_denoise_strength=self.input_info.i2i_denoise_strength,
         )
         for sample in inputs["samples"]:
             sample["tgt_image_len"] = inputs["tgt_image_len"]
@@ -202,7 +211,7 @@ class HidreamO1ImageRunner(DefaultRunner):
                 "seed": self.input_info.seed,
                 "save_result_path": self.input_info.save_result_path,
                 "generation_config": generation_config,
-                "i2i_denoise_strength": getattr(self.input_info, "i2i_denoise_strength", None),
+                "i2i_denoise_strength": self.input_info.i2i_denoise_strength,
             }
         )
         return inputs

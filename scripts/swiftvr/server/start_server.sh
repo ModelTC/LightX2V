@@ -17,7 +17,6 @@ python -m lightx2v.server \
   --task sr \
   --model_path "${model_path}" \
   --config_json "${config_path}" \
-  --warmup \
   --host 0.0.0.0 \
   --port 8000
 

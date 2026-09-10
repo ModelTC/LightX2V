@@ -21,6 +21,7 @@ from lightx2v_train.model_zoo.native.minimax_h3 import (
     build_row_timesteps,
     video_latent_num_frames,
 )
+from lightx2v_train.utils.generation_shapes import resolve_generation_shape
 
 from .common import MiniMaxH3JointLatents, MiniMaxH3LatentShape
 
@@ -113,26 +114,24 @@ class MiniMaxH3DistributionMatchingCapability(GenericDistributionMatchingCapabil
     def default_lora_target_modules(self):
         return self._DEFAULT_LORA_TARGETS
 
+    @property
+    def generation_shape_dimensions(self) -> int:
+        return 3
+
     def latent_shape(
         self,
         batch,
-        shape_config,
-        image_sizes,
+        generation_shapes,
         broadcast,
     ):
-        if image_sizes:
-            raise ValueError("MiniMax-H3 uses training.dmd.height/width and does not support training.dmd.image_sizes.")
         prompt = batch["conditioning"].get("prompt", "")
         _require_single_prompt(prompt)
-        try:
-            height = int(broadcast(int(shape_config["height"])))
-            width = int(broadcast(int(shape_config["width"])))
-            num_frames = int(broadcast(int(shape_config["num_frames"])))
-        except KeyError as exc:
-            raise KeyError(f"MiniMax-H3 DMD requires training.dmd.{exc.args[0]}.") from exc
-
-        if height <= 0 or width <= 0 or num_frames <= 0:
-            raise ValueError(f"MiniMax-H3 dimensions must be positive, got frames={num_frames}, size={height}x{width}.")
+        num_frames, height, width = resolve_generation_shape(
+            generation_shapes,
+            batch,
+            expected_dimensions=self.generation_shape_dimensions,
+            broadcast=broadcast,
+        )
         size_multiple = self.model.vae_spatial_scale_factor * self.model.patch_size[1]
         width_multiple = self.model.vae_spatial_scale_factor * self.model.patch_size[2]
         if height % size_multiple or width % width_multiple:

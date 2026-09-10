@@ -179,11 +179,6 @@ def normalize_omni_vision_subtask(subtask):
     return normalized
 
 
-def get_omni_vision_task_spec(subtask):
-    normalized = normalize_omni_vision_subtask(subtask)
-    return normalized, OMNI_VISION_TASK_SPECS[normalized]
-
-
 TASK_TO_MODE = {
     "raw_query": "dense_perception",
     "depth": "dense_perception",

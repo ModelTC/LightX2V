@@ -57,10 +57,13 @@ data:
         drop_last: true
 
 scheduler:
+    min_sigma: 0.02
+    max_sigma: 0.98
     num_train_timesteps: 1000
     timestep_distribution: uniform
-    min_t: 0.001
-    max_t: 1.0
+    time_shift_settings:
+        # Joint audio/video latents apply their modality shifts in the model.
+        do_time_shift: false
 
 training:
     method: dmd
@@ -76,16 +79,12 @@ training:
         # Four student model evaluations; the terminal zero sigma is added internally.
         num_inference_steps: 4
         fake_update_ratio: 5
-        height: 768
-        width: 1344
         # 124 = 17*7+5, about 5.17 seconds at H3's fixed 24 fps.
-        num_frames: 124
+        generation_shapes:
+            - {value: [124, 768, 1344]}
         score_sampling:
             type: continuous_uniform
-            min_sigma: 0.02
-            max_sigma: 0.98
         # Do not apply the generic scheduler shift before H3's modality shifts.
-        warp_denoising_step: false
     student:
         train_type: lora
         lora:

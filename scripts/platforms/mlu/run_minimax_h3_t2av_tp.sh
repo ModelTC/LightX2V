@@ -1,5 +1,14 @@
 #!/bin/bash
 
+# AdaLN cache setup:
+# If the inference JSON config enables "use_adaln_cache": true, generate the cache before inference:
+# 1. Set lightx2v_path, model_path, --config_json, and --task in
+#    tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh.
+# 2. Use --task fl2av for t2av/i2av/l2av/fl2av, or --task ref2av for ref2av.
+# 3. From the repository root, run:
+#    bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
+# Cache generation and inference must use the same JSON config and adaln_cache_dir.
+
 # System management interface: mthreads-gmi
 
 # set path firstly
@@ -26,4 +35,4 @@ nohup torchrun --standalone --nproc_per_node=8 -m lightx2v.infer \
     --prompt "$prompt" \
     --save_result_path ${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av.mp4 \
     --seed 0 \
-    --warmup > ${lightx2v_path}/save_results/minimax_h3_t2av_544p_124_8gpu_tp8_comile_torch_real_rope.log 2>&1 &
+     > ${lightx2v_path}/save_results/minimax_h3_t2av_544p_124_8gpu_tp8_comile_torch_real_rope.log 2>&1 &

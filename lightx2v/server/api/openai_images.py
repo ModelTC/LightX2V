@@ -2,7 +2,6 @@ import asyncio
 import base64
 import re
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional
@@ -12,6 +11,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..schema import ImageTaskRequest, Usage
+from ..services.file_service import FileService
 from ..task_manager import TaskStatus, task_manager
 from .deps import get_services
 
@@ -37,11 +37,6 @@ class OpenAIImageResponse(BaseModel):
     output_format: Optional[Literal["png", "webp", "jpeg"]] = None
     size: Optional[str] = None
     usage: Optional[Usage] = None
-
-
-def _write_file_sync(file_path: Path, content: bytes) -> None:
-    with open(file_path, "wb") as buffer:
-        buffer.write(content)
 
 
 def _shape_from_size(size: str) -> tuple[int, int]:
@@ -152,7 +147,7 @@ def _build_url_response(request: Request, task_id: str, image_bytes: bytes) -> s
     file_name = f"{task_id}.png"
     output_path = services.file_service.output_video_dir / file_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_file_sync(output_path, image_bytes)
+    output_path.write_bytes(image_bytes)
 
     base = str(request.base_url).rstrip("/")
     return f"{base}/v1/files/download/{file_name}"
@@ -184,19 +179,22 @@ def _build_openai_response(request: Request, task_id: str, image_bytes: bytes, r
 def _build_image_task_request(
     prompt: str,
     *,
-    negative_prompt: str = "",
+    task: str,
+    negative_prompt: Optional[str] = None,
     seed: Optional[int] = None,
     target_shape: Optional[list[int]] = None,
     image_path: str = "",
     image_mask_path: str = "",
     i2i_denoise_strength: Optional[float] = None,
 ) -> ImageTaskRequest:
-    payload = {
-        "prompt": prompt,
-        "negative_prompt": negative_prompt,
-        "image_path": image_path,
+    payload = {"task": task, "prompt": prompt}
+    optional_fields = {
         "image_mask_path": image_mask_path,
+        "image_path": image_path,
     }
+    payload.update({key: value for key, value in optional_fields.items() if value})
+    if negative_prompt is not None:
+        payload["negative_prompt"] = negative_prompt
     if target_shape:
         payload["target_shape"] = target_shape
     if seed is not None:
@@ -222,6 +220,7 @@ async def create_openai_image_generation(request: Request, body: OpenAIImageGene
             raise HTTPException(status_code=400, detail=str(e))
 
     message = _build_image_task_request(
+        task="t2i",
         prompt=body.prompt,
         seed=body.seed,
         target_shape=target_shape,
@@ -231,18 +230,16 @@ async def create_openai_image_generation(request: Request, body: OpenAIImageGene
     return _build_openai_response(request, message.task_id, result_png, body.response_format, usage, size=body.size)
 
 
-async def _save_upload_file(file: UploadFile, target_dir: Path) -> str:
+async def _save_upload_file(file: UploadFile, file_service: FileService) -> str:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Uploaded file has no filename")
 
-    file_extension = Path(file.filename).suffix or ".png"
-    unique_filename = f"{uuid.uuid4()}{file_extension}"
-    file_path = target_dir / unique_filename
+    filename = file.filename if Path(file.filename).suffix else file.filename + ".png"
 
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail=f"Uploaded file is empty: {file.filename}")
-    await asyncio.to_thread(_write_file_sync, file_path, content)
+    file_path = await asyncio.to_thread(file_service.save_uploaded_file, content, filename)
     return str(file_path)
 
 
@@ -261,9 +258,9 @@ async def create_openai_image_edit(
     seed: int | None = Form(default=None),
     i2i_denoise_strength: float | None = Form(default=None),
 ):
+    form = await request.form()
     image_uploads = list(image or [])
     if not image_uploads:
-        form = await request.form()
         image_uploads = [upload for upload in form.getlist("image[]") if hasattr(upload, "filename") and hasattr(upload, "read")]
 
     _ = model, user
@@ -290,16 +287,17 @@ async def create_openai_image_edit(
 
     image_paths = []
     for image_upload in image_uploads:
-        image_paths.append(await _save_upload_file(image_upload, services.file_service.input_image_dir))
+        image_paths.append(await _save_upload_file(image_upload, services.file_service))
     image_path = ",".join(image_paths)
 
     image_mask_path = ""
     if mask is not None:
-        image_mask_path = await _save_upload_file(mask, services.file_service.input_image_dir)
+        image_mask_path = await _save_upload_file(mask, services.file_service)
 
     message = _build_image_task_request(
+        task="i2i",
         prompt=prompt,
-        negative_prompt=negative_prompt,
+        negative_prompt=form.get("negative_prompt"),
         seed=seed,
         target_shape=target_shape,
         image_path=image_path,

@@ -16,8 +16,7 @@ class HunyuanImage3Scheduler(BaseScheduler):
         self.noise_pred = None
 
     def prepare(self, input_info):
-        seed = getattr(input_info, "seed", None) or self.config.get("seed", 42)
-        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
 
     def set_timesteps(self, num_inference_steps=None, device=None):
         num_inference_steps = num_inference_steps or self.infer_steps

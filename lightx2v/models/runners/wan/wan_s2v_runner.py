@@ -1,9 +1,7 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import gc
 import os
-import random
 import subprocess
-import sys
 
 import numpy as np
 import torch
@@ -14,6 +12,7 @@ from torchvision import transforms
 from lightx2v.models.input_encoders.hf.wan.s2v.audio_encoder import AudioEncoder
 from lightx2v.models.networks.wan.s2v_model import WanS2VModel
 from lightx2v.models.networks.wan.s2v_utils import get_size_less_than_area
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.s2v.s2v_scheduler import WanS2VScheduler
 from lightx2v.server.metrics import monitor_cli
@@ -55,6 +54,10 @@ def merge_video_audio(video_path: str, audio_path: str):
 
 @RUNNER_REGISTER("wan2.2_s2v")
 class WanS2VRunner(WanRunner):
+    supported_request_fields_by_task = {
+        "s2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"audio_path", "image_path", "src_pose_path"},
+    }
+
     def __init__(self, config):
         self.vae_name = "Wan2.1_VAE.pth"
         super().__init__(config)
@@ -286,7 +289,7 @@ class WanS2VRunner(WanRunner):
 
         videos_last_frames = inputs["motion_latents"].detach()
         out_clips = []
-        seed = inputs["seed"] if inputs["seed"] >= 0 else random.randint(0, sys.maxsize)
+        seed = inputs["seed"]
 
         num_repeat = inputs["num_repeat"]
         src_pose_path = getattr(self.input_info, "src_pose_path", None) or ""

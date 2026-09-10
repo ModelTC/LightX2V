@@ -9,6 +9,17 @@ from typing import (
 from ..dmd.config import DmdScheduleConfig
 
 
+def _phase_step_index(match_timestep, num_train_timesteps, num_steps, config_name):
+    if num_steps <= 0:
+        raise ValueError(f"{config_name}.num_inference_steps must be positive.")
+    if not 0 < match_timestep < num_train_timesteps:
+        raise ValueError("training.dmd.phased.match_timestep must lie strictly between 0 and scheduler.num_train_timesteps.")
+    index, remainder = divmod((num_train_timesteps - match_timestep) * num_steps, num_train_timesteps)
+    if remainder:
+        raise ValueError(f"training.dmd.phased.match_timestep={match_timestep} is not a boundary of the uniform {num_steps}-step schedule from {config_name}.num_inference_steps.")
+    return index
+
+
 def parse_role_lora_config(
     role_config,
     role,
@@ -36,8 +47,6 @@ class PhasedDmdConfig(DmdScheduleConfig):
     match_step_index: int
     infer_boundary_step_index: int
     score_timestep_margin: int
-    score_timestep_min: int
-    score_timestep_max: int
     eps: float
     dmd_norm_clip_min: float
     guidance_distill: float
@@ -69,26 +78,19 @@ class PhasedDmdConfig(DmdScheduleConfig):
         if not isinstance(phased, dict):
             raise ValueError("training.dmd.phased must be a mapping.")
         match_timestep = int(phased.get("match_timestep", 500))
-        if match_timestep not in base_config.denoising_step_list:
-            raise ValueError("training.dmd.phased.match_timestep must appear in training.dmd.denoising_step_list.")
-        match_step_index = base_config.denoising_step_list.index(match_timestep)
-        if not (0 < match_step_index < len(base_config.denoising_step_list)):
-            raise ValueError("training.dmd.phased.match_timestep must split training.dmd.denoising_step_list into non-empty High and Low regions.")
-
-        inference_steps = infer_config.get("denoising_step_list")
-        if not isinstance(inference_steps, list):
-            raise ValueError("phased_dmd requires inference.denoising_step_list.")
-        inference_step_count = int(
-            infer_config.get(
-                "num_inference_steps",
-                len(inference_steps),
-            )
+        match_step_index = _phase_step_index(
+            match_timestep,
+            base_config.num_train_timestep,
+            base_config.num_inference_steps,
+            "training.dmd",
         )
-        if inference_step_count != len(inference_steps):
-            raise ValueError("inference.num_inference_steps must equal the length of inference.denoising_step_list.")
-        if match_timestep not in inference_steps:
-            raise ValueError("training.dmd.phased.match_timestep must appear in inference.denoising_step_list.")
-        configured_boundary = inference_steps.index(match_timestep)
+        inference_step_count = int(infer_config.get("num_inference_steps", base_config.num_inference_steps))
+        configured_boundary = _phase_step_index(
+            match_timestep,
+            base_config.num_train_timestep,
+            inference_step_count,
+            "inference",
+        )
         infer_boundary = int(
             infer_config.get(
                 "boundary_step_index",
@@ -96,19 +98,11 @@ class PhasedDmdConfig(DmdScheduleConfig):
             )
         )
         if infer_boundary != configured_boundary:
-            raise ValueError("inference.boundary_step_index must equal the position of training.dmd.phased.match_timestep in inference.denoising_step_list.")
-        if "training_target" in phased:
-            raise ValueError("training.dmd.phased.training_target is no longer supported. Phased DMD always trains High and Low regions together.")
+            raise ValueError(f"inference.boundary_step_index must be {configured_boundary} for match_timestep={match_timestep} and inference.num_inference_steps={inference_step_count}.")
         if max_train_iters < 2:
             raise ValueError("phased_dmd requires training.max_train_iters >= 2 so both High and Low regions are trained.")
 
         margin = int(phased.get("score_timestep_margin", 20))
-        score_min = int(phased["score_timestep_min"])
-        score_max = int(phased["score_timestep_max"])
-        if not (1 <= score_min < score_max <= base_config.num_train_timestep):
-            raise ValueError(f"training.dmd.phased score timestep bounds must satisfy 1 <= min < max <= {base_config.num_train_timestep}.")
-        if score_min >= match_timestep or score_max < match_timestep + margin:
-            raise ValueError("training.dmd.phased score timestep bounds must leave non-empty Low and High ranges around match_timestep.")
         if not (0 < margin < base_config.num_train_timestep - match_timestep):
             raise ValueError("training.dmd.phased.score_timestep_margin must be positive and leave score timesteps above the phase boundary.")
         eps = float(phased.get("eps", 1.0e-8))
@@ -137,8 +131,6 @@ class PhasedDmdConfig(DmdScheduleConfig):
             match_step_index=match_step_index,
             infer_boundary_step_index=infer_boundary,
             score_timestep_margin=margin,
-            score_timestep_min=score_min,
-            score_timestep_max=score_max,
             eps=eps,
             dmd_norm_clip_min=norm_clip_min,
             guidance_distill=float(phased.get("guidance_distill", 6.0)),

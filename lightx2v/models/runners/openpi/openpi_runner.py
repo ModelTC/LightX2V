@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from lightx2v.models.runners.base_runner import BaseRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -65,6 +66,10 @@ class OpenPIPolicy:
 
 @RUNNER_REGISTER("openpi")
 class OpenPIRunner(BaseRunner):
+    supported_request_fields_by_task = {
+        "i2va": COMMON_REQUEST_FIELDS | {"prompt", "save_action_path"},
+    }
+
     def init_modules(self) -> None:
         if self.config["task"] != "i2va":
             raise ValueError(f"OpenPI currently supports only task='i2va', got {self.config['task']!r}.")

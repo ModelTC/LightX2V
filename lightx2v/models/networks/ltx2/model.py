@@ -679,31 +679,30 @@ class LTX2Model(BaseTransformerModel):
                 if self.config["cfg_parallel"]:
                     raise NotImplementedError("LTX2 mm_guider 与 cfg_parallel 同时使用尚未实现，请关闭其一。")
                 self._infer_mm_guider_cfg(inputs)
-            elif self.config["cfg_parallel"]:
-                # ==================== CFG Parallel Processing ====================
-                cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
-                assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
-                cfg_p_rank = dist.get_rank(cfg_p_group)
-                if cfg_p_rank == 0:
-                    v_noise_pred, a_noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
-                else:
-                    v_noise_pred, a_noise_pred = self._infer_cond_uncond(inputs, infer_condition=False)
-
-                v_noise_pred_list = [torch.zeros_like(v_noise_pred) for _ in range(2)]
-                a_noise_pred_list = [torch.zeros_like(a_noise_pred) for _ in range(2)]
-                dist.all_gather(v_noise_pred_list, v_noise_pred, group=cfg_p_group)
-                dist.all_gather(a_noise_pred_list, a_noise_pred, group=cfg_p_group)
-                v_noise_pred_cond = v_noise_pred_list[0]  # cfg_p_rank == 0
-                v_noise_pred_uncond = v_noise_pred_list[1]  # cfg_p_rank == 1
-                a_noise_pred_cond = a_noise_pred_list[0]  # cfg_p_rank == 0
-                a_noise_pred_uncond = a_noise_pred_list[1]  # cfg_p_rank == 1
-
-                self.scheduler.v_noise_pred = v_noise_pred_uncond + self.scheduler.sample_guide_scale * (v_noise_pred_cond - v_noise_pred_uncond)
-                self.scheduler.a_noise_pred = a_noise_pred_uncond + self.scheduler.sample_guide_scale * (a_noise_pred_cond - a_noise_pred_uncond)
             else:
-                # ==================== CFG Processing ====================
-                v_noise_pred_cond, a_noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
-                v_noise_pred_uncond, a_noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
+                assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
+                if self.config["cfg_parallel"]:
+                    # ==================== CFG Parallel Processing ====================
+                    cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+                    assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"
+                    cfg_p_rank = dist.get_rank(cfg_p_group)
+                    if cfg_p_rank == 0:
+                        v_noise_pred, a_noise_pred = self._infer_cond_uncond(inputs, infer_condition=True)
+                    else:
+                        v_noise_pred, a_noise_pred = self._infer_cond_uncond(inputs, infer_condition=False)
+
+                    v_noise_pred_list = [torch.zeros_like(v_noise_pred) for _ in range(2)]
+                    a_noise_pred_list = [torch.zeros_like(a_noise_pred) for _ in range(2)]
+                    dist.all_gather(v_noise_pred_list, v_noise_pred, group=cfg_p_group)
+                    dist.all_gather(a_noise_pred_list, a_noise_pred, group=cfg_p_group)
+                    v_noise_pred_cond = v_noise_pred_list[0]  # cfg_p_rank == 0
+                    v_noise_pred_uncond = v_noise_pred_list[1]  # cfg_p_rank == 1
+                    a_noise_pred_cond = a_noise_pred_list[0]  # cfg_p_rank == 0
+                    a_noise_pred_uncond = a_noise_pred_list[1]  # cfg_p_rank == 1
+                else:
+                    # ==================== CFG Processing ====================
+                    v_noise_pred_cond, a_noise_pred_cond = self._infer_cond_uncond(inputs, infer_condition=True)
+                    v_noise_pred_uncond, a_noise_pred_uncond = self._infer_cond_uncond(inputs, infer_condition=False)
 
                 self.scheduler.v_noise_pred = v_noise_pred_uncond + self.scheduler.sample_guide_scale * (v_noise_pred_cond - v_noise_pred_uncond)
                 self.scheduler.a_noise_pred = a_noise_pred_uncond + self.scheduler.sample_guide_scale * (a_noise_pred_cond - a_noise_pred_uncond)

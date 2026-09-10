@@ -16,8 +16,7 @@ python -m lightx2v.infer \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/infinitetalk/infinitetalk_480p_single_distilled.json \
 --prompt "A man is talking" \
---negative_prompt "bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards" \
---src_video /data/nvme4/gushiqiao/new/InfiniteTalk/examples/single/ref_video.mp4 \
+--video_path /data/nvme4/gushiqiao/new/InfiniteTalk/examples/single/ref_video.mp4 \
 --audio_path /data/nvme4/gushiqiao/new/InfiniteTalk/examples/single/1.wav \
 --save_result_path ${lightx2v_path}/save_results/infinitetalk_single_video_480p.mp4 \
 --seed 42

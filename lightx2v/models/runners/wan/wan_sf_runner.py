@@ -21,6 +21,10 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("wan2.1_sf")
 class WanSFRunner(WanRunner):
+    supported_request_fields_by_task = {
+        "t2v": WanRunner.supported_request_fields_by_task["t2v"] - {"target_video_length"},
+    }
+
     def __init__(self, config):
         super().__init__(config)
 

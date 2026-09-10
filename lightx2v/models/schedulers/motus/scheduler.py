@@ -88,9 +88,8 @@ class MotusScheduler(WanScheduler):
         self.latents = self.video_latents.squeeze(0)
 
     def clear(self):
+        super().clear()
         self.video_latents = None
         self.action_latents = None
         self.action_noise_pred = None
         self.condition_frame_latent = None
-        self.vae_encoder_out = None
-        self.latents = None

@@ -18,10 +18,6 @@ model:
         name: wan_t2v
         pretrained_model_name_or_path: /path/to/models/Wan2.1-T2V-1.3B/
         transformer_param_dtype: bf16
-    # student:
-    #     # checkpoint_path: /path/to/checkpoints/chunkwise/causal_cd.pt
-    #     checkpoint_path: /path/to/LightX2V/lightx2v_train/output_train/wan2_1_t2v_1_3b_tf_chunkwise_full_fp32param/checkpoint-000002400
-    #     checkpoint_strict: true
 
 distributed:
     backend: nccl
@@ -59,10 +55,10 @@ data:
         shuffle: false
 
 scheduler:
+    min_sigma: 0.02
+    max_sigma: 0.98
     num_train_timesteps: 1000
     timestep_distribution: uniform
-    min_t: 0.001
-    max_t: 1.0
     time_shift_settings:
         do_time_shift: true
         shift_type: linear
@@ -84,29 +80,12 @@ training:
     dmd:
         num_inference_steps: 4
         fake_update_ratio: 5
-        height: 480
-        width: 832
-        num_frames: 81
-        denoising_step_list:
-            - 1000
-            - 750
-            - 500
-            - 250
-        warp_denoising_step: true
+        generation_shapes:
+            - {value: [81, 480, 832]}
         ts_schedule: false
         ts_schedule_max: false
-        num_train_timestep: 1000
-        timestep_shift: 5.0
-        min_score_timestep: 0
-        min_step_ratio: 0.02
-        max_step_ratio: 0.98
         same_step_across_blocks: true
-        num_frame_per_chunk: 3
         context_noise: 0
-        renoise_sigma_min: 0.02
-        renoise_sigma_max: 0.98
-        renoise_discrete_samples: 1000
-        renoise_shift: 5.0
     student:
         train_type: full
         optimizer:
@@ -130,16 +109,11 @@ training:
 
 inference:
     method: wan_t2v_ar_infer
+    scheduler_type: renoise
     default_width: 832
     default_height: 480
     num_frames: 81
-    num_inference_steps: 4
-    denoising_step_list:
-        - 1000
-        - 750
-        - 500
-        - 250
-    warp_denoising_step: true
+    num_inference_steps: ${training.dmd.num_inference_steps}
     fps: 16
     enable_cfg: false
     cfg_guidance_scale: 1.0

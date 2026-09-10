@@ -437,9 +437,10 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
     @torch.no_grad()
     def infer(self, inputs):
         latents = self.scheduler.latents
-        do_cfg = self.config.get("enable_cfg", True) and self.config.get("sample_guide_scale", 1.0) > 1.0
+        do_cfg = self.config.get("enable_cfg", True)
 
         if do_cfg:
+            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
             use_cfg_parallel = self.config.get("cfg_parallel", False)
             if use_cfg_parallel and hasattr(self.scheduler, "input_image_latents") and self.scheduler.input_image_latents is not None:
                 if hasattr(self.scheduler, "image_rotary_emb") and hasattr(self.scheduler, "negative_image_rotary_emb"):
@@ -482,7 +483,7 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
                 noise_pred_cond = noise_pred_list[0]
                 noise_pred_uncond = noise_pred_list[1]
 
-                guidance_scale = self.config.get("sample_guide_scale", 1.0)
+                guidance_scale = self.scheduler.sample_guide_scale
                 noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
                 self.scheduler.noise_pred = noise_pred
             else:
@@ -504,7 +505,7 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
                     img_ids=img_ids,
                 )
 
-                guidance_scale = self.config.get("sample_guide_scale", 1.0)
+                guidance_scale = self.scheduler.sample_guide_scale
                 noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
                 self.scheduler.noise_pred = noise_pred
         else:

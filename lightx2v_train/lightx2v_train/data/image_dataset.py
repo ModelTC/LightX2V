@@ -142,7 +142,17 @@ def build_image_dataset(
         unconditional_prompt=unconditional_prompt,
     )
     dp_world_size = get_data_parallel_world_size()
-    sampler = DistributedSampler(dataset, num_replicas=dp_world_size, rank=get_data_parallel_rank(), shuffle=shuffle) if dp_world_size > 1 and train_or_val == "train" else None
+    distributed_sampling = train_or_val == "train" or data_config_split.get("distributed_cache_build", False)
+    sampler = (
+        DistributedSampler(
+            dataset,
+            num_replicas=dp_world_size,
+            rank=get_data_parallel_rank(),
+            shuffle=shuffle,
+        )
+        if dp_world_size > 1 and distributed_sampling
+        else None
+    )
     loader_kwargs = {}
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = data_config_split.get("persistent_workers", False)

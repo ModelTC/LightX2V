@@ -25,8 +25,6 @@ from ...schema import (
     SenseNovaVisionTaskRequest,
     SenseNovaVisionTaskResult,
 )
-from ..file_service import FileService
-from ..inference import DistributedInferenceService
 from .base import BaseGenerationService
 
 SenseNovaTaskSpec = OmniVisionTaskSpec
@@ -105,9 +103,6 @@ def validate_sensenova_request(message: SenseNovaVisionTaskRequest) -> tuple[str
         raise ValueError(f"SenseNova-Vision task={task!r} requires {expected} input image(s), got {image_count}.")
     if spec.requires_prompt and not str(message.prompt or "").strip():
         raise ValueError(f"SenseNova-Vision task={task!r} requires a non-empty prompt.")
-    if message.target_shape:
-        if len(message.target_shape) != 2 or any(int(value) <= 0 for value in message.target_shape):
-            raise ValueError("SenseNova-Vision target_shape must be [height, width] with two positive integers.")
     if message.postprocess_3d and task != "recon3d":
         raise ValueError("postprocess_3d is only valid for task='recon3d'.")
     mode = spec.mode
@@ -115,9 +110,6 @@ def validate_sensenova_request(message: SenseNovaVisionTaskRequest) -> tuple[str
 
 
 class SenseNovaVisionGenerationService(BaseGenerationService):
-    def __init__(self, file_service: FileService, inference_service: DistributedInferenceService):
-        super().__init__(file_service, inference_service)
-
     def get_output_extension(self) -> str:
         return ".json"
 
@@ -295,8 +287,6 @@ class SenseNovaVisionGenerationService(BaseGenerationService):
             "task_id": message.task_id,
             "prompt": prompt,
             "image_path": ",".join(image_paths),
-            "seed": int(message.seed),
-            "target_shape": list(message.target_shape),
             "save_result_path": str(save_result_path),
             "omni_vision_subtask": task,
             "raw_output_path": str(raw_output_path) if raw_output_path else "",
@@ -305,6 +295,8 @@ class SenseNovaVisionGenerationService(BaseGenerationService):
             "return_result_tensor": False,
             "_return_pipeline_result": True,
         }
+        if message.seed is not None:
+            task_data["seed"] = message.seed
 
         inference_result = await self.inference_service.submit_task_async(task_data)
         if inference_result is None:

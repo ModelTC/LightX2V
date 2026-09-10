@@ -134,9 +134,6 @@ class DecoderService(BaseService):
         self._phase2_slots = shared_slots
         self._phase2_slot_size = shared_slot_size
 
-        if "seed" in self.config:
-            seed_all(self.config["seed"])
-
         data_bootstrap_addr = self.config.get("data_bootstrap_addr", "127.0.0.1")
         data_bootstrap_room = self.config.get("data_bootstrap_room", 0)
 
@@ -192,6 +189,11 @@ class DecoderService(BaseService):
         return MemoryHandle(buffers=buffers)
 
     def process(self, config):
+        save_path = config.get("save_path")
+        if not save_path:
+            raise ValueError("save_path is required for disaggregated generation requests")
+
+        seed_all(config["seed"])
         self.logger.info("Starting processing in DecoderService...")
         room = config.get("data_bootstrap_room", 0)
         decoder_metrics = config.setdefault("request_metrics", {}).setdefault("stages", {}).setdefault("decoder", {})
@@ -302,10 +304,6 @@ class DecoderService(BaseService):
         gen_video = self.vae_decoder.decode(latents.to(GET_DTYPE()))
         gen_video_final = wan_vae_to_comfy(gen_video)
         decoder_metrics["compute_end_ts"] = time.time()
-
-        save_path = config.get("save_path")
-        if save_path is None:
-            raise ValueError("save_path is required in config.")
 
         self.logger.info(f"Saving video to {save_path}...")
         save_to_video(gen_video_final, save_path, fps=config.get("fps", 16), method="ffmpeg")

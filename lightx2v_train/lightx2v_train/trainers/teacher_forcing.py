@@ -33,17 +33,7 @@ class TeacherForcingTrainer(FlowMatchingTrainer):
             raise ValueError(f"Unsupported teacher_forcing.mode={mode!r}; expected 'chunkwise'.")
         self.num_frame_per_chunk = int(teacher_forcing["num_frame_per_chunk"])
         self.noise_augmentation_max_timestep = int(teacher_forcing.get("noise_augmentation_max_timestep", 0))
-        scheduler_config = self.config["scheduler"]
-        self.teacher_forcing_scheduler = CausalForcingFlowMatchScheduler(
-            num_train_timesteps=scheduler_config.get(
-                "num_train_timesteps",
-                1000,
-            ),
-            time_shift_settings=scheduler_config.get(
-                "time_shift_settings",
-                {},
-            ),
-        )
+        self.teacher_forcing_scheduler = CausalForcingFlowMatchScheduler(self.config)
 
     def set_model(self, model):
         BaseTrainer.set_model(self, model)

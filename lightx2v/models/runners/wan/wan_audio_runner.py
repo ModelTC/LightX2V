@@ -20,6 +20,7 @@ from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter, CausalAudioSlidingProcessor
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioARModel, WanAudioModel
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler, WanAudioARScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
@@ -27,7 +28,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import UNSET
+from lightx2v.utils.input_info import UNSET, S2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, wan_vae_to_comfy
@@ -284,6 +285,18 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 
 @RUNNER_REGISTER("seko_talk")
 class WanAudioRunner(WanRunner):  # type:ignore
+    supported_request_fields_by_task = {
+        task: COMMON_REQUEST_FIELDS
+        | PROMPT_FIELDS
+        | {
+            "audio_path",
+            "image_path",
+            "target_video_length",
+            "video_duration",
+        }
+        for task in ("s2v", "rs2v")
+    }
+
     def __init__(self, config):
         super().__init__(config)
         self.name = self.config.get("name", "WanAudioRunner")
@@ -320,17 +333,16 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_audio_len.observe(audio_len)
 
-        expected_frames = min(max(1, int(self.video_duration * target_fps)), audio_len)
-        if expected_frames < int(self.video_duration * target_fps):
-            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={self.video_duration}")
+        video_duration = self.input_info.video_duration or self.video_duration
+        expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
+        if expected_frames < int(video_duration * target_fps):
+            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={video_duration}")
 
         # Segment audio (CLI / input_info wins over config_json; target_video_length is not merged into config)
         target_video_length = self.config.get("target_video_length", 81)
-        ii = getattr(self, "input_info", None)
-        if ii is not None and hasattr(ii, "target_video_length"):
-            tvl = ii.target_video_length
-            if tvl is not None and tvl is not UNSET and tvl > 0:
-                target_video_length = tvl
+        request_frames = self.input_info.target_video_length
+        if request_frames is not None and request_frames is not UNSET and request_frames > 0:
+            target_video_length = request_frames
         if self.config.get("model_cls") == "seko_talk_ar":
             audio_start, audio_end = self._audio_processor.get_audio_range(0, expected_frames)
             audio_segments = [AudioSegment(audio_array[:, audio_start:audio_end], 0, expected_frames)]
@@ -366,7 +378,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def _get_image_resize_kwargs(self):
         input_info = getattr(self, "input_info", None)
         return {
-            "resize_mode": (getattr(input_info, "resize_mode", None) if input_info is not None else None) or self.config.get("resize_mode", "adaptive"),
+            "resize_mode": self.config.get("resize_mode", "adaptive"),
             "bucket_shape": self.config.get("bucket_shape", None),
             "fixed_area": (getattr(input_info, "fixed_area", None) if input_info is not None else None) or self.config.get("fixed_area", None),
             "fixed_shape": self.config.get("fixed_shape", None),
@@ -408,11 +420,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         latent_h = patched_h * self.config["patch_size"][1]
         latent_w = patched_w * self.config["patch_size"][2]
 
-        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None and self.input_info.target_video_length > 0:
-            target_video_length = self.input_info.target_video_length
-            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, target_video_length)
-        else:
-            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
+        latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, self.input_info.target_video_length)
 
         logger.info(f"[wan_audio] target_h: {target_shape[0]}, target_w: {target_shape[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
 
@@ -525,9 +533,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         """Prepare previous latents for conditioning"""
         dtype = GET_DTYPE()
         tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
-        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None and self.input_info.target_video_length > 0:
-            target_video_length = self.input_info.target_video_length
-        else:
+        target_video_length = self.input_info.target_video_length
+        if target_video_length is None or target_video_length <= 0:
             target_video_length = self.config["target_video_length"]
         prev_frames = torch.zeros((1, 3, target_video_length, tgt_h, tgt_w), device=AI_DEVICE)
 
@@ -556,7 +563,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
                     prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
                 else:
                     prev_latents = None
-                prev_mask = self.model.scheduler.mask
             else:
                 prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
 
@@ -897,7 +903,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.scheduler.set_audio_adapter(self.audio_adapter)
 
         self.model.scheduler.prepare(
-            seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, infer_steps=self.input_info.infer_steps, image_encoder_output=self.inputs["image_encoder_output"]
+            seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, infer_steps=self.config["infer_steps"], image_encoder_output=self.inputs["image_encoder_output"]
         )
 
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
@@ -944,53 +950,39 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
 @RUNNER_REGISTER("wan2.2_audio")
 class Wan22AudioRunner(WanAudioRunner):
-    def __init__(self, config):
-        super().__init__(config)
-
-    def load_vae_decoder(self):
-        # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device(AI_DEVICE)
-        vae_config = {
-            "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-            "dummy_model": self.config.get("dummy_model", False),
-        }
-        vae_decoder = Wan2_2_VAE(**vae_config)
-        return vae_decoder
+    supported_request_fields_by_task = {task: WanAudioRunner.supported_request_fields_by_task["s2v"] for task in ("i2v", "s2v")}
+    input_info_cls_by_task = {"i2v": S2VInputInfo}
+    # The legacy i2v task still needs both image and audio inputs.
+    _run_input_encoder_local_i2v = WanAudioRunner._run_input_encoder_local_s2v
 
     def load_vae_encoder(self):
-        # offload config
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device(AI_DEVICE)
-        vae_config = {
-            "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-            "dummy_model": self.config.get("dummy_model", False),
-        }
-        if self.config.task not in ["i2v", "s2v", "rs2v"]:
-            return None
-        else:
-            return Wan2_2_VAE(**vae_config)
+        return Wan2_2_VAE(
+            vae_path=find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
+            device=torch.device("cpu" if vae_offload else AI_DEVICE),
+            cpu_offload=vae_offload,
+            offload_cache=self.config.get("vae_offload_cache", False),
+            dummy_model=self.config.get("dummy_model", False),
+        )
+
+    load_vae_decoder = load_vae_encoder
 
     def load_vae(self):
-        vae_encoder = self.load_vae_encoder()
-        vae_decoder = self.load_vae_decoder()
-        return vae_encoder, vae_decoder
+        return self.load_vae_encoder(), self.load_vae_decoder()
 
 
 @RUNNER_REGISTER("seko_talk_ar")
 class WanAudioARRunner(WanAudioRunner):
+    supported_request_fields_by_task = {
+        "rs2v": (WanAudioRunner.supported_request_fields_by_task["rs2v"] - {"target_video_length"}) | {"target_shape"},
+    }
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if self.config.get("prompt_travel"):
+            supported_request_fields -= {"prompt"}
+        return supported_request_fields
+
     @dataclass(frozen=True)
     class PromptTravelSegment:
         start_frame: int

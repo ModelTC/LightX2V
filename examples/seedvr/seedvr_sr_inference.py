@@ -26,8 +26,6 @@ pipe = LightX2VPipeline(
 pipe.create_generator(config_json="/path/to/LightX2V/configs/seedvr/seedvr2_3b.json")
 
 seed = 42
-prompt = "A cinematic video of a sunset over the ocean with golden reflections"
-negative_prompt = ""
 save_result_path = f"output_sr_{ts}.mp4"
 
 # Input video or image path (required for SR task)
@@ -38,10 +36,8 @@ input_video_path = "input.mp4"
 # Generate super-resolved video
 pipe.generate(
     seed=seed,
-    prompt=prompt,
-    negative_prompt=negative_prompt,
     save_result_path=save_result_path,
-    video_path=input_video_path,  # Use video_path for video SR
+    video_path=input_video_path,
     # Or use image_path for single-frame SR:
     # image_path=input_image_path,
 )

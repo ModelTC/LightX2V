@@ -5,7 +5,7 @@ from lightx2v import LightX2VPipeline
 # -------------------------------------------------
 
 pipe = LightX2VPipeline(
-    model_path="/data/nvme1/yongyang/FL/neo_9b_new/hf_step44000_ema_x2v_part",
+    model_path="/path/to/neopp_dense",
     model_cls="neopp",
     support_tasks=["t2i", "i2i"],
 )
@@ -22,8 +22,8 @@ pipe.modify_config({"load_kv_cache_in_pipeline_for_debug": False, "save_result_f
 # TURN 0
 # -------------------------------------------------
 pipe.runner.load_kvcache(
-    "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor_44000_ema_1k/to_x2v_cond_kv_0_298.pt",
-    "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor_44000_ema_1k/to_x2v_uncond_kv_0_9.pt",
+    "/path/to/neopp_dense_kv_1k/to_x2v_cond_kv_0_298.pt",
+    "/path/to/neopp_dense_kv_1k/to_x2v_uncond_kv_0_9.pt",
 )
 pipe.runner.set_inference_params(
     index_offset_cond=298,
@@ -35,8 +35,9 @@ pipe.runner.set_inference_params(
 )
 
 pipe.generate(
+    task="t2i",
     seed=200,
-    save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_1k_0.png",
+    save_result_path="/path/to/save_results/output_lightx2v_neopp_dense_1k_0.png",
     target_shape=[1024, 1024],  # Height, Width
 )
 
@@ -45,8 +46,8 @@ pipe.generate(
 # TURN 1
 # -------------------------------------------------
 pipe.runner.load_kvcache(
-    "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor_44000_ema_1k/to_x2v_cond_kv_1_366.pt",
-    "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor_44000_ema_1k/to_x2v_uncond_kv_1_12.pt",
+    "/path/to/neopp_dense_kv_1k/to_x2v_cond_kv_1_366.pt",
+    "/path/to/neopp_dense_kv_1k/to_x2v_uncond_kv_1_12.pt",
 )
 pipe.runner.set_inference_params(
     index_offset_cond=366,
@@ -58,8 +59,9 @@ pipe.runner.set_inference_params(
 )
 
 pipe.generate(
+    task="t2i",
     seed=201,
-    save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_1k_1.png",
+    save_result_path="/path/to/save_results/output_lightx2v_neopp_dense_1k_1.png",
     target_shape=[1024, 1024],  # Height, Width
 )
 
@@ -68,8 +70,8 @@ pipe.generate(
 # TURN 2
 # -------------------------------------------------
 pipe.runner.load_kvcache(
-    "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor_44000_ema_1k/to_x2v_cond_kv_2_441.pt",
-    "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor_44000_ema_1k/to_x2v_uncond_kv_2_15.pt",
+    "/path/to/neopp_dense_kv_1k/to_x2v_cond_kv_2_441.pt",
+    "/path/to/neopp_dense_kv_1k/to_x2v_uncond_kv_2_15.pt",
 )
 pipe.runner.set_inference_params(
     index_offset_cond=441,
@@ -81,7 +83,8 @@ pipe.runner.set_inference_params(
 )
 
 pipe.generate(
+    task="t2i",
     seed=202,
-    save_result_path="/data/nvme1/yongyang/FL/LightX2V/save_results/output_lightx2v_neopp_dense_1k_2.png",
+    save_result_path="/path/to/save_results/output_lightx2v_neopp_dense_1k_2.png",
     target_shape=[1024, 1024],  # Height, Width
 )

@@ -10,6 +10,7 @@ from lightx2v.models.input_encoders.hf.ltx2.model import LTX2TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.ltx2.model import LTX2ARModel, LTX2Model
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.ltx2.scheduler import LTX2ARScheduler, LTX2Scheduler, LatentState
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.audio_vae import encode_audio
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
@@ -89,6 +90,22 @@ def _ltx2_resize_video_denoise_mask_for_stage2(mask: torch.Tensor, target_h: int
 
 @RUNNER_REGISTER("ltx2")
 class LTX2Runner(DefaultRunner):
+    supported_request_fields_by_task = {
+        "t2av": VIDEO_REQUEST_FIELDS,
+        "i2av": VIDEO_REQUEST_FIELDS | {"image_frame_idx", "image_path", "image_strength"},
+        "ltx2_s2v": VIDEO_REQUEST_FIELDS | {"audio_path", "image_frame_idx", "image_path", "image_strength"},
+        "v2av": VIDEO_REQUEST_FIELDS
+        | {
+            "image_frame_idx",
+            "image_path",
+            "image_strength",
+            "mux_audio_video_path",
+            "reference_video_frame_cap",
+            "reference_video_strength",
+            "video_path",
+        },
+    }
+
     _WARMUP_RESOLUTIONS = ((480, 480), (512, 768))
     _UPSAMPLER_WARMUP_RESOLUTIONS = ((480, 480), (1024, 1536))
     transformer_model_class = LTX2Model
@@ -99,6 +116,12 @@ class LTX2Runner(DefaultRunner):
     text_encoder_root_key = "gemma_original_ckpt"
     video_vae_checkpoint_key = None
     audio_vae_checkpoint_key = None
+
+    def create_input_info(self, request_data):
+        input_info = super().create_input_info(request_data)
+        if input_info.task == "v2av" and "target_shape" not in request_data and "target_shape" not in self.config:
+            input_info.target_shape = []
+        return input_info
 
     def __init__(self, config):
         super().__init__(config)
@@ -377,6 +400,12 @@ class LTX2Runner(DefaultRunner):
 
         return video_latent_shape, audio_latent_shape
 
+    def prepare_stage1_target_shape(self):
+        """Convert the requested final size to the first-stage size."""
+        if self.config.get("use_upsampler", False):
+            height, width = self.input_info.target_shape
+            self.input_info.target_shape = [height // 2, width // 2]
+
     def _clear_ltx2_reference_audio_state(self) -> None:
         """Avoid leaking ltx2_s2v audio conditioning into t2av/i2av runs on a reused runner."""
         self.initial_audio_latent = None
@@ -389,6 +418,7 @@ class LTX2Runner(DefaultRunner):
         self._clear_ltx2_reference_video_state()
         self.video_denoise_mask = None
         self.initial_video_latent = None
+        self.prepare_stage1_target_shape()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
         self.maybe_empty_cache()
@@ -419,6 +449,7 @@ class LTX2Runner(DefaultRunner):
         self._clear_ltx2_reference_audio_state()
         self._clear_ltx2_reference_video_state()
         self._normalize_i2av_input_fields()
+        self.prepare_stage1_target_shape()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         text_encoder_output = self.run_text_encoder(self.input_info)
         self.video_denoise_mask, self.initial_video_latent = self.run_vae_encoder()
@@ -467,7 +498,7 @@ class LTX2Runner(DefaultRunner):
         return None
 
     def _override_target_hw_from_ref_video(self) -> None:
-        """v2av: set ``input_info.target_shape`` from probed ``video_path`` (control mp4).
+        """v2av: set ``input_info.target_shape`` from the source control video.
 
         Skip if ``target_shape`` already set. Base H/W = final//2 when upsampler else final;
         snap to VAE grid (spatial 32) vs ``ref_downscale_factor``. Probe/config miss → no-op.
@@ -475,7 +506,7 @@ class LTX2Runner(DefaultRunner):
         if self.input_info.target_shape:
             return
 
-        ref_path = (getattr(self.input_info, "video_path", None) or "").strip()
+        ref_path = (self.input_info.video_path or "").strip()
         hw = self._probe_video_hw(ref_path)
         if hw is None:
             return
@@ -507,7 +538,7 @@ class LTX2Runner(DefaultRunner):
             f"base-gen {base_w}x{base_h}, base_div={base_div}, "
             f"ref_downscale_factor={ref_factor}, use_upsampler={use_upsampler})."
         )
-        self.input_info.target_shape = [base_h, base_w]
+        self.input_info.target_shape = [eff_final_h, eff_final_w]
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_v2av(self):
@@ -518,22 +549,17 @@ class LTX2Runner(DefaultRunner):
         self._normalize_i2av_input_fields()
         self._override_target_hw_from_ref_video()
         if not self.input_info.target_shape:
-            if self.config.get("use_upsampler", False):
-                self.input_info.target_shape = [
-                    self.config["target_height"] // 2,
-                    self.config["target_width"] // 2,
-                ]
-            else:
-                self.input_info.target_shape = [
-                    self.config["target_height"],
-                    self.config["target_width"],
-                ]
+            self.input_info.target_shape = [
+                self.config["target_height"],
+                self.config["target_width"],
+            ]
+        self.prepare_stage1_target_shape()
 
         # Reference/control video → pixel tensor, then align temporal length with
         # the clip (official-style: decode up to ``num_frames`` cap, actual length
         # follows the shorter of cap vs. on-disk frames). Only then derive
         # ``target_video_length`` / latent shapes so audio and denoising match.
-        ref_path = (getattr(self.input_info, "video_path", None) or "").strip()
+        ref_path = (self.input_info.video_path or "").strip()
         if not ref_path:
             raise ValueError("v2av requires a non-empty video_path (pre-processed control / reference video).")
 
@@ -623,6 +649,7 @@ class LTX2Runner(DefaultRunner):
         """Reference audio (frozen in latent) + optional reference images; mux original waveform when saving."""
         self._clear_ltx2_reference_video_state()
         self._normalize_i2av_input_fields()
+        self.prepare_stage1_target_shape()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
 
         ap = (getattr(self.input_info, "audio_path", None) or "").strip()
@@ -1186,6 +1213,8 @@ class LTX2Runner(DefaultRunner):
 class LTX2ARRunner(LTX2Runner):
     """Chunkwise autoregressive LTX2.3 runner for teacher-forcing checkpoints."""
 
+    supported_request_fields_by_task = {"t2av": LTX2Runner.supported_request_fields_by_task["t2av"]}
+
     def init_scheduler(self):
         self.scheduler = LTX2ARScheduler(self.config)
 
@@ -1210,8 +1239,6 @@ class LTX2ARRunner(LTX2Runner):
         self._prepare_ar_states()
 
     def _validate_ar_config(self):
-        if self.config.get("task") != "t2av":
-            raise NotImplementedError("ltx2_ar currently supports task=t2av only.")
         if self.config.get("use_upsampler", False):
             raise NotImplementedError("ltx2_ar does not support the latent upsampler.")
         chunk = int(self.config.get("ar_config", {}).get("num_frame_per_chunk", 0))

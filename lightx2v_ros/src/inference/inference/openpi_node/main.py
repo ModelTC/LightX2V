@@ -9,7 +9,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray, MultiArrayDimension, String
 
 from lightx2v.models.runners.openpi.openpi_runner import OpenPIPolicy
-from lightx2v.utils.set_config import auto_calc_config, get_default_config
+from lightx2v.utils.set_config import build_startup_config
 
 
 class OpenPINode(Node):
@@ -57,8 +57,7 @@ class OpenPINode(Node):
             raise ValueError("OpenPI requires model_path and config_json")
         seed = int(self.get_parameter("seed").value)
 
-        config = get_default_config()
-        config.update(
+        config = build_startup_config(
             {
                 "model_cls": "openpi",
                 "task": "i2va",
@@ -66,7 +65,6 @@ class OpenPINode(Node):
                 "config_json": config_json,
             }
         )
-        config = auto_calc_config(config)
         # ROS parameters take precedence over values loaded from the model JSON.
         config["model_path"] = model_path
         config["seed"] = seed
