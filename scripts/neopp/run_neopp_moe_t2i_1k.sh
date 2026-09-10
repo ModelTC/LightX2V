@@ -17,5 +17,5 @@ python "${lightx2v_path}/examples/neopp/replay_kv.py" \
     --index_offset_cond 325 \
     --index_offset_uncond 9 \
     --seed 200 \
-    --target_shape 1024 1024 \
+    --size 1024 1024 \
     --save_result_path "${lightx2v_path}/save_results/output_lightx2v_neopp_moe_t2i_1k.png"

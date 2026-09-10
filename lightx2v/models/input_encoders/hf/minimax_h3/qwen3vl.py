@@ -838,8 +838,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
         if self.disk_streaming:
             if torch.device(AI_DEVICE).type != "mps":
                 raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming currently requires AI_DEVICE='mps'.")
-            if config.get("task") != "t2av":
-                raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming currently supports task='t2av' only.")
+            if config.get("model_variant") != "fl2av":
+                raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming requires model_variant='fl2av' and supports t2av requests only.")
             if GET_DTYPE() != torch.bfloat16:
                 raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming currently requires BF16.")
             if config.get("text_encoder_quantized", False):

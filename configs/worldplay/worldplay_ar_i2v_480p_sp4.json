@@ -4,7 +4,7 @@
     "infer_steps": 50,
     "transformer_model_name": "480p_i2v",
     "action_ckpt": "/path/to/HY-WorldPlay/ar_model/diffusion_pytorch_model.safetensors",
-    "target_video_length": 125,
+    "num_frames": 125,
     "vae_stride": [4, 16, 16],
     "sample_shift": 7.0,
     "sample_guide_scale": 1.0,

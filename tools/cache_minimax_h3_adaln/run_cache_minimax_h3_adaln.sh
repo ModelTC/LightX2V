@@ -67,4 +67,4 @@ export PYTHONPATH="${lightx2v_path}:${PYTHONPATH:-}"
 /opt/miniconda3/envs/torch/bin/python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
   --model_path "${model_path}" \
   --config_json "${config_json}" \
-  --task fl2av
+  --model-variant fl2av

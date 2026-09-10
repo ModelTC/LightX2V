@@ -12,7 +12,7 @@ def submit_t2i_task(
     negative_prompt: Optional[str],
     seed: Optional[int],
     aspect_ratio: Optional[str],
-    target_shape: Optional[List[int]],
+    size: Optional[List[int]],
     save_result_path: Optional[str],
 ) -> str:
     payload = {
@@ -23,8 +23,8 @@ def submit_t2i_task(
         "save_result_path": save_result_path,
     }
     payload = {key: value for key, value in payload.items() if value is not None}
-    if target_shape is not None:
-        payload["target_shape"] = target_shape
+    if size is not None:
+        payload["size"] = size
 
     submit_url = f"{base_url.rstrip('/')}/v1/tasks/image/"
     response = requests.post(submit_url, json=payload, timeout=30)
@@ -81,11 +81,11 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--aspect_ratio", type=str, default=None, help="Aspect ratio for image task")
     parser.add_argument(
-        "--target_shape",
+        "--size",
         type=int,
         nargs="+",
         default=None,
-        help="Target output shape, e.g. --target_shape 1536 2752",
+        help="Target output shape, e.g. --size 1536 2752",
     )
     parser.add_argument("--save_result_path", type=str, default=None, help="Server-side save_result_path")
     parser.add_argument("--timeout_seconds", type=int, default=600, help="Polling timeout in seconds")
@@ -100,7 +100,7 @@ def main():
         negative_prompt=args.negative_prompt,
         seed=args.seed,
         aspect_ratio=args.aspect_ratio,
-        target_shape=args.target_shape,
+        size=args.size,
         save_result_path=args.save_result_path,
     )
     print(f"Task submitted successfully, task_id={task_id}")

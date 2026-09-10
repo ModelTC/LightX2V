@@ -65,10 +65,10 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
 
         input_info.pose = load_pose(input_info.pose)
         num_frames = (len(input_info.pose) - 1) * self.config["vae_stride"][0] + 1
-        requested_frames = request_data.get("target_video_length")
+        requested_frames = request_data.get("num_frames")
         if requested_frames is not None and requested_frames is not UNSET and requested_frames != num_frames:
             raise ValueError(f"pose corresponds to {num_frames} frames, but num_frames is {requested_frames}; they must match.")
-        input_info.target_video_length = num_frames
+        input_info.num_frames = num_frames
         return input_info
 
     def init_scheduler(self):

@@ -78,7 +78,7 @@ def smart_resize(height, width, factor, min_pixels=None, max_pixels=None):
 @RUNNER_REGISTER("lingbot_video")
 class LingBotVideoRunner(DefaultRunner):
     supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"target_shape"},
+        "t2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"size"},
         "t2v": VIDEO_REQUEST_FIELDS,
         "i2v": VIDEO_REQUEST_FIELDS | {"image_path"},
     }
@@ -124,7 +124,7 @@ class LingBotVideoRunner(DefaultRunner):
             seed=0,
             prompt="warmup",
             negative_prompt="",
-            target_shape=[height, width],
+            size=[height, width],
             return_result_tensor=True,
         )
 
@@ -274,15 +274,15 @@ class LingBotVideoRunner(DefaultRunner):
         if self.config["task"] == "t2i":
             frames = 1
         else:
-            frames = self.get_target_video_length()
+            frames = self.get_num_frames()
         if frames != 1 and (frames - 1) % int(self.config.get("vae_scale_factor_temporal", 4)) != 0:
-            raise ValueError(f"LingBot-Video target_video_length must be 1 or 4n+1, got {frames}.")
+            raise ValueError(f"LingBot-Video num_frames must be 1 or 4n+1, got {frames}.")
         latent_t = (frames - 1) // int(self.config.get("vae_scale_factor_temporal", 4)) + 1
         latent_h = height // int(self.config.get("vae_scale_factor_spatial", 8))
         latent_w = width // int(self.config.get("vae_scale_factor_spatial", 8))
         latent_shape = (1, int(self.config.get("in_channels", 16)), latent_t, latent_h, latent_w)
 
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
         self.input_info.latent_shape = latent_shape
         logger.info(f"LingBot-Video target shape: frames={frames}, image={height}x{width}, latent={latent_shape}")
 
@@ -333,7 +333,7 @@ class LingBotVideoRunner(DefaultRunner):
             image.save(save_result_path)
             logger.info(f"Image saved: {save_result_path}")
         else:
-            save_to_video(outputs, save_result_path, fps=float(self.config.get("target_fps", 24)), method="ffmpeg")
+            save_to_video(outputs, save_result_path, fps=float(self.config.get("fps", 24)), method="ffmpeg")
             logger.info(f"Video saved: {save_result_path}")
 
     def _finalize_pipeline_outputs(self, outputs, latents=None, generator=None):

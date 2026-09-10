@@ -25,8 +25,8 @@ torchrun --nproc_per_node=2 -m lightx2v.infer \
 --task animate \
 --model_path $model_path \
 --config_json ${lightx2v_path}/configs/wan22/wan_animate_lora_dist.json \
---src_pose_path ${lightx2v_path}/save_results/animate/process_results/src_pose.mp4 \
---src_face_path ${lightx2v_path}/save_results/animate/process_results/src_face.mp4 \
---src_ref_images ${lightx2v_path}/save_results/animate/process_results/src_ref.png \
+--pose_video_path ${lightx2v_path}/save_results/animate/process_results/src_pose.mp4 \
+--face_video_path ${lightx2v_path}/save_results/animate/process_results/src_face.mp4 \
+--ref_image_paths ${lightx2v_path}/save_results/animate/process_results/src_ref.png \
 --prompt "视频中的人在做动作" \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_wan22_animate_lora_dist.mp4

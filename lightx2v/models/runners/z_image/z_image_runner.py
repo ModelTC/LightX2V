@@ -278,8 +278,8 @@ class ZImageRunner(DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.target_shape) == 2:
-            height, width = self.input_info.target_shape
+        if len(self.input_info.size) == 2:
+            height, width = self.input_info.size
             height, width = int(height), int(width)
             if width > max_size or height > max_size:
                 scale = max_size / max(width, height)
@@ -311,7 +311,7 @@ class ZImageRunner(DefaultRunner):
 
     def set_latent_shape(self):
         width, height = self.get_input_target_shape()
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.

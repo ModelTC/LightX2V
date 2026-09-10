@@ -10,20 +10,20 @@ from lightx2v.models.runners.bagel.t2i_utils import get_bagel_latent_downsample,
 _BICUBIC = Image.Resampling.BICUBIC if hasattr(Image, "Resampling") else Image.BICUBIC
 
 
-def _validate_target_shape(target_shape, latent_downsample):
-    if len(target_shape) == 2:
+def _validate_target_shape(size, latent_downsample):
+    if len(size) == 2:
         try:
-            height, width = int(target_shape[0]), int(target_shape[1])
+            height, width = int(size[0]), int(size[1])
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"BAGEL I2I target_shape must be two positive integers [H W], got: {target_shape}") from exc
+            raise ValueError(f"BAGEL I2I size must be two positive integers [H W], got: {size}") from exc
         if height <= 0 or width <= 0:
-            raise ValueError(f"BAGEL I2I target_shape must be positive [H W], got: {target_shape}")
+            raise ValueError(f"BAGEL I2I size must be positive [H W], got: {size}")
         if height % latent_downsample != 0 or width % latent_downsample != 0:
-            raise ValueError(f"BAGEL I2I target_shape must be divisible by latent downsample {latent_downsample}, got: {[height, width]}")
+            raise ValueError(f"BAGEL I2I size must be divisible by latent downsample {latent_downsample}, got: {[height, width]}")
         return (height, width)
 
-    if target_shape:
-        raise ValueError(f"BAGEL I2I target_shape must be [H W] when set, got: {target_shape}")
+    if size:
+        raise ValueError(f"BAGEL I2I size must be [H W] when set, got: {size}")
     return None
 
 
@@ -33,8 +33,8 @@ def _round_to_multiple(value, multiple):
 
 def resolve_bagel_i2i_image_shape(input_info, config, input_image_size):
     latent_downsample = get_bagel_latent_downsample(config)
-    target_shape = getattr(input_info, "target_shape", None) or []
-    resolved = _validate_target_shape(target_shape, latent_downsample)
+    size = getattr(input_info, "size", None) or []
+    resolved = _validate_target_shape(size, latent_downsample)
     if resolved is not None:
         return resolved
 

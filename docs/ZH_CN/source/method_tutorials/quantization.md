@@ -2,7 +2,7 @@
 
 ## 📖 概述
 
-LightX2V 支持对 DIT、T5 和 CLIP 模型进行量化推理，通过降低模型精度来减少显存占用并提升推理速度。
+LightX2V 支持对 DIT、VAE、T5 和 CLIP 模型进行量化推理，通过降低模型精度来减少显存占用并提升推理速度。
 
 ---
 
@@ -142,6 +142,68 @@ DiT tensor parallel 当前也回退到 `fp8-sgl`。初始化日志会打印实�
 该内核会按精确 GEMM shape 自动调优 CUTLASS tile 和 swizzle。首次遇到新 shape 时在 C++ 内遍历
 内置候选，winner 保存在当前进程的 C++ cache 中；同一进程的后续调用只执行 cache 查询。若 warmup
 覆盖正式请求的 shape，首次调优开销会在请求前完成。进程重启后会重新调优一次，不写用户目录。
+
+### MiniMax-H3 Video VAE Encoder Conv3D
+
+MiniMax-H3 Video VAE Encoder 支持默认 PyTorch 路径和三种可选的 Conv3D 模式：
+
+| mode | 实现 | 权重 qmax | 激活 qmax | 累加类型 | checkpoint 约束 |
+| --- | --- | ---: | ---: | --- | --- |
+| `torch`（默认） | PyTorch Conv3D | - | - | 由后端决定 | 原始 Encoder 权重 |
+| `torch_channels_last` | PyTorch Conv3D + `channels_last_3d` | - | - | 由后端决定 | 原始 Encoder 权重 |
+| `cutlass_fp8_f32_accum` | CUTLASS FP8 Conv3D | 448 | 448 | FP32 | 标准 FP8 权重与 scale |
+| `cutlass_fp8_f16_accum` | CUTLASS FP8 Conv3D | 21 | 21 | FP16 | `h3-vae-encoder-fp8-f16-accum` profile |
+
+这些模式只影响会调用 Video VAE Encoder 的任务，例如 I2AV 和 REF2AV；T2AV 不执行 Encoder。
+`torch_channels_last` 使用相同的 PyTorch 算子和 dtype 策略，该配置只改变 tensor layout。
+
+FP32 累加使用标准 E4M3 全量程，不需要额外的命名 profile。FP16 累加的 qmax 是权重量化与运行时
+激活量化共同遵守的数值约束，因此 checkpoint 必须携带对应 profile。它是更激进的模式，部署前应完成
+输出质量准出。
+
+转换器的输入必须是运行时兼容的 H3 Video VAE FP8 混合 checkpoint：Decoder Linear 的权重和
+scale 已分别是 FP8 和 FP32，对应 bias 为 FP16；所有 Encoder tensor 则保持原始 FP32 dtype。转换器会校验
+但不会修改 Decoder，只量化 33 个 Encoder Conv3D 中已经验证的 27 个；其余 6 个敏感权重和所有
+Encoder bias 保持 FP32。转换器不负责把 BF16 Decoder 转换为 FP8。离线转换和运行时必须使用相同的
+Encoder FP8 mode。Decoder tensor 和 metadata 均原样保留，因此 `video_vae_quant_scheme` 必须与源
+Decoder 一致（`fp8-sgl` 或 `fp8-f16-accum`）。下例以满足上述 dtype 约束的 FP8-F16 Decoder checkpoint 为输入，
+追加 Encoder qmax 21 量化，不改变 Decoder 的 qmax 14 策略：
+
+```bash
+python tools/convert/converter.py \
+    --source /path/to/minimax_h3_video_vae_fp8_f16_accum.safetensors \
+    --output /path/to/h3_quantized \
+    --output_name minimax_h3_video_vae_fp8_f16_accum_encoder_conv_q21 \
+    --output_ext .safetensors \
+    --model_type h3_video_vae_encoder \
+    --vae_encoder_conv_mode cutlass_fp8_f16_accum \
+    --device cuda \
+    --quantized \
+    --bits 8 \
+    --linear_type fp8 \
+    --single_file
+```
+
+将匹配的 mode 和权重路径加入完整的启动 JSON，通过 `--config_json`，或 Python 的
+`create_generator(config_json=...)` 使用：
+
+```json
+{
+    "video_vae_quantized": true,
+    "video_vae_quant_scheme": "fp8-f16-accum",
+    "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_f16_accum_encoder_conv_q21.safetensors",
+    "vae_encoder_conv_mode": "cutlass_fp8_f16_accum"
+}
+```
+
+这些设置在加载 VAE 时确定，供后续请求共用。启动时仍用 `model_variant` 选择权重分支
+（`fl2av` 或 `ref2av`），请求通过 `task` 选择该分支支持的任务。请求覆盖继续使用
+`size=[height, width]`、`num_frames` 和 `save_result_path`；`fps`、compile、warmup 和
+`vae_encoder_conv_mode` 属于启动设置。上面的转换命令是离线权重转换工具，其输出参数描述
+checkpoint 文件，与推理结果的保存参数各有职责。
+
+FP8 Conv3D 当前仅支持 SM120，并要求安装由包含该算子的代码版本构建的 `lightx2v_kernel` wheel。kernel
+会在新 Conv3D shape 首次出现时自动调优，并在当前进程内复用最优配置，不需要额外的离线调优步骤。
 
 ### T5 模型量化
 

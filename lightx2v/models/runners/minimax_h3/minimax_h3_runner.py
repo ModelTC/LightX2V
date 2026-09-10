@@ -109,11 +109,13 @@ class MiniMaxH3Runner(DefaultRunner):
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
-        self.loaded_transformer_partition = "transformer_ref" if config["task"] == "ref2av" else "transformer"
+        self.loaded_transformer_partition = "transformer_ref" if config["model_variant"] == "ref2av" else "transformer"
 
     def get_supported_tasks(self):
         """Return tasks supported by the loaded transformer weights."""
-        if self.config["task"] == "ref2av":
+        if self.config.get("text_encoder_disk_streaming", False):
+            return ("t2av",)
+        if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
         return ("t2av", "i2av", "l2av", "fl2av")
 
@@ -127,7 +129,7 @@ class MiniMaxH3Runner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
-        task = self.config["task"]
+        task = self.config["model_variant"]
 
         if task == "ref2av" and self.config.get("vae_use_compile", False):
             height, width, _ = self._WARMUP_SHAPES[0]
@@ -137,11 +139,11 @@ class MiniMaxH3Runner(DefaultRunner):
             del pixels
 
         for height, width, num_frames in self._WARMUP_SHAPES:
-            logger.info(f"Warmup: {height}x{width}x{num_frames}")
+            logger.info(f"Warmup {task}: {height}x{width}x{num_frames}")
             transformer_offloaded = not self.config.get("cpu_offload", False)
             try:
                 self.scheduler.generator = None
-                self._prepare_warmup_inputs(height, width, num_frames)
+                self._prepare_warmup_inputs(task, height, width, num_frames)
                 self.inputs = self._run_input_encoder_local_h3()
                 self.init_run()
 
@@ -167,16 +169,15 @@ class MiniMaxH3Runner(DefaultRunner):
         logger.info("[Warmup] Warmup completed")
         self._maybe_freeze_gc()
 
-    def _prepare_warmup_inputs(self, height, width, num_frames):
-        task = self.config["task"]
+    def _prepare_warmup_inputs(self, task, height, width, num_frames):
         self.input_info = INPUT_INFO_TYPES[task](
             task=task,
             seed=0,
             prompt="A sunrise over distant mountains reflected across a calm lake beneath drifting clouds."
             if (height, width, num_frames) == self._WARMUP_SHAPES[0]
             else "A cinematic fox walking through a snowy forest.",
-            target_shape=[height, width],
-            target_video_length=num_frames,
+            size=[height, width],
+            num_frames=num_frames,
             return_result_tensor=True,
         )
         image = Image.new("RGB", (width, height), color=0)
@@ -217,7 +218,7 @@ class MiniMaxH3Runner(DefaultRunner):
         self.video_vae, self.audio_vae = self.load_vae()
 
     def _is_mps_low_memory_streaming(self):
-        return AI_DEVICE == "mps" and self.config.get("task") == "t2av" and self.config.get("dit_disk_streaming", False) and self.config.get("text_encoder_disk_streaming", False)
+        return AI_DEVICE == "mps" and self.config.get("model_variant") == "fl2av" and self.config.get("dit_disk_streaming", False) and self.config.get("text_encoder_disk_streaming", False)
 
     def _validate_mps_low_memory_streaming_config(self):
         if not self.config.get("text_encoder_release_block_offload_buffers", False):
@@ -289,6 +290,7 @@ class MiniMaxH3Runner(DefaultRunner):
             cpu_offload=cpu_offload,
             checkpoint_path=video_vae_quantized_ckpt,
             quant_scheme=video_vae_quant_scheme,
+            encoder_conv_mode=self.config.get("vae_encoder_conv_mode", "torch"),
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
@@ -316,24 +318,24 @@ class MiniMaxH3Runner(DefaultRunner):
         return video_vae, audio_vae
 
     def _resolve_request_geometry(self, geometry_image=None):
-        if self.input_info.target_shape:
-            if len(self.input_info.target_shape) != 2:
-                raise ValueError(f"MiniMax-H3 target_shape must be [height, width], got {self.input_info.target_shape}")
-            height, width = (int(value) for value in self.input_info.target_shape)
+        if self.input_info.size:
+            if len(self.input_info.size) != 2:
+                raise ValueError(f"MiniMax-H3 size must be [height, width], got {self.input_info.size}")
+            height, width = (int(value) for value in self.input_info.size)
         elif geometry_image is not None:
             height, width = resolve_canvas_size(*geometry_image.size)
-            self.input_info.target_shape = [height, width]
+            self.input_info.size = [height, width]
         else:
-            height = int(self.config["target_height"])
-            width = int(self.config["target_width"])
-            self.input_info.target_shape = [height, width]
+            height = int(self.config["size"][0])
+            width = int(self.config["size"][1])
+            self.input_info.size = [height, width]
 
-        requested_frames = int(self.input_info.target_video_length or self.config.get("target_video_length", 124))
+        requested_frames = int(self.input_info.num_frames or self.config.get("num_frames", 124))
         num_frames = align_num_frames(requested_frames)
         if num_frames != requested_frames:
             logger.warning(f"MiniMax-H3 frame count must be 17*n+5; aligning {requested_frames} upward to {num_frames}")
         validate_t2av_geometry(num_frames, height, width)
-        self.input_info.target_video_length = num_frames
+        self.input_info.num_frames = num_frames
         self.request_height = height
         self.request_width = width
         self.request_num_frames = num_frames

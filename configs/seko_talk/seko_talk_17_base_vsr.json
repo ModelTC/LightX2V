@@ -1,11 +1,11 @@
 {
     "infer_steps": 2,
-    "target_fps": 25,
+    "fps": 25,
     "video_duration": 1,
     "audio_sr": 16000,
-    "target_video_length": 25,
+    "num_frames": 25,
     "resize_mode": "fixed_shape",
-    "fixed_shape": [
+    "size": [
         192,
         320
     ],

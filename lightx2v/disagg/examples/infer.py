@@ -55,7 +55,6 @@ def main():
         required=True,
     )
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--sf_model_path", type=str, required=False)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--prompt", type=str, default=None, help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default=None)
@@ -80,33 +79,33 @@ def main():
         help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9",
     )
     parser.add_argument(
-        "--image_frame_idx",
+        "--image_frame_indices",
         type=str,
         default=None,
         help="i2av: comma-separated pixel frame indices (one per image). Omit or empty to evenly space frames in [0, num_frames-1]. Example: 0,40,80",
     )
     # [Warning] For vace task, need refactor.
     parser.add_argument(
-        "--src_ref_images",
+        "--ref_image_paths",
         type=str,
         default=None,
         help="The file list of the source reference images. Separated by ','. Default None.",
     )
     parser.add_argument("--mask_path", type=str, default=None, help="Input mask path.")
     parser.add_argument(
-        "--src_pose_path",
+        "--pose_video_path",
         type=str,
         default=None,
         help="The file of the source pose. Default None.",
     )
     parser.add_argument(
-        "--src_face_path",
+        "--face_video_path",
         type=str,
         default=None,
         help="The file of the source face. Default None.",
     )
     parser.add_argument(
-        "--src_bg_path",
+        "--background_video_path",
         type=str,
         default=None,
         help="The file of the source background. Default None.",
@@ -134,7 +133,8 @@ def main():
 
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", default=None, help="Whether to return result tensor. (Useful for comfyui)")
-    parser.add_argument("--target_shape", type=int, nargs="+", default=None, help="Set return video or image shape")
+    parser.add_argument("--size", type=int, nargs="+", default=None, help="Output size in pixels: HEIGHT WIDTH")
+    parser.add_argument("--num_frames", type=int, default=None, help="Requested output frame count. Model-specific length constraints apply.")
     parser.add_argument("--aspect_ratio", type=str, default=None)
     parser.add_argument("--sr_ratio", type=float, default=None, help="super resolution ratio for sr task")
 

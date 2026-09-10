@@ -18,11 +18,10 @@ from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 class LightX2VPipeline:
     def __init__(
         self,
-        task="",
+        task=None,
         model_path="",
         model_cls="",
         support_tasks=None,
-        sf_model_path=None,
         dit_original_ckpt=None,
         low_noise_original_ckpt=None,
         high_noise_original_ckpt=None,
@@ -49,7 +48,6 @@ class LightX2VPipeline:
                 "model_path": model_path,
                 "model_cls": model_cls,
                 "model_variant": model_variant,
-                "sf_model_path": sf_model_path,
                 "dit_original_ckpt": dit_original_ckpt,
                 "low_noise_original_ckpt": low_noise_original_ckpt,
                 "high_noise_original_ckpt": high_noise_original_ckpt,
@@ -115,11 +113,10 @@ class LightX2VPipeline:
         attn_mode="flash_attn2",
         infer_steps=50,
         num_frames=81,
-        height=480,
-        width=832,
+        size=(480, 832),
         guidance_scale=5.0,
         sample_shift=5.0,
-        fps=16,
+        fps=None,
         aspect_ratio="16:9",
         boundary=0.900,
         boundary_step_index=2,
@@ -127,9 +124,8 @@ class LightX2VPipeline:
         config_json=None,
         rope_type="torch_complex_rope",
         resize_mode=None,
-        audio_fps=24000,
         double_precision_rope=True,
-        norm_modulate_backend="torch",
+        modulate_type=None,
         distilled_sigma_values=None,
     ):
         if self.runner is not None:
@@ -141,29 +137,28 @@ class LightX2VPipeline:
                 rope_type,
                 infer_steps,
                 num_frames,
-                height,
-                width,
+                size,
                 guidance_scale,
                 sample_shift,
-                fps,
                 aspect_ratio,
                 boundary,
                 boundary_step_index,
                 denoising_step_list,
-                audio_fps,
                 double_precision_rope,
-                norm_modulate_backend,
+                modulate_type,
                 distilled_sigma_values,
             )
 
         startup_config = dict(self.startup_config, config_json=config_json)
+        if fps is not None:
+            startup_config["fps"] = fps
         if resize_mode is not None:
             startup_config["resize_mode"] = resize_mode
 
         config = build_startup_config(startup_config)
         self.model_cls = config["model_cls"]
-        self.model_path = config["model_path"]
         self.model_variant = config.get("model_variant", self.model_variant)
+        self.model_path = config["model_path"]
         validate_config_paths(config)
 
         if config["parallel"]:
@@ -173,7 +168,7 @@ class LightX2VPipeline:
 
         self.runner = build_runner(config)
         print(self.runner.config)
-        logger.info(f"Initializing {self.model_cls} runner for {config['task']} task...")
+        logger.info(f"Initialized {self.model_cls} runner; supported tasks: {', '.join(self.runner.supported_tasks)}")
         logger.info(f"Model path: {self.model_path}")
         logger.info("LightGenerator initialized successfully!")
 
@@ -188,48 +183,44 @@ class LightX2VPipeline:
         rope_type,
         infer_steps,
         num_frames,
-        height,
-        width,
+        size,
         guidance_scale,
         sample_shift,
-        fps,
         aspect_ratio,
         boundary,
         boundary_step_index,
         denoising_step_list,
-        audio_fps,
         double_precision_rope,
-        norm_modulate_backend,
+        modulate_type,
         distilled_sigma_values,
     ):
         config = {
             "infer_steps": infer_steps,
-            "target_width": width,
-            "target_height": height,
+            "size": list(size),
             "sample_guide_scale": guidance_scale,
             "sample_shift": sample_shift,
             "enable_cfg": guidance_scale != 1 and not (self.model_cls == "z_image" and guidance_scale == 0),
             "rope_type": rope_type,
-            "fps": fps,
             "aspect_ratio": aspect_ratio,
             "boundary": boundary,
             "boundary_step_index": boundary_step_index,
             "denoising_step_list": list(denoising_step_list),
-            "audio_fps": audio_fps,
             "double_precision_rope": double_precision_rope,
-            "norm_modulate_backend": norm_modulate_backend,
         }
+        if modulate_type is not None:
+            config["modulate_type"] = modulate_type
         if self.model_cls in ["ltx2", "ltx2_5"]:
+            config.setdefault("modulate_type", self.startup_config.get("modulate_type", "torch"))
             if distilled_sigma_values is not None:
                 config["distilled_sigma_values"] = distilled_sigma_values
                 config["infer_steps"] = len(distilled_sigma_values) - 1
         if num_frames is not None:
-            config["target_video_length"] = num_frames
+            config["num_frames"] = num_frames
         elif self.model_cls == "ltx2_5" and self.startup_config.get("auto_duration", False):
             # ``None`` is meaningful for LTX-2.5: ask DurationHead to select
             # the request length. Preserve fixed JSON lengths for LTX-2/2.3
             # and for LTX-2.5 profiles with auto duration disabled.
-            config["target_video_length"] = None
+            config["num_frames"] = None
         if self.model_cls.startswith("wan"):
             config.update(self_attn_1_type=attn_mode, cross_attn_1_type=attn_mode, cross_attn_2_type=attn_mode)
         elif self.model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3"]:
@@ -409,35 +400,35 @@ class LightX2VPipeline:
         video_path=None,
         image_strength=None,
         i2i_denoise_strength=None,
-        image_frame_idx=None,
+        image_frame_indices=None,
         last_frame_path=None,
         audio_path=None,
-        src_ref_images=None,
+        ref_image_paths=None,
         mask_path=None,
         return_result_tensor=None,
-        target_shape=None,
+        size=None,
         num_frames=None,
         sr_ratio=None,
-        prompt_ref=None,
+        ref_video_prompt=None,
         **task_inputs,
     ):
         """Generate one result, validating task-specific inputs in the runner.
 
+        Size is (height, width) in pixels, subject to the model's sizing rules.
         Seed is a non-negative integer; omitted/None defaults to 42.
         NeoPP preserves explicit None for LightLLM session RNG continuation.
-        An omitted output path is passed to the runner as None, skipping file saving.
-        An omitted task uses the task explicitly set when creating the pipeline.
-        When only support_tasks is provided, each call must select a task.
+        An omitted output path is passed to the runner as None. Most runners skip saving;
+        WorldMirror uses its default output directory.
+        An omitted task uses the task explicitly set when creating the pipeline,
+        or the runner's only supported task. Multi-task runners require a task.
         """
         if task is None:
             task = self.task
-        if not task:
-            raise ValueError("task is required when the pipeline has no default task")
         request_data = {
             "task": task,
             "seed": seed,
             "prompt": prompt,
-            "prompt_ref": prompt_ref,
+            "ref_video_prompt": ref_video_prompt,
             "negative_prompt": negative_prompt,
             "save_result_path": save_result_path,
             "image_path": image_path,
@@ -445,15 +436,15 @@ class LightX2VPipeline:
             "video_path": video_path,
             "last_frame_path": last_frame_path,
             "audio_path": audio_path,
-            "src_ref_images": src_ref_images,
+            "ref_image_paths": ref_image_paths,
             "mask_path": mask_path,
             "return_result_tensor": return_result_tensor,
-            "target_shape": target_shape,
-            "target_video_length": num_frames,
+            "size": size,
+            "num_frames": num_frames,
             "sr_ratio": sr_ratio,
             "image_strength": image_strength,
             "i2i_denoise_strength": i2i_denoise_strength,
-            "image_frame_idx": image_frame_idx,
+            "image_frame_indices": image_frame_indices,
         }
         request_data.update(task_inputs)
 

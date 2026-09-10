@@ -24,7 +24,7 @@ class ShotStreamPipeline(ShotPipeline):  # type:ignore
         f2v = self.clip_generators["f2v_clip"]  # f2v一致性差，动态响应强
         # 根据 pipe 最长 overlap_len 初始化 tail buffer
         self.max_tail_len = max(s2v.config.get("prev_frame_length", None), f2v.config.get("prev_frame_length", None))
-        model_fps = s2v.config.get("target_fps", 16)
+        model_fps = s2v.config.get("fps", 16)
         model_sr = s2v.config.get("audio_sr", 16000)
 
         s2v_input_info = self.prepare_input_info(args, s2v.config)
@@ -99,7 +99,7 @@ def main():
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
-    parser.add_argument("--target_shape", type=int, nargs="+", default=None, help="Set return video or image shape")
+    parser.add_argument("--size", type=int, nargs="+", default=None, help="Output size in pixels: HEIGHT WIDTH")
     args = parser.parse_args()
 
     clip_configs = load_clip_configs(args.config_json)

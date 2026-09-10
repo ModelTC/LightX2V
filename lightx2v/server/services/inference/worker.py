@@ -49,6 +49,7 @@ class TorchrunInferenceWorker:
                 {
                     "config_json": args.config_json,
                     "model_cls": args.model_cls,
+                    "model_variant": args.model_variant,
                     "model_path": args.model_path,
                     "task": args.task,
                 }
@@ -61,7 +62,7 @@ class TorchrunInferenceWorker:
                 logger.info(f"Config:\n {config}")
 
             self.runner = build_runner(config)
-            logger.info(f"Rank {self.rank}/{self.world_size - 1} initialization completed")
+            logger.info(f"Rank {self.rank}/{self.world_size - 1} initialization completed; supported tasks: {', '.join(self.runner.supported_tasks)}")
 
             return True
 
@@ -133,7 +134,7 @@ class TorchrunInferenceWorker:
                         out["result_png"] = png
                     usage = self.runner.compute_usage(
                         prompt=task_data.get("prompt", ""),
-                        target_shape=task_data.get("target_shape", []),
+                        size=task_data.get("size", []),
                         has_input_image=bool(task_data.get("image_path")),
                     )
                     if usage:

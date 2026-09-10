@@ -67,7 +67,7 @@ cd examples/worldmirror/
 python test_worldmirror.py \
     --model_path /path/to/HY-World-2.0 \
     --input_path /path/to/scene_dir \
-    --output_path /path/to/output
+    --save_result_path /path/to/output
 ```
 
 This is the highest-accuracy path (matches the upstream HY-World-2.0 pipeline within 1e-3 MAE on depth / normal and 1% on point cloud bounding volume).
@@ -82,10 +82,12 @@ python test_worldmirror.py \
     --config_path /workspace/LightX2V/configs/worldmirror/worldmirror_recon_fp8.json \
     --model_path /path/to/HY-World-2.0 \
     --input_path /path/to/scene_dir \
-    --output_path /path/to/output
+    --save_result_path /path/to/output
 ```
 
-For the full CLI surface (per-head disable, mask controls, prior camera/depth inputs, Gaussian-splat flythrough rendering, interactive `>>>` loop), use `run_worldmirror.py` instead — it mirrors the original `python -m hyworld2.worldrecon.pipeline` entry point flag-for-flag:
+WorldMirror delivers reconstruction results as files. If `save_result_path` is omitted or `None`, results are saved under `./inference_output/<scene>/<timestamp>/`. `strict_output_path` takes precedence and writes directly to the specified directory.
+
+For the full CLI surface (per-head disable, mask controls, prior camera/depth inputs, Gaussian-splat flythrough rendering, interactive `>>>` loop), use `run_worldmirror.py` instead — it mirrors the original `python -m hyworld2.worldrecon.pipeline` entry point, with output paths named `--save_result_path`:
 
 ```bash
 python run_worldmirror.py \

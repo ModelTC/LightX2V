@@ -105,12 +105,12 @@ async def _run_sync_image_task(request: Request, message: ImageTaskRequest) -> t
     poll_interval_seconds = OPENAI_IMAGE_RESULT_POLL_INTERVAL_SECONDS
 
     try:
-        message.prefer_memory_result = True
+        message._prefer_memory_result = True
         create_task_start = time.perf_counter()
         task_id = task_manager.create_task(message)
         create_task_elapsed_ms = (time.perf_counter() - create_task_start) * 1000
         message.task_id = task_id
-        logger.info(f"Task {task_id} OpenAI image create_task cost {create_task_elapsed_ms:.2f} ms prompt_chars={len(message.prompt)} target_shape={message.target_shape}")
+        logger.info(f"Task {task_id} OpenAI image create_task cost {create_task_elapsed_ms:.2f} ms prompt_chars={len(message.prompt)} image_size={message.size}")
 
         wait_task = asyncio.create_task(_wait_task_result_png(task_id, timeout_seconds, poll_interval_seconds))
         disconnect_task = asyncio.create_task(_watch_client_disconnect(request, task_id))
@@ -182,7 +182,7 @@ def _build_image_task_request(
     task: str,
     negative_prompt: Optional[str] = None,
     seed: Optional[int] = None,
-    target_shape: Optional[list[int]] = None,
+    size: Optional[list[int]] = None,
     image_path: str = "",
     image_mask_path: str = "",
     i2i_denoise_strength: Optional[float] = None,
@@ -195,8 +195,8 @@ def _build_image_task_request(
     payload.update({key: value for key, value in optional_fields.items() if value})
     if negative_prompt is not None:
         payload["negative_prompt"] = negative_prompt
-    if target_shape:
-        payload["target_shape"] = target_shape
+    if size:
+        payload["size"] = size
     if seed is not None:
         payload["seed"] = seed
     if i2i_denoise_strength is not None:
@@ -211,11 +211,11 @@ async def create_openai_image_generation(request: Request, body: OpenAIImageGene
     if not body.prompt.strip():
         raise HTTPException(status_code=400, detail="prompt is required")
 
-    target_shape = None
+    image_size = None
     if body.size:
         try:
             width, height = _shape_from_size(body.size)
-            target_shape = [height, width]
+            image_size = [height, width]
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -223,7 +223,7 @@ async def create_openai_image_generation(request: Request, body: OpenAIImageGene
         task="t2i",
         prompt=body.prompt,
         seed=body.seed,
-        target_shape=target_shape,
+        size=image_size,
     )
 
     result_png, usage = await _run_sync_image_task(request, message)
@@ -272,11 +272,11 @@ async def create_openai_image_edit(
     services = get_services()
     assert services.file_service is not None, "File service is not initialized"
 
-    target_shape = None
+    image_size = None
     if size:
         try:
             width, height = _shape_from_size(size)
-            target_shape = [height, width]
+            image_size = [height, width]
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -299,7 +299,7 @@ async def create_openai_image_edit(
         prompt=prompt,
         negative_prompt=form.get("negative_prompt"),
         seed=seed,
-        target_shape=target_shape,
+        size=image_size,
         image_path=image_path,
         image_mask_path=image_mask_path,
         i2i_denoise_strength=i2i_denoise_strength,

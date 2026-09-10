@@ -1,9 +1,9 @@
 {
     "infer_steps": 4,
-    "target_fps": 16,
+    "fps": 16,
     "video_duration": 360,
     "audio_sr": 16000,
-    "target_video_length": 81,
+    "num_frames": 81,
     "self_attn_1_type": "npu_flash_attn",
     "cross_attn_1_type": "npu_flash_attn",
     "cross_attn_2_type": "npu_flash_attn",
@@ -24,7 +24,7 @@
         "seq_p_attn_type": "ulysses"
     },
     "resize_mode": "fixed_shape",
-    "fixed_shape": [
+    "size": [
         480,
         832
     ]

@@ -26,7 +26,7 @@ class Flux2Runner(DefaultRunner):
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     input_info_cls_by_task = {"i2i": Flux2I2IInputInfo}
     supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "target_shape"},
+        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "size"},
         "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt"},
     }
 
@@ -177,21 +177,21 @@ class Flux2Runner(DefaultRunner):
         if inpaint_mask_enabled:
             main_img = input_image[0]
             image_processor.check_image_input(main_img)
-            processed_img, target_shape = self._preprocess_condition_image(image_processor, main_img, max_image_area, vae_scale_factor)
-            self.input_info.target_shape = list(target_shape)
+            processed_img, size = self._preprocess_condition_image(image_processor, main_img, max_image_area, vae_scale_factor)
+            self.input_info.size = list(size)
             processed_tensor = processed_img.to(AI_DEVICE)
             condition_images.extend([processed_tensor, processed_tensor])
 
             if len(input_image) > 1:
                 image_processor.check_image_input(input_image[1])
-                inpaint_mask = self._preprocess_inpaint_mask_image(image_processor, input_image[1], main_img, max_image_area, target_shape)
+                inpaint_mask = self._preprocess_inpaint_mask_image(image_processor, input_image[1], main_img, max_image_area, size)
         else:
             for index, img in enumerate(input_image):
                 image_processor.check_image_input(img)
-                processed_img, target_shape = self._preprocess_condition_image(image_processor, img, max_image_area, vae_scale_factor)
+                processed_img, size = self._preprocess_condition_image(image_processor, img, max_image_area, vae_scale_factor)
                 condition_images.append(processed_img.to(AI_DEVICE))
                 if index == 0:
-                    self.input_info.target_shape = list(target_shape)
+                    self.input_info.size = list(size)
 
         torch_device_module.empty_cache()
         gc.collect()
@@ -219,12 +219,12 @@ class Flux2Runner(DefaultRunner):
         img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
         return img, (image_height, image_width)
 
-    def _preprocess_inpaint_mask_image(self, image_processor, mask_img, reference_img, max_image_area, target_shape):
+    def _preprocess_inpaint_mask_image(self, image_processor, mask_img, reference_img, max_image_area, size):
         mask_img = mask_img.convert("RGB")
         if mask_img.size != reference_img.size:
             mask_img = mask_img.resize(reference_img.size)
         mask_img = self._maybe_resize_to_max_area(image_processor, mask_img, max_image_area)
-        image_height, image_width = target_shape
+        image_height, image_width = size
         cropped_mask = image_processor.resize(mask_img, image_height, image_width, resize_mode="crop")
         return self._prepare_inpaint_mask(cropped_mask)
 
@@ -234,7 +234,7 @@ class Flux2Runner(DefaultRunner):
 
         from PIL import Image
 
-        height, width = self.input_info.target_shape
+        height, width = self.input_info.size
         multiple_of = self.config.get("vae_scale_factor", 8) * 2
         packed_h = height // multiple_of
         packed_w = width // multiple_of
@@ -337,8 +337,8 @@ class Flux2Runner(DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.target_shape) == 2:
-            height, width = self.input_info.target_shape
+        if len(self.input_info.size) == 2:
+            height, width = self.input_info.size
             height = int(height)
             width = int(width)
             if width > max_size or height > max_size:
@@ -362,10 +362,10 @@ class Flux2Runner(DefaultRunner):
     def set_latent_shape(self):
         task = self.config.get("task", "t2i")
         if task == "i2i":
-            height, width = self.input_info.target_shape
+            height, width = self.input_info.size
         else:
             width, height = self.get_custom_shape()
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
 
         multiple_of = self.config.get("vae_scale_factor", 8) * 2
 

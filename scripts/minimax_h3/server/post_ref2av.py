@@ -23,7 +23,7 @@ if __name__ == "__main__":
         # "audio_path": "/path/to/reference.wav",
         "seed": 42,
         "num_frames": 124,
-        "target_shape": [544, 960],
+        "size": [544, 960],
         "save_result_path": "./minimax_h3_ref2av.mp4",
     }
 

@@ -32,6 +32,10 @@ from quant import *  # noqa: E402
 
 from lightx2v.utils.lora_loader import LoRALoader  # noqa: E402
 from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER  # noqa: E402
+from tools.convert.h3_video_vae_encoder import (  # noqa: E402
+    FP8_ENCODER_CONV_MODES,
+    convert_h3_video_vae_encoder_fp8,
+)
 
 dtype_mapping = {
     "int8": torch.int8,
@@ -682,6 +686,9 @@ def convert_weights(args):
     if args.model_type == "h3_text_encoder":
         convert_minimax_h3_text_encoder_fp8(args)
         return
+    if args.model_type == "h3_video_vae_encoder":
+        convert_h3_video_vae_encoder_fp8(args)
+        return
 
     if os.path.isdir(args.source):
         src_files = sorted(glob.glob(os.path.join(args.source, "*.safetensors"), recursive=True))
@@ -987,7 +994,21 @@ def main():
     parser.add_argument(
         "-t",
         "--model_type",
-        choices=["wan_dit", "h3", "h3_video_vae_decoder", "h3_text_encoder", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit", "qwen25vl_llm", "z_image_dit", "self_forcing"],
+        choices=[
+            "wan_dit",
+            "h3",
+            "h3_video_vae_decoder",
+            "h3_video_vae_encoder",
+            "h3_text_encoder",
+            "hunyuan_dit",
+            "wan_t5",
+            "wan_clip",
+            "wan_animate_dit",
+            "qwen_image_dit",
+            "qwen25vl_llm",
+            "z_image_dit",
+            "self_forcing",
+        ],
         default="wan_dit",
         help="Model type",
     )
@@ -1025,6 +1046,7 @@ def main():
     parser.add_argument("--quantized", action="store_true")
     parser.add_argument("--quantization_profile", choices=[FP8_F16_ACCUM_QUANTIZATION_PROFILE])
     parser.add_argument("--bits", type=int, default=8, choices=[8], help="Quantization bit width")
+    parser.add_argument("--vae_encoder_conv_mode", choices=FP8_ENCODER_CONV_MODES)
     parser.add_argument(
         "--device",
         type=str,
@@ -1093,7 +1115,7 @@ def main():
             return None
         return [x.strip() for x in v.split(",") if x.strip()]
 
-    if args.quantized and args.model_type != "h3_text_encoder":
+    if args.quantized and args.model_type not in {"h3_text_encoder", "h3_video_vae_encoder"}:
         args.linear_dtype = dtype_mapping.get(args.linear_type, None)
         args.non_linear_dtype = eval(args.non_linear_dtype)
 

@@ -72,7 +72,7 @@ def _load_base_config() -> dict[str, Any]:
         "seed": 42,
         "prompt": "A cinematic cat scene with detailed lighting and motion.",
         "negative_prompt": "blurry, low quality, artifacts",
-        "save_path": str(REPO_ROOT / "save_results" / "locust_disagg.mp4"),
+        "save_result_path": str(REPO_ROOT / "save_results" / "locust_disagg.mp4"),
     }
 
 
@@ -171,7 +171,7 @@ def _build_request_payload(base_config: dict[str, Any], stage: StageSpec, reques
     if save_path_prefix:
         save_root = Path(save_path_prefix)
         save_root.parent.mkdir(parents=True, exist_ok=True)
-        payload["save_path"] = str(save_root.with_name(f"{save_root.stem}_{stage.name}_{request_index}{save_root.suffix}"))
+        payload["save_result_path"] = str(save_root.with_name(f"{save_root.stem}_{stage.name}_{request_index}{save_root.suffix}"))
 
     return payload
 

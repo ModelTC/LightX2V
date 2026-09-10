@@ -42,16 +42,16 @@ class HunyuanImage3Runner(DefaultRunner):
     input_info_cls_by_task = {"i2i": TI2IInputInfo}
     supported_request_fields_by_task = {
         "t2t": TEXT_REQUEST_FIELDS,
-        "ti2t": TEXT_REQUEST_FIELDS | {"image_path", "infer_align_image_size"},
-        "t2i": COMMON_REQUEST_FIELDS | {"prompt", "target_shape"},
-        "ti2i": COMMON_REQUEST_FIELDS | {"image_path", "infer_align_image_size", "prompt", "target_shape"},
-        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "infer_align_image_size", "prompt", "target_shape"},
+        "ti2t": TEXT_REQUEST_FIELDS | {"image_path", "align_image_size"},
+        "t2i": COMMON_REQUEST_FIELDS | {"prompt", "size"},
+        "ti2i": COMMON_REQUEST_FIELDS | {"image_path", "align_image_size", "prompt", "size"},
+        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "align_image_size", "prompt", "size"},
     }
 
     def get_supported_request_fields(self, task):
         supported_request_fields = super().get_supported_request_fields(task)
         if self.config.get("image_size"):
-            supported_request_fields -= {"target_shape"}
+            supported_request_fields -= {"size"}
         return supported_request_fields
 
     def __init__(self, config):
@@ -334,11 +334,11 @@ class HunyuanImage3Runner(DefaultRunner):
     def _resolve_image_size(self, input_info):
         if self.config.get("image_size"):
             return self.config["image_size"]
-        target_shape = getattr(input_info, "target_shape", None) or self.config.get("target_shape")
-        if target_shape:
-            if len(target_shape) >= 2:
-                return int(target_shape[-2]), int(target_shape[-1])
-        return int(self.config.get("target_height", 1024)), int(self.config.get("target_width", 1024))
+        size = getattr(input_info, "size", None) or self.config.get("size")
+        if size:
+            if len(size) >= 2:
+                return int(size[-2]), int(size[-1])
+        return tuple(map(int, self.config.get("size", (1024, 1024))))
 
     def _build_batch_rope_image_info(self, output, sections):
         if self.hunyuan_config.rope_type == "default":
@@ -1267,11 +1267,11 @@ class HunyuanImage3Runner(DefaultRunner):
             return [str(path) for path in image_path if str(path)]
         return [path.strip() for path in str(image_path).split(",") if path.strip()]
 
-    def _build_batch_cond_images(self, image_paths, infer_align_image_size):
+    def _build_batch_cond_images(self, image_paths, align_image_size):
         return [
             self.hunyuan_image_processor.build_cond_images(
                 image_list=image_paths,
-                infer_align_image_size=infer_align_image_size,
+                infer_align_image_size=align_image_size,
             )
         ]
 
@@ -1285,12 +1285,12 @@ class HunyuanImage3Runner(DefaultRunner):
         if requested_image_size != "auto":
             return requested_image_size
         if not batch_cond_images or not batch_cond_images[0]:
-            return int(self.config.get("target_height", 1024)), int(self.config.get("target_width", 1024))
+            return tuple(map(int, self.config.get("size", (1024, 1024))))
         first_cond_image = batch_cond_images[0][0]
         vae_image = self._cond_vae_image(first_cond_image)
         if hasattr(vae_image, "i"):
             return int(vae_image.i.image_height), int(vae_image.i.image_width)
-        return int(self.config.get("target_height", 1024)), int(self.config.get("target_width", 1024))
+        return tuple(map(int, self.config.get("size", (1024, 1024))))
 
     def _vae_encode_cond_tensor(self, image_tensor, generator=None):
         self._ensure_vae()
@@ -1608,11 +1608,11 @@ class HunyuanImage3Runner(DefaultRunner):
         self._ensure_pipeline_modules()
         seed = input_info.seed
         image_paths = self._split_image_paths(getattr(input_info, "image_path", None) or self.config.get("image_path"))
-        infer_align_image_size = getattr(input_info, "infer_align_image_size", None)
-        if infer_align_image_size is None:
-            infer_align_image_size = self.config.get("infer_align_image_size", False)
+        align_image_size = getattr(input_info, "align_image_size", None)
+        if align_image_size is None:
+            align_image_size = self.config.get("align_image_size", False)
 
-        batch_cond_images = self._build_batch_cond_images(image_paths, bool(infer_align_image_size))
+        batch_cond_images = self._build_batch_cond_images(image_paths, bool(align_image_size))
         cond_inputs = self._prepare_cond_inputs(batch_cond_images, cfg_factor=1, seed=seed)
         return self._generate_text(input_info, batch_cond_images=batch_cond_images, cond_inputs=cond_inputs)
 
@@ -1640,12 +1640,12 @@ class HunyuanImage3Runner(DefaultRunner):
         prompt = getattr(input_info, "prompt", "")
         seed = input_info.seed
         image_paths = self._split_image_paths(getattr(input_info, "image_path", None) or self.config.get("image_path"))
-        infer_align_image_size = getattr(input_info, "infer_align_image_size", None)
-        if infer_align_image_size is None:
-            infer_align_image_size = self.config.get("infer_align_image_size", False)
-        infer_align_image_size = bool(infer_align_image_size)
+        align_image_size = getattr(input_info, "align_image_size", None)
+        if align_image_size is None:
+            align_image_size = self.config.get("align_image_size", False)
+        align_image_size = bool(align_image_size)
 
-        batch_cond_images = self._build_batch_cond_images(image_paths, infer_align_image_size)
+        batch_cond_images = self._build_batch_cond_images(image_paths, align_image_size)
         image_size = self._resolve_ti2i_image_size(self._resolve_image_size(input_info), batch_cond_images)
 
         text_cond_inputs = self._prepare_cond_inputs(batch_cond_images, cfg_factor=1, seed=seed)
@@ -1669,7 +1669,7 @@ class HunyuanImage3Runner(DefaultRunner):
         return self.hunyuan_image_processor.postprocess_outputs(
             images,
             batch_cond_images=batch_cond_images,
-            infer_align_image_size=infer_align_image_size,
+            infer_align_image_size=align_image_size,
         )
 
     def generate_i2i(self, input_info):
