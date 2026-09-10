@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3PreInferOutput
-from lightx2v.models.networks.minimax_h3.infer.sglang_fused import _silu_mul_with_activation_rounding_inplace
+from lightx2v.models.networks.minimax_h3.infer.sgl_exact_ops import _silu_mul_with_activation_rounding_inplace
 from lightx2v.models.networks.minimax_h3.infer.tensor_parallel import all_gather_last_dim, row_parallel_linear
 from lightx2v.utils.envs import GET_DTYPE
 

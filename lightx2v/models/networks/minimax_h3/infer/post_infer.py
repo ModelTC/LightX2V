@@ -2,7 +2,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3VelocityOutput
-from lightx2v.models.networks.minimax_h3.infer.sglang_fused import indexed_scale_shift_sglang
+from lightx2v.models.networks.minimax_h3.infer.sgl_exact_ops import sgl_exact_indexed_scale_shift
 from lightx2v.models.networks.minimax_h3.infer.tensor_parallel import all_gather_last_dim
 from lightx2v.utils.envs import GET_DTYPE
 
@@ -24,7 +24,7 @@ class MiniMaxH3PostInfer:
 
     @staticmethod
     def _apply_modulation(hidden_states, shift, scale, indices):
-        return indexed_scale_shift_sglang(hidden_states, shift, scale, indices)
+        return sgl_exact_indexed_scale_shift(hidden_states, shift, scale, indices)
 
     def infer(self, weights, hidden_states, pre_infer_out):
         modulation = pre_infer_out.norm_out_modulation

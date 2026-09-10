@@ -1,0 +1,40 @@
+{
+  "infer_steps": 4,
+  "target_video_length": 362,
+  "target_height": 768,
+  "target_width": 1344,
+  "fps": 24,
+  "enable_cfg": false,
+  "cpu_offload": true,
+  "reference_image_resize_mode": "match",
+  "offload_granularity": "model",
+  "use_adaln_cache": true,
+  "adaln_cache_dir": "/data/wushuo1/.cache/lightx2v/adaln",
+  "text_encoder_cpu_offload": true,
+  "vae_cpu_offload": true,
+  "lazy_load": false,
+  "unload_modules": false,
+  "attn_type": "sage_attn2",
+  "rms_type": "sgl-kernel",
+  "rope_type": "sgl_exact_neox_rope",
+  "feature_caching": "NoCaching",
+  "use_compile": false,
+  "warmup": false,
+  "video_flow_shift": 12.0,
+  "audio_flow_shift": 3.0,
+  "h3_sampling_profile": "dmd",
+  "vae_spatial_scale_factor": 16,
+  "audio_sampling_rate": 32000,
+  "text_encoder_tensor_parallel": true,
+  "lora_dynamic_apply": false,
+  "lora_configs": [
+    {
+      "path": "/data/wushuo1/models/Minimax-h3-Turbo/Minimax-h3-Turbo/minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors",
+      "strength": 1.0,
+      "alpha": 8
+    }
+  ],
+  "parallel": {
+    "tensor_p_size": 8
+  }
+}

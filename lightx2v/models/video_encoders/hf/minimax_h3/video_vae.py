@@ -41,9 +41,9 @@ import torch.nn.functional as F
 from loguru import logger
 
 from lightx2v.common.ops.rope import SGLExactNeoXRope as _registered_rope  # noqa: F401
-from lightx2v.models.video_encoders.hf.minimax_h3.sglang_fused import (
-    apply_vae_silu_mul_sglang,
-    scaled_residual_add_vae_sglang,
+from lightx2v.models.video_encoders.hf.minimax_h3.sgl_exact_ops import (
+    sgl_exact_vae_scaled_residual_add,
+    sgl_exact_vae_silu_mul,
 )
 from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     SafetensorsSubsetReport,
@@ -156,7 +156,7 @@ class _SwiGLU(nn.Module):
         self._weights_packed = True
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return apply_vae_silu_mul_sglang(self.proj(hidden_states))
+        return sgl_exact_vae_silu_mul(self.proj(hidden_states))
 
 
 class _FeedForward(nn.Module):
@@ -497,11 +497,11 @@ class MiniMaxH3VideoTransformerBlock(nn.Module):
     ) -> torch.Tensor:
         norm_hidden_states = self.norm1(hidden_states.float()).to(self.infer_dtype)
         attention_output = self.attn(norm_hidden_states, rotary_emb)
-        hidden_states = scaled_residual_add_vae_sglang(hidden_states, attention_output, self.scale1)
+        hidden_states = sgl_exact_vae_scaled_residual_add(hidden_states, attention_output, self.scale1)
 
         norm_hidden_states = self.norm2(hidden_states.float()).to(self.infer_dtype)
         feed_forward_output = self.ff(norm_hidden_states)
-        return scaled_residual_add_vae_sglang(hidden_states, feed_forward_output, self.scale2)
+        return sgl_exact_vae_scaled_residual_add(hidden_states, feed_forward_output, self.scale2)
 
 
 class MiniMaxH3VideoViTDecoder3d(nn.Module):

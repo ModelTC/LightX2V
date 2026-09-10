@@ -145,11 +145,11 @@ def _silu_mul_with_activation_rounding(hidden_states: torch.Tensor) -> torch.Ten
     return F.silu(gate).mul_(value)
 
 
-def apply_vae_silu_mul_sglang(hidden_states: torch.Tensor) -> torch.Tensor:
+def sgl_exact_vae_silu_mul(hidden_states: torch.Tensor) -> torch.Tensor:
     return _silu_mul_with_activation_rounding(hidden_states)
 
 
-def scaled_residual_add_vae_sglang(
+def sgl_exact_vae_scaled_residual_add(
     residual: torch.Tensor,
     hidden_states: torch.Tensor,
     scale: torch.Tensor,

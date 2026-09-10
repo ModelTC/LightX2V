@@ -165,7 +165,7 @@ def _validate_indexed_modulation_inputs(
             raise ValueError(f"{operation} {name} must match activation shape {x.shape}, got {tensor.shape}")
 
 
-def indexed_scale_shift_sglang(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+def sgl_exact_indexed_scale_shift(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     _validate_indexed_modulation_inputs(
         "H3 indexed scale/shift",
         x,
@@ -199,7 +199,7 @@ def indexed_scale_shift_sglang(x: torch.Tensor, shift: torch.Tensor, scale: torc
     return x
 
 
-def indexed_gate_sglang(x: torch.Tensor, gate: torch.Tensor, other: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+def sgl_exact_indexed_gate(x: torch.Tensor, gate: torch.Tensor, other: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     _validate_indexed_modulation_inputs(
         "H3 indexed gate",
         x,

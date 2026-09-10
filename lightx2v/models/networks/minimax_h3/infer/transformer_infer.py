@@ -4,10 +4,10 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
-from lightx2v.models.networks.minimax_h3.infer.sglang_fused import (
+from lightx2v.models.networks.minimax_h3.infer.sgl_exact_ops import (
     _silu_mul_with_activation_rounding_inplace,
-    indexed_gate_sglang,
-    indexed_scale_shift_sglang,
+    sgl_exact_indexed_gate,
+    sgl_exact_indexed_scale_shift,
 )
 from lightx2v.models.networks.minimax_h3.infer.tensor_parallel import all_gather_last_dim
 from lightx2v.utils.envs import GET_DTYPE
@@ -135,11 +135,11 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
 
     @staticmethod
     def _apply_modulation(hidden_states, shift, scale, indices):
-        return indexed_scale_shift_sglang(hidden_states, shift, scale, indices)
+        return sgl_exact_indexed_scale_shift(hidden_states, shift, scale, indices)
 
     @staticmethod
     def _apply_residual(residual, gate, branch, indices):
-        return indexed_gate_sglang(residual, gate, branch, indices)
+        return sgl_exact_indexed_gate(residual, gate, branch, indices)
 
     def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None):
         if modulation is None:
