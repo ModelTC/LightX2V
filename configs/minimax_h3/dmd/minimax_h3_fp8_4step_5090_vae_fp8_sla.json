@@ -39,7 +39,8 @@
   "dit_quantized_ckpt": "/path/to/minimax_h3_dit_fp8_f16_accum.safetensors",
   "video_vae_quantized": true,
   "video_vae_quant_scheme": "fp8-f16-accum",
-  "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_f16_accum.safetensors",
+  "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_f16_accum_encoder_conv_q21.safetensors",
+  "vae_encoder_conv_mode": "cutlass_fp8_f16_accum",
   "lora_dynamic_apply": true,
   "lora_configs": [
     {
