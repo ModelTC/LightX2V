@@ -2,7 +2,10 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
-from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
+from lightx2v.common.ops.norm import SGLExactRMSNorm128  # noqa: F401
+from lightx2v.common.ops.rope import SGLExactNeoXRope  # noqa: F401
+from lightx2v.models.networks.minimax_h3.weights.merged_qkv import MiniMaxH3MergedQKVWeight
+from lightx2v.models.networks.minimax_h3.weights.reordered_mlp import MiniMaxH3ReorderedMLPWeight
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 
 
@@ -31,8 +34,26 @@ def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
     )
 
 
-def _rms(config, name, eps, create_cuda_buffer=False):
-    return RMS_WEIGHT_REGISTER[config.get("rms_type", "torch_native")](
+def _packed_linear_kwargs(config):
+    kwargs = {
+        "mm_type": config.get("dit_quant_scheme", "Default"),
+        "tp_group": None,
+        "tp_rank": 0,
+        "tp_size": 1,
+        "config": config,
+    }
+    if config.get("tensor_parallel", False):
+        group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+        kwargs.update(
+            tp_group=group,
+            tp_rank=dist.get_rank(group),
+            tp_size=dist.get_world_size(group),
+        )
+    return kwargs
+
+
+def _rms(config, name, eps, create_cuda_buffer=False, kind=None):
+    return RMS_WEIGHT_REGISTER[kind or config.get("rms_type", "torch_native")](
         name,
         create_cuda_buffer=create_cuda_buffer,
         eps=eps,
@@ -42,10 +63,17 @@ def _rms(config, name, eps, create_cuda_buffer=False):
 class MiniMaxH3AttentionWeights(WeightModule):
     def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
-        self.add_module("to_q", _linear(config, f"{prefix}.to_q", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
-        self.add_module("to_k", _linear(config, f"{prefix}.to_k", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
-        self.add_module("to_v", _linear(config, f"{prefix}.to_v", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
+        self.add_module(
+            "qkv",
+            MiniMaxH3MergedQKVWeight(
+                weight_names=tuple(f"{prefix}.to_{name}.weight" for name in ("q", "k", "v")),
+                create_cuda_buffer=create_cuda_buffer,
+                **_packed_linear_kwargs(config),
+            ),
+        )
+
         qk_eps = float(config.get("qk_norm_eps", 1e-5))
+        qk_norm_kind = "sgl_exact_rms_norm_128"
         self.add_module(
             "norm_q",
             _rms(
@@ -53,6 +81,7 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 f"{prefix}.norm_q.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 eps=qk_eps,
+                kind=qk_norm_kind,
             ),
         )
         self.add_module(
@@ -62,13 +91,15 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 f"{prefix}.norm_k.weight",
                 create_cuda_buffer=create_cuda_buffer,
                 eps=qk_eps,
+                kind=qk_norm_kind,
             ),
         )
+        rope_kind = config.get("rope_type", "sgl_exact_neox_rope")
         self.add_module(
             "rope",
-            ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](
+            ROPE_REGISTER[rope_kind](
                 layout="split_half",
-                compute_dtype=torch.float32,
+                compute_dtype=torch.bfloat16,
             ),
         )
         attn_type = config.get("attn_type", "flash_attn3")
@@ -92,7 +123,13 @@ class MiniMaxH3AttentionWeights(WeightModule):
 class MiniMaxH3FeedForwardWeights(WeightModule):
     def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
-        self.add_module("in_proj", _linear(config, f"{prefix}.net.0.proj", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
+        in_proj = MiniMaxH3ReorderedMLPWeight(
+            weight_name=f"{prefix}.net.0.proj.weight",
+            create_cuda_buffer=create_cuda_buffer,
+            lora_prefix="transformer_blocks",
+            **_packed_linear_kwargs(config),
+        )
+        self.add_module("in_proj", in_proj)
         self.add_module("out_proj", _linear(config, f"{prefix}.net.2", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
 
 
@@ -139,8 +176,6 @@ class MiniMaxH3TransformerWeights(WeightModule):
         self.blocks = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config) for i in range(int(config.get("num_layers", 50)))])
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block":
             self.offload_block_cuda_buffers = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config, create_cuda_buffer=True) for i in range(2)])
-            # Register device buffers before source blocks: buffer allocation
-            # needs checkpoint metadata that normal CPU loading consumes.
             self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
             self.offload_phase_cuda_buffers = None
         self.add_module("blocks", self.blocks)

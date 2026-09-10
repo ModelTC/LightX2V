@@ -1,6 +1,9 @@
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.norm import SGLExactRMSNorm128  # noqa: F401
+from lightx2v.models.networks.minimax_h3.weights.merged_qkv import MiniMaxH3MergedQKVWeight
+from lightx2v.models.networks.minimax_h3.weights.reordered_mlp import MiniMaxH3ReorderedMLPWeight
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
@@ -24,28 +27,58 @@ def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
     return MM_WEIGHT_REGISTER[kind](f"{name}.weight", f"{name}.bias" if bias else None, **lora_kwargs)
 
 
-def _rms(config, name, eps):
-    return RMS_WEIGHT_REGISTER[config.get("rms_type", "torch_native")](name, eps=eps)
+def _packed_linear_kwargs(config):
+    kwargs = {
+        "mm_type": "Default",
+        "tp_group": None,
+        "tp_rank": 0,
+        "tp_size": 1,
+        "config": config,
+    }
+    if config.get("tensor_parallel", False):
+        group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+        kwargs.update(
+            tp_group=group,
+            tp_rank=dist.get_rank(group),
+            tp_size=dist.get_world_size(group),
+        )
+    return kwargs
+
+
+def _rms(config, name, eps, kind=None):
+    return RMS_WEIGHT_REGISTER[kind or config.get("rms_type", "torch_native")](name, eps=eps)
 
 
 class MiniMaxH3RefinerAttentionWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
-        self.add_module("to_q", _linear(f"{prefix}.to_q", config=config, tp_split="col"))
-        self.add_module("to_k", _linear(f"{prefix}.to_k", config=config, tp_split="col"))
-        self.add_module("to_v", _linear(f"{prefix}.to_v", config=config, tp_split="col"))
+        self.add_module(
+            "qkv",
+            MiniMaxH3MergedQKVWeight(
+                weight_names=tuple(f"{prefix}.to_{name}.weight" for name in ("q", "k", "v")),
+                lora_prefix="token_refiner",
+                **_packed_linear_kwargs(config),
+            ),
+        )
+        qk_norm_kind = "sgl_exact_rms_norm_128"
         self.add_module(
             "norm_q",
-            _rms(config, f"{prefix}.norm_q.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
+            _rms(
+                config,
+                f"{prefix}.norm_q.weight",
+                eps=float(config.get("qk_norm_eps", 1e-5)),
+                kind=qk_norm_kind,
+            ),
         )
         self.add_module(
             "norm_k",
-            _rms(config, f"{prefix}.norm_k.weight", eps=float(config.get("qk_norm_eps", 1e-5))),
+            _rms(
+                config,
+                f"{prefix}.norm_k.weight",
+                eps=float(config.get("qk_norm_eps", 1e-5)),
+                kind=qk_norm_kind,
+            ),
         )
-        # H3's text refiner attends over a short text-only sequence, while the
-        # main transformer attends over the much longer packed AV sequence.
-        # Allow sparse main attention without paying its setup/quality cost in
-        # the refiner. Existing configs retain their previous shared backend.
         attn_type = config.get("refiner_attn_type", config.get("attn_type", "flash_attn3"))
         attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
         if attn_type == "dynamic_sparse_attn":
@@ -61,7 +94,12 @@ class MiniMaxH3RefinerAttentionWeights(WeightModule):
 class MiniMaxH3FeedForwardWeights(WeightModule):
     def __init__(self, prefix, config):
         super().__init__()
-        self.add_module("in_proj", _linear(f"{prefix}.net.0.proj", config=config, tp_split="col"))
+        in_proj = MiniMaxH3ReorderedMLPWeight(
+            weight_name=f"{prefix}.net.0.proj.weight",
+            lora_prefix="token_refiner",
+            **_packed_linear_kwargs(config),
+        )
+        self.add_module("in_proj", in_proj)
         self.add_module("out_proj", _linear(f"{prefix}.net.2", config=config, tp_split="row"))
 
 
@@ -79,16 +117,27 @@ class MiniMaxH3TokenRefinerBlockWeights(WeightModule):
 class MiniMaxH3PreWeights(WeightModule):
     def __init__(self, config):
         super().__init__()
-        # The released checkpoint deliberately keeps the two media projections
-        # and timestep MLP in fp32.  The text projection/refiner stay bf16.
-        self.add_module("proj_in", _linear("proj_in", bias=True, force_fp32=True))
-        self.add_module("audio_proj_in", _linear("audio_proj_in", bias=True, force_fp32=True))
-        self.add_module("context_embedder", _linear("context_embedder", bias=True))
+        col, row = "col", "row"
+        self.add_module("proj_in", _linear("proj_in", bias=True, force_fp32=True, config=config, tp_split=col))
+        self.add_module(
+            "audio_proj_in",
+            _linear("audio_proj_in", bias=True, force_fp32=True, config=config, tp_split=col),
+        )
+        self.add_module(
+            "context_embedder",
+            _linear("context_embedder", bias=True, config=config, tp_split=col),
+        )
         if not config.get("use_adaln_cache", False):
             # ADALN CACHE SYNC: The offline builder reads these keys and mirrors
             # their FP32 semantics; update the offline builder if either changes.
-            self.add_module("time_linear_1", _linear("time_embedder.linear_1", bias=True, force_fp32=True))
-            self.add_module("time_linear_2", _linear("time_embedder.linear_2", bias=True, force_fp32=True))
+            self.add_module(
+                "time_linear_1",
+                _linear("time_embedder.linear_1", bias=True, force_fp32=True, config=config, tp_split=col),
+            )
+            self.add_module(
+                "time_linear_2",
+                _linear("time_embedder.linear_2", bias=True, force_fp32=True, config=config, tp_split=row),
+            )
         self.add_module(
             "refiner_blocks",
             WeightModuleList([MiniMaxH3TokenRefinerBlockWeights(i, config) for i in range(int(config.get("num_refiner_layers", 2)))]),

@@ -38,6 +38,11 @@ else:
         logger.info("sageattn not found, please install sageattention first")
         sageattn = None
 
+try:
+    from sageattention import sageattn_varlen
+except ImportError:
+    sageattn_varlen = None
+
 
 if magi_register_custom_op is not None and sageattn is not None:
 
@@ -88,6 +93,31 @@ class SageAttn2Weight(AttnWeightTemplate):
         **kwargs,
     ):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        if (cu_seqlens_q is None) != (cu_seqlens_kv is None):
+            raise ValueError("cu_seqlens_q and cu_seqlens_kv must either both be set or both be None")
+        if q.ndim == 3 and cu_seqlens_q is not None and cu_seqlens_q.numel() > 2:
+            if sageattn_varlen is None:
+                raise ImportError("Packed SageAttention2 requires sageattn_varlen")
+            cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True).contiguous()
+            cu_seqlens_kv = cu_seqlens_kv.to(k.device, non_blocking=True).contiguous()
+            if max_seqlen_q is None:
+                max_seqlen_q = int((cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item())
+            if max_seqlen_kv is None:
+                max_seqlen_kv = int((cu_seqlens_kv[1:] - cu_seqlens_kv[:-1]).max().item())
+            x = sageattn_varlen(
+                q,
+                k,
+                v,
+                cu_seqlens_q,
+                cu_seqlens_kv,
+                max_seqlen_q,
+                max_seqlen_kv,
+                is_causal=kwargs.get("causal", False),
+                sm_scale=kwargs.get("softmax_scale"),
+                smooth_k=False,
+            )
+            return x.flatten(1)
+
         if len(q.shape) == 3:
             bs = 1
             q, k, v = q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0)

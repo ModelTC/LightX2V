@@ -9,6 +9,7 @@ from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
 from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.models.networks.minimax_h3.config import resolve_minimax_h3_execution_profile
 from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
@@ -45,7 +46,7 @@ from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
-from lightx2v.utils.ltx2_media_io import encode_video
+from lightx2v.utils.ltx2_media_io import encode_video_sglang_compatible
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -81,12 +82,12 @@ def build_minimax_h3_model_with_lora(config, model_kwargs, lora_configs):
 
 @RUNNER_REGISTER("minimax_h3")
 class MiniMaxH3Runner(DefaultRunner):
-    """Native MiniMax-H3 audio-video runner.
+    """MiniMax-H3 audio-video runner.
 
     Transformer, text-encoder, and VAE residency are configured independently.
     ``cpu_offload`` controls only the transformer, while
-    ``text_encoder_cpu_offload`` and ``vae_cpu_offload`` control the native
-    Qwen3-VL conditioner and both native VAEs. This mirrors Wan's component
+    ``text_encoder_cpu_offload`` and ``vae_cpu_offload`` control the
+    Qwen3-VL conditioner and both VAEs. This mirrors Wan's component
     offload behavior while keeping Diffusers out of the runtime dependency
     graph.
     """
@@ -105,6 +106,8 @@ class MiniMaxH3Runner(DefaultRunner):
     }
 
     def __init__(self, config):
+        self.execution_profile = resolve_minimax_h3_execution_profile(config)
+        self.video_vae_class = MiniMaxH3VideoVAE
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
@@ -267,7 +270,7 @@ class MiniMaxH3Runner(DefaultRunner):
         video_vae_quant_scheme = self.config["video_vae_quant_scheme"] if video_vae_quantized else None
         video_vae_quantized_ckpt = self.config["video_vae_quantized_ckpt"] if video_vae_quantized else None
         vae_sensitive_layer_dtype = DTYPE_MAP[self.config.get("vae_sensitive_layer_dtype", "fp32")]
-        video_vae = MiniMaxH3VideoVAE.from_pretrained(
+        video_vae = self.video_vae_class.from_pretrained(
             self.config["model_path"],
             device=AI_DEVICE,
             cpu_offload=cpu_offload,
@@ -276,6 +279,7 @@ class MiniMaxH3Runner(DefaultRunner):
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
+            rope_type=self.config.get("rope_type", "sgl_exact_neox_rope"),
         )
         self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
         self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
@@ -469,10 +473,18 @@ class MiniMaxH3Runner(DefaultRunner):
             raise ValueError(f"MiniMax-H3 ref2av accepts at most {MAX_REFERENCE_AUDIOS} audio-bearing references")
         return references
 
+    def _reference_pixels(self, value, *, video: bool) -> torch.Tensor:
+        pixels = torch.from_numpy(np.asarray(value).copy())
+        if video:
+            pixels = pixels.permute(3, 0, 1, 2)[None]
+        else:
+            pixels = pixels.permute(2, 0, 1)[None, :, None]
+        return self.video_vae.prepare_reference_pixels(pixels)
+
     def _encode_keyframes(self, keyframes):
         latents = []
         for image in keyframes:
-            pixels = torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1)[None, :, None].float().div_(255.0)
+            pixels = self._reference_pixels(image, video=False)
             latents.append(self.video_vae.encode_condition(pixels, video=False))
         return latents
 
@@ -481,11 +493,11 @@ class MiniMaxH3Runner(DefaultRunner):
         for reference in references:
             if reference.kind != "audio":
                 if reference.kind == "image":
-                    pixels = torch.from_numpy(np.asarray(reference.image).copy()).permute(2, 0, 1)[None, :, None].float().div_(255.0)
+                    pixels = self._reference_pixels(reference.image, video=False)
                     latent = self.video_vae.encode_condition(pixels, video=False)
                 else:
                     frames = reference.frames[: trim_reference_num_frames(reference.frames.shape[0])]
-                    pixels = torch.from_numpy(frames.copy()).permute(3, 0, 1, 2)[None].float().div_(255.0)
+                    pixels = self._reference_pixels(frames, video=True)
                     latent = self.video_vae.encode_condition(pixels, video=True)
                 reference.num_latent_frames = latent.shape[2]
                 reference.latent_height, reference.latent_width = latent.shape[3:]
@@ -564,7 +576,7 @@ class MiniMaxH3Runner(DefaultRunner):
         if not self.config.get("cpu_offload", False):
             logger.info("MiniMax-H3 transformer is resident on the accelerator")
         elif self.config.get("offload_granularity", "model") == "model":
-            logger.info("Moving the native MiniMax-H3 transformer to the accelerator")
+            logger.info("Moving the MiniMax-H3 transformer to the accelerator")
             self.model.to_cuda()
         else:
             logger.info("MiniMax-H3 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
@@ -642,11 +654,8 @@ class MiniMaxH3Runner(DefaultRunner):
                 audio = self.audio_vae.decode(audio_latents)
         return video, audio
 
-    @staticmethod
-    def _video_to_uint8_frames(video):
-        if video.ndim != 5 or video.shape[0] != 1 or video.shape[1] != 3:
-            raise ValueError(f"decoded H3 video must be [1,3,F,H,W], got {tuple(video.shape)}")
-        return (video[0].permute(1, 2, 3, 0).float() * 255.0).round().to(torch.uint8).contiguous().cpu()
+    def _video_to_uint8_frames(self, video):
+        return self.video_vae.to_uint8_frames(video)
 
     def process_images_after_vae_decoder(self):
         if self.video_vae.decode_parallel and dist.get_rank() != 0:
@@ -674,13 +683,13 @@ class MiniMaxH3Runner(DefaultRunner):
             )
             logger.info(f"Saving MiniMax-H3 audio-video output to {output_path}")
             with ProfilingContext4DebugL2("Save Audio-Video Output"):
-                encode_video(
+                encode_video_sglang_compatible(
                     video=frames,
                     fps=int(self.config.get("fps", 24)),
                     audio=audio,
                     output_path=output_path,
-                    video_chunks_number=1,
-                    video_codec_options=self.config.get("video_codec_options"),
+                    crf=self.config.get("sglang_export_crf", 25),
+                    threads=self.config.get("sglang_export_threads", 24),
                 )
             logger.info(f"MiniMax-H3 output saved to {output_path}")
         return {"video": None, "audio": None}

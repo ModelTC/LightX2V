@@ -6,12 +6,12 @@
   "fps": 24,
   "enable_cfg": false,
   "cpu_offload": true,
+  "reference_image_resize_mode": "match",
   "offload_granularity": "model",
   "use_adaln_cache": true,
-  "adaln_cache_dir": "~/.cache/lightx2v/adaln",
+  "adaln_cache_dir": "/data/wushuo1/.cache/lightx2v/adaln",
   "text_encoder_cpu_offload": true,
-  "vae_cpu_offload": false,
-  "vae_decode_parallel": true,
+  "vae_cpu_offload": true,
   "lazy_load": false,
   "unload_modules": false,
   "attn_type": "sage_attn2",
@@ -19,24 +19,22 @@
   "rope_type": "sgl_exact_neox_rope",
   "feature_caching": "NoCaching",
   "use_compile": false,
-  "video_flow_shift": 6.0,
+  "warmup": false,
+  "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "h3_sampling_profile": "dmd",
   "vae_spatial_scale_factor": 16,
   "audio_sampling_rate": 32000,
-  "dit_quantized": true,
-  "dit_quant_scheme": "fp8-sgl",
-  "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors",
-  "lora_dynamic_apply": true,
+  "text_encoder_tensor_parallel": true,
+  "lora_dynamic_apply": false,
   "lora_configs": [
     {
-      "path": "/path/to/minimax_h3_fl2v_turbo_4step_v1.0_768p_bf16.safetensors",
+      "path": "/data/wushuo1/models/Minimax-h3-Turbo/Minimax-h3-Turbo/minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors",
       "strength": 1.0,
-      "alpha": 128
+      "alpha": 8
     }
   ],
   "parallel": {
-    "seq_p_size": 4,
-    "seq_p_attn_type": "ulysses"
+    "tensor_p_size": 8
   }
 }

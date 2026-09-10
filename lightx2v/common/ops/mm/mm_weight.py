@@ -628,9 +628,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return input_tensor_quant, input_tensor_scale
 
     def act_quant_fp8_perchannel_sym_sgl(self, x):
+        x = x.contiguous()
         m, k = x.shape
-        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device="cuda", requires_grad=False)
-        input_tensor_scale = torch.empty((m, 1), dtype=torch.float32, device="cuda", requires_grad=False)
+        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=x.device, requires_grad=False)
+        input_tensor_scale = torch.empty((m, 1), dtype=torch.float32, device=x.device, requires_grad=False)
         sgl_kernel.sgl_per_token_quant_fp8(x, input_tensor_quant, input_tensor_scale)
         return input_tensor_quant, input_tensor_scale
 
@@ -659,9 +660,10 @@ class MMWeightQuantTemplate(MMWeightTemplate):
         return (x_view * (448.0 / x_amax.unsqueeze(2))).to(torch.float8_e4m3fn).view(m, n), (x_amax / 448.0).view(m, -1)
 
     def act_quant_fp8_perchannelgroup128_sym_sgl(self, x):
+        x = x.contiguous()
         m, k = x.shape
-        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device="cuda", requires_grad=False)
-        input_tensor_scale = torch.empty((m, k // 128), dtype=torch.float32, device="cuda", requires_grad=False)
+        input_tensor_quant = torch.empty((m, k), dtype=torch.float8_e4m3fn, device=x.device, requires_grad=False)
+        input_tensor_scale = torch.empty((m, k // 128), dtype=torch.float32, device=x.device, requires_grad=False)
         sgl_kernel.sgl_per_token_group_quant_fp8(
             x,
             input_tensor_quant,
@@ -2025,6 +2027,7 @@ class MMWeightWint8channelAint8channeldynamicSglActVllm(MMWeightQuantTemplate):
         self.scale_force_fp32 = True
 
     def apply(self, input_tensor):
+        input_tensor = input_tensor.contiguous()
         shape = (input_tensor.shape[0], self.weight.shape[1])
         dtype = input_tensor.dtype
         device = input_tensor.device
@@ -2592,6 +2595,7 @@ class MMWeightTP(MMWeightTemplate):
         lora_path="",
         reduce_output=True,
         lora_column_chunks=1,
+        fp32_reduce=False,
     ):
         super().__init__(
             weight_name,
@@ -2610,6 +2614,7 @@ class MMWeightTP(MMWeightTemplate):
         self.split_dim = split_dim  # "col" for column split, "row" for row split
         self.reduce_output = reduce_output
         self.lora_column_chunks = lora_column_chunks
+        self.fp32_reduce = bool(fp32_reduce)
         assert split_dim in ["col", "row"], f"split_dim must be 'col' or 'row', got {split_dim}"
         assert lora_column_chunks >= 1, f"lora_column_chunks must be positive, got {lora_column_chunks}"
 
@@ -2727,7 +2732,12 @@ class MMWeightTP(MMWeightTemplate):
 
         # For row split, need all-reduce to combine results from all ranks
         if self.split_dim == "row" and self.reduce_output and self.tp_size > 1 and self.tp_group is not None:
+            output_dtype = output.dtype
+            if self.fp32_reduce:
+                output = output.float()
             dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
+            if self.fp32_reduce:
+                output = output.to(output_dtype)
             # Add bias after all-reduce (bias is not split for row split)
             if self._row_split_bias is not None:
                 output = output + self._row_split_bias

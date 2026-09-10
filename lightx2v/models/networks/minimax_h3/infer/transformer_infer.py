@@ -4,6 +4,12 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
+from lightx2v.models.networks.minimax_h3.infer.sgl_exact_ops import (
+    _silu_mul_with_activation_rounding_inplace,
+    sgl_exact_indexed_gate,
+    sgl_exact_indexed_scale_shift,
+)
+from lightx2v.models.networks.minimax_h3.infer.tensor_parallel import all_gather_last_dim
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -50,41 +56,52 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return torch.device(AI_DEVICE, device_module.current_device())
 
     def _gather_tp_last_dim(self, tensor):
-        if self.tp_size == 1:
-            return tensor
-        gathered = [torch.empty_like(tensor) for _ in range(self.tp_size)]
-        dist.all_gather(gathered, tensor.contiguous(), group=self.tp_group)
-        return torch.cat(gathered, dim=-1)
+        return all_gather_last_dim(tensor, self.tp_group, self.tp_size)
 
-    def _attention(self, weights, hidden_states, pre_infer_out):
-        q = weights.to_q.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
-        k = weights.to_k.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
-        v = weights.to_v.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
+    @staticmethod
+    def _project_qkv(weights, hidden_states):
+        projected = weights.qkv.apply(hidden_states)
+        return weights.qkv.split_qkv(projected)
+
+    def _apply_qk_norm_rope(self, weights, q, k, pre_infer_out):
+        if pre_infer_out.prepared_rotary_emb is None:
+            pre_infer_out.prepared_rotary_emb = weights.rope.prepare_freqs(
+                pre_infer_out.rotary_emb,
+                rotary_dim=pre_infer_out.rotary_emb[0].shape[-1],
+            )
+        pre_infer_out.prepared_rotary_emb = weights.rope.validate_inputs(q, k, pre_infer_out.prepared_rotary_emb)
         q = weights.norm_q.apply(q)
         k = weights.norm_k.apply(k)
-        q, k = weights.rope.apply(
+        return weights.rope.apply(
             q,
             k,
-            pre_infer_out.rotary_emb,
+            pre_infer_out.prepared_rotary_emb,
             rotary_dim=pre_infer_out.rotary_emb[0].shape[-1],
         )
+
+    def _attention(self, weights, hidden_states, pre_infer_out):
+        q, k, v = self._project_qkv(weights, hidden_states)
+        q = q.unflatten(-1, (self.num_heads, self.head_dim))
+        k = k.unflatten(-1, (self.num_heads, self.head_dim))
+        v = v.unflatten(-1, (self.num_heads, self.head_dim))
+        q, k = self._apply_qk_norm_rope(weights, q, k, pre_infer_out)
         sp_state = pre_infer_out.sequence_parallel_state
+        used_seq_len = self.scheduler.layout.used_sequence_length
         attention_kwargs = {
             "causal": False,
             "scheduler": self.scheduler,
             "block_idx": self.block_idx,
+            "softmax_scale": self.head_dim**-0.5,
+            "cu_seqlens_q": pre_infer_out.cu_seqlens,
+            "cu_seqlens_kv": pre_infer_out.cu_seqlens,
+            "max_seqlen_q": used_seq_len,
+            "max_seqlen_kv": used_seq_len,
         }
         if sp_state is None:
-            seq_len = q.shape[0]
-            cu_seqlens = torch.tensor((0, seq_len), dtype=torch.int32, device=q.device)
             out = weights.calculate.apply(
                 q=q,
                 k=k,
                 v=v,
-                cu_seqlens_q=cu_seqlens,
-                cu_seqlens_kv=cu_seqlens,
-                max_seqlen_q=seq_len,
-                max_seqlen_kv=seq_len,
                 **attention_kwargs,
             )
         else:
@@ -112,11 +129,19 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
 
     @staticmethod
     def _ff(weights, hidden_states):
-        value, gate = weights.in_proj.apply(hidden_states).chunk(2, dim=-1)
-        return weights.out_proj.apply(value * F.silu(gate))
+        hidden_states = weights.in_proj.apply(hidden_states)
+        hidden_states = _silu_mul_with_activation_rounding_inplace(hidden_states)
+        return weights.out_proj.apply(hidden_states)
+
+    @staticmethod
+    def _apply_modulation(hidden_states, shift, scale, indices):
+        return sgl_exact_indexed_scale_shift(hidden_states, shift, scale, indices)
+
+    @staticmethod
+    def _apply_residual(residual, gate, branch, indices):
+        return sgl_exact_indexed_gate(residual, gate, branch, indices)
 
     def infer_block(self, weights, hidden_states, pre_infer_out, modulation=None):
-        # Keep the Python cache lookup outside the compiled block.
         if modulation is None:
             modulation = self._compute_adaln_table(weights, pre_infer_out)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = modulation.chunk(6, dim=-1)
@@ -124,16 +149,15 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
 
         residual = hidden_states
         normed = weights.norm1.apply(hidden_states)
-        normed = normed * (1.0 + scale_msa.index_select(0, indices))
-        normed = normed + shift_msa.index_select(0, indices)
-        hidden_states = residual + gate_msa.index_select(0, indices) * self._attention(weights.attn, normed, pre_infer_out)
+        normed = self._apply_modulation(normed, shift_msa, scale_msa, indices)
+        attention_output = self._attention(weights.attn, normed, pre_infer_out)
+        hidden_states = self._apply_residual(residual, gate_msa, attention_output, indices)
 
         residual = hidden_states
         normed = weights.norm2.apply(hidden_states)
-        normed = normed * (1.0 + scale_mlp.index_select(0, indices))
-        normed = normed + shift_mlp.index_select(0, indices)
-        hidden_states = residual + gate_mlp.index_select(0, indices) * self._ff(weights.ff, normed)
-        return hidden_states
+        normed = self._apply_modulation(normed, shift_mlp, scale_mlp, indices)
+        ff_output = self._ff(weights.ff, normed)
+        return self._apply_residual(residual, gate_mlp, ff_output, indices)
 
     def _compute_adaln_table(self, weights, pre_infer_out):
         # ADALN CACHE SYNC: This projection is reproduced by the offline builder.

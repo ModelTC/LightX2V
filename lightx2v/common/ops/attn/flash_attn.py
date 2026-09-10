@@ -34,6 +34,20 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from .template import AttnWeightTemplate
 
 
+def _uses_varlen(q, cu_seqlens_q, cu_seqlens_kv):
+    if (cu_seqlens_q is None) != (cu_seqlens_kv is None):
+        raise ValueError("cu_seqlens_q and cu_seqlens_kv must either both be set or both be None")
+    return (q.ndim == 4 and q.shape[0] > 1) or (cu_seqlens_q is not None and cu_seqlens_q.numel() > 2)
+
+
+def _flatten_varlen_qkv(q, k, v):
+    if q.ndim == 4:
+        q = q.reshape(-1, q.shape[-2], q.shape[-1])
+        k = k.reshape(-1, k.shape[-2], k.shape[-1])
+        v = v.reshape(-1, v.shape[-2], v.shape[-1])
+    return q, k, v
+
+
 @ATTN_WEIGHT_REGISTER("flash_attn2")
 class FlashAttn2Weight(AttnWeightTemplate):
     def __init__(self):
@@ -52,27 +66,25 @@ class FlashAttn2Weight(AttnWeightTemplate):
     ):
         causal = kwargs.get("causal", False)
         softmax_scale = kwargs.get("softmax_scale", None)
-        if len(q.shape) == 3:
-            bs = 1
-        elif len(q.shape) == 4:
-            bs = q.shape[0]
-        total_seqlen = bs * max_seqlen_q
-
-        if bs == 1:
+        total_seqlen = q.shape[0] if q.ndim == 3 else q.shape[0] * q.shape[1]
+        if not _uses_varlen(q, cu_seqlens_q, cu_seqlens_kv):
             if len(q.shape) == 3:
                 q = q.unsqueeze(0)
                 k = k.unsqueeze(0)
                 v = v.unsqueeze(0)
             x = flash_attn_func_v2(q, k, v, softmax_scale=softmax_scale, causal=causal).reshape(total_seqlen, -1)
         else:
+            if cu_seqlens_q is None:
+                batch_size, sequence_length = q.shape[:2]
+                cu_seqlens_q = torch.arange(batch_size + 1, device=q.device, dtype=torch.int32) * sequence_length
+                cu_seqlens_kv = torch.arange(batch_size + 1, device=k.device, dtype=torch.int32) * k.shape[1]
+                max_seqlen_q = sequence_length
+                max_seqlen_kv = k.shape[1]
             if cu_seqlens_q.is_cpu:
                 cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
             if cu_seqlens_kv.is_cpu:
                 cu_seqlens_kv = cu_seqlens_kv.to(k.device, non_blocking=True)
-            if len(q.shape) == 4:
-                q = q.reshape(-1, q.shape[-2], q.shape[-1])
-                k = k.reshape(-1, k.shape[-2], k.shape[-1])
-                v = v.reshape(-1, v.shape[-2], v.shape[-1])
+            q, k, v = _flatten_varlen_qkv(q, k, v)
             x = flash_attn_varlen_func_v2(
                 q,
                 k,
@@ -127,27 +139,25 @@ class FlashAttn3Weight(AttnWeightTemplate):
     ):
         causal = kwargs.get("causal", False)
         softmax_scale = kwargs.get("softmax_scale", None)
-        if len(q.shape) == 3:
-            bs = 1
-        elif len(q.shape) == 4:
-            bs = q.shape[0]
-        total_seqlen = bs * max_seqlen_q
-
-        if bs == 1:
+        total_seqlen = q.shape[0] if q.ndim == 3 else q.shape[0] * q.shape[1]
+        if not _uses_varlen(q, cu_seqlens_q, cu_seqlens_kv):
             if len(q.shape) == 3:
                 q = q.unsqueeze(0)
                 k = k.unsqueeze(0)
                 v = v.unsqueeze(0)
             x = flash_attn_func_v3(q, k, v, softmax_scale=softmax_scale, causal=causal).reshape(total_seqlen, -1)
         else:
+            if cu_seqlens_q is None:
+                batch_size, sequence_length = q.shape[:2]
+                cu_seqlens_q = torch.arange(batch_size + 1, device=q.device, dtype=torch.int32) * sequence_length
+                cu_seqlens_kv = torch.arange(batch_size + 1, device=k.device, dtype=torch.int32) * k.shape[1]
+                max_seqlen_q = sequence_length
+                max_seqlen_kv = k.shape[1]
             if cu_seqlens_q.is_cpu:
                 cu_seqlens_q = cu_seqlens_q.to(q.device, non_blocking=True)
             if cu_seqlens_kv.is_cpu:
                 cu_seqlens_kv = cu_seqlens_kv.to(k.device, non_blocking=True)
-            if len(q.shape) == 4:
-                q = q.reshape(-1, q.shape[-2], q.shape[-1])
-                k = k.reshape(-1, k.shape[-2], k.shape[-1])
-                v = v.reshape(-1, v.shape[-2], v.shape[-1])
+            q, k, v = _flatten_varlen_qkv(q, k, v)
             x = flash_attn_varlen_func_v3(
                 q,
                 k,

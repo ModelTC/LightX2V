@@ -27,7 +27,7 @@
     "strict": true
   },
   "rms_type": "sgl-kernel",
-  "rope_type": "minimax_h3_triton_rope",
+  "rope_type": "sgl_exact_neox_rope",
   "feature_caching": "NoCaching",
   "use_compile": false,
   "video_flow_shift": 12.0,
