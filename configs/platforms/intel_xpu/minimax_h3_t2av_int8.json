@@ -6,6 +6,7 @@
   "fps": 24,
   "target_fps": 24,
   "enable_cfg": false,
+  "warmup": true,
   "cpu_offload": true,
   "offload_granularity": "block",
   "use_adaln_cache": true,
@@ -22,6 +23,7 @@
   "rope_type": "minimax_h3_xpu_rope",
   "feature_caching": "NoCaching",
   "use_compile": true,
+  "use_fused_qkv_attn": true,
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
@@ -31,5 +33,5 @@
   "keep_latents_dtype_in_scheduler": true,
   "dit_quantized": true,
   "dit_quant_scheme": "int8-intel-xpu",
-  "dit_quantized_ckpt": "/path/to/minimax_h3_int8.safetensors"
+  "dit_quantized_ckpt": "/llm/models/MiniMax-H3/quantized/int8/minimax_h3_int8.safetensors"
 }
