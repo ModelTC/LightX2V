@@ -31,6 +31,8 @@ MiniMax-H3/
 
 基础 transformer 加载一次即可处理前四种任务。参考生成使用独立的 transformer 和服务。这些权重已经完成 CFG 蒸馏，请勿传入 `negative_prompt`，包括空字符串。
 
+启动时显式设置 `--model-variant`：`fl2av` 加载 `transformer`，支持 `t2av`、`i2av`、`l2av` 和 `fl2av`；`ref2av` 加载 `transformer_ref`，支持 `ref2av`。variant 没有默认值；每次请求通过 `task` 选择该分支支持的任务。两个分支可以使用同一份推理 JSON；启用 LoRA 或量化时，需要选择与分支匹配的权重。
+
 ## AdaLN 缓存
 
 MiniMax-H3 开启 CPU offload 时强制要求 `use_adaln_cache: true`。开始推理前，需要使用与推理一致的模型、配置、推理步数和 flow shift 生成持久化缓存：
@@ -39,11 +41,11 @@ MiniMax-H3 开启 CPU offload 时强制要求 `use_adaln_cache: true`。开始�
 bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
 ```
 
-运行前需要在脚本中设置 `lightx2v_path`、`model_path`、`--config_json` 和 `--task`。使用 `--task fl2av` 会生成两套基础 transformer profile，可供 `t2av`、`i2av`、`l2av` 和 `fl2av` 共用。参考任务需要另外使用 `--task ref2av` 生成 `transformer_ref` 缓存。所有设置了 `use_adaln_cache: true` 的 JSON 配置都必须显式设置 `adaln_cache_dir`；仓库自带配置统一写为 `~/.cache/lightx2v/adaln`。最终目录名包含缓存任务组和推理步数，例如 `minimax_h3/fl2av_29steps`、`minimax_h3/fl2av_04steps` 或 `minimax_h3/ref2av_29steps`。各自的 `manifest.json` 只保存必要的缓存规格，推理时直接与当前预期规格比较。离线生成和推理读取同一个 JSON 配置项。缓存生成不会覆盖已经存在的目标目录。推理会严格读取匹配缓存，不会回退到在线 AdaLN 计算。
+运行前需要在脚本中设置 `lightx2v_path`、`model_path`、`--config_json` 和 `--model-variant`。使用 `--model-variant fl2av` 会生成两套基础 transformer profile，可供 `t2av`、`i2av`、`l2av` 和 `fl2av` 共用。参考任务需要另外使用 `--model-variant ref2av` 生成 `transformer_ref` 缓存。所有设置了 `use_adaln_cache: true` 的 JSON 配置都必须显式设置 `adaln_cache_dir`；仓库自带配置统一写为 `~/.cache/lightx2v/adaln`。最终目录名包含模型分支、推理步数和视频/音频 flow shift，例如 `minimax_h3/fl2av_29steps_shift_12.0_3.0`、`minimax_h3/fl2av_04steps_shift_6.0_3.0` 或 `minimax_h3/ref2av_29steps_shift_12.0_3.0`。各自的 `manifest.json` 只保存必要的缓存规格，推理时直接与当前预期规格比较。离线生成和推理读取同一个 JSON 配置项。缓存生成不会覆盖已经存在的目标目录。推理会严格读取匹配缓存，不会回退到在线 AdaLN 计算。
 
 ## 离线推理
 
-五种任务脚本共用 `configs/minimax_h3/minimax_h3.json`：单 GPU、BF16 权重、模型级 CPU 卸载，默认输出 124 帧，`[高度, 宽度] = [544, 960]`。脚本中的 `--task` 决定加载哪组 transformer 以及如何处理输入，JSON 文件名不决定任务。
+五种任务脚本共用 `configs/minimax_h3/minimax_h3.json`：单 GPU、BF16 权重、模型级 CPU 卸载，默认输出 124 帧，`[高度, 宽度] = [544, 960]`。脚本中的 `--model-variant` 决定加载哪组 transformer，`--task` 选择本次请求的任务和输入处理方式。
 
 ```bash
 bash scripts/minimax_h3/run_minimax_h3_t2av.sh
@@ -90,7 +92,7 @@ bash scripts/minimax_h3/run_minimax_h3_ref2av.sh
 | SP4 或 TP2 × SP2 | `0,1,2,3` | `4` |
 | SP8，包括 5090 配置 | `0,1,2,3,4,5,6,7` | `8` |
 
-使用 8 GPU 参考任务 LoRA 配置时，在 `run_minimax_h3_ref2av.sh` 中设置 `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7`，并将 `python -m lightx2v.infer` 改为 `torchrun --standalone --nproc_per_node=8 -m lightx2v.infer`。保留其中的 `--task ref2av` 和参考输入参数。
+使用 8 GPU 参考任务 LoRA 配置时，在 `run_minimax_h3_ref2av.sh` 中设置 `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7`，并将 `python -m lightx2v.infer` 改为 `torchrun --standalone --nproc_per_node=8 -m lightx2v.infer`。保留其中的 `--model-variant ref2av`、`--task ref2av` 和参考输入参数。
 
 两个单 GPU Sol 配置均默认输出 362 帧，尺寸为 `[768, 1344]`。在 `run_minimax_h3_t2av.sh` 中通过 `--config_json` 选择对应的 Sol JSON，即可使用这些默认规格。
 
@@ -131,6 +133,8 @@ bash scripts/minimax_h3/run_minimax_h3_ref2av.sh
 
 在 JSON 中将 `infer_steps` 设置为实际模型计算次数：四步推理填 `4`，八步推理填 `8`。Scheduler 会自动包含末尾零点。迁移旧版 MiniMax-H3 配置时，将原 `infer_steps` 减一（`5` → `4`、`9` → `8`、`30` → `29`），即可保持原有采样过程。仓库中的配置已完成同步。
 
+Python 构造 `LightX2VPipeline` 时传入 `model_variant="fl2av"` 或 `"ref2av"`，在 `generate()` 中选择 `task`。
+
 使用 Python 时，先设置[示例](../../examples/minimax_h3/minimax_h3_t2av_dmd.py)中的 `MODEL_PATH`，以及所选 JSON 中的本地 LoRA 路径，再执行：
 
 ```bash
@@ -139,7 +143,7 @@ python examples/minimax_h3/minimax_h3_t2av_dmd.py
 
 ## 服务与 POST 请求
 
-先启动基础任务服务，再从另一个终端发送请求：
+基础任务服务使用 `--model-variant fl2av` 启动，启动命令不再传 `--task`。先启动服务，再从另一个终端发送请求：
 
 ```bash
 bash scripts/minimax_h3/server/start_server.sh
@@ -154,7 +158,7 @@ python scripts/minimax_h3/server/post_fl2av.py
 
 基础任务请求必须指定 `task`，因为服务加载的 transformer 支持四种任务。图片示例会将客户端本地文件编码为 Base64 后发送。
 
-参考生成需要单独启动参考任务服务：
+参考生成使用 `--model-variant ref2av` 启动服务：
 
 ```bash
 bash scripts/minimax_h3/server/start_server_ref2av.sh
@@ -193,7 +197,7 @@ curl --fail http://localhost:8000/v1/tasks/TASK_ID/result -o minimax_h3.mp4
 
 ## 请求参数与启动配置
 
-- 启动配置：模型路径、默认任务、权重/LoRA、算子、卸载、并行、编译和预热。Prompt、媒体路径、seed 和输出路径应放在 Python 调用、CLI 命令或 POST 请求体中。
+- 启动配置：模型路径、模型分支、权重/LoRA、算子、卸载、并行、编译和预热。Prompt、媒体路径、seed 和输出路径应放在 Python 调用、CLI 命令或 POST 请求体中。
 - 输出默认值：JSON 设置 `target_video_length` 和 `target_height`/`target_width`。请求可通过 `num_frames` 和 `target_shape`（`[高度, 宽度]`）覆盖。宽高必须是 32 的倍数。帧数向上对齐到 `17*n+5`，支持的对齐后帧数范围为 124 到 362；例如，125 会调整为 141。
 - Seed：省略或传入 `null` 时默认使用 42；显式提供的非负整数按原值使用，包括 0。
 - 保存：每个 CLI 示例都显式提供输出路径，移除该参数即跳过文件保存，服务采用相同规则。输出为 MP4，包含 24 FPS 视频和 32 kHz 立体声音频。

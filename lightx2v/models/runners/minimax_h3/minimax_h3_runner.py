@@ -108,11 +108,11 @@ class MiniMaxH3Runner(DefaultRunner):
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
-        self.loaded_transformer_partition = "transformer_ref" if config["task"] == "ref2av" else "transformer"
+        self.loaded_transformer_partition = "transformer_ref" if config["model_variant"] == "ref2av" else "transformer"
 
     def get_supported_tasks(self):
         """Return tasks supported by the loaded transformer weights."""
-        if self.config["task"] == "ref2av":
+        if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
         return ("t2av", "i2av", "l2av", "fl2av")
 
@@ -126,7 +126,7 @@ class MiniMaxH3Runner(DefaultRunner):
 
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
-        task = self.config["task"]
+        task = self.config["model_variant"]
 
         if task == "ref2av" and self.config.get("vae_use_compile", False):
             height, width, _ = self._WARMUP_SHAPES[0]
@@ -136,11 +136,11 @@ class MiniMaxH3Runner(DefaultRunner):
             del pixels
 
         for height, width, num_frames in self._WARMUP_SHAPES:
-            logger.info(f"Warmup: {height}x{width}x{num_frames}")
+            logger.info(f"Warmup {task}: {height}x{width}x{num_frames}")
             transformer_offloaded = not self.config.get("cpu_offload", False)
             try:
                 self.scheduler.generator = None
-                self._prepare_warmup_inputs(height, width, num_frames)
+                self._prepare_warmup_inputs(task, height, width, num_frames)
                 self.inputs = self._run_input_encoder_local_h3()
                 self.init_run()
 
@@ -166,8 +166,7 @@ class MiniMaxH3Runner(DefaultRunner):
         logger.info("[Warmup] Warmup completed")
         self._maybe_freeze_gc()
 
-    def _prepare_warmup_inputs(self, height, width, num_frames):
-        task = self.config["task"]
+    def _prepare_warmup_inputs(self, task, height, width, num_frames):
         self.input_info = INPUT_INFO_TYPES[task](
             task=task,
             seed=0,

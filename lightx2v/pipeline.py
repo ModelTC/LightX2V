@@ -18,7 +18,7 @@ from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 class LightX2VPipeline:
     def __init__(
         self,
-        task="",
+        task=None,
         model_path="",
         model_cls="",
         support_tasks=None,
@@ -162,8 +162,8 @@ class LightX2VPipeline:
 
         config = build_startup_config(startup_config)
         self.model_cls = config["model_cls"]
-        self.model_path = config["model_path"]
         self.model_variant = config.get("model_variant", self.model_variant)
+        self.model_path = config["model_path"]
         validate_config_paths(config)
 
         if config["parallel"]:
@@ -173,7 +173,7 @@ class LightX2VPipeline:
 
         self.runner = build_runner(config)
         print(self.runner.config)
-        logger.info(f"Initializing {self.model_cls} runner for {config['task']} task...")
+        logger.info(f"Initialized {self.model_cls} runner; supported tasks: {', '.join(self.runner.supported_tasks)}")
         logger.info(f"Model path: {self.model_path}")
         logger.info("LightGenerator initialized successfully!")
 
@@ -426,13 +426,11 @@ class LightX2VPipeline:
         Seed is a non-negative integer; omitted/None defaults to 42.
         NeoPP preserves explicit None for LightLLM session RNG continuation.
         An omitted output path is passed to the runner as None, skipping file saving.
-        An omitted task uses the task explicitly set when creating the pipeline.
-        When only support_tasks is provided, each call must select a task.
+        An omitted task uses the task explicitly set when creating the pipeline,
+        or the runner's only supported task. Multi-task runners require a task.
         """
         if task is None:
             task = self.task
-        if not task:
-            raise ValueError("task is required when the pipeline has no default task")
         request_data = {
             "task": task,
             "seed": seed,

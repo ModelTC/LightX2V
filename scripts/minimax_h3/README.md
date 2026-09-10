@@ -31,6 +31,8 @@ Each transformer directory needs its `config.json`, weight index, and checkpoint
 
 The base transformer can serve all four base tasks without reloading. Reference generation uses a separate transformer and service. These checkpoints are CFG-distilled: do not send `negative_prompt`, including an empty string.
 
+Set `--model-variant` explicitly at startup: `fl2av` loads `transformer` and supports `t2av`, `i2av`, `l2av`, and `fl2av`; `ref2av` loads `transformer_ref` and supports `ref2av`. There is no default variant. Requests select `task` within the loaded variant. Both variants can use the same inference JSON; choose a matching LoRA or quantized checkpoint when those features are enabled.
+
 ## AdaLN cache
 
 MiniMax-H3 CPU offload requires `use_adaln_cache: true`. Before starting inference, generate the persistent cache with the same model, config, inference-step count, and flow shifts that inference will use:
@@ -39,11 +41,11 @@ MiniMax-H3 CPU offload requires `use_adaln_cache: true`. Before starting inferen
 bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
 ```
 
-Set `lightx2v_path`, `model_path`, `--config_json`, and `--task` in the script before running it. `--task fl2av` creates both base-transformer profiles and serves `t2av`, `i2av`, `l2av`, and `fl2av`. Run the script separately with `--task ref2av` to build the reference-transformer cache. Every JSON config with `use_adaln_cache: true` must explicitly set `adaln_cache_dir`; the bundled configs use `~/.cache/lightx2v/adaln`. Final directory names include the cache group and inference-step count, such as `minimax_h3/fl2av_29steps`, `minimax_h3/fl2av_04steps`, or `minimax_h3/ref2av_29steps`. Each `manifest.json` stores the minimal cache specification, which inference compares directly with its expected specification. Offline generation and inference read this same JSON setting. Cache generation refuses to overwrite an existing target directory. Inference loads a matching cache strictly and does not fall back to online AdaLN computation.
+Set `lightx2v_path`, `model_path`, `--config_json`, and `--model-variant` in the script before running it. `--model-variant fl2av` creates both base-transformer profiles and serves `t2av`, `i2av`, `l2av`, and `fl2av`. Run the script separately with `--model-variant ref2av` to build the reference-transformer cache. Every JSON config with `use_adaln_cache: true` must explicitly set `adaln_cache_dir`; the bundled configs use `~/.cache/lightx2v/adaln`. Final directory names include the variant, inference-step count, and video/audio flow shifts, such as `minimax_h3/fl2av_29steps_shift_12.0_3.0`, `minimax_h3/fl2av_04steps_shift_6.0_3.0`, or `minimax_h3/ref2av_29steps_shift_12.0_3.0`. Each `manifest.json` stores the minimal cache specification, which inference compares directly with its expected specification. Offline generation and inference read this same JSON setting. Cache generation refuses to overwrite an existing target directory. Inference loads a matching cache strictly and does not fall back to online AdaLN computation.
 
 ## Offline inference
 
-The five task scripts share `configs/minimax_h3/minimax_h3.json`: one GPU, BF16 weights, model CPU offload, and 124 frames at `[height, width] = [544, 960]`. The script's `--task` selects the transformer and input handling; the JSON filename does not select a task.
+The five task scripts share `configs/minimax_h3/minimax_h3.json`: one GPU, BF16 weights, model CPU offload, and 124 frames at `[height, width] = [544, 960]`. The script's `--model-variant` selects the transformer; `--task` selects this request's input handling.
 
 ```bash
 bash scripts/minimax_h3/run_minimax_h3_t2av.sh
@@ -90,7 +92,7 @@ To select another mode, change `--config_json` in the listed script to the corre
 | SP4 or TP2 × SP2 | `0,1,2,3` | `4` |
 | SP8, including the 5090 presets | `0,1,2,3,4,5,6,7` | `8` |
 
-For the 8-GPU reference LoRA config, set `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7` in `run_minimax_h3_ref2av.sh` and replace `python -m lightx2v.infer` with `torchrun --standalone --nproc_per_node=8 -m lightx2v.infer`. Keep its `--task ref2av` and reference input arguments.
+For the 8-GPU reference LoRA config, set `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7` in `run_minimax_h3_ref2av.sh` and replace `python -m lightx2v.infer` with `torchrun --standalone --nproc_per_node=8 -m lightx2v.infer`. Keep its `--model-variant ref2av`, `--task ref2av`, and reference input arguments.
 
 Both single-GPU Sol configs default to 362 frames at `[768, 1344]`. Select the corresponding Sol JSON through `--config_json` in `run_minimax_h3_t2av.sh` to use these output defaults.
 
@@ -131,6 +133,8 @@ The shared `dmd/minimax_h3_bf16_4step.json` defaults to `lora_dynamic_apply: tru
 
 Set `infer_steps` in JSON to the number of model evaluations: `4` for 4-step inference and `8` for 8-step inference. The scheduler includes the terminal zero automatically. When migrating an older MiniMax-H3 config, subtract one from its `infer_steps` value (`5` → `4`, `9` → `8`, `30` → `29`) to preserve the original sampling schedule. The bundled configs already use this convention.
 
+In Python, pass `model_variant="fl2av"` or `"ref2av"` to `LightX2VPipeline`, and select `task` in `generate()`.
+
 For Python, set `MODEL_PATH` in [the example](../../examples/minimax_h3/minimax_h3_t2av_dmd.py) and the local LoRA path in its selected JSON, then run:
 
 ```bash
@@ -139,7 +143,7 @@ python examples/minimax_h3/minimax_h3_t2av_dmd.py
 
 ## Server and POST
 
-Start the base service, then submit a request from another terminal:
+The base service starts with `--model-variant fl2av` and no startup `--task`. Start it, then submit a request from another terminal:
 
 ```bash
 bash scripts/minimax_h3/server/start_server.sh
@@ -154,7 +158,7 @@ python scripts/minimax_h3/server/post_fl2av.py
 
 Each base request must specify `task`, because the loaded transformer supports four tasks. The image examples encode client-local files as Base64.
 
-For reference generation, use the separate reference service instead:
+For reference generation, start the service with `--model-variant ref2av`:
 
 ```bash
 bash scripts/minimax_h3/server/start_server_ref2av.sh
@@ -193,7 +197,7 @@ Use a relative path such as `./minimax_h3_t2av.mp4` for `save_result_path`; the 
 
 ## Request and startup settings
 
-- Startup: model paths, default task, weights/LoRA, kernels, offload, parallelism, compile, and warmup. Prompt, media paths, seed, and output path belong in the Python call, CLI command, or POST body.
+- Startup: model paths, model variant, weights/LoRA, kernels, offload, parallelism, compile, and warmup. Prompt, media paths, seed, and output path belong in the Python call, CLI command, or POST body.
 - Output defaults: JSON sets `target_video_length` and `target_height`/`target_width`. Requests can override them with `num_frames` and `target_shape` (`[height, width]`). Dimensions must be multiples of 32. Frame counts align upward to `17*n+5`, with supported aligned counts from 124 to 362; for example, 125 becomes 141.
 - Seed: omitted or `null` defaults to 42; an explicit non-negative value, including 0, is used as supplied.
 - Saving: every CLI example explicitly provides an output path. Removing it skips file saving. The service follows the same rule. Output is MP4 with 24 FPS video and 32 kHz stereo audio.

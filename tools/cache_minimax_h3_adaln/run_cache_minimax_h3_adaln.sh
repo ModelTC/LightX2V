@@ -57,4 +57,4 @@ source "${lightx2v_path}/scripts/base/base.sh"
 python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
   --model_path "${model_path}" \
   --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3.json" \
-  --task fl2av
+  --model-variant fl2av

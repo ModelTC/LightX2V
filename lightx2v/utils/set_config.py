@@ -45,7 +45,9 @@ def build_startup_config(config_data):
         with open(config["config_json"], "r") as f:
             config_json = json.load(f)
         config.update(config_json)
-    config["task"] = config_data["task"]
+    config["task"] = config_data.get("task")
+    if config_data.get("model_variant") is not None:
+        config["model_variant"] = config_data["model_variant"]
 
     load_model_config(config)
     return config
@@ -176,7 +178,10 @@ def load_model_config(config):
             config.setdefault("vae_scale_factor_temporal", 4)
             config.setdefault("vae_scale_factor", 8)
     elif config["model_cls"] == "minimax_h3":
-        transformer_subfolder = "transformer_ref" if config["task"] == "ref2av" else "transformer"
+        model_variant = config.get("model_variant")
+        if model_variant not in ("fl2av", "ref2av"):
+            raise ValueError("MiniMax-H3 requires model_variant='fl2av' or 'ref2av'; set --model-variant when starting the model")
+        transformer_subfolder = "transformer_ref" if model_variant == "ref2av" else "transformer"
         transformer_path = os.path.join(config["model_path"], transformer_subfolder)
         transformer_config_path = os.path.join(transformer_path, "config.json")
         if not os.path.isfile(transformer_config_path):
@@ -184,6 +189,8 @@ def load_model_config(config):
         with open(transformer_config_path, "r") as f:
             model_config = json.load(f)
         config.update(model_config)
+        config["model_variant"] = model_variant
+        config.pop("task", None)
         config["dit_original_ckpt"] = transformer_path
         if config.get("dit_quantized_ckpt"):
             config["dit_quantized"] = True
@@ -300,7 +307,7 @@ def load_model_config(config):
 
 def build_cli_inputs(args):
     args_data = {key: value for key, value in vars(args).items() if value is not None}
-    startup_fields = {"config_json", "model_cls", "model_path", "sf_model_path", "task"}
+    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "sf_model_path", "task"}
     startup_args = {key: value for key, value in args_data.items() if key in startup_fields}
     request_data = {key: value for key, value in args_data.items() if key not in startup_fields}
     request_data["task"] = args.task

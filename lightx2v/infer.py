@@ -43,6 +43,7 @@ def main():
         required=True,
         choices=RUNNER_MODULES,
     )
+    parser.add_argument("--model-variant", type=str, default=None, help="Model-specific startup weight variant; MiniMax-H3 uses fl2av or ref2av.")
 
     parser.add_argument(
         "--task",
@@ -73,7 +74,7 @@ def main():
             "i23d",
             "omni_vision_task",
         ],
-        required=True,
+        default=None,
     )
     parser.add_argument(
         "--omni_vision_subtask",

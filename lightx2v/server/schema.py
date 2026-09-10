@@ -34,7 +34,7 @@ class BaseTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
-    task: Optional[str] = Field(None, description="Required for multi-task runners; single-task services use their startup task")
+    task: Optional[str] = Field(None, description="Required for multi-task runners; single-task services use their only supported task")
     prompt: str = Field("", description="Generation prompt")
     negative_prompt: str = Field("", description="Negative prompt")
     image_path: str = Field("", description="Base64 encoded image or URL")
