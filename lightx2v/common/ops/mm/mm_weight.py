@@ -68,6 +68,36 @@ except ImportError:
     comfy_kitchen = None
 
 
+if comfy_kitchen is not None:
+    # Keep comfy-kitchen's DLPack implementation opaque to FakeTensor tracing.
+    @torch.library.custom_op(
+        "lightx2v::int8_convrot_linear",
+        mutates_args=(),
+        device_types="cuda",
+    )
+    def _int8_convrot_linear(
+        input_tensor: torch.Tensor,
+        weight: torch.Tensor,
+        weight_scale: torch.Tensor,
+        bias: torch.Tensor | None,
+        out_dtype: torch.dtype,
+        convrot_groupsize: int,
+    ) -> torch.Tensor:
+        return comfy_kitchen.int8_linear(
+            input_tensor,
+            weight,
+            weight_scale,
+            bias,
+            out_dtype=out_dtype,
+            convrot=True,
+            convrot_groupsize=convrot_groupsize,
+        )
+
+    @_int8_convrot_linear.register_fake
+    def _int8_convrot_linear_fake(input_tensor, weight, weight_scale, bias, out_dtype, convrot_groupsize):
+        return input_tensor.new_empty((*input_tensor.shape[:-1], weight.shape[0]), dtype=out_dtype)
+
+
 if magi_register_custom_op is not None and sgl_kernel is not None:
 
     @magi_register_custom_op(
@@ -1842,14 +1872,13 @@ class MMWeightWint8ConvRot(MMWeightQuantTemplate):
         if input_tensor.shape[-1] % self._convrot_groupsize != 0:
             raise ValueError(f"INT8 ConvRot requires input width divisible by {self._convrot_groupsize}, got {input_tensor.shape[-1]}")
 
-        output_tensor = comfy_kitchen.int8_linear(
+        output_tensor = _int8_convrot_linear(
             input_tensor.contiguous(),
             self.weight.contiguous(),
             self.weight_scale.contiguous(),
             self._get_actual_bias(),
-            out_dtype=self.infer_dtype,
-            convrot=True,
-            convrot_groupsize=self._convrot_groupsize,
+            self.infer_dtype,
+            self._convrot_groupsize,
         )
         if self.has_lora_branch:
             output_tensor = output_tensor + self.apply_lora(input_tensor)
