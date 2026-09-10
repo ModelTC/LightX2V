@@ -331,7 +331,7 @@ class BaseTransformerModel(ABC):
             self.post_weight.load(self.original_weight_dict)
 
         # Handle LoRA if needed
-        if self.config.get("lora_dynamic_apply", False):
+        if self.config.get("lora_dynamic_apply", False) and self.lora_path is not None:
             assert self.config.get("lora_configs", False)
             if hasattr(self, "_register_lora"):
                 self._register_lora(self.lora_path, self.lora_strength)

@@ -80,12 +80,13 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "prompt": args.prompt,
         "negative_prompt": args.negative_prompt,
-        "infer_steps": args.infer_steps,
         "seed": args.seed,
         "aspect_ratio": args.aspect_ratio,
         "save_result_path": args.save_result_path,
         "presigned_url": args.presigned_url,
     }
+
+    payload = {key: value for key, value in payload.items() if value is not None}
 
     image_base64 = args.image_base64
     if not image_base64 and args.image_path:
@@ -111,13 +112,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Call /v1/tasks/image/sync with presigned_url upload.")
     parser.add_argument("--url", type=str, default="http://127.0.0.1:8000", help="Server base url")
     parser.add_argument("--prompt", type=str, required=True, help="Prompt text")
-    parser.add_argument("--negative_prompt", type=str, default="", help="Negative prompt text")
-    parser.add_argument("--infer_steps", type=int, default=30, help="Inference steps")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--aspect_ratio", type=str, default="16:9", help="Aspect ratio for image task")
+    parser.add_argument("--negative_prompt", type=str, default=None, help="Negative prompt text")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--aspect_ratio", type=str, default=None, help="Aspect ratio for image task")
     parser.add_argument("--timeout_seconds", type=int, default=600, help="Sync API timeout_seconds")
     parser.add_argument("--poll_interval_seconds", type=float, default=0.5, help="Sync API poll_interval_seconds")
-    parser.add_argument("--save_result_path", type=str, default="", help="Server-side save_result_path")
+    parser.add_argument("--save_result_path", type=str, default=None, help="Server-side save_result_path")
     parser.add_argument("--presigned_url", type=str, default="", help="Presigned URL used by server to upload final PNG")
     parser.add_argument("--s3_endpoint_url", type=str, default="", help="S3 compatible endpoint, e.g. https://s3.amazonaws.com")
     parser.add_argument("--s3_region", type=str, default="", help="S3 region, defaults to AWS_DEFAULT_REGION or us-east-1")

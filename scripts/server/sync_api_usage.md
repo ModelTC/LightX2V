@@ -2,6 +2,8 @@
 
 本文档说明如何调用 `POST /v1/tasks/image/sync` 接口。
 
+文本、输入媒体和 seed 由请求提供，seed 省略时使用 42。尺寸、帧数、宽高比等规格可继承部署 JSON 的默认值，并由请求覆盖。`negative_prompt` 省略时不发送该字段；显式值（包括空字符串）会按当前模型的能力校验，开启 CFG 的模型仍可能对空字符串应用默认模板。省略 `save_result_path` 或传 null 时不保存文件，同步图片接口继续从内存返回图片。
+
 ## 1. 接口说明
 
 - **接口**：`POST /v1/tasks/image/sync`
@@ -21,8 +23,6 @@ curl -X POST "http://127.0.0.1:8000/v1/tasks/image/sync?timeout_seconds=600&poll
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "a cute cat, studio light",
-    "negative_prompt": "",
-    "infer_steps": 30,
     "seed": 42,
     "aspect_ratio": "16:9"
   }' \
@@ -38,8 +38,6 @@ url = "http://127.0.0.1:8000/v1/tasks/image/sync"
 params = {"timeout_seconds": 600, "poll_interval_seconds": 0.5}
 payload = {
     "prompt": "a cute cat, studio light",
-    "negative_prompt": "",
-    "infer_steps": 30,
     "seed": 42,
     "aspect_ratio": "16:9",
 }
@@ -63,8 +61,6 @@ curl -X POST "http://127.0.0.1:8000/v1/tasks/image/sync?timeout_seconds=600&poll
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "a cute cat, studio light",
-    "negative_prompt": "",
-    "infer_steps": 30,
     "seed": 42,
     "aspect_ratio": "16:9",
     "presigned_url": "https://your-presigned-put-url"
@@ -91,8 +87,6 @@ url = "http://127.0.0.1:8000/v1/tasks/image/sync"
 params = {"timeout_seconds": 600, "poll_interval_seconds": 0.5}
 payload = {
     "prompt": "a cute cat, studio light",
-    "negative_prompt": "",
-    "infer_steps": 30,
     "seed": 42,
     "aspect_ratio": "16:9",
     "presigned_url": "https://your-presigned-put-url",

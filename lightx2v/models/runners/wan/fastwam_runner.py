@@ -12,6 +12,7 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.networks.wan.fastwam_model import FastWAMNativeModel
 from lightx2v.models.runners.base_runner import BaseRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -377,6 +378,10 @@ class FastWAMPolicy:
 
 @RUNNER_REGISTER("fastwam")
 class FastWAMRunner(BaseRunner):
+    supported_request_fields_by_task = {
+        "i2va": COMMON_REQUEST_FIELDS | {"image_path", "prompt", "save_action_path", "state_path"},
+    }
+
     def init_modules(self):
         logger.info("Loading FastWAM policy...")
         self.policy = FastWAMPolicy.from_config(self.config)

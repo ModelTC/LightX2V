@@ -14,9 +14,19 @@ uses these LightX2V interfaces:
   bytes, and wraps `_run_infer_step` to check cancellation.
 - `runner.set_kvcache(...)` injects conditioning; `set_inference_params(...)`
   supplies matching position offsets, CFG settings and output format.
-- `generate(seed=None, save_result_path="", target_shape=[height, width])`
+- `generate(task="t2i", seed=None, save_result_path="", target_shape=[height, width])`
   continues the RNG state restored by LightLLM for later images in a session.
   An explicit integer seed starts a seeded generation.
+
+Pipelines initialized with only `support_tasks` require `task` on every generation
+call. The linked LightLLM adapter currently omits it; add
+`task="t2i" if is_t2i else "i2i"` to its
+`self.pipe.generate(...)` call when upgrading LightX2V. Keep its KV injection and
+session RNG handling unchanged.
+
+An explicit constructor `task`, such as `LightX2VPipeline(..., task="t2i")`, is the
+default for calls that omit it. Passing `generate(task="i2i", ...)` selects a task
+for that request without changing the default.
 
 Default image editing also uses `set_kvcache`: LightLLM includes image
 conditioning in the two KV branches. The optional `image_guidance_scale != 1`
@@ -27,7 +37,8 @@ The Python files in this directory replay KV dumps for backend development and
 performance debugging. Replace their `/path/to/...` placeholders with the
 checkpoint, KV files and output directory for your model and request. The
 filenames and position offsets in the examples describe particular dumps;
-update both to match your captured request. Each turn calls `load_kvcache(...)`
+update both and select `task="t2i"` or `task="i2i"` to match your captured request.
+Each turn calls `load_kvcache(...)`
 and `set_inference_params(...)` before `generate(...)`;
 `save_result_for_debug=True` saves the image to the requested file.
 
@@ -105,8 +116,8 @@ bash /path/to/LightX2V/scripts/neopp/run_neopp_dense_t2i_1k.sh
 ```
 
 For image editing, capture KV from a LightLLM request that includes the input
-images. CFG settings come from the selected JSON. In `replay_kv.py`, an explicit
-seed overrides the JSON seed; if both are omitted, the default is 42.
+images. CFG settings come from the selected JSON. In `replay_kv.py`, the seed
+comes from `--seed` and defaults to 42 when omitted.
 
 `run_neopp_dense_i2i_1k_cfg3.sh` has been removed because the current runner does
 not implement three-branch image guidance. Use the supported two-branch image

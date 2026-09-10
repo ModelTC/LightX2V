@@ -16,6 +16,7 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.infinitetalk.audio_encoder import InfiniteTalkAudioEncoder
 from lightx2v.models.networks.wan.infinitetalk_model import WanInfiniteTalkModel
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
 from lightx2v.server.metrics import monitor_cli
@@ -103,6 +104,18 @@ def _is_video(path):
 
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
+    supported_request_fields_by_task = {
+        "s2v": COMMON_REQUEST_FIELDS
+        | PROMPT_FIELDS
+        | {
+            "audio_path",
+            "image_path",
+            "target_video_length",
+            "video_duration",
+            "video_path",
+        },
+    }
+
     def __init__(self, config):
         super().__init__(config)
         assert self.config["task"] == "s2v", "InfiniteTalk runner expects task=s2v"
@@ -207,7 +220,7 @@ class InfiniteTalkRunner(WanRunner):
                     audio_paths = [item.strip() for item in str(audio_path).split(",") if item.strip()]
                     cond_audio = {f"person{idx + 1}": path for idx, path in enumerate(audio_paths)}
 
-            cond_video = getattr(self.input_info, "src_video", "") or getattr(self.input_info, "image_path", "") or self.config.get("cond_video", "") or self.config.get("image_path", "")
+            cond_video = self.input_info.video_path or self.input_info.image_path or self.config.get("cond_video", "") or self.config.get("image_path", "")
             data = {
                 "prompt": getattr(self.input_info, "prompt", "") or self.config.get("prompt", ""),
                 "cond_video": cond_video,
@@ -222,14 +235,14 @@ class InfiniteTalkRunner(WanRunner):
             if self.config.get("bbox", None):
                 data["bbox"] = self.config["bbox"]
 
-        input_cond_video = getattr(self.input_info, "src_video", "") or getattr(self.input_info, "image_path", "")
+        input_cond_video = self.input_info.video_path or self.input_info.image_path
         if input_cond_video:
             data["cond_video"] = input_cond_video
 
         if not data.get("prompt"):
             raise ValueError("InfiniteTalk requires prompt from --prompt or config infinitetalk_input/prompt.")
         if not data.get("cond_video"):
-            raise ValueError("InfiniteTalk requires cond_video from --src_video, --image_path, or config.")
+            raise ValueError("InfiniteTalk requires cond_video from --video_path, --image_path, or config.")
         if not data.get("cond_audio"):
             raise ValueError("InfiniteTalk requires cond_audio from --audio_path or config.")
 

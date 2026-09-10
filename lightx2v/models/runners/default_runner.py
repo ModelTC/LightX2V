@@ -288,30 +288,15 @@ class DefaultRunner(BaseRunner):
         self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
         self.vsr_model = self.load_vsr_model() if "video_super_resolution" in self.config else None
 
-    def set_inputs(self, inputs):
-        self.input_info.seed = inputs.get("seed", 42)
-        self.input_info.prompt = inputs.get("prompt", "")
-        if "prompt_ref" in self.input_info.__dataclass_fields__:
-            self.input_info.prompt_ref = inputs.get("prompt_ref", self.input_info.prompt_ref)
-        self.input_info.negative_prompt = inputs.get("negative_prompt", "")
-        if "image_path" in self.input_info.__dataclass_fields__:
-            self.input_info.image_path = inputs.get("image_path", "")
-        if "state_path" in self.input_info.__dataclass_fields__:
-            self.input_info.state_path = inputs.get("state_path", "")
-        if "audio_path" in self.input_info.__dataclass_fields__:
-            self.input_info.audio_path = inputs.get("audio_path", "")
-        if "video_path" in self.input_info.__dataclass_fields__:
-            self.input_info.video_path = inputs.get("video_path", "")
-        if "src_video" in self.input_info.__dataclass_fields__:
-            self.input_info.src_video = inputs.get("src_video", "")
-        self.input_info.save_result_path = inputs.get("save_result_path", "")
-        if "save_action_path" in self.input_info.__dataclass_fields__:
-            self.input_info.save_action_path = inputs.get("save_action_path", "")
+    def get_target_video_length(self):
+        value = getattr(self.input_info, "target_video_length", None)
+        return int(self.config["target_video_length"] if value is None else value)
 
-    def set_config(self, config_modify):
-        logger.info(f"modify config: {config_modify}")
-        with self.config.temporarily_unlocked():
-            self.config.update(config_modify)
+    def get_target_size(self):
+        target_shape = getattr(self.input_info, "target_shape", None)
+        if target_shape:
+            return int(target_shape[0]), int(target_shape[1])
+        return int(self.config["target_height"]), int(self.config["target_width"])
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
@@ -414,8 +399,6 @@ class DefaultRunner(BaseRunner):
         self.input_info.original_size = img_ori.size
 
         resize_mode = self.config.get("resize_mode", None)
-        # Treat empty string the same as missing — InputInfo dataclasses default
-        # `resize_mode` to "", which used to silently skip the resize branch.
         if resize_mode:
             img, h, w = resize_image(
                 img,
@@ -480,14 +463,13 @@ class DefaultRunner(BaseRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_vace(self):
-        src_video = self.input_info.src_video
-        src_mask = self.input_info.src_mask
-        src_ref_images = self.input_info.src_ref_images
+        ref_images = self.input_info.src_ref_images
+        target_height, target_width = self.get_target_size()
         src_video, src_mask, src_ref_images = self.prepare_source(
-            [src_video],
-            [src_mask],
-            [None if src_ref_images is None else src_ref_images.split(",")],
-            (self.config["target_width"], self.config["target_height"]),
+            [self.input_info.video_path or None],
+            [self.input_info.mask_path or None],
+            [ref_images.split(",") if ref_images else None],
+            (target_width, target_height),
         )
         self.src_ref_images = src_ref_images
 
@@ -578,6 +560,9 @@ class DefaultRunner(BaseRunner):
             del self.vae_decoder
             self.maybe_empty_cache()
 
+    def get_output_fps(self):
+        return getattr(self.input_info, "output_fps", None) or self.config.get("fps", 16)
+
     def process_images_after_vae_decoder(self):
         return_result_tensor = self.input_info.return_result_tensor
         save_result = self.input_info.save_result_path is not None
@@ -594,10 +579,11 @@ class DefaultRunner(BaseRunner):
         if "video_frame_interpolation" in self.config:
             assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
             target_fps = self.config["video_frame_interpolation"]["target_fps"]
-            logger.info(f"Interpolating frames from {self.config.get('fps', 16)} to {target_fps}")
+            source_fps = self.get_output_fps()
+            logger.info(f"Interpolating frames from {source_fps} to {target_fps}")
             self.gen_video_final = self.vfi_model.interpolate_frames(
                 self.gen_video_final,
-                source_fps=self.config.get("fps", 16),
+                source_fps=source_fps,
                 target_fps=target_fps,
             )
 
@@ -610,7 +596,7 @@ class DefaultRunner(BaseRunner):
         if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
             fps = self.config["video_frame_interpolation"]["target_fps"]
         else:
-            fps = self.config.get("fps", 16)
+            fps = self.get_output_fps()
 
         out_path = self.input_info.save_result_path
         img_in = (getattr(self.input_info, "image_path", None) or "").strip()

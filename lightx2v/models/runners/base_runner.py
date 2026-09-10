@@ -7,6 +7,8 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
+from lightx2v.utils.input_info import INPUT_INFO_TYPES, UNSET, InputInfo
+from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -16,8 +18,17 @@ class BaseRunner(ABC):
     Defines interface methods that all subclasses must implement
     """
 
+    input_info_cls_by_task: dict[str, type[InputInfo]] = {}
+    supported_request_fields_by_task: dict[str, frozenset[str]] = {}
+
     def __init__(self, config):
         self.config = config
+        task = config.get("task")
+        if not task:
+            raise ValueError("task must be set when the runner is created")
+        if task not in self.supported_request_fields_by_task:
+            raise ValueError(f"{type(self).__name__} does not support task {task!r}")
+        self.supported_tasks = self.get_supported_tasks()
         self.vae_encoder_need_img_original = False
         self.input_info = None
         self.enable_reuse = config.get("enable_reuse", False)
@@ -68,6 +79,60 @@ class BaseRunner(ABC):
         if self.config.get("warmup", False):
             raise NotImplementedError(f"Warmup is not supported for {type(self).__name__}")
 
+    def get_supported_tasks(self):
+        """Return tasks accepted by this initialized runner."""
+        return (self.config["task"],)
+
+    def create_input_info(self, request_data):
+        """Create the runtime context for one inference request."""
+        task = request_data["task"]
+        input_info_cls = self.input_info_cls_by_task.get(task) or INPUT_INFO_TYPES[task]
+        input_info = input_info_cls()
+        input_info.update(self.config)
+        input_info.update(request_data)
+
+        if "aspect_ratio" in request_data and "target_shape" not in request_data:
+            input_info.target_shape = []
+        elif "target_shape" not in request_data and "target_shape" not in self.config and "target_height" in self.config and "target_width" in self.config:
+            input_info.update({"target_shape": [self.config["target_height"], self.config["target_width"]]})
+
+        input_info.seed = self.resolve_request_seed(request_data)
+        return input_info
+
+    def resolve_request_seed(self, request_data):
+        seed = request_data.get("seed")
+        return 42 if seed is None else seed
+
+    def get_supported_request_fields(self, task):
+        """Return supported request fields for the given task."""
+        supported_request_fields = self.supported_request_fields_by_task[task]
+        if not self.config.get("enable_cfg", False):
+            supported_request_fields = supported_request_fields - {"negative_prompt"}
+        return supported_request_fields
+
+    def prepare_request(self, request_data):
+        """Build and validate the runtime context for one request."""
+        request_data = {key: value for key, value in request_data.items() if value is not UNSET and value is not None}
+        task = request_data.get("task")
+        if task is None:
+            if len(self.supported_tasks) > 1:
+                raise ValueError("task is required when the runner supports multiple tasks")
+            task = self.config["task"]
+        request_data["task"] = task
+        if task not in self.supported_tasks:
+            task_names = ", ".join(self.supported_tasks)
+            raise ValueError(f"Task {task!r} is not supported by this runner; expected one of: {task_names}")
+        unsupported_fields = set(request_data) - self.get_supported_request_fields(task)
+        if unsupported_fields:
+            raise ValueError(f"{type(self).__name__} ({task}) does not support request fields: {', '.join(sorted(unsupported_fields))}")
+        return self.create_input_info(request_data)
+
+    def run_request(self, input_info):
+        """Run a request that has already passed request preparation."""
+        if input_info.seed is not None:
+            seed_all(input_info.seed)
+        return self.run_pipeline(input_info)
+
     def set_reuse(self, reuse, reuse_prefix_segments=0):
         if reuse and not self.enable_reuse:
             raise ValueError(f"This {type(self).__name__} service does not enable reuse")
@@ -106,51 +171,6 @@ class BaseRunner(ABC):
         gc.freeze()
         self._gc_frozen = True
         logger.info(f"[GC] gc.collect() reclaimed {collected} objects; gc.freeze() moved ~{n} live tracked objects out of future GC walks")
-
-    def apply_disagg_request_overrides(self, config_modify):
-        """Mirror flat disagg request fields into ``disagg_config`` in disagg mode only."""
-        if not isinstance(config_modify, dict):
-            return
-        if not self.config.get("disagg_mode"):
-            return
-        disagg_config = self.config.get("disagg_config")
-        if not isinstance(disagg_config, dict):
-            return
-
-        def _safe_int(key):
-            value = config_modify.get(key)
-            if value is None:
-                return None
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return None
-
-        with self.config.temporarily_unlocked():
-            data_bootstrap_room = _safe_int("data_bootstrap_room")
-            if data_bootstrap_room is not None:
-                self.config["data_bootstrap_room"] = data_bootstrap_room
-
-            disagg_bootstrap_room = _safe_int("disagg_bootstrap_room")
-            if disagg_bootstrap_room is not None:
-                disagg_config["bootstrap_room"] = disagg_bootstrap_room
-                self.config["data_bootstrap_room"] = disagg_bootstrap_room
-
-            decoder_bootstrap_room = _safe_int("disagg_decoder_bootstrap_room")
-            if decoder_bootstrap_room is not None:
-                disagg_config["decoder_bootstrap_room"] = decoder_bootstrap_room
-
-            phase1_receiver_engine_rank = _safe_int("disagg_phase1_receiver_engine_rank")
-            if phase1_receiver_engine_rank is not None:
-                self.config["disagg_phase1_receiver_engine_rank"] = phase1_receiver_engine_rank
-
-            for flat_key, disagg_key in (
-                ("disagg_phase1_receiver_engine_rank", "receiver_engine_rank"),
-                ("disagg_phase2_sender_engine_rank", "receiver_engine_rank"),
-            ):
-                value = _safe_int(flat_key)
-                if value is not None:
-                    disagg_config[disagg_key] = value
 
     def load_transformer(self):
         """Load transformer model

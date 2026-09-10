@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
@@ -15,14 +16,7 @@ class ImageGenerationService(BaseGenerationService):
 
     async def generate_with_stop_event(self, message: Any, stop_event) -> Optional[Any]:
         try:
-            task_data = {field: getattr(message, field) for field in message.model_fields_set if field != "task_id"}
-            task_data["task_id"] = message.task_id
-            task_data["target_shape"] = message.target_shape
-
-            if hasattr(message, "aspect_ratio"):
-                task_data["aspect_ratio"] = message.aspect_ratio
-            if hasattr(message, "i2i_denoise_strength"):
-                task_data["i2i_denoise_strength"] = message.i2i_denoise_strength
+            task_data = self.prepare_task_data(message)
 
             if stop_event.is_set():
                 logger.info(f"Task {message.task_id} cancelled before processing")
@@ -38,12 +32,12 @@ class ImageGenerationService(BaseGenerationService):
                 self._pack_image_and_mask_as_dir(task_data)
                 logger.info(f"Task {message.task_id} packed image+mask dir: {task_data.get('image_path')}")
 
-            self._prepare_output_path(message.save_result_path, task_data)
-            task_data["seed"] = message.seed
+            task_data.pop("image_mask_path", None)
             prefer_memory_result = bool(getattr(message, "prefer_memory_result", False))
             task_data.pop("prefer_memory_result", None)
             task_data.pop("presigned_url", None)
-            task_data["return_result_tensor"] = prefer_memory_result
+            if prefer_memory_result:
+                task_data["return_result_tensor"] = True
 
             result = await self.inference_service.submit_task_async(task_data)
 
@@ -54,9 +48,6 @@ class ImageGenerationService(BaseGenerationService):
                 raise RuntimeError("Task processing failed")
 
             if result.get("status") == "success":
-                actual_save_path = self.file_service.get_output_path(message.save_result_path)
-                if not actual_save_path.suffix:
-                    actual_save_path = actual_save_path.with_suffix(self.get_output_extension())
                 if prefer_memory_result:
                     result_png = result.get("result_png")
                     if not result_png:
@@ -65,15 +56,16 @@ class ImageGenerationService(BaseGenerationService):
                     return TaskResponse(
                         task_id=message.task_id,
                         task_status="completed",
-                        save_result_path="",
+                        save_result_path=None,
                         result_png=result_png,
                         usage=usage,
                     )
 
+                output_path = result["save_result_path"]
                 return TaskResponse(
                     task_id=message.task_id,
                     task_status="completed",
-                    save_result_path=actual_save_path.name,
+                    save_result_path=str(Path(output_path).absolute()) if output_path is not None else None,
                 )
             else:
                 error_msg = result.get("error", "Inference failed")

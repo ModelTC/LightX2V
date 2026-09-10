@@ -11,6 +11,7 @@ from lightx2v.models.networks.worldplay.bi_model import WorldPlayBIModel
 from lightx2v.models.networks.worldplay.pose_utils import pose_to_input
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner
 from lightx2v.models.schedulers.worldplay.bi_scheduler import WorldPlayBIScheduler
+from lightx2v.utils.input_info import WorldPlayI2VInputInfo, WorldPlayT2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -110,6 +111,9 @@ class WorldPlayBIRunner(HunyuanVideo15Runner):
     - ProPE (camera pose) conditioning
     - Chunk-based generation with context frame selection
     """
+
+    input_info_cls_by_task = {"t2v": WorldPlayT2VInputInfo, "i2v": WorldPlayI2VInputInfo}
+    supported_request_fields_by_task = {task: request_fields | {"pose"} for task, request_fields in HunyuanVideo15Runner.supported_request_fields_by_task.items()}
 
     def __init__(self, config):
         # BI-specific parameters
@@ -230,7 +234,7 @@ class WorldPlayBIRunner(HunyuanVideo15Runner):
 
         # Process pose input if available
         pose_output = None
-        if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
+        if self.input_info.pose is not None:
             pose_output = self._process_pose_input(self.input_info.pose, self.input_info.latent_shape[1])
 
         torch_device_module.empty_cache()
@@ -257,7 +261,7 @@ class WorldPlayBIRunner(HunyuanVideo15Runner):
 
         # Process pose input if available
         pose_output = None
-        if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
+        if self.input_info.pose is not None:
             pose_output = self._process_pose_input(self.input_info.pose, self.input_info.latent_shape[1])
 
         torch_device_module.empty_cache()

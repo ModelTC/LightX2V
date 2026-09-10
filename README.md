@@ -176,6 +176,8 @@ For attention operators installation, please refer to our documentation: **[Engl
 
 ### Usage Example
 
+See the [MiniMax-H3 guide](scripts/minimax_h3/README.md) for checkpoint layout, local LoRA paths, CLI presets, and server/POST examples.
+
 ```python
 # examples/minimax_h3/minimax_h3_t2av_dmd.py
 """
@@ -194,7 +196,7 @@ pipe = LightX2VPipeline(
 # The DMD config uses the released 768p LoRA, 4 inference steps,
 # video_flow_shift=6, audio_flow_shift=3, and lora alpha=128.
 pipe.create_generator(
-    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step_single_gpu_offload.json"
+    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step.json"
 )
 
 # Generation parameters

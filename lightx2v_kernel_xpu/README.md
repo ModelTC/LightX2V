@@ -274,3 +274,27 @@ version `0.0.1` because CUTE FMHA is disabled there.
 CUTE FMHA is disabled on Windows because the current sycl-tla kernel produces
 incorrect attention results there. `build.bat` builds only the existing
 ESIMD/oneDNN extension, and `sycl_kernels.has_cute_fmha()` returns `False`.
+
+### MiniMax-H3 SLA block-sparse attention
+
+The Linux BMG build also exposes an SLA forward path for BF16 MiniMax-H3
+self-attention in `[B,L,H,128]` layout:
+
+```python
+lut = sycl_kernels.sla_block_map(q, k, keep_ratio=0.15, block_q=128, block_k=128)
+out = sycl_kernels.sparse_block_attention(q, k, v, lut)
+# Or route and execute in one call:
+out = sycl_kernels.sla_sparse_attention(q, k, v, keep_ratio=0.15)
+```
+
+The CUTE kernel fuses sparse QK, online softmax, and PV and never materializes
+the score matrix. The optimized contract is forward-only, non-causal, B=1,
+BF16, D=128, equal Q/K/V head counts, and 128x128 SLA blocks. Other supported
+64/128 block or GQA shapes currently use a slower Triton-XPU fallback.
+
+Benchmark the kernel, router, and dense CUTE baseline separately with:
+
+```bash
+ONEAPI_DEVICE_SELECTOR=level_zero:0 PYTHONPATH=python \
+  python test/bench_sla_sparse_attention.py
+```

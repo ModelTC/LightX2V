@@ -1,5 +1,5 @@
 {
-  "infer_steps": 30,
+  "infer_steps": 29,
   "target_video_length": 124,
   "target_height": 544,
   "target_width": 960,
@@ -8,6 +8,8 @@
   "enable_cfg": false,
   "cpu_offload": true,
   "offload_granularity": "block",
+  "use_adaln_cache": true,
+  "adaln_cache_dir": "~/.cache/lightx2v/adaln",
   "text_encoder_cpu_offload": true,
   "text_encoder_offload_granularity": "block",
   "text_encoder_tensor_parallel": false,

@@ -4,15 +4,13 @@
 
 import argparse
 import sys
-from argparse import Namespace
 from pathlib import Path
 
 import torch
 from PIL import Image
 
 from lightx2v.models.runners.bagel.sensenova_vision_runner import SenseNovaVisionRunner
-from lightx2v.utils.input_info import SenseNovaVisionInputInfo
-from lightx2v.utils.set_config import set_config
+from lightx2v.utils.set_config import build_startup_config
 
 
 def parse_args():
@@ -67,14 +65,14 @@ def main():
         visualize_panoptic_segmentation,
     )
 
-    config_args = Namespace(
-        model_cls="sensenova_vision",
-        task="omni_vision_task",
-        model_path=args.model_path,
-        config_json=str(lightx2v_root / "configs/sensenova_vision/sensenova_vision.json"),
-        seed=args.seed,
+    config = build_startup_config(
+        {
+            "model_cls": "sensenova_vision",
+            "task": "omni_vision_task",
+            "model_path": args.model_path,
+            "config_json": str(lightx2v_root / "configs/sensenova_vision/sensenova_vision.json"),
+        }
     )
-    config = set_config(config_args)
     config["sensenova_source_path"] = str(source_root)
     runner = SenseNovaVisionRunner(config)
     runner.init_modules()
@@ -87,15 +85,16 @@ def main():
         return str(source_root / relative_path)
 
     def run(subtask, image_paths, prompt, save_name="", seed=None, **kwargs):
-        info = SenseNovaVisionInputInfo(
-            seed=args.seed if seed is None else seed,
-            prompt=prompt,
-            image_path=",".join(source_file(path) for path in image_paths),
-            save_result_path=str(output_dir / save_name) if save_name else "",
-            omni_vision_subtask=subtask,
+        request_data = {
+            "seed": args.seed if seed is None else seed,
+            "prompt": prompt,
+            "image_path": ",".join(source_file(path) for path in image_paths),
+            "save_result_path": str(output_dir / save_name) if save_name else "",
+            "omni_vision_subtask": subtask,
             **kwargs,
-        )
-        return runner.run_pipeline(info)
+        }
+        input_info = runner.prepare_request(request_data)
+        return runner.run_request(input_info)
 
     # 1. General understanding.
     if selected("01"):

@@ -50,9 +50,10 @@ MODEL_PATH=/path/to/Wan2.1-I2V-14B-480P \
 
 MiniMax-H3 的示例沿用 15 秒、768p、block CPU offload 配置：
 
+运行前，将 `scripts/minimax_h3/run_minimax_h3_t2av.sh` 中的 `lightx2v_path` 和 `model_path` 改为本地目录，并将其 `--config_json` 参数改为 `"${lightx2v_path}/configs/minimax_h3/minimax_h3_sol_block_offload.json"`。
+
 ```bash
-MODEL_PATH=/path/to/MiniMax-H3 \
-    bash scripts/minimax_h3/run_minimax_h3_t2av_sol_attn_offload.sh
+bash scripts/minimax_h3/run_minimax_h3_t2av.sh
 ```
 
-对应配置为 `configs/minimax_h3/minimax_h3_t2av_sol_attn_block_offload.json`。Sol-Attn 仅用于 50 层主 Transformer，短文本 refiner 使用 dense Torch SDPA；前 6 个去噪步骤和第 0 层通过 `dense_backend=sage_attn2` 使用 SageAttention2。H3 的 attention 序列按 `[text | audio | video]` 混合打包，不是单一的三维视频网格，因此该配置使用 `reorder=none`，不能直接启用 Wan 的 Morton3D 重排。
+对应配置为 `configs/minimax_h3/minimax_h3_sol_block_offload.json`。Sol-Attn 仅用于 50 层主 Transformer，短文本 refiner 使用 dense Torch SDPA；前 6 个去噪步骤和第 0 层通过 `dense_backend=sage_attn2` 使用 SageAttention2。H3 的 attention 序列按 `[text | audio | video]` 混合打包，不是单一的三维视频网格，因此该配置使用 `reorder=none`，不能直接启用 Wan 的 Morton3D 重排。

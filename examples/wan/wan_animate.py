@@ -34,7 +34,7 @@ pipe = LightX2VPipeline(
     model_cls="wan2.2_animate",
     task="animate",
 )
-pipe.replace_flag = True  # Set to True for replace mode, False for animate mode
+pipe.startup_config["replace_flag"] = True  # Set to True for replace mode, False for animate mode
 
 # Alternative: create generator from config JSON file
 # pipe.create_generator(
@@ -55,7 +55,6 @@ pipe.create_generator(
 
 seed = 42
 prompt = "视频中的人在做动作"
-negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 src_pose_path = "../save_results/animate/process_results/src_pose.mp4"
 src_face_path = "../save_results/animate/process_results/src_face.mp4"
 src_ref_images = "../save_results/animate/process_results/src_ref.png"
@@ -67,6 +66,5 @@ pipe.generate(
     src_face_path=src_face_path,
     src_ref_images=src_ref_images,
     prompt=prompt,
-    negative_prompt=negative_prompt,
     save_result_path=save_result_path,
 )

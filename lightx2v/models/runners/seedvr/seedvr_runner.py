@@ -23,6 +23,7 @@ from loguru import logger
 from torch import Tensor
 
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.seedvr.scheduler import SeedVRScheduler
 from lightx2v.models.video_encoders.hf.seedvr import attn_video_vae_v3_s8_c16_t4_inflation_sd3_init
 from lightx2v.models.video_encoders.hf.seedvr.color_fix import wavelet_reconstruction
@@ -141,6 +142,16 @@ def _get_read_video():
 class SeedVRRunner(DefaultRunner):
     """Runner for SeedVR video super-resolution model."""
 
+    supported_request_fields_by_task = {
+        "sr": COMMON_REQUEST_FIELDS | {"image_path", "sr_ratio", "video_path"},
+    }
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if self.config.get("seq_parallel", False):
+            supported_request_fields -= {"image_path"}
+        return supported_request_fields
+
     def __init__(self, config):
         super().__init__(config)
         self.run_input_encoder = self._run_input_encoder_local_sr
@@ -227,17 +238,16 @@ class SeedVRRunner(DefaultRunner):
             logger.warning(f"[SeedVRRunner] sr_overlap >= sr_segment_length, clamp to {overlap}")
         return seg_len, overlap
 
-    def _set_output_fps(self, fps):
+    def set_output_fps(self, fps):
         if fps is None:
             return
         try:
             fps = float(fps)
-        except Exception:
+        except (TypeError, ValueError):
             return
         if fps <= 0:
             return
-        with self.config.temporarily_unlocked():
-            self.config["fps"] = fps
+        self.input_info.output_fps = fps
 
     def _probe_video_torchcodec(self, video_path):
         from torchcodec.decoders import VideoDecoder
@@ -254,7 +264,7 @@ class SeedVRRunner(DefaultRunner):
             fps = float(self.config.get("fps", 16))
         else:
             fps = float(fps)
-            self._set_output_fps(fps)
+            self.set_output_fps(fps)
 
         return int(total_frames), fps, []
 
@@ -272,7 +282,7 @@ class SeedVRRunner(DefaultRunner):
         if fps_for_seek is None or fps_for_seek == 0:
             fps_for_seek = float(self.config.get("fps", 16))
         if fps is not None and fps != 0:
-            self._set_output_fps(fps)
+            self.set_output_fps(fps)
         return total_frames, fps_for_seek, pts
 
     def _build_sr_segments(self, total_frames, seg_len, overlap):
@@ -331,7 +341,7 @@ class SeedVRRunner(DefaultRunner):
         )
         if info is not None and self._sr_fps in [None, 0]:
             self._sr_fps = info.get("video_fps", self._sr_fps)
-            self._set_output_fps(self._sr_fps)
+            self.set_output_fps(self._sr_fps)
 
         if video.shape[0] > total_len:
             video = video[:total_len]
@@ -713,7 +723,7 @@ class SeedVRRunner(DefaultRunner):
 
     def _run_input_encoder_local_sr(self):
         """Prepare the input video, VAE latents and diffusion condition."""
-        if "video_path" in self.input_info.__dataclass_fields__ and self.input_info.video_path:
+        if self.input_info.video_path:
             video_path = self.input_info.video_path
 
             if getattr(self, "_sr_segment", None) is not None:
@@ -732,7 +742,7 @@ class SeedVRRunner(DefaultRunner):
                 read_video = _get_read_video()
                 video, _, info = read_video(video_path, output_format="TCHW")
                 if info is not None:
-                    self._set_output_fps(info.get("video_fps", None))
+                    self.set_output_fps(info.get("video_fps", None))
             if video.numel() == 0:
                 raise ValueError(f"Failed to read video from {video_path}")
 
@@ -740,7 +750,7 @@ class SeedVRRunner(DefaultRunner):
             input_dtype = torch.float32 if self._seedvr_sp_size > 1 else GET_DTYPE()
             img = video.to(device=input_device, dtype=input_dtype).div_(255.0)
             input_source = video_path
-        elif "image_path" in self.input_info.__dataclass_fields__ and self.input_info.image_path:
+        elif self.input_info.image_path:
             from PIL import Image
 
             img_path = self.input_info.image_path
@@ -804,7 +814,7 @@ class SeedVRRunner(DefaultRunner):
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
-        video_path = getattr(self.input_info, "video_path", "")
+        video_path = self.input_info.video_path
         if self._seedvr_sp_size > 1 and not video_path:
             raise ValueError("SeedVR VAE sequence parallel currently supports video SR input only")
         seg_len, overlap = self._get_sr_segment_params()
@@ -845,7 +855,7 @@ class SeedVRRunner(DefaultRunner):
                 if stream_file_output:
                     video_recorder = SeedVRVideoRecorder(
                         livestream_url=original_save_path,
-                        fps=float(self.config.get("fps", 16)),
+                        fps=float(self.get_output_fps()),
                     )
                     video_recorder.config_crf = int(self.config.get("video_crf", 16))
                     video_recorder.config_preset = str(self.config.get("video_preset", "medium"))
@@ -870,7 +880,7 @@ class SeedVRRunner(DefaultRunner):
                                 self._stream_sr_segment_video(raw, video_recorder, idx, len(segments))
                             else:
                                 segment_path = os.path.join(tmp_dir, f"segment_{idx:05d}.mp4")
-                                self._save_sr_segment_video(raw, segment_path, fps=self.config.get("fps", 16))
+                                self._save_sr_segment_video(raw, segment_path, fps=self.get_output_fps())
                                 segment_paths.append(segment_path)
                         if raw is not None:
                             del raw
@@ -897,7 +907,7 @@ class SeedVRRunner(DefaultRunner):
                         if not segment_paths:
                             raise RuntimeError("SeedVR produced no video segments to save.")
                         self._concat_sr_segment_videos(segment_paths, original_save_path)
-                    input_video_path = getattr(self.input_info, "video_path", "")
+                    input_video_path = self.input_info.video_path
                     if input_video_path:
                         mux_audio_from_video(input_video_path, original_save_path)
                     logger.info(f"✅ Video saved successfully to: {original_save_path} ✅")

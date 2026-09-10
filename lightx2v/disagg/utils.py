@@ -1,4 +1,3 @@
-import json
 import logging
 import math
 import os
@@ -8,20 +7,12 @@ import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
 
-from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.set_config import set_config as set_config_base
+from lightx2v.utils.set_config import build_startup_config
 from lightx2v.utils.utils import find_torch_model_path
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 logger = logging.getLogger(__name__)
-
-
-class ConfigObj:
-    """Helper class to convert dictionary to object with attributes"""
-
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
 
 
 def read_image_input(image_path):
@@ -78,16 +69,7 @@ def set_config(
         "vae_cpu_offload": vae_offload,  # Map to internal keys
     }
 
-    # Simulate logic from LightX2VPipeline.create_generator
-    # which calls set_infer_config / set_infer_config_json
-    # Here we directly populate args_dict with the required inference config
-
-    if config_path is not None:
-        with open(config_path, "r") as f:
-            config_json_content = json.load(f)
-        args_dict.update(config_json_content)
-    else:
-        # Replicating set_infer_config logic
+    if config_path is None:
         if model_cls == "ltx2":
             args_dict["distilled_sigma_values"] = distilled_sigma_values
             args_dict["infer_steps"] = len(distilled_sigma_values) - 1 if distilled_sigma_values is not None else infer_steps
@@ -125,42 +107,7 @@ def set_config(
         args_dict["norm_modulate_backend"] = norm_modulate_backend
 
     args_dict.update(kwargs)
-
-    # Convert to object for set_config compatibility
-    args = ConfigObj(**args_dict)
-
-    # Use existing set_config from utils
-    config = set_config_base(args)
-
-    return config
-
-
-def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, model_type="high_noise_model"):
-    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
-
-    if lora_dynamic_apply:
-        if model_type in ["high_noise_model", "low_noise_model"]:
-            # For wan2.2
-            lora_name_to_info = {item["name"]: item for item in lora_configs}
-            lora_path = lora_name_to_info[model_type]["path"]
-            lora_strength = lora_name_to_info[model_type]["strength"]
-        else:
-            # For wan2.1
-            lora_path = lora_configs[0]["path"]
-            lora_strength = lora_configs[0]["strength"]
-
-        model_kwargs["lora_path"] = lora_path
-        model_kwargs["lora_strength"] = lora_strength
-        model = wan_module(**model_kwargs)
-    else:
-        assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
-        assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
-        model = wan_module(**model_kwargs)
-        lora_wrapper = LoraAdapter(model)
-        if model_type in ["high_noise_model", "low_noise_model"]:
-            lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
-        lora_wrapper.apply_lora(lora_configs, model_type=model_type)
-    return model
+    return build_startup_config(args_dict)
 
 
 def load_wan_text_encoder(config: Dict[str, Any]):
@@ -344,7 +291,7 @@ def load_wan_transformer(config: Dict[str, Any]):
         flush=True,
     )
     from lightx2v.models.networks.wan.model import WanModel
-    from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, get_wan_model_class
+    from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, build_wan_model_with_lora, get_wan_model_class
     from lightx2v.models.schedulers.wan.scheduler_factory import get_wan_distill_method
 
     print(

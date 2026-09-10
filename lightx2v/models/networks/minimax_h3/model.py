@@ -9,6 +9,8 @@ from safetensors import safe_open
 
 from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason
 from lightx2v.models.networks.base_model import BaseTransformerModel
+from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
+from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
 from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
     DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
     FP8_F16_ACCUM_WEIGHT_QMAX,
@@ -55,6 +57,14 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
+        if config.get("cpu_offload", False) and not self.use_adaln_cache:
+            message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{ADALN_CACHE_GUIDE}"
+            logger.error(message)
+            raise ValueError(message)
+        if self.use_adaln_cache:
+            validate_adaln_cache_config(config)
+            self.remove_keys = [".adaln_proj.", "time_embedder.", "norm_out.linear."]
         self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block"
         # Model offload moves pre/blocks/post together. Pre/post residency only applies
         # to block offload and is ignored otherwise.
@@ -317,8 +327,9 @@ class MiniMaxH3Model(BaseTransformerModel):
         checks = {
             "num_attention_heads": int(self.config.get("num_attention_heads", 56)),
             "ffn_hidden_size": int(self.config.get("ffn_hidden_size", 14336)),
-            "adaln_output_size": 18 * int(self.config.get("hidden_size", 5376)),
         }
+        if not self.use_adaln_cache:
+            checks["adaln_output_size"] = 18 * int(self.config.get("hidden_size", 5376))
         invalid = {name: value for name, value in checks.items() if value % self.tp_size}
         if invalid:
             details = ", ".join(f"{name}={value}" for name, value in invalid.items())

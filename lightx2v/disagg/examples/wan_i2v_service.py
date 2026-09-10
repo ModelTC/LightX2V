@@ -70,18 +70,12 @@ def main():
         decoder_engine_rank=2,
     )
 
-    config["image_path"] = image_path
-    config["prompt"] = prompt
-    config["negative_prompt"] = negative_prompt
-    config["save_path"] = save_result_path
+    request_data = {"seed": seed, "prompt": prompt, "negative_prompt": negative_prompt, "image_path": image_path, "save_path": save_result_path}
 
     logger.info(f"Config initialized for task: {task}")
     seed_all(seed)
 
-    # 2. Add seed to config so services use it
-    config["seed"] = seed
-
-    # 3. Define service threads
+    # 2. Define service threads
     def run_encoder():
         logger.info("Initializing Encoder Service...")
         encoder_service = EncoderService(config)
@@ -107,13 +101,13 @@ def main():
         logger.info("Initializing Controller Service...")
         controller_service = ControllerService()
         logger.info("Dispatching request to services...")
-        controller_service.run(config)
+        controller_service.run(config, request_data)
         encoder_stop_event.set()
         transformer_stop_event.set()
         decoder_stop_event.set()
         logger.info("Controller Service completed.")
 
-    # 4. Start threads
+    # 3. Start threads
     encoder_thread = threading.Thread(target=run_encoder)
     transformer_thread = threading.Thread(target=run_transformer)
     decoder_thread = threading.Thread(target=run_decoder)
@@ -125,7 +119,7 @@ def main():
     decoder_thread.start()
     controller_thread.start()
 
-    # 5. Wait for completion
+    # 4. Wait for completion
     encoder_thread.join()
     transformer_thread.join()
     decoder_thread.join()

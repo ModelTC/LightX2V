@@ -130,9 +130,12 @@ class MiniMaxH3TransformerBlockWeights(WeightModule):
             ),
         )
         self.add_module("ff", MiniMaxH3FeedForwardWeights(f"{prefix}.ff", config, create_cuda_buffer))
-        # AdaLN is the largest per-block projection in H3.  Its output is
-        # column-sharded here and gathered once per block before modulation.
-        self.add_module("adaln", _linear(config, f"{prefix}.adaln_proj.linear", bias=True, create_cuda_buffer=create_cuda_buffer, tp_split="col"))
+        if not config.get("use_adaln_cache", False):
+            # ADALN CACHE SYNC: The offline builder reads this key and mirrors
+            # the unquantized projection; update the offline builder if it changes.
+            # AdaLN is the largest per-block projection in H3. Its output is
+            # column-sharded here and gathered once per block before modulation.
+            self.add_module("adaln", _linear(config, f"{prefix}.adaln_proj.linear", bias=True, create_cuda_buffer=create_cuda_buffer, tp_split="col"))
 
 
 class MiniMaxH3TransformerWeights(WeightModule):
