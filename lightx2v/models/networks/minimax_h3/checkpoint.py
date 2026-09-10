@@ -8,6 +8,8 @@ from typing import NamedTuple
 import torch
 from safetensors import safe_open
 
+TARGET_CHUNK_BYTES = int(5.25 * 1024 * 1024)
+
 _H3_BLOCK_KEY_RE = re.compile(r"^transformer_blocks\.(\d+)\.")
 
 
@@ -221,13 +223,20 @@ class MiniMaxH3CheckpointPlan:
 class MiniMaxH3SelectedSourceReader:
     """Bounded CPU slice staging, with no large mmap views retained across sources."""
 
-    def __init__(self, plan, row_chunk_size=128):
+    def __init__(self, plan, row_chunk_size=None, *, target_chunk_bytes=TARGET_CHUNK_BYTES):
+        """Prefer explicit row counts, then a byte budget, then legacy 128-row chunks.
+
+        Set target_chunk_bytes=None to disable byte-based sizing. QKV head
+        boundaries and one-dimensional tensors keep their dedicated slicing.
+        """
         if plan.format != "official_raw":
             raise ValueError("MiniMax-H3 selected adapter requires official raw format")
-        if row_chunk_size < 1:
-            raise ValueError("row_chunk_size must be positive")
+        for name, value in (("row_chunk_size", row_chunk_size), ("target_chunk_bytes", target_chunk_bytes)):
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+                raise ValueError(f"{name} must be a positive integer")
         self.plan = plan
         self.row_chunk_size = row_chunk_size
+        self.target_chunk_bytes = target_chunk_bytes
 
     @contextmanager
     def _source(self, name):
@@ -262,6 +271,15 @@ class MiniMaxH3SelectedSourceReader:
                     if not torch.equal(actual.view(torch.int32), expected.view(torch.int32)):
                         raise ValueError("MiniMax-H3 rope.inv_freq differs from native reconstruction")
 
+    def _row_chunk_size(self, entry):
+        if self.row_chunk_size is not None:
+            return self.row_chunk_size
+        if self.target_chunk_bytes is not None and len(entry.shape) == 2 and entry.source_name.endswith(".weight"):
+            row_bytes = entry.shape[1] * {"F32": 4, "BF16": 2}[entry.dtype]
+            # The budget is a target: at least one complete row must fit a slice.
+            return max(1, self.target_chunk_bytes // row_bytes)
+        return 128
+
     def _ranges(self, entry, requested):
         if entry.transform == "qkv_head_interleaved":
             dim = self.plan.config["attention_head_dim"]
@@ -271,12 +289,13 @@ class MiniMaxH3SelectedSourceReader:
                         yield target.name, (head * 3 + component) * dim, head * dim, dim
         elif entry.transform == "swap_gate_value":
             half = entry.shape[0] // 2
+            step = self._row_chunk_size(entry)
             for source_start, target_start in ((half, 0), (0, half)):
-                for row in range(0, half, self.row_chunk_size):
-                    yield entry.targets[0].name, source_start + row, target_start + row, min(self.row_chunk_size, half - row)
+                for row in range(0, half, step):
+                    yield entry.targets[0].name, source_start + row, target_start + row, min(step, half - row)
         else:
             size = entry.shape[0]
-            step = size if len(entry.shape) == 1 else self.row_chunk_size
+            step = size if len(entry.shape) == 1 else self._row_chunk_size(entry)
             for row in range(0, size, step):
                 yield entry.targets[0].name, row, row, min(step, size - row)
 

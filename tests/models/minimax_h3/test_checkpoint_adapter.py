@@ -76,6 +76,90 @@ def destinations(plan, names, transpose=False, device="cpu"):
     }
 
 
+@pytest.mark.parametrize("dtype,expected", [("BF16", [2, 2, 1]), ("F32", [1, 1, 1, 1, 1])])
+def test_target_bytes_row_size_rounding_and_tail(raw, dtype, expected):
+    plan = raw[3]
+    entry = plan.entries["condition_proj.weight"]._replace(shape=(5, 3), dtype=dtype)
+    reader = C.MiniMaxH3SelectedSourceReader(plan, target_chunk_bytes=13)
+    ranges = list(reader._ranges(entry, {entry.targets[0].name}))
+    assert [rows for _, _, _, rows in ranges] == expected
+    assert [(start, out) for _, start, out, _ in ranges] == [(sum(expected[:i]), sum(expected[:i])) for i in range(len(expected))]
+
+
+@pytest.mark.parametrize("kwargs,expected", [({}, 1024), ({"target_chunk_bytes": 10752}, 2), ({"row_chunk_size": 3, "target_chunk_bytes": 1}, 3), ({"target_chunk_bytes": None}, 128)])
+def test_chunk_policy_precedence_and_legacy_fallback(raw, kwargs, expected):
+    plan = raw[3]
+    entry = plan.entries["condition_proj.weight"]._replace(shape=(2049, 2688))
+    reader = C.MiniMaxH3SelectedSourceReader(plan, **kwargs)
+    ranges = list(reader._ranges(entry, {entry.targets[0].name}))
+    assert ranges[0][3] == expected
+    assert sum(rows for _, _, _, rows in ranges) == 2049
+    if not kwargs:
+        fc1 = plan.entries["blocks.0.mlp.fc1.weight"]._replace(shape=(28672, 5376))
+        assert next(reader._ranges(fc1, {fc1.targets[0].name}))[3] == 512
+
+
+def test_target_smaller_than_one_row(raw):
+    plan = raw[3]
+    entry = plan.entries["condition_proj.weight"]
+    reader = C.MiniMaxH3SelectedSourceReader(plan, target_chunk_bytes=1)
+    assert [rows for _, _, _, rows in reader._ranges(entry, {entry.targets[0].name})] == [1, 1, 1]
+
+
+@pytest.mark.parametrize("prefix", ["blocks.0", "token_refiner.blocks.0"])
+@pytest.mark.parametrize("budget,expected", [(18, [(4, 0, 3), (7, 3, 1), (0, 4, 3), (3, 7, 1)]), (1024, [(4, 0, 4), (0, 4, 4)])])
+def test_target_bytes_keeps_gate_value_halves_independent(raw, prefix, budget, expected):
+    plan = raw[3]
+    entry = plan.entries[prefix + ".mlp.fc1.weight"]
+    reader = C.MiniMaxH3SelectedSourceReader(plan, target_chunk_bytes=budget)
+    assert [r[1:] for r in reader._ranges(entry, {entry.targets[0].name})] == expected
+
+
+@pytest.mark.parametrize("prefix", ["blocks.0", "token_refiner.blocks.0"])
+def test_qkv_and_vectors_bypass_byte_policy(raw, monkeypatch, prefix):
+    plan = raw[3]
+    reader = C.MiniMaxH3SelectedSourceReader(plan, target_chunk_bytes=1)
+    monkeypatch.setattr(reader, "_row_chunk_size", lambda *a: pytest.fail("dedicated slicing must bypass chunk policy"))
+    entry = plan.entries[prefix + ".attn.qkv_proj.weight"]
+    query = entry.targets[0].name
+    assert list(reader._ranges(entry, {query})) == [(query, 0, 0, 2), (query, 6, 2, 2)]
+    for name in ["video_patch_proj.bias", "blocks.0.norm1.weight", "token_refiner.final_norm.weight"]:
+        entry = plan.entries[name]
+        target = entry.targets[0].name
+        assert list(reader._ranges(entry, {target})) == [(target, 0, 0, entry.shape[0])]
+
+
+@pytest.mark.parametrize("name", ["row_chunk_size", "target_chunk_bytes"])
+@pytest.mark.parametrize("value", [0, -1, 1.5, True])
+def test_invalid_chunk_policy_rejected(raw, name, value):
+    with pytest.raises(ValueError, match=name + " must be a positive integer"):
+        C.MiniMaxH3SelectedSourceReader(raw[3], **{name: value})
+
+
+@pytest.mark.parametrize("budget", [1, 13, C.TARGET_CHUNK_BYTES, None])
+@pytest.mark.parametrize("transpose", [False, True])
+def test_target_bytes_full_adapter_cpu_parity(raw, budget, transpose):
+    _, tensors, _, plan, _ = raw
+    reader = C.MiniMaxH3SelectedSourceReader(plan, target_chunk_bytes=budget)
+    dest, expected = {}, {}
+    for entry in plan.entries.values():
+        source = tensors[entry.source_name]
+        for component, target in enumerate(entry.targets):
+            if entry.transform == "qkv_head_interleaved":
+                value = source.reshape(2, 3, 2, 3)[:, component].reshape(4, 3)
+            elif entry.transform == "swap_gate_value":
+                value = torch.cat((source[4:], source[:4]))
+            else:
+                value = source
+            transposed = transpose and value.ndim == 2
+            expected[target.name] = value.t() if transposed else value
+            dest[target.name] = (torch.empty_like(expected[target.name]), transposed)
+    reader.write_targets(dest)
+    for name, (tensor, _) in dest.items():
+        assert tensor.dtype == expected[name].dtype
+        assert torch.equal(tensor, expected[name]), name
+
+
 def test_official_detection_and_complete_config_driven_plan(raw):
     _, tensors, _, plan, _ = raw
     assert plan.format == "official_raw"
