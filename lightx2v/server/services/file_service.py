@@ -93,18 +93,14 @@ class FileService:
             media_name = Path(parsed_url.path).name
             if not media_name:
                 default_ext = "jpg" if media_type == "image" else "mp3"
-                media_name = f"{uuid.uuid4()}.{default_ext}"
+                media_name = f"download.{default_ext}"
 
             if media_type == "image":
                 target_dir = self.input_image_dir
             else:
                 target_dir = self.input_audio_dir
 
-            media_path = target_dir / media_name
-            media_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(media_path, "wb") as f:
-                f.write(response.content)
+            media_path = self.save_uploaded_file(response.content, media_name, target_dir)
 
             logger.info(f"Successfully downloaded {media_type} from {url} to {media_path}")
             return media_path
@@ -191,13 +187,11 @@ class FileService:
             error_msg += f": {str(last_exception)}"
         raise ValueError(error_msg)
 
-    def save_uploaded_file(self, file_content: bytes, filename: str) -> Path:
+    def save_uploaded_file(self, file_content: bytes, filename: str, target_dir: Optional[Path] = None) -> Path:
         file_extension = Path(filename).suffix
         unique_filename = f"{uuid.uuid4()}{file_extension}"
-        file_path = self.input_image_dir / unique_filename
-
-        with open(file_path, "wb") as f:
-            f.write(file_content)
+        file_path = (target_dir or self.input_image_dir) / unique_filename
+        file_path.write_bytes(file_content)
 
         return file_path
 

@@ -13,7 +13,6 @@ class WanScheduler(BaseScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.infer_steps = self.config["infer_steps"]
-        self.target_video_length = self.config["target_video_length"]
         self.sample_shift = self.config["sample_shift"]
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
@@ -25,7 +24,9 @@ class WanScheduler(BaseScheduler):
         self.disable_corrector = []
         self.solver_order = 2
         self.noise_pred = None
-        self.sample_guide_scale = self.config["sample_guide_scale"]
+        self.sample_guide_scale = self.config.get("sample_guide_scale")
+        if self.config.get("enable_cfg", False) and self.sample_guide_scale is None:
+            raise ValueError("enable_cfg=true requires sample_guide_scale")
         self.caching_records_2 = [True] * self.config["infer_steps"]
         self.head_size = self.config["dim"] // self.config["num_heads"]
         self.rope_request_id = 0
@@ -33,9 +34,8 @@ class WanScheduler(BaseScheduler):
     def refresh_from_config(self, config):
         self.config = config
         self.infer_steps = int(self.config["infer_steps"])
-        self.target_video_length = int(self.config["target_video_length"])
         self.sample_shift = float(self.config["sample_shift"])
-        self.sample_guide_scale = self.config["sample_guide_scale"]
+        self.sample_guide_scale = self.config.get("sample_guide_scale")
         self.caching_records = [True] * self.infer_steps
         self.caching_records_2 = [True] * self.infer_steps
         self.step_index = 0

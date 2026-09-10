@@ -28,6 +28,7 @@
     "t5_cpu_offload": false,
     "vae_cpu_offload": false,
     "fps": 16,
+    "boundary": 0.900,
     "use_image_encoder": false,
     "parallel": {
         "seq_p_size": 8,

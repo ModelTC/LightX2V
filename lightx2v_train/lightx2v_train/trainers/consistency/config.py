@@ -77,9 +77,6 @@ class CMLossConfig:
             "inverse_delta",
             "inverse_sqrt_delta",
             "none",
-            "default",
-            "sqrt",
-            "one",
             "c_out",
             "c_out_sq",
             "sigma_sq",
@@ -146,9 +143,8 @@ class JVPConfig:
     def from_mapping(cls, value, *, default_epsilon):
         value = _mapping(value, "training.consistency.jvp")
         method = str(value.get("method", "finite_difference")).lower()
-        aliases = {"fd": "finite_difference", "finite-difference": "finite_difference"}
         result = cls(
-            method=aliases.get(method, method),
+            method=method,
             epsilon=float(value.get("epsilon", default_epsilon)),
         )
         if result.method not in {"finite_difference", "exact"}:
@@ -263,9 +259,8 @@ class PCMLossConfig:
     def from_mapping(cls, value):
         value = _mapping(value, "training.consistency.loss")
         distance = str(value.get("distance", "pseudo_huber")).lower()
-        aliases = {"huber": "pseudo_huber", "mse": "l2", "squared_l2": "l2"}
         result = cls(
-            distance=aliases.get(distance, distance),
+            distance=distance,
             huber_constant=float(value.get("huber_constant", 1e-3)),
             computation_dtype=str(value.get("computation_dtype", "float32")).lower(),
         )
@@ -323,10 +318,9 @@ class MeanFlowConfig:
         loss = _mapping(consistency.get("loss"), "training.consistency.loss")
         sampling = _mapping(consistency.get("sampling"), "training.consistency.sampling")
         guidance = _mapping(consistency.get("guidance"), "training.consistency.guidance")
-        teacher = _mapping(consistency.get("teacher"), "training.consistency.teacher")
         mode = str(consistency.get("mode", "ct")).lower()
         raw_dropout = guidance.get("condition_dropout_probability")
-        raw_scale = guidance.get("scale", teacher.get("guidance_scale"))
+        raw_scale = guidance.get("scale")
         raw_mixture = guidance.get("mixture_ratio")
         result = cls(
             mode=mode,

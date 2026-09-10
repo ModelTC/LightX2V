@@ -13,8 +13,10 @@ from lightx2v.models.input_encoders.hf.hunyuan15.qwen25.model import Qwen25VL_Te
 from lightx2v.models.input_encoders.hf.hunyuan15.siglip.model import SiglipVisionEncoder
 from lightx2v.models.networks.hunyuan_video.model import HunyuanVideo15Model
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.schedulers.hunyuan_video.feature_caching.scheduler import HunyuanVideo15SchedulerCaching
 from lightx2v.models.schedulers.hunyuan_video.scheduler import HunyuanVideo15SRScheduler, HunyuanVideo15Scheduler
+from lightx2v.models.schedulers.hunyuan_video.step_distill.scheduler import HunyuanVideo15StepDistillScheduler
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.hunyuanvideo_15_vae import HunyuanVideo15VAE
 from lightx2v.models.video_encoders.hf.hunyuanvideo15.lighttae_hy15 import LightTaeHy15
 from lightx2v.server.metrics import monitor_cli
@@ -28,6 +30,17 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("hunyuan_video_1.5")
 class HunyuanVideo15Runner(DefaultRunner):
+    supported_request_fields_by_task = {
+        "t2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"target_video_length"},
+        "i2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "target_video_length"},
+    }
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if self.config.get("video_super_resolution", {}).get("enable_cfg", False):
+            supported_request_fields |= {"negative_prompt"}
+        return supported_request_fields
+
     def __init__(self, config):
         config["is_sr_running"] = False
 
@@ -43,6 +56,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             self.config_sr["is_sr_running"] = False
             self.config_sr["sample_shift"] = config["video_super_resolution"]["flow_shift"]  # for SR model
             self.config_sr["sample_guide_scale"] = config["video_super_resolution"]["guidance_scale"]  # for SR model
+            self.config_sr["enable_cfg"] = config["video_super_resolution"].get("enable_cfg", config["enable_cfg"])
             self.config_sr["infer_steps"] = config["video_super_resolution"]["num_inference_steps"]
 
         super().__init__(config)
@@ -58,12 +72,22 @@ class HunyuanVideo15Runner(DefaultRunner):
         self.tae_cls = LightTaeHy15
 
     def init_scheduler(self):
-        if self.config["feature_caching"] == "NoCaching":
-            scheduler_class = HunyuanVideo15Scheduler
-        elif self.config.feature_caching in ["Mag", "Tea"]:
-            scheduler_class = HunyuanVideo15SchedulerCaching
+        distill_method = self.config.get("distill_method")
+        feature_caching = self.config["feature_caching"]
+
+        if distill_method == "dmd2":
+            if feature_caching != "NoCaching":
+                raise NotImplementedError("HunyuanVideo-1.5 DMD2 does not support feature caching")
+            scheduler_class = HunyuanVideo15StepDistillScheduler
+        elif distill_method is None:
+            if feature_caching == "NoCaching":
+                scheduler_class = HunyuanVideo15Scheduler
+            elif feature_caching in ["Mag", "Tea"]:
+                scheduler_class = HunyuanVideo15SchedulerCaching
+            else:
+                raise NotImplementedError(f"Unsupported feature_caching type: {feature_caching}")
         else:
-            raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
+            raise NotImplementedError(f"hunyuan_video_1.5 does not support distill_method {distill_method!r}")
         self.scheduler = scheduler_class(self.config)
 
         if self.sr_version is not None:
@@ -127,7 +151,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         target_height, target_width = self.get_closest_resolution_given_original_size((int(width), int(height)), target_size)
         latent_shape = [
             self.config.get("in_channels", 32),
-            (self.config["target_video_length"] - 1) // self.config["vae_stride"][0] + 1,
+            (self.get_target_video_length() - 1) // self.config["vae_stride"][0] + 1,
             target_height // self.config["vae_stride"][1],
             target_width // self.config["vae_stride"][2],
         ]
@@ -219,7 +243,7 @@ class HunyuanVideo15Runner(DefaultRunner):
         target_width, target_height = hr_bucket_map((lr_video_width, lr_video_height))
         latent_shape = [
             self.config_sr.get("in_channels", 32),
-            (self.config_sr["target_video_length"] - 1) // self.config_sr["vae_stride"][0] + 1,
+            (self.get_target_video_length() - 1) // self.config_sr["vae_stride"][0] + 1,
             target_height // self.config_sr["vae_stride"][1],
             target_width // self.config_sr["vae_stride"][2],
         ]
@@ -272,12 +296,13 @@ class HunyuanVideo15Runner(DefaultRunner):
         return closest_size, closest_ratio
 
     def run_text_encoder(self, input_info):
+        config = self.config_sr if self.sr_version and self.config_sr["is_sr_running"] else self.config
         prompt = input_info.prompt
         neg_prompt = input_info.negative_prompt
 
         # run qwen25vl
-        if self.config.get("enable_cfg", False) and self.config["cfg_parallel"]:
-            cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
+        if config.get("enable_cfg", False) and config["cfg_parallel"]:
+            cfg_p_group = config["device_mesh"].get_group(mesh_dim="cfg_p")
             cfg_p_rank = dist.get_rank(cfg_p_group)
             if cfg_p_rank == 0:
                 context = self.text_encoders[0].infer([prompt])
@@ -287,7 +312,7 @@ class HunyuanVideo15Runner(DefaultRunner):
                 text_encoder_output = {"context_null": context_null}
         else:
             context = self.text_encoders[0].infer([prompt])
-            context_null = self.text_encoders[0].infer([neg_prompt]) if self.config.get("enable_cfg", False) else None
+            context_null = self.text_encoders[0].infer([neg_prompt]) if config.get("enable_cfg", False) else None
             text_encoder_output = {
                 "context": context,
                 "context_null": context_null,

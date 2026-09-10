@@ -432,6 +432,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
             rope_global_end = None if use_local_cache_rope else current_end
             rope_sink_tokens = 0 if use_local_cache_rope else sink_tokens
             q = self._apply_rope_with_cache_range(
+                phase,
                 q,
                 freqs,
                 h,
@@ -446,6 +447,7 @@ class WanAudioARTransformerInfer(WanAudioPostAdapterMixin, WanSFTransformerInfer
                 sink_tokens=rope_sink_tokens,
             )
             attn_k = self._apply_rope_with_cache_range(
+                phase,
                 attn_k,
                 freqs,
                 h,

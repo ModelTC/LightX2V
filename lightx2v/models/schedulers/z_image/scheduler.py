@@ -9,7 +9,6 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
-from loguru import logger
 from torch.nn import functional as F
 
 from lightx2v.models.schedulers.scheduler import BaseScheduler
@@ -374,10 +373,10 @@ class ZImageScheduler(BaseScheduler):
 
     def prepare_latents(self, input_info):
         self.input_info = input_info
-        shape = input_info.target_shape
+        shape = input_info.latent_shape
 
         if len(shape) != 4:
-            raise ValueError(f"target_shape must be 4D [B, C, H, W], got {len(shape)}D: {shape}")
+            raise ValueError(f"latent_shape must be 4D [B, C, H, W], got {len(shape)}D: {shape}")
 
         latents = randn_tensor(shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
 
@@ -443,10 +442,7 @@ class ZImageScheduler(BaseScheduler):
         self.rope_request_id += 1
         self.freqs_cis_cache = {}
 
-        if self.generator is None:
-            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
-        else:
-            logger.info(f"Generator is not None, using existing generator for latents")
+        self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
         self.prepare_latents(input_info)
         self.set_timesteps()
         strength = self._get_i2i_denoise_strength(input_info)

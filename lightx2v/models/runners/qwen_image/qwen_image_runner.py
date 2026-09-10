@@ -11,6 +11,7 @@ from lightx2v.models.input_encoders.hf.qwen25.qwen25_vlforconditionalgeneration 
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.qwen_image.model import QwenImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import IMAGE_REQUEST_FIELDS
 from lightx2v.models.schedulers.qwen_image.scheduler import QwenImageScheduler
 from lightx2v.models.video_encoders.hf.qwen_image.vae import AutoencoderKLQwenImageVAE
 from lightx2v.server.metrics import monitor_cli
@@ -59,6 +60,16 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     _WARMUP_RESOLUTIONS = ((480, 480), (832, 1248))
     _WARMUP_TASKS = ("t2i", "i2i")
+    supported_request_fields_by_task = {
+        "t2i": IMAGE_REQUEST_FIELDS,
+        "i2i": IMAGE_REQUEST_FIELDS | {"i2i_denoise_strength", "image_path"},
+    }
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if task == "i2i" and self.config.get("layered", False):
+            supported_request_fields -= {"i2i_denoise_strength"}
+        return supported_request_fields
 
     def __init__(self, config):
         super().__init__(config)
@@ -149,8 +160,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             "text_encoder_output": text_encoder_output,
             "image_encoder_output": image_encoder_output,
         }
-        self.set_target_shape()
-        self.set_img_shapes()
+        self.set_latent_shape()
         return t2i_text_cache
 
     def clear_warmup_state(self):
@@ -171,11 +181,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
                 delattr(self, name)
         model = None
         self.maybe_empty_cache(collect_garbage=True)
-
-    def set_config(self, config_modify):
-        """Apply per-request overrides and optionally sync disagg fields."""
-        super().set_config(config_modify)
-        self.apply_disagg_request_overrides(config_modify)
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -292,10 +297,8 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             return
         if self.config["task"] == "t2i":
             self.run_input_encoder = self._run_input_encoder_local_t2i
-        elif self.config["task"] == "i2i":
-            self.run_input_encoder = self._run_input_encoder_local_i2i
         else:
-            raise NotImplementedError(f"QwenImageRunner does not support task: {self.config['task']}")
+            self.run_input_encoder = self._run_input_encoder_local_i2i
 
     @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):
@@ -462,11 +465,6 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             logger.info(f"Qwen Image Runner got custom shape: {width}x{height}")
             return (width, height)
 
-        target_height = self.config.get("target_height", None)
-        target_width = self.config.get("target_width", None)
-        if target_height and target_width:
-            return (target_width, target_height)
-
         aspect_ratio = self.input_info.aspect_ratio if self.input_info.aspect_ratio else self.config.get("aspect_ratio", None)
         if aspect_ratio in as_maps:
             logger.info(f"Qwen Image Runner got aspect ratio: {aspect_ratio}")
@@ -476,43 +474,38 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
         return None
 
-    def set_target_shape(self):
+    def set_latent_shape(self):
         # In disagg transformer mode, use the shape transmitted from encoder
         if self.config.get("disagg_mode") == "transformer" and getattr(self, "inputs", {}).get("latent_shape"):
             latent_shape = self.inputs["latent_shape"]
-            self.input_info.target_shape = tuple(latent_shape)
-            # Reconstruct auto_height and auto_width
+            self.input_info.latent_shape = tuple(latent_shape)
             scale_factor = self.config["vae_scale_factor"]
-            self.input_info.auto_height = latent_shape[-2] * scale_factor
-            self.input_info.auto_width = latent_shape[-1] * scale_factor
-            logger.info(f"Qwen Image Runner restored target shape from disagg: {latent_shape}")
-            return
-
-        custom_shape = self.get_custom_shape()
-        if custom_shape is not None:
-            width, height = custom_shape
+            self.input_info.target_shape = [latent_shape[-2] * scale_factor, latent_shape[-1] * scale_factor]
+            logger.info(f"Qwen Image Runner restored latent shape from disagg: {latent_shape}")
         else:
-            width, height = self.input_info.original_size[-1]
-            calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, width / height)
-            multiple_of = self.config["vae_scale_factor"] * 2
-            width = calculated_width // multiple_of * multiple_of
-            height = calculated_height // multiple_of * multiple_of
-        logger.info(f"Qwen Image Runner set target shape: {width}x{height}")
-        self.input_info.auto_width = width
-        self.input_info.auto_height = height
+            custom_shape = self.get_custom_shape()
+            if custom_shape is not None:
+                width, height = custom_shape
+            else:
+                width, height = self.input_info.original_size[-1]
+                calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, width / height)
+                multiple_of = self.config["vae_scale_factor"] * 2
+                width = calculated_width // multiple_of * multiple_of
+                height = calculated_height // multiple_of * multiple_of
+            logger.info(f"Qwen Image Runner set target shape: {width}x{height}")
+            self.input_info.target_shape = [height, width]
 
-        # VAE applies 8x compression on images but we must also account for packing which requires
-        # latent height and width to be divisible by 2.
-        height = 2 * (int(height) // (self.config["vae_scale_factor"] * 2))
-        width = 2 * (int(width) // (self.config["vae_scale_factor"] * 2))
-        num_channels_latents = self.config["in_channels"] // 4
-        if not self.is_layered:
-            self.input_info.target_shape = (1, 1, num_channels_latents, height, width)
-        else:
-            self.input_info.target_shape = (1, self.layers + 1, num_channels_latents, height, width)
+            # VAE applies 8x compression on images but we must also account for packing which requires
+            # latent height and width to be divisible by 2.
+            height = 2 * (int(height) // (self.config["vae_scale_factor"] * 2))
+            width = 2 * (int(width) // (self.config["vae_scale_factor"] * 2))
+            num_channels_latents = self.config["in_channels"] // 4
+            if not self.is_layered:
+                self.input_info.latent_shape = (1, 1, num_channels_latents, height, width)
+            else:
+                self.input_info.latent_shape = (1, self.layers + 1, num_channels_latents, height, width)
 
-    def set_img_shapes(self):
-        width, height = self.input_info.auto_width, self.input_info.auto_height
+        height, width = self.input_info.target_shape
         if self.config["task"] == "t2i":
             image_shapes = [[(1, height // self.config["vae_scale_factor"] // 2, width // self.config["vae_scale_factor"] // 2)]]
         elif self.config["task"] == "i2i":
@@ -544,7 +537,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
     def _save_images(self, images, input_info, log_prefix="Image saved"):
         if dist.is_initialized() and dist.get_rank() != 0:
             return
-        if input_info.return_result_tensor:
+        if input_info.return_result_tensor or input_info.save_result_path is None:
             return
 
         image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
@@ -592,8 +585,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             self.stage_reuse_cache()
             if self.config["task"] == "i2i" and "image_encoder_output" in self.inputs:
                 self.input_info.image_encoder_output = self.inputs["image_encoder_output"]
-            self.set_target_shape()
-            self.set_img_shapes()
+            self.set_latent_shape()
             logger.info(f"input_info: {self.input_info}")
             latents, generator = self.run_dit()
             images = self.run_vae_decoder(latents)
@@ -609,20 +601,20 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             if self.input_info is not None:
                 self.end_run()
 
-    def _run_pipeline_disagg_encoder(self):
+    def _run_pipeline_disagg_encoder(self, request_config):
         self.inputs = self.run_input_encoder()
-        self.set_target_shape()
-        self.set_img_shapes()
+        self.set_latent_shape()
         logger.info(f"input_info: {self.input_info}")
-        latent_shape = list(self.input_info.target_shape)
-        self.send_encoder_outputs(self.inputs, latent_shape)
+        request_config = self.build_disagg_request_config(self.input_info, request_config)
+        latent_shape = list(self.input_info.latent_shape)
+        self.send_encoder_outputs(self.inputs, latent_shape, request_config)
         logger.info("[Disagg] Encoder role completed. Skipping DiT run_main.")
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_success.inc()
         return None
 
-    def _run_pipeline_disagg_transformer(self, input_info):
-        self.inputs = self.receive_encoder_outputs()
+    def _run_pipeline_disagg_transformer(self, input_info, request_config):
+        self.inputs = self.receive_encoder_outputs(request_config)
         if self.config["task"] == "i2i" and "image_encoder_output" in self.inputs:
             self.input_info.image_encoder_output = self.inputs["image_encoder_output"]
         prompt_embeds = self.inputs.get("text_encoder_output", {}).get("prompt_embeds")
@@ -632,8 +624,7 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
             if neg_embeds is not None:
                 self.input_info.txt_seq_lens.append(neg_embeds.shape[1])
 
-        self.set_target_shape()
-        self.set_img_shapes()
+        self.set_latent_shape()
         logger.info(f"input_info: {self.input_info}")
 
         latents, generator = self.run_dit()
@@ -649,25 +640,24 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
         self._save_images(images, input_info, log_prefix="Image saved")
         return self._finalize_pipeline_outputs(input_info, images, latents=latents, generator=generator)
 
-    def _run_pipeline_disagg_decode(self, input_info):
+    def _run_pipeline_disagg_decode(self, input_info, request_config):
         # Decoder role: receive DiT latents from Transformer, decode with VAE, save image
-        latents = self.receive_transformer_outputs()
+        latents = self.receive_transformer_outputs(request_config)
 
         scale_factor = self.config["vae_scale_factor"]
         p2_meta = getattr(self, "_p2_receive_meta", {})
-        auto_height = p2_meta.get("auto_height")
-        auto_width = p2_meta.get("auto_width")
-        if auto_height is None or auto_width is None:
+        target_height = p2_meta.get("auto_height")
+        target_width = p2_meta.get("auto_width")
+        if target_height is None or target_width is None:
             # Fallback for spatial-format latents (non-packed models)
             latent_h = latents.shape[-2]
             latent_w = latents.shape[-1]
-            auto_height = latent_h * scale_factor * 2
-            auto_width = latent_w * scale_factor * 2
-        self.input_info.auto_height = int(auto_height)
-        self.input_info.auto_width = int(auto_width)
+            target_height = latent_h * scale_factor * 2
+            target_width = latent_w * scale_factor * 2
+        self.input_info.target_shape = [int(target_height), int(target_width)]
         # Compute image_shapes: number of spatial patches per image
-        h_patches = int(auto_height) // (scale_factor * 2)
-        w_patches = int(auto_width) // (scale_factor * 2)
+        h_patches = int(target_height) // (scale_factor * 2)
+        w_patches = int(target_width) // (scale_factor * 2)
         self.input_info.image_shapes = [[(1, h_patches, w_patches)]]
         images = self.run_vae_decoder(latents)
         self.end_run()
@@ -682,13 +672,20 @@ class QwenImageRunner(DisaggMixin, DefaultRunner):
 
     @ProfilingContext4DebugL1("RUN pipeline")
     def run_pipeline(self, input_info):
-        self.input_info = input_info
         disagg_mode = self.config.get("disagg_mode")
+        if disagg_mode in ("transformer", "decode"):
+            input_info.update(self._disagg_request_config or {})
+        self.input_info = input_info
+        request_config = self.build_disagg_request_config(input_info) if disagg_mode else None
 
-        if disagg_mode == "decode":
-            return self._run_pipeline_disagg_decode(input_info)
-        if disagg_mode == "encoder":
-            return self._run_pipeline_disagg_encoder()
-        if disagg_mode == "transformer":
-            return self._run_pipeline_disagg_transformer(input_info)
-        return self._run_pipeline_local(input_info)
+        try:
+            if disagg_mode == "decode":
+                return self._run_pipeline_disagg_decode(input_info, request_config)
+            if disagg_mode == "encoder":
+                return self._run_pipeline_disagg_encoder(request_config)
+            if disagg_mode == "transformer":
+                return self._run_pipeline_disagg_transformer(input_info, request_config)
+            return self._run_pipeline_local(input_info)
+        finally:
+            if disagg_mode:
+                self._disagg_request_config = None

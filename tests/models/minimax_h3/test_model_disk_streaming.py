@@ -191,6 +191,12 @@ def h3_model_modules(monkeypatch):
         package.__path__ = []
         monkeypatch.setitem(sys.modules, package_name, package)
 
+    # Cache IO is outside these isolated model/streaming tests.
+    cache = types.ModuleType("lightx2v.models.networks.minimax_h3.adaln_cache")
+    cache.validate_adaln_cache_config = lambda config: None
+    cache.load_persistent_adaln_cache = lambda config, device: ({}, {})
+    monkeypatch.setitem(sys.modules, cache.__name__, cache)
+
     weight_module = types.ModuleType("lightx2v.common.modules.weight_module")
     weight_module.WeightModule = _FakeWeightModule
     weight_module.WeightModuleList = _FakeWeightModuleList
@@ -328,6 +334,8 @@ def _config(tmp_path, **overrides):
         "cfg_parallel": False,
         "enable_cfg": False,
         "cpu_offload": True,
+        "use_adaln_cache": True,
+        "adaln_cache_dir": str(tmp_path / "adaln-cache"),
         "offload_granularity": "block",
         "dit_disk_streaming": True,
         "dit_original_ckpt": str(tmp_path),
@@ -399,3 +407,9 @@ def test_disk_streaming_rejects_non_block_offload(tmp_path, h3_model_modules):
 
     with pytest.raises(ValueError, match="requires offload_granularity='block'"):
         model_module.MiniMaxH3Model(str(tmp_path), _config(tmp_path, offload_granularity="model"), torch.device("cpu"))
+
+
+def test_cpu_offload_requires_persistent_cache(tmp_path, h3_model_modules):
+    model_module = h3_model_modules[-1]
+    with pytest.raises(ValueError, match="cpu_offload=true requires use_adaln_cache=true"):
+        model_module.MiniMaxH3Model(str(tmp_path), _config(tmp_path, use_adaln_cache=False), torch.device("cpu"))

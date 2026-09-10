@@ -1,6 +1,8 @@
 import importlib
 from collections.abc import MutableMapping
 
+from lightx2v_train.utils.utils import is_cache_build
+
 
 class Register(MutableMapping):
     def __init__(self, *args, **kwargs):
@@ -97,7 +99,7 @@ _TRAINER_MODULES = {
     "phased_dmd": "lightx2v_train.trainers.phased_dmd.trainer",
     "sgmd": "lightx2v_train.trainers.sgmd",
     "teacher_forcing": "lightx2v_train.trainers.teacher_forcing",
-    "training_cache": "lightx2v_train.trainers.training_cache",
+    "cache_build": "lightx2v_train.trainers.cache_build",
 }
 
 _INFERENCER_MODULES = {
@@ -136,8 +138,8 @@ def _ensure_data_registered(data_name):
         return
     if data_name == "image_dataset":
         import lightx2v_train.data.image_dataset  # noqa: F401
-    elif data_name == "training_cache_dataset":
-        import lightx2v_train.data.training_cache_dataset  # noqa: F401
+    elif data_name == "cache_dataset":
+        import lightx2v_train.data.cache_dataset  # noqa: F401
     elif data_name in {"prompt_dataset", "video_dataset"}:
         import lightx2v_train.data.video_dataset  # noqa: F401
 
@@ -152,7 +154,7 @@ def build_model(config):
 
 
 def build_trainer(config):
-    name = "training_cache" if "training_cache" in config else config["training"]["method"]
+    name = "cache_build" if is_cache_build(config) else config["training"]["method"]
     _ensure_registered(name, TRAINER_REGISTER, _TRAINER_MODULES)
     if name not in TRAINER_REGISTER:
         available = ", ".join(sorted(TRAINER_REGISTER.keys()))
@@ -182,14 +184,12 @@ def build_sample_processor(config):
 
 
 def build_data(config, train_or_val, sample_processor=None):
-    from lightx2v_train.data.training_cache import training_cache_info
-
     data_config = config.get("data", {})
     if train_or_val not in data_config:
         available_splits = ", ".join(repr(k) for k in sorted(data_config.keys()))
         raise ValueError(f"config['data'] has no key {train_or_val!r}. Available keys: {available_splits}")
     data_config_split = dict(data_config[train_or_val])
-    if "training_cache" in config:
+    if is_cache_build(config):
         data_config_split.update(
             prompt_dropout_rate=0.0,
             dataset_repeat=1,
@@ -197,15 +197,16 @@ def build_data(config, train_or_val, sample_processor=None):
             drop_last=False,
             decode_retries=1,
         )
+        # Cache construction may target val/test. Those splits normally do not
+        # use a distributed sampler, but caching must still partition work
+        # across data-parallel ranks.
+        data_config_split["distributed_cache_build"] = True
         data_config_split.pop("max_samples", None)
     data_name = data_config_split.get("name", "image_dataset")
-    use_training_cache = data_config.get("use_training_cache", False) if train_or_val == "train" and "training_cache" not in config else False
-    if use_training_cache:
-        data_name = "training_cache_dataset"
-    if train_or_val == "train" and data_name == "prompt_dataset":
-        image_sizes = config.get("training", {}).get("dmd", {}).get("image_sizes")
-        if image_sizes is not None:
-            data_config_split["image_sizes"] = image_sizes
+    if train_or_val == "train" and data_name in {"prompt_dataset", "cache_dataset"}:
+        generation_shapes = config.get("training", {}).get("dmd", {}).get("generation_shapes")
+        if generation_shapes is not None:
+            data_config_split["generation_shapes"] = generation_shapes
     _ensure_data_registered(data_name)
     if data_name not in DATA_REGISTER:
         available_names = ", ".join(sorted(DATA_REGISTER.keys()))
@@ -213,9 +214,9 @@ def build_data(config, train_or_val, sample_processor=None):
     kwargs = (
         {
             "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),
-            "expected_cache_info": training_cache_info(config) if use_training_cache else None,
+            "sample_processor": sample_processor,
         }
-        if data_name == "training_cache_dataset"
+        if data_name == "cache_dataset"
         else {
             "sample_processor": sample_processor,
             "unconditional_prompt": getattr(sample_processor, "unconditional_prompt", " "),

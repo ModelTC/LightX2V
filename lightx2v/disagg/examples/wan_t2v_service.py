@@ -54,11 +54,7 @@ def main():
     logger.info(f"Config initialized for task: {task}")
     seed_all(seed)
 
-    # Add seed into config so services can use it if needed
-    config["seed"] = seed
-    config["prompt"] = prompt
-    config["negative_prompt"] = negative_prompt
-    config["save_path"] = save_result_path
+    request_data = {"seed": seed, "prompt": prompt, "negative_prompt": negative_prompt, "save_path": save_result_path}
 
     encoder_stop_event = threading.Event()
     transformer_stop_event = threading.Event()
@@ -90,7 +86,7 @@ def main():
         logger.info("Initializing Controller Service...")
         controller_service = ControllerService()
         logger.info("Dispatching request to services...")
-        controller_service.run(config)
+        controller_service.run(config, request_data)
         encoder_stop_event.set()
         transformer_stop_event.set()
         decoder_stop_event.set()

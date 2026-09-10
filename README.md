@@ -7,7 +7,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ModelTC/lightx2v)
 [![Doc](https://img.shields.io/badge/docs-English-99cc2)](https://lightx2v-en.readthedocs.io/en/latest)
 [![Doc](https://img.shields.io/badge/文档-中文-99cc2)](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest)
-[![Papers](https://img.shields.io/badge/论文集-中文-99cc2)](https://lightx2v-papers-zhcn.readthedocs.io/zh-cn/latest)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/lightx2v/lightx2v/tags)
 
 **\[ English | [中文](README_zh.md) \]**
@@ -18,7 +17,7 @@
 
 **LightX2V** is an advanced lightweight image/video generation inference framework engineered to deliver efficient, high-performance image/video synthesis solutions. This unified platform integrates multiple state-of-the-art image/video generation techniques, supporting diverse generation tasks including text-to-video (T2V), image-to-video (I2V), text-to-image (T2I), image-editing (I2I). **X2V represents the transformation of different input modalities (X, such as text or images) into vision output (Vision)**.
 
-> 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Studio](https://x2v.light-ai.top/)** — a free, lightweight AI video platform with **LTX 2.3**, **Wan 2.2**, **SekoTalk**, **Qwen-Image**, **SeedVR2**, and more models and tasks.
+> 🌐 **Try it online now!** Experience LightX2V without installation: **[LightX2V Studio](https://x2v.light-ai.top/)** — a free, lightweight AI video platform with **Minimax H3**, **Wan 2.2**, **SekoTalk**, **Qwen-Image**, **SwiftVR**, and more models and tasks.
 
 > 🤗 **HuggingFace Model Repository: [LightX2V HuggingFace](https://huggingface.co/lightx2v)**
 
@@ -177,6 +176,8 @@ For attention operators installation, please refer to our documentation: **[Engl
 
 ### Usage Example
 
+See the [MiniMax-H3 guide](scripts/minimax_h3/README.md) for checkpoint layout, local LoRA paths, CLI presets, and server/POST examples.
+
 ```python
 # examples/minimax_h3/minimax_h3_t2av_dmd.py
 """
@@ -195,7 +196,7 @@ pipe = LightX2VPipeline(
 # The DMD config uses the released 768p LoRA, 4 inference steps,
 # video_flow_shift=6, audio_flow_shift=3, and lora alpha=128.
 pipe.create_generator(
-    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step_single_gpu_offload.json"
+    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step.json"
 )
 
 # Generation parameters
@@ -222,6 +223,7 @@ pipe.generate(
 ## 🤖 Supported Model Ecosystem
 
 ### Official Open-Source Models
+- ✅ [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
 - ✅ [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)
 - ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2)
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
@@ -316,6 +318,7 @@ We sincerely thank all the model repositories and research communities that insp
 - [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan)
 - [Wan-Video](https://github.com/Wan-Video)
 - [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
+- [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
 - [LightLLM](https://github.com/ModelTC/LightLLM)
 - [sglang](https://github.com/sgl-project/sglang)
 - [vllm](https://github.com/vllm-project/vllm)

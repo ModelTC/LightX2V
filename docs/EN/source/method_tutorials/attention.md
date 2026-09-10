@@ -50,9 +50,10 @@ The example config is `configs/attentions/wan_i2v_sol_attn.json`. It enables Mor
 
 The MiniMax-H3 example retains the 15-second, 768p, block CPU-offload setup:
 
+Set `lightx2v_path` and `model_path` in `scripts/minimax_h3/run_minimax_h3_t2av.sh` to your local directories, and change its `--config_json` argument to `"${lightx2v_path}/configs/minimax_h3/minimax_h3_sol_block_offload.json"` before running.
+
 ```bash
-MODEL_PATH=/path/to/MiniMax-H3 \
-    bash scripts/minimax_h3/run_minimax_h3_t2av_sol_attn_offload.sh
+bash scripts/minimax_h3/run_minimax_h3_t2av.sh
 ```
 
-Its config is `configs/minimax_h3/minimax_h3_t2av_sol_attn_block_offload.json`. Sol-Attn is used only by the 50-layer main transformer; the short text refiner uses dense Torch SDPA. The first six denoising steps and transformer layer 0 use SageAttention2 through `dense_backend=sage_attn2`. H3 attention uses a mixed `[text | audio | video]` packed sequence rather than one 3D video grid, so this config uses `reorder=none`; Wan's Morton3D reorder must not be enabled directly.
+Its config is `configs/minimax_h3/minimax_h3_sol_block_offload.json`. Sol-Attn is used only by the 50-layer main transformer; the short text refiner uses dense Torch SDPA. The first six denoising steps and transformer layer 0 use SageAttention2 through `dense_backend=sage_attn2`. H3 attention uses a mixed `[text | audio | video]` packed sequence rather than one 3D video grid, so this config uses `reorder=none`; Wan's Morton3D reorder must not be enabled directly.

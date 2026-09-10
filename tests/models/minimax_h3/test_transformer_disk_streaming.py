@@ -143,6 +143,12 @@ def h3_modules(monkeypatch):
         package.__path__ = []
         monkeypatch.setitem(sys.modules, package_name, package)
 
+    # Cache IO is outside these isolated model/streaming tests.
+    cache = types.ModuleType("lightx2v.models.networks.minimax_h3.adaln_cache")
+    cache.validate_adaln_cache_config = lambda config: None
+    cache.load_persistent_adaln_cache = lambda config, device: ({}, {})
+    monkeypatch.setitem(sys.modules, cache.__name__, cache)
+
     weight_module = types.ModuleType("lightx2v.common.modules.weight_module")
     weight_module.WeightModule = _FakeWeightModule
     weight_module.WeightModuleList = _FakeWeightModuleList
@@ -366,3 +372,38 @@ def test_transformer_infer_dispatches_to_disk_streaming(h3_modules):
     assert infer.infer(FakeBlockWeights(), pre_infer_out) == 3
     assert loaded == [0, 1]
     assert ran == [(0, "block-0", 0), (1, "block-1", 1)]
+
+
+def test_persistent_cache_prepared_before_streaming_and_survives_clear(h3_modules, monkeypatch):
+    _, weights_module, infer_module = h3_modules
+    monkeypatch.setattr(infer_module, "AI_DEVICE", "mps")
+    assert infer_module.MiniMaxH3TransformerInfer._cache_device() == torch.device("mps")
+    infer = infer_module.MiniMaxH3TransformerInfer({"num_attention_heads": 1, "use_adaln_cache": True})
+    infer.scheduler = SimpleNamespace(unique_timesteps_cpu=torch.tensor([0.5]))
+    tables = [torch.tensor([1.0]), torch.tensor([2.0])]
+    norm_out = torch.tensor([3.0])
+    infer._adaln_cache[(0.5,)] = tables
+    infer._norm_out_cache[(0.5,)] = norm_out
+    pre = SimpleNamespace(hidden_states=0, temb=None)
+
+    class Blocks:
+        disk_streaming = True
+        checkpoint = SimpleNamespace(block_indices=(0, 1))
+
+        def load_streaming_block(self, index):
+            assert pre.norm_out_modulation is norm_out
+            assert infer._get_cached_adaln(index) is tables[index]
+            return index
+
+    infer.run_block = lambda index, block, hidden, pre: hidden + block + 1
+    assert infer.infer(Blocks(), pre) == 3
+    infer._clear_adaln_cache()
+    assert infer._adaln_cache[(0.5,)] is tables
+    assert infer.infer(Blocks(), pre) == 3
+    infer.scheduler.unique_timesteps_cpu = torch.tensor([0.25])
+    with pytest.raises(KeyError, match="no entry"):
+        infer.infer(Blocks(), pre)
+
+    cached_block = weights_module.MiniMaxH3TransformerBlockWeights(0, {"use_adaln_cache": True})
+    assert not hasattr(cached_block, "adaln")
+    assert hasattr(cached_block, "ff")

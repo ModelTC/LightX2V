@@ -13,6 +13,7 @@
 - [Lingbot-Video：normal MoE](#lingbot-videonormal-moe)
 - [Offload 接入](#offload-接入)
 - [第三方算子叶子](#第三方算子叶子)
+- [自定义算子内层编译与 Triton 动态标量](#自定义算子内层编译与-triton-动态标量)
 - [测试骨架](#测试骨架)
 
 ## 参考入口
@@ -182,6 +183,36 @@ return external_kernel(x, weight)
 ```
 
 用最小输入验证数值、dtype、shape 和真实 kernel。custom op 不会减少调用次数；需要减少 launch 时应设计更大粒度的融合算子。
+
+边界应覆盖包含 data-dependent 中间结果的最小完整语义单元。当中间结果会迫使 Dynamo 追踪其数据依赖时，block map、增量 LUT 和消费该 LUT 的 attention kernel 应共同留在边界内，不能只把最后一个 kernel 设为叶子；fake 实现只描述该单元对外可见的输出元数据。
+
+## 自定义算子内层编译与 Triton 动态标量
+
+custom op 让外层 Dynamo 只看到一个算子，但函数体仍会正常执行。其内部的 Triton、CUDA extension 和第三方 wrapper 有各自的 JIT 与缓存，因此外层没有 recompile 日志，不代表正式请求没有发生内层编译。服务 ready 前后分别记录内层编译日志或缓存产物，再用冷缓存完整生命周期复测；不要仅凭 `TORCH_LOGS` 判断。
+
+多模态路径按实际执行顺序比较签名：
+
+```text
+原始模态 token
+→ packing / padding / alignment
+→ TP / SP 切分
+→ 各 rank 的实际 q/k 长度
+→ sparse block 数和 leaf kernel 标量参数
+```
+
+prompt 长度可任意变化时，不要靠枚举 prompt 预编译所有长度。先判断 Triton 标量是否必须静态：
+
+- 标量只参与指针偏移、mask 或运行时算术，且 launch grid 可在 JIT 外计算时，可以作为运行时参数；block size 等静态元参数仍保留 `tl.constexpr`。
+- 标量决定 `tl.arange` 范围、静态 tensor shape、constexpr 分支、unroll、layout 或 `num_warps` 时，不能直接动态化；应重新划分参数，或使用明确且有限的 bucket/padding。
+- 对确认安全的长度参数，使用 `do_not_specialize` 禁止按运行时值和对齐关系特化，避免每个长度或整除关系产生新变体：
+
+```python
+@triton.jit(do_not_specialize=("seq_len",))
+def kernel(x, seq_len, block: tl.constexpr):
+    ...
+```
+
+不要批量套用该装饰器。至少用两个不同长度（包含非整除 tail）验证数值，并确认 ready 后不再产生新的内层编译产物，稳态性能也没有回退。
 
 ## 测试骨架
 

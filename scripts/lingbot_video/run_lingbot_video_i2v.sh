@@ -33,6 +33,5 @@ python -m lightx2v.infer \
 --config_json ${lightx2v_path}/configs/lingbot_video/lingbot_video_lora.json \
 --image_path ${image_path} \
 --prompt "${prompt}" \
---negative_prompt "${negative_prompt}" \
 --save_result_path ${lightx2v_path}/save_results/output_lightx2v_lingbot_video_i2v.mp4 \
 --seed 42

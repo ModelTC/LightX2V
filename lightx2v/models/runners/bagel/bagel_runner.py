@@ -9,6 +9,7 @@ from lightx2v.models.networks.bagel.model import BagelModel
 from lightx2v.models.runners.bagel.i2i_utils import load_bagel_i2i_input_image, resize_pil_to_shape, resolve_bagel_i2i_image_shape
 from lightx2v.models.runners.bagel.t2i_utils import get_bagel_latent_downsample, resolve_bagel_t2i_image_shape
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.bagel.scheduler import BagelScheduler
 from lightx2v.models.video_encoders.hf.bagel.vae import BagelVae
 from lightx2v.server.metrics import monitor_cli
@@ -26,6 +27,11 @@ def _has_save_path(input_info):
 
 @RUNNER_REGISTER("bagel")
 class BagelRunner(DefaultRunner):
+    supported_request_fields_by_task = {
+        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "target_shape"},
+        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt", "target_shape"},
+    }
+
     def __init__(self, config):
         super().__init__(config)
 
@@ -177,9 +183,6 @@ class BagelRunner(DefaultRunner):
         return {"images": images}
 
     def run_pipeline(self, input_info):
-        if self.config["task"] not in ["t2i", "i2i"]:
-            raise NotImplementedError("BAGEL image generation in LightX2V currently supports task='t2i' and task='i2i'")
-
         self.input_info = input_info
         logger.info(f"input_info: {self.input_info}")
         if getattr(self.input_info, "negative_prompt", ""):

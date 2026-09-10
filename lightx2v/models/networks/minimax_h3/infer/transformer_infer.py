@@ -3,7 +3,9 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
+from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 class MiniMaxH3TransformerInfer(BaseTransformerInfer):
@@ -36,10 +38,18 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             self.seq_p_group = None
         self.infer_func = self.infer_without_offload
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
-        self._adaln_cache = {}
         self._current_adaln_tables = None
         self._adaln_cache_hit = False
+        if self.use_adaln_cache:
+            self._adaln_cache, self._norm_out_cache = load_persistent_adaln_cache(config, self._cache_device())
         self.init_compile(config)
+
+    @staticmethod
+    def _cache_device():
+        if str(AI_DEVICE) == "mps":
+            return torch.device("mps")
+        device_module = getattr(torch, AI_DEVICE)
+        return torch.device(AI_DEVICE, device_module.current_device())
 
     def _gather_tp_last_dim(self, tensor):
         if self.tp_size == 1:
@@ -133,38 +143,42 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return hidden_states
 
     def _compute_adaln_table(self, weights, pre_infer_out):
+        # ADALN CACHE SYNC: This projection is reproduced by the offline builder.
+        # Keep the offline AdaLN cache builder and its tests aligned with changes
+        # to activation placement, dtype, projection, gather, or reshape.
         # Activation is evaluated in fp32, then cast to the inference dtype
         # immediately before the (possibly quantized) AdaLN projection.
+        if pre_infer_out.temb is None:
+            raise RuntimeError("MiniMax-H3 timestep embedding is missing")
         modulation = weights.adaln.apply(F.silu(pre_infer_out.temb).to(self.infer_dtype))
         modulation = self._gather_tp_last_dim(modulation)
         return modulation.view(-1, 6 * self.hidden_size)
 
     def _clear_adaln_cache(self):
-        self._adaln_cache.clear()
+        # Online mode has no reusable cache; it only creates a temporary table
+        # for the current block invocation in _compute_adaln_table().
         self._current_adaln_tables = None
         self._adaln_cache_hit = False
 
-    def _prepare_adaln_cache(self):
+    def _prepare_adaln_cache(self, pre_infer_out):
         current_timesteps = tuple(self.scheduler.unique_timesteps_cpu.tolist())
         cached_tables = self._adaln_cache.get(current_timesteps)
-        if cached_tables is not None:
+        norm_out_modulation = self._norm_out_cache.get(current_timesteps)
+        if cached_tables is not None and norm_out_modulation is not None:
             self._current_adaln_tables = cached_tables
+            pre_infer_out.norm_out_modulation = norm_out_modulation
             self._adaln_cache_hit = True
         else:
-            self._current_adaln_tables = []
-            self._adaln_cache[current_timesteps] = self._current_adaln_tables
-            self._adaln_cache_hit = False
+            raise KeyError(f"Persistent MiniMax-H3 AdaLN cache has no entry for timesteps {current_timesteps}")
 
-    def _get_or_build_adaln(self, block_index, weights, pre_infer_out):
+    def _get_cached_adaln(self, block_index):
         if self._adaln_cache_hit:
             return self._current_adaln_tables[block_index]
-        adaln_table = self._compute_adaln_table(weights, pre_infer_out)
-        self._current_adaln_tables.append(adaln_table)
-        return adaln_table
+        raise RuntimeError("Persistent MiniMax-H3 AdaLN cache was not prepared")
 
     def run_block(self, block_idx, block, hidden_states, pre_infer_out):
         if self.use_adaln_cache:
-            adaln_table = self._get_or_build_adaln(block_idx, block, pre_infer_out)
+            adaln_table = self._get_cached_adaln(block_idx)
             return super().run_block(block_idx, block, hidden_states, pre_infer_out, adaln_table)
         return super().run_block(block_idx, block, hidden_states, pre_infer_out)
 
@@ -183,7 +197,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
 
     def infer(self, block_weights, pre_infer_out):
         if self.use_adaln_cache:
-            self._prepare_adaln_cache()
+            self._prepare_adaln_cache(pre_infer_out)
         if getattr(block_weights, "disk_streaming", False):
             return self.infer_with_disk_streaming(block_weights, pre_infer_out.hidden_states, pre_infer_out)
         return self.infer_func(block_weights.blocks, pre_infer_out.hidden_states, pre_infer_out)

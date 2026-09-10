@@ -10,13 +10,12 @@ import logging
 import os
 import warnings
 
-import torch
 from loguru import logger
 from utils.i18n import DEFAULT_LANG, set_language
 from utils.model_utils import cleanup_memory, extract_op_name, get_model_configs
 from utils.ui_builder import build_ui, generate_unique_filename, get_auto_config_dict
 
-from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
+from lightx2v.models.runners.runner_factory import build_runner
 from lightx2v.utils.set_config import get_default_config
 
 warnings.filterwarnings("ignore", category=UserWarning, module="huggingface_hub")
@@ -41,12 +40,8 @@ logger.add(
 
 
 global_runner = None
-current_config = None
-cur_dit_path = None
-cur_use_lora = None
-cur_lora_path = None
-cur_high_lora_path = None
-cur_low_lora_path = None
+current_startup_config = None
+current_lora_configs = []
 
 
 def run_inference(
@@ -146,16 +141,9 @@ def run_inference(
     model_cls = model_config["model_cls"]
     model_path = model_config["model_path"]
 
-    global global_runner, current_config, cur_dit_path, cur_use_lora, cur_lora_path, cur_high_lora_path, cur_low_lora_path
+    global global_runner, current_startup_config, current_lora_configs
 
     logger.info(f"Auto-determined model_cls: {model_cls} (model type: {model_type_input})")
-
-    if model_cls.startswith("wan2.2"):
-        current_dit_path = f"{high_noise_path_input}|{low_noise_path_input}" if high_noise_path_input and low_noise_path_input else None
-    else:
-        current_dit_path = dit_path_input
-
-    needs_reinit = lazy_load or unload_modules or global_runner is None or cur_dit_path != current_dit_path or cur_use_lora != use_lora
 
     config_graio = {
         "infer_steps": infer_steps,
@@ -207,22 +195,8 @@ def run_inference(
         "aspect_ratio": aspect_ratio,
     }
 
-    args = argparse.Namespace(
-        model_cls=model_cls,
-        seed=seed,
-        task=task,
-        model_path=model_path,
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        image_path=image_path,
-        save_result_path=save_result_path,
-        return_result_tensor=False,
-        aspect_ratio=aspect_ratio,
-        target_shape=[],
-    )
-    input_info = init_empty_input_info(args.task)
     config = get_default_config()
-    config.update({k: v for k, v in vars(args).items()})
+    config.update({"model_cls": model_cls, "task": task, "model_path": model_path})
     config.update(config_graio)
     config.update(model_config)
 
@@ -233,92 +207,62 @@ def run_inference(
     logger.info(f"Using model: {model_path}")
     logger.info(f"Inference config:\n{json.dumps(config, indent=4, ensure_ascii=False)}")
 
+    startup_config = {key: value for key, value in config.items() if key not in {"aspect_ratio", "target_video_length", "lora_configs"}}
+    lora_configs = config.get("lora_configs") or []
+
+    current_targets = {item.get("name") for item in current_lora_configs}
+    new_targets = {item.get("name") for item in lora_configs}
+    config_changed = current_startup_config != startup_config
+    # Wan2.2 switch_lora cannot remove an adapter from a branch.
+    lora_targets_changed = current_targets != new_targets
+    needs_reinit = global_runner is None or lazy_load or unload_modules or config_changed or lora_targets_changed
+
     # 初始化或重用 runner
     runner = global_runner
     if needs_reinit:
         if runner is not None:
+            global_runner = None
             del runner
-            torch.cuda.empty_cache()
-            gc.collect()
+            # Inference freezes the model graph; unfreeze it before collection.
+            gc.unfreeze()
+            cleanup_memory()
 
-        from lightx2v.infer import init_runner
-
-        runner = init_runner(config)
-
-        data = args.__dict__
-        update_input_info_from_dict(input_info, data)
-
-        current_config = config
-        cur_dit_path = current_dit_path
-        cur_use_lora = use_lora
-        cur_lora_path = lora_path
-
-        # 保存 Wan2.2 的 LoRA 路径
-        if model_cls.startswith("wan2.2"):
-            lora_configs = config.get("lora_configs")
-            if lora_configs:
-                lora_name_to_info = {item["name"]: item for item in lora_configs}
-                cur_high_lora_path = lora_name_to_info.get("high_noise_model", {}).get("path")
-                cur_low_lora_path = lora_name_to_info.get("low_noise_model", {}).get("path")
-            else:
-                cur_high_lora_path = None
-                cur_low_lora_path = None
+        runner = build_runner(config)
 
         if not lazy_load:
             global_runner = runner
-    else:
-        runner.config = config
-        data = args.__dict__
-        update_input_info_from_dict(input_info, data)
+    elif lora_configs != current_lora_configs:
+        if model_cls.startswith("wan2.2"):
+            lora_by_name = {item["name"]: item for item in lora_configs}
+            high_lora = lora_by_name.get("high_noise_model", {})
+            low_lora = lora_by_name.get("low_noise_model", {})
+            switched = runner.switch_lora(
+                high_lora_path=high_lora.get("path"),
+                high_lora_strength=high_lora.get("strength", 1.0),
+                low_lora_path=low_lora.get("path"),
+                low_lora_strength=low_lora.get("strength", 1.0),
+            )
+        else:
+            switched = runner.switch_lora(lora_configs[0]["path"], lora_configs[0]["strength"])
+        if not switched:
+            raise RuntimeError("Failed to switch LoRA")
 
-        # 如果 use_lora 为 True 且 lora_path 变化了，调用 switch_lora
-        if use_lora:
-            lora_configs = config.get("lora_configs")
-            if model_cls.startswith("wan2.2") and lora_configs:
-                # 对于 Wan2.2 模型，从 lora_configs 中获取 high_noise 和 low_noise 的 LoRA 路径
-                lora_name_to_info = {item["name"]: item for item in lora_configs}
-                high_lora_path = None
-                high_lora_strength = 1.0
-                low_lora_path = None
-                low_lora_strength = 1.0
+    current_startup_config = startup_config
+    current_lora_configs = lora_configs
 
-                if "high_noise_model" in lora_name_to_info:
-                    high_lora_info = lora_name_to_info["high_noise_model"]
-                    high_lora_path = high_lora_info["path"]
-                    high_lora_strength = high_lora_info.get("strength", 1.0)
-
-                if "low_noise_model" in lora_name_to_info:
-                    low_lora_info = lora_name_to_info["low_noise_model"]
-                    low_lora_path = low_lora_info["path"]
-                    low_lora_strength = low_lora_info.get("strength", 1.0)
-
-                # 检查 high_lora_path 和 low_lora_path 是否变化
-                high_lora_changed = high_lora_path != cur_high_lora_path
-                low_lora_changed = low_lora_path != cur_low_lora_path
-
-                if high_lora_changed or low_lora_changed:
-                    if hasattr(runner, "switch_lora"):
-                        runner.switch_lora(
-                            high_lora_path=high_lora_path,
-                            high_lora_strength=high_lora_strength,
-                            low_lora_path=low_lora_path,
-                            low_lora_strength=low_lora_strength,
-                        )
-                        logger.info(f"Switched LoRA for Wan2.2: high={high_lora_path}, low={low_lora_path}")
-                        cur_high_lora_path = high_lora_path
-                        cur_low_lora_path = low_lora_path
-                    else:
-                        logger.warning("Runner does not support switch_lora method")
-            elif lora_path and lora_path != cur_lora_path:
-                lora_strength_val = float(lora_strength) if lora_strength is not None else 1.0
-                if hasattr(runner, "switch_lora"):
-                    runner.switch_lora(lora_path, lora_strength_val)
-                    logger.info(f"Switched LoRA to: {lora_path} with strength={lora_strength_val}")
-                else:
-                    logger.warning("Runner does not support switch_lora method")
-                cur_lora_path = lora_path
-
-    runner.run_pipeline(input_info)
+    form_data = {
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "image_path": image_path,
+        "seed": seed,
+        "save_result_path": save_result_path,
+        "return_result_tensor": False,
+        "aspect_ratio": aspect_ratio,
+        "target_video_length": num_frames,
+    }
+    supported_request_fields = runner.get_supported_request_fields(task)
+    input_info = runner.prepare_request({key: value for key, value in form_data.items() if key in supported_request_fields})
+    runner.run_request(input_info)
     cleanup_memory()
 
     return save_result_path

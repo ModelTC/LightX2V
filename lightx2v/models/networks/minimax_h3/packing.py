@@ -31,6 +31,7 @@ MAX_DURATION = 15.0
 PIXEL_MEAN = (0.485, 0.456, 0.406)
 PIXEL_STD = (0.229, 0.224, 0.225)
 KEYFRAME_NOISE_AUG = 0.999
+CONDITION_AUDIO_TIMESTEP = 1.0
 KEYFRAME_ENCODE_SEED = 42
 
 _ROPE_FRAME_RESCALE = 5.0 / 3.0
@@ -287,7 +288,7 @@ def build_row_timesteps(
     video_timestep: float,
     audio_timestep: float,
     condition_video_timestep: float | None = None,
-    condition_audio_timestep: float = 1.0,
+    condition_audio_timestep: float = CONDITION_AUDIO_TIMESTEP,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     row_timesteps = torch.full((layout.sequence_length,), video_timestep, dtype=torch.float32)
     if condition_video_timestep is None:

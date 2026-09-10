@@ -231,18 +231,16 @@ def pose_string_to_json(pose_string):
     return pose_json
 
 
-def get_latent_num_from_pose(pose_data):
-    """Get the number of latent frames from pose data without full tensor conversion."""
+def load_pose(pose_data):
+    """Load pose data from a command string, JSON path, or dictionary."""
+    if isinstance(pose_data, dict):
+        return pose_data
     if isinstance(pose_data, str):
         if pose_data.endswith(".json"):
-            pose_json = json.load(open(pose_data, "r"))
-        else:
-            pose_json = pose_string_to_json(pose_data)
-    elif isinstance(pose_data, dict):
-        pose_json = pose_data
-    else:
-        raise ValueError(f"Invalid pose_data type: {type(pose_data)}")
-    return len(pose_json)
+            with open(pose_data, "r") as f:
+                return json.load(f)
+        return pose_string_to_json(pose_data)
+    raise ValueError(f"Invalid pose_data type: {type(pose_data)}. Expected str or dict.")
 
 
 def pose_to_input(pose_data, latent_num, tps=False):
@@ -263,22 +261,11 @@ def pose_to_input(pose_data, latent_num, tps=False):
             - intrinsic_list: torch.Tensor (batch, latent_num, 3, 3) - normalized intrinsics
             - action_one_label: torch.Tensor (batch, latent_num) - discrete action labels (0-80)
     """
-    # Handle different input types
-    if isinstance(pose_data, str):
-        if pose_data.endswith(".json"):
-            # Load from JSON file
-            pose_json = json.load(open(pose_data, "r"))
-        else:
-            # Parse pose string
-            pose_json = pose_string_to_json(pose_data)
-    elif isinstance(pose_data, dict):
-        pose_json = pose_data
-    else:
-        raise ValueError(f"Invalid pose_data type: {type(pose_data)}. Expected str or dict.")
-
+    pose_json = load_pose(pose_data)
     pose_keys = list(pose_json.keys())
     latent_num_from_pose = len(pose_keys)
-    assert latent_num_from_pose == latent_num, f"pose corresponds to {latent_num_from_pose * 4 - 3} frames, num_frames must be set to {latent_num_from_pose * 4 - 3} to ensure alignment."
+    if latent_num_from_pose != latent_num:
+        raise ValueError(f"pose corresponds to {latent_num_from_pose * 4 - 3} frames, num_frames must be set to {latent_num_from_pose * 4 - 3} to ensure alignment.")
 
     intrinsic_list = []
     w2c_list = []

@@ -13,6 +13,7 @@ from lightx2v_train.utils.constants import (
     LINGBOT_VIDEO_NEGATIVE_PROMPT,
     WAN_NEGATIVE_PROMPT,
 )
+from lightx2v_train.utils.generation_shapes import resolve_generation_shape
 
 
 class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
@@ -33,32 +34,31 @@ class WanDistributionMatchingCapability(GenericDistributionMatchingCapability):
     def default_lora_target_modules(self):
         return ("q", "k", "v", "o", "ffn.0", "ffn.2")
 
+    @property
+    def generation_shape_dimensions(self) -> int:
+        return 3
+
     def latent_shape(
         self,
         batch,
-        shape_config,
-        image_sizes,
+        generation_shapes,
         broadcast,
     ):
-        del image_sizes, broadcast
         prompt = batch["conditioning"].get("prompt", "")
         _require_single_prompt(prompt)
-        configured = shape_config.get("image_or_video_shape")
-        if configured is not None:
-            shape = tuple(int(dimension) for dimension in configured)
-            if len(shape) != 5 or shape[0] != 1:
-                raise ValueError(f"training.dmd.image_or_video_shape must be a five-dimensional singleton shape beginning with 1, got {shape}.")
-            return shape
-        missing = [key for key in ("height", "width", "num_frames") if key not in shape_config]
-        if missing:
-            raise ValueError("Video DMD shape is missing: " + ", ".join(missing) + ".")
-        latent_frames = (int(shape_config["num_frames"]) - 1) // self.model.vae_scale_factor_temporal + 1
+        num_frames, height, width = resolve_generation_shape(
+            generation_shapes,
+            batch,
+            expected_dimensions=self.generation_shape_dimensions,
+            broadcast=broadcast,
+        )
+        latent_frames = (num_frames - 1) // self.model.vae_scale_factor_temporal + 1
         return (
             1,
             self.model._latent_channels(),
             latent_frames,
-            int(shape_config["height"]) // self.model.vae_scale_factor_spatial,
-            int(shape_config["width"]) // self.model.vae_scale_factor_spatial,
+            height // self.model.vae_scale_factor_spatial,
+            width // self.model.vae_scale_factor_spatial,
         )
 
     def encode_conditions(

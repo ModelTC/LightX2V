@@ -7,7 +7,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ModelTC/lightx2v)
 [![Doc](https://img.shields.io/badge/docs-English-99cc2)](https://lightx2v-en.readthedocs.io/en/latest)
 [![Doc](https://img.shields.io/badge/文档-中文-99cc2)](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest)
-[![Papers](https://img.shields.io/badge/论文集-中文-99cc2)](https://lightx2v-papers-zhcn.readthedocs.io/zh-cn/latest)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com/r/lightx2v/lightx2v/tags)
 
 **\[ [English](README.md) | 中文 \]**
@@ -18,7 +17,7 @@
 
 **LightX2V** 是一个先进的轻量级图像视频生成推理框架，专为提供高效、高性能的图像视频生成解决方案而设计。该统一平台集成了多种前沿的图像视频生成技术，支持文本生成视频(T2V)和图像生成视频(I2V)，文本生图片(T2I)，图像编辑(I2I)等多样化生成任务。**X2V 表示将不同的输入模态(X，如文本或图像)转换为视觉输出(Vision)**。
 
-> 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V Studio](https://x2v.light-ai.top/)** - 免费、轻量、快速的AI视频生成平台，提供LTX2.3 / Wan 2.2 / SekoTalk / Qwen-Image / SeedVR2等多个模型多种任务的免费体验使用。
+> 🌐 **立即在线体验！** 无需安装即可体验 LightX2V：**[LightX2V Studio](https://x2v.light-ai.top/)** - 免费、轻量、快速的AI视频生成平台，提供 Minimax H3 / Wan 2.2 / SekoTalk / Qwen-Image / SwiftVR 等多个模型多种任务的免费体验使用。
 
 > 🤗 **HuggingFace 模型仓库: [LightX2V HuggingFace](https://huggingface.co/lightx2v)**
 
@@ -177,6 +176,9 @@ uv pip install -v . # pip install -v .
 注意力算子安装说明请参考我们的文档：**[英文文档](https://lightx2v-en.readthedocs.io/en/latest/getting_started/quickstart.html#step-4-install-attention-operators) | [中文文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/getting_started/quickstart.html#id9)**
 
 ### 使用示例
+
+权重目录、本地 LoRA 路径、CLI 配置及服务与 POST 示例见 [MiniMax-H3 使用说明](scripts/minimax_h3/README_zh.md)。
+
 ```python
 # examples/minimax_h3/minimax_h3_t2av_dmd.py
 """
@@ -195,7 +197,7 @@ pipe = LightX2VPipeline(
 # DMD 配置使用已发布的 768p LoRA、4 步推理、
 # video_flow_shift=6、audio_flow_shift=3 和 LoRA alpha=128。
 pipe.create_generator(
-    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step_single_gpu_offload.json"
+    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step.json"
 )
 
 # 生成参数
@@ -221,6 +223,7 @@ pipe.generate(
 ## 🤖 支持的模型生态
 
 ### 官方开源模型
+- ✅ [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
 - ✅ [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3)
 - ✅ [LTX-2](https://huggingface.co/Lightricks/LTX-2)
 - ✅ [HunyuanVideo-1.5](https://huggingface.co/tencent/HunyuanVideo-1.5)
@@ -316,6 +319,7 @@ pipe.generate(
 - [Tencent-Hunyuan](https://github.com/Tencent-Hunyuan)
 - [Wan-Video](https://github.com/Wan-Video)
 - [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
+- [MiniMax-H3](https://github.com/MiniMax-AI/MiniMax-H3)
 - [LightLLM](https://github.com/ModelTC/LightLLM)
 - [sglang](https://github.com/sgl-project/sglang)
 - [vllm](https://github.com/vllm-project/vllm)

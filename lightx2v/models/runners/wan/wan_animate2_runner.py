@@ -16,8 +16,8 @@ except ImportError:
     VideoReader = None
 
 from lightx2v.common.kvcache import KVCacheManager
-from lightx2v.models.networks.wan.animate2_identity import WAN_ANIMATE2_MODEL_ID
 from lightx2v.models.networks.wan.animate2_model import WanAnimate2Model
+from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.animate2 import WanAnimate2Scheduler
 from lightx2v.utils.envs import GET_DTYPE
@@ -168,7 +168,7 @@ class _Animate2VideoRecorder(VideoRecorder):
         return self.returncode
 
 
-@RUNNER_REGISTER(WAN_ANIMATE2_MODEL_ID)
+@RUNNER_REGISTER("wan2.2_animate2_distilled")
 class WanAnimate2Runner(WanRunner):
     """Native LightX2V runner for Wan-Animate-2.
 
@@ -177,6 +177,10 @@ class WanAnimate2Runner(WanRunner):
     intentionally registered separately from the pose/face-adapter based
     ``wan2.2_animate`` runner.
     """
+
+    supported_request_fields_by_task = {
+        "animate": VIDEO_REQUEST_FIELDS | {"image_path", "prompt_ref", "src_pose_path", "src_ref_images", "video_path"},
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -188,8 +192,6 @@ class WanAnimate2Runner(WanRunner):
             raise NotImplementedError("Wan-Animate-2 supports model/block offload, not phase offload.")
         if self.config.get("enable_reuse", False):
             raise NotImplementedError("Wan-Animate-2 request reuse is not implemented for autoregressive inputs.")
-        if self.config["task"] != "animate":
-            raise ValueError(f"{WAN_ANIMATE2_MODEL_ID} requires task='animate'.")
         if self.config.get("use_stream_vae", False):
             raise NotImplementedError("Wan-Animate-2 must drop its leading latent before Wan VAE decode; use_stream_vae is not supported.")
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
@@ -200,8 +202,6 @@ class WanAnimate2Runner(WanRunner):
             raise ValueError("Wan-Animate-2 requires both use_image_encoder=true and use_img_emb=true.")
         if not self.config.get("use_31_block", True):
             raise ValueError("Wan-Animate-2 requires use_31_block=true for its CLIP image features.")
-        if self.config.get("enable_cfg", False) != (float(self.config["sample_guide_scale"]) > 1.0):
-            raise ValueError("Wan-Animate-2 enables CFG exactly when sample_guide_scale > 1.")
 
     def init_scheduler(self):
         if self.config.get("disagg_mode") == "decode":
@@ -231,11 +231,6 @@ class WanAnimate2Runner(WanRunner):
         # parallel rank.  Its dynamically selected area-preserving canvas is not
         # guaranteed to be splittable by LightX2V's spatial VAE grid either.
         return False
-
-    def set_inputs(self, inputs):
-        """Keep the reference prompt request-scoped in service mode."""
-        super().set_inputs(inputs)
-        self.input_info.prompt_ref = inputs.get("prompt_ref", "人物动作的参考视频")
 
     @staticmethod
     def _padding_resize(image, height, width, return_padding_info=False):
@@ -398,15 +393,14 @@ class WanAnimate2Runner(WanRunner):
         # DefaultRunner's audio mux reads video_path. Keep legacy src_pose_path
         # fallback inputs source-compatible by recording the resolved driver.
         self.input_info.video_path = video_path
-        if self.input_info.seed is None or int(self.input_info.seed) < 0:
-            raise ValueError("Wan-Animate-2 requires a non-negative --seed.")
 
         reference_bgr = cv2.imread(reference_path, cv2.IMREAD_COLOR)
         if reference_bgr is None:
             raise ValueError(f"Failed to decode reference image: {reference_path}")
         reference_rgb = reference_bgr[:, :, ::-1]
 
-        target_area = int(self.config["target_width"]) * int(self.config["target_height"])
+        target_height, target_width = self.get_target_size()
+        target_area = target_width * target_height
         self.reference_image, self.output_crop = self._resize_by_area(
             reference_rgb,
             target_area,
@@ -420,7 +414,7 @@ class WanAnimate2Runner(WanRunner):
         driving_shape = driving_frames[0].shape[:2]
 
         self.real_frame_len = len(driving_frames)
-        clip_len = int(self.config["target_video_length"])
+        clip_len = self.get_target_video_length()
         if clip_len <= 1 or (clip_len - 1) % 4:
             raise ValueError(f"target_video_length must be 4k+1 and greater than 1, got {clip_len}.")
         padded_len = self._padding_length(self.real_frame_len, clip_len, overlap=1)
@@ -633,6 +627,7 @@ class WanAnimate2Runner(WanRunner):
         if list(generation_y.shape[1:]) != latent_shape[1:]:
             raise RuntimeError(f"Generation conditioning shape {tuple(generation_y.shape)} does not match latent shape {latent_shape}.")
 
+        target_height, target_width = self.get_target_size()
         animate2 = {
             "reference_latents": reference_latents,
             "reference_y": reference_y,
@@ -641,7 +636,7 @@ class WanAnimate2Runner(WanRunner):
             "generation_clip": self.generation_clip,
             "reference_kv_cache": self._build_reference_cache(reference_latents),
             "origin_len": clip_len,
-            "origin_area": [int(self.config["target_width"]), int(self.config["target_height"])],
+            "origin_area": [target_width, target_height],
             "clip_len": clip_len,
         }
         self.input_info.latent_shape = latent_shape
@@ -753,7 +748,7 @@ class WanAnimate2Runner(WanRunner):
         if not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
             raise RuntimeError(f"Wan-Animate-2 FFmpeg stream did not produce a valid output file: {output_path}")
 
-        input_video_path = getattr(self.input_info, "video_path", "")
+        input_video_path = self.input_info.video_path
         if input_video_path:
             muxed_path = mux_audio_from_video(
                 input_video_path,

@@ -10,5 +10,6 @@
   "quality": 60,
   "ffmpeg_preset": "ultrafast",
   "queue_size": 3,
-  "use_compile": true
+  "use_compile": true,
+  "warmup": true
 }

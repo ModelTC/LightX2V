@@ -31,10 +31,10 @@ class PhasedRolloutEngine:
         grad_enabled,
         xt=None,
     ):
+        self._prepare_timestep_lookup(self.student.latent_hw(latent_shape))
         self.scheduler.set_timesteps(
             self.num_inference_steps,
-            sigmas=[float(sigma) for sigma in self.denoising_sigmas.detach().cpu()],
-            latent_hw=latent_shape[-2:],
+            latent_hw=self.student.latent_hw(latent_shape),
             device=self.student.device,
         )
         if region == "high":
@@ -96,7 +96,7 @@ class PhasedRolloutEngine:
         else:
             sigma_s = zero_sigma
             anchor = student_x0
-        raw_gradient_timestep = self._raw_timestep_from_warped_step(self.denoising_steps[gradient_step_index])
+        raw_gradient_timestep = self._raw_timestep_from_warped_step(self.scheduler.timesteps[gradient_step_index])
         return (
             anchor.to(dtype=self.latent_dtype),
             student_x0.to(dtype=self.latent_dtype),
@@ -111,10 +111,10 @@ class PhasedRolloutEngine:
         latent_shape,
         xt=None,
     ):
+        self._prepare_timestep_lookup(self.student.latent_hw(latent_shape))
         self.scheduler.set_timesteps(
             self.num_inference_steps,
-            sigmas=[float(sigma) for sigma in self.denoising_sigmas.detach().cpu()],
-            latent_hw=latent_shape[-2:],
+            latent_hw=self.student.latent_hw(latent_shape),
             device=self.student.device,
         )
         if xt is None:
@@ -418,8 +418,6 @@ class PhasedRolloutEngine:
             warp_denoising_step=self.warp_denoising_step,
             match_timestep=self.match_timestep,
             score_timestep_margin=self.score_timestep_margin,
-            score_timestep_min=self.score_timestep_min,
-            score_timestep_max=self.score_timestep_max,
             phased_eps=self.phased_eps,
         )
 
@@ -433,6 +431,7 @@ class PhasedRolloutEngine:
             device=self.student.device,
             dtype=self.latent_dtype,
             extract_real_latents=self._extract_real_latents,
+            prepare_timestep_lookup=self._prepare_timestep_lookup,
             sample_synced_int=self._sample_synced_int,
             broadcast_noise=broadcast_sequence_parallel_value,
             predict_student_velocity=self._predict_real_student_velocity,

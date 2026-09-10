@@ -216,12 +216,12 @@ sequenceDiagram
     end
 
     par Parallel Inference across all ranks
-        TIW0->>TIW0: runner.set_inputs(task_data)
-        TIW0->>TIW0: runner.run_pipeline()
+        TIW0->>TIW0: input_info = runner.prepare_request(task_data)
+        TIW0->>TIW0: runner.run_request(input_info)
     and
         Note over TIW1: If world_size > 1
-        TIW1->>TIW1: runner.set_inputs(task_data)
-        TIW1->>TIW1: runner.run_pipeline()
+        TIW1->>TIW1: input_info = runner.prepare_request(task_data)
+        TIW1->>TIW1: runner.run_request(input_info)
     end
 
     Note over TIW0,TIW1: Synchronization
@@ -304,10 +304,17 @@ stateDiagram-v2
 
 ```python
 class VideoTaskRequest(BaseTaskRequest):
-    target_video_length: int = 81
+    target_video_length: Optional[int] = Field(
+        None,
+        validation_alias=AliasChoices("num_frames", "target_video_length"),
+    )
+    reuse_prefix_segments: int = Field(0, ge=0)
+    video_path: str = ""
+    sr_ratio: float = Field(2.0, gt=0)
     audio_path: str = ""
     video_duration: int = 5
     talk_objects: Optional[list[TalkObject]] = None
+    src_ref_images: list[str] = Field(default_factory=list)
 ```
 
 ### ImageTaskRequest
@@ -325,10 +332,19 @@ class BaseTaskRequest(BaseModel):
     prompt: str = ""
     negative_prompt: str = ""
     image_path: str = ""  # URL, base64, or local path
-    save_result_path: str = ""
-    infer_steps: int = 5
-    seed: int  # auto-generated
+    save_result_path: Optional[str] = None  # omitted/null: do not save a file
+    seed: Optional[int]  # non-negative; omitted/null: 42
 ```
+
+To download an asynchronous task's file result, provide `save_result_path` in the request. Omitting it or passing null skips file saving. Synchronous image APIs return the image from memory.
+
+Single-task services use the task selected by `--task` at startup, so POST requests can omit `task`. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively.
+
+Native image and video request schemas accept the inference fields supported by their runners, including animation conditions, action/state paths, LTX reference controls, and image-edit options. The runner validates whether a field is supported by the selected model, task, and startup configuration. Unknown JSON or form fields are rejected with HTTP 422; startup settings such as `infer_steps`, `resize_mode`, and `warmup` belong in the startup configuration.
+
+The `/form` endpoints accept the same named request fields as the JSON endpoints, alongside their existing file uploads. Encode structured values such as `target_shape`, `image_frame_idx`, `image_strength` lists, `src_ref_images`, `talk_objects`, and WorldPlay `pose` objects as JSON strings. For example, use `target_shape='[480,832]'`. Text fields, including prompts and `layout_bboxes`, retain their submitted text.
+
+Video, pose-video, mask-video, action, and state paths refer to files or directories on the server. Image and audio inputs retain their existing URL, Base64, and local-path handling. Python-only inputs such as callbacks and in-memory policy tensors are not exposed as JSON fields; synchronous image APIs select tensor output internally.
 
 ## Configuration
 
@@ -342,7 +358,7 @@ see `lightx2v/server/config.py`
 # Single GPU
 python -m lightx2v.server \
     --model_path /path/to/model \
-    --model_cls wan2.1_distill \
+    --model_cls wan2.1 \
     --task i2v \
     --host 0.0.0.0 \
     --port 8000 \
@@ -353,7 +369,7 @@ python -m lightx2v.server \
 # Multi-GPU with torchrun
 torchrun --nproc_per_node=2 -m lightx2v.server \
     --model_path /path/to/model \
-    --model_cls wan2.1_distill \
+    --model_cls wan2.1 \
     --task i2v \
     --host 0.0.0.0 \
     --port 8000 \

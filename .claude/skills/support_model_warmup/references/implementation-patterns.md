@@ -24,7 +24,7 @@
 | 公共 warmup 生命周期、GC | `lightx2v/models/runners/base_runner.py` |
 | warmup 开关和拒绝条件 | `lightx2v/models/runners/default_runner.py` |
 | Wan task/MoE/lazy 模式 | `lightx2v/models/runners/wan/wan_runner.py` |
-| Wan distill/MoE 分支 | `lightx2v/models/runners/wan/wan_distill_runner.py` |
+| Wan distill/MoE 分支 | `lightx2v/models/runners/wan/wan_runner.py` |
 | Wan 状态清理 | `lightx2v/models/schedulers/wan/scheduler.py` |
 | Qwen T2I/I2I 模式 | `lightx2v/models/runners/qwen_image/qwen_image_runner.py` |
 | Qwen RoPE/diffusers 状态清理 | `lightx2v/models/schedulers/qwen_image/scheduler.py` |

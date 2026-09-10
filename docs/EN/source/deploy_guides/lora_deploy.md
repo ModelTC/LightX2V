@@ -83,28 +83,22 @@ LightX2V supports multiple LoRA weight naming conventions:
 
 ```bash
 # T2V LoRA Inference
-bash scripts/wan/run_wan_t2v_distill_4step_cfg_lora.sh
+bash scripts/wan/distill/run_wan_t2v_distill_lora_4step_cfg.sh
 
 # I2V LoRA Inference
-bash scripts/wan/run_wan_i2v_distill_4step_cfg_lora.sh
-```
-
-**Audio-Driven LoRA Inference:**
-
-```bash
-bash scripts/wan/run_wan_i2v_audio.sh
+bash scripts/wan/distill/run_wan_i2v_distill_lora_4step_cfg.sh
 ```
 
 ### Using LoRA in API Service
 
-Specify through [config file](wan_t2v_distill_4step_cfg_lora.json), modify the startup command in [scripts/server/start_server.sh](https://github.com/ModelTC/lightx2v/blob/main/scripts/server/start_server.sh):
+Specify through the [config file](https://github.com/ModelTC/lightx2v/blob/main/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json), then modify the startup command in [scripts/server/start_server.sh](https://github.com/ModelTC/lightx2v/blob/main/scripts/server/start_server.sh):
 
 ```bash
 python -m lightx2v.api_server \
-  --model_cls wan2.1_distill \
+  --model_cls wan2.1 \
   --task t2v \
   --model_path $model_path \
-  --config_json ${lightx2v_path}/configs/distill/wan_t2v_distill_4step_cfg_lora.json \
+  --config_json ${lightx2v_path}/configs/distill/wan21/wan_t2v_distill_lora_4step_cfg.json \
   --port 8000 \
   --nproc_per_node 1
 ```

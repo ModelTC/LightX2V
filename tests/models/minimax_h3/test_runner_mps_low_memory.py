@@ -58,6 +58,12 @@ def _load_runner_module(monkeypatch):
         package.__path__ = []
         monkeypatch.setitem(sys.modules, package_name, package)
 
+    request_name = "lightx2v.models.runners.request_fields"
+    request_spec = importlib.util.spec_from_file_location(request_name, REPO_ROOT / "lightx2v/models/runners/request_fields.py")
+    request_module = importlib.util.module_from_spec(request_spec)
+    monkeypatch.setitem(sys.modules, request_name, request_module)
+    request_spec.loader.exec_module(request_module)
+
     class DefaultRunner:
         def __init__(self, config):
             self.config = config
@@ -90,6 +96,7 @@ def _load_runner_module(monkeypatch):
     _install_module(
         monkeypatch,
         "lightx2v.utils.input_info",
+        INPUT_INFO_TYPES={task: object for task in ("t2av", "i2av", "l2av", "fl2av", "ref2av")},
         FL2AVInputInfo=object,
         I2AVInputInfo=object,
         L2AVInputInfo=object,

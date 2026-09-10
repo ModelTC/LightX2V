@@ -39,12 +39,13 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     trim_reference_num_frames,
 )
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.minimax_h3 import MiniMaxH3Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
 from lightx2v.models.video_encoders.hf.minimax_h3 import MiniMaxH3VideoVAE
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import DTYPE_MAP, GET_RECORDER_MODE
-from lightx2v.utils.input_info import FL2AVInputInfo, I2AVInputInfo, L2AVInputInfo, Ref2AVInputInfo, T2AVInputInfo
+from lightx2v.utils.input_info import INPUT_INFO_TYPES
 from lightx2v.utils.ltx2_media_io import encode_video
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
@@ -96,15 +97,25 @@ class MiniMaxH3Runner(DefaultRunner):
         (544, 960, 124),
     )
     _WARMUP_STEP_COUNT = 2
-    _WARMUP_TASKS = ("t2av", "fl2av", "i2av", "l2av", "ref2av")
+    supported_request_fields_by_task = {
+        "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"},
+        "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "prompt"},
+        "l2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"last_frame_path", "prompt"},
+        "fl2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_path", "last_frame_path", "prompt"},
+        "ref2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"audio_path", "image_path", "prompt", "video_path"},
+    }
 
     def __init__(self, config):
-        if config.get("task") not in {"t2av", "i2av", "l2av", "fl2av", "ref2av"}:
-            raise ValueError("MiniMax-H3 supports t2av/i2av/l2av/fl2av/ref2av")
-        self.loaded_transformer_partition = "transformer_ref" if config["task"] == "ref2av" else "transformer"
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
+        self.loaded_transformer_partition = "transformer_ref" if config["task"] == "ref2av" else "transformer"
+
+    def get_supported_tasks(self):
+        """Return tasks supported by the loaded transformer weights."""
+        if self.config["task"] == "ref2av":
+            return ("ref2av",)
+        return ("t2av", "i2av", "l2av", "fl2av")
 
     def init_modules(self):
         super().init_modules()
@@ -117,8 +128,6 @@ class MiniMaxH3Runner(DefaultRunner):
     @ProfilingContext4DebugL1("Warmup")
     def run_warmup(self):
         task = self.config["task"]
-        if task not in self._WARMUP_TASKS:
-            raise NotImplementedError(f"MiniMax-H3 warmup does not support task: {task}")
 
         if task == "ref2av" and self.config.get("vae_use_compile", False):
             height, width, _ = self._WARMUP_SHAPES[0]
@@ -160,35 +169,37 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def _prepare_warmup_inputs(self, height, width, num_frames):
         task = self.config["task"]
-        common = {
-            "seed": 0,
-            "prompt": "A sunrise over distant mountains reflected across a calm lake beneath drifting clouds."
+        self.input_info = INPUT_INFO_TYPES[task](
+            task=task,
+            seed=0,
+            prompt="A sunrise over distant mountains reflected across a calm lake beneath drifting clouds."
             if (height, width, num_frames) == self._WARMUP_SHAPES[0]
             else "A cinematic fox walking through a snowy forest.",
-            "target_shape": [height, width],
-            "target_video_length": num_frames,
-            "return_result_tensor": True,
-        }
+            target_shape=[height, width],
+            target_video_length=num_frames,
+            return_result_tensor=True,
+        )
         image = Image.new("RGB", (width, height), color=0)
-        if task == "t2av":
-            self.input_info = T2AVInputInfo(**common)
-        elif task == "i2av":
-            self.input_info = I2AVInputInfo(**common, image_path=image)
-        elif task == "l2av":
-            self.input_info = L2AVInputInfo(**common, last_frame_path=image)
-        elif task == "fl2av":
-            self.input_info = FL2AVInputInfo(**common, image_path=image, last_frame_path=image.copy())
-        else:
-            self.input_info = Ref2AVInputInfo(**common, image_path=image)
+        if task in ("i2av", "fl2av", "ref2av"):
+            self.input_info.image_path = image
+        if task in ("l2av", "fl2av"):
+            self.input_info.last_frame_path = image.copy() if task == "fl2av" else image
 
-    def clear_warmup_state(self):
-        self.scheduler.clear()
+    def clear_conditioning_state(self):
         self.condition_video_latents = []
         self.condition_audio_latents = []
         self.keyframe_anchors = ()
         self.prepared_references = None
+
+    def clear_warmup_state(self):
+        self.scheduler.clear()
+        self.clear_conditioning_state()
         self.input_info = None
         self.__dict__.pop("inputs", None)
+
+    def end_run(self):
+        self.clear_conditioning_state()
+        super().end_run()
 
     def init_scheduler(self):
         self.scheduler = MiniMaxH3Scheduler(self.config)
@@ -353,21 +364,17 @@ class MiniMaxH3Runner(DefaultRunner):
         return ImageOps.exif_transpose(image).convert("RGB")
 
     def _prepare_keyframes(self):
-        task = self.config["task"]
-        if task == "t2av":
-            if not isinstance(self.input_info, T2AVInputInfo):
-                raise TypeError(f"MiniMax-H3 t2av expects T2AVInputInfo, got {type(self.input_info).__name__}")
-            return [], ()
+        task = self.input_info.task
         if task == "i2av":
-            if not isinstance(self.input_info, I2AVInputInfo) or not self.input_info.image_path:
+            if not self.input_info.image_path:
                 raise ValueError("MiniMax-H3 i2av requires exactly one --image_path")
             values, anchors = [self.input_info.image_path], ("first",)
         elif task == "l2av":
-            if not isinstance(self.input_info, L2AVInputInfo) or not self.input_info.last_frame_path:
+            if not self.input_info.last_frame_path:
                 raise ValueError("MiniMax-H3 l2av requires --last_frame_path")
             values, anchors = [self.input_info.last_frame_path], ("last",)
         elif task == "fl2av":
-            if not isinstance(self.input_info, FL2AVInputInfo) or not self.input_info.image_path or not self.input_info.last_frame_path:
+            if not self.input_info.image_path or not self.input_info.last_frame_path:
                 raise ValueError("MiniMax-H3 fl2av requires --image_path and --last_frame_path")
             values, anchors = [self.input_info.image_path, self.input_info.last_frame_path], ("first", "last")
         else:
@@ -400,8 +407,6 @@ class MiniMaxH3Runner(DefaultRunner):
         return [value]
 
     def _prepare_references(self):
-        if not isinstance(self.input_info, Ref2AVInputInfo):
-            raise TypeError(f"MiniMax-H3 ref2av expects Ref2AVInputInfo, got {type(self.input_info).__name__}")
         entries = []
         for kind, value in (
             ("image", self.input_info.image_path),
@@ -514,7 +519,7 @@ class MiniMaxH3Runner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Input Encoder")
     def _run_input_encoder_local_h3(self):
-        task = self.config["task"]
+        task = self.input_info.task
         requested_partition = "transformer_ref" if task == "ref2av" else "transformer"
         if requested_partition != self.loaded_transformer_partition:
             raise ValueError(
@@ -522,10 +527,7 @@ class MiniMaxH3Runner(DefaultRunner):
                 f"loaded {self.loaded_transformer_partition!r}, requested {requested_partition!r}. "
                 "Create a separate LightX2VPipeline for ref2av."
             )
-        self.condition_video_latents = []
-        self.condition_audio_latents = []
-        self.keyframe_anchors = ()
-        self.prepared_references = None
+        self.clear_conditioning_state()
         if task == "ref2av":
             self._resolve_request_geometry()
             self.prepared_references = self._prepare_references()

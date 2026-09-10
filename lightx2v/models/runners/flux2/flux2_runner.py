@@ -1,5 +1,4 @@
 import gc
-import math
 import os
 
 import numpy as np
@@ -8,9 +7,11 @@ from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.flux2.feature_caching.scheduler import Flux2DevSchedulerCaching, Flux2SchedulerCaching
 from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2Scheduler
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
+from lightx2v.utils.input_info import Flux2I2IInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process
@@ -19,32 +20,86 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
-def calculate_dimensions(target_area, ratio):
-    width = math.sqrt(target_area * ratio)
-    height = width / ratio
-
-    width = round(width / 32) * 32
-    height = round(height / 32) * 32
-
-    return width, height, None
-
-
-class Flux2BaseRunner(DefaultRunner):
-    """Shared base runner for Flux2 Klein and Dev models."""
-
+@RUNNER_REGISTER("flux2")
+class Flux2Runner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
+    input_info_cls_by_task = {"i2i": Flux2I2IInputInfo}
+    supported_request_fields_by_task = {
+        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "target_shape"},
+        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt"},
+    }
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if task == "i2i" and self.config.get("inpaint_mask_enabled", False):
+            supported_request_fields |= {"inpaint_blur_sigma", "inpaint_blur_size"}
+        return supported_request_fields
 
     def __init__(self, config):
+        self.model_variant = config["model_variant"]
+        if self.model_variant == "klein":
+            self.transformer_class = Flux2KleinTransformerModel
+            self.scheduler_class = Flux2Scheduler
+            self.caching_scheduler_class = Flux2SchedulerCaching
+        elif self.model_variant == "dev":
+            self.transformer_class = Flux2DevTransformerModel
+            self.scheduler_class = Flux2DevScheduler
+            self.caching_scheduler_class = Flux2DevSchedulerCaching
+        else:
+            raise ValueError(f"Unsupported Flux2 model_variant: {self.model_variant}")
+
         config["vae_scale_factor"] = config.get("vae_scale_factor", 16)
         super().__init__(config)
 
-    def _get_scheduler_class(self):
-        if self.config.get("feature_caching", "NoCaching") in ("NoCaching", "None"):
-            return None
-        if self.config.get("feature_caching") == "Ada":
-            return Flux2SchedulerCaching
-        raise NotImplementedError(f"Unsupported feature_caching type: {self.config.get('feature_caching')}")
+    def load_transformer(self):
+        model_kwargs = {
+            "model_path": os.path.join(self.config["model_path"], "transformer"),
+            "config": self.config,
+            "device": self.init_device,
+        }
+        return self.transformer_class(**model_kwargs)
+
+    def load_text_encoder(self):
+        if self.model_variant == "klein":
+            from lightx2v.models.input_encoders.hf.flux2.qwen3_model import Flux2Klein_TextEncoder
+
+            text_encoder_class = Flux2Klein_TextEncoder
+        elif self.model_variant == "dev":
+            from lightx2v.models.input_encoders.hf.flux2.mistral3_model import Flux2Dev_TextEncoder
+
+            text_encoder_class = Flux2Dev_TextEncoder
+
+        return [text_encoder_class(self.config)]
+
+    def init_scheduler(self):
+        feature_caching = self.config.get("feature_caching", "NoCaching")
+        if feature_caching in ("NoCaching", "None"):
+            scheduler_class = self.scheduler_class
+        elif feature_caching == "Ada":
+            scheduler_class = self.caching_scheduler_class
+        else:
+            raise NotImplementedError(f"Unsupported feature_caching type: {feature_caching}")
+        self.scheduler = scheduler_class(self.config)
+
+    @ProfilingContext4DebugL1("Run Text Encoder")
+    def run_text_encoder(self, text, image_list=None, neg_prompt=None):
+        prompt_embeds_list, _ = self.text_encoders[0].infer([text])
+        prompt_embeds = prompt_embeds_list[0].unsqueeze(0)
+        text_ids = self._prepare_text_ids(prompt_embeds).to(AI_DEVICE)
+
+        text_encoder_output = {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
+
+        uses_cfg = self.config.get("enable_cfg", True)
+        if self.model_variant == "klein" and uses_cfg:
+            neg_prompt_embeds_list, _ = self.text_encoders[0].infer([""])
+            neg_prompt_embeds = neg_prompt_embeds_list[0].unsqueeze(0)
+            neg_text_ids = self._prepare_text_ids(neg_prompt_embeds).to(AI_DEVICE)
+
+            text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
+            text_encoder_output["negative_text_ids"] = neg_text_ids
+
+        return text_encoder_output
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -56,7 +111,7 @@ class Flux2BaseRunner(DefaultRunner):
         return Flux2VAE(self.config)
 
     def init_modules(self):
-        logger.info(f"Initializing {self.config['model_cls']} modules...")
+        logger.info(f"Initializing Flux2 {self.model_variant} modules...")
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
             self.load_model()
             self.model.set_scheduler(self.scheduler)
@@ -123,7 +178,7 @@ class Flux2BaseRunner(DefaultRunner):
             main_img = input_image[0]
             image_processor.check_image_input(main_img)
             processed_img, target_shape = self._preprocess_condition_image(image_processor, main_img, max_image_area, vae_scale_factor)
-            self.input_info.target_shape = target_shape
+            self.input_info.target_shape = list(target_shape)
             processed_tensor = processed_img.to(AI_DEVICE)
             condition_images.extend([processed_tensor, processed_tensor])
 
@@ -136,7 +191,7 @@ class Flux2BaseRunner(DefaultRunner):
                 processed_img, target_shape = self._preprocess_condition_image(image_processor, img, max_image_area, vae_scale_factor)
                 condition_images.append(processed_img.to(AI_DEVICE))
                 if index == 0:
-                    self.input_info.target_shape = target_shape
+                    self.input_info.target_shape = list(target_shape)
 
         torch_device_module.empty_cache()
         gc.collect()
@@ -190,8 +245,8 @@ class Flux2BaseRunner(DefaultRunner):
         mask = mask.permute(2, 0, 1).unsqueeze(0)
         mask = mask.mean(dim=1, keepdim=True)
 
-        blur_size = getattr(self.input_info, "inpaint_blur_size", None)
-        blur_sigma = getattr(self.input_info, "inpaint_blur_sigma", None)
+        blur_size = self.input_info.inpaint_blur_size
+        blur_sigma = self.input_info.inpaint_blur_sigma
         if blur_size is not None and blur_sigma is not None:
             from torchvision.transforms import GaussianBlur
 
@@ -304,20 +359,13 @@ class Flux2BaseRunner(DefaultRunner):
         width, height = as_maps[self.config.get("aspect_ratio", "16:9")]
         return (width, height)
 
-    def set_target_shape(self):
+    def set_latent_shape(self):
         task = self.config.get("task", "t2i")
         if task == "i2i":
             height, width = self.input_info.target_shape
         else:
-            custom_shape = self.get_custom_shape()
-            if custom_shape is not None:
-                width, height = custom_shape
-            else:
-                calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, 16 / 9)
-                multiple_of = self.config.get("vae_scale_factor", 8) * 2
-                width = calculated_width // multiple_of * multiple_of
-                height = calculated_height // multiple_of * multiple_of
-                self.input_info.target_shape = (height, width)
+            width, height = self.get_custom_shape()
+        self.input_info.target_shape = [height, width]
 
         multiple_of = self.config.get("vae_scale_factor", 8) * 2
 
@@ -329,9 +377,6 @@ class Flux2BaseRunner(DefaultRunner):
         self.num_channels_latents = packed_channels
         self.input_info.latent_shape = (packed_batch, packed_h * packed_w, packed_channels)
         self.input_info.latent_image_ids = self._prepare_latent_ids(packed_batch, packed_h, packed_w).to(AI_DEVICE)
-
-    def set_img_shapes(self):
-        pass
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
@@ -371,14 +416,13 @@ class Flux2BaseRunner(DefaultRunner):
         self.inputs = self.run_input_encoder()
         logger.info(f"input_info: {self.input_info}")
 
-        self.set_target_shape()
-        self.set_img_shapes()
+        self.set_latent_shape()
 
         latents, generator = self.run_dit()
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor and is_main_process():
+        if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
             image = images[0]
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")
@@ -390,79 +434,3 @@ class Flux2BaseRunner(DefaultRunner):
         if input_info.return_result_tensor:
             return {"images": images}
         return {"images": None}
-
-
-@RUNNER_REGISTER("flux2_klein")
-class Flux2KleinRunner(Flux2BaseRunner):
-    def load_transformer(self):
-        model_kwargs = {
-            "model_path": os.path.join(self.config["model_path"], "transformer"),
-            "config": self.config,
-            "device": self.init_device,
-        }
-        return Flux2KleinTransformerModel(**model_kwargs)
-
-    def load_text_encoder(self):
-        from lightx2v.models.input_encoders.hf.flux2.qwen3_model import Flux2Klein_TextEncoder
-
-        text_encoder = Flux2Klein_TextEncoder(self.config)
-        return [text_encoder]
-
-    def init_scheduler(self):
-        caching_scheduler_class = self._get_scheduler_class()
-        if caching_scheduler_class is not None:
-            self.scheduler = caching_scheduler_class(self.config)
-        else:
-            self.scheduler = Flux2Scheduler(self.config)
-
-    @ProfilingContext4DebugL1("Run Text Encoder")
-    def run_text_encoder(self, text, image_list=None, neg_prompt=None):
-        prompt_embeds_list, _ = self.text_encoders[0].infer([text])
-        prompt_embeds = prompt_embeds_list[0].unsqueeze(0)
-        text_ids = self._prepare_text_ids(prompt_embeds).to(AI_DEVICE)
-
-        text_encoder_output = {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
-
-        if self.config.get("sample_guide_scale", 1.0) > 1.0 or self.config.get("enable_cfg", True):
-            neg_prompt_embeds_list, _ = self.text_encoders[0].infer([""])
-            neg_prompt_embeds = neg_prompt_embeds_list[0].unsqueeze(0)
-            neg_text_ids = self._prepare_text_ids(neg_prompt_embeds).to(AI_DEVICE)
-
-            text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
-            text_encoder_output["negative_text_ids"] = neg_text_ids
-
-        return text_encoder_output
-
-
-@RUNNER_REGISTER("flux2_dev")
-class Flux2DevRunner(Flux2BaseRunner):
-    def load_transformer(self):
-        model_kwargs = {
-            "model_path": os.path.join(self.config["model_path"], "transformer"),
-            "config": self.config,
-            "device": self.init_device,
-        }
-        return Flux2DevTransformerModel(**model_kwargs)
-
-    def load_text_encoder(self):
-        from lightx2v.models.input_encoders.hf.flux2.mistral3_model import Flux2Dev_TextEncoder
-
-        text_encoder = Flux2Dev_TextEncoder(self.config)
-        return [text_encoder]
-
-    def init_scheduler(self):
-        caching_scheduler_class = self._get_scheduler_class()
-        if caching_scheduler_class is not None:
-            self.scheduler = Flux2DevSchedulerCaching(self.config)
-        else:
-            self.scheduler = Flux2DevScheduler(self.config)
-
-    @ProfilingContext4DebugL1("Run Text Encoder")
-    def run_text_encoder(self, text, image_list=None, neg_prompt=None):
-        prompt_embeds_list, _ = self.text_encoders[0].infer([text])
-        prompt_embeds = prompt_embeds_list[0].unsqueeze(0)
-        text_ids = self._prepare_text_ids(prompt_embeds).to(AI_DEVICE)
-
-        text_encoder_output = {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
-
-        return text_encoder_output

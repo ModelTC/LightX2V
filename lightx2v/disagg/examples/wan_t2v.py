@@ -9,7 +9,7 @@ from lightx2v.disagg.utils import (
     load_wan_vae_decoder,
     set_config,
 )
-from lightx2v.models.schedulers.wan.scheduler import WanScheduler
+from lightx2v.models.schedulers.wan.scheduler_factory import create_wan_scheduler
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.utils import save_to_video, seed_all, wan_vae_to_comfy
 
@@ -68,7 +68,7 @@ def main():
 
     # 3. Initialize Scheduler
     # Only supporting basic NoCaching scheduler for this simple example as per default config
-    scheduler = WanScheduler(config)
+    scheduler = create_wan_scheduler(config)
     model.set_scheduler(scheduler)
 
     # 4. Run Inference Pipeline

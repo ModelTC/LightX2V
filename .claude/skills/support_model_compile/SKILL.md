@@ -55,7 +55,7 @@ block/phase 族及各自签名：
 block/phase cache key 与预期 cache 数量：
 运行时分支和 request-specific 状态：
 可能分流的第三方算子：
-正式 graph signature（shape/token/frame/dtype/layout/branch/stage）：
+正式 graph signature（原始 shape/token/frame、packing/padding/SP 后各 rank 的本地 tensor shape、dtype/layout/branch/stage）：
 warmup 是否覆盖相同 signature 和真实 leaf kernel：
 ```
 
@@ -130,7 +130,7 @@ compile 不会优化图外的 CPU→GPU 拷贝、buffer 交换或 stream synchro
 - eager 与 compile 是否数值一致；
 - 性能对照是否真的使用相同 kernel。
 
-需要隔离第三方实现时，在模块作用域定义 `torch.library.custom_op` 并注册 fake。custom op 只建立图边界，不会消除其 kernel launch，也不会跨边界融合。
+需要隔离第三方实现时，在模块作用域定义 `torch.library.custom_op` 并注册 fake。custom op 只建立 Dynamo 图边界，不会消除其 kernel launch，也不会跨边界融合。算子内部的 Triton、CUDA extension 或第三方 JIT 仍可能按运行时签名编译和特化；按 [自定义算子内层编译与 Triton 动态标量](references/implementation-patterns.md#自定义算子内层编译与-triton-动态标量) 继续检查。
 
 已确认不兼容且没有可靠 fallback 的组合应在初始化阶段明确报错，不要静默换 kernel。只有精确定位到公共算子并验证所有受影响路径后，才修改 `lightx2v/common/ops`。
 
@@ -179,7 +179,7 @@ git diff --check
 
 ## 7. 评测稳态收益
 
-两边都启用 warmup，并通过正式调用链覆盖相同的 shape、token/frame、dtype、layout、branch、stage、offload 对象生命周期和真实 leaf-op dispatch；分辨率相同不等于 graph 相同。目标模型 warmup 不可靠时，先使用 `../support_model_warmup/SKILL.md` 修复，再评测 compile。
+两边都启用 warmup，并通过正式调用链覆盖相同的 graph signature、offload 对象生命周期和真实 leaf-op dispatch。graph signature 不只包含原始 shape/token/frame、dtype、layout、branch 和 stage；多模态或序列并行路径还应比较 packing/padding/SP 后各 rank 的本地 tensor shape，尤其是实际 q/k 长度。分辨率相同不等于 graph 相同。目标模型 warmup 不可靠时，先使用 `../support_model_warmup/SKILL.md` 修复，再评测 compile。
 
 - 每个模式先完成一轮 warmup + 正式请求的功能验收；
 - 每组至少三轮；

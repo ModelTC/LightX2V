@@ -6,7 +6,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, Int32, String
 
 from lightx2v.models.runners.wan.wan_lingbot_va_runner import LingbotVAPolicy
-from lightx2v.utils.set_config import auto_calc_config, get_default_config
+from lightx2v.utils.set_config import build_startup_config
 
 
 class LingbotVANode(Node):
@@ -73,8 +73,7 @@ class LingbotVANode(Node):
         model_path = str(self.get_parameter("model_path").value).strip()
         if not model_path:
             raise ValueError("LingBot-VA ROS node requires `model_path`.")
-        config = get_default_config()
-        config.update(
+        return build_startup_config(
             {
                 "model_cls": "lingbot_va",
                 "task": "i2va",
@@ -83,7 +82,6 @@ class LingbotVANode(Node):
                 "seed": self.seed,
             }
         )
-        return auto_calc_config(config)
 
     def _make_image_cb(self, camera):
         def _callback(msg):

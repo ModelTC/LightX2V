@@ -94,3 +94,14 @@ def test_query_chunks_keep_complete_key_value_context(sdpa, monkeypatch):
     monkeypatch.setattr(sdpa.F, "scaled_dot_product_attention", record)
     assert sdpa._query_chunked_sdpa(q, k, v, 8).shape == q.shape
     assert lengths == [8, 8, 3]
+
+
+def test_gqa_fallback_preserved(sdpa):
+    generator = torch.Generator().manual_seed(123)
+    q = torch.randn(9, 4, 8, generator=generator)
+    k, v = [torch.randn(9, 2, 8, generator=generator) for _ in range(2)]
+    actual = sdpa.TorchSDPAWeight().apply(q, k, v, attention_scope="minimax_h3_dit", mps_sdpa_query_chunk_size=128)
+    expected = F.scaled_dot_product_attention(
+        q.transpose(0, 1), k.repeat_interleave(2, dim=1).transpose(0, 1), v.repeat_interleave(2, dim=1).transpose(0, 1)
+    ).transpose(0, 1).reshape(9, 32)
+    torch.testing.assert_close(actual, expected)

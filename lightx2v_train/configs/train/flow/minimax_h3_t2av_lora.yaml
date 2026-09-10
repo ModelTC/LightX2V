@@ -69,8 +69,8 @@ data:
 scheduler:
     num_train_timesteps: 1000
     timestep_distribution: uniform
-    min_t: 0.001
-    max_t: 1.0
+    min_sigma: 0.001
+    max_sigma: 1.0
     # The H3 capability applies separate rational shifts to video and audio.
     time_shift_settings:
         do_time_shift: false

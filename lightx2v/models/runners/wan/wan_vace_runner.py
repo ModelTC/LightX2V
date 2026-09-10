@@ -7,6 +7,7 @@ from PIL import Image
 
 from lightx2v.models.input_encoders.hf.vace.vace_processor import VaceVideoProcessor
 from lightx2v.models.networks.wan.vace_model import WanVaceModel
+from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, WanRunner, build_wan_model_with_lora
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
@@ -16,9 +17,12 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 @RUNNER_REGISTER("wan2.1_vace")
 class WanVaceRunner(WanRunner):
+    supported_request_fields_by_task = {
+        "vace": VIDEO_REQUEST_FIELDS | {"mask_path", "src_ref_images", "video_path"},
+    }
+
     def __init__(self, config):
         super().__init__(config)
-        assert self.config["task"] == "vace"
         self.vid_proc = VaceVideoProcessor(
             downsample=tuple([x * y for x, y in zip(self.config["vae_stride"], self.config["patch_size"])]),
             min_area=720 * 1280,
@@ -59,7 +63,7 @@ class WanVaceRunner(WanRunner):
                 src_mask[i] = torch.clamp((src_mask[i][:1, :, :, :] + 1) / 2, min=0, max=1)
                 image_sizes.append(src_video[i].shape[2:])
             elif sub_src_video is None:
-                src_video[i] = torch.zeros((3, self.config["target_video_length"], image_size[0], image_size[1]), device=device)
+                src_video[i] = torch.zeros((3, self.get_target_video_length(), image_size[0], image_size[1]), device=device)
                 src_mask[i] = torch.ones_like(src_video[i], device=device)
                 image_sizes.append(image_size)
             else:
@@ -236,4 +240,4 @@ class Wan22MoeVaceRunner(WanVaceRunner):
             high_noise_model = build_wan_model_with_lora(WanVaceModel, self.config, high_model_kwargs, lora_configs, model_type="high_noise_model")
             low_noise_model = build_wan_model_with_lora(WanVaceModel, self.config, low_model_kwargs, lora_configs, model_type="low_noise_model")
 
-        return MultiModelStruct([high_noise_model, low_noise_model], self.config, self.config["boundary"])
+        return MultiModelStruct([high_noise_model, low_noise_model], self.config)

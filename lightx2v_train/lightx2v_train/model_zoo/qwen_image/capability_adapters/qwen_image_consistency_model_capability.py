@@ -18,7 +18,6 @@ class QwenImageConsistencyModelCapability(TimeConditionedConsistencyModelCapabil
                 embedding_module_path="time_text_embed.timestep_embedder",
                 embedding_dimension_path="inner_dim",
             ),
-            # Keep existing Qwen consistency checkpoints byte-for-byte compatible.
             endpoint_module_name="r_timestep_embedder",
             log_variance_module_name="logvar_linear",
         )

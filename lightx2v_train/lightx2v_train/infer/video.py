@@ -15,18 +15,44 @@ from lightx2v_train.runtime.distributed import (
     is_distributed,
 )
 from lightx2v_train.runtime.sequence_parallel import broadcast_sequence_parallel_value
-from lightx2v_train.schedulers.flow_matching import CausalForcingFlowMatchScheduler
 from lightx2v_train.utils.constants import LINGBOT_VIDEO_NEGATIVE_PROMPT, WAN_NEGATIVE_PROMPT
 from lightx2v_train.utils.registry import INFERENCER_REGISTER
 
 from ..model_zoo.native.lingbot_video.scheduling_flow_unipc import FlowUniPCMultistepScheduler as LingBotVideoFlowUniPCMultistepScheduler
 from ..model_zoo.native.wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
-from .base import BaseInferencer
+from .base import BaseInferencer, cached_condition
+
+
+def _set_unipc_timesteps(solver, scheduler, num_steps, device, latent_hw):
+    raw_sigmas = torch.linspace(float(solver.sigma_max), float(solver.sigma_min), num_steps + 1, dtype=torch.float64)[:-1]
+    sigmas = scheduler.time_shift(raw_sigmas, latent_hw=latent_hw, num_steps=num_steps)
+    solver.set_timesteps(num_steps, device=device, sigmas=sigmas.numpy(), shift=1.0)
+
+
+def _uses_cache_dataset(dataset):
+    return getattr(dataset, "uses_cache_dataset", False)
+
+
+def _load_infer_sample(dataset, index, has_sample):
+    if _uses_cache_dataset(dataset):
+        return dataset[index if has_sample else 0]
+    return dataset.samples[index] if has_sample else {}
+
+
+def _prompt_condition(dataset, sample, model, role, prompt):
+    condition = cached_condition(sample, model, role)
+    if condition is not None:
+        return condition
+    if _uses_cache_dataset(dataset):
+        cache_path = sample.get("meta", {}).get("training_cache_path", "<unknown>")
+        raise KeyError(f"Cached video inference requires conditioning.{role} in {cache_path}.")
+    return model.encode_prompt_condition(prompt)
 
 
 def _target_hw_for_sample(sample, default_height, default_width):
-    h = sample.get("target_height")
-    w = sample.get("target_width")
+    metadata = sample.get("meta", sample)
+    h = metadata.get("target_height")
+    w = metadata.get("target_width")
     if h is not None and w is not None:
         return int(h), int(w)
     return default_height, default_width
@@ -45,7 +71,8 @@ class WanT2VInferencer(BaseInferencer):
 
     @torch.no_grad()
     def infer(self):
-        samples = self.dataloader_eval.dataset.samples
+        dataset = self.dataloader_val.dataset
+        samples = dataset.samples
         prompts = [sample["prompt"] for sample in samples]
         rank = get_data_parallel_rank()
         world_size = get_data_parallel_world_size()
@@ -53,8 +80,8 @@ class WanT2VInferencer(BaseInferencer):
         sp_world_size = get_sequence_parallel_world_size()
         is_sp_leader = sp_rank == 0
 
-        default_height = self.infer_config.get("default_height", self.infer_config.get("height", 480))
-        default_width = self.infer_config.get("default_width", self.infer_config.get("width", 832))
+        default_height = self.infer_config.get("default_height", 480)
+        default_width = self.infer_config.get("default_width", 832)
         num_inference_steps = self.infer_config.get("num_inference_steps", 50)
         fps = self.infer_config.get("fps", 16)
         video_quality = self.infer_config.get("video_quality", 6.0)
@@ -74,11 +101,13 @@ class WanT2VInferencer(BaseInferencer):
         self.enable_cfg = self.infer_config.get("enable_cfg", True)
         if self.enable_cfg:
             self.guidance_scale = self.infer_config.get("cfg_guidance_scale", 5.0)
-            neg_cond = self.model.encode_prompt_condition(self.negative_prompt)
-            neg_cond = broadcast_sequence_parallel_value(neg_cond)
+            static_neg_cond = None
+            if not _uses_cache_dataset(dataset):
+                static_neg_cond = self.model.encode_prompt_condition(self.negative_prompt)
+                static_neg_cond = broadcast_sequence_parallel_value(static_neg_cond)
         else:
             self.guidance_scale = None
-            neg_cond = None
+            static_neg_cond = None
 
         saved_paths = []
         self.model.set_denoiser_eval()
@@ -97,13 +126,14 @@ class WanT2VInferencer(BaseInferencer):
                 i = slot * world_size + rank
                 has_sample = i < len(prompts)
                 prompt = prompts[i] if has_sample else " "
-                sample = samples[i] if has_sample else {}
+                sample = _load_infer_sample(dataset, i, has_sample)
                 should_log_sample = has_sample and is_sp_leader
 
                 height, width = _target_hw_for_sample(sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_prompt_condition(prompt)
+                pos_cond = _prompt_condition(dataset, sample, self.model, "positive", prompt)
+                neg_cond = _prompt_condition(dataset, sample, self.model, "negative", self.negative_prompt) if self.enable_cfg and static_neg_cond is None else static_neg_cond
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 pos_cond = broadcast_sequence_parallel_value(pos_cond)
                 latent = broadcast_sequence_parallel_value(latent)
@@ -198,20 +228,6 @@ class WanT2VDualInferencer(WanT2VInferencer):
 class LingBotVideoT2VInferencer(BaseInferencer):
     negative_prompt = LINGBOT_VIDEO_NEGATIVE_PROMPT
 
-    def _euler_sigmas(self, num_inference_steps):
-        denoising_steps = self.infer_config.get("denoising_step_list")
-        if denoising_steps is None:
-            sigmas = torch.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps, dtype=torch.float32)
-        else:
-            if len(denoising_steps) != num_inference_steps:
-                raise ValueError(f"LingBot-Video inference.denoising_step_list length must match num_inference_steps, got {len(denoising_steps)} and {num_inference_steps}.")
-            sigmas = torch.tensor(denoising_steps, dtype=torch.float32) / self.scheduler.num_train_timesteps
-
-        if self.infer_config.get("warp_denoising_step", True):
-            shift = float(self.infer_config.get("shift", 3.0))
-            sigmas = shift * sigmas / (1.0 + (shift - 1.0) * sigmas)
-        return sigmas.tolist()
-
     def _predict_source_flow(self, latents, timestep, condition):
         transformer = self.model.denoiser_module()
         try:
@@ -269,16 +285,12 @@ class LingBotVideoT2VInferencer(BaseInferencer):
         }
 
     def _run_unipc(self, latent, pos_cond, neg_cond, num_inference_steps, generator, log_progress):
-        if self.infer_config.get("denoising_step_list") is not None:
-            raise ValueError("LingBot-Video UniPC base inference does not use denoising_step_list; remove it from inference config.")
-
-        shift = float(self.infer_config.get("shift", 3.0))
         scheduler = LingBotVideoFlowUniPCMultistepScheduler(
             num_train_timesteps=self.scheduler.num_train_timesteps,
             shift=1.0,
             use_dynamic_shifting=False,
         )
-        scheduler.set_timesteps(num_inference_steps, device=self.model.device, shift=shift)
+        _set_unipc_timesteps(scheduler, self.scheduler, num_inference_steps, self.model.device, latent.shape[-2:])
         total_steps = len(scheduler.timesteps)
         for step_idx, timestep in enumerate(scheduler.timesteps):
             if self.enable_cfg and self.batch_cfg:
@@ -303,7 +315,6 @@ class LingBotVideoT2VInferencer(BaseInferencer):
         latent_hw = (latent.shape[-2], latent.shape[-1])
         self.scheduler.set_timesteps(
             num_inference_steps,
-            sigmas=self._euler_sigmas(num_inference_steps),
             latent_hw=latent_hw,
         )
         total_steps = len(self.scheduler.infer_timesteps)
@@ -323,7 +334,8 @@ class LingBotVideoT2VInferencer(BaseInferencer):
 
     @torch.no_grad()
     def infer(self):
-        samples = self.dataloader_eval.dataset.samples
+        dataset = self.dataloader_val.dataset
+        samples = dataset.samples
         prompts = [sample["prompt"] for sample in samples]
         rank = get_data_parallel_rank()
         world_size = get_data_parallel_world_size()
@@ -331,8 +343,8 @@ class LingBotVideoT2VInferencer(BaseInferencer):
         sp_world_size = get_sequence_parallel_world_size()
         is_sp_leader = sp_rank == 0
 
-        default_height = self.infer_config.get("default_height", self.infer_config.get("height", 480))
-        default_width = self.infer_config.get("default_width", self.infer_config.get("width", 832))
+        default_height = self.infer_config.get("default_height", 480)
+        default_width = self.infer_config.get("default_width", 832)
         num_inference_steps = int(self.infer_config.get("num_inference_steps", 40))
         scheduler_type = self.infer_config.get("scheduler_type", "unipc")
         if scheduler_type not in {"unipc", "euler"}:
@@ -376,17 +388,17 @@ class LingBotVideoT2VInferencer(BaseInferencer):
             i = slot * world_size + rank
             has_sample = i < len(prompts)
             prompt = prompts[i] if has_sample else " "
-            sample = samples[i] if has_sample else {}
+            sample = _load_infer_sample(dataset, i, has_sample)
             should_log_sample = has_sample and is_sp_leader
             height, width = _target_hw_for_sample(sample, default_height, default_width)
             seed = base_seed + i if has_sample else base_seed
             generator = torch.Generator(device=self.model.device).manual_seed(seed)
 
-            pos_cond = broadcast_sequence_parallel_value(self.model.encode_prompt_condition(prompt))
+            pos_cond = broadcast_sequence_parallel_value(_prompt_condition(dataset, sample, self.model, "positive", prompt))
             neg_cond = None
             if self.enable_cfg:
                 negative_prompt = sample.get("negative_prompt") or self.negative_prompt
-                neg_cond = broadcast_sequence_parallel_value(self.model.encode_prompt_condition(negative_prompt))
+                neg_cond = broadcast_sequence_parallel_value(_prompt_condition(dataset, sample, self.model, "negative", negative_prompt))
             latent = broadcast_sequence_parallel_value(self.model.prepare_infer_latents(height, width, generator))
 
             if should_log_sample:
@@ -429,7 +441,8 @@ class LingBotVideoT2VInferencer(BaseInferencer):
 class WanT2VARInferencer(BaseInferencer):
     @torch.no_grad()
     def infer(self):
-        samples = self.dataloader_eval.dataset.samples
+        dataset = self.dataloader_val.dataset
+        samples = dataset.samples
         prompts = [sample["prompt"] for sample in samples]
         rank = get_data_parallel_rank()
         world_size = get_data_parallel_world_size()
@@ -437,8 +450,8 @@ class WanT2VARInferencer(BaseInferencer):
         sp_world_size = get_sequence_parallel_world_size()
         is_sp_leader = sp_rank == 0
 
-        default_height = self.infer_config.get("default_height", self.infer_config.get("height", 480))
-        default_width = self.infer_config.get("default_width", self.infer_config.get("width", 832))
+        default_height = self.infer_config.get("default_height", 480)
+        default_width = self.infer_config.get("default_width", 832)
         num_inference_steps = self.infer_config.get("num_inference_steps", 50)
         fps = self.infer_config.get("fps", 16)
         video_quality = self.infer_config.get("video_quality", 6.0)
@@ -473,14 +486,14 @@ class WanT2VARInferencer(BaseInferencer):
                 i = slot * world_size + rank
                 has_sample = i < len(prompts)
                 prompt = prompts[i] if has_sample else " "
-                sample = samples[i] if has_sample else {}
+                sample = _load_infer_sample(dataset, i, has_sample)
                 should_log_sample = has_sample and is_sp_leader
 
                 height, width = _target_hw_for_sample(sample, default_height, default_width)
                 seed = base_seed + i if has_sample else base_seed
                 generator = torch.Generator(device=self.model.device).manual_seed(seed)
-                pos_cond = self.model.encode_prompt_condition(prompt)
-                neg_cond = self.model.encode_prompt_condition(WAN_NEGATIVE_PROMPT) if enable_cfg else None
+                pos_cond = _prompt_condition(dataset, sample, self.model, "positive", prompt)
+                neg_cond = _prompt_condition(dataset, sample, self.model, "negative", WAN_NEGATIVE_PROMPT) if enable_cfg else None
                 latent = self.model.prepare_infer_latents(height, width, generator)
                 pos_cond = broadcast_sequence_parallel_value(pos_cond)
                 neg_cond = broadcast_sequence_parallel_value(neg_cond) if neg_cond is not None else None
@@ -542,6 +555,9 @@ class WanT2VARInferencer(BaseInferencer):
         return saved_paths
 
     def _ar_rollout(self, noise, pos_cond, neg_cond, num_inference_steps, guidance_scale, log_progress=False):
+        scheduler_type = self.infer_config.get("scheduler_type", "unipc")
+        if scheduler_type not in {"unipc", "renoise"}:
+            raise ValueError(f"Wan AR inference.scheduler_type must be 'unipc' or 'renoise', got {scheduler_type!r}.")
         transformer = self.model.denoiser_module()
         if not hasattr(transformer, "_forward_inference"):
             raise RuntimeError("wan_t2v_ar_infer requires the causal Wan transformer.")
@@ -560,9 +576,8 @@ class WanT2VARInferencer(BaseInferencer):
             kv_cache_neg, crossattn_cache_neg = None, None
         pos_context = self.model._condition_to_context_tensor(pos_cond, batch_size=batch_size)
         neg_context = self.model._condition_to_context_tensor(neg_cond, batch_size=batch_size) if neg_cond is not None else None
-        denoising_steps = self._build_ar_denoising_steps(noise.device)
-        if denoising_steps is not None:
-            logger.info("[ar-infer] using denoising_step_list={}", [round(float(step), 4) for step in denoising_steps.detach().cpu()])
+        if scheduler_type == "renoise":
+            self.scheduler.set_timesteps(num_inference_steps, latent_hw=noise.shape[-2:])
 
         cache_start_frame = 0
         num_blocks = num_frames // chunk_size
@@ -572,8 +587,8 @@ class WanT2VARInferencer(BaseInferencer):
             if log_progress:
                 logger.info("[ar-infer] block={}/{} frames={}..{}", block_idx + 1, num_blocks, cache_start_frame, cache_start_frame + chunk_size - 1)
 
-            if denoising_steps is None:
-                sample_scheduler = self._build_cf_unipc_scheduler(noise.device, num_inference_steps)
+            if scheduler_type == "unipc":
+                sample_scheduler = self._build_cf_unipc_scheduler(noise.device, num_inference_steps, latent_hw=noise.shape[-2:])
                 for step_idx, timestep in enumerate(sample_scheduler.timesteps):
                     timestep = timestep.float().reshape(1, 1).expand(batch_size, chunk_size).to(device=noise.device)
                     flow_pred = self._predict_causal_flow(
@@ -591,7 +606,7 @@ class WanT2VARInferencer(BaseInferencer):
                     )
                     latents = sample_scheduler.step(flow_pred, sample_scheduler.timesteps[step_idx], latents, return_dict=False)[0]
             else:
-                for step_idx, current_timestep in enumerate(denoising_steps):
+                for step_idx, current_timestep in enumerate(self.scheduler.infer_timesteps):
                     timestep = torch.full((batch_size, chunk_size), float(current_timestep), device=noise.device, dtype=torch.float32)
                     flow_pred = self._predict_causal_flow(
                         latents,
@@ -607,8 +622,8 @@ class WanT2VARInferencer(BaseInferencer):
                         cache_start=cache_start_frame * frame_seq_length,
                     )
                     x0 = self._flow_to_x0(latents, flow_pred, timestep)
-                    if step_idx < len(denoising_steps) - 1:
-                        next_timestep = torch.full((batch_size, chunk_size), float(denoising_steps[step_idx + 1]), device=noise.device, dtype=torch.float32)
+                    if step_idx < num_inference_steps - 1:
+                        next_timestep = torch.full((batch_size, chunk_size), float(self.scheduler.infer_timesteps[step_idx + 1]), device=noise.device, dtype=torch.float32)
                         latents = self._add_noise_by_timestep(x0, torch.randn_like(x0), next_timestep)
                     else:
                         latents = x0
@@ -691,59 +706,18 @@ class WanT2VARInferencer(BaseInferencer):
                 cache_start=cache_start,
             )
 
-    def _build_cf_unipc_scheduler(self, device, num_inference_steps):
+    def _build_cf_unipc_scheduler(self, device, num_inference_steps, *, latent_hw=None):
         scheduler_config = self.config.get("scheduler", {})
-        shift = self.infer_config.get("timestep_shift")
-        if shift is None:
-            time_shift_settings = scheduler_config.get("time_shift_settings", {})
-            shift = time_shift_settings.get("time_shift_mu", 5.0)
         scheduler = FlowUniPCMultistepScheduler(
             num_train_timesteps=scheduler_config.get("num_train_timesteps", 1000),
             shift=1,
             use_dynamic_shifting=False,
         )
-        scheduler.set_timesteps(num_inference_steps, device=device, shift=float(shift))
+        _set_unipc_timesteps(scheduler, self.scheduler, num_inference_steps, device, latent_hw)
         return scheduler
 
-    def _configured_denoising_step_list(self):
-        dmd_config = self.config.get("training", {}).get("dmd", {})
-        return self.infer_config.get("denoising_step_list", dmd_config.get("denoising_step_list"))
-
-    def _build_ar_denoising_steps(self, device):
-        denoising_step_list = self._configured_denoising_step_list()
-        if not denoising_step_list:
-            return None
-        scheduler = self._causal_forcing_scheduler()
-        raw_steps = torch.tensor(denoising_step_list, dtype=torch.long, device=device)
-        warp = self.infer_config.get("warp_denoising_step", self.config.get("training", {}).get("dmd", {}).get("warp_denoising_step", True))
-        if not warp:
-            return raw_steps.to(dtype=torch.float32)
-        timesteps = torch.cat(
-            [
-                scheduler.timesteps.to(device=device, dtype=torch.float32),
-                torch.zeros(1, device=device, dtype=torch.float32),
-            ]
-        )
-        return timesteps[scheduler.num_train_timesteps - raw_steps]
-
-    def _causal_forcing_scheduler(self):
-        scheduler = getattr(self, "_ar_cf_scheduler", None)
-        if scheduler is not None:
-            return scheduler
-        scheduler_config = self.config.get("scheduler", {})
-        self._ar_cf_scheduler = CausalForcingFlowMatchScheduler(
-            num_train_timesteps=scheduler_config.get("num_train_timesteps", 1000),
-            time_shift_settings=scheduler_config.get("time_shift_settings", {}),
-        )
-        return self._ar_cf_scheduler
-
     def _sigma_from_timestep(self, timestep, dtype):
-        scheduler = self._causal_forcing_scheduler()
-        timesteps = scheduler.timesteps.to(device=timestep.device, dtype=torch.float32)
-        sigmas = scheduler.sigmas.to(device=timestep.device, dtype=dtype)
-        flat_timestep = timestep.flatten().float()
-        index = torch.argmin((timesteps.unsqueeze(0) - flat_timestep.unsqueeze(1)).abs(), dim=1)
-        return sigmas[index].reshape(timestep.shape)
+        return (timestep.float() / self.scheduler.num_train_timesteps).to(dtype=dtype)
 
     def _expand_frame_sigma(self, sigma, ndim):
         return sigma.reshape(sigma.shape[0], 1, sigma.shape[1], *([1] * (ndim - 3)))
