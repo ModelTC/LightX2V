@@ -13,6 +13,7 @@ LightX2V supports quantized inference for DIT, VAE, T5, and CLIP models, reducin
 | `fp8-vllm` | FP8 channel symmetric | FP8 channel dynamic symmetric | [VLLM](https://github.com/vllm-project/vllm) | H100/H200/H800, RTX 40 series, etc. |
 | `int8-vllm` | INT8 channel symmetric | INT8 channel dynamic symmetric | [VLLM](https://github.com/vllm-project/vllm) | A100/A800, RTX 30/40 series, etc.  |
 | `fp8-sgl` | FP8 channel symmetric | FP8 channel dynamic symmetric | [SGL](https://github.com/sgl-project/sglang/tree/main/sgl-kernel) | H100/H200/H800, RTX 40 series, etc. |
+| `fp8-f16-accum` | FP8 channel symmetric | FP8 row-wise dynamic symmetric | CUTLASS FP16 accumulation | RTX 5090 (SM120) |
 | `int8-sgl` | INT8 channel symmetric | INT8 channel dynamic symmetric | [SGL](https://github.com/sgl-project/sglang/tree/main/sgl-kernel) | A100/A800, RTX 30/40 series, etc.  |
 | `fp8-q8f` | FP8 channel symmetric | FP8 channel dynamic symmetric | [Q8-Kernels](https://github.com/KONAKONA666/q8_kernels) | RTX 40 series, L40S, etc. |
 | `int8-q8f` | INT8 channel symmetric | INT8 channel dynamic symmetric | [Q8-Kernels](https://github.com/KONAKONA666/q8_kernels) | RTX 40 series, L40S, etc. |
@@ -67,7 +68,7 @@ For detailed quantization tool usage, refer to: [Model Conversion Documentation]
 
 #### Supported Quantization Modes
 
-DIT quantization modes (`dit_quant_scheme`) support: `fp8-vllm`, `int8-vllm`, `fp8-sgl`, `int8-sgl`, `fp8-q8f`, `int8-q8f`, `int8-torchao`, `int4-g128-marlin`, `fp8-b128-deepgemm`
+DIT quantization modes (`dit_quant_scheme`) support: `fp8-vllm`, `int8-vllm`, `fp8-sgl`, `fp8-f16-accum`, `int8-sgl`, `fp8-q8f`, `int8-q8f`, `int8-torchao`, `int4-g128-marlin`, `fp8-b128-deepgemm`
 
 #### Configuration Example
 
@@ -80,6 +81,72 @@ DIT quantization modes (`dit_quant_scheme`) support: `fp8-vllm`, `int8-vllm`, `f
 ```
 
 > 💡 **Tip**: When there's only one DIT model in the script's `model_path`, `dit_quantized_ckpt` doesn't need to be specified separately.
+
+#### MiniMax-H3 FP8 with FP16 Accumulation
+
+On RTX 5090, MiniMax-H3 can use FP8 inputs with FP16 accumulation through `fp8-f16-accum`. Convert
+the weights with the `h3-fp8-f16-accum` profile; regular `fp8-sgl` checkpoints are not compatible.
+DiT and Video VAE decoder are converted separately. The profile selects the qmax-14 projections,
+keeps standard FP8 quantization for the remaining layers, and records the policy in safetensors
+metadata.
+
+```bash
+python tools/convert/converter.py \
+    --source /path/to/MiniMax-H3/transformer \
+    --output /path/to/h3_quantized \
+    --output_name minimax_h3_dit_fp8_f16_accum \
+    --output_ext .safetensors \
+    --model_type h3 \
+    --device cuda \
+    --quantized \
+    --bits 8 \
+    --linear_type fp8 \
+    --quantization_profile h3-fp8-f16-accum \
+    --single_file
+
+python tools/convert/converter.py \
+    --source /path/to/MiniMax-H3/vae \
+    --output /path/to/h3_quantized \
+    --output_name minimax_h3_video_vae_fp8_f16_accum \
+    --output_ext .safetensors \
+    --model_type h3_video_vae_decoder \
+    --device cuda \
+    --quantized \
+    --bits 8 \
+    --linear_type fp8 \
+    --quantization_profile h3-fp8-f16-accum \
+    --single_file
+```
+
+```json
+{
+  "dit_quantized": true,
+  "dit_quant_scheme": "fp8-f16-accum",
+  "dit_quantized_ckpt": "/path/to/minimax_h3_dit_fp8_f16_accum.safetensors",
+  "video_vae_quantized": true,
+  "video_vae_quant_scheme": "fp8-f16-accum",
+  "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_f16_accum.safetensors"
+}
+```
+
+Activations use dynamic row-wise quantization with `scale = max(abs(x)) / qmax`. Reducing qmax
+increases the scale and lowers the raw values accumulated in FP16, at the cost of fewer effective FP8
+levels. In the validated MiniMax-H3 workload, DiT produced non-finite FFN-out values with qmax 14 and
+12, while qmax 7 completed every denoising step. Video VAE decoder remained finite and had the lowest
+error with qmax 14. The current H3 policy therefore fixes activation qmax to 7 for DiT and 14 for
+Video VAE, avoiding mismatches between runtime configuration and checkpoint conversion.
+
+The kernel is enabled only for DiT Q/K/V, attention output, and FFN projections, and for Video VAE
+packed QKV, attention output, and FFN projections. It falls back to `fp8-sgl` when the extension is
+unavailable or the device is not SM120. DiT tensor parallel also currently uses the `fp8-sgl` fallback.
+Initialization logs report the effective scope or fallback reason. All other pipeline settings are
+independent of this quantization mode.
+
+The kernel automatically tunes its CUTLASS tile and swizzle for each exact GEMM shape. The first use
+of an unseen shape benchmarks the built-in candidates in C++ and keeps the winner in a process-local
+C++ cache; later calls in the same process perform only a cache lookup. Enabling `warmup` moves the
+tuning cost out of the first request when warmup covers the production shapes. A restarted process
+tunes its shapes again and does not write to the user's cache directory.
 
 ### MiniMax-H3 Video VAE Encoder Conv3D
 
@@ -100,17 +167,20 @@ FP32 accumulation uses the standard full E4M3 range and does not require a named
 the checkpoint profile because weight and activation quantization must share its validated qmax constraint. It is the
 more aggressive mode and should be qualified for output quality before deployment.
 
-The converter starts from a runtime-compatible combined H3 Video VAE FP8-SGL checkpoint. Its Decoder Linear weights
+The converter starts from a runtime-compatible combined H3 Video VAE FP8 checkpoint. Its Decoder Linear weights
 and scales must already be FP8 and FP32, with FP16 biases. In this source checkpoint, all Encoder tensors retain the
 original FP32 dtype. The converter validates but does not modify the Decoder. It quantizes 27 of the 33 Encoder Conv3D
 weights; the remaining six sensitive weights and all Encoder biases stay FP32. It does not convert a BF16 Decoder.
-Use the same FP8 mode for conversion and runtime execution. For example:
+Use the same Encoder FP8 mode for conversion and runtime execution. Decoder tensors and metadata are preserved,
+so `video_vae_quant_scheme` must match the source Decoder (`fp8-sgl` or `fp8-f16-accum`). The example below starts
+from an FP8-F16 Decoder checkpoint meeting the dtype requirements above and adds Encoder qmax-21 quantization;
+it does not change the Decoder's qmax-14 policy:
 
 ```bash
 python tools/convert/converter.py \
-    --source /path/to/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors \
+    --source /path/to/minimax_h3_video_vae_fp8_f16_accum.safetensors \
     --output /path/to/h3_quantized \
-    --output_name minimax_h3_video_vae_fp8_encoder_conv_q21_f16_accum \
+    --output_name minimax_h3_video_vae_fp8_f16_accum_encoder_conv_q21 \
     --output_ext .safetensors \
     --model_type h3_video_vae_encoder \
     --vae_encoder_conv_mode cutlass_fp8_f16_accum \
@@ -126,8 +196,8 @@ Use the same mode at runtime:
 ```json
 {
     "video_vae_quantized": true,
-    "video_vae_quant_scheme": "fp8-sgl",
-    "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_encoder_conv_q21_f16_accum.safetensors",
+    "video_vae_quant_scheme": "fp8-f16-accum",
+    "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_f16_accum_encoder_conv_q21.safetensors",
     "vae_encoder_conv_mode": "cutlass_fp8_f16_accum"
 }
 ```
