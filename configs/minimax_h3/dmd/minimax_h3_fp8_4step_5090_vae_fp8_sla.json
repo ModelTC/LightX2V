@@ -39,7 +39,8 @@
   "dit_quantized_ckpt": "/path/to/minimax_h3_fp8.safetensors",
   "video_vae_quantized": true,
   "video_vae_quant_scheme": "fp8-sgl",
-  "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors",
+  "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_encoder_conv_q21_f16_accum.safetensors",
+  "vae_encoder_conv_mode": "cutlass_fp8_f16_accum",
   "lora_dynamic_apply": true,
   "lora_configs": [
     {

@@ -2,7 +2,7 @@
 
 ## 📖 Overview
 
-LightX2V supports quantized inference for DIT, T5, and CLIP models, reducing memory usage and improving inference speed by lowering model precision.
+LightX2V supports quantized inference for DIT, VAE, T5, and CLIP models, reducing memory usage and improving inference speed by lowering model precision.
 
 ---
 
@@ -80,6 +80,61 @@ DIT quantization modes (`dit_quant_scheme`) support: `fp8-vllm`, `int8-vllm`, `f
 ```
 
 > 💡 **Tip**: When there's only one DIT model in the script's `model_path`, `dit_quantized_ckpt` doesn't need to be specified separately.
+
+### MiniMax-H3 Video VAE Encoder Conv3D
+
+The MiniMax-H3 Video VAE Encoder supports the default PyTorch path and three optional Conv3D modes:
+
+| Mode | Implementation | Weight qmax | Activation qmax | Accumulator | Checkpoint constraint |
+| --- | --- | ---: | ---: | --- | --- |
+| `torch` (default) | PyTorch Conv3D | - | - | Backend-managed | Original Encoder weights |
+| `torch_channels_last` | PyTorch Conv3D with `channels_last_3d` | - | - | Backend-managed | Original Encoder weights |
+| `cutlass_fp8_f32_accum` | CUTLASS FP8 Conv3D | 448 | 448 | FP32 | Standard FP8 weight and scale |
+| `cutlass_fp8_f16_accum` | CUTLASS FP8 Conv3D | 21 | 21 | FP16 | `h3-vae-encoder-fp8-f16-accum` profile |
+
+These modes affect only tasks that invoke the Video VAE Encoder, such as I2AV and REF2AV. T2AV does not execute the
+Encoder. The `torch_channels_last` mode uses the same PyTorch operators and dtype policy; this setting changes only
+the tensor layout.
+
+FP32 accumulation uses the standard full E4M3 range and does not require a named profile. FP16 accumulation requires
+the checkpoint profile because weight and activation quantization must share its validated qmax constraint. It is the
+more aggressive mode and should be qualified for output quality before deployment.
+
+The converter starts from a runtime-compatible combined H3 Video VAE FP8-SGL checkpoint. Its Decoder Linear weights
+and scales must already be FP8 and FP32, with FP16 biases. In this source checkpoint, all Encoder tensors retain the
+original FP32 dtype. The converter validates but does not modify the Decoder. It quantizes 27 of the 33 Encoder Conv3D
+weights; the remaining six sensitive weights and all Encoder biases stay FP32. It does not convert a BF16 Decoder.
+Use the same FP8 mode for conversion and runtime execution. For example:
+
+```bash
+python tools/convert/converter.py \
+    --source /path/to/minimax_h3_video_vae_fp8_sgl_bias_fp16.safetensors \
+    --output /path/to/h3_quantized \
+    --output_name minimax_h3_video_vae_fp8_encoder_conv_q21_f16_accum \
+    --output_ext .safetensors \
+    --model_type h3_video_vae_encoder \
+    --vae_encoder_conv_mode cutlass_fp8_f16_accum \
+    --device cuda \
+    --quantized \
+    --bits 8 \
+    --linear_type fp8 \
+    --single_file
+```
+
+Use the same mode at runtime:
+
+```json
+{
+    "video_vae_quantized": true,
+    "video_vae_quant_scheme": "fp8-sgl",
+    "video_vae_quantized_ckpt": "/path/to/minimax_h3_video_vae_fp8_encoder_conv_q21_f16_accum.safetensors",
+    "vae_encoder_conv_mode": "cutlass_fp8_f16_accum"
+}
+```
+
+FP8 Conv3D currently supports SM120 only and requires a `lightx2v_kernel` wheel built from a revision containing the
+FP8 Conv3D operator. A new Conv3D shape is tuned automatically on first use and its winner is reused by later calls in
+the same process; no separate offline tuning step is required.
 
 ### T5 Model Quantization
 
