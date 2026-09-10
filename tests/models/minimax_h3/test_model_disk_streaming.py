@@ -191,6 +191,9 @@ def h3_model_modules(monkeypatch):
         package.__path__ = []
         monkeypatch.setitem(sys.modules, package_name, package)
 
+    guide = _load_module("h3_adaln_cache_guide_under_test", "lightx2v/models/networks/minimax_h3/adaln_cache_guide.py")
+    monkeypatch.setitem(sys.modules, "lightx2v.models.networks.minimax_h3.adaln_cache_guide", guide)
+
     # Cache IO is outside these isolated model/streaming tests.
     cache = types.ModuleType("lightx2v.models.networks.minimax_h3.adaln_cache")
     cache.validate_adaln_cache_config = lambda config: None

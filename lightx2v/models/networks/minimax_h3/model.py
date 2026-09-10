@@ -11,6 +11,7 @@ from safetensors import safe_open
 
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.minimax_h3.adaln_cache import validate_adaln_cache_config
+from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
 from lightx2v.models.networks.minimax_h3.infer.module_io import MiniMaxH3SequenceParallelState
 from lightx2v.models.networks.minimax_h3.infer.offload import MiniMaxH3OffloadTransformerInfer
 from lightx2v.models.networks.minimax_h3.infer.post_infer import MiniMaxH3PostInfer
@@ -74,24 +75,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         self.lora_alpha = lora_alpha
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not self.use_adaln_cache:
-            separator = "=" * 88
-            message = (
-                f"\n{separator}\n"
-                "MINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n"
-                "cpu_offload=true requires use_adaln_cache=true.\n"
-                "\nACTION REQUIRED\n"
-                "Enable the AdaLN cache and set its root in the inference JSON config:\n"
-                '  "use_adaln_cache": true,\n'
-                '  "adaln_cache_dir": "~/.cache/lightx2v/adaln"\n'
-                "adaln_cache_dir can be any custom cache root; the path above is the recommended default.\n"
-                "\nBefore inference, set lightx2v_path, model_path, --config_json, and "
-                "--task in tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh.\n"
-                "Then generate the cache from the repository root with:\n"
-                "  bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh\n"
-                "Set --task fl2av in that script for t2av/i2av/l2av/fl2av, or "
-                "--task ref2av for ref2av. The generation script and inference must "
-                f"use the same JSON config.\n{separator}"
-            )
+            message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{ADALN_CACHE_GUIDE}"
             logger.error(message)
             raise ValueError(message)
         if self.use_adaln_cache:
