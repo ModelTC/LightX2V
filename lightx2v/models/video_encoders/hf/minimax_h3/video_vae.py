@@ -51,8 +51,6 @@ from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
 )
 from lightx2v.models.video_encoders.hf.minimax_h3.weights import (
     SafetensorsSubsetReport,
-    _is_official_video_vae_checkpoint,
-    load_minimax_h3_video_vae_checkpoint,
     load_safetensors_subset,
 )
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
@@ -87,102 +85,6 @@ def _component_dir(model_path: str | Path, component: str) -> Path:
     if model_path.name == component and model_path.is_dir():
         return model_path
     raise FileNotFoundError(f"Cannot find MiniMax-H3 {component!r} below {model_path}")
-
-
-def _resolve_video_vae_dir(model_path: str | Path) -> Path:
-    """Resolve official ``video_vae`` and legacy ``vae`` component layouts."""
-    model_path = Path(model_path)
-    candidates = [
-        model_path / "video_vae",
-        model_path / "vae",
-    ]
-    if model_path.name in {"video_vae", "vae"}:
-        candidates.append(model_path)
-
-    tried = []
-    for candidate in candidates:
-        if candidate in tried:
-            continue
-        tried.append(candidate)
-        if candidate.is_dir():
-            return candidate
-
-    formatted = ", ".join(str(path) for path in tried)
-    raise FileNotFoundError(f"Cannot find MiniMax-H3 video VAE directory. Tried: {formatted}")
-
-
-def _read_json_file(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def _normalize_official_video_vae_config(wrapper_config: dict, source_config: dict | None = None) -> dict:
-    """Convert the official FL2VA wrapper/source config pair to native keys."""
-    if source_config is None:
-        return dict(wrapper_config)
-
-    config = dict(wrapper_config)
-    if "in_channels" in source_config:
-        config["in_channels"] = source_config["in_channels"]
-    if "out_ch" in source_config:
-        config["out_channels"] = source_config["out_ch"]
-    if "z_channels" in source_config and "latent_channels" not in config:
-        config["latent_channels"] = source_config["z_channels"]
-    if "ch" in source_config and "ch_mult" in source_config:
-        config["block_out_channels"] = [int(source_config["ch"]) * int(value) for value in source_config["ch_mult"]]
-    if "num_res_blocks" in source_config:
-        config["layers_per_block"] = source_config["num_res_blocks"]
-    if "space_down" in source_config:
-        config["spatial_downsample_factors"] = source_config["space_down"]
-    if "time_down" in source_config:
-        config["temporal_downsample_factors"] = source_config["time_down"]
-    if "padding_mode" in source_config:
-        config["spatial_padding_mode"] = source_config["padding_mode"]
-
-    vit_config = source_config.get("vit_decoder_kwargs")
-    if isinstance(vit_config, dict):
-        vit_mappings = {
-            "num_layers": "decoder_num_layers",
-            "heads": "decoder_num_attention_heads",
-            "dim_head": "decoder_attention_head_dim",
-            "rope_theta": "decoder_rope_theta",
-            "rope_dim_ratio": "decoder_rope_dim_ratio",
-        }
-        for source_key, target_key in vit_mappings.items():
-            if source_key in vit_config:
-                config[target_key] = vit_config[source_key]
-
-    wrapper_mappings = {
-        "vae_clip_length": "clip_length",
-        "vae_token_drop": "token_drop",
-    }
-    for source_key, target_key in wrapper_mappings.items():
-        if source_key in wrapper_config:
-            config[target_key] = wrapper_config[source_key]
-    for key in ("latent_channels", "latents_mean", "latents_std"):
-        if key in wrapper_config:
-            config[key] = wrapper_config[key]
-    return config
-
-
-def _load_video_vae_config_and_weight_path(
-    vae_dir: Path,
-    checkpoint_path: str | Path | None,
-) -> tuple[dict, Path | str]:
-    wrapper_config = _read_json_file(vae_dir / "config.json")
-    source_config = None
-    default_weight_path: Path | str = vae_dir
-
-    source_path = wrapper_config.get("source_path")
-    source_safetensors_path = wrapper_config.get("source_safetensors_path")
-    source_dir = vae_dir / source_path if isinstance(source_path, str) else None
-    if source_dir is not None and (source_dir / "config.json").is_file():
-        source_config = _read_json_file(source_dir / "config.json")
-    if source_dir is not None and isinstance(source_safetensors_path, str):
-        default_weight_path = source_dir / source_safetensors_path
-
-    weight_path = checkpoint_path if checkpoint_path is not None else default_weight_path
-    return _normalize_official_video_vae_config(wrapper_config, source_config), weight_path
 
 
 class _SwiGLU(nn.Module):
@@ -822,10 +724,12 @@ class MiniMaxH3VideoVAE(nn.Module):
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
     ) -> "MiniMaxH3VideoVAE":
-        vae_dir = _resolve_video_vae_dir(model_path)
+        vae_dir = _component_dir(model_path, "vae")
         if (checkpoint_path is None) != (quant_scheme is None):
             raise ValueError("MiniMax-H3 video VAE checkpoint_path and quant_scheme must be configured together")
-        config, weight_path = _load_video_vae_config_and_weight_path(vae_dir, checkpoint_path)
+        with (vae_dir / "config.json").open(encoding="utf-8") as handle:
+            config = json.load(handle)
+        weight_path = checkpoint_path if checkpoint_path is not None else vae_dir
         if quant_scheme == "fp8-f16-accum":
             validate_fp8_f16_accum_checkpoint(weight_path)
             fallback_reason = fp8_f16_accum_mm_unavailable_reason()
@@ -851,10 +755,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                 attn_type=attn_type,
             )
         model._reset_runtime_buffers()
-        if quant_scheme is None and _is_official_video_vae_checkpoint(weight_path):
-            model.load_report = load_minimax_h3_video_vae_checkpoint(model, weight_path)
-        else:
-            model.load_report = load_safetensors_subset(model, weight_path)
+        model.load_report = load_safetensors_subset(model, weight_path)
         if quant_scheme is not None:
             # Pack only after loading the checkpoint's original Q/K/V keys.
             model._pack_decoder_fp8_qkv()

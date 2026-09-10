@@ -1,8 +1,8 @@
 {
-  "infer_steps": 29,
-  "target_video_length": 124,
-  "target_height": 480,
-  "target_width": 480,
+  "infer_steps": 4,
+  "target_video_length": 22,
+  "target_height": 512,
+  "target_width": 512,
   "fps": 24,
   "target_fps": 24,
   "enable_cfg": false,

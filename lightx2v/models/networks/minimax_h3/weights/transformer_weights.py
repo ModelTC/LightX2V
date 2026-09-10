@@ -38,6 +38,10 @@ def _empty_device_cache():
         return
     device_module = getattr(torch, AI_DEVICE, None)
     if device_module is not None and hasattr(device_module, "empty_cache"):
+        if AI_DEVICE == "mps":
+            # Drain copies before empty_cache waits while holding the GIL.
+            # Metal completion may need the GIL to release safetensors storage.
+            device_module.synchronize()
         device_module.empty_cache()
 
 
@@ -180,7 +184,7 @@ class MiniMaxH3TransformerWeights(WeightModule):
         self.streaming_lora = None
         if self.disk_streaming:
             if config.get("lazy_load", False):
-                raise NotImplementedError("MiniMax-H3 dit_disk_streaming reads the official sharded checkpoint directly and cannot be combined with converted lazy_load block shards.")
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming reads the diffusers sharded checkpoint directly and cannot be combined with converted lazy_load block shards.")
             if config.get("dit_quantized", False):
                 raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support quantized DiT checkpoints yet.")
             if config.get("tensor_parallel", False):
@@ -190,14 +194,8 @@ class MiniMaxH3TransformerWeights(WeightModule):
 
             checkpoint_dir = config.get("dit_original_ckpt")
             if checkpoint_dir is None:
-                raise ValueError("MiniMax-H3 dit_disk_streaming requires config['dit_original_ckpt'] to point to the official transformer checkpoint directory.")
-            self.checkpoint = MiniMaxH3ShardCheckpoint(checkpoint_dir, config=config)
-            if self.checkpoint.selected_reader is not None:
-                # Raw config aliases (e.g. token_refiner_num_layers) must reach
-                # the native pre/post constructors as well as the mapping plan.
-                for name, value in self.checkpoint.config.items():
-                    config.setdefault(name, value)
-                self.num_layers = int(config["num_layers"])
+                raise ValueError("MiniMax-H3 dit_disk_streaming requires config['dit_original_ckpt'] to point to the diffusers transformer checkpoint directory.")
+            self.checkpoint = MiniMaxH3ShardCheckpoint(checkpoint_dir)
             expected_block_indices = tuple(range(self.num_layers))
             if self.checkpoint.block_indices != expected_block_indices:
                 raise ValueError(f"MiniMax-H3 dit_disk_streaming checkpoint block indices mismatch: expected {expected_block_indices}, found {self.checkpoint.block_indices}")
@@ -210,7 +208,7 @@ class MiniMaxH3TransformerWeights(WeightModule):
 
         if config.get("lazy_load", False):
             raise NotImplementedError(
-                "MiniMax-H3 reads the official sharded checkpoint directly; disk lazy_load requires a converted block-sharded checkpoint and is not supported yet. Use lazy_load=false with model or block CPU offload."
+                "MiniMax-H3 reads the diffusers sharded checkpoint directly; disk lazy_load requires a converted block-sharded checkpoint and is not supported yet. Use lazy_load=false with model or block CPU offload."
             )
         self.blocks = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, config) for i in range(self.num_layers)])
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block":
@@ -238,11 +236,6 @@ class MiniMaxH3TransformerWeights(WeightModule):
         if self.streaming_lora is not None:
             # Finish the previous use before either base weights or factors change.
             self.streaming_lora.clear(self.streaming_block)
-        if self.checkpoint.selected_reader is not None:
-            self.checkpoint.selected_reader.load_modules([self.streaming_block], device=AI_DEVICE, block_index=block_index, reusable=True)
-            if self.streaming_lora is not None:
-                self.streaming_lora.load_block(self.streaming_block, block_index)
-            return self.streaming_block
         tensor_names = self.checkpoint.tensor_names_for_block(block_index)
         tensors = self.checkpoint.load_tensors(tensor_names, device="cpu")
         try:
@@ -258,9 +251,6 @@ class MiniMaxH3TransformerWeights(WeightModule):
             return
         self.streaming_block = MiniMaxH3TransformerBlockWeights(0, self.config, create_cuda_buffer=True)
         self.add_module("streaming_block", self.streaming_block)
-        if self.checkpoint.selected_reader is not None:
-            self.checkpoint.selected_reader.load_modules([self.streaming_block], device=AI_DEVICE, block_index=0, reusable=True)
-            return
         block0_tensors = self.checkpoint.load_tensors(self.checkpoint.tensor_names_for_block(0), device="cpu")
         try:
             self.streaming_block.load(block0_tensors)

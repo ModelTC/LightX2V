@@ -485,12 +485,31 @@ class MiniMaxH3Runner(DefaultRunner):
             raise ValueError(f"MiniMax-H3 ref2av accepts at most {MAX_REFERENCE_AUDIOS} audio-bearing references")
         return references
 
+    def _ensure_vae_loaded(self):
+        if self.video_vae is None or self.audio_vae is None:
+            self.video_vae, self.audio_vae = self.load_vae()
+
+    def _release_low_memory_vae(self):
+        if self._is_mps_low_memory_streaming() and (self.video_vae is not None or self.audio_vae is not None):
+            self.video_vae = None
+            self.audio_vae = None
+            gc.collect()
+            self.maybe_empty_cache(force=True, collect_garbage=True)
+
     def _encode_keyframes(self, keyframes):
-        latents = []
-        for image in keyframes:
-            pixels = torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1)[None, :, None].float().div_(255.0)
-            latents.append(self.video_vae.encode_condition(pixels, video=False))
-        return latents
+        if not keyframes:
+            return []
+        self._ensure_vae_loaded()
+        try:
+            latents = []
+            for image in keyframes:
+                pixels = torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1)[None, :, None].float().div_(255.0)
+                latents.append(self.video_vae.encode_condition(pixels, video=False))
+            return latents
+        finally:
+            # Switched i2av/l2av/fl2av requests need the VAE for conditioning,
+            # but MPS streaming must release it again before denoising.
+            self._release_low_memory_vae()
 
     def _encode_references(self, references):
         video_latents, audio_latents = [], []
@@ -582,6 +601,8 @@ class MiniMaxH3Runner(DefaultRunner):
         elif self.config.get("offload_granularity", "model") == "model":
             logger.info("Moving the native MiniMax-H3 transformer to the accelerator")
             self.model.to_cuda()
+        elif self.config.get("dit_disk_streaming", False):
+            logger.info("MiniMax-H3 diffusers disk streaming enabled; reusing one accelerator block buffer")
         else:
             logger.info("MiniMax-H3 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
         torch_device_module.synchronize()
@@ -635,8 +656,7 @@ class MiniMaxH3Runner(DefaultRunner):
         metrics_labels=["MiniMaxH3Runner"],
     )
     def run_vae_decoder(self, video_rows, audio_rows):
-        if self._is_mps_low_memory_streaming() and (self.video_vae is None or self.audio_vae is None):
-            self.video_vae, self.audio_vae = self.load_vae()
+        self._ensure_vae_loaded()
         video_rows = video_rows[self.scheduler.num_condition_video_rows :]
         audio_rows = audio_rows[self.scheduler.num_condition_audio_rows :]
         video_latents = unpatchify_video_tokens(
@@ -732,11 +752,7 @@ class MiniMaxH3Runner(DefaultRunner):
                 with suppress(Exception):
                     self._offload_transformer()
             try:
-                if self._is_mps_low_memory_streaming() and (self.video_vae is not None or self.audio_vae is not None):
-                    self.video_vae = None
-                    self.audio_vae = None
-                    gc.collect()
-                    self.maybe_empty_cache(force=True, collect_garbage=True)
+                self._release_low_memory_vae()
             finally:
                 self.end_run()
                 # Decoded FP32 video is large (roughly 1.5 GiB at the default

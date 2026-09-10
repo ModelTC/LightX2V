@@ -30,7 +30,6 @@ from lightx2v.models.networks.minimax_h3.adaln_cache import (
     _timesteps_from_bits,
     _validate_cache,
 )
-from lightx2v.models.networks.minimax_h3.checkpoint import MiniMaxH3ShardCheckpoint
 from lightx2v.models.networks.minimax_h3.infer.pre_infer import timestep_embedding
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -48,13 +47,9 @@ def _checkpoint_files(config) -> list[Path]:
 class _CheckpointTensors:
     """Read individual tensors without materializing the whole checkpoint."""
 
-    def __init__(self, files: list[Path], config=None):
+    def __init__(self, files: list[Path]):
         self.files = files
-        self.adapter = None
-        if (files[0].parent / "model.safetensors.index.json").is_file():
-            checkpoint = MiniMaxH3ShardCheckpoint(files[0].parent, config=config)
-            self.adapter = checkpoint.selected_reader
-        self.locations = self._find_locations() if self.adapter is None else {}
+        self.locations = self._find_locations()
 
     def _find_locations(self) -> dict[str, Path]:
         directory = self.files[0].parent
@@ -71,17 +66,6 @@ class _CheckpointTensors:
         return locations
 
     def get(self, name: str) -> torch.Tensor:
-        if self.adapter is not None:
-            # Reuse the inference mapping and validation. The builder consumes
-            # logical (out, in) weights; _linear owns the eventual transpose.
-            try:
-                spec = self.adapter.plan.targets[name][1]
-            except KeyError as error:
-                raise KeyError(f"MiniMax-H3 checkpoint tensor is missing: {name}") from error
-            dtype = torch.float32 if spec.dtype == "F32" else torch.bfloat16
-            tensor = torch.empty(spec.shape, dtype=dtype, device="cpu")
-            self.adapter.write_targets({name: (tensor, False)})
-            return tensor
         path = self.locations.get(name)
         if path is None:
             raise KeyError(f"MiniMax-H3 checkpoint tensor is missing: {name}")
@@ -110,10 +94,10 @@ def _empty_device_cache() -> None:
         torch_device_module.empty_cache()
 
 
-def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path], config=None) -> None:
+def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> None:
     stage_path = Path(tempfile.mkdtemp(prefix=".building-", dir=cache_path.parent))
     try:
-        checkpoint = _CheckpointTensors(checkpoint_files, config=config)
+        checkpoint = _CheckpointTensors(checkpoint_files)
         with torch.inference_mode():
             # ADALN CACHE SYNC: Keep activation placement and casts aligned with
             # the three online infer modules named in this file's contract.
@@ -184,7 +168,7 @@ def build_persistent_adaln_cache(config) -> Path:
         raise FileExistsError(f"MiniMax-H3 AdaLN cache path already exists: {cache_path}")
     checkpoint_files = _checkpoint_files(config)
     logger.info("Building MiniMax-H3 AdaLN cache on {}: {}", AI_DEVICE, cache_path)
-    _build_cache(spec, cache_path, checkpoint_files, config=config)
+    _build_cache(spec, cache_path, checkpoint_files)
 
     if not _validate_cache(cache_path, spec):
         raise RuntimeError(f"MiniMax-H3 AdaLN cache validation failed: {cache_path}")

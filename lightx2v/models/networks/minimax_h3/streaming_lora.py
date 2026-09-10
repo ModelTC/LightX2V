@@ -163,21 +163,13 @@ def streaming_target_shapes(checkpoint, block, *resident_roots):
     for root in resident_roots:
         names.update(MiniMaxH3StreamingLora.weights(root))
     shapes = {}
-    if checkpoint.selected_reader is not None:
-        for name in names:
-            spec = checkpoint.targets[name][1]
-            # Ordinary dynamic H3 LoRA uses BF16 factors. Sensitive FP32
-            # linears require a different execution contract and are excluded.
-            if spec.dtype == "BF16":
-                shapes[name] = spec.shape
-    else:
-        by_shard = {}
-        for name in names:
-            by_shard.setdefault(checkpoint.weight_map[name], []).append(name)
-        for shard, shard_names in by_shard.items():
-            with safe_open(checkpoint.checkpoint_dir / shard, framework="pt", device="cpu") as source:
-                for name in shard_names:
-                    tensor = source.get_slice(name)
-                    if tensor.get_dtype() == "BF16":
-                        shapes[name] = tuple(tensor.get_shape())
+    by_shard = {}
+    for name in names:
+        by_shard.setdefault(checkpoint.weight_map[name], []).append(name)
+    for shard, shard_names in by_shard.items():
+        with safe_open(checkpoint.checkpoint_dir / shard, framework="pt", device="cpu") as source:
+            for name in shard_names:
+                tensor = source.get_slice(name)
+                if tensor.get_dtype() == "BF16":
+                    shapes[name] = tuple(tensor.get_shape())
     return shapes
