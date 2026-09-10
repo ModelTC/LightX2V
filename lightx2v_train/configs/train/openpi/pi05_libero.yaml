@@ -1,0 +1,81 @@
+model:
+    name: openpi_pi05_libero
+    checkpoint_dir: ${oc.env:OPENPI_INITIAL_CHECKPOINT}
+    pi05: true
+    discrete_state_input: false
+    paligemma_variant: gemma_2b
+    action_expert_variant: gemma_300m
+    action_dim: 32
+    action_horizon: 10
+    max_token_len: 200
+    dtype: bfloat16
+    parameter_dtype: float32
+    require_fp32_checkpoint: true
+    pytorch_compile_mode: null
+
+distributed:
+    backend: nccl
+    timeout_minutes: 60
+    sequence_parallel:
+        enabled: false
+        size: 1
+    dp:
+        broadcast_buffers: false
+        find_unused_parameters: true
+        gradient_as_bucket_view: true
+        static_graph: false
+
+data:
+    train:
+        name: openpi_libero
+        repo_id: physical-intelligence/libero
+        root: ${oc.env:OPENPI_LEROBOT_ROOT}
+        norm_stats_path: ${oc.env:OPENPI_NORM_STATS_PATH}
+        tokenizer_path: ${oc.env:OPENPI_INITIAL_CHECKPOINT}/assets/paligemma_tokenizer.model
+        hf_cache_dir: ${oc.env:HF_HOME}
+        action_dim: ${model.action_dim}
+        action_horizon: ${model.action_horizon}
+        max_token_len: ${model.max_token_len}
+        global_batch_size: ${oc.env:OPENPI_GLOBAL_BATCH_SIZE,256}
+        gradient_accumulation_iters: ${training.gradient_accumulation_iters}
+        num_workers: ${oc.env:OPENPI_DATA_WORKERS,2}
+        pin_memory: true
+        shuffle: true
+        seed: ${training.seed}
+
+training:
+    method: openpi_flow_matching
+    max_train_iters: ${oc.env:OPENPI_MAX_TRAIN_ITERS,30000}
+    gradient_accumulation_iters: ${oc.env:OPENPI_GRADIENT_ACCUMULATION_ITERS,1}
+    gradient_checkpointing: true
+    max_grad_norm: 1.0
+    optimizer:
+        learning_rate: ${training.lr_schedule.peak_lr}
+        adam_beta1: 0.9
+        adam_beta2: 0.95
+        adam_epsilon: 0.00000001
+        weight_decay: 0.0000000001
+    lr_schedule:
+        warmup_steps: 10000
+        peak_lr: 0.00005
+        decay_steps: 1000000
+        decay_lr: 0.00005
+    ema:
+        decay: 0.999
+    save_every_iters: ${oc.env:OPENPI_SAVE_EVERY_ITERS,1000}
+    save_total_limit: ${oc.env:OPENPI_SAVE_TOTAL_LIMIT,1}
+    keep_period: ${oc.env:OPENPI_KEEP_PERIOD,5000}
+    output_dir: ${oc.env:OPENPI_TRAIN_OUTPUT}
+    seed: ${oc.env:OPENPI_TRAIN_SEED,42}
+
+inference:
+    method: none
+
+logging:
+    rank_zero_only: true
+    train_log_every_iters: ${oc.env:OPENPI_LOG_EVERY_ITERS,10}
+    swanlab:
+        enable: false
+
+resume:
+    checkpoint_path: ${oc.env:OPENPI_RESUME_CHECKPOINT,''}
