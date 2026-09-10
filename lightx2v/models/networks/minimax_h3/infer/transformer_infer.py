@@ -24,6 +24,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self.num_heads = self.global_num_heads // self.tp_size
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.infer_dtype = GET_DTYPE()
+        self.use_fused_qkv_attn = bool(config.get("use_fused_qkv_attn", False))
         if config.get("seq_parallel", False):
             self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
             parallel = config.get("parallel", {})
@@ -57,9 +58,15 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return torch.cat(gathered, dim=-1)
 
     def _attention(self, weights, hidden_states, pre_infer_out):
-        q = weights.to_q.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
-        k = weights.to_k.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
-        v = weights.to_v.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
+        if self.use_fused_qkv_attn and weights.has_fused_qkv:
+            q, k, v = weights.to_qkv.apply(hidden_states).chunk(3, dim=-1)
+        else:
+            q = weights.to_q.apply(hidden_states)
+            k = weights.to_k.apply(hidden_states)
+            v = weights.to_v.apply(hidden_states)
+        q = q.unflatten(-1, (self.num_heads, self.head_dim))
+        k = k.unflatten(-1, (self.num_heads, self.head_dim))
+        v = v.unflatten(-1, (self.num_heads, self.head_dim))
         q = weights.norm_q.apply(q)
         k = weights.norm_k.apply(k)
         q, k = weights.rope.apply(

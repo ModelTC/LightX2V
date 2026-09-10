@@ -67,6 +67,20 @@ class MMWeightTemplate(metaclass=ABCMeta):
     def set_config(self, config={}):
         self.config = config
 
+    def _get_actual_weight(self):
+        """Return the effective weight used by fused-weight builders."""
+        if not hasattr(self, "weight_diff"):
+            return self.weight
+        return self.weight + self.weight_diff
+
+    def _get_actual_bias(self, bias=None):
+        """Return the effective bias used by fused-weight builders."""
+        if bias is None:
+            bias = getattr(self, "bias", None)
+        if bias is None or not hasattr(self, "bias_diff"):
+            return bias
+        return bias + self.bias_diff
+
     def to_cuda(self, non_blocking=False):
         self.weight = self.pin_weight.to(AI_DEVICE, non_blocking=non_blocking)
         if hasattr(self, "pin_weight_scale"):

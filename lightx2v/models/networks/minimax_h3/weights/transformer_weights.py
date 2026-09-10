@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.mm.mm_weight import unwrap_tp_weight
 from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
     DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
     FP8_F16_ACCUM_PROJECTION_SUFFIXES,
@@ -51,9 +52,14 @@ def _rms(config, name, eps, create_cuda_buffer=False):
 class MiniMaxH3AttentionWeights(WeightModule):
     def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
+        self.use_fused_qkv_attn = bool(config.get("use_fused_qkv_attn", False))
         self.add_module("to_q", _linear(config, f"{prefix}.to_q", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         self.add_module("to_k", _linear(config, f"{prefix}.to_k", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         self.add_module("to_v", _linear(config, f"{prefix}.to_v", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
+        # This is deliberately not registered as a child module: there is no
+        # fused tensor in the released checkpoint.  It is populated from the
+        # three checkpoint-backed projections after loading/device movement.
+        self.to_qkv = _linear(config, f"{prefix}.to_qkv", create_cuda_buffer=create_cuda_buffer, tp_split="col") if self.use_fused_qkv_attn else None
         qk_eps = float(config.get("qk_norm_eps", 1e-5))
         self.add_module(
             "norm_q",
@@ -96,6 +102,63 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")](a2a_backend=parallel.get("seq_p_a2a_backend", "torch")),
             )
         self.add_module("to_out", _linear(config, f"{prefix}.to_out.0", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
+
+    def load(self, weight_dict):
+        super().load(weight_dict)
+        self._build_fused_qkv()
+
+    def to_cuda(self, non_blocking=False):
+        super().to_cuda(non_blocking=non_blocking)
+        self._build_fused_qkv()
+
+    def to_cpu(self, non_blocking=False):
+        super().to_cpu(non_blocking=non_blocking)
+        self._build_fused_qkv()
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        result = super().load_state_dict(destination, block_index, adapter_block_index)
+        self._build_fused_qkv()
+        return result
+
+    @staticmethod
+    def _cat_output_weights(modules, tensors):
+        transpose = bool(getattr(modules[0], "weight_need_transpose", False))
+        if transpose:
+            return torch.cat([tensor.t().contiguous() for tensor in tensors], dim=0).t()
+        return torch.cat([tensor.contiguous() for tensor in tensors], dim=0)
+
+    @staticmethod
+    def _cat_output_scales(scales):
+        if scales[0].dim() == 1 or scales[0].shape[-1] == 1:
+            dim = 0
+        else:
+            dim = scales[0].dim() - 1
+        return torch.cat([scale.contiguous() for scale in scales], dim=dim)
+
+    def _build_fused_qkv(self):
+        if self.to_qkv is None:
+            return
+        sources = tuple(unwrap_tp_weight(module) for module in (self.to_q, self.to_k, self.to_v))
+        target = unwrap_tp_weight(self.to_qkv)
+        if any(not hasattr(module, "weight") or module.weight is None for module in sources):
+            return
+        weights = [module._get_actual_weight() for module in sources]
+        target.weight = self._cat_output_weights(sources, weights)
+        target.bias = None
+        target.has_lora_branch = False
+
+        scales = [getattr(module, "weight_scale", None) for module in sources]
+        if all(scale is not None for scale in scales):
+            target.weight_scale = self._cat_output_scales(scales)
+
+    @property
+    def has_fused_qkv(self):
+        if self.to_qkv is None or not hasattr(unwrap_tp_weight(self.to_qkv), "weight"):
+            return False
+        return not any(
+            getattr(unwrap_tp_weight(module), "has_lora_branch", False) or getattr(unwrap_tp_weight(module), "has_diff", False)
+            for module in (self.to_q, self.to_k, self.to_v)
+        )
 
 
 class MiniMaxH3FeedForwardWeights(WeightModule):
