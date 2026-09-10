@@ -35,6 +35,10 @@ bash scripts/platforms/mps/run_minimax_h3_t2av.sh
 
 默认使用 `configs/platforms/mps/minimax_h3_t2av_4step_512_22.json`：512×512、22 帧、4 步、BF16，DiT 和文本编码器逐层磁盘加载，VAE 按阶段加载。输出为 `save_results/output_lightx2v_minimax_h3_t2av.mp4`。这份 4 步配置用于本机快速验证。
 
+DiT 默认开启 `dit_mps_shared_buffer=true`，复用现有 block offload 的 `init_first_buffer → prefetch_weights → run_block → swap_blocks` 流程。两套 MPS 权重 buffer 交替使用：后台线程通过 CPU 共享视图，将 safetensors 数据直接读入空闲 buffer；GPU 同时计算当前 block。交换前等待 GPU 计算和后台读取完成，并同步 CPU 写入，再复用上一套 buffer。无需中间 CPU 权重副本，也无需另建 GPU stream。
+
+共享视图依赖 `torch.mps._host_alias_storage`（PyTorch 2.13 起提供的私有接口，本机使用 2.14.0 验证）；接口缺失时会明确报错。此模式要求 `cpu_offload=true`、`offload_granularity="block"`、`dit_disk_streaming=true`，文件与推理 dtype 一致，并沿用现有的非量化、AdaLN 缓存配置。设置 `dit_mps_shared_buffer=false` 可使用原来的单 buffer 磁盘加载路径。当前 H3 配置的两套 block 权重合计约 1.44 GiB，进入 VAE 阶段前会等待预读结束并释放共享视图和设备 buffer；文本编码器和 VAE 的加载方式保持不变。
+
 MPS 配置使用独立缓存根目录 `~/.cache/lightx2v/adaln/diffusers`，避免与之前的权重混用。换权重或改动缓存相关计算后应重新生成缓存；步数和 flow shift 必须与推理配置一致。
 
 流式权重初始化在清理 MPS 缓存前显式同步 GPU，避免 safetensors 存储释放回调与 Python GIL 相互等待。正式入口已经包含该处理，无需使用之前 bench 目录中的临时包装入口。

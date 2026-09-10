@@ -601,6 +601,8 @@ class MiniMaxH3Runner(DefaultRunner):
         elif self.config.get("offload_granularity", "model") == "model":
             logger.info("Moving the native MiniMax-H3 transformer to the accelerator")
             self.model.to_cuda()
+        elif self.config.get("dit_mps_shared_buffer", False):
+            logger.info("MiniMax-H3 diffusers disk offload enabled; prefetching directly into two shared MPS block buffers")
         elif self.config.get("dit_disk_streaming", False):
             logger.info("MiniMax-H3 diffusers disk streaming enabled; reusing one accelerator block buffer")
         else:
@@ -634,11 +636,11 @@ class MiniMaxH3Runner(DefaultRunner):
             return
         if self.model.block_offload:
             if self._is_mps_low_memory_streaming() and self.config.get("dit_disk_streaming", False):
-                logger.info("Offloading MiniMax-H3 pre/post weights and releasing the disk-streaming DiT device block buffer")
+                logger.info("Offloading MiniMax-H3 pre/post weights and releasing the disk-streaming DiT device block buffers")
                 if not self.model.prepost_resident:
                     self.model.pre_weight.to_cpu()
                     self.model.post_weight.to_cpu()
-                self.model.transformer_weights.release_disk_streaming_buffer()
+                self.model.release_disk_streaming_buffer()
             elif not self.model.prepost_resident:
                 logger.info("Offloading MiniMax-H3 pre/post weights; retaining the two block-offload device buffers")
                 self.model.pre_weight.to_cpu()

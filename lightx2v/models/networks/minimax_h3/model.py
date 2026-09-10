@@ -406,7 +406,8 @@ class MiniMaxH3Model(BaseTransformerModel):
         if self.config.get("dit_disk_streaming", False):
             adapter = getattr(self.transformer_weights, "streaming_lora", None)
             if adapter is not None:
-                for root in (self.pre_weight, self.post_weight, self.transformer_weights.streaming_block):
+                blocks = self.transformer_weights.offload_block_cuda_buffers if self.config.get("dit_mps_shared_buffer", False) else [self.transformer_weights.streaming_block]
+                for root in (self.pre_weight, self.post_weight, *blocks):
                     adapter.clear(root)
                 self.transformer_weights.streaming_lora = None
         super()._remove_lora()
@@ -607,7 +608,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("MiniMax-H3 feature caching is not implemented")
         self.pre_infer_class = MiniMaxH3PreInfer
-        if self.config.get("dit_disk_streaming", False):
+        if self.config.get("dit_disk_streaming", False) and not self.config.get("dit_mps_shared_buffer", False):
             self.transformer_infer_class = MiniMaxH3TransformerInfer
         else:
             self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
@@ -708,8 +709,16 @@ class MiniMaxH3Model(BaseTransformerModel):
         return output
 
     def to_cpu(self):
+        if self.config.get("dit_mps_shared_buffer", False):
+            self.release_disk_streaming_buffer()
         super().to_cpu()
         if hasattr(self.transformer_infer, "offload_manager"):
             # Full teardown moves the active aliases away from the persistent
             # device buffers. Force buffer 0 to be populated again next run.
             self.transformer_infer.offload_manager.need_init_first_buffer = True
+
+    def release_disk_streaming_buffer(self):
+        if self.config.get("dit_mps_shared_buffer", False):
+            self.transformer_infer.offload_manager.close()
+            self.transformer_infer.compiled_blocks.clear()
+        self.transformer_weights.release_disk_streaming_buffer()

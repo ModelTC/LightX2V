@@ -26,11 +26,16 @@ def _resolve_streaming_block_name(name, block_index):
 
 
 def _iter_base_attrs(module):
+    for child in _iter_weight_modules(module):
+        yield from child.base_attrs
+
+
+def _iter_weight_modules(module):
     if hasattr(module, "base_attrs"):
-        yield from module.base_attrs
+        yield module
     for child in getattr(module, "_modules", {}).values():
         if child is not None:
-            yield from _iter_base_attrs(child)
+            yield from _iter_weight_modules(child)
 
 
 def _empty_device_cache():
@@ -181,6 +186,9 @@ class MiniMaxH3TransformerWeights(WeightModule):
         self.config = config
         self.num_layers = int(config.get("num_layers", 50))
         self.disk_streaming = bool(config.get("dit_disk_streaming", False))
+        self.shared_buffer = bool(config.get("dit_mps_shared_buffer", False))
+        if self.shared_buffer and (AI_DEVICE != "mps" or not self.disk_streaming):
+            raise ValueError("dit_mps_shared_buffer requires MPS and dit_disk_streaming=true")
         self.streaming_lora = None
         if self.disk_streaming:
             if config.get("lazy_load", False):
@@ -225,6 +233,47 @@ class MiniMaxH3TransformerWeights(WeightModule):
             raise RuntimeError("MiniMax-H3 streaming_block_indices is only available when dit_disk_streaming=true.")
         return self.checkpoint.block_indices
 
+    def __len__(self):
+        return self.num_layers
+
+    def _init_shared_streaming_buffers(self):
+        from lightx2v.common.offload.mps_manager import host_view
+
+        buffers = WeightModuleList([MiniMaxH3TransformerBlockWeights(0, self.config, create_cuda_buffer=True) for _ in range(2)])
+        for block in buffers:
+            tensors = {}
+            for name, _, _ in _iter_base_attrs(block):
+                dtype, shape, _, _ = self.checkpoint.tensor_metadata(name)
+                tensors[name] = torch.empty(shape, dtype=dtype, device="mps")
+            # Reuse the ordinary weight loaders, including their transpose and
+            # dtype rules. These source tensors are already on the device.
+            block.load(tensors)
+            block.shared_host_tensors = {}
+            for module in _iter_weight_modules(block):
+                for name, attr, transpose in module.base_attrs:
+                    buffer = getattr(module, f"{attr}_cuda_buffer")
+                    if buffer.dtype != tensors[name].dtype:
+                        raise ValueError(f"Shared weight loading requires matching file/inference dtypes: {name}")
+                    setattr(module, attr, buffer)
+                    # Disk data keeps its original row-major layout; compute
+                    # retains the existing transposed view of the same storage.
+                    block.shared_host_tensors[name] = host_view(buffer.t() if transpose else buffer)
+        self.offload_block_cuda_buffers = buffers
+        self.offload_phase_cuda_buffers = None
+        self.add_module("offload_block_cuda_buffers", buffers)
+        self.streaming_block = buffers[0]
+
+    def load_block_into(self, block, block_index):
+        """CPU-only prefetch into an idle offload block, ordered by its manager."""
+        destinations = {_resolve_streaming_block_name(name, block_index): tensor for name, tensor in block.shared_host_tensors.items()}
+        self.checkpoint.load_tensors_into(destinations)
+
+    def prepare_streaming_block(self, block, block_index):
+        # LoRA binding can submit device work. Keep it on the compute thread,
+        # separate from the CPU-only weight reader.
+        if self.streaming_lora is not None:
+            self.streaming_lora.load_block(block, block_index)
+
     def load_streaming_block(self, block_index):
         if not self.disk_streaming:
             raise RuntimeError("MiniMax-H3 load_streaming_block requires dit_disk_streaming=true.")
@@ -249,6 +298,9 @@ class MiniMaxH3TransformerWeights(WeightModule):
     def _ensure_streaming_block(self):
         if self.streaming_block is not None:
             return
+        if self.shared_buffer:
+            self._init_shared_streaming_buffers()
+            return
         self.streaming_block = MiniMaxH3TransformerBlockWeights(0, self.config, create_cuda_buffer=True)
         self.add_module("streaming_block", self.streaming_block)
         block0_tensors = self.checkpoint.load_tensors(self.checkpoint.tensor_names_for_block(0), device="cpu")
@@ -266,20 +318,24 @@ class MiniMaxH3TransformerWeights(WeightModule):
         block = self.streaming_block
         if block is None:
             return
+        buffers = list(self.offload_block_cuda_buffers) if self.shared_buffer else [block]
         if self.streaming_lora is not None:
-            self.streaming_lora.clear(block)
+            for buffer in buffers:
+                self.streaming_lora.clear(buffer)
         with suppress(Exception):
             device_module = getattr(torch, AI_DEVICE, None)
             if device_module is not None and hasattr(device_module, "synchronize"):
                 device_module.synchronize()
 
-        stack = [block]
+        stack = list(buffers)
         visited = set()
         while stack:
             module = stack.pop()
             if module is None or id(module) in visited:
                 continue
             visited.add(id(module))
+            if hasattr(module, "shared_host_tensors"):
+                module.shared_host_tensors.clear()
             for _, attr_name, _ in getattr(module, "base_attrs", ()):
                 if hasattr(module, attr_name):
                     setattr(module, attr_name, None)
@@ -294,6 +350,9 @@ class MiniMaxH3TransformerWeights(WeightModule):
 
         self.streaming_block = None
         self._modules["streaming_block"] = None
+        if self.shared_buffer:
+            self.offload_block_cuda_buffers = WeightModuleList([])
+            self.add_module("offload_block_cuda_buffers", self.offload_block_cuda_buffers)
         gc.collect()
         _empty_device_cache()
 
