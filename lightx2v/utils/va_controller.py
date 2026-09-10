@@ -36,13 +36,19 @@ class VAController:
         self.init_reader(model_runner)
 
     def init_base(self, config, input_info, has_vfi_model, has_vsr_model):
+        self.stream_config = {}
         if "stream_config" in input_info.__dataclass_fields__:
             self.stream_config = input_info.stream_config
             logger.info(f"VAController init base with stream config: {self.stream_config}")
         self.audio_path = input_info.audio_path
         self.output_video_path = input_info.save_result_path
+        self.ws_output = None
         if isinstance(self.output_video_path, dict):
-            self.output_video_path = self.output_video_path["data"]
+            if self.output_video_path.get("type") == "ws":
+                self.ws_output = self.output_video_path
+                self.output_video_path = "ws://session"
+            else:
+                self.output_video_path = self.output_video_path.get("data", "")
 
         self.audio_sr = config.get("audio_sr", 16000)
         self.target_fps = config.get("target_fps", 16)
@@ -92,6 +98,19 @@ class VAController:
         if not self.output_video_path or self.rank != self.target_recorder_rank:
             return
         logger.info(f"Rank {self.rank} init recorder with: {self.output_video_path}")
+        if self.ws_output is not None:
+            from lightx2v.utils.va_recorder_ws import WsVideoChunkRecorder
+
+            self.recorder = WsVideoChunkRecorder(
+                fps=self.record_fps,
+                sample_rate=self.audio_sr,
+                slice_frame=self.slice_frame,
+                prev_frame=self.prev_frame_length,
+                on_output=self.ws_output.get("on_output") or self.ws_output.get("on_chunk"),
+                stream_config=self.stream_config,
+                chunk_frames=self.ws_output.get("chunk_frames"),
+            )
+            return
         whip_shared_path = os.getenv("WHIP_SHARED_LIB", None)
         if whip_shared_path and self.output_video_path.startswith("http"):
             from lightx2v.utils.va_recorder_x264 import X264VARecorder
@@ -119,9 +138,30 @@ class VAController:
     def init_reader(self, model_runner=None):
         if not isinstance(self.audio_path, dict):
             return
-        assert self.audio_path["type"] == "stream", f"unexcept audio_path: {self.audio_path}"
+        audio_type = self.audio_path.get("type")
         segment_duration = self.max_num_frames / self.target_fps
         prev_duration = self.prev_frame_length / self.target_fps
+        if audio_type == "ws":
+            from lightx2v.utils.va_reader_ws import SekoARWSReader
+
+            if not self.is_seko_talk_ar:
+                raise ValueError("audio_path type=ws currently requires model_cls=seko_talk_ar")
+            self.reader = SekoARWSReader(
+                rank=self.rank,
+                world_size=self.world_size,
+                stream_url=self.audio_path.get("data", ""),
+                sample_rate=self.audio_sr,
+                latent_per_chunk=self.latent_per_chunk,
+                audio_window_secs=self.audio_window_secs,
+                look_ahead_secs=self.look_ahead_secs,
+                video_fps=self.target_fps,
+                target_rank=self.target_reader_rank,
+                model_runner=model_runner,
+                stream_config=self.stream_config,
+                audio_source=self.audio_path.get("source"),
+            )
+            return
+        assert audio_type == "stream", f"unexcept audio_path: {self.audio_path}"
         omni_work_dir = os.getenv("OMNI_WORK_DIR", None)
         if omni_work_dir:
             from lightx2v.utils.va_reader_omni import OmniVAReader, SekoAROmniVAReader
