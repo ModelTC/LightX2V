@@ -191,7 +191,7 @@ from lightx2v import LightX2VPipeline
 pipe = LightX2VPipeline(
     model_path="/path/to/MiniMax-H3",
     model_cls="minimax_h3",
-    task="t2av",
+    model_variant="fl2av",
 )
 
 # DMD 配置使用已发布的 768p LoRA、4 步推理、
@@ -207,6 +207,7 @@ save_result_path = "outputs/minimax_h3_t2av_768p.mp4"
 
 # 生成带同步音频的视频
 pipe.generate(
+    task="t2av",
     seed=seed,
     prompt=prompt,
     save_result_path=save_result_path,

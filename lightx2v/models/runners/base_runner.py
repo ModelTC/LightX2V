@@ -24,9 +24,7 @@ class BaseRunner(ABC):
     def __init__(self, config):
         self.config = config
         task = config.get("task")
-        if not task:
-            raise ValueError("task must be set when the runner is created")
-        if task not in self.supported_request_fields_by_task:
+        if task and task not in self.supported_request_fields_by_task:
             raise ValueError(f"{type(self).__name__} does not support task {task!r}")
         self.supported_tasks = self.get_supported_tasks()
         self.vae_encoder_need_img_original = False
@@ -81,7 +79,10 @@ class BaseRunner(ABC):
 
     def get_supported_tasks(self):
         """Return tasks accepted by this initialized runner."""
-        return (self.config["task"],)
+        task = self.config.get("task")
+        if not task:
+            raise ValueError("task must be set when the runner is created")
+        return (task,)
 
     def create_input_info(self, request_data):
         """Create the runtime context for one inference request."""
@@ -117,7 +118,7 @@ class BaseRunner(ABC):
         if task is None:
             if len(self.supported_tasks) > 1:
                 raise ValueError("task is required when the runner supports multiple tasks")
-            task = self.config["task"]
+            task = self.supported_tasks[0]
         request_data["task"] = task
         if task not in self.supported_tasks:
             task_names = ", ".join(self.supported_tasks)

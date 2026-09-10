@@ -234,23 +234,24 @@ class DefaultRunner(BaseRunner):
             assert self.config.get("cpu_offload", False)
         if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)  # set scheduler to model
-        if self.config["task"] == "i2v":
+        task = self.config.get("task")
+        if task == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
-        elif self.config["task"] == "flf2v":
+        elif task == "flf2v":
             self.run_input_encoder = self._run_input_encoder_local_flf2v
-        elif self.config["task"] == "t2v":
+        elif task == "t2v":
             self.run_input_encoder = self._run_input_encoder_local_t2v
-        elif self.config["task"] == "vace":
+        elif task == "vace":
             self.run_input_encoder = self._run_input_encoder_local_vace
-        elif self.config["task"] == "animate":
+        elif task == "animate":
             self.run_input_encoder = self._run_input_encoder_local_animate
-        elif self.config["task"] in ["s2v", "rs2v"]:
+        elif task in ["s2v", "rs2v"]:
             self.run_input_encoder = self._run_input_encoder_local_s2v
-        elif self.config["task"] == "t2av":
+        elif task == "t2av":
             self.run_input_encoder = self._run_input_encoder_local_t2av
-        elif self.config["task"] == "i2av":
+        elif task == "i2av":
             self.run_input_encoder = self._run_input_encoder_local_i2av
-        elif self.config["task"] == "sr":
+        elif task == "sr":
             self.run_input_encoder = self._run_input_encoder_local_sr
 
         self.config.lock()  # lock config to avoid modification
