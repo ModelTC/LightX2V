@@ -11,6 +11,7 @@ import torch
 from loguru import logger
 from safetensors import SafetensorError, safe_open
 
+from lightx2v.models.networks.minimax_h3.adaln_cache_guide import ADALN_CACHE_GUIDE
 from lightx2v.models.networks.minimax_h3.packing import (
     CONDITION_AUDIO_TIMESTEP,
     KEYFRAME_NOISE_AUG,
@@ -24,24 +25,7 @@ def validate_adaln_cache_config(config) -> None:
         return
     cache_dir = config.get("adaln_cache_dir")
     if cache_dir is None or not str(cache_dir).strip():
-        separator = "=" * 88
-        message = (
-            f"\n{separator}\n"
-            "MINIMAX-H3 ADALN CACHE CONFIGURATION ERROR\n"
-            "use_adaln_cache=true, but adaln_cache_dir is missing or empty.\n"
-            "\nACTION REQUIRED\n"
-            "Add the cache root to the inference JSON config:\n"
-            '  "use_adaln_cache": true,\n'
-            '  "adaln_cache_dir": "~/.cache/lightx2v/adaln"\n'
-            "adaln_cache_dir can be any custom cache root; the path above is the recommended default.\n"
-            "\nBefore inference, set lightx2v_path, model_path, --config_json, and "
-            "--task in tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh.\n"
-            "Then generate the cache from the repository root with:\n"
-            "  bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh\n"
-            "Set --task fl2av in that script for t2av/i2av/l2av/fl2av, or "
-            "--task ref2av for ref2av. The generation script and inference must "
-            f"use the same JSON config.\n{separator}"
-        )
+        message = f"\nMINIMAX-H3 ADALN CACHE CONFIGURATION ERROR\n\nuse_adaln_cache=true, but adaln_cache_dir is missing or empty.\n\n{ADALN_CACHE_GUIDE}"
         logger.error(message)
         raise ValueError(message)
     if config.get("dummy_model", False):
@@ -125,7 +109,9 @@ def _build_spec(config) -> dict:
 def _cache_path(config) -> Path:
     cache_name = "ref2av" if config["task"] == "ref2av" else "fl2av"
     infer_steps = int(config["infer_steps"])
-    return _cache_root(config) / "minimax_h3" / f"{cache_name}_{infer_steps:02d}steps"
+    video_flow_shift = float(config.get("video_flow_shift", 12.0))
+    audio_flow_shift = float(config.get("audio_flow_shift", 3.0))
+    return _cache_root(config) / "minimax_h3" / f"{cache_name}_{infer_steps:02d}steps_shift_{video_flow_shift}_{audio_flow_shift}"
 
 
 def _expected_table_shape(spec: dict, entry: dict) -> tuple[int, int]:
@@ -183,7 +169,21 @@ def load_persistent_adaln_cache(
     spec = _build_spec(config)
     cache_path = _cache_path(config)
     if not _validate_cache(cache_path, spec):
-        raise FileNotFoundError(f"MiniMax-H3 AdaLN cache is missing or invalid: {cache_path}. Generate it first with tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py.")
+        message = (
+            "\nMINIMAX-H3 ADALN CACHE LOAD ERROR\n\n"
+            "AdaLN cache not found.\n\n"
+            "Inference config:\n"
+            f"  Cache root (adaln_cache_dir): {_cache_root(config)}\n"
+            f"  infer_steps: {spec['infer_steps']}\n"
+            f"  video_flow_shift: {spec['video_flow_shift']}\n"
+            f"  audio_flow_shift: {spec['audio_flow_shift']}\n\n"
+            "Cache files not found:\n"
+            f"  {cache_path / 'manifest.json'}\n"
+            f"  {cache_path / 'adaln_cache.safetensors'}\n\n"
+            f"{ADALN_CACHE_GUIDE}"
+        )
+        logger.error(message)
+        raise FileNotFoundError(message)
 
     logger.info("========== Loading MiniMax-H3 AdaLN cache from {} ==========", cache_path)
     keys = [tuple(_timesteps_from_bits(entry["timestep_bits"]).tolist()) for entry in spec["entries"]]
