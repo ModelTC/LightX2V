@@ -217,12 +217,7 @@ class MiniMaxH3Runner(DefaultRunner):
         self.video_vae, self.audio_vae = self.load_vae()
 
     def _is_mps_low_memory_streaming(self):
-        return (
-            AI_DEVICE == "mps"
-            and self.config.get("task") == "t2av"
-            and self.config.get("dit_disk_streaming", False)
-            and self.config.get("text_encoder_disk_streaming", False)
-        )
+        return AI_DEVICE == "mps" and self.config.get("task") == "t2av" and self.config.get("dit_disk_streaming", False) and self.config.get("text_encoder_disk_streaming", False)
 
     def _validate_mps_low_memory_streaming_config(self):
         if not self.config.get("text_encoder_release_block_offload_buffers", False):

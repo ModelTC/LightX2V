@@ -391,8 +391,11 @@ def test_public_infer_offload_lifecycle(tmp_path, monkeypatch, qwen_module, mode
     monkeypatch.setattr(qwen_module, "AI_DEVICE", "cpu")
     monkeypatch.setattr(qwen_module, "MINIMAX_H3_TEXT_HIDDEN_SIZE", 8)
     backbone = qwen_module._Qwen3VLTextBackboneWeights(
-        encoder.config, _tiny_text_config(), num_layers=2,
-        block_offload=encoder.block_offload, disk_streaming=encoder.disk_streaming,
+        encoder.config,
+        _tiny_text_config(),
+        num_layers=2,
+        block_offload=encoder.block_offload,
+        disk_streaming=encoder.disk_streaming,
     )
     encoder.text_encoder = backbone
     encoder.tokenizer = Mock(return_value={"input_ids": [0, 1, 2]})

@@ -171,9 +171,7 @@ class MiniMaxH3TransformerWeights(WeightModule):
         self.streaming_lora = None
         if self.disk_streaming:
             if config.get("lazy_load", False):
-                raise NotImplementedError(
-                    "MiniMax-H3 dit_disk_streaming reads the official sharded checkpoint directly and cannot be combined with converted lazy_load block shards."
-                )
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming reads the official sharded checkpoint directly and cannot be combined with converted lazy_load block shards.")
             if config.get("dit_quantized", False):
                 raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support quantized DiT checkpoints yet.")
             if config.get("tensor_parallel", False):
@@ -193,10 +191,7 @@ class MiniMaxH3TransformerWeights(WeightModule):
                 self.num_layers = int(config["num_layers"])
             expected_block_indices = tuple(range(self.num_layers))
             if self.checkpoint.block_indices != expected_block_indices:
-                raise ValueError(
-                    "MiniMax-H3 dit_disk_streaming checkpoint block indices mismatch: "
-                    f"expected {expected_block_indices}, found {self.checkpoint.block_indices}"
-                )
+                raise ValueError(f"MiniMax-H3 dit_disk_streaming checkpoint block indices mismatch: expected {expected_block_indices}, found {self.checkpoint.block_indices}")
 
             self.blocks = WeightModuleList([])
             self.streaming_block = None

@@ -31,11 +31,7 @@ def _write_fake_checkpoint(tmp_path):
     save_file(shard_1, tmp_path / "model-00001-of-00002.safetensors")
     save_file(shard_2, tmp_path / "model-00002-of-00002.safetensors")
 
-    weight_map = {
-        name: "model-00001-of-00002.safetensors" for name in shard_1
-    } | {
-        name: "model-00002-of-00002.safetensors" for name in shard_2
-    }
+    weight_map = {name: "model-00001-of-00002.safetensors" for name in shard_1} | {name: "model-00002-of-00002.safetensors" for name in shard_2}
     (tmp_path / "model.safetensors.index.json").write_text(
         json.dumps({"metadata": {"total_size": 0}, "weight_map": weight_map}),
         encoding="utf-8",

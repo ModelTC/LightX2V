@@ -87,6 +87,7 @@ def _load_runner_module(monkeypatch):
             self.__dict__.update(kwargs)
 
     _install_module(monkeypatch, "lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops", Audio=Audio)
+
     class _Metrics:
         def __getattr__(self, _name):
             return None

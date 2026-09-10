@@ -133,15 +133,9 @@ class MiniMaxH3CheckpointPlan:
         if not weight_map:
             raise ValueError(f"MiniMax-H3 safetensors index weight_map is empty: {self.index_path}")
 
-        invalid_shard_names = sorted(
-            name
-            for name, shard_name in weight_map.items()
-            if not isinstance(shard_name, str) or not shard_name
-        )
+        invalid_shard_names = sorted(name for name, shard_name in weight_map.items() if not isinstance(shard_name, str) or not shard_name)
         if invalid_shard_names:
-            raise ValueError(
-                f"MiniMax-H3 safetensors index contains invalid shard file names for tensors: {invalid_shard_names}"
-            )
+            raise ValueError(f"MiniMax-H3 safetensors index contains invalid shard file names for tensors: {invalid_shard_names}")
 
         self.weight_map = dict(weight_map)
         raw = any(n.startswith(("blocks.", "video_patch_proj.", "audio_patch_proj.", "condition_proj.", "final_layer.", "token_refiner.blocks.")) for n in weight_map)
@@ -161,9 +155,21 @@ class MiniMaxH3CheckpointPlan:
             if config is not None:
                 runtime = _native_config(config)
                 keys = (
-                    "hidden_size", "num_layers", "num_attention_heads", "attention_head_dim", "ffn_dim", "time_embed_dim",
-                    "num_refiner_layers", "freq_dim", "rope_freq_dim", "rope_theta", "time_embed_hidden_dim", "in_channels",
-                    "audio_in_channels", "text_dim", "patch_size",
+                    "hidden_size",
+                    "num_layers",
+                    "num_attention_heads",
+                    "attention_head_dim",
+                    "ffn_dim",
+                    "time_embed_dim",
+                    "num_refiner_layers",
+                    "freq_dim",
+                    "rope_freq_dim",
+                    "rope_theta",
+                    "time_embed_hidden_dim",
+                    "in_channels",
+                    "audio_in_channels",
+                    "text_dim",
+                    "patch_size",
                 )
                 for key in keys:
                     if key == "rope_theta" and key not in config:
@@ -185,15 +191,7 @@ class MiniMaxH3CheckpointPlan:
     @property
     def block_indices(self):
         pattern = re.compile(r"^blocks\.(\d+)\.") if self.format == "official_raw" else _H3_BLOCK_KEY_RE
-        return tuple(
-            sorted(
-                {
-                    int(match.group(1))
-                    for name in self.weight_map
-                    if (match := pattern.match(name)) is not None
-                }
-            )
-        )
+        return tuple(sorted({int(match.group(1)) for name in self.weight_map if (match := pattern.match(name)) is not None}))
 
     def tensor_names_for_block(self, block_index):
         prefix = "blocks" if self.format == "official_raw" else "transformer_blocks"

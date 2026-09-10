@@ -210,9 +210,7 @@ def _official_video_vae_targets(source_key: str) -> tuple[str, ...] | None:
     return (target,)
 
 
-def _official_validation_error(
-    *, unknown: list[str], missing: list[str], duplicates: list[str], shape_mismatches: list[str], dtype_mismatches: list[str]
-) -> RuntimeError:
+def _official_validation_error(*, unknown: list[str], missing: list[str], duplicates: list[str], shape_mismatches: list[str], dtype_mismatches: list[str]) -> RuntimeError:
     details = []
     for label, values in (
         ("unknown", unknown),

@@ -65,7 +65,11 @@ def destination_device(request):
 def destinations(plan, names, transpose=False, device="cpu"):
     return {
         name: (
-            torch.empty(tuple(reversed(plan.targets[name][1].shape)) if transpose else plan.targets[name][1].shape, dtype=torch.float32 if plan.targets[name][1].dtype == "F32" else torch.bfloat16, device=device),
+            torch.empty(
+                tuple(reversed(plan.targets[name][1].shape)) if transpose else plan.targets[name][1].shape,
+                dtype=torch.float32 if plan.targets[name][1].dtype == "F32" else torch.bfloat16,
+                device=device,
+            ),
             transpose,
         )
         for name in names

@@ -101,7 +101,5 @@ def test_gqa_fallback_preserved(sdpa):
     q = torch.randn(9, 4, 8, generator=generator)
     k, v = [torch.randn(9, 2, 8, generator=generator) for _ in range(2)]
     actual = sdpa.TorchSDPAWeight().apply(q, k, v, attention_scope="minimax_h3_dit", mps_sdpa_query_chunk_size=128)
-    expected = F.scaled_dot_product_attention(
-        q.transpose(0, 1), k.repeat_interleave(2, dim=1).transpose(0, 1), v.repeat_interleave(2, dim=1).transpose(0, 1)
-    ).transpose(0, 1).reshape(9, 32)
+    expected = F.scaled_dot_product_attention(q.transpose(0, 1), k.repeat_interleave(2, dim=1).transpose(0, 1), v.repeat_interleave(2, dim=1).transpose(0, 1)).transpose(0, 1).reshape(9, 32)
     torch.testing.assert_close(actual, expected)
