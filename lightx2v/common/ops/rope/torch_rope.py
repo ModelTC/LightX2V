@@ -90,10 +90,6 @@ class TorchComplexRope(RopeTemplate):
 
 @ROPE_REGISTER("torch_real_rope")
 class TorchRealRope(RopeTemplate):
-    @staticmethod
-    def fused_qkv_norm_rope_low_precision(q, cos, sin, rotary_dim):
-        return False
-
     def _cos_sin(self, freqs, rotary_dim: int):
         if torch.is_tensor(freqs) and torch.is_complex(freqs):
             return freqs.real, freqs.imag, True
