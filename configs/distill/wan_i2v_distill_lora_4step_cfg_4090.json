@@ -1,8 +1,7 @@
 {
     "infer_steps": 4,
-    "target_video_length": 81,
-    "target_height": 480,
-    "target_width": 832,
+    "num_frames": 81,
+    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "sage_attn2",
     "cross_attn_1_type": "sage_attn2",

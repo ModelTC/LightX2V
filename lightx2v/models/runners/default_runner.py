@@ -21,7 +21,7 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
-def resize_image(img, resize_mode="adaptive", resolution="480p", bucket_shape=None, fixed_area=None, fixed_shape=None):
+def resize_image(img, resize_mode="adaptive", resolution="480p", bucket_shape=None, fixed_area=None, size=None):
     """Resize input image for i2v / flf2v.
 
     Supports the same six modes as wan_audio_runner.resize_image (adaptive,
@@ -33,9 +33,9 @@ def resize_image(img, resize_mode="adaptive", resolution="480p", bucket_shape=No
     assert resize_mode in ("adaptive", "keep_ratio_fixed_area", "fixed_min_area", "fixed_max_area", "fixed_shape", "fixed_min_side")
 
     if resize_mode == "fixed_shape":
-        assert fixed_shape is not None, "fixed_shape mode requires `fixed_shape` arg"
-        logger.info(f"fixed_shape_resize fixed_height: {fixed_shape[0]}, fixed_width: {fixed_shape[1]}")
-        return fixed_shape_resize(img, fixed_shape[0], fixed_shape[1])
+        assert size is not None, "fixed_shape mode requires `size` arg"
+        logger.info(f"fixed_shape_resize fixed_height: {size[0]}, fixed_width: {size[1]}")
+        return fixed_shape_resize(img, size[0], size[1])
 
     if bucket_shape is None:
         bucket_config = {
@@ -234,24 +234,26 @@ class DefaultRunner(BaseRunner):
             assert self.config.get("cpu_offload", False)
         if hasattr(self, "model") and self.model is not None:
             self.model.set_scheduler(self.scheduler)  # set scheduler to model
-        if self.config["task"] == "i2v":
+        task = self.config.get("task")
+        if task == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
-        elif self.config["task"] == "flf2v":
+        elif task == "flf2v":
             self.run_input_encoder = self._run_input_encoder_local_flf2v
-        elif self.config["task"] == "t2v":
+        elif task == "t2v":
             self.run_input_encoder = self._run_input_encoder_local_t2v
-        elif self.config["task"] == "vace":
+        elif task == "vace":
             self.run_input_encoder = self._run_input_encoder_local_vace
-        elif self.config["task"] == "animate":
+        elif task == "animate":
             self.run_input_encoder = self._run_input_encoder_local_animate
-        elif self.config["task"] in ["s2v", "rs2v"]:
+        elif task in ["s2v", "rs2v"]:
             self.run_input_encoder = self._run_input_encoder_local_s2v
-        elif self.config["task"] == "t2av":
+        elif task == "t2av":
             self.run_input_encoder = self._run_input_encoder_local_t2av
-        elif self.config["task"] == "i2av":
+        elif task == "i2av":
             self.run_input_encoder = self._run_input_encoder_local_i2av
-        elif self.config["task"] == "sr":
+        elif task == "sr":
             self.run_input_encoder = self._run_input_encoder_local_sr
+
         self.config.lock()  # lock config to avoid modification
 
     def set_init_device(self):
@@ -259,15 +261,6 @@ class DefaultRunner(BaseRunner):
             self.init_device = torch.device("cpu")
         else:
             self.init_device = torch.device(AI_DEVICE)
-
-    def load_vfi_model(self):
-        if self.config["video_frame_interpolation"].get("algo", None) == "rife":
-            from lightx2v.models.vfi.rife.rife_comfyui_wrapper import RIFEWrapper
-
-            logger.info("Loading RIFE model...")
-            return RIFEWrapper(self.config["video_frame_interpolation"]["model_path"])
-        else:
-            raise ValueError(f"Unsupported VFI model: {self.config['video_frame_interpolation']['algo']}")
 
     def load_vsr_model(self):
         if "video_super_resolution" in self.config:
@@ -284,33 +277,17 @@ class DefaultRunner(BaseRunner):
         self.text_encoders = self.load_text_encoder()
         self.image_encoder = self.load_image_encoder()
         self.vae_encoder, self.vae_decoder = self.load_vae()
-        self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
         self.vsr_model = self.load_vsr_model() if "video_super_resolution" in self.config else None
 
-    def set_inputs(self, inputs):
-        self.input_info.seed = inputs.get("seed", 42)
-        self.input_info.prompt = inputs.get("prompt", "")
-        if "prompt_ref" in self.input_info.__dataclass_fields__:
-            self.input_info.prompt_ref = inputs.get("prompt_ref", self.input_info.prompt_ref)
-        self.input_info.negative_prompt = inputs.get("negative_prompt", "")
-        if "image_path" in self.input_info.__dataclass_fields__:
-            self.input_info.image_path = inputs.get("image_path", "")
-        if "state_path" in self.input_info.__dataclass_fields__:
-            self.input_info.state_path = inputs.get("state_path", "")
-        if "audio_path" in self.input_info.__dataclass_fields__:
-            self.input_info.audio_path = inputs.get("audio_path", "")
-        if "video_path" in self.input_info.__dataclass_fields__:
-            self.input_info.video_path = inputs.get("video_path", "")
-        if "src_video" in self.input_info.__dataclass_fields__:
-            self.input_info.src_video = inputs.get("src_video", "")
-        self.input_info.save_result_path = inputs.get("save_result_path", "")
-        if "save_action_path" in self.input_info.__dataclass_fields__:
-            self.input_info.save_action_path = inputs.get("save_action_path", "")
+    def get_num_frames(self):
+        value = getattr(self.input_info, "num_frames", None)
+        return int(self.config["num_frames"] if value is None else value)
 
-    def set_config(self, config_modify):
-        logger.info(f"modify config: {config_modify}")
-        with self.config.temporarily_unlocked():
-            self.config.update(config_modify)
+    def get_target_size(self):
+        size = getattr(self.input_info, "size", None)
+        if size:
+            return int(size[0]), int(size[1])
+        return int(self.config["size"][0]), int(self.config["size"][1])
 
     def set_progress_callback(self, callback):
         self.progress_callback = callback
@@ -413,8 +390,6 @@ class DefaultRunner(BaseRunner):
         self.input_info.original_size = img_ori.size
 
         resize_mode = self.config.get("resize_mode", None)
-        # Treat empty string the same as missing — InputInfo dataclasses default
-        # `resize_mode` to "", which used to silently skip the resize branch.
         if resize_mode:
             img, h, w = resize_image(
                 img,
@@ -422,7 +397,7 @@ class DefaultRunner(BaseRunner):
                 resolution=self.config.get("resolution", "480p"),
                 bucket_shape=self.config.get("bucket_shape", None),
                 fixed_area=self.config.get("fixed_area", None),
-                fixed_shape=self.config.get("fixed_shape", None),
+                size=self.config.get("size"),
             )
             logger.info(f"resize_image target_h: {h}, target_w: {w}")
             patched_h = max(1, h // self.config["vae_stride"][1] // self.config["patch_size"][1])
@@ -434,15 +409,15 @@ class DefaultRunner(BaseRunner):
             latent_w = patched_w * self.config["patch_size"][2]
 
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
-            target_shape = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
+            size = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
 
-            logger.info(f"target_h: {target_shape[0]}, target_w: {target_shape[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
+            logger.info(f"target_h: {size[0]}, target_w: {size[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
 
-            img = torch.nn.functional.interpolate(img, size=(target_shape[0], target_shape[1]), mode="bicubic")
+            img = torch.nn.functional.interpolate(img, size=(size[0], size[1]), mode="bicubic")
             # Must populate both before run_vae_encoder; its else-branch reads
             # `input_info.latent_shape` unconditionally when resize_mode is set.
             self.input_info.latent_shape = latent_shape
-            self.input_info.target_shape = target_shape
+            self.input_info.size = size
 
         return img, img_ori
 
@@ -479,14 +454,13 @@ class DefaultRunner(BaseRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_vace(self):
-        src_video = self.input_info.src_video
-        src_mask = self.input_info.src_mask
-        src_ref_images = self.input_info.src_ref_images
+        ref_images = self.input_info.ref_image_paths
+        target_height, target_width = self.get_target_size()
         src_video, src_mask, src_ref_images = self.prepare_source(
-            [src_video],
-            [src_mask],
-            [None if src_ref_images is None else src_ref_images.split(",")],
-            (self.config["target_width"], self.config["target_height"]),
+            [self.input_info.video_path or None],
+            [self.input_info.mask_path or None],
+            [ref_images.split(",") if ref_images else None],
+            (target_width, target_height),
         )
         self.src_ref_images = src_ref_images
 
@@ -577,6 +551,9 @@ class DefaultRunner(BaseRunner):
             del self.vae_decoder
             self.maybe_empty_cache()
 
+    def get_output_fps(self):
+        return getattr(self.input_info, "output_fps", None) or self.config.get("fps", 16)
+
     def process_images_after_vae_decoder(self):
         return_result_tensor = self.input_info.return_result_tensor
         save_result = self.input_info.save_result_path is not None
@@ -590,26 +567,13 @@ class DefaultRunner(BaseRunner):
         with ProfilingContext4DebugL2("wan_vae_to_comfy"):
             self.gen_video_final = wan_vae_to_comfy(self.gen_video_final)
 
-        if "video_frame_interpolation" in self.config:
-            assert self.vfi_model is not None and self.config["video_frame_interpolation"].get("target_fps", None) is not None
-            target_fps = self.config["video_frame_interpolation"]["target_fps"]
-            logger.info(f"Interpolating frames from {self.config.get('fps', 16)} to {target_fps}")
-            self.gen_video_final = self.vfi_model.interpolate_frames(
-                self.gen_video_final,
-                source_fps=self.config.get("fps", 16),
-                target_fps=target_fps,
-            )
-
         if return_result_tensor:
             self.gen_video_final = self.gen_video_final.cpu()
             return {"video": self.gen_video_final}
 
         # Reaching here means should_process was true because this is the main
         # process and a save path was provided.
-        if "video_frame_interpolation" in self.config and self.config["video_frame_interpolation"].get("target_fps"):
-            fps = self.config["video_frame_interpolation"]["target_fps"]
-        else:
-            fps = self.config.get("fps", 16)
+        fps = self.get_output_fps()
 
         out_path = self.input_info.save_result_path
         img_in = (getattr(self.input_info, "image_path", None) or "").strip()

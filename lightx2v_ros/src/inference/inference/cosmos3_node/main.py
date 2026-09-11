@@ -10,7 +10,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, Int32, String
 
 from lightx2v.models.runners.cosmos3.cosmos3_runner import Cosmos3Policy
-from lightx2v.utils.set_config import auto_calc_config, get_default_config, set_parallel_config
+from lightx2v.utils.set_config import build_startup_config, init_parallel
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
@@ -106,8 +106,7 @@ class Cosmos3Node(Node):
         if not model_path:
             raise ValueError("Cosmos3 ROS node requires `model_path`.")
 
-        config = get_default_config()
-        config.update(
+        config = build_startup_config(
             {
                 "model_cls": "cosmos3",
                 "task": "i2va",
@@ -116,9 +115,7 @@ class Cosmos3Node(Node):
                 "seed": int(self.get_parameter("seed").value),
             }
         )
-        config = auto_calc_config(config)
-        # ROS parameters are explicit runtime overrides and must win over the
-        # values loaded from config_json by auto_calc_config().
+        # The ROS prompt format overrides deployment defaults.
         config["policy_prompt_format"] = prompt_format
         if int(config.get("raw_action_dim", 8)) != self.contract.action_dim:
             raise ValueError(f"Cosmos3 raw_action_dim={config.get('raw_action_dim')} != RoboLab action_dim={self.contract.action_dim}")
@@ -137,7 +134,7 @@ class Cosmos3Node(Node):
             if platform is None:
                 raise RuntimeError(f"unsupported LightX2V platform: {os.getenv('PLATFORM', 'cuda')}")
             platform.init_parallel_env()
-        set_parallel_config(self.policy_config)
+        init_parallel(self.policy_config)
 
     def _broadcast(self, payload):
         if not dist.is_initialized():

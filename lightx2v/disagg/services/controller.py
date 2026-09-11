@@ -164,12 +164,6 @@ class ControllerService(BaseService):
             str(instance_cfg.get("model_path")),
             "--config_json",
             service_config_json,
-            "--prompt",
-            str(instance_cfg.get("prompt", "")),
-            "--negative_prompt",
-            str(instance_cfg.get("negative_prompt", "")),
-            "--save_result_path",
-            str(instance_cfg.get("save_path", "")),
         ]
 
     def _maybe_wrap_service_command_with_nsys(
@@ -202,7 +196,9 @@ class ControllerService(BaseService):
         if output_dir_raw:
             output_dir = Path(output_dir_raw)
         else:
-            base_save_path = instance_cfg.get("save_path") or (self._runtime_config or {}).get("save_path") or str(Path(__file__).resolve().parents[3] / "save_results" / "wan22_i2v_dynamic.mp4")
+            base_save_path = (
+                instance_cfg.get("save_result_path") or (self._runtime_config or {}).get("save_result_path") or str(Path(__file__).resolve().parents[3] / "save_results" / "wan22_i2v_dynamic.mp4")
+            )
             output_dir = Path(str(base_save_path)).parent / "nsys"
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1156,9 +1152,9 @@ class ControllerService(BaseService):
 
         if result.get("ok", False):
             self.logger.info(
-                "Decoder result received room=%s save_path=%s (%s/%s)",
+                "Decoder result received room=%s save_result_path=%s (%s/%s)",
                 room,
-                result.get("save_path"),
+                result.get("save_result_path"),
                 len(received_rooms),
                 len(expected_rooms),
             )
@@ -1921,8 +1917,8 @@ class ControllerService(BaseService):
         self.rdma_buffer_request.produce(config)
         self.logger.info("Request enqueued to encoder request RDMA buffer")
 
-    def run(self, config):
-        """Initialize controller buffers, stream request configs from workload, then wait for all callbacks."""
+    def run(self, config, request_data=None):
+        """Dispatch incoming workload or repeat request_data for automatic requests."""
         if config is None:
             raise ValueError("config cannot be None")
 
@@ -2033,7 +2029,6 @@ class ControllerService(BaseService):
 
         time.sleep(5.0)
 
-        base_save_path = config.get("save_path")
         expected_rooms: set[int] = set()
         received_rooms: set[int] = set()
         received_results: list[dict] = []
@@ -2059,7 +2054,7 @@ class ControllerService(BaseService):
                 self.logger.info("LOAD_FROM_USER enabled, waiting workload configs on port=%s", request_ingress_port)
             else:
                 self.logger.info(
-                    "LOAD_FROM_USER disabled, generating requests from config: count=%s",
+                    "LOAD_FROM_USER disabled, repeating automatic request: count=%s",
                     auto_request_count,
                 )
 
@@ -2076,14 +2071,13 @@ class ControllerService(BaseService):
                 else:
                     if generated_request_count >= auto_request_count:
                         break
-                    workload_config = {}
+                    workload_config = dict(request_data or {})
                     generated_request_count += 1
 
                 request_config = dict(config)
                 request_config.update(self._to_plain(workload_config))
-                if request_config.get("seed") is None:
-                    seed = config.get("seed")
-                    request_config["seed"] = 42 if seed is None else seed
+                seed = workload_config.get("seed")
+                request_config["seed"] = 42 if seed is None else seed
 
                 room = request_config.get("data_bootstrap_room", next_room)
                 try:
@@ -2099,7 +2093,6 @@ class ControllerService(BaseService):
                 request_config["data_bootstrap_room"] = room
                 request_config["controller_result_host"] = bootstrap_addr
                 request_config["controller_result_port"] = result_port
-
                 metrics = request_config.get("request_metrics")
                 if not isinstance(metrics, dict):
                     metrics = {}
@@ -2109,9 +2102,22 @@ class ControllerService(BaseService):
                     metrics["stages"] = {}
                 request_config["request_metrics"] = metrics
 
-                if base_save_path and not request_config.get("save_path"):
-                    save_path = Path(base_save_path)
-                    request_config["save_path"] = str(save_path.with_name(f"{save_path.stem}{room}{save_path.suffix}"))
+                save_result_path = workload_config.get("save_result_path")
+                if not save_result_path:
+                    error = "save_result_path is required for disaggregated generation requests"
+                    if not load_from_user:
+                        raise ValueError(error)
+                    expected_rooms.add(room)
+                    self._handle_decoder_result(
+                        {"ok": False, "data_bootstrap_room": room, "save_result_path": None, "error": error, "request_metrics": metrics},
+                        expected_rooms=expected_rooms,
+                        received_rooms=received_rooms,
+                        received_results=received_results,
+                    )
+                    continue
+                if not load_from_user:
+                    output_path = Path(save_result_path)
+                    request_config["save_result_path"] = str(output_path.with_name(f"{output_path.stem}{room}{output_path.suffix}"))
 
                 with self._lock:
                     current_request = request_config
@@ -2121,9 +2127,9 @@ class ControllerService(BaseService):
 
                 self.send_request(current_request)
                 self.logger.info(
-                    "Dispatched request room=%s save_path=%s",
+                    "Dispatched request room=%s save_result_path=%s",
                     room,
-                    request_config.get("save_path"),
+                    request_config.get("save_result_path"),
                 )
                 expected_rooms.add(room)
 

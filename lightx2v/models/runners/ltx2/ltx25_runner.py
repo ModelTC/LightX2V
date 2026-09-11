@@ -10,6 +10,7 @@ from lightx2v.models.input_encoders.hf.ltx2.duration_head import LTX25DurationPr
 from lightx2v.models.input_encoders.hf.ltx2.model import LTX25TextEncoder
 from lightx2v.models.networks.ltx2.ltx25_model import LTX25Model
 from lightx2v.models.runners.ltx2.ltx2_runner import LTX2Runner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_OUTPUT_FIELDS
 from lightx2v.models.schedulers.ltx2.ltx25_scheduler import LTX25Scheduler
 from lightx2v.models.video_encoders.hf.ltx2.model import LTX25AudioVAE, LTX25VideoVAE
 from lightx2v.utils.envs import GET_DTYPE
@@ -36,11 +37,12 @@ class LTX25Runner(LTX2Runner):
     text_encoder_root_key = "text_encoder_original_ckpt"
     video_vae_checkpoint_key = "video_vae_original_ckpt"
     audio_vae_checkpoint_key = "audio_vae_original_ckpt"
+    supported_request_fields_by_task = {
+        "t2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"prompt"},
+        "i2av": COMMON_REQUEST_FIELDS | VIDEO_OUTPUT_FIELDS | {"image_frame_indices", "image_path", "image_strength", "prompt"},
+    }
 
     def __init__(self, config):
-        task = config.get("task")
-        if task not in ("t2av", "i2av"):
-            raise NotImplementedError(f"LTX-2.5 currently supports t2av and i2av, got {task!r}")
         if config.get("enable_cfg", False) or float(config.get("sample_guide_scale", 1.0)) != 1.0:
             raise ValueError("The LTX-2.5 distilled pipeline requires CFG=1 (enable_cfg=false)")
         if config.get("disagg_mode"):
@@ -92,8 +94,8 @@ class LTX25Runner(LTX2Runner):
             "a_context_n": audio_context,
         }
 
-    def _resolve_target_video_length(self, text_encoder_output) -> int:
-        requested = int(self.input_info.target_video_length or 0)
+    def _resolve_num_frames(self, text_encoder_output) -> int:
+        requested = int(self.input_info.num_frames or 0)
         if requested > 0:
             num_frames = requested
             source = "request"
@@ -111,30 +113,31 @@ class LTX25Runner(LTX2Runner):
             )
             source = "DurationHead"
         else:
-            configured = self.config.get("target_video_length")
+            configured = self.config.get("num_frames")
             if configured is None:
-                raise ValueError("LTX-2.5 auto_duration is disabled and no frame count was provided; pass num_frames/--num_frames or set target_video_length in the profile")
+                raise ValueError("LTX-2.5 auto_duration is disabled and no frame count was provided; pass num_frames/--num_frames or set num_frames in the profile")
             num_frames = int(configured)
             source = "config"
 
         if num_frames < 1 or (num_frames - 1) % 8 != 0:
             raise ValueError(f"LTX-2.5 output length must satisfy num_frames=8k+1, got {num_frames} from {source}")
-        self.input_info.target_video_length = num_frames
+        self.input_info.num_frames = num_frames
         logger.info(f"LTX-2.5 target video length: {num_frames} frames ({source})")
         return num_frames
 
-    def _prepare_stage1_target_shape(self) -> None:
+    def prepare_stage1_size(self) -> None:
         """Interpret request/config dimensions as final two-stage dimensions."""
-        if self.input_info.target_shape:
-            if len(self.input_info.target_shape) != 2:
-                raise ValueError(f"LTX-2.5 target_shape must be [height, width], got {self.input_info.target_shape}")
-            final_height, final_width = map(int, self.input_info.target_shape)
+        if self.input_info.size:
+            if len(self.input_info.size) != 2:
+                raise ValueError(f"LTX-2.5 size must be [height, width], got {self.input_info.size}")
+            final_height, final_width = map(int, self.input_info.size)
         else:
-            final_height = int(self.config["target_height"])
-            final_width = int(self.config["target_width"])
+            final_height = int(self.config["size"][0])
+            final_width = int(self.config["size"][1])
         if final_height % 64 != 0 or final_width % 64 != 0:
             raise ValueError(f"LTX-2.5 distilled two-stage output height and width must be divisible by 64, got {final_height}x{final_width}")
-        self.input_info.target_shape = [final_height // 2, final_width // 2]
+        self.input_info.size = [final_height, final_width]
+        super().prepare_stage1_size()
 
     def _validate_sequence_parallel_shape(self, num_frames: int, guiding_keyframes: int = 0) -> None:
         """Reject SP layouts that would introduce unmasked video tokens.
@@ -153,7 +156,7 @@ class LTX25Runner(LTX2Runner):
             return
 
         latent_frames = (num_frames - 1) // int(self.config["vae_scale_factors"][0]) + 1
-        stage1_height, stage1_width = map(int, self.input_info.target_shape)
+        stage1_height, stage1_width = map(int, self.input_info.size)
         spatial_stride = int(self.config["vae_scale_factors"][1])
         stage_token_counts = {
             "stage 1": (latent_frames + guiding_keyframes) * (stage1_height // spatial_stride) * (stage1_width // spatial_stride),
@@ -171,9 +174,9 @@ class LTX25Runner(LTX2Runner):
         self._clear_ltx2_reference_video_state()
         self.video_denoise_mask = None
         self.initial_video_latent = None
-        self._prepare_stage1_target_shape()
+        self.prepare_stage1_size()
         text_encoder_output = self.run_text_encoder(self.input_info)
-        num_frames = self._resolve_target_video_length(text_encoder_output)
+        num_frames = self._resolve_num_frames(text_encoder_output)
         self._validate_sequence_parallel_shape(num_frames)
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         self.maybe_empty_cache()
@@ -183,11 +186,11 @@ class LTX25Runner(LTX2Runner):
         self._clear_ltx2_reference_audio_state()
         self._clear_ltx2_reference_video_state()
         self._normalize_i2av_input_fields()
-        self._prepare_stage1_target_shape()
+        self.prepare_stage1_size()
         text_encoder_output = self.run_text_encoder(self.input_info)
-        num_frames = self._resolve_target_video_length(text_encoder_output)
+        num_frames = self._resolve_num_frames(text_encoder_output)
         image_paths = [path.strip() for path in (self.input_info.image_path or "").split(",") if path.strip()]
-        frame_indices = self.input_info.image_frame_idx
+        frame_indices = self.input_info.image_frame_indices
         if not frame_indices:
             if len(image_paths) <= 1:
                 frame_indices = [0] * len(image_paths)

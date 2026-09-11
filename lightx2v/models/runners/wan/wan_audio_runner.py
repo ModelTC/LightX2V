@@ -20,6 +20,7 @@ from lightx2v.common.kvcache import KVCacheManager
 from lightx2v.models.input_encoders.hf.seko_audio.audio_adapter import AudioAdapter, CausalAudioSlidingProcessor
 from lightx2v.models.input_encoders.hf.seko_audio.audio_encoder import SekoAudioEncoderModel
 from lightx2v.models.networks.wan.audio_model import WanAudioARModel, WanAudioModel
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.wan.audio.scheduler import EulerScheduler, WanAudioARScheduler
 from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
@@ -27,7 +28,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import UNSET
+from lightx2v.utils.input_info import UNSET, S2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, wan_vae_to_comfy
@@ -38,13 +39,13 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.io")
 
 
-def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None, fixed_shape=None):
+def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None, size=None):
     assert resize_mode in ["adaptive", "keep_ratio_fixed_area", "fixed_min_area", "fixed_max_area", "fixed_shape", "fixed_min_side"]
 
     if resize_mode == "fixed_shape":
-        assert fixed_shape is not None
-        logger.info(f"[wan_audio] fixed_shape_resize fixed_height: {fixed_shape[0]}, fixed_width: {fixed_shape[1]}")
-        return fixed_shape_resize(img, fixed_shape[0], fixed_shape[1])
+        assert size is not None
+        logger.info(f"[wan_audio] fixed_shape_resize fixed_height: {size[0]}, fixed_width: {size[1]}")
+        return fixed_shape_resize(img, size[0], size[1])
 
     if bucket_shape is not None:
         """
@@ -284,6 +285,18 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 
 @RUNNER_REGISTER("seko_talk")
 class WanAudioRunner(WanRunner):  # type:ignore
+    supported_request_fields_by_task = {
+        task: COMMON_REQUEST_FIELDS
+        | PROMPT_FIELDS
+        | {
+            "audio_path",
+            "image_path",
+            "num_frames",
+            "video_duration",
+        }
+        for task in ("s2v", "rs2v")
+    }
+
     def __init__(self, config):
         super().__init__(config)
         self.name = self.config.get("name", "WanAudioRunner")
@@ -300,7 +313,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def read_audio_input(self, audio_path):
         """Read audio input - handles both single and multi-person scenarios"""
         audio_sr = self.config.get("audio_sr", 16000)
-        target_fps = self.config.get("target_fps", 16)
+        target_fps = self.config.get("fps", 16)
         self._audio_processor = AudioProcessor(audio_sr, target_fps)
 
         if not isinstance(audio_path, str):
@@ -320,22 +333,21 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_input_audio_len.observe(audio_len)
 
-        expected_frames = min(max(1, int(self.video_duration * target_fps)), audio_len)
-        if expected_frames < int(self.video_duration * target_fps):
-            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={self.video_duration}")
+        video_duration = self.input_info.video_duration or self.video_duration
+        expected_frames = min(max(1, int(video_duration * target_fps)), audio_len)
+        if expected_frames < int(video_duration * target_fps):
+            logger.warning(f"Input video duration is greater than actual audio duration, using audio duration instead: audio_duration={audio_len / target_fps}, video_duration={video_duration}")
 
-        # Segment audio (CLI / input_info wins over config_json; target_video_length is not merged into config)
-        target_video_length = self.config.get("target_video_length", 81)
-        ii = getattr(self, "input_info", None)
-        if ii is not None and hasattr(ii, "target_video_length"):
-            tvl = ii.target_video_length
-            if tvl is not None and tvl is not UNSET and tvl > 0:
-                target_video_length = tvl
+        # Segment audio (CLI / input_info wins over config_json; num_frames is not merged into config)
+        num_frames = self.config.get("num_frames", 81)
+        request_frames = self.input_info.num_frames
+        if request_frames is not None and request_frames is not UNSET and request_frames > 0:
+            num_frames = request_frames
         if self.config.get("model_cls") == "seko_talk_ar":
             audio_start, audio_end = self._audio_processor.get_audio_range(0, expected_frames)
             audio_segments = [AudioSegment(audio_array[:, audio_start:audio_end], 0, expected_frames)]
         else:
-            audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, target_video_length, self.prev_frame_length)
+            audio_segments = self._audio_processor.segment_audio(audio_array, expected_frames, num_frames, self.prev_frame_length)
 
         # Mask latent for multi-person s2v
         if mask_files is not None:
@@ -366,10 +378,10 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def _get_image_resize_kwargs(self):
         input_info = getattr(self, "input_info", None)
         return {
-            "resize_mode": (getattr(input_info, "resize_mode", None) if input_info is not None else None) or self.config.get("resize_mode", "adaptive"),
+            "resize_mode": self.config.get("resize_mode", "adaptive"),
             "bucket_shape": self.config.get("bucket_shape", None),
             "fixed_area": (getattr(input_info, "fixed_area", None) if input_info is not None else None) or self.config.get("fixed_area", None),
-            "fixed_shape": self.config.get("fixed_shape", None),
+            "size": self.config.get("size"),
         }
 
     def _resolve_patched_spatial_size(self, h, w):
@@ -378,8 +390,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
         patched_h, patched_w = get_optimal_patched_size_with_sp(patched_h, patched_w, 1)
         latent_h = patched_h * self.config["patch_size"][1]
         latent_w = patched_w * self.config["patch_size"][2]
-        target_shape = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
-        return target_shape, patched_h, patched_w
+        size = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
+        return size, patched_h, patched_w
 
     def process_single_mask(self, mask_file):
         mask_img = load_image(mask_file)
@@ -389,8 +401,8 @@ class WanAudioRunner(WanRunner):  # type:ignore
             mask_img = mask_img[:, :1]  # Only take the first channel
 
         mask_img, h, w = resize_image(mask_img, **self._get_image_resize_kwargs())
-        target_shape, patched_h, patched_w = self._resolve_patched_spatial_size(h, w)
-        mask_img = F.interpolate(mask_img, size=(target_shape[0], target_shape[1]), mode="bicubic")
+        size, patched_h, patched_w = self._resolve_patched_spatial_size(h, w)
+        mask_img = F.interpolate(mask_img, size=(size[0], size[1]), mode="bicubic")
         mask_latent = F.interpolate(mask_img, size=(patched_h, patched_w), mode="bicubic")
         mask_latent = (mask_latent > 0).to(torch.int8)
         return mask_latent
@@ -404,20 +416,16 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         ref_img, h, w = resize_image(ref_img, **self._get_image_resize_kwargs())
         logger.info(f"[wan_audio] resize_image target_h: {h}, target_w: {w}")
-        target_shape, patched_h, patched_w = self._resolve_patched_spatial_size(h, w)
+        size, patched_h, patched_w = self._resolve_patched_spatial_size(h, w)
         latent_h = patched_h * self.config["patch_size"][1]
         latent_w = patched_w * self.config["patch_size"][2]
 
-        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None and self.input_info.target_video_length > 0:
-            target_video_length = self.input_info.target_video_length
-            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, target_video_length)
-        else:
-            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
+        latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, self.input_info.num_frames)
 
-        logger.info(f"[wan_audio] target_h: {target_shape[0]}, target_w: {target_shape[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
+        logger.info(f"[wan_audio] target_h: {size[0]}, target_w: {size[1]}, latent_h: {latent_h}, latent_w: {latent_w}")
 
-        ref_img = F.interpolate(ref_img, size=(target_shape[0], target_shape[1]), mode="bicubic")
-        return ref_img, latent_shape, target_shape
+        ref_img = F.interpolate(ref_img, size=(size[0], size[1]), mode="bicubic")
+        return ref_img, latent_shape, size
 
     @ProfilingContext4DebugL1(
         "Run Image Encoder",
@@ -456,11 +464,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_s2v(self):
-        img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
+        img, latent_shape, size = self.read_image_input(self.input_info.image_path)
         if self.config.get("f2v_process", False):
             self.ref_img = img
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
-        self.input_info.target_shape = target_shape  # Important: set target_shape in input_info
+        self.input_info.size = size  # Important: set size in input_info
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
 
@@ -483,11 +491,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
     @ProfilingContext4DebugL2("Run Encoders Static (RS2V)")
     def _run_input_encoder_local_rs2v_static(self):
-        img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
+        img, latent_shape, size = self.read_image_input(self.input_info.image_path)
         if self.config.get("f2v_process", False):
             self.ref_img = img
         self.input_info.latent_shape = latent_shape
-        self.input_info.target_shape = target_shape
+        self.input_info.size = size
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
         text_encoder_output = self.run_text_encoder(self.input_info)
@@ -524,12 +532,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
     def prepare_prev_latents(self, prev_video: Optional[torch.Tensor], prev_frame_length: int) -> Optional[Dict[str, torch.Tensor]]:
         """Prepare previous latents for conditioning"""
         dtype = GET_DTYPE()
-        tgt_h, tgt_w = self.input_info.target_shape[0], self.input_info.target_shape[1]
-        if hasattr(self.input_info, "target_video_length") and self.input_info.target_video_length is not None and self.input_info.target_video_length > 0:
-            target_video_length = self.input_info.target_video_length
-        else:
-            target_video_length = self.config["target_video_length"]
-        prev_frames = torch.zeros((1, 3, target_video_length, tgt_h, tgt_w), device=AI_DEVICE)
+        tgt_h, tgt_w = self.input_info.size[0], self.input_info.size[1]
+        num_frames = self.input_info.num_frames
+        if num_frames is None or num_frames <= 0:
+            num_frames = self.config["num_frames"]
+        prev_frames = torch.zeros((1, 3, num_frames, tgt_h, tgt_w), device=AI_DEVICE)
 
         if prev_video is not None:
             # Extract and process last frames
@@ -556,7 +563,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
                     prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
                 else:
                     prev_latents = None
-                prev_mask = self.model.scheduler.mask
             else:
                 prev_latents = self.vae_encoder.encode(prev_frames.to(dtype))
 
@@ -601,7 +607,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         else:
             self.prev_video = None
         if self.input_info.return_result_tensor:
-            self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.target_shape[0], self.input_info.target_shape[1], 3), dtype=torch.float32, device="cpu")
+            self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.size[0], self.input_info.size[1], 3), dtype=torch.float32, device="cpu")
             self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
         else:
             self.gen_video_final = None
@@ -656,16 +662,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
         audio_seg = self.segment.audio_array[:, : useful_length * self._audio_processor.audio_frame_rate]
         audio_seg = audio_seg.sum(dim=0)  # Multiple audio tracks, mixed into one track
         video_seg = wan_vae_to_comfy(video_seg)
-
-        # [Warning] Need check whether video segment interpolation works...
-        if "video_frame_interpolation" in self.config and self.vfi_model is not None:
-            target_fps = self.config["video_frame_interpolation"]["target_fps"]
-            logger.info(f"Interpolating frames from {self.config.get('fps', 16)} to {target_fps}")
-            video_seg = self.vfi_model.interpolate_frames(
-                video_seg,
-                source_fps=self.config.get("fps", 16),
-                target_fps=target_fps,
-            )
 
         if "video_super_resolution" in self.config and self.vsr_model is not None:
             # logger.info(f"Applying video super resolution with scale {self.config['video_super_resolution']['scale']}")
@@ -859,11 +855,11 @@ class WanAudioRunner(WanRunner):  # type:ignore
             self.audio_encoder = self.load_audio_encoder()
             self.audio_adapter = self.load_audio_adapter()
 
-    def get_latent_shape_with_lat_hw(self, latent_h, latent_w, target_video_length=None):
-        target_video_length = target_video_length if target_video_length is not None and target_video_length > 0 else self.config["target_video_length"]
+    def get_latent_shape_with_lat_hw(self, latent_h, latent_w, num_frames=None):
+        num_frames = num_frames if num_frames is not None and num_frames > 0 else self.config["num_frames"]
         latent_shape = [
             self.config.get("num_channels_latents", 16),
-            (target_video_length - 1) // self.config["vae_stride"][0] + 1,
+            (num_frames - 1) // self.config["vae_stride"][0] + 1,
             latent_h,
             latent_w,
         ]
@@ -897,7 +893,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         self.scheduler.set_audio_adapter(self.audio_adapter)
 
         self.model.scheduler.prepare(
-            seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, infer_steps=self.input_info.infer_steps, image_encoder_output=self.inputs["image_encoder_output"]
+            seed=self.input_info.seed, latent_shape=self.input_info.latent_shape, infer_steps=self.config["infer_steps"], image_encoder_output=self.inputs["image_encoder_output"]
         )
 
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
@@ -944,53 +940,39 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
 @RUNNER_REGISTER("wan2.2_audio")
 class Wan22AudioRunner(WanAudioRunner):
-    def __init__(self, config):
-        super().__init__(config)
-
-    def load_vae_decoder(self):
-        # offload config
-        vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device(AI_DEVICE)
-        vae_config = {
-            "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-            "dummy_model": self.config.get("dummy_model", False),
-        }
-        vae_decoder = Wan2_2_VAE(**vae_config)
-        return vae_decoder
+    supported_request_fields_by_task = {task: WanAudioRunner.supported_request_fields_by_task["s2v"] for task in ("i2v", "s2v")}
+    input_info_cls_by_task = {"i2v": S2VInputInfo}
+    # The legacy i2v task still needs both image and audio inputs.
+    _run_input_encoder_local_i2v = WanAudioRunner._run_input_encoder_local_s2v
 
     def load_vae_encoder(self):
-        # offload config
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
-        if vae_offload:
-            vae_device = torch.device("cpu")
-        else:
-            vae_device = torch.device(AI_DEVICE)
-        vae_config = {
-            "vae_path": find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
-            "device": vae_device,
-            "cpu_offload": vae_offload,
-            "offload_cache": self.config.get("vae_offload_cache", False),
-            "dummy_model": self.config.get("dummy_model", False),
-        }
-        if self.config.task not in ["i2v", "s2v", "rs2v"]:
-            return None
-        else:
-            return Wan2_2_VAE(**vae_config)
+        return Wan2_2_VAE(
+            vae_path=find_torch_model_path(self.config, "vae_path", "Wan2.2_VAE.pth"),
+            device=torch.device("cpu" if vae_offload else AI_DEVICE),
+            cpu_offload=vae_offload,
+            offload_cache=self.config.get("vae_offload_cache", False),
+            dummy_model=self.config.get("dummy_model", False),
+        )
+
+    load_vae_decoder = load_vae_encoder
 
     def load_vae(self):
-        vae_encoder = self.load_vae_encoder()
-        vae_decoder = self.load_vae_decoder()
-        return vae_encoder, vae_decoder
+        return self.load_vae_encoder(), self.load_vae_decoder()
 
 
 @RUNNER_REGISTER("seko_talk_ar")
 class WanAudioARRunner(WanAudioRunner):
+    supported_request_fields_by_task = {
+        "rs2v": (WanAudioRunner.supported_request_fields_by_task["rs2v"] - {"num_frames"}) | {"size"},
+    }
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if self.config.get("prompt_travel"):
+            supported_request_fields -= {"prompt"}
+        return supported_request_fields
+
     @dataclass(frozen=True)
     class PromptTravelSegment:
         start_frame: int
@@ -1009,7 +991,7 @@ class WanAudioARRunner(WanAudioRunner):
             audio_window=self.config.get("audio_window", 1.0),
             look_ahead=self.config.get("look_ahead", 0.0),
             audio_feat_window_neighbor_frame=self.config.get("audio_feat_window_neighbor_frame", 0),
-            video_fps=self.config.get("target_fps", 16),
+            video_fps=self.config.get("fps", 16),
             audio_sr=self.config.get("audio_sr", 16000),
             audio_feat_fps=self.config.get("audio_feat_fps", 50),
         )
@@ -1061,14 +1043,13 @@ class WanAudioARRunner(WanAudioRunner):
         else:
             ref_img = load_image(img_path)
 
-        input_target_shape = getattr(self.input_info, "target_shape", None)
-        if input_target_shape is not None and input_target_shape is not UNSET and len(input_target_shape) >= 2:
-            target_h = int(input_target_shape[0] or self.config.get("target_height", 480))
-            target_w = int(input_target_shape[1] or self.config.get("target_width", 832))
-        else:
-            target_h = int(self.config.get("target_height", 480))
-            target_w = int(self.config.get("target_width", 832))
-        target_shape = [target_h, target_w]
+        input_size = getattr(self.input_info, "size", None)
+        target_h, target_w = self.config.get("size", (480, 832))
+        if input_size is not None and input_size is not UNSET and len(input_size) >= 2:
+            target_h = input_size[0] or target_h
+            target_w = input_size[1] or target_w
+        target_h, target_w = int(target_h), int(target_w)
+        size = [target_h, target_w]
 
         ref_img = torch.from_numpy(np.array(ref_img))
         if ref_img.ndim == 2:
@@ -1079,14 +1060,14 @@ class WanAudioARRunner(WanAudioRunner):
 
         latent_h = target_h // self.config["vae_stride"][1]
         latent_w = target_w // self.config["vae_stride"][2]
-        target_video_length = getattr(self.input_info, "target_video_length", None)
-        if target_video_length is not None and target_video_length is not UNSET and target_video_length > 0:
-            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, target_video_length)
+        num_frames = getattr(self.input_info, "num_frames", None)
+        if num_frames is not None and num_frames is not UNSET and num_frames > 0:
+            latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, num_frames)
         else:
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
 
         logger.info(f"[wan_audio_ar] image resize target_h: {target_h}, target_w: {target_w}, latent_h: {latent_h}, latent_w: {latent_w}")
-        return ref_img, latent_shape, target_shape
+        return ref_img, latent_shape, size
 
     def _parse_prompt_travel_segments(self):
         prompt_travel = self.config.get("prompt_travel")
@@ -1245,11 +1226,11 @@ class WanAudioARRunner(WanAudioRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_s2v(self):
-        img, latent_shape, target_shape = self.read_image_input(self.input_info.image_path)
+        img, latent_shape, size = self.read_image_input(self.input_info.image_path)
         if self.config.get("f2v_process", False):
             self.ref_img = img
         self.input_info.latent_shape = latent_shape
-        self.input_info.target_shape = target_shape
+        self.input_info.size = size
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
 
@@ -1286,7 +1267,7 @@ class WanAudioARRunner(WanAudioRunner):
         self.scheduler.set_audio_adapter(self.audio_adapter)
         self.va_controller = VAController(self)
         if self.input_info.return_result_tensor:
-            self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.target_shape[0], self.input_info.target_shape[1], 3), dtype=torch.float32, device="cpu")
+            self.gen_video_final = torch.zeros((self.inputs["expected_frames"], self.input_info.size[0], self.input_info.size[1], 3), dtype=torch.float32, device="cpu")
             self.cut_audio_final = torch.zeros((self.inputs["expected_frames"] * self._audio_processor.audio_frame_rate), dtype=torch.float32, device="cpu")
         else:
             self.cut_audio_final = None

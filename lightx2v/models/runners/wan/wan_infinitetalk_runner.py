@@ -16,6 +16,7 @@ from loguru import logger
 
 from lightx2v.models.input_encoders.hf.infinitetalk.audio_encoder import InfiniteTalkAudioEncoder
 from lightx2v.models.networks.wan.infinitetalk_model import WanInfiniteTalkModel
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.infinitetalk.scheduler import InfiniteTalkScheduler
 from lightx2v.server.metrics import monitor_cli
@@ -103,11 +104,23 @@ def _is_video(path):
 
 @RUNNER_REGISTER("infinitetalk")
 class InfiniteTalkRunner(WanRunner):
+    supported_request_fields_by_task = {
+        "s2v": COMMON_REQUEST_FIELDS
+        | PROMPT_FIELDS
+        | {
+            "audio_path",
+            "image_path",
+            "num_frames",
+            "video_duration",
+            "video_path",
+        },
+    }
+
     def __init__(self, config):
         super().__init__(config)
         assert self.config["task"] == "s2v", "InfiniteTalk runner expects task=s2v"
         self.audio_sample_rate = int(self.config.get("audio_sample_rate", 16000))
-        self.target_fps = int(self.config.get("target_fps", 25))
+        self.target_fps = int(self.config.get("fps", 25))
         self.video_audio_path = None
         self.video_audio_array = None
         self.cond_video_temp_path = None
@@ -143,7 +156,6 @@ class InfiniteTalkRunner(WanRunner):
         self.image_encoder = self.load_image_encoder()
         self.vae_encoder, self.vae_decoder = self.load_vae()
         self.audio_encoder = self.load_audio_encoder()
-        self.vfi_model = None
         self.vsr_model = None
 
     def load_transformer(self):
@@ -207,7 +219,7 @@ class InfiniteTalkRunner(WanRunner):
                     audio_paths = [item.strip() for item in str(audio_path).split(",") if item.strip()]
                     cond_audio = {f"person{idx + 1}": path for idx, path in enumerate(audio_paths)}
 
-            cond_video = getattr(self.input_info, "src_video", "") or getattr(self.input_info, "image_path", "") or self.config.get("cond_video", "") or self.config.get("image_path", "")
+            cond_video = self.input_info.video_path or self.input_info.image_path or self.config.get("cond_video", "") or self.config.get("image_path", "")
             data = {
                 "prompt": getattr(self.input_info, "prompt", "") or self.config.get("prompt", ""),
                 "cond_video": cond_video,
@@ -222,14 +234,14 @@ class InfiniteTalkRunner(WanRunner):
             if self.config.get("bbox", None):
                 data["bbox"] = self.config["bbox"]
 
-        input_cond_video = getattr(self.input_info, "src_video", "") or getattr(self.input_info, "image_path", "")
+        input_cond_video = self.input_info.video_path or self.input_info.image_path
         if input_cond_video:
             data["cond_video"] = input_cond_video
 
         if not data.get("prompt"):
             raise ValueError("InfiniteTalk requires prompt from --prompt or config infinitetalk_input/prompt.")
         if not data.get("cond_video"):
-            raise ValueError("InfiniteTalk requires cond_video from --src_video, --image_path, or config.")
+            raise ValueError("InfiniteTalk requires cond_video from --video_path, --image_path, or config.")
         if not data.get("cond_audio"):
             raise ValueError("InfiniteTalk requires cond_audio from --audio_path or config.")
 
@@ -514,10 +526,10 @@ class InfiniteTalkRunner(WanRunner):
             "cond_video": self.input_data["cond_video"],
             "mask_files": self.input_data.get("mask_files") or {},
             "bbox": self.input_data.get("bbox") or {},
-            "target_video_length": self.resolve_frame_num(),
+            "num_frames": self.resolve_frame_num(),
             "video_duration": self._resolve_video_duration(),
             "infer_steps": self.config["infer_steps"],
-            "target_shape": list(self.input_info.target_shape),
+            "size": list(self.input_info.size),
             "target_fps": self.target_fps,
             "motion_frame": self.config.get("motion_frame", 9),
         }
@@ -809,7 +821,7 @@ class InfiniteTalkRunner(WanRunner):
         self.cond_video_duration = self._get_cond_video_duration(self.cond_file_path)
         first_image = self._extract_specific_frame(self.cond_file_path, 0)
         self.src_h, self.src_w, self.target_h, self.target_w = self._select_target_size(first_image)
-        self.input_info.target_shape = [self.target_h, self.target_w]
+        self.input_info.size = [self.target_h, self.target_w]
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_s2v(self):
@@ -870,9 +882,9 @@ class InfiniteTalkRunner(WanRunner):
         return float(video_duration)
 
     def resolve_frame_num(self):
-        frame_num = getattr(self.input_info, "target_video_length", UNSET)
+        frame_num = getattr(self.input_info, "num_frames", UNSET)
         if frame_num is UNSET or frame_num is None or frame_num <= 0:
-            frame_num = self.config["target_video_length"]
+            frame_num = self.config["num_frames"]
         return int(frame_num)
 
     def _resolve_expected_frames(self):
@@ -926,7 +938,7 @@ class InfiniteTalkRunner(WanRunner):
         self.motion_frame = int(self.config.get("motion_frame", 9))
         self.segment_stride = self.frame_num - self.motion_frame
         if self.segment_stride <= 0:
-            raise ValueError(f"motion_frame must be smaller than target_video_length, got motion_frame={self.motion_frame}, target_video_length={self.frame_num}")
+            raise ValueError(f"motion_frame must be smaller than num_frames, got motion_frame={self.motion_frame}, num_frames={self.frame_num}")
 
         self.full_audio_embs = list(self.inputs["full_audio_embs"])
         self.human_num = int(self.inputs["human_num"])

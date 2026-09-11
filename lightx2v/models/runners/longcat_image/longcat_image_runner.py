@@ -8,6 +8,7 @@ from loguru import logger
 from lightx2v.models.input_encoders.hf.longcat.longcat_text_encoder import LongCatImageTextEncoder
 from lightx2v.models.networks.longcat_image.model import LongCatImageTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, IMAGE_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.schedulers.longcat_image.scheduler import LongCatImageScheduler
 from lightx2v.models.video_encoders.hf.longcat_image.vae import LongCatImageVAE
 from lightx2v.server.metrics import monitor_cli
@@ -24,16 +25,6 @@ except ImportError:
     logger.warning("VaeImageProcessor not available. I2I task will not work.")
 
 torch_device_module = getattr(torch, AI_DEVICE)
-
-
-def calculate_dimensions(target_area, ratio):
-    width = math.sqrt(target_area * ratio)
-    height = width / ratio
-
-    width = round(width / 32) * 32
-    height = round(height / 32) * 32
-
-    return width, height, None
 
 
 def calculate_target_dimensions_from_image(image_size, target_area=1024 * 1024, multiple_of=16):
@@ -62,10 +53,10 @@ def calculate_target_dimensions_from_image(image_size, target_area=1024 * 1024, 
 class LongCatImageRunner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.resolution = self.config.get("resolution", 1024)
+    supported_request_fields_by_task = {
+        "t2i": IMAGE_REQUEST_FIELDS,
+        "i2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path"},
+    }
 
     def load_transformer(self):
         model = LongCatImageTransformerModel(os.path.join(self.config["model_path"], "transformer"), self.config, self.init_device)
@@ -190,9 +181,7 @@ class LongCatImageRunner(DefaultRunner):
         image = image_processor.resize(image, height, width)
         image_tensor = image_processor.preprocess(image, height, width)
 
-        # Store dimensions for later use
-        self.input_info.auto_width = width
-        self.input_info.auto_height = height
+        self.input_info.size = [height, width]
 
         return image_tensor.to(AI_DEVICE, dtype=GET_DTYPE())
 
@@ -314,8 +303,8 @@ class LongCatImageRunner(DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.target_shape) == 2:
-            height, width = self.input_info.target_shape
+        if len(self.input_info.size) == 2:
+            height, width = self.input_info.size
             if width > max_size or height > max_size:
                 scale = max_size / max(width, height)
                 width, height = int(width * scale), int(height * scale)
@@ -334,26 +323,15 @@ class LongCatImageRunner(DefaultRunner):
         width, height = as_maps[self.config.get("aspect_ratio", "16:9")]
         return (width, height)
 
-    def set_target_shape(self):
-        # For I2I task, use dimensions from _preprocess_image() if already set
+    def set_latent_shape(self):
         task = self.config.get("task", "t2i")
-        if task == "i2i" and hasattr(self.input_info, "auto_width") and self.input_info.auto_width:
-            width = self.input_info.auto_width
-            height = self.input_info.auto_height
+        if task == "i2i":
+            height, width = self.input_info.size
         else:
-            custom_shape = self.get_custom_shape()
-            if custom_shape is not None:
-                width, height = custom_shape
-            else:
-                calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, 16 / 9)
-                multiple_of = self.config.get("vae_scale_factor", 8) * 2
-                width = calculated_width // multiple_of * multiple_of
-                height = calculated_height // multiple_of * multiple_of
-
-            self.input_info.auto_width = width
-            self.input_info.auto_height = height
+            width, height = self.get_custom_shape()
 
         logger.info(f"LongCat Image Runner set target shape: {width}x{height}")
+        self.input_info.size = [height, width]
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
@@ -361,14 +339,7 @@ class LongCatImageRunner(DefaultRunner):
         height = 2 * (int(height) // (vae_scale_factor * 2))
         width = 2 * (int(width) // (vae_scale_factor * 2))
         num_channels_latents = 16  # LongCat uses 16 latent channels
-        self.input_info.target_shape = (1, num_channels_latents, height, width)
-
-    def set_img_shapes(self):
-        width, height = self.input_info.auto_width, self.input_info.auto_height
-        vae_scale_factor = self.config.get("vae_scale_factor", 8)
-        # For T2I task
-        image_shapes = [(1, height // vae_scale_factor // 2, width // vae_scale_factor // 2)] * 1
-        self.input_info.image_shapes = image_shapes
+        self.input_info.latent_shape = (1, num_channels_latents, height, width)
 
     def init_scheduler(self):
         self.scheduler = LongCatImageScheduler(self.config)
@@ -385,20 +356,18 @@ class LongCatImageRunner(DefaultRunner):
         self.text_encoders = self.load_text_encoder()
         self.image_encoder = self.load_image_encoder()
         self.vae = self.load_vae()
-        self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
     def run_pipeline(self, input_info):
         self.input_info = input_info
 
         self.inputs = self.run_input_encoder()
-        self.set_target_shape()
-        self.set_img_shapes()
+        self.set_latent_shape()
         logger.info(f"input_info: {self.input_info}")
         latents, generator = self.run_dit()
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor and is_main_process():
+        if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
             image = images[0]
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")

@@ -24,10 +24,18 @@ quant_path = str(Path(__file__).parent / "quant")
 if quant_path not in sys.path:
     sys.path.insert(0, quant_path)
 
+from h3_fp8_f16_accum import (  # noqa: E402
+    FP8_F16_ACCUM_QUANTIZATION_PROFILE,
+    create_h3_fp8_f16_accum_quantization,
+)
 from quant import *  # noqa: E402
 
 from lightx2v.utils.lora_loader import LoRALoader  # noqa: E402
 from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER  # noqa: E402
+from tools.convert.h3_video_vae_encoder import (  # noqa: E402
+    FP8_ENCODER_CONV_MODES,
+    convert_h3_video_vae_encoder_fp8,
+)
 
 dtype_mapping = {
     "int8": torch.int8,
@@ -310,9 +318,9 @@ def get_key_mapping_rules(direction, model_type):
             return [rule["backward"] for rule in unified_rules]
         else:
             raise ValueError(f"Invalid direction: {direction}")
-    elif model_type == "h3":
-        # MiniMax-H3 checkpoints under the Diffusers ``transformer`` or
-        # ``transformer_ref`` directory already use LightX2V's runtime keys.
+    elif model_type in {"h3", "h3_video_vae_decoder"}:
+        # MiniMax-H3 transformer and Video VAE decoder checkpoints already use
+        # LightX2V's runtime keys.
         return []
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
@@ -331,6 +339,7 @@ def quantize_model(
     preserve_non_quant_dtype=False,
     comfyui_mode=False,
     comfyui_keys=[],
+    quantization_policy=None,
 ):
     """
     Quantize model weights in-place
@@ -407,7 +416,10 @@ def quantize_model(
 
             # Quantize tensor and store results
             quantizer = CONVERT_WEIGHT_REGISTER[linear_type](tensor)
-            w_q, scales, extra = quantizer.weight_quant_func(tensor, comfyui_mode)
+            if quantization_policy is None:
+                w_q, scales, extra = quantizer.weight_quant_func(tensor, comfyui_mode)
+            else:
+                w_q, scales, extra = quantization_policy.quantize_weight(key, tensor, quantizer.weight_quant_func)
             weight_global_scale = extra.get("weight_global_scale", None)  # For nvfp4
             convrot_groupsize = extra.get("convrot_groupsize", None)
 
@@ -448,6 +460,8 @@ def quantize_model(
     logger.info(f"Total final model size: {total_final_size_mb:.2f} MB")
     logger.info(f"Size reduction in quantized tensors: {size_reduction_mb:.2f} MB ({size_reduction_mb / original_size_mb * 100:.1f}%)")
 
+    if quantization_policy is not None:
+        quantization_policy.validate()
     if comfyui_mode:
         weights["scaled_fp8"] = torch.zeros(2, dtype=torch.float8_e4m3fn)
 
@@ -672,6 +686,9 @@ def convert_weights(args):
     if args.model_type == "h3_text_encoder":
         convert_minimax_h3_text_encoder_fp8(args)
         return
+    if args.model_type == "h3_video_vae_encoder":
+        convert_h3_video_vae_encoder_fp8(args)
+        return
 
     if os.path.isdir(args.source):
         src_files = sorted(glob.glob(os.path.join(args.source, "*.safetensors"), recursive=True))
@@ -827,7 +844,15 @@ def convert_weights(args):
                 preserve_non_quant_dtype=getattr(args, "preserve_non_quant_dtype", False),
                 comfyui_mode=args.comfyui_mode,
                 comfyui_keys=args.comfyui_keys,
+                quantization_policy=args.quantization_policy,
             )
+            if args.model_type == "h3_video_vae_decoder" and args.linear_type == "fp8":
+                # FP8 decoder linears require FP16 bias; preserve other VAE tensors.
+                for key in converted_weights:
+                    if key.startswith("decoder.") and key.endswith(".weight_scale"):
+                        bias_key = key.removesuffix(".weight_scale") + ".bias"
+                        if bias_key in converted_weights:
+                            converted_weights[bias_key] = converted_weights[bias_key].to(torch.float16)
 
     os.makedirs(args.output, exist_ok=True)
 
@@ -852,7 +877,8 @@ def convert_weights(args):
                     logger.warning("Consider using --save_by_block or default chunked saving for better memory efficiency.")
 
                 # Save the entire model as a single file
-                st.save_file(converted_weights, output_path)
+                metadata = args.quantization_policy.metadata if args.quantization_policy is not None else None
+                st.save_file(converted_weights, output_path, metadata=metadata)
                 logger.info(f"Model saved successfully to: {output_path} ({total_size_gb:.2f}GB)")
 
             except MemoryError:
@@ -975,7 +1001,21 @@ def main():
     parser.add_argument(
         "-t",
         "--model_type",
-        choices=["wan_dit", "h3", "h3_text_encoder", "hunyuan_dit", "wan_t5", "wan_clip", "wan_animate_dit", "qwen_image_dit", "qwen25vl_llm", "z_image_dit", "self_forcing"],
+        choices=[
+            "wan_dit",
+            "h3",
+            "h3_video_vae_decoder",
+            "h3_video_vae_encoder",
+            "h3_text_encoder",
+            "hunyuan_dit",
+            "wan_t5",
+            "wan_clip",
+            "wan_animate_dit",
+            "qwen_image_dit",
+            "qwen25vl_llm",
+            "z_image_dit",
+            "self_forcing",
+        ],
         default="wan_dit",
         help="Model type",
     )
@@ -1011,7 +1051,9 @@ def main():
     parser.add_argument("--comfyui_mode", action="store_true")
     parser.add_argument("--full_quantized", action="store_true")
     parser.add_argument("--quantized", action="store_true")
+    parser.add_argument("--quantization_profile", choices=[FP8_F16_ACCUM_QUANTIZATION_PROFILE])
     parser.add_argument("--bits", type=int, default=8, choices=[8], help="Quantization bit width")
+    parser.add_argument("--vae_encoder_conv_mode", choices=FP8_ENCODER_CONV_MODES)
     parser.add_argument(
         "--device",
         type=str,
@@ -1080,7 +1122,7 @@ def main():
             return None
         return [x.strip() for x in v.split(",") if x.strip()]
 
-    if args.quantized and args.model_type != "h3_text_encoder":
+    if args.quantized and args.model_type not in {"h3_text_encoder", "h3_video_vae_encoder"}:
         args.linear_dtype = dtype_mapping.get(args.linear_type, None)
         args.non_linear_dtype = eval(args.non_linear_dtype)
 
@@ -1111,6 +1153,12 @@ def main():
                 # H3 deliberately mixes BF16 transformer tensors with FP32
                 # input/time/output projections. Preserve that precision for
                 # every tensor outside the quantized block linears.
+                "preserve_non_quant_dtype": True,
+            },
+            "h3_video_vae_decoder": {
+                "key_idx": 1,
+                "target_keys": ["transformer_blocks", "proj_out"],
+                "ignore_key": None,
                 "preserve_non_quant_dtype": True,
             },
             "self_forcing": {
@@ -1188,6 +1236,15 @@ def main():
             args.ignore_quant_keys = ignore_quant_keys_ov
         else:
             args.ignore_quant_keys = None
+
+    args.quantization_policy = None
+    if args.quantization_profile is not None:
+        if not args.quantized or args.linear_type != "fp8" or not args.single_file or args.output_ext != ".safetensors" or args.comfyui_mode:
+            parser.error("H3 FP8-F16 accumulation conversion requires --quantized --linear_type fp8 --output_ext .safetensors --single_file without --comfyui_mode")
+        try:
+            args.quantization_policy = create_h3_fp8_f16_accum_quantization(args.quantization_profile, args.model_type)
+        except ValueError as profile_error:
+            parser.error(str(profile_error))
 
     if os.path.isfile(args.output):
         raise ValueError("Output path must be a directory, not a file")

@@ -1,22 +1,32 @@
 #!/bin/bash
 
+# AdaLN cache setup:
+# If the inference JSON config enables "use_adaln_cache": true, generate the cache before inference:
+# 1. Set lightx2v_path, model_path, --config_json, and --model-variant in
+#    tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh.
+# 2. Use --model-variant fl2av for t2av/i2av/l2av/fl2av, or --model-variant ref2av for ref2av.
+# 3. From the repository root, run:
+#    bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
+# Cache generation and inference must use the same JSON config and adaln_cache_dir.
+
 # set path firstly
-lightx2v_path=/data/nvme6/gushiqiao/codes/LightX2V
-model_path=/data/nvme6/gushiqiao/models/MiniMax-H3
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/MiniMax-H3
 
 export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
-source ${lightx2v_path}/scripts/base/base.sh
+source "${lightx2v_path}/scripts/base/base.sh"
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 
 python -m lightx2v.infer \
---model_cls minimax_h3 \
---task i2av \
---model_path $model_path \
---config_json ${lightx2v_path}/configs/minimax_h3/minimax_h3_i2av.json \
---prompt "Animate this image with natural synchronized sound." \
---image_path ${lightx2v_path}/assets/inputs/imgs/img_0.jpg \
---save_result_path ${lightx2v_path}/save_results/output_lightx2v_minimax_h3_i2av.mp4 \
---seed 42
+  --model_cls minimax_h3 \
+  --model-variant fl2av \
+  --task i2av \
+  --model_path "${model_path}" \
+  --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3.json" \
+  --prompt "Animate this image with natural synchronized sound." \
+  --image_path "${lightx2v_path}/assets/inputs/imgs/img_0.jpg" \
+  --save_result_path "${lightx2v_path}/save_results/output_lightx2v_minimax_h3_i2av.mp4" \
+  --seed 42

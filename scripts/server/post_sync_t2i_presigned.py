@@ -81,14 +81,14 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "prompt": args.prompt,
         "negative_prompt": args.negative_prompt,
-        "infer_steps": args.infer_steps,
         "seed": args.seed,
         "aspect_ratio": args.aspect_ratio,
         "save_result_path": args.save_result_path,
         "presigned_url": args.presigned_url,
     }
-    if args.target_shape:
-        payload["target_shape"] = args.target_shape
+    payload = {key: value for key, value in payload.items() if value is not None}
+    if args.size is not None:
+        payload["size"] = args.size
     return payload
 
 
@@ -111,18 +111,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Call /v1/tasks/image/sync for T2I with presigned_url upload.")
     parser.add_argument("--url", type=str, default="http://127.0.0.1:8000", help="Server base url")
     parser.add_argument("--prompt", type=str, required=True, help="Prompt text")
-    parser.add_argument("--negative_prompt", type=str, default="", help="Negative prompt text")
-    parser.add_argument("--infer_steps", type=int, default=30, help="Inference steps")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--aspect_ratio", type=str, default="16:9", help="Aspect ratio for image task")
+    parser.add_argument("--negative_prompt", type=str, default=None, help="Negative prompt text")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--aspect_ratio", type=str, default=None, help="Aspect ratio for image task")
     parser.add_argument(
-        "--target_shape",
+        "--size",
         type=int,
         nargs="+",
         default=None,
-        help="Target output shape, e.g. --target_shape 1536 2752",
+        help="Target output shape, e.g. --size 1536 2752",
     )
-    parser.add_argument("--save_result_path", type=str, default="", help="Server-side save_result_path")
+    parser.add_argument("--save_result_path", type=str, default=None, help="Server-side save_result_path")
     parser.add_argument("--timeout_seconds", type=int, default=600, help="Sync API timeout_seconds")
     parser.add_argument("--poll_interval_seconds", type=float, default=0.5, help="Sync API poll_interval_seconds")
     parser.add_argument("--presigned_url", type=str, default="", help="Presigned URL used by server to upload final PNG")
@@ -168,9 +167,9 @@ def main() -> None:
     parser.add_argument("--download_timeout_seconds", type=int, default=120, help="Timeout for download verification")
     args = parser.parse_args()
 
-    target_shape: Optional[List[int]] = args.target_shape
-    if target_shape is not None and len(target_shape) < 2:
-        raise ValueError("--target_shape must provide at least 2 integers, e.g. --target_shape 1536 2752")
+    size: Optional[List[int]] = args.size
+    if size is not None and len(size) < 2:
+        raise ValueError("--size must provide at least 2 integers, e.g. --size 1536 2752")
     if args.presign_expires <= 0:
         raise ValueError("--presign_expires must be > 0")
     if args.download_timeout_seconds <= 0:

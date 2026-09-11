@@ -12,6 +12,7 @@ from lightx2v.models.input_encoders.hf.lingbot_video.qwen3vl import LingBotVideo
 from lightx2v.models.networks.lingbot_video.model import LingBotVideoTransformerModel
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS, VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.lingbot_video.scheduler import LingBotVideoScheduler
 from lightx2v.models.video_encoders.hf.lingbot_video.vae import LingBotVideoWanVAE
 from lightx2v.utils.input_info import I2VInputInfo, T2IInputInfo, T2VInputInfo
@@ -76,12 +77,16 @@ def smart_resize(height, width, factor, min_pixels=None, max_pixels=None):
 
 @RUNNER_REGISTER("lingbot_video")
 class LingBotVideoRunner(DefaultRunner):
+    supported_request_fields_by_task = {
+        "t2i": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"size"},
+        "t2v": VIDEO_REQUEST_FIELDS,
+        "i2v": VIDEO_REQUEST_FIELDS | {"image_path"},
+    }
+
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _WARMUP_RESOLUTIONS = ((480, 480), (320, 832))
 
     def __init__(self, config):
-        if config.get("task") not in {"t2i", "t2v", "i2v"}:
-            raise NotImplementedError("LingBot-Video LightX2V backend currently supports t2i, t2v, and i2v.")
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("LingBot-Video lazy_load/unload_modules are not implemented yet.")
         super().__init__(config)
@@ -119,7 +124,7 @@ class LingBotVideoRunner(DefaultRunner):
             seed=0,
             prompt="warmup",
             negative_prompt="",
-            target_shape=[height, width],
+            size=[height, width],
             return_result_tensor=True,
         )
 
@@ -132,7 +137,7 @@ class LingBotVideoRunner(DefaultRunner):
                 "text_encoder_output": text_encoder_output,
                 "image_encoder_output": None,
             }
-        self.set_target_shape()
+        self.set_latent_shape()
         return text_encoder_output
 
     def clear_warmup_state(self):
@@ -186,16 +191,11 @@ class LingBotVideoRunner(DefaultRunner):
         prompt_output = self.text_encoders[0].infer(prompt, images=images)
         text_encoder_output["prompt_embeds"] = prompt_output["prompt_embeds"]
         text_encoder_output["prompt_mask"] = prompt_output["prompt_mask"]
-        if hasattr(self.input_info, "txt_seq_lens"):
-            self.input_info.txt_seq_lens = [prompt_output["prompt_embeds"].shape[1]]
-
         if self.config.get("enable_cfg", True):
             neg_prompt = "" if neg_prompt is None else neg_prompt
             negative_output = self.text_encoders[0].infer(neg_prompt, images=images)
             text_encoder_output["negative_prompt_embeds"] = negative_output["prompt_embeds"]
             text_encoder_output["negative_prompt_mask"] = negative_output["prompt_mask"]
-            if hasattr(self.input_info, "txt_seq_lens"):
-                self.input_info.txt_seq_lens.append(negative_output["prompt_embeds"].shape[1])
         return text_encoder_output
 
     @ProfilingContext4DebugL2("Run Encoders")
@@ -246,7 +246,7 @@ class LingBotVideoRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2v(self, image=None):
-        height, width = self._resolve_output_size()
+        height, width = self.get_target_size()
         if image is None:
             image_path = self.input_info.image_path.split(",")[0]
             if not image_path:
@@ -264,15 +264,8 @@ class LingBotVideoRunner(DefaultRunner):
             "image_encoder_output": {"cond_latent": cond_latent},
         }
 
-    def _resolve_output_size(self):
-        if len(self.input_info.target_shape) == 2:
-            height, width = int(self.input_info.target_shape[0]), int(self.input_info.target_shape[1])
-        else:
-            height, width = int(self.config["target_height"]), int(self.config["target_width"])
-        return height, width
-
-    def set_target_shape(self):
-        height, width = self._resolve_output_size()
+    def set_latent_shape(self):
+        height, width = self.get_target_size()
         if height <= 0 or width <= 0:
             raise ValueError(f"LingBot-Video target shape must be positive, got {height}x{width}.")
         if height % 16 != 0 or width % 16 != 0:
@@ -281,21 +274,16 @@ class LingBotVideoRunner(DefaultRunner):
         if self.config["task"] == "t2i":
             frames = 1
         else:
-            frames = int(self.config["target_video_length"])
+            frames = self.get_num_frames()
         if frames != 1 and (frames - 1) % int(self.config.get("vae_scale_factor_temporal", 4)) != 0:
-            raise ValueError(f"LingBot-Video target_video_length must be 1 or 4n+1, got {frames}.")
+            raise ValueError(f"LingBot-Video num_frames must be 1 or 4n+1, got {frames}.")
         latent_t = (frames - 1) // int(self.config.get("vae_scale_factor_temporal", 4)) + 1
         latent_h = height // int(self.config.get("vae_scale_factor_spatial", 8))
         latent_w = width // int(self.config.get("vae_scale_factor_spatial", 8))
         latent_shape = (1, int(self.config.get("in_channels", 16)), latent_t, latent_h, latent_w)
 
-        self.input_info.auto_height = height
-        self.input_info.auto_width = width
-        self.input_info.target_shape = latent_shape
+        self.input_info.size = [height, width]
         self.input_info.latent_shape = latent_shape
-        patch_h, patch_w = self.config.get("patch_size", [1, 2, 2])[1:]
-        if hasattr(self.input_info, "image_shapes"):
-            self.input_info.image_shapes = [[(latent_t, latent_h // patch_h, latent_w // patch_w)]]
         logger.info(f"LingBot-Video target shape: frames={frames}, image={height}x{width}, latent={latent_shape}")
 
     def _apply_condition_latent(self):
@@ -345,7 +333,7 @@ class LingBotVideoRunner(DefaultRunner):
             image.save(save_result_path)
             logger.info(f"Image saved: {save_result_path}")
         else:
-            save_to_video(outputs, save_result_path, fps=float(self.config.get("target_fps", 24)), method="ffmpeg")
+            save_to_video(outputs, save_result_path, fps=float(self.config.get("fps", 24)), method="ffmpeg")
             logger.info(f"Video saved: {save_result_path}")
 
     def _finalize_pipeline_outputs(self, outputs, latents=None, generator=None):
@@ -363,7 +351,7 @@ class LingBotVideoRunner(DefaultRunner):
     def run_pipeline(self, input_info):
         self.input_info = input_info
         self.inputs = self.run_input_encoder()
-        self.set_target_shape()
+        self.set_latent_shape()
         logger.info(f"input_info: {self.input_info}")
         latents, generator = self.run_dit()
         outputs = self.run_vae_decoder(latents)

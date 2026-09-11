@@ -23,10 +23,12 @@ except ImportError:
     Rotation = None
     Slerp = None
 
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import Wan22DenseRunner, build_wan_model_with_lora
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.input_info import ActionI2VInputInfo
 from lightx2v.utils.profiler import GET_RECORDER_MODE, ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -1027,12 +1029,16 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
     - Roll latent history across overlapping segments, then trim duplicated decoded frames.
     """
 
+    input_info_cls_by_task = {"i2v": ActionI2VInputInfo}
+    supported_request_fields_by_task = {
+        "i2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"action_path", "image_path", "pose", "size"},
+    }
+
     def __init__(self, config):
         with config.temporarily_unlocked():
             # The public pipeline still instantiates us as "wan2.2_matrix_game3", but
             # the shared Wan2.2 runner expects `model_cls == "wan2.2"` for common setup.
             original_model_cls = str(config.get("model_cls", "wan2.2_matrix_game3"))
-            config["runner_model_cls"] = original_model_cls
             config["model_cls"] = "wan2.2"
             config["mode"] = "matrix_game3"
             config["use_image_encoder"] = False
@@ -1092,15 +1098,6 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
         self._mg3_generated_latent_history: list[torch.Tensor] = []
         self._mg3_tail_latents: Optional[torch.Tensor] = None
         self._mg3_noise_generator: Optional[torch.Generator] = None
-
-    def set_inputs(self, inputs):
-        super().set_inputs(inputs)
-        # Some callers still use `pose`, others use `action_path`. Mirror both so the
-        # runner remains compatible with older LightX2V entry points.
-        if "action_path" in self.input_info.__dataclass_fields__:
-            self.input_info.action_path = inputs.get("action_path", inputs.get("pose", ""))
-        if "pose" in self.input_info.__dataclass_fields__:
-            self.input_info.pose = inputs.get("pose", inputs.get("action_path", ""))
 
     def run_text_encoder(self, input_info):
         # Official Matrix-Game-3 base inference uses a non-empty default negative
@@ -1260,8 +1257,7 @@ class WanMatrixGame3Runner(Wan22DenseRunner):
     def run_vae_encoder(self, img):
         # Unlike the generic Wan2.2 i2v path, MG3 only encodes the first frame. The
         # remaining temporal slots are left zeroed and later mixed with scheduler noise.
-        target_h = int(self.config["target_height"])
-        target_w = int(self.config["target_width"])
+        target_h, target_w = self.get_target_size()
         target_ratio = target_h / target_w
         input_h, input_w = img.height, img.width
         if input_h / input_w > target_ratio:

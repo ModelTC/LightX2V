@@ -10,6 +10,7 @@ from lightx2v.models.input_encoders.hf.ltx2.model import LTX2TextEncoder
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.ltx2.model import LTX2ARModel, LTX2Model
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import VIDEO_REQUEST_FIELDS
 from lightx2v.models.schedulers.ltx2.scheduler import LTX2ARScheduler, LTX2Scheduler, LatentState
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.audio_vae import encode_audio
 from lightx2v.models.video_encoders.hf.ltx2.audio_vae.ops import Audio
@@ -58,17 +59,17 @@ def _ltx2_normalize_image_strengths(image_strength, n: int) -> list[float]:
     return [float(x) for x in image_strength]
 
 
-def _ltx2_resolve_pixel_frame_indices(image_frame_idx, n: int, num_frames: int) -> list[int]:
-    if not image_frame_idx:
+def _ltx2_resolve_pixel_frame_indices(image_frame_indices, n: int, num_frames: int) -> list[int]:
+    if not image_frame_indices:
         if n == 1:
             return [0]
         if num_frames <= 1:
             return [0] * n
         return [round(i * (num_frames - 1) / (n - 1)) for i in range(n)]
-    if len(image_frame_idx) != n:
-        raise ValueError(f"i2av image_frame_idx: expected {n} indices (one per image), got {len(image_frame_idx)}")
+    if len(image_frame_indices) != n:
+        raise ValueError(f"i2av image_frame_indices: expected {n} indices (one per image), got {len(image_frame_indices)}")
     hi = num_frames - 1
-    return [max(0, min(hi, int(x))) for x in image_frame_idx]
+    return [max(0, min(hi, int(x))) for x in image_frame_indices]
 
 
 def _ltx2_pixel_to_latent_frame_idx(pixel_frame_idx: int, temporal_scale: int) -> int:
@@ -89,6 +90,22 @@ def _ltx2_resize_video_denoise_mask_for_stage2(mask: torch.Tensor, target_h: int
 
 @RUNNER_REGISTER("ltx2")
 class LTX2Runner(DefaultRunner):
+    supported_request_fields_by_task = {
+        "t2av": VIDEO_REQUEST_FIELDS,
+        "i2av": VIDEO_REQUEST_FIELDS | {"image_frame_indices", "image_path", "image_strength"},
+        "ltx2_s2v": VIDEO_REQUEST_FIELDS | {"audio_path", "image_frame_indices", "image_path", "image_strength"},
+        "v2av": VIDEO_REQUEST_FIELDS
+        | {
+            "image_frame_indices",
+            "image_path",
+            "image_strength",
+            "mux_audio_video_path",
+            "reference_video_frame_cap",
+            "reference_video_strength",
+            "video_path",
+        },
+    }
+
     _WARMUP_RESOLUTIONS = ((480, 480), (512, 768))
     _UPSAMPLER_WARMUP_RESOLUTIONS = ((480, 480), (1024, 1536))
     transformer_model_class = LTX2Model
@@ -100,7 +117,15 @@ class LTX2Runner(DefaultRunner):
     video_vae_checkpoint_key = None
     audio_vae_checkpoint_key = None
 
+    def create_input_info(self, request_data):
+        input_info = super().create_input_info(request_data)
+        if input_info.task == "v2av" and "size" not in request_data:
+            # Resolve the reference-video size before using the configured fallback.
+            input_info.size = []
+        return input_info
+
     def __init__(self, config):
+        config.setdefault("fps", 24)
         super().__init__(config)
 
     @ProfilingContext4DebugL1("Warmup")
@@ -185,8 +210,8 @@ class LTX2Runner(DefaultRunner):
             seed=0,
             prompt="warmup",
             negative_prompt=" " if self.config["enable_cfg"] else "",
-            target_shape=[height, width],
-            target_video_length=self.config["target_video_length"],
+            size=[height, width],
+            num_frames=self.config["num_frames"],
         )
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         self.video_denoise_mask = None
@@ -345,27 +370,27 @@ class LTX2Runner(DefaultRunner):
         return video_vae, audio_vae
 
     def get_latent_shape_with_target_hw(self):
-        if self.input_info.target_shape:
-            target_height = self.input_info.target_shape[0]
-            target_width = self.input_info.target_shape[1]
+        if self.input_info.size:
+            target_height = self.input_info.size[0]
+            target_width = self.input_info.size[1]
         else:
             if self.config.get("use_upsampler", False):
-                target_height = self.config["target_height"] // 2
-                target_width = self.config["target_width"] // 2
+                target_height = self.config["size"][0] // 2
+                target_width = self.config["size"][1] // 2
             else:
-                target_height = self.config["target_height"]
-                target_width = self.config["target_width"]
-            self.input_info.target_shape = [target_height, target_width]
+                target_height = self.config["size"][0]
+                target_width = self.config["size"][1]
+            self.input_info.size = [target_height, target_width]
 
-        target_video_length = self.input_info.target_video_length or self.config["target_video_length"]
+        num_frames = self.input_info.num_frames or self.config["num_frames"]
         video_latent_shape = (
             self.config.get("num_channels_latents", 128),
-            (target_video_length - 1) // self.config["vae_scale_factors"][0] + 1,
+            (num_frames - 1) // self.config["vae_scale_factors"][0] + 1,
             int(target_height) // self.config["vae_scale_factors"][1],
             int(target_width) // self.config["vae_scale_factors"][2],
         )
 
-        duration = float(target_video_length) / float(self.config["fps"])
+        duration = float(num_frames) / float(self.config["fps"])
         latents_per_second = float(self.config["audio_sampling_rate"]) / float(self.config["audio_hop_length"]) / float(self.config["audio_scale_factor"])
         audio_frames = round(duration * latents_per_second)
 
@@ -376,6 +401,12 @@ class LTX2Runner(DefaultRunner):
         )
 
         return video_latent_shape, audio_latent_shape
+
+    def prepare_stage1_size(self):
+        """Convert the requested final size to the first-stage size."""
+        if self.config.get("use_upsampler", False):
+            height, width = self.input_info.size
+            self.input_info.size = [height // 2, width // 2]
 
     def _clear_ltx2_reference_audio_state(self) -> None:
         """Avoid leaking ltx2_s2v audio conditioning into t2av/i2av runs on a reused runner."""
@@ -389,6 +420,7 @@ class LTX2Runner(DefaultRunner):
         self._clear_ltx2_reference_video_state()
         self.video_denoise_mask = None
         self.initial_video_latent = None
+        self.prepare_stage1_size()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()  # Important: set latent_shape in input_info
         text_encoder_output = self.run_text_encoder(self.input_info)
         self.maybe_empty_cache()
@@ -402,23 +434,24 @@ class LTX2Runner(DefaultRunner):
         if isinstance(info.image_strength, str):
             p = [float(x.strip()) for x in info.image_strength.split(",") if x.strip()]
             info.image_strength = 1.0 if not p else (p[0] if len(p) == 1 else p)
-        if isinstance(info.image_frame_idx, str):
-            p = [int(x.strip()) for x in info.image_frame_idx.split(",") if x.strip()]
-            info.image_frame_idx = p or None
+        if isinstance(info.image_frame_indices, str):
+            p = [int(x.strip()) for x in info.image_frame_indices.split(",") if x.strip()]
+            info.image_frame_indices = p or None
         n = len(_ltx2_parse_image_paths(info.image_path or ""))
         if n == 0:
             return
-        st, fi = info.image_strength, info.image_frame_idx
+        st, fi = info.image_strength, info.image_frame_indices
         if isinstance(st, list) and len(st) not in (1, n):
             raise ValueError(f"i2av image_strength: need 1 or {n} values, got {len(st)}")
         if fi is not None and len(fi) != n:
-            raise ValueError(f"i2av image_frame_idx: need {n} indices, got {len(fi)}")
+            raise ValueError(f"i2av image_frame_indices: need {n} indices, got {len(fi)}")
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2av(self):
         self._clear_ltx2_reference_audio_state()
         self._clear_ltx2_reference_video_state()
         self._normalize_i2av_input_fields()
+        self.prepare_stage1_size()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         text_encoder_output = self.run_text_encoder(self.input_info)
         self.video_denoise_mask, self.initial_video_latent = self.run_vae_encoder()
@@ -466,16 +499,16 @@ class LTX2Runner(DefaultRunner):
             logger.warning(f"  ⚠ Could not probe pose-video resolution from {path!r}: {e}")
         return None
 
-    def _override_target_hw_from_ref_video(self) -> None:
-        """v2av: set ``input_info.target_shape`` from probed ``video_path`` (control mp4).
+    def _override_size_from_ref_video(self) -> None:
+        """v2av: set ``input_info.size`` from the source control video.
 
-        Skip if ``target_shape`` already set. Base H/W = final//2 when upsampler else final;
+        Skip if ``size`` already set. Base H/W = final//2 when upsampler else final;
         snap to VAE grid (spatial 32) vs ``ref_downscale_factor``. Probe/config miss → no-op.
         """
-        if self.input_info.target_shape:
+        if self.input_info.size:
             return
 
-        ref_path = (getattr(self.input_info, "video_path", None) or "").strip()
+        ref_path = (self.input_info.video_path or "").strip()
         hw = self._probe_video_hw(ref_path)
         if hw is None:
             return
@@ -497,8 +530,7 @@ class LTX2Runner(DefaultRunner):
         base_h = _snap_nearest(base_h, base_div)
         base_w = _snap_nearest(base_w, base_div)
 
-        old_h = int(self.config.get("target_height", 0) or 0)
-        old_w = int(self.config.get("target_width", 0) or 0)
+        old_h, old_w = (int(value or 0) for value in self.config.get("size", (0, 0)))
         eff_final_h = base_h * 2 if use_upsampler else base_h
         eff_final_w = base_w * 2 if use_upsampler else base_w
         logger.info(
@@ -507,7 +539,7 @@ class LTX2Runner(DefaultRunner):
             f"base-gen {base_w}x{base_h}, base_div={base_div}, "
             f"ref_downscale_factor={ref_factor}, use_upsampler={use_upsampler})."
         )
-        self.input_info.target_shape = [base_h, base_w]
+        self.input_info.size = [eff_final_h, eff_final_w]
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_v2av(self):
@@ -516,36 +548,28 @@ class LTX2Runner(DefaultRunner):
         """
         self._clear_ltx2_reference_audio_state()
         self._normalize_i2av_input_fields()
-        self._override_target_hw_from_ref_video()
-        if not self.input_info.target_shape:
-            if self.config.get("use_upsampler", False):
-                self.input_info.target_shape = [
-                    self.config["target_height"] // 2,
-                    self.config["target_width"] // 2,
-                ]
-            else:
-                self.input_info.target_shape = [
-                    self.config["target_height"],
-                    self.config["target_width"],
-                ]
+        self._override_size_from_ref_video()
+        if not self.input_info.size:
+            self.input_info.size = self.config["size"]
+        self.prepare_stage1_size()
 
         # Reference/control video → pixel tensor, then align temporal length with
         # the clip (official-style: decode up to ``num_frames`` cap, actual length
         # follows the shorter of cap vs. on-disk frames). Only then derive
-        # ``target_video_length`` / latent shapes so audio and denoising match.
-        ref_path = (getattr(self.input_info, "video_path", None) or "").strip()
+        # ``num_frames`` / latent shapes so audio and denoising match.
+        ref_path = (self.input_info.video_path or "").strip()
         if not ref_path:
             raise ValueError("v2av requires a non-empty video_path (pre-processed control / reference video).")
 
         ref_downscale_factor = self._get_ref_downscale_factor()
-        target_h = self.input_info.target_shape[0]
-        target_w = self.input_info.target_shape[1]
+        target_h = self.input_info.size[0]
+        target_w = self.input_info.size[1]
         ref_h = max(int(round(target_h * ref_downscale_factor)), 1)
         ref_w = max(int(round(target_w * ref_downscale_factor)), 1)
         ref_h = ref_h - (ref_h % 2)
         ref_w = ref_w - (ref_w % 2)
 
-        length_cap = int(self.input_info.target_video_length or self.config.get("target_video_length", 1))
+        length_cap = int(self.input_info.num_frames or self.config.get("num_frames", 1))
         ref_extra = getattr(self.input_info, "reference_video_frame_cap", None)
         if ref_extra and int(ref_extra) > 0:
             read_cap = min(length_cap, int(ref_extra))
@@ -574,9 +598,9 @@ class LTX2Runner(DefaultRunner):
             raise ValueError(f"v2av: reference video {ref_path!r} produced no usable frames (decoded {ref_T}, snapped to {snapped_T}).")
 
         if snapped_T != length_cap:
-            logger.info(f"  ↪ v2av: setting target_video_length={snapped_T} from reference (decoded {ref_T} frame(s) within read_cap={read_cap}; configured max was {length_cap}).")
+            logger.info(f"  ↪ v2av: setting num_frames={snapped_T} from reference (decoded {ref_T} frame(s) within read_cap={read_cap}; configured max was {length_cap}).")
         # Config is a LockableDict and is locked after init_modules; only mutate input_info.
-        self.input_info.target_video_length = snapped_T
+        self.input_info.num_frames = snapped_T
 
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
 
@@ -623,13 +647,14 @@ class LTX2Runner(DefaultRunner):
         """Reference audio (frozen in latent) + optional reference images; mux original waveform when saving."""
         self._clear_ltx2_reference_video_state()
         self._normalize_i2av_input_fields()
+        self.prepare_stage1_size()
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
 
         ap = (getattr(self.input_info, "audio_path", None) or "").strip()
         if not ap:
             raise ValueError("ltx2_s2v requires a non-empty audio_path.")
 
-        num_frames = self.input_info.target_video_length or self.config.get("target_video_length", 1)
+        num_frames = self.input_info.num_frames or self.config.get("num_frames", 1)
         fps = float(self.config["fps"])
         max_duration = num_frames / fps
 
@@ -712,8 +737,8 @@ class LTX2Runner(DefaultRunner):
         # Get latent shape
         C, F, H, W = self.input_info.video_latent_shape
 
-        target_height = self.input_info.target_shape[0]
-        target_width = self.input_info.target_shape[1]
+        target_height = self.input_info.size[0]
+        target_width = self.input_info.size[1]
         # Initialize denoise mask (1 = denoise, 0 = keep original)
         # Shape: [1, F, H, W]
         video_denoise_mask = torch.ones(
@@ -746,9 +771,9 @@ class LTX2Runner(DefaultRunner):
             self._i2av_first_frame_meta = None
             return video_denoise_mask, initial_video_latent
 
-        num_frames = self.input_info.target_video_length or self.config.get("target_video_length", 1)
+        num_frames = self.input_info.num_frames or self.config.get("num_frames", 1)
         strengths = _ltx2_normalize_image_strengths(self.input_info.image_strength, n)
-        raw_frame_idx = getattr(self.input_info, "image_frame_idx", None)
+        raw_frame_idx = getattr(self.input_info, "image_frame_indices", None)
         pixel_frame_indices = _ltx2_resolve_pixel_frame_indices(raw_frame_idx, n, num_frames)
         temporal_scale = int(self.config["vae_scale_factors"][0])
 
@@ -807,11 +832,11 @@ class LTX2Runner(DefaultRunner):
         return video_denoise_mask, initial_video_latent
 
     def _build_i2av_video_guiding_latents(self):
-        """Encode guiding keyframe images at current target_shape for scheduler.append (stage 1 / 2)."""
+        """Encode guiding keyframe images at current size for scheduler.append (stage 1 / 2)."""
         meta = getattr(self, "_i2av_guiding_keyframe_meta", None)
         if not meta:
             return None
-        th, tw = self.input_info.target_shape[0], self.input_info.target_shape[1]
+        th, tw = self.input_info.size[0], self.input_info.size[1]
         out = []
         for path, pixel_idx, strength in meta:
             image = load_image_conditioning(
@@ -834,7 +859,7 @@ class LTX2Runner(DefaultRunner):
             return None
 
         path, _strength = meta
-        th, tw = self.input_info.target_shape[0], self.input_info.target_shape[1]
+        th, tw = self.input_info.size[0], self.input_info.size[1]
         image = load_image_conditioning(
             image_path=path,
             height=th,
@@ -935,7 +960,7 @@ class LTX2Runner(DefaultRunner):
             del self.upsampler
             self.maybe_empty_cache()
 
-        self.input_info.target_shape = [self.input_info.target_shape[0] * 2, self.input_info.target_shape[1] * 2]
+        self.input_info.size = [self.input_info.size[0] * 2, self.input_info.size[1] * 2]
         self.input_info.video_latent_shape, self.input_info.audio_latent_shape = self.get_latent_shape_with_target_hw()
         _, _, stage2_h, stage2_w = self.input_info.video_latent_shape
         stage2_video_denoise_mask = None
@@ -1186,6 +1211,8 @@ class LTX2Runner(DefaultRunner):
 class LTX2ARRunner(LTX2Runner):
     """Chunkwise autoregressive LTX2.3 runner for teacher-forcing checkpoints."""
 
+    supported_request_fields_by_task = {"t2av": LTX2Runner.supported_request_fields_by_task["t2av"]}
+
     def init_scheduler(self):
         self.scheduler = LTX2ARScheduler(self.config)
 
@@ -1210,8 +1237,6 @@ class LTX2ARRunner(LTX2Runner):
         self._prepare_ar_states()
 
     def _validate_ar_config(self):
-        if self.config.get("task") != "t2av":
-            raise NotImplementedError("ltx2_ar currently supports task=t2av only.")
         if self.config.get("use_upsampler", False):
             raise NotImplementedError("ltx2_ar does not support the latent upsampler.")
         chunk = int(self.config.get("ar_config", {}).get("num_frame_per_chunk", 0))
@@ -1254,7 +1279,7 @@ class LTX2ARRunner(LTX2Runner):
             logger.warning(
                 f"ltx2_ar trims latent frames from {video_frames} to {keep_video_frames} so they are divisible by num_frame_per_chunk={chunk_frames}; decoded video length becomes {output_frames}."
             )
-            self.input_info.target_video_length = output_frames
+            self.input_info.num_frames = output_frames
 
         self._ar_video_state = self._slice_latent_state(video_state, 0, keep_video_tokens, clone_latent=False)
         self._ar_audio_state = self._slice_latent_state(audio_state, 0, keep_audio_tokens, clone_latent=False)

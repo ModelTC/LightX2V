@@ -6,7 +6,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32MultiArray, Int32, String
 
 from lightx2v.models.runners.wan.fastwam_runner import FastWAMPolicy
-from lightx2v.utils.set_config import auto_calc_config, get_default_config
+from lightx2v.utils.set_config import build_startup_config
 
 
 class FastWAMNode(Node):
@@ -59,8 +59,7 @@ class FastWAMNode(Node):
         model_path = str(self.get_parameter("model_path").value).strip()
         if not model_path:
             raise ValueError("FastWAM ROS node requires `model_path`.")
-        config = get_default_config()
-        config.update(
+        config = build_startup_config(
             {
                 "model_cls": "fastwam",
                 "task": "i2va",
@@ -68,7 +67,6 @@ class FastWAMNode(Node):
                 "config_json": config_json,
             }
         )
-        config = auto_calc_config(config)
 
         # The config_json is authoritative for policy params; warn loudly on any
         # mismatch with the environment contract so dimension bugs surface early.

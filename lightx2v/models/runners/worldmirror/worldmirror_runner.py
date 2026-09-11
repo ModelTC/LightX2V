@@ -48,6 +48,7 @@ from lightx2v.models.networks.worldmirror.utils.inference_utils import (
 )
 from lightx2v.models.networks.worldmirror.utils.render_utils import render_interpolated_video
 from lightx2v.models.runners.base_runner import BaseRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -131,6 +132,19 @@ def _broadcast_string(s, rank, src=0):
 @RUNNER_REGISTER("worldmirror")
 class WorldMirrorRunner(BaseRunner):
     """Runner for HY-WorldMirror-2.0 3D reconstruction model."""
+
+    supported_request_fields_by_task = {
+        "recon": COMMON_REQUEST_FIELDS
+        | {
+            "input_path",
+            "prior_cam_path",
+            "prior_depth_path",
+            "render_depth",
+            "render_interp_per_pair",
+            "save_rendered",
+            "strict_output_path",
+        },
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -427,8 +441,9 @@ class WorldMirrorRunner(BaseRunner):
             raise ValueError("input_info.input_path must be set")
 
         cfg = self.config
-        output_path = input_info.save_result_path or cfg.get("output_path", "inference_output")
-        strict_output_path = input_info.strict_output_path or cfg.get("strict_output_path", None)
+        # Reconstruction results are delivered as files, so keep a default output directory.
+        output_path = input_info.save_result_path or "./inference_output"
+        strict_output_path = input_info.strict_output_path
 
         target_size = cfg.get("target_size", 952)
         fps = cfg.get("fps", 1)
@@ -460,12 +475,12 @@ class WorldMirrorRunner(BaseRunner):
         max_resolution = cfg.get("max_resolution", 1920)
         compress_gs_max_points = cfg.get("compress_gs_max_points", 5_000_000)
 
-        save_rendered = cfg.get("save_rendered", False)
-        render_interp_per_pair = cfg.get("render_interp_per_pair", 15)
-        render_depth = cfg.get("render_depth", False)
+        save_rendered = input_info.save_rendered
+        render_interp_per_pair = input_info.render_interp_per_pair
+        render_depth = input_info.render_depth
 
-        prior_cam_path = input_info.prior_cam_path or cfg.get("prior_cam_path", None)
-        prior_depth_path = input_info.prior_depth_path or cfg.get("prior_depth_path", None)
+        prior_cam_path = input_info.prior_cam_path
+        prior_depth_path = input_info.prior_depth_path
         log_time = cfg.get("log_time", True)
 
         case_t0 = time.perf_counter()
@@ -630,15 +645,15 @@ class WorldMirrorRunner(BaseRunner):
                     if log_time:
                         timings["render_video"] = -1.0
 
-            if not self.is_distributed:
-                del predictions
-                torch.cuda.empty_cache()
-
             timings["case_total"] = time.perf_counter() - case_t0
             if log_time:
                 print_and_save_timings(timings, outdir)
 
             logger.info(f"[WorldMirror] Results saved to: {outdir}")
+
+        if not self.is_distributed:
+            del predictions
+            torch.cuda.empty_cache()
 
         if self.is_distributed:
             # Free local tensors and resync state across ranks before the
@@ -650,9 +665,10 @@ class WorldMirrorRunner(BaseRunner):
             torch.cuda.empty_cache()
             dist.barrier()
 
+        result = {"output_dir": str(outdir)}
         if input_info.return_result_tensor:
-            return {"output_dir": str(outdir), "timings": timings if self.rank == 0 else None}
-        return {"output_dir": str(outdir)}
+            result["timings"] = timings if self.rank == 0 else None
+        return result
 
     def end_run(self):
         self.input_info = None

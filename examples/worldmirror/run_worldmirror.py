@@ -1,7 +1,8 @@
 """Full-feature CLI for HY-WorldMirror-2.0 through the LightX2V runner.
 
-Mirrors the original ``python -m hyworld2.worldrecon.pipeline`` entry point:
-all CLI flags, multi-GPU via ``torchrun`` (WorldMirror's own sequence-
+Mirrors the original ``python -m hyworld2.worldrecon.pipeline`` entry point,
+using LightX2V's ``--save_result_path`` for output paths. Supports multi-GPU
+via ``torchrun`` (WorldMirror's own sequence-
 parallel path — no FSDP), the ``>>>`` interactive loop, optional Gaussian-
 splat flythrough video rendering, prior camera/depth inputs, and per-head
 disable.
@@ -12,15 +13,15 @@ Examples
 Single-GPU, exported-model dir (default subfolder)::
 
     python examples/worldmirror/run_worldmirror.py \\
-        --input_path /workspace/HY-World-2.0/examples/worldrecon/realistic/Workspace \\
-        --pretrained_model_name_or_path /data/nvme1/models/HY-World-2.0 \\
+        --input_path /path/to/HY-World-2.0/examples/worldrecon/realistic/Workspace \\
+        --pretrained_model_name_or_path /path/to/HY-World-2.0 \\
         --no_interactive
 
 Multi-GPU (sequence-parallel) + bf16::
 
     torchrun --nproc_per_node=2 examples/worldmirror/run_worldmirror.py \\
         --input_path /path/to/images \\
-        --pretrained_model_name_or_path /data/nvme1/models/HY-World-2.0 \\
+        --pretrained_model_name_or_path /path/to/HY-World-2.0 \\
         --enable_bf16 --no_interactive
 
 Training-output format (separate yaml + ckpt)::
@@ -50,11 +51,11 @@ def build_parser():
 
     # --- Input / output ---
     p.add_argument("--input_path", type=str, required=True)
-    p.add_argument("--output_path", type=str, default="inference_output")
+    p.add_argument("--save_result_path", type=str, default=None)
     p.add_argument("--strict_output_path", type=str, default=None, help="If set, save results directly to this path (no subdir/timestamp).")
 
     # --- Model loading ---
-    p.add_argument("--pretrained_model_name_or_path", type=str, default="/data/nvme1/models/HY-World-2.0", help="Local directory containing HY-WorldMirror-2.0 weights.")
+    p.add_argument("--pretrained_model_name_or_path", type=str, default="/path/to/HY-World-2.0", help="Local directory containing HY-WorldMirror-2.0 weights.")
     p.add_argument("--subfolder", type=str, default="HY-WorldMirror-2.0", help="Subfolder inside the model directory.")
     p.add_argument("--config_path", type=str, default=None, help="Optional training YAML; used with --ckpt_path.")
     p.add_argument("--ckpt_path", type=str, default=None, help="Optional .ckpt/.safetensors; used with --config_path.")
@@ -176,26 +177,19 @@ def build_config(args):
         if val is not None:
             config_dict[key] = val
 
-    # Passed along so rank-0 can reconstruct the per-case output dir.
-    config_dict["output_path"] = args.output_path
-
     return config_dict
 
 
-def run_one(runner, input_path, strict_output_path, output_path, task_name="recon"):
-    from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
-
-    input_info = init_empty_input_info(task_name)
-    update_input_info_from_dict(
-        input_info,
+def run_one(runner, input_path, strict_output_path, save_result_path):
+    input_info = runner.prepare_request(
         {
             "input_path": input_path,
-            "save_result_path": output_path,
+            "save_result_path": save_result_path,
             "strict_output_path": strict_output_path,
             "return_result_tensor": False,
-        },
+        }
     )
-    return runner.run_pipeline(input_info)
+    return runner.run_request(input_info)
 
 
 def main():
@@ -205,21 +199,12 @@ def main():
     import torch
     import torch.distributed as dist
 
-    from lightx2v.models.runners.worldmirror.worldmirror_runner import (
-        WorldMirrorRunner,  # noqa: F401  — registers "worldmirror"
-        _broadcast_string,
-    )
-    from lightx2v.utils.lockable_dict import LockableDict
-    from lightx2v.utils.registry_factory import RUNNER_REGISTER
+    from lightx2v.models.runners.runner_factory import build_runner
+    from lightx2v.models.runners.worldmirror.worldmirror_runner import _broadcast_string
+    from lightx2v.utils.set_config import build_startup_config
 
     config_dict = build_config(args)
-    if args.strict_output_path is None:
-        os.makedirs(args.output_path, exist_ok=True)
-
-    config = LockableDict(config_dict)
-
-    runner = RUNNER_REGISTER[config["model_cls"]](config)
-    runner.init_modules()
+    runner = build_runner(build_startup_config(config_dict))
 
     is_distributed = runner.is_distributed
     rank = runner.rank
@@ -231,7 +216,7 @@ def main():
         cuda_backend = dist.distributed_c10d._get_default_group()._get_backend(torch.device("cuda"))
 
     try:
-        run_one(runner, args.input_path, args.strict_output_path, args.output_path)
+        run_one(runner, args.input_path, args.strict_output_path, args.save_result_path)
 
         if args.no_interactive:
             return
@@ -267,7 +252,7 @@ def main():
             # No need to re-.to(device)/.eval() — the model state is stable
             # across cases because run_pipeline doesn't mutate training mode
             # or device placement.
-            run_one(runner, new_input, args.strict_output_path, args.output_path)
+            run_one(runner, new_input, args.strict_output_path, args.save_result_path)
     finally:
         if dist.is_initialized():
             dist.destroy_process_group()

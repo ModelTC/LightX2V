@@ -53,14 +53,13 @@ Key fields in `run_wan_t2v_sf.sh`:
 
 - `lightx2v_path`: your LightX2V repo path
 - `model_path`: path to the original BF16 `Wan2.1-T2V-1.3B` directory
-- `sf_model_path`: path to `self_forcing_dmd.pt` (downloaded from `gdhe17/Self-Forcing`)
+- `dit_original_ckpt` in the config file: path to `self_forcing_dmd.pt` (downloaded from `gdhe17/Self-Forcing`)
 
 The script runs:
 
 - `python -m lightx2v.infer`
 - `--model_cls wan2.1_sf`: use the Wan2.1 Self-Forcing pipeline
 - `--task t2v`: text-to-video
-- `--sf_model_path`: the Self-Forcing checkpoint
 - `--config_json configs/self_forcing/wan_t2v_sf.json`: Self-Forcing runtime config
 
 Note: In `configs/self_forcing/wan_t2v_sf.json`, `enable_cfg` is set to `false` by default.

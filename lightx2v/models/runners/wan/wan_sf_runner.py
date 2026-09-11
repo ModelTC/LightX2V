@@ -21,6 +21,10 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("wan2.1_sf")
 class WanSFRunner(WanRunner):
+    supported_request_fields_by_task = {
+        "t2v": WanRunner.supported_request_fields_by_task["t2v"] - {"num_frames"},
+    }
+
     def __init__(self, config):
         super().__init__(config)
 
@@ -110,10 +114,7 @@ class WanSFRunner(WanRunner):
         logger.info(f"init video_recorder with output_video_path: {output_video_path}")
         rank, world_size = get_rank_and_world_size()
         if output_video_path and rank == world_size - 1:
-            record_fps = self.config.get("target_fps", 16)
-            if "video_frame_interpolation" in self.config and self.vfi_model is not None:
-                record_fps = self.config["video_frame_interpolation"]["target_fps"]
-
+            record_fps = self.config.get("fps", 16)
             self.video_recorder = VideoRecorder(
                 livestream_url=output_video_path,
                 fps=record_fps,

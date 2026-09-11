@@ -1,9 +1,7 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import gc
 import os
-import random
 import subprocess
-import sys
 
 import numpy as np
 import torch
@@ -14,6 +12,7 @@ from torchvision import transforms
 from lightx2v.models.input_encoders.hf.wan.s2v.audio_encoder import AudioEncoder
 from lightx2v.models.networks.wan.s2v_model import WanS2VModel
 from lightx2v.models.networks.wan.s2v_utils import get_size_less_than_area
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.s2v.s2v_scheduler import WanS2VScheduler
 from lightx2v.server.metrics import monitor_cli
@@ -55,12 +54,17 @@ def merge_video_audio(video_path: str, audio_path: str):
 
 @RUNNER_REGISTER("wan2.2_s2v")
 class WanS2VRunner(WanRunner):
+    supported_request_fields_by_task = {
+        "s2v": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"audio_path", "image_path", "pose_video_path"},
+    }
+
     def __init__(self, config):
+        config.setdefault("fps", 16)
         self.vae_name = "Wan2.1_VAE.pth"
         super().__init__(config)
         assert self.config["task"] == "s2v"
         self.param_dtype = GET_DTYPE()
-        self.fps = self.config["target_fps"]
+        self.fps = self.config["fps"]
         self.audio_sample_m = 0
 
     def init_scheduler(self):
@@ -119,7 +123,7 @@ class WanS2VRunner(WanRunner):
     @staticmethod
     def read_pose_video_frames(video_path, n_frames, target_fps=16, reverse=False):
         if VideoReader is None:
-            raise ImportError("decord is required for src_pose_path (pip install decord)")
+            raise ImportError("decord is required for pose_video_path (pip install decord)")
         vr = VideoReader(video_path)
         original_fps = vr.get_avg_fps()
         total_frames = len(vr)
@@ -137,7 +141,7 @@ class WanS2VRunner(WanRunner):
     def load_pose_cond(self, pose_video, num_repeat, infer_frames, height, width):
         """Align with Wan2.2 WanS2V.load_pose_cond: VAE-encoded pose latents per clip."""
         offload = self.config.get("cpu_offload", False)
-        fps = self.config["target_fps"]
+        fps = self.config["fps"]
         resize_op = transforms.Resize(min(height, width))
         crop_op = transforms.CenterCrop((height, width))
 
@@ -286,18 +290,18 @@ class WanS2VRunner(WanRunner):
 
         videos_last_frames = inputs["motion_latents"].detach()
         out_clips = []
-        seed = inputs["seed"] if inputs["seed"] >= 0 else random.randint(0, sys.maxsize)
+        seed = inputs["seed"]
 
         num_repeat = inputs["num_repeat"]
-        src_pose_path = getattr(self.input_info, "src_pose_path", None) or ""
-        if src_pose_path and os.path.isfile(src_pose_path):
+        pose_video_path = getattr(self.input_info, "pose_video_path", None) or ""
+        if pose_video_path and os.path.isfile(pose_video_path):
             with ProfilingContext4DebugL1("Load pose cond"):
-                pose_conds = self.load_pose_cond(src_pose_path, num_repeat, infer_frames, height, width)
-            logger.info(f"Loaded pose cond from {src_pose_path} ({len(pose_conds)} clips)")
+                pose_conds = self.load_pose_cond(pose_video_path, num_repeat, infer_frames, height, width)
+            logger.info(f"Loaded pose cond from {pose_video_path} ({len(pose_conds)} clips)")
         else:
             pose_conds = None
-            if src_pose_path:
-                logger.warning(f"src_pose_path not found, ignoring: {src_pose_path}")
+            if pose_video_path:
+                logger.warning(f"pose_video_path not found, ignoring: {pose_video_path}")
 
         with torch.no_grad(), torch.amp.autocast("cuda", dtype=self.param_dtype):
             for r in range(num_repeat):
@@ -389,7 +393,7 @@ class WanS2VRunner(WanRunner):
         if self.input_info.save_result_path is not None and is_main_process():
             out_path = self.input_info.save_result_path
             os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-            save_to_video(self.gen_video_final, out_path, fps=self.config["target_fps"], method="ffmpeg")
+            save_to_video(self.gen_video_final, out_path, fps=self.config["fps"], method="ffmpeg")
             audio_path = getattr(self.input_info, "audio_path", None)
             if audio_path and os.path.isfile(audio_path):
                 try:

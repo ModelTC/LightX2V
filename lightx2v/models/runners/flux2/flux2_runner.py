@@ -1,5 +1,4 @@
 import gc
-import math
 import os
 
 import numpy as np
@@ -8,9 +7,11 @@ from loguru import logger
 
 from lightx2v.models.networks.flux2.model import Flux2DevTransformerModel, Flux2KleinTransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.flux2.feature_caching.scheduler import Flux2DevSchedulerCaching, Flux2SchedulerCaching
 from lightx2v.models.schedulers.flux2.scheduler import Flux2DevScheduler, Flux2Scheduler
 from lightx2v.models.video_encoders.hf.flux2.vae import Flux2VAE
+from lightx2v.utils.input_info import Flux2I2IInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import is_main_process
@@ -19,20 +20,21 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
-def calculate_dimensions(target_area, ratio):
-    width = math.sqrt(target_area * ratio)
-    height = width / ratio
-
-    width = round(width / 32) * 32
-    height = round(height / 32) * 32
-
-    return width, height, None
-
-
 @RUNNER_REGISTER("flux2")
 class Flux2Runner(DefaultRunner):
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
+    input_info_cls_by_task = {"i2i": Flux2I2IInputInfo}
+    supported_request_fields_by_task = {
+        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "size"},
+        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt"},
+    }
+
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if task == "i2i" and self.config.get("inpaint_mask_enabled", False):
+            supported_request_fields |= {"inpaint_blur_sigma", "inpaint_blur_size"}
+        return supported_request_fields
 
     def __init__(self, config):
         self.model_variant = config["model_variant"]
@@ -88,7 +90,7 @@ class Flux2Runner(DefaultRunner):
 
         text_encoder_output = {"prompt_embeds": prompt_embeds, "text_ids": text_ids}
 
-        uses_cfg = self.config.get("enable_cfg", True) and self.config.get("sample_guide_scale", 1.0) > 1.0
+        uses_cfg = self.config.get("enable_cfg", True)
         if self.model_variant == "klein" and uses_cfg:
             neg_prompt_embeds_list, _ = self.text_encoders[0].infer([""])
             neg_prompt_embeds = neg_prompt_embeds_list[0].unsqueeze(0)
@@ -175,21 +177,21 @@ class Flux2Runner(DefaultRunner):
         if inpaint_mask_enabled:
             main_img = input_image[0]
             image_processor.check_image_input(main_img)
-            processed_img, target_shape = self._preprocess_condition_image(image_processor, main_img, max_image_area, vae_scale_factor)
-            self.input_info.target_shape = target_shape
+            processed_img, size = self._preprocess_condition_image(image_processor, main_img, max_image_area, vae_scale_factor)
+            self.input_info.size = list(size)
             processed_tensor = processed_img.to(AI_DEVICE)
             condition_images.extend([processed_tensor, processed_tensor])
 
             if len(input_image) > 1:
                 image_processor.check_image_input(input_image[1])
-                inpaint_mask = self._preprocess_inpaint_mask_image(image_processor, input_image[1], main_img, max_image_area, target_shape)
+                inpaint_mask = self._preprocess_inpaint_mask_image(image_processor, input_image[1], main_img, max_image_area, size)
         else:
             for index, img in enumerate(input_image):
                 image_processor.check_image_input(img)
-                processed_img, target_shape = self._preprocess_condition_image(image_processor, img, max_image_area, vae_scale_factor)
+                processed_img, size = self._preprocess_condition_image(image_processor, img, max_image_area, vae_scale_factor)
                 condition_images.append(processed_img.to(AI_DEVICE))
                 if index == 0:
-                    self.input_info.target_shape = target_shape
+                    self.input_info.size = list(size)
 
         torch_device_module.empty_cache()
         gc.collect()
@@ -217,12 +219,12 @@ class Flux2Runner(DefaultRunner):
         img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
         return img, (image_height, image_width)
 
-    def _preprocess_inpaint_mask_image(self, image_processor, mask_img, reference_img, max_image_area, target_shape):
+    def _preprocess_inpaint_mask_image(self, image_processor, mask_img, reference_img, max_image_area, size):
         mask_img = mask_img.convert("RGB")
         if mask_img.size != reference_img.size:
             mask_img = mask_img.resize(reference_img.size)
         mask_img = self._maybe_resize_to_max_area(image_processor, mask_img, max_image_area)
-        image_height, image_width = target_shape
+        image_height, image_width = size
         cropped_mask = image_processor.resize(mask_img, image_height, image_width, resize_mode="crop")
         return self._prepare_inpaint_mask(cropped_mask)
 
@@ -232,7 +234,7 @@ class Flux2Runner(DefaultRunner):
 
         from PIL import Image
 
-        height, width = self.input_info.target_shape
+        height, width = self.input_info.size
         multiple_of = self.config.get("vae_scale_factor", 8) * 2
         packed_h = height // multiple_of
         packed_w = width // multiple_of
@@ -243,8 +245,8 @@ class Flux2Runner(DefaultRunner):
         mask = mask.permute(2, 0, 1).unsqueeze(0)
         mask = mask.mean(dim=1, keepdim=True)
 
-        blur_size = getattr(self.input_info, "inpaint_blur_size", None)
-        blur_sigma = getattr(self.input_info, "inpaint_blur_sigma", None)
+        blur_size = self.input_info.inpaint_blur_size
+        blur_sigma = self.input_info.inpaint_blur_sigma
         if blur_size is not None and blur_sigma is not None:
             from torchvision.transforms import GaussianBlur
 
@@ -335,8 +337,8 @@ class Flux2Runner(DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.target_shape) == 2:
-            height, width = self.input_info.target_shape
+        if len(self.input_info.size) == 2:
+            height, width = self.input_info.size
             height = int(height)
             width = int(width)
             if width > max_size or height > max_size:
@@ -357,20 +359,13 @@ class Flux2Runner(DefaultRunner):
         width, height = as_maps[self.config.get("aspect_ratio", "16:9")]
         return (width, height)
 
-    def set_target_shape(self):
+    def set_latent_shape(self):
         task = self.config.get("task", "t2i")
         if task == "i2i":
-            height, width = self.input_info.target_shape
+            height, width = self.input_info.size
         else:
-            custom_shape = self.get_custom_shape()
-            if custom_shape is not None:
-                width, height = custom_shape
-            else:
-                calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, 16 / 9)
-                multiple_of = self.config.get("vae_scale_factor", 8) * 2
-                width = calculated_width // multiple_of * multiple_of
-                height = calculated_height // multiple_of * multiple_of
-                self.input_info.target_shape = (height, width)
+            width, height = self.get_custom_shape()
+        self.input_info.size = [height, width]
 
         multiple_of = self.config.get("vae_scale_factor", 8) * 2
 
@@ -382,9 +377,6 @@ class Flux2Runner(DefaultRunner):
         self.num_channels_latents = packed_channels
         self.input_info.latent_shape = (packed_batch, packed_h * packed_w, packed_channels)
         self.input_info.latent_image_ids = self._prepare_latent_ids(packed_batch, packed_h, packed_w).to(AI_DEVICE)
-
-    def set_img_shapes(self):
-        pass
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
     def run_vae_decoder(self, latents):
@@ -424,14 +416,13 @@ class Flux2Runner(DefaultRunner):
         self.inputs = self.run_input_encoder()
         logger.info(f"input_info: {self.input_info}")
 
-        self.set_target_shape()
-        self.set_img_shapes()
+        self.set_latent_shape()
 
         latents, generator = self.run_dit()
         images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor and is_main_process():
+        if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
             image = images[0]
             image.save(input_info.save_result_path)
             logger.info(f"Image saved: {input_info.save_result_path}")

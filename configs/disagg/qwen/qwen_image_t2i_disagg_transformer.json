@@ -13,9 +13,8 @@
     "sample_guide_scale": 4.0,
     "vae_z_dim": 16,
     "vae_stride": [1, 8, 8],
-    "target_video_length": 1,
-    "target_height": 1536,
-    "target_width": 2752,
+    "num_frames": 1,
+    "size": [1536, 2752],
     "dit_original_ckpt": "/path/to/base_dit_info_v060_res2k_9k_3k_25kiter.safetensors",
     "disagg_config": {
         "bootstrap_addr": "127.0.0.1",

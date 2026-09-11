@@ -12,12 +12,6 @@ DEFAULT_PROMPT = (
     "gestures. The camera is fixed in a static medium shot."
 )
 
-DEFAULT_NEGATIVE_PROMPT = (
-    "low quality, blurry, pixelated, low resolution, noise, artifacts, poor lighting, "
-    "overexposed, underexposed, distorted, unnatural, deformed, watermark, logo, text, "
-    "bad hands, malformed hands, missing fingers, static"
-)
-
 
 def submit_task(args) -> str:
     url = f"{args.url.rstrip('/')}/v1/tasks/video/"
@@ -28,13 +22,11 @@ def submit_task(args) -> str:
         "audio_path": args.audio_path,
         "save_result_path": args.save_result_path,
         "seed": args.seed,
-        "infer_steps": args.infer_steps,
         "video_duration": args.video_duration,
-        "target_fps": args.target_fps,
-        "resize_mode": args.resize_mode,
     }
-    if args.target_shape:
-        message["target_shape"] = args.target_shape
+    message = {key: value for key, value in message.items() if value is not None}
+    if args.size:
+        message["size"] = args.size
 
     logger.info(f"submit url: {url}")
     logger.info(f"message: {message}")
@@ -82,18 +74,15 @@ def download_result(base_url: str, task_id: str, output: str) -> Path:
 def parse_args():
     parser = argparse.ArgumentParser(description="Submit a Seko Talk AR rs2v task to LightX2V server.")
     parser.add_argument("--url", type=str, default="http://127.0.0.1:8000", help="Server base URL")
-    parser.add_argument("--image_path", type=str, default="/data/nvme4/gushiqiao/new/example/1_素材图.png", help="Reference image path, URL, or base64")
-    parser.add_argument("--audio_path", type=str, default="/data/nvme4/gushiqiao/new/example/1_素材图.mp3", help="Driving audio path, URL, or base64")
+    parser.add_argument("--image_path", type=str, default="/path/to/reference.png", help="Reference image path, URL, or base64")
+    parser.add_argument("--audio_path", type=str, default="/path/to/audio.mp3", help="Driving audio path, URL, or base64")
     parser.add_argument("--prompt", type=str, default=DEFAULT_PROMPT)
-    parser.add_argument("--negative_prompt", type=str, default=DEFAULT_NEGATIVE_PROMPT)
-    parser.add_argument("--save_result_path", type=str, default="seko_talk_ar_server_test.mp4", help="Server-side output filename/path")
+    parser.add_argument("--negative_prompt", type=str, default=None, help="Optional negative prompt for CFG-enabled deployments")
+    parser.add_argument("--save_result_path", type=str, default=None, help="Server-side output filename/path")
     parser.add_argument("--output", type=str, default="save_results/seko_talk_ar_server_test.mp4", help="Downloaded result path")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--infer_steps", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--video_duration", type=int, default=5)
-    parser.add_argument("--target_fps", type=int, default=16)
-    parser.add_argument("--resize_mode", type=str, default="fixed_shape")
-    parser.add_argument("--target_shape", type=int, nargs=2, default=None, help="Optional target shape: H W")
+    parser.add_argument("--size", type=int, nargs=2, default=None, help="Optional target shape: H W")
     parser.add_argument("--timeout_seconds", type=int, default=1800)
     parser.add_argument("--poll_interval", type=float, default=2.0)
     parser.add_argument("--no_download", action="store_true", help="Only submit and poll status")
@@ -106,8 +95,11 @@ def main():
     final_status = wait_task_done(args.url, task_id, args.timeout_seconds, args.poll_interval)
     logger.info(f"final status: {final_status}")
     if not args.no_download:
-        output_path = download_result(args.url, task_id, args.output)
-        logger.info(f"result saved to: {output_path}")
+        if final_status["save_result_path"] is not None:
+            output_path = download_result(args.url, task_id, args.output)
+            logger.info(f"result saved to: {output_path}")
+        else:
+            logger.info("No file was saved; provide --save_result_path to download a result.")
 
 
 if __name__ == "__main__":

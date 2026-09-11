@@ -89,7 +89,7 @@ class LongCatImageVAE:
         if self.cpu_offload:
             self.model.to(AI_DEVICE)
 
-        width, height = input_info.auto_width, input_info.auto_height
+        height, width = input_info.size
         # Full VAE latent dimensions
         full_latent_height = height // self.vae_scale_factor
         full_latent_width = width // self.vae_scale_factor

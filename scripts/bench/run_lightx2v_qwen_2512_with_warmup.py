@@ -30,7 +30,7 @@ prompt = "A futuristic cyberpunk city at night, neon lights reflecting on wet st
 
 negative_prompt = " "
 
-target_shape = [1024, 1024]
+size = [1024, 1024]
 
 save_result_path = f"{lightx2v_path}/save_results/{model_cls}_{task}_{ts}.png"
 
@@ -38,7 +38,7 @@ save_result_path = f"{lightx2v_path}/save_results/{model_cls}_{task}_{ts}.png"
 pipe.generate(
     seed=seed,
     prompt=prompt,
-    target_shape=target_shape,
+    size=size,
     negative_prompt=negative_prompt,
     save_result_path=save_result_path,
 )
@@ -47,7 +47,7 @@ pipe.generate(
 pipe.generate(
     seed=seed,
     prompt=prompt,
-    target_shape=target_shape,
+    size=size,
     negative_prompt=negative_prompt,
     save_result_path=save_result_path,
     return_result_tensor=True,

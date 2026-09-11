@@ -9,8 +9,10 @@ from PIL import Image
 from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.models.networks.neopp.model import NeoppModel
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.neopp.scheduler import NeoppMoeScheduler
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import NeoppInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -37,6 +39,32 @@ def build_neopp_model_with_lora(neopp_module, config, model_kwargs, lora_configs
 
 @RUNNER_REGISTER("neopp")
 class NeoppRunner(DefaultRunner):
+    input_info_cls_by_task = {"t2i": NeoppInputInfo, "i2i": NeoppInputInfo}
+    supported_request_fields_by_task = {
+        "t2i": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"size"},
+        "i2i": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"size"},
+    }
+
+    def get_supported_tasks(self):
+        # LightLLM encodes both text and image conditioning into the injected KV.
+        return ("t2i", "i2i")
+
+    def prepare_request(self, request_data):
+        if "target_shape" in request_data:
+            # LightLLM's existing adapter still sends target_shape.
+            request_data = dict(request_data)
+            legacy_size = request_data.pop("target_shape")
+            if request_data.get("size") is None:
+                request_data["size"] = legacy_size
+        # LightLLM omits task; t2i and i2i share the same generation path.
+        if request_data.get("task") is None:
+            request_data = dict(request_data, task="t2i")
+        input_info = super().prepare_request(request_data)
+        # LightLLM restores the session RNG before explicitly passing seed=None.
+        if "seed" in request_data and request_data["seed"] is None:
+            input_info.seed = None
+        return input_info
+
     def __init__(self, config):
         super().__init__(config)
         self.patch_size = self.config.get("patch_size", 16)
@@ -52,9 +80,6 @@ class NeoppRunner(DefaultRunner):
         self.enable_cfg = self.config.get("enable_cfg", True)
         self.past_key_values_cond = None
         self.past_key_values_uncond = None
-        self.past_key_values_text_uncond = None
-        self.past_key_values_img_uncond = None
-        self.num_input_images = config.get("num_input_images", 1)
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
         else:
@@ -107,8 +132,8 @@ class NeoppRunner(DefaultRunner):
 
     def run_input_encoder(self):
         with ProfilingContext4DebugL1("run_input_encoder"):
-            token_h = self.input_info.target_shape[0] // (self.patch_size * self.merge_size)
-            token_w = self.input_info.target_shape[1] // (self.patch_size * self.merge_size)
+            token_h = self.input_info.size[0] // (self.patch_size * self.merge_size)
+            token_w = self.input_info.size[1] // (self.patch_size * self.merge_size)
             self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
 
             indexes_cond = self._build_t2i_image_indexes(token_h, token_w, self.index_offset_cond, device=self.init_device)
@@ -157,69 +182,13 @@ class NeoppRunner(DefaultRunner):
             }
 
     def get_latent_shape_with_target_hw(self):
-        target_height = self.input_info.target_shape[0] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_height"]
-        target_width = self.input_info.target_shape[1] if self.input_info.target_shape and len(self.input_info.target_shape) == 2 else self.config["target_width"]
+        target_height = self.input_info.size[0] if self.input_info.size and len(self.input_info.size) == 2 else self.config["size"][0]
+        target_width = self.input_info.size[1] if self.input_info.size and len(self.input_info.size) == 2 else self.config["size"][1]
         latent_shape = [1, 3, target_height, target_width]
         return latent_shape
 
-    def multi_pipeline_run_debug(self, input_info):
-        self.input_info = input_info
-        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
-            self.load_kvcache(
-                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_0_289.pt",
-                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_0_9.pt",
-            )
-            self.set_inference_params(
-                index_offset_cond=289,
-                index_offset_uncond=9,
-                cfg_interval=(-1, 2),
-                cfg_scale=4.0,
-                cfg_norm="global",
-                timestep_shift=3.0,
-            )
-            self.input_info.save_result_path = self.input_info.save_result_path.replace(".png", "_0.png")
-
-        self.inputs = self.run_input_encoder()
-        gen_result = self.run_main()
-        self.clear_kvcache()
-
-        self.input_info = self.input_info
-        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
-            self.load_kvcache(
-                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_1_346.pt",
-                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_1_12.pt",
-            )
-            self.set_inference_params(
-                index_offset_cond=346,
-                index_offset_uncond=12,
-                cfg_interval=(-1, 2),
-                cfg_scale=4.0,
-                cfg_norm="global",
-                timestep_shift=3.0,
-            )
-            self.input_info.save_result_path = self.input_info.save_result_path.replace("_0.png", "_1.png")
-
-        self.inputs = self.run_input_encoder()
-        gen_result = self.run_main()
-        self.clear_kvcache()
-        return gen_result
-
     def run_pipeline(self, input_info):
         self.input_info = input_info
-        if self.config.get("load_kv_cache_in_pipeline_for_debug", False):
-            self.load_kvcache(
-                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_cond_kv_0_289.pt",
-                "/data/nvme1/yongyang/FL/neo_9b_new/vlm_tensor/to_x2v_uncond_kv_0_9.pt",
-            )
-            self.set_inference_params(
-                index_offset_cond=289,
-                index_offset_uncond=9,
-                cfg_interval=(-1, 2),
-                cfg_scale=4.0,
-                cfg_norm="global",
-                timestep_shift=3.0,
-            )
-
         try:
             self.inputs = self.run_input_encoder()
             return self.run_main()

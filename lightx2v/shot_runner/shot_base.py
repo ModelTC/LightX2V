@@ -1,16 +1,15 @@
 import json
-from argparse import Namespace
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
 import torch
 from loguru import logger
 
-from lightx2v.utils.input_info import fill_input_info_from_defaults
+from lightx2v.models.runners.runner_factory import build_runner
+from lightx2v.utils.input_info import UNSET, SekoTalkInputs
 from lightx2v.utils.profiler import *
-from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
+from lightx2v.utils.set_config import build_startup_config, init_parallel, print_config
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
 
@@ -52,12 +51,11 @@ def load_clip_configs(main_json_path):
             config = item["config"]
         else:
             config_json = str(Path(lightx2v_path) / item["path"])
-            config_json = {"config_json": config_json}
-            config = set_config(Namespace(**config_json))
+            config = build_startup_config(get_config_json(config_json))
 
         if "parallel" in cfg:  # Add parallel config to clip json
             config["parallel"] = cfg["parallel"]
-            set_parallel_config(config)
+            init_parallel(config)
 
         clip_configs.append(ClipConfig(name=item["name"], config_json=config))
     return clip_configs
@@ -76,11 +74,18 @@ class ShotPipeline:
             name = clip_config.name
             self.clip_generators[name] = self.create_clip_generator(clip_config)
 
-    def check_input_info(self, user_input_info, clip_config):
-        default_input_info = clip_config.get("default_input_info", None)
-        if default_input_info is not None:
-            fill_input_info_from_defaults(user_input_info, default_input_info)
-        return user_input_info.normalize_unset_to_none()
+    def prepare_input_info(self, args, clip_config):
+        task = clip_config["task"]
+        if task not in ("s2v", "rs2v"):
+            raise ValueError(f"Unsupported task: {task}")
+
+        input_info = SekoTalkInputs(prompt="", negative_prompt="", seed=None, save_result_path=None)
+        input_info.update(clip_config)
+        input_info.update({key: value for key, value in vars(args).items() if value is not None})
+        for input_field in fields(input_info):
+            if getattr(input_info, input_field.name) is UNSET:
+                setattr(input_info, input_field.name, None)
+        return input_info
 
     def _input_data_to_dict(self, input_data):
         if isinstance(input_data, dict):
@@ -95,12 +100,12 @@ class ShotPipeline:
             return
 
         # 将外部输入同步到 shot_cfg 和各 clip 的 input_info
-        for key in ["seed", "image_path", "audio_path", "prompt", "negative_prompt", "save_result_path", "target_shape"]:
+        for key in ["seed", "image_path", "audio_path", "prompt", "negative_prompt", "save_result_path", "size"]:
             if key in data and data[key] is not None:
                 setattr(self.shot_cfg, key, data[key])
 
         for clip_input in self.clip_inputs.values():
-            update_input_info_from_dict(clip_input, data)
+            clip_input.update(data)
             if hasattr(clip_input, "overlap_frame"):
                 clip_input.overlap_frame = None
             if hasattr(clip_input, "overlap_latent"):
@@ -108,24 +113,13 @@ class ShotPipeline:
             if hasattr(clip_input, "audio_clip"):
                 clip_input.audio_clip = None
 
-    def _init_runner(self, config):
-        torch.set_grad_enabled(False)
-        runner = RUNNER_REGISTER[config["model_cls"]](config)
-        runner.init_modules()
-        return runner
-
-    def set_config(self, config_modify):
-        for runner in self.clip_generators.values():
-            if hasattr(runner, "set_config"):
-                runner.set_config(config_modify)
-
     def set_progress_callback(self, callback):
         self.progress_callback = callback
 
     def create_clip_generator(self, clip_config: ClipConfig):
         logger.info(f"Clip {clip_config.name} initializing ... ")
         print_config(clip_config.config_json)
-        runner = self._init_runner(clip_config.config_json)
+        runner = build_runner(clip_config.config_json)
         logger.info(f"Clip {clip_config.name} initialized successfully!")
 
         return runner

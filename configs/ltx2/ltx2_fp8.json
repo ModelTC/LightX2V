@@ -1,8 +1,7 @@
 {
     "infer_steps": 40,
-    "target_video_length": 121,
-    "target_height": 512,
-    "target_width": 768,
+    "num_frames": 121,
+    "size": [512, 768],
     "attn_type": "sage_attn2",
     "sample_guide_scale": 4,
     "sample_shift": [2.05, 0.95],
@@ -10,7 +9,6 @@
     "cpu_offload": false,
     "num_channels_latents": 128,
     "fps": 24,
-    "audio_fps": 24000,
     "audio_mel_bins":16,
     "double_precision_rope": true,
     "dit_quantized_ckpt": "Lightricks/LTX-2/LTX-2/ltx-2-19b-dev-fp8.safetensors",

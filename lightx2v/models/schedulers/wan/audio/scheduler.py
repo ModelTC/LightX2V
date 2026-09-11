@@ -45,6 +45,11 @@ class EulerScheduler(WanScheduler):
             self.prev_latents = None
             self.prev_len = 0
 
+    def clear(self):
+        super().clear()
+        self.prev_latents = None
+        self.prev_len = 0
+
     def set_audio_adapter(self, audio_adapter):
         self.audio_adapter = audio_adapter
         self._audio_t_emb_cache.clear()
