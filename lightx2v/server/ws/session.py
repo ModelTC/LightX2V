@@ -26,6 +26,8 @@ ASPECT_RATIOS = {
     "9:16": [640, 360],
 }
 DEFAULT_ASPECT_RATIO = "16:9"
+DEFAULT_PROMPT = "The video features a person is saying something."
+DEFAULT_NEGATIVE_PROMPT = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
 
 def resolve_aspect_ratio(value: str) -> tuple[str, list[int]]:
@@ -63,6 +65,35 @@ class RunnerThread(threading.Thread):
             asyncio.run_coroutine_threadsafe(set_future_result(), self.loop)
 
 
+def launch_pipeline(runner, input_info, rank: int, loop: asyncio.AbstractEventLoop):
+    if not hasattr(runner, "stop_signal"):
+        runner.stop_signal = False
+    if not hasattr(runner, "can_pause"):
+        runner.can_pause = False
+    if not hasattr(runner, "pause_signal"):
+        runner.pause_signal = False
+    runner.stop_signal = False
+    future = loop.create_future()
+    device_rank = rank if torch.cuda.is_available() else 0
+    thread = RunnerThread(loop, future, runner.run_pipeline, device_rank, input_info)
+    thread.start()
+    return thread, future
+
+
+async def join_pipeline(thread, future, rank: int, timeout: float = 5):
+    if future is not None and not future.done():
+        try:
+            await future
+        except Exception:
+            logger.warning(f"Rank {rank} wait pipeline future failed: {traceback.format_exc()}")
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=timeout)
+    if thread is not None and thread.is_alive():
+        logger.error(f"Rank {rank} pipeline thread still running after join")
+        return False
+    return True
+
+
 def _image_suffix(image_fromat: str) -> str:
     fmt = (image_fromat or "jpg").lower().lstrip(".")
     if fmt in ("jpg", "jpeg"):
@@ -91,7 +122,7 @@ class LiveSession:
     def _on_output(self, item):
         self.video_queue.put(item)
 
-    def apply_start(self, start: Start) -> str:
+    def apply_start(self, start: Start) -> dict:
         parse_pcm_audio_format(start.audio_format or "pcm_s16le/16000/1")
         images = start.image_data or []
         if not images or not images[0]:
@@ -103,9 +134,9 @@ class LiveSession:
         with open(image_path, "wb") as f:
             f.write(images[0])
 
-        prompt = start.prompt or getattr(self.input_info, "prompt", "") or ""
-        negative_prompt = start.negative_prompt or getattr(self.input_info, "negative_prompt", "") or ""
-        seed = int(start.seed or getattr(self.input_info, "seed", 42) or 42)
+        prompt = start.prompt or DEFAULT_PROMPT
+        negative_prompt = start.negative_prompt or DEFAULT_NEGATIVE_PROMPT
+        seed = int(start.seed or 42)
         _, target_shape = resolve_aspect_ratio(start.aspect_ratio)
 
         seg_duration = 1.0
@@ -124,12 +155,13 @@ class LiveSession:
             model_runner=self.runner,
         )
 
+        # 设置 seed 会导致片段间有雪花点，因此暂不设置 seed
         update_input_info_from_dict(
             self.input_info,
             {
                 "prompt": prompt,
                 "negative_prompt": negative_prompt,
-                "seed": seed,
+                # "seed": seed,
                 "target_shape": target_shape,
                 "image_path": image_path,
                 "audio_path": {"type": "ws", "source": self.audio_source},
@@ -140,21 +172,19 @@ class LiveSession:
                 },
             },
         )
-        return image_path
+        logger.info(f"Rank {self.rank} input_info: {self.input_info}")
+        return {
+            "op": "run",
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            # "seed": seed,
+            "image_path": image_path,
+            "target_shape": target_shape,
+        }
 
     def start_pipeline(self):
-        if not hasattr(self.runner, "stop_signal"):
-            self.runner.stop_signal = False
-        if not hasattr(self.runner, "can_pause"):
-            self.runner.can_pause = False
-        if not hasattr(self.runner, "pause_signal"):
-            self.runner.pause_signal = False
-        self.runner.stop_signal = False
         self.busy = True
-        self.future = self.loop.create_future()
-        device_rank = self.rank if torch.cuda.is_available() else 0
-        self.thread = RunnerThread(self.loop, self.future, self.runner.run_pipeline, device_rank, self.input_info)
-        self.thread.start()
+        self.thread, self.future = launch_pipeline(self.runner, self.input_info, self.rank, self.loop)
 
     def handle_client_body(self, msg: ClientMessage):
         which = msg.which()
@@ -207,15 +237,7 @@ class LiveSession:
 
     async def stop_and_join(self):
         self.request_stop()
-        if self.future is not None and not self.future.done():
-            try:
-                await self.future
-            except Exception:
-                logger.warning(f"wait pipeline future failed: {traceback.format_exc()}")
-        if self.thread is not None and self.thread.is_alive():
-            await asyncio.to_thread(self.thread.join)
-        if self.thread is not None and self.thread.is_alive():
-            logger.error("pipeline thread still running after Interrupt")
+        if not await join_pipeline(self.thread, self.future, self.rank):
             return False
         self.busy = False
         logger.info("pipeline stopped, session no longer busy")

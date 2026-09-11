@@ -15,7 +15,7 @@ from loguru import logger
 
 from lightx2v.infer import init_runner
 from lightx2v.server.ws.protocol import ClientMessage, error_message
-from lightx2v.server.ws.session import LiveSession
+from lightx2v.server.ws.session import LiveSession, join_pipeline, launch_pipeline
 from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
 from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
 from lightx2v.utils.utils import seed_all
@@ -42,7 +42,7 @@ def init_task_group():
     logger.info(f"Rank {dist.get_rank()} created gloo group for websocket session commands")
 
 
-def broadcast_obj(obj):
+async def broadcast_obj(obj):
     obj = {} if obj is None else obj
     rank, world_size = _dist_world()
     if world_size <= 1:
@@ -63,39 +63,10 @@ def broadcast_obj(obj):
     return obj
 
 
-def sync_ranks():
+async def sync_ranks():
     if _dist_world()[1] > 1:
         dist.barrier()
         logger.info(f"Rank {RANK} ranks synced")
-
-
-def align_args(args):
-    defaults = {
-        "seed": 42,
-        "sf_model_path": "",
-        "use_prompt_enhancer": False,
-        "prompt": "",
-        "negative_prompt": "",
-        "image_path": "",
-        "last_frame_path": "",
-        "audio_path": "",
-        "src_pose_path": None,
-        "src_face_path": None,
-        "src_bg_path": None,
-        "src_mask_path": None,
-        "src_ref_images": None,
-        "src_video": None,
-        "src_mask": None,
-        "save_result_path": "",
-        "return_result_tensor": False,
-        "aspect_ratio": "",
-        "support_tasks": [],
-        "omni_vision_subtask": None,
-    }
-    for key, value in defaults.items():
-        if not hasattr(args, key):
-            setattr(args, key, value)
-    return args
 
 
 def build_parser():
@@ -111,10 +82,11 @@ def build_parser():
     return parser
 
 
-def follower_loop(runner, input_info):
+async def follower_loop(runner, input_info):
     logger.info(f"Rank {RANK} waiting for websocket sessions")
+    loop = asyncio.get_running_loop()
     while True:
-        cmd = broadcast_obj(None)
+        cmd = await broadcast_obj(None)
         op = cmd.get("op")
         if op == "shutdown":
             logger.info(f"Rank {RANK} shutdown")
@@ -123,27 +95,24 @@ def follower_loop(runner, input_info):
             logger.info(f"Rank {RANK} received {op} message, skipping")
             continue
         try:
-            runner.stop_signal = False
-            if not hasattr(runner, "can_pause"):
-                runner.can_pause = False
-            if not hasattr(runner, "pause_signal"):
-                runner.pause_signal = False
             update_input_info_from_dict(
                 input_info,
                 {
-                    "prompt": cmd.get("prompt", ""),
-                    "negative_prompt": cmd.get("negative_prompt", ""),
-                    "seed": cmd.get("seed", 42),
-                    "target_shape": cmd.get("target_shape") or [360, 640],
-                    "image_path": cmd.get("image_path", ""),
+                    "prompt": cmd["prompt"],
+                    "negative_prompt": cmd["negative_prompt"],
+                    # "seed": cmd["seed"],
+                    "target_shape": cmd["target_shape"],
+                    "image_path": cmd["image_path"],
                     "audio_path": {"type": "ws"},
                     "save_result_path": {"type": "ws"},
                 },
             )
-            runner.run_pipeline(input_info)
+            logger.info(f"Rank {RANK} input_info: {input_info}")
+            thread, future = launch_pipeline(runner, input_info, RANK, loop)
+            await join_pipeline(thread, future, RANK)
         except Exception:
             logger.error(f"Rank {RANK} pipeline failed: {traceback.format_exc()}")
-        sync_ranks()
+        await sync_ranks()
 
 
 async def run_websocket_server(args, runner, input_info):
@@ -172,22 +141,14 @@ async def run_websocket_server(args, runner, input_info):
                             continue
                         session = LiveSession(runner, input_info, RANK, asyncio.get_running_loop())
                         try:
-                            image_path = session.apply_start(msg.start)
+                            cmd = session.apply_start(msg.start)
                         except Exception as e:
                             await websocket.send_bytes(error_message("invalid_start", str(e), False))
                             session.close()
                             session = None
                             continue
                         state.session = session
-                        cmd = {
-                            "op": "run",
-                            "prompt": getattr(input_info, "prompt", ""),
-                            "negative_prompt": getattr(input_info, "negative_prompt", ""),
-                            "seed": getattr(input_info, "seed", 42),
-                            "image_path": image_path,
-                            "target_shape": getattr(input_info, "target_shape", None) or [360, 640],
-                        }
-                        await asyncio.to_thread(broadcast_obj, cmd)
+                        await broadcast_obj(cmd)
                     session.start_pipeline()
                     try:
                         await session.wait_started()
@@ -236,7 +197,7 @@ async def run_websocket_server(args, runner, input_info):
                 except Exception:
                     pass
                 session.close()
-                sync_ranks()
+                await sync_ranks()
                 if state.session is session:
                     state.session = None
 
@@ -258,7 +219,7 @@ async def run_websocket_server(args, runner, input_info):
             async with session_lock:
                 if state.session is not None:
                     continue
-                await asyncio.to_thread(broadcast_obj, {"op": "idle"})
+                await broadcast_obj({"op": "idle"})
                 logger.info(f"Rank {RANK} sent idle message")
 
     loop = asyncio.get_running_loop()
@@ -275,13 +236,13 @@ async def run_websocket_server(args, runner, input_info):
         if heartbeat is not None:
             heartbeat.cancel()
     if WORLD_SIZE > 1:
-        broadcast_obj({"op": "shutdown"})
+        await broadcast_obj({"op": "shutdown"})
 
 
 def main():
     global RANK, WORLD_SIZE, TARGET_RANK
     parser = build_parser()
-    args = align_args(parser.parse_args())
+    args = parser.parse_args()
     seed_all(args.seed)
     config = set_config(args)
 
@@ -305,7 +266,7 @@ def main():
     init_task_group()
 
     if RANK != TARGET_RANK:
-        follower_loop(runner, input_info)
+        asyncio.run(follower_loop(runner, input_info))
     else:
         asyncio.run(run_websocket_server(args, runner, input_info))
 

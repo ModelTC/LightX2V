@@ -138,7 +138,9 @@ class WsVideoChunkRecorder:
             logger.info(f"STOP_SPEAKING seq={self.sequence}")
         imgs = torch.cat([item[0] for item in batch], dim=0)
         auds = torch.cat([item[1].reshape(-1) for item in batch], dim=0)
-        self._emit(("video", self.sequence, encode_audio_pcm(auds), encode_video_frames(imgs)))
+        video_data = encode_video_frames(imgs)
+        audio_data = encode_audio_pcm(auds)
+        self._emit(("video", self.sequence, audio_data, video_data))
         self.sequence += 1
         self.stoppable_t = time.time() + auds.numel() / self.sample_rate + 3
 
