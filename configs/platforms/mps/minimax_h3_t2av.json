@@ -1,0 +1,51 @@
+{
+  "infer_steps": 29,
+  "num_frames": 124,
+  "size": [480, 480],
+  "fps": 24,
+  "enable_cfg": false,
+
+  "cpu_offload": true,
+  "offload_granularity": "block",
+  "dit_prepost_resident": false,
+  "dit_disk_streaming": true,
+  "dit_mps_shared_buffer": true,
+  "use_adaln_cache": true,
+  "adaln_cache_dir": "~/.cache/lightx2v/adaln/diffusers",
+
+  "text_encoder_cpu_offload": true,
+  "text_encoder_offload_granularity": "block",
+  "text_encoder_disk_streaming": true,
+  "text_encoder_host_pinned": false,
+  "text_encoder_release_block_offload_buffers": true,
+  "text_encoder_quantized": false,
+
+  "vae_cpu_offload": true,
+  "vae_use_compile": false,
+  "vae_attn_type": "torch_sdpa",
+  "video_vae_quantized": false,
+
+  "lazy_load": false,
+  "unload_modules": false,
+  "warmup": false,
+
+  "attn_type": "torch_sdpa",
+  "mps_sdpa_query_chunk_size": 512,
+  "rms_type": "torch_native",
+  "rope_type": "torch_real_rope",
+
+  "tensor_parallel": false,
+  "dit_quantized": false,
+  "dit_quant_scheme": "Default",
+
+  "feature_caching": "NoCaching",
+  "use_compile": false,
+
+  "video_flow_shift": 12.0,
+  "audio_flow_shift": 3.0,
+  "vae_spatial_scale_factor": 16,
+  "audio_sampling_rate": 32000,
+  "audio_latents_per_second": 40,
+  "audio_channels": 2,
+  "keep_latents_dtype_in_scheduler": true
+}

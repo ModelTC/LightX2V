@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 
 import torch
 from loguru import logger
@@ -14,9 +15,12 @@ torch_device_module = getattr(torch, AI_DEVICE)
 class WeightAsyncStreamManager(object):
     def __init__(self, offload_granularity):
         self.offload_granularity = offload_granularity
-        self.init_stream = torch_device_module.Stream(priority=0)
         self.need_init_first_buffer = True
         self.lazy_load = False
+        self._init_streams()
+
+    def _init_streams(self):
+        self.init_stream = torch_device_module.Stream(priority=0)
         torch_version = parse(torch.__version__.split("+")[0])
         # Legacy name: this is the active device backend's weight-loading stream, not a CUDA-only stream.
         if AI_DEVICE == "cuda" and torch_version >= parse("2.7"):
@@ -25,6 +29,14 @@ class WeightAsyncStreamManager(object):
         else:
             self.cuda_load_stream = torch_device_module.Stream(priority=0)
             self.compute_stream = torch_device_module.Stream(priority=-1)
+
+    def prepare_compute(self):
+        self.compute_stream.wait_stream(torch_device_module.current_stream())
+
+    def compute_context(self):
+        if AI_DEVICE == "xpu":
+            return nullcontext()
+        return torch_device_module.stream(self.compute_stream)
 
     def init_cpu_buffer(self, blocks_cpu_buffer=None, phases_cpu_buffer=None):
         self.need_init_first_buffer = True

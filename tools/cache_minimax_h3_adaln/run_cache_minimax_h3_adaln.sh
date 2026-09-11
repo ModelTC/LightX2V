@@ -1,14 +1,19 @@
 #!/bin/bash
+set -euo pipefail
 
 # set path firstly
-lightx2v_path=/data/nvme1/yongyang/dan/LightX2V
-model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3
+lightx2v_path=/Users/yongyang/Documents/x2v/LightX2V
+model_path=/Users/yongyang/Documents/x2v/models/MiniMaxAI/diffusers/MiniMax-H3
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/mps/minimax_h3_t2av_4step_512_22.json}"
 
-# Select one platform. NVIDIA is enabled by default.
+# Select one platform. Apple MPS is enabled by default.
+
+# Apple MPS
+export PLATFORM=mps
 
 # NVIDIA
-export PLATFORM=cuda
-export CUDA_VISIBLE_DEVICES=0
+# export PLATFORM=cuda
+# export CUDA_VISIBLE_DEVICES=0
 
 # Intel XPU
 # export PLATFORM=intel_xpu
@@ -51,10 +56,15 @@ export CUDA_VISIBLE_DEVICES=0
 # export CUDA_VISIBLE_DEVICES=0
 
 # set environment variables
-source "${lightx2v_path}/scripts/base/base.sh"
+export DTYPE=BF16
+export SENSITIVE_LAYER_DTYPE=BF16
+export TOKENIZERS_PARALLELISM=false
+export PYTHONUNBUFFERED=1
+export PYTHONPATH="${lightx2v_path}:${PYTHONPATH:-}"
 
-# Supported tasks: fl2av, ref2av
-python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
+# fl2av also generates the cache used by t2av/i2av/l2av inference.
+# Cache generation and inference must use the same model and JSON config.
+/opt/miniconda3/envs/torch/bin/python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
   --model_path "${model_path}" \
-  --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3.json" \
+  --config_json "${config_json}" \
   --model-variant fl2av

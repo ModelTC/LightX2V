@@ -46,6 +46,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
 
     @staticmethod
     def _cache_device():
+        if str(AI_DEVICE) == "mps":
+            return torch.device("mps")
         device_module = getattr(torch, AI_DEVICE)
         return torch.device(AI_DEVICE, device_module.current_device())
 
@@ -75,6 +77,11 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             "block_idx": self.block_idx,
         }
         if sp_state is None:
+            if self.config.get("attn_type") == "torch_sdpa":
+                attention_kwargs.update(
+                    attention_scope="minimax_h3_dit",
+                    mps_sdpa_query_chunk_size=self.config.get("mps_sdpa_query_chunk_size", 0),
+                )
             seq_len = q.shape[0]
             cu_seqlens = torch.tensor((0, seq_len), dtype=torch.int32, device=q.device)
             out = weights.calculate.apply(
@@ -181,7 +188,16 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             hidden_states = self.run_block(block_index, block, hidden_states, pre_infer_out)
         return hidden_states
 
+    def infer_with_disk_streaming(self, block_weights, hidden_states, pre_infer_out):
+        for block_index in block_weights.checkpoint.block_indices:
+            block = block_weights.load_streaming_block(block_index)
+            self.block_idx = block_index
+            hidden_states = self.run_block(block_index, block, hidden_states, pre_infer_out)
+        return hidden_states
+
     def infer(self, block_weights, pre_infer_out):
         if self.use_adaln_cache:
             self._prepare_adaln_cache(pre_infer_out)
+        if getattr(block_weights, "disk_streaming", False):
+            return self.infer_with_disk_streaming(block_weights, pre_infer_out.hidden_states, pre_infer_out)
         return self.infer_func(block_weights.blocks, pre_infer_out.hidden_states, pre_infer_out)

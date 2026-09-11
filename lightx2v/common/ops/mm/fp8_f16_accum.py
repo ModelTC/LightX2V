@@ -2,8 +2,6 @@ import math
 
 import torch
 
-from lightx2v.common.ops.mm.triton_kernels import fp8_quantize_range_triton
-
 try:
     from lightx2v_kernel.gemm import FP8_F16_ACCUM_MM_AVAILABLE, cutlass_scaled_fp8_mm_f16_accum
 except ImportError:
@@ -35,6 +33,8 @@ def validate_fp8_f16_accum_qmax(activation_qmax):
 
 
 def fp8_f16_accum_linear(input_tensor, weight, weight_scale, bias, activation_qmax):
+    from lightx2v.common.ops.mm.triton_kernels import fp8_quantize_range_triton
+
     input_shape = input_tensor.shape
     input_matrix = input_tensor.reshape(-1, input_shape[-1])
     quantized, activation_scale = fp8_quantize_range_triton(input_matrix, activation_qmax)

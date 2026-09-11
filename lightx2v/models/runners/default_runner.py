@@ -332,6 +332,35 @@ class DefaultRunner(BaseRunner):
         min_free_bytes = float(self.config.get("empty_cache_min_free_gib", 4)) * gib
         min_reclaimable_bytes = float(self.config.get("empty_cache_min_reclaimable_gib", 2)) * gib
 
+        if AI_DEVICE == "mps":
+            driver_allocated_bytes = torch.mps.driver_allocated_memory()
+            recommended_max_bytes = torch.mps.recommended_max_memory()
+            headroom_bytes = max(recommended_max_bytes - driver_allocated_bytes, 0)
+            check_cache = force or headroom_bytes < min_free_bytes
+            if collect_garbage or check_cache:
+                gc.collect()
+            if not check_cache:
+                return False
+
+            current_allocated_bytes = torch.mps.current_allocated_memory()
+            driver_allocated_bytes = torch.mps.driver_allocated_memory()
+            recommended_max_bytes = torch.mps.recommended_max_memory()
+            headroom_bytes = max(recommended_max_bytes - driver_allocated_bytes, 0)
+            reclaimable_bytes = max(driver_allocated_bytes - current_allocated_bytes, 0)
+
+            if force or reclaimable_bytes >= min_reclaimable_bytes:
+                logger.info(
+                    f"[Memory] Emptying MPS cache: headroom={headroom_bytes / gib:.2f} GiB, "
+                    f"current_allocated={current_allocated_bytes / gib:.2f} GiB, "
+                    f"driver_allocated={driver_allocated_bytes / gib:.2f} GiB, "
+                    f"recommended_max={recommended_max_bytes / gib:.2f} GiB, "
+                    f"reclaimable={reclaimable_bytes / gib:.2f} GiB, force={force}"
+                )
+                torch.mps.empty_cache()
+                return True
+
+            return False
+
         free_bytes, _ = torch_device_module.mem_get_info()
         check_cache = force or free_bytes < min_free_bytes
         if collect_garbage or check_cache:
