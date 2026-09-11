@@ -157,26 +157,6 @@ def _load_minimax_h3_qkv_norm():
     _minimax_h3_qkv_norm_loaded = True
 
 
-def minimax_h3_qkv_norm(packed, q_weight, k_weight, q_eps, k_eps):
-    """Split packed MiniMax-H3 QKV and apply RMSNorm to Q/K on XPU."""
-    import torch
-
-    try:
-        op = torch.ops.sycl_kernels_minimax_h3_qkv.qkv_norm
-    except AttributeError:
-        _load_minimax_h3_qkv_norm()
-        op = torch.ops.sycl_kernels_minimax_h3_qkv.qkv_norm
-    return op(packed, q_weight, k_weight, q_eps, k_eps)
-
-
-def has_minimax_h3_qkv_norm():
-    try:
-        _load_minimax_h3_qkv_norm()
-        return True
-    except (ImportError, OSError, RuntimeError):
-        return False
-
-
 def minimax_h3_qkv_norm_rope(packed, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope=False):
     """Fused XPU QKV split, RMSNorm and 96-dimensional split-half RoPE (head_dim=128)."""
     import torch

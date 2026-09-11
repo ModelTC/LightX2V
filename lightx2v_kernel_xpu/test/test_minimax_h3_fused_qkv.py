@@ -129,54 +129,6 @@ def test_xpu_offload_roundtrip(transpose, monkeypatch):
         assert all(source.weight.untyped_storage().data_ptr() == storage.target.weight.untyped_storage().data_ptr() for source in sources)
 
 
-@pytest.mark.skipif(not torch.xpu.is_available(), reason="XPU is unavailable")
-@pytest.mark.parametrize("shape", [(0, 1, 128), (17, 1, 128), (9, 28, 128), (5, 7, 96)])
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_split_qkv_norm_matches_reference(shape, dtype):
-    tokens, heads, dim = shape
-    packed = torch.randn(tokens, 3 * heads * dim, device="xpu", dtype=dtype)
-    qw, kw = (torch.randn(dim, device="xpu", dtype=dtype) for _ in range(2))
-    actual = qkv_ops.split_qkv_norm(packed, qw, kw, 1e-5, 1e-4)
-    expected = list(packed.chunk(3, -1))
-    expected = [x.unflatten(-1, (heads, dim)) for x in expected]
-    for index, (weight, eps) in enumerate(((qw, 1e-5), (kw, 1e-4))):
-        x = expected[index].float()
-        expected[index] = (x * torch.rsqrt(x.square().mean(-1, keepdim=True) + eps) * weight.float()).to(dtype)
-    for index, (a, e) in enumerate(zip(actual, expected)):
-        assert a.is_contiguous()
-        torch.testing.assert_close(a, e, atol=0 if index == 2 else 2e-3, rtol=0 if index == 2 else 1e-2)
-
-
-@pytest.mark.skipif(not torch.xpu.is_available(), reason="XPU is unavailable")
-@pytest.mark.parametrize("tokens,heads", [(1, 1), (17, 1), (9, 28)])
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
-def test_xpu_qkv_norm_kernel_matches_reference(tokens, heads, dtype):
-    import sycl_kernels
-
-    packed = torch.randn(tokens, 3 * heads * 128, device="xpu", dtype=dtype)
-    qw = torch.randn(128, device="xpu", dtype=dtype)
-    kw = torch.randn(128, device="xpu", dtype=dtype)
-    actual = sycl_kernels.minimax_h3_qkv_norm(packed, qw, kw, 1e-5, 1e-4)
-    expected = [x.unflatten(-1, (heads, 128)) for x in packed.chunk(3, -1)]
-    expected[0] = torch.nn.functional.rms_norm(expected[0].float(), (128,), qw.float(), 1e-5).to(dtype)
-    expected[1] = torch.nn.functional.rms_norm(expected[1].float(), (128,), kw.float(), 1e-4).to(dtype)
-    atol = 2e-5 if dtype == torch.float32 else 2e-3
-    rtol = 2e-5 if dtype == torch.float32 else 1e-2
-    for index, (a, e) in enumerate(zip(actual, expected)):
-        assert a.is_contiguous()
-        torch.testing.assert_close(a, e, atol=0 if index == 2 else atol, rtol=0 if index == 2 else rtol)
-
-
-def test_split_qkv_norm_fake_shapes():
-    from torch._subclasses.fake_tensor import FakeTensorMode
-
-    with FakeTensorMode():
-        packed = torch.empty(9, 3 * 28 * 128)
-        weight = torch.empty(128)
-        outputs = qkv_ops.split_qkv_norm(packed, weight, weight, 1e-5, 1e-5)
-        assert all(output.shape == (9, 28, 128) and output.is_contiguous() for output in outputs)
-
-
 @pytest.mark.parametrize("device", ["cuda", "xpu"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
 @pytest.mark.parametrize("shape", [(0, 1, 128, 96), (1, 1, 128, 96), (17, 7, 128, 96), (9, 28, 128, 128), (5, 3, 96, 48)])
@@ -278,7 +230,9 @@ def test_fused_norm_rope_dispatch(device, rope_backend, norm_rope_backend, monke
         monkeypatch.setattr(sycl_kernels, "has_minimax_h3_qkv_norm_rope", lambda: False)
         fallback = qkv_ops.try_split_qkv_norm_rope(packed, *norms, rope, freqs, backend=norm_rope_backend)
         assert fallback is not None and calls == [True]
-    q, k, v = qkv_ops.split_qkv_norm(packed, norms[0].weight, norms[1].weight, norms[0].eps, norms[1].eps)
+    q, k, v = (x.unflatten(-1, (7, 128)) for x in packed.chunk(3, -1))
+    q = torch.nn.functional.rms_norm(q.float(), (128,), norms[0].weight.float(), norms[0].eps).to(packed.dtype)
+    k = torch.nn.functional.rms_norm(k.float(), (128,), norms[1].weight.float(), norms[1].eps).to(packed.dtype)
     q, k = rope.apply(q, k, freqs, rotary_dim=96)
     for a, e in zip(actual, (q, k, v)):
         torch.testing.assert_close(a, e, atol=2e-3, rtol=1e-2)
