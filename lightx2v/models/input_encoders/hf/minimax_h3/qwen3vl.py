@@ -38,7 +38,7 @@ from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight as _TorchSDPAWei
 from lightx2v.common.ops.embedding.embedding_weight import EmbeddingWeight as _EmbeddingWeight  # noqa: F401
 from lightx2v.common.ops.mm.mm_weight import MMWeight as _MMWeight  # noqa: F401
 from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightFP32Qwen as _RMSWeightFP32Qwen  # noqa: F401
-from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl_vision import MiniMaxH3Qwen3VLVisionTower
+from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl_vision import MiniMaxH3Qwen3VLVisionTower, _apply_comfy_rope, _prepare_comfy_images
 from lightx2v.models.networks.minimax_h3.packing import VIDEO_TAG
 from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     build_ref2av_presentation,
@@ -103,6 +103,33 @@ def _repeat_kv(x, num_groups):
     return x[:, :, None, :].expand(tokens, num_kv_heads, num_groups, head_dim).reshape(tokens, num_kv_heads * num_groups, head_dim)
 
 
+def _encode_vision_items(vision_encoder, pixels, grid_thw, separate_items=False):
+    if not separate_items or grid_thw.shape[0] == 1:
+        return vision_encoder(pixels, grid_thw)
+
+    features = []
+    deepstack_by_layer = None
+    offset = 0
+    for grid in grid_thw:
+        patch_count = int(grid.prod())
+        item_features, item_deepstack = vision_encoder(
+            pixels[offset : offset + patch_count],
+            grid.unsqueeze(0),
+        )
+        features.append(item_features)
+        if deepstack_by_layer is None:
+            deepstack_by_layer = [[] for _ in item_deepstack]
+        elif len(deepstack_by_layer) != len(item_deepstack):
+            raise RuntimeError("Qwen3-VL vision items returned inconsistent deepstack layers")
+        for layer_values, item_values in zip(deepstack_by_layer, item_deepstack):
+            layer_values.append(item_values)
+        offset += patch_count
+    if offset != pixels.shape[0]:
+        raise RuntimeError(f"Qwen3-VL grids describe {offset} patches, but received {pixels.shape[0]}")
+    deepstack = [] if deepstack_by_layer is None else [torch.cat(values) for values in deepstack_by_layer]
+    return torch.cat(features), deepstack
+
+
 class _Qwen3VLVocabParallelEmbedding(_EmbeddingWeight):
     """Vocabulary-sharded embedding with a TP all-reduce on activations."""
 
@@ -142,11 +169,52 @@ def _qwen_linear(config, weight_name, *, tp_group, tp_rank, tp_size, split_dim, 
     )
 
 
+def _use_comfyui_sdpa_priority(q):
+    return q.device.type == "cuda" and q.nelement() >= 1024 * 128
+
+
+def _comfyui_scaled_dot_product_attention(q, k, v, *, attn_mask, dropout_p, is_causal, enable_gqa):
+    """Mirror ComfyUI's CUDA SDPA priority and masked-GQA fallback."""
+
+    kwargs = {
+        "attn_mask": attn_mask,
+        "dropout_p": dropout_p,
+        "is_causal": is_causal,
+        "enable_gqa": enable_gqa,
+    }
+    if not _use_comfyui_sdpa_priority(q):
+        return F.scaled_dot_product_attention(q, k, v, **kwargs)
+
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
+    priority = [
+        SDPBackend.FLASH_ATTENTION,
+        SDPBackend.CUDNN_ATTENTION,
+        SDPBackend.EFFICIENT_ATTENTION,
+        SDPBackend.MATH,
+    ]
+    with sdpa_kernel(priority, set_priority=True):
+        if enable_gqa and attn_mask is not None and q.shape[-3] != k.shape[-3]:
+            params = torch.backends.cuda.SDPAParams(q, k, v, attn_mask, dropout_p, is_causal, True)
+            supports_native_gqa = (
+                torch.backends.cuda.can_use_flash_attention(params)
+                or torch.backends.cuda.can_use_cudnn_attention(params)
+                or torch.backends.cuda.can_use_efficient_attention(params)
+            )
+            if not supports_native_gqa:
+                repeats = q.shape[-3] // k.shape[-3]
+                k = k.repeat_interleave(repeats, dim=-3)
+                v = v.repeat_interleave(repeats, dim=-3)
+                kwargs["enable_gqa"] = False
+        return F.scaled_dot_product_attention(q, k, v, **kwargs)
+
+
 class _MiniMaxH3QwenSDPAWeight(AttnWeightTemplate):
     """Qwen SDPA preserving the released model's native grouped-query path."""
 
-    def __init__(self):
+    def __init__(self, comfyui_implementation=False):
         super().__init__(None)
+        self.comfyui_implementation = comfyui_implementation
 
     def apply(
         self,
@@ -165,18 +233,42 @@ class _MiniMaxH3QwenSDPAWeight(AttnWeightTemplate):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
+        if self.comfyui_implementation and causal and attn_mask is None:
+            # ComfyUI's Qwen path materializes an additive causal mask before
+            # calling SDPA instead of relying on ``is_causal=True``.  The two
+            # forms are mathematically equivalent but select different kernel
+            # arithmetic on CUDA.
+            mask_value = torch.finfo(q.dtype).min / 4
+            attn_mask = torch.empty(
+                (q.shape[-2], k.shape[-2]),
+                dtype=q.dtype,
+                device=q.device,
+            ).fill_(mask_value).triu_(1)
+            attn_mask = attn_mask[None, None]
+            causal = False
         if attn_mask is not None and attn_mask.dtype != torch.bool:
             attn_mask = attn_mask.to(q.dtype)
-        output = F.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            attn_mask=attn_mask,
-            dropout_p=drop_rate,
-            is_causal=causal,
-            scale=softmax_scale,
-            enable_gqa=True,
-        )
+        if self.comfyui_implementation:
+            output = _comfyui_scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                dropout_p=drop_rate,
+                is_causal=causal,
+                enable_gqa=True,
+            )
+        else:
+            output = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                dropout_p=drop_rate,
+                is_causal=causal,
+                scale=softmax_scale,
+                enable_gqa=True,
+            )
         output = output.transpose(1, 2)
         batch_size, sequence_length, num_heads, head_dim = output.shape
         output = output.reshape(batch_size, sequence_length, num_heads * head_dim)
@@ -214,6 +306,7 @@ class _Qwen3VLAttentionWeights(WeightModule):
         self.head_dim = int(text_config["head_dim"])
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.softmax_scale = self.head_dim**-0.5
+        self.h3_implementation = config.get("h3_implementation")
         eps = float(text_config["rms_norm_eps"])
 
         for name, split_dim in (("q_proj", "col"), ("k_proj", "col"), ("v_proj", "col"), ("o_proj", "row")):
@@ -239,7 +332,10 @@ class _Qwen3VLAttentionWeights(WeightModule):
         )
         self.native_gqa = attn_type == "torch_sdpa"
         if self.native_gqa:
-            self.add_module("calculate", _MiniMaxH3QwenSDPAWeight())
+            self.add_module(
+                "calculate",
+                _MiniMaxH3QwenSDPAWeight(comfyui_implementation=self.h3_implementation == "comfyui"),
+            )
         else:
             self.add_module("calculate", ATTN_WEIGHT_REGISTER[attn_type]())
 
@@ -255,8 +351,12 @@ class _Qwen3VLAttentionWeights(WeightModule):
         cos, sin = position_embeddings
         cos = cos[:, None, :]
         sin = sin[:, None, :]
-        query = query * cos + _rotate_half(query) * sin
-        key = key * cos + _rotate_half(key) * sin
+        if self.h3_implementation == "comfyui":
+            query = _apply_comfy_rope(query, cos, sin)
+            key = _apply_comfy_rope(key, cos, sin)
+        else:
+            query = query * cos + _rotate_half(query) * sin
+            key = key * cos + _rotate_half(key) * sin
 
         # The released Qwen model keeps eight KV heads and uses torch SDPA's
         # native GQA specialization.  Preserve that CUDA kernel path for close
@@ -345,6 +445,7 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
     def __init__(self, config, text_config, num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER, attn_type="torch_sdpa", block_offload=False, tp_group=None):
         super().__init__()
         self.config = config
+        self.comfyui_implementation = config.get("h3_implementation") == "comfyui"
         self.text_config = text_config
         self.num_layers = int(num_layers)
         self.attn_type = attn_type
@@ -427,8 +528,7 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
             raise ValueError(f"Cannot shard Qwen3-VL tensor {name} shape {tuple(tensor.shape)} across text TP size {self.tp_size}")
         return torch.chunk(tensor, self.tp_size, dim=split_dim)[self.tp_rank].contiguous()
 
-    @staticmethod
-    def _allocate_layer_buffer(buffer_layer, source_layer):
+    def _allocate_layer_buffer(self, buffer_layer, source_layer):
         """Allocate compute-layout device tensors without another checkpoint copy."""
         allocated_bytes = 0
         for buffer_weight, source_weight in zip(buffer_layer.weight_modules(), source_layer.weight_modules()):
@@ -447,7 +547,7 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
                 device_buffer = torch.empty_strided(
                     source_tensor.size(),
                     source_tensor.stride(),
-                    dtype=source_tensor.dtype,
+                    dtype=torch.float32 if self.comfyui_implementation and source_tensor.is_floating_point() else source_tensor.dtype,
                     device=AI_DEVICE,
                 )
                 setattr(buffer_storage, f"{attr_name}_cuda_buffer", device_buffer)
@@ -523,6 +623,8 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
             frequencies_t[..., slice(offset, self.mrope_section[dim] * 3, 3)] = frequencies[dim, ..., slice(offset, self.mrope_section[dim] * 3, 3)]
         frequencies = frequencies_t
         embeddings = torch.cat((frequencies, frequencies), dim=-1)
+        if self.config.get("h3_implementation") == "comfyui":
+            return embeddings.cos(), embeddings.sin()
         return embeddings.cos().to(hidden_states.dtype), embeddings.sin().to(hidden_states.dtype)
 
     def _inject_vision_embeds(self, hidden_states, vision_mask, vision_embeds):
@@ -564,6 +666,8 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
                 hidden_states = self.embed_tokens.apply(input_ids)
             finally:
                 self.embed_tokens.weight = self.embed_tokens.pin_weight
+            if self.comfyui_implementation:
+                hidden_states = hidden_states.float()
             hidden_states = self._inject_vision_embeds(hidden_states, vision_mask, vision_embeds)
             position_embeddings = self._position_embeddings(hidden_states, position_ids)
 
@@ -600,6 +704,8 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
             return self._forward_with_block_offload(input_ids, position_ids, vision_mask, vision_embeds, deepstack_embeds)
 
         hidden_states = self.embed_tokens.apply(input_ids)
+        if self.comfyui_implementation:
+            hidden_states = hidden_states.float()
         hidden_states = self._inject_vision_embeds(hidden_states, vision_mask, vision_embeds)
         position_embeddings = self._position_embeddings(hidden_states, position_ids)
         for layer_index, layer in enumerate(self.layers):
@@ -623,6 +729,14 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
 
     def to_cuda(self, non_blocking=False):
         super().to_cuda(non_blocking=non_blocking)
+        if self.comfyui_implementation:
+            for layer in self.layers:
+                for module in layer.weight_modules():
+                    storage = unwrap_tp_linear(module)
+                    for _, attr_name, _ in storage.base_attrs:
+                        tensor = getattr(storage, attr_name, None)
+                        if tensor is not None and tensor.is_floating_point() and tensor.dtype != torch.float32:
+                            setattr(storage, attr_name, tensor.float())
         return self
 
 
@@ -656,6 +770,11 @@ class MiniMaxH3Qwen3VLTextEncoder:
             self.tp_group = None
             self.tp_size = 1
             self.tp_rank = 0
+        requested_rank0_only = bool(config.get("text_encoder_rank0_only", False))
+        self.rank0_only = requested_rank0_only and dist.is_initialized() and dist.get_world_size() > 1
+        if self.rank0_only and self.tensor_parallel:
+            raise ValueError("MiniMax-H3 text_encoder_rank0_only and text_encoder_tensor_parallel cannot both be enabled")
+        self.is_encoder_rank = not self.rank0_only or dist.get_rank() == 0
         text_encoder_cpu_offload = bool(config.get("text_encoder_cpu_offload", config.get("cpu_offload", False)))
         if "qwen3vl_cpu_offload" in config and bool(config["qwen3vl_cpu_offload"]) != text_encoder_cpu_offload:
             raise ValueError("qwen3vl_cpu_offload cannot override text_encoder_cpu_offload for MiniMax-H3; the runner schedules the native conditioner through text_encoder_cpu_offload")
@@ -1025,7 +1144,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
             return self.vision_encoder
         text_encoder_path = self._component_path("text_encoder_path", "text_encoder")
         model_config = self._read_model_config(text_encoder_path)
-        vision_config = dict(model_config["vision_config"])
+        vision_config = {**model_config["vision_config"], "h3_implementation": self.config.get("h3_implementation")}
         logger.info(f"Building native MiniMax-H3 Qwen3-VL vision tower from {text_encoder_path}")
         self.vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config)
         return self.vision_encoder
@@ -1054,6 +1173,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
         return self
 
     def load(self):
+        if not self.is_encoder_rank:
+            return self
         self.load_tokenizer()
         self.load_text_encoder()
         return self
@@ -1069,6 +1190,29 @@ class MiniMaxH3Qwen3VLTextEncoder:
             self.load_tokenizer()
         if self.text_encoder is None:
             self.load_text_encoder()
+
+    def _broadcast_rank0_output(self, output):
+        if not self.rank0_only:
+            return output
+
+        rank = dist.get_rank()
+        if rank == 0:
+            prompt_embeds = output["prompt_embeds"]
+            text_token_tags = output["text_token_tags"]
+            metadata = torch.tensor(prompt_embeds.shape, dtype=torch.long, device=prompt_embeds.device)
+        else:
+            metadata = torch.empty(2, dtype=torch.long, device=AI_DEVICE)
+        dist.broadcast(metadata, src=0)
+
+        if rank != 0:
+            prompt_embeds = torch.empty(tuple(metadata.tolist()), dtype=GET_DTYPE(), device=AI_DEVICE)
+            text_token_tags = torch.empty(prompt_embeds.shape[0], dtype=torch.long, device=AI_DEVICE)
+        dist.broadcast(prompt_embeds, src=0)
+        dist.broadcast(text_token_tags, src=0)
+        return {
+            "prompt_embeds": prompt_embeds,
+            "text_token_tags": text_token_tags,
+        }
 
     def _prepare_t2av_input_ids(self, prompt, device):
         if not isinstance(prompt, str):
@@ -1120,9 +1264,14 @@ class MiniMaxH3Qwen3VLTextEncoder:
             raise RuntimeError(f"Qwen3-VL M-RoPE produced {result.shape[1]} positions for {input_ids.shape[0]} tokens")
         return result
 
+    def _process_images(self, images):
+        if self.config.get("h3_implementation") == "comfyui":
+            return _prepare_comfy_images(images)
+        return self.load_processor().image_processor(images=images, return_tensors="pt")
+
     def _prepare_keyframe_inputs(self, prompt, images):
         processor = self.load_processor()
-        vision = processor.image_processor(images=images, return_tensors="pt")
+        vision = self._process_images(images)
         image_grid_thw = vision["image_grid_thw"]
         merge_unit = processor.image_processor.merge_size**2
         token_ids, token_tags = [], []
@@ -1146,7 +1295,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
         images = [reference.image for reference in references if reference.kind == "image"]
         merge_unit = processor.image_processor.merge_size**2
         if images:
-            vision = processor.image_processor(images=images, return_tensors="pt")
+            vision = self._process_images(images)
             pixel_values, image_grid_thw = vision["pixel_values"], vision["image_grid_thw"]
             image_counts = [int(grid.prod()) // merge_unit for grid in image_grid_thw]
         pixel_values_videos = video_grid_thw = None
@@ -1173,9 +1322,19 @@ class MiniMaxH3Qwen3VLTextEncoder:
         try:
             with torch.no_grad():
                 if pixel_values is not None:
-                    image_features, image_deepstack = vision_encoder(pixel_values.to(AI_DEVICE, parameter.dtype), image_grid_thw.to(AI_DEVICE))
+                    image_features, image_deepstack = _encode_vision_items(
+                        vision_encoder,
+                        pixel_values.to(AI_DEVICE, parameter.dtype),
+                        image_grid_thw.to(AI_DEVICE),
+                        separate_items=self.config.get("h3_implementation") == "comfyui",
+                    )
                 if pixel_values_videos is not None:
-                    video_features, video_deepstack = vision_encoder(pixel_values_videos.to(AI_DEVICE, parameter.dtype), video_grid_thw.to(AI_DEVICE))
+                    video_features, video_deepstack = _encode_vision_items(
+                        vision_encoder,
+                        pixel_values_videos.to(AI_DEVICE, parameter.dtype),
+                        video_grid_thw.to(AI_DEVICE),
+                        separate_items=self.config.get("h3_implementation") == "comfyui",
+                    )
             image_token_id = self.tokenizer.convert_tokens_to_ids("<|image_pad|>")
             video_token_id = self.tokenizer.convert_tokens_to_ids("<|video_pad|>")
             image_mask, video_mask = input_ids == image_token_id, input_ids == video_token_id
@@ -1207,6 +1366,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
     @torch.inference_mode()
     def infer(self, prompt, image_list=None, references=None):
         """Return unbatched ``[tokens, 5120]`` conditioning and text tags."""
+        if self.rank0_only and not self.is_encoder_rank:
+            return self._broadcast_rank0_output(None)
         self._ensure_loaded()
         try:
             # Input encoding happens before DefaultRunner enters its main-model
@@ -1256,10 +1417,11 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 raise RuntimeError(f"MiniMax-H3 expected conditioner hidden shape {expected_shape}, but native Qwen3-VL returned {tuple(prompt_embeds.shape)}")
 
             prompt_embeds = prompt_embeds.to(device=AI_DEVICE, dtype=GET_DTYPE()).contiguous()
-            return {
+            output = {
                 "prompt_embeds": prompt_embeds,
                 "text_token_tags": token_tags.to(prompt_embeds.device),
             }
+            return self._broadcast_rank0_output(output)
         finally:
             if self.block_offload:
                 if self.release_block_offload_buffers and self.text_encoder is not None:

@@ -146,6 +146,7 @@ class MiniMaxH3LoraAdapter(LoraAdapter):
                 lora_down = source.get_tensor(pair["down_key"])
                 lora_up, lora_down = self._shard_factors(model_key, lora_up, lora_down)
                 merge_device = self._merge_device(parameter)
+                comfyui_merge = self.model.config.get("h3_implementation") == "comfyui"
                 lora_up = lora_up.to(device=merge_device, dtype=parameter.dtype)
                 lora_down = lora_down.to(device=merge_device, dtype=parameter.dtype)
 
@@ -155,10 +156,17 @@ class MiniMaxH3LoraAdapter(LoraAdapter):
                 delta = torch.mm(lora_up, lora_down)
                 if delta.shape != parameter.shape:
                     raise ValueError(f"LoRA delta shape mismatch for {model_key}: delta={tuple(delta.shape)}, weight={tuple(parameter.shape)}")
-                parameter.add_(
-                    delta.to(parameter.device),
-                    alpha=scale * float(strength),
-                )
+                factor = scale * float(strength)
+                if comfyui_merge:
+                    # The target process runs with --lowvram. Its runtime patch
+                    # passes weight.dtype as ComfyUI's intermediate_dtype, then
+                    # evaluates weight += ((factor * (up @ down)).type(dtype)).
+                    merged = parameter.to(device=merge_device, copy=True)
+                    merged += (factor * delta).to(parameter.dtype)
+                    parameter.copy_(merged.to(parameter.device))
+                    del merged
+                else:
+                    parameter.add_(delta.to(parameter.device), alpha=factor)
                 del lora_up, lora_down, delta
 
                 if index % 24 == 0 or index == len(pairs):

@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .packing import (
     AUDIO_CHANNELS,
@@ -59,6 +59,51 @@ class MiniMaxH3PreparedReference:
     @property
     def num_audio_rows(self) -> int:
         return self.num_audio_latents * AUDIO_CHANNELS
+
+
+def load_comfyui_reference_image(media) -> Image.Image:
+    """Load the first RGB frame with the same path decoder used by ComfyUI."""
+
+    path = os.fspath(media)
+    if not os.path.isfile(path):
+        raise ValueError(f"MiniMax-H3 reference image is not a local file: {path}")
+    try:
+        import av
+    except ImportError as error:
+        raise ImportError("ComfyUI-compatible MiniMax-H3 reference image loading requires PyAV") from error
+
+    with av.open(path) as container:
+        if not container.streams.video:
+            raise ValueError(f"No image stream to decode in {path}")
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        try:
+            frame = next(container.decode(stream), None)
+        except av.error.InvalidDataError:
+            frame = None
+        if frame is None:
+            # ComfyUI keeps this Pillow fallback for image formats which PyAV
+            # recognizes as a container but cannot materialize as a frame.
+            return ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+
+        has_alpha = any(component.is_alpha for component in frame.format.components) or frame.format.name == "pal8"
+        byte_formats = {"yuvj420p", "yuvj422p", "yuvj444p", "rgb24", "rgba", "pal8"}
+        if frame.format.name in byte_formats:
+            image_format = "rgba" if has_alpha else "rgb24"
+            pixels = frame.to_ndarray(format=image_format)
+        else:
+            image_format = "gbrapf32le" if has_alpha else "gbrpf32le"
+            pixels = frame.to_ndarray(format=image_format)
+        if has_alpha:
+            pixels = pixels[..., :-1]
+
+        rotation = int(round(frame.rotation // 90)) % 4 if frame.rotation else 0
+
+    if rotation:
+        pixels = np.rot90(pixels, k=rotation, axes=(0, 1))
+    if pixels.dtype != np.uint8:
+        pixels = np.clip(255.0 * pixels, 0, 255).astype(np.uint8)
+    return Image.fromarray(np.ascontiguousarray(pixels))
 
 
 def _decode_reference_soundtrack(av, container, stream) -> tuple[torch.Tensor, int]:
@@ -261,8 +306,15 @@ def resolve_reference_image_size(
     )
 
 
-def prepare_reference_image(image: Image.Image, height: int, width: int) -> Image.Image:
-    return image if image.size == (width, height) else image.resize((width, height), Image.Resampling.LANCZOS)
+def prepare_reference_image(image: Image.Image, height: int, width: int, *, comfyui: bool = False) -> Image.Image:
+    if not comfyui:
+        return image if image.size == (width, height) else image.resize((width, height), Image.Resampling.LANCZOS)
+
+    # Mirror common_upscale(..., "lanczos", "disabled"): the IMAGE tensor is
+    # converted back to uint8 before Pillow performs the Lanczos resize.
+    samples = torch.from_numpy(np.array(image).astype(np.float32) / 255.0)[None].movedim(-1, 1)
+    pixels = np.clip(255.0 * samples.movedim(1, -1)[0].cpu().numpy(), 0, 255).astype(np.uint8)
+    return Image.fromarray(pixels).resize((width, height), Image.Resampling.LANCZOS)
 
 
 def resample_reference_frames(frames: np.ndarray, fps: float) -> np.ndarray:

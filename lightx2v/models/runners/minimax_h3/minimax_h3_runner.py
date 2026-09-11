@@ -30,6 +30,7 @@ from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     MiniMaxH3PreparedReference,
     decode_reference_audio,
     decode_reference_video,
+    load_comfyui_reference_image,
     prepare_reference_frames,
     prepare_reference_image,
     prepare_reference_waveform,
@@ -114,7 +115,11 @@ class MiniMaxH3Runner(DefaultRunner):
         """Return tasks supported by the loaded transformer weights."""
         if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
-        return ("t2av", "i2av", "l2av", "fl2av")
+        # Reference packing is a conditioning topology, not a requirement to
+        # load transformer_ref. ComfyUI's FL2VA reference workflow uses the
+        # base transformer with Ref2AV packing, while the released Ref2AV
+        # variant remains restricted to its native task.
+        return ("t2av", "i2av", "l2av", "fl2av", "ref2av")
 
     def init_modules(self):
         super().init_modules()
@@ -266,6 +271,7 @@ class MiniMaxH3Runner(DefaultRunner):
         video_vae_quant_scheme = self.config["video_vae_quant_scheme"] if video_vae_quantized else None
         video_vae_quantized_ckpt = self.config["video_vae_quantized_ckpt"] if video_vae_quantized else None
         vae_sensitive_layer_dtype = DTYPE_MAP[self.config.get("vae_sensitive_layer_dtype", "fp32")]
+        comfyui_implementation = self.config.get("h3_implementation") == "comfyui"
         video_vae = MiniMaxH3VideoVAE.from_pretrained(
             self.config["model_path"],
             device=AI_DEVICE,
@@ -274,6 +280,7 @@ class MiniMaxH3Runner(DefaultRunner):
             quant_scheme=video_vae_quant_scheme,
             encoder_conv_mode=self.config.get("vae_encoder_conv_mode", "torch"),
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
+            comfyui_implementation=comfyui_implementation,
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
         )
@@ -332,6 +339,8 @@ class MiniMaxH3Runner(DefaultRunner):
         negative_prompt = (input_info.negative_prompt or "").strip()
         if negative_prompt:
             logger.warning("MiniMax-H3 is guidance-distilled; negative_prompt is ignored")
+        # Preserve the request prompt byte-for-byte. In particular, CRLF and LF
+        # produce different Qwen token sequences in the ComfyUI workflow.
         return self.text_encoders[0].infer(input_info.prompt, image_list=keyframes, references=references)
 
     @staticmethod
@@ -410,9 +419,14 @@ class MiniMaxH3Runner(DefaultRunner):
         references = []
         audio_count = 0
         max_duration = self.request_num_frames / 24.0
+        comfyui_implementation = self.config.get("h3_implementation") == "comfyui"
         for entry, kind in zip(entries, kinds):
             if kind == "image":
-                image = self._load_rgb_image(entry["image"])
+                image_value = entry["image"]
+                if comfyui_implementation and isinstance(image_value, (str, os.PathLike)):
+                    image = load_comfyui_reference_image(image_value)
+                else:
+                    image = self._load_rgb_image(image_value)
                 height, width = resolve_reference_image_size(
                     *image.size,
                     target_width=self.request_width,
@@ -420,7 +434,7 @@ class MiniMaxH3Runner(DefaultRunner):
                     mode=resize_mode,
                 )
                 logger.info(f"MiniMax-H3 reference image resized with {resize_mode!r}: {image.width}x{image.height} -> {width}x{height}")
-                references.append(MiniMaxH3PreparedReference("image", image=prepare_reference_image(image, height, width)))
+                references.append(MiniMaxH3PreparedReference("image", image=prepare_reference_image(image, height, width, comfyui=comfyui_implementation)))
                 continue
             if kind == "video":
                 video = entry["video"]
@@ -478,15 +492,16 @@ class MiniMaxH3Runner(DefaultRunner):
 
     def _encode_references(self, references):
         video_latents, audio_latents = [], []
+        sample_posterior = self.config.get("h3_implementation") != "comfyui"
         for reference in references:
             if reference.kind != "audio":
                 if reference.kind == "image":
                     pixels = torch.from_numpy(np.asarray(reference.image).copy()).permute(2, 0, 1)[None, :, None].float().div_(255.0)
-                    latent = self.video_vae.encode_condition(pixels, video=False)
+                    latent = self.video_vae.encode_condition(pixels, video=False, sample_posterior=sample_posterior)
                 else:
                     frames = reference.frames[: trim_reference_num_frames(reference.frames.shape[0])]
                     pixels = torch.from_numpy(frames.copy()).permute(3, 0, 1, 2)[None].float().div_(255.0)
-                    latent = self.video_vae.encode_condition(pixels, video=True)
+                    latent = self.video_vae.encode_condition(pixels, video=True, sample_posterior=sample_posterior)
                 reference.num_latent_frames = latent.shape[2]
                 reference.latent_height, reference.latent_width = latent.shape[3:]
                 video_latents.append(latent)
@@ -499,13 +514,8 @@ class MiniMaxH3Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Input Encoder")
     def _run_input_encoder_local_h3(self):
         task = self.input_info.task
-        requested_partition = "transformer_ref" if task == "ref2av" else "transformer"
-        if requested_partition != self.loaded_transformer_partition:
-            raise ValueError(
-                "MiniMax-H3 cannot switch between the base and reference transformer partitions after initialization; "
-                f"loaded {self.loaded_transformer_partition!r}, requested {requested_partition!r}. "
-                "Create a separate LightX2VPipeline for ref2av."
-            )
+        if self.loaded_transformer_partition == "transformer_ref" and task != "ref2av":
+            raise ValueError(f"MiniMax-H3 transformer_ref only supports ref2av requests; received task {task!r}. Use model_variant='fl2av' for base-transformer tasks.")
         self.clear_conditioning_state()
         if task == "ref2av":
             self._resolve_request_geometry()
@@ -640,13 +650,26 @@ class MiniMaxH3Runner(DefaultRunner):
         if not self.video_vae.decode_parallel or dist.get_rank() == 0:
             with ProfilingContext4DebugL1("Run Audio VAE Decoder"):
                 audio = self.audio_vae.decode(audio_latents)
+                audio = self._postprocess_audio(audio)
         return video, audio
 
+    def _postprocess_audio(self, audio):
+        if self.config.get("h3_implementation") == "comfyui":
+            scale = audio.std(dim=(1, 2), keepdim=True) * 5.0
+            scale[scale < 1.0] = 1.0
+            return audio / scale
+        return audio
+
     @staticmethod
-    def _video_to_uint8_frames(video):
+    def _video_to_uint8_frames(video, *, comfyui_implementation=False):
         if video.ndim != 5 or video.shape[0] != 1 or video.shape[1] != 3:
             raise ValueError(f"decoded H3 video must be [1,3,F,H,W], got {tuple(video.shape)}")
-        return (video[0].permute(1, 2, 3, 0).float() * 255.0).round().to(torch.uint8).contiguous().cpu()
+        pixels = video[0].permute(1, 2, 3, 0).float() * 255.0
+        if comfyui_implementation:
+            pixels = pixels.clamp(0, 255)
+        else:
+            pixels = pixels.round()
+        return pixels.to(torch.uint8).contiguous().cpu()
 
     def process_images_after_vae_decoder(self):
         if self.video_vae.decode_parallel and dist.get_rank() != 0:
@@ -666,7 +689,8 @@ class MiniMaxH3Runner(DefaultRunner):
                 raise ValueError(f"MiniMax-H3 AV output uses H.264/AAC; save_result_path must end in .mp4, got {output_path!r}")
             parent = os.path.dirname(os.path.abspath(output_path))
             os.makedirs(parent, exist_ok=True)
-            frames = self._video_to_uint8_frames(self.gen_video)
+            comfyui_implementation = self.config.get("h3_implementation") == "comfyui"
+            frames = self._video_to_uint8_frames(self.gen_video, comfyui_implementation=comfyui_implementation)
             waveform = self.gen_audio[0].float().cpu()
             audio = Audio(
                 waveform=waveform,
@@ -681,6 +705,7 @@ class MiniMaxH3Runner(DefaultRunner):
                     output_path=output_path,
                     video_chunks_number=1,
                     video_codec_options=self.config.get("video_codec_options"),
+                    comfyui_implementation=comfyui_implementation,
                 )
             logger.info(f"MiniMax-H3 output saved to {output_path}")
         return {"video": None, "audio": None}

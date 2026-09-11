@@ -5,11 +5,39 @@ import math
 from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
 from safetensors import safe_open
+
+
+def _prepare_comfy_images(images):
+    patches, grids = [], []
+    patch_size, temporal_patch_size, merge_size = 16, 2, 2
+    factor = patch_size * merge_size
+    for image in images:
+        pixels = torch.from_numpy(np.array(image).astype(np.float32) / 255.0).permute(2, 0, 1)
+        height, width = pixels.shape[-2:]
+        h_bar, w_bar = round(height / factor) * factor, round(width / factor) * factor
+        if h_bar * w_bar > 12845056:
+            beta = math.sqrt(height * width / 12845056)
+            h_bar = max(factor, math.floor(height / beta / factor) * factor)
+            w_bar = max(factor, math.floor(width / beta / factor) * factor)
+        elif h_bar * w_bar < 3136:
+            beta = math.sqrt(3136 / (height * width))
+            h_bar = math.ceil(height * beta / factor) * factor
+            w_bar = math.ceil(width * beta / factor) * factor
+        pixels = F.interpolate(pixels.unsqueeze(0), size=(h_bar, w_bar), mode="bilinear", align_corners=False).squeeze(0)
+        pixels = (pixels - 0.5) / 0.5
+        grid_h, grid_w = h_bar // patch_size, w_bar // patch_size
+        pixels = pixels.unsqueeze(0).repeat(temporal_patch_size, 1, 1, 1)
+        pixels = pixels.reshape(1, temporal_patch_size, 3, grid_h // merge_size, merge_size, patch_size, grid_w // merge_size, merge_size, patch_size)
+        pixels = pixels.permute(0, 3, 6, 4, 7, 2, 1, 5, 8)
+        patches.append(pixels.reshape(grid_h * grid_w, 3 * temporal_patch_size * patch_size**2))
+        grids.append((1, grid_h, grid_w))
+    return {"pixel_values": torch.cat(patches), "image_grid_thw": torch.tensor(grids, dtype=torch.long)}
 
 
 def _vision_position_ids(grid_thw, merge_size):
@@ -65,6 +93,14 @@ def _rotate_half(value):
     return torch.cat((-second, first), dim=-1)
 
 
+def _apply_comfy_rope(value, cos, sin):
+    rotated = value * cos
+    midpoint = value.shape[-1] // 2
+    rotated[..., :midpoint].addcmul_(value[..., midpoint:], -sin[..., midpoint:])
+    rotated[..., midpoint:].addcmul_(value[..., :midpoint], sin[..., :midpoint])
+    return rotated.to(value.dtype)
+
+
 class _PatchEmbed(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -85,16 +121,21 @@ class _VisionAttention(nn.Module):
         self.num_heads = config["num_heads"]
         self.head_dim = config["hidden_size"] // self.num_heads
         self.scaling = self.head_dim**-0.5
+        self.h3_implementation = config.get("h3_implementation")
         self.qkv = nn.Linear(config["hidden_size"], config["hidden_size"] * 3, bias=True)
         self.proj = nn.Linear(config["hidden_size"], config["hidden_size"], bias=True)
 
     def forward(self, hidden_states, cu_seqlens, cos, sin):
         length = hidden_states.shape[0]
         query, key, value = self.qkv(hidden_states).reshape(length, 3, self.num_heads, self.head_dim).permute(1, 0, 2, 3).unbind(0)
-        query_f, key_f = query.float(), key.float()
         cos_f, sin_f = cos.unsqueeze(-2).float(), sin.unsqueeze(-2).float()
-        query = (query_f * cos_f + _rotate_half(query_f) * sin_f).to(query.dtype)
-        key = (key_f * cos_f + _rotate_half(key_f) * sin_f).to(key.dtype)
+        if self.h3_implementation == "comfyui":
+            query = _apply_comfy_rope(query, cos_f, sin_f)
+            key = _apply_comfy_rope(key, cos_f, sin_f)
+        else:
+            query_f, key_f = query.float(), key.float()
+            query = (query_f * cos_f + _rotate_half(query_f) * sin_f).to(query.dtype)
+            key = (key_f * cos_f + _rotate_half(key_f) * sin_f).to(key.dtype)
         outputs = []
         for start, end in zip(cu_seqlens[:-1].tolist(), cu_seqlens[1:].tolist()):
             q = query[start:end].transpose(0, 1).unsqueeze(0)
@@ -173,7 +214,12 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
         position_ids = _vision_position_ids(grid_thw, self.spatial_merge_size)
         cu_seqlens = _vision_cu_seqlens(grid_thw)
         hidden_states = self.patch_embed(pixels)
-        pos_embed = (self.pos_embed(indices) * weights[:, :, None]).sum(0)
+        if self.config.get("h3_implementation") == "comfyui":
+            # Comfy keeps the position table and interpolation arithmetic in the checkpoint dtype.
+            corners = self.pos_embed(indices) * weights.to(self.pos_embed.weight.dtype)[:, :, None]
+            pos_embed = corners[0] + corners[1] + corners[2] + corners[3]
+        else:
+            pos_embed = (self.pos_embed(indices) * weights[:, :, None]).sum(0)
         hidden_states = hidden_states + pos_embed.to(hidden_states.dtype)
         rotary = (position_ids.unsqueeze(-1) * self.rotary_inv_freq.to(position_ids.device)).flatten(1)
         rotary = torch.cat((rotary, rotary), dim=-1)
@@ -210,6 +256,10 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
             raise RuntimeError(f"Qwen3-VL vision checkpoint mismatch: missing={missing}, unexpected={unexpected}")
         head_dim = vision_config["hidden_size"] // vision_config["num_heads"]
         model.rotary_inv_freq = 1.0 / (10000.0 ** (torch.arange(0, head_dim // 2, 2, dtype=torch.float32) / (head_dim // 2)))
+        if vision_config.get("h3_implementation") == "comfyui":
+            position_dtype = model.pos_embed.weight.dtype
+            model.float()
+            model.pos_embed.to(dtype=position_dtype)
         return model.eval().requires_grad_(False)
 
 
