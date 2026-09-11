@@ -25,7 +25,6 @@
   "use_compile": true,
   "use_fused_qkv_attn": true,
   "use_fused_qkv_norm_rope": true,
-  "qkv_norm_type": "triton",
   "qkv_norm_rope_type": "intel_xpu",
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
