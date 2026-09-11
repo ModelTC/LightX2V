@@ -2,12 +2,15 @@ import torch
 import torch.distributed as dist
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.common.ops.mm.mm_weight import unwrap_tp_weight
 from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
     DIT_FP8_F16_ACCUM_ACTIVATION_QMAX,
     FP8_F16_ACCUM_PROJECTION_SUFFIXES,
 )
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
+from lightx2v.models.networks.minimax_h3.weights.fused_qkv import FusedQKVStorage
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def _linear(config, name, bias=False, create_cuda_buffer=False, tp_split=None):
@@ -51,9 +54,15 @@ def _rms(config, name, eps, create_cuda_buffer=False):
 class MiniMaxH3AttentionWeights(WeightModule):
     def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
+        self.use_fused_qkv_attn = bool(config.get("use_fused_qkv_attn", False))
         self.add_module("to_q", _linear(config, f"{prefix}.to_q", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         self.add_module("to_k", _linear(config, f"{prefix}.to_k", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         self.add_module("to_v", _linear(config, f"{prefix}.to_v", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
+        # This is deliberately not registered as a child module: there is no
+        # fused tensor in the released checkpoint. The checkpoint-backed
+        # projections become views of its shared storage after loading.
+        self.to_qkv = _linear(config, f"{prefix}.to_qkv", create_cuda_buffer=create_cuda_buffer, tp_split="col") if self.use_fused_qkv_attn else None
+        self._qkv_storage = FusedQKVStorage(tuple(unwrap_tp_weight(module) for module in (self.to_q, self.to_k, self.to_v)), unwrap_tp_weight(self.to_qkv)) if self.to_qkv is not None else None
         qk_eps = float(config.get("qk_norm_eps", 1e-5))
         self.add_module(
             "norm_q",
@@ -96,6 +105,55 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")](a2a_backend=parallel.get("seq_p_a2a_backend", "torch")),
             )
         self.add_module("to_out", _linear(config, f"{prefix}.to_out.0", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
+
+    def load(self, weight_dict):
+        super().load(weight_dict)
+        self._build_fused_qkv()
+
+    def to_cuda(self, non_blocking=False):
+        self._move_weights(AI_DEVICE, non_blocking)
+
+    def to_cpu(self, non_blocking=False):
+        self._move_weights("cpu", non_blocking)
+
+    def _move_weights(self, device, non_blocking):
+        shared = self._qkv_storage is not None and self._qkv_storage.can_move
+        if shared:
+            self._qkv_storage.move(device, non_blocking)
+        method = "to_cpu" if device == "cpu" else "to_cuda"
+        for name, module in self._modules.items():
+            if shared and name in ("to_q", "to_k", "to_v"):
+                continue
+            if hasattr(module, method):
+                getattr(module, method)(non_blocking=non_blocking)
+        if not shared:
+            self._build_fused_qkv()
+
+    def to_cuda_async(self, non_blocking=True):
+        self.to_cuda(non_blocking=non_blocking)
+
+    def to_cpu_async(self, non_blocking=True):
+        self.to_cpu(non_blocking=non_blocking)
+
+    def load_state_dict(self, destination, block_index, adapter_block_index=None):
+        result = super().load_state_dict(destination, block_index, adapter_block_index)
+        self._build_fused_qkv()
+        return result
+
+    def load_state_dict_from_disk(self, block_index, adapter_block_index=None):
+        result = super().load_state_dict_from_disk(block_index, adapter_block_index)
+        self._build_fused_qkv()
+        return result
+
+    def _build_fused_qkv(self):
+        if self._qkv_storage is not None:
+            self._qkv_storage.refresh()
+
+    @property
+    def has_fused_qkv(self):
+        if self.to_qkv is None or getattr(unwrap_tp_weight(self.to_qkv), "weight", None) is None:
+            return False
+        return not any(getattr(unwrap_tp_weight(module), "has_lora_branch", False) or getattr(unwrap_tp_weight(module), "has_diff", False) for module in (self.to_q, self.to_k, self.to_v))
 
 
 class MiniMaxH3FeedForwardWeights(WeightModule):

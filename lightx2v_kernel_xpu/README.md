@@ -275,6 +275,52 @@ CUTE FMHA is disabled on Windows because the current sycl-tla kernel produces
 incorrect attention results there. `build.bat` builds only the existing
 ESIMD/oneDNN extension, and `sycl_kernels.has_cute_fmha()` returns `False`.
 
+### MiniMax-H3 fused QKV norm and RoPE
+
+Enable the optional Triton path in the model config with:
+
+```json
+{"use_fused_qkv_attn": true, "use_fused_qkv_norm_rope": true}
+```
+
+This combines Q/K RMSNorm, split-half RoPE, and V copying in one launch on
+CUDA or XPU. The default is disabled. Supported RoPE implementations are `torch_real_rope`
+and `minimax_h3_xpu_rope`, with FP32 computation and FP32 full-width
+`[tokens, rotary_dim]` cosine/sine caches. Unsupported norm or RoPE modes
+retain the separate configured operations. FP16, BF16 and FP32 inputs are
+supported, including partial rotation and padded token strides. The fused
+path preserves the norm output cast and the XPU BF16 RoPE intermediate
+rounding when that backend is active. The Triton path needs no C++ rebuild.
+
+To select the native XPU ESIMD kernel, use:
+
+```json
+{"use_fused_qkv_attn": true, "use_fused_qkv_norm_rope": true, "qkv_norm_rope_type": "intel_xpu"}
+```
+
+`qkv_norm_rope_type` accepts `triton` or `intel_xpu` and defaults to `triton`. The ESIMD
+kernel supports head dimension 128 and rotary dimension 96 with FP16,
+BF16 or FP32 inputs. Other shapes or an older extension fall back to
+Triton, then the separate configured operations if Triton is unavailable.
+The native path does not require Triton. Rebuild the extension with
+`./build.sh`, or update just this sidecar from an existing configured build:
+
+```bash
+cd lightx2v_kernel_xpu
+cmake --build _cmake_build --target minimax_h3_qkv_norm_torch -j 2
+cp _cmake_build/minimax_h3_qkv_norm_torch.so python/sycl_kernels/
+```
+
+When using the local build without reinstalling the package, prepend
+`lightx2v_kernel_xpu/python` to `PYTHONPATH` from the repository root so the
+new Python API and sidecar are loaded together.
+
+Run correctness tests from the repository root with:
+
+```bash
+PYTHONPATH=lightx2v_kernel_xpu/python:$PYTHONPATH python -m pytest lightx2v_kernel_xpu/test/test_minimax_h3_fused_qkv.py -q
+```
+
 ### MiniMax-H3 SLA block-sparse attention
 
 The Linux BMG build also exposes an SLA forward path for BF16 MiniMax-H3
