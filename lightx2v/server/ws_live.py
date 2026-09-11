@@ -21,7 +21,6 @@ from lightx2v.utils.set_config import build_startup_config, init_parallel, print
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
-
 WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
 RANK = int(os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0")))
 TARGET_RANK = int(os.getenv("WORKER_RANK", "0")) % max(WORLD_SIZE, 1)
@@ -155,9 +154,7 @@ async def run_websocket_server(args, runner, input_info):
                         continue
                     pump_task = asyncio.create_task(session.pump_video(websocket))
                     if session.future is not None:
-                        session.future.add_done_callback(
-                            lambda fut: session.mark_pipeline_done(*(fut.result() if not fut.cancelled() else (False, "cancelled")))
-                        )
+                        session.future.add_done_callback(lambda fut: session.mark_pipeline_done(*(fut.result() if not fut.cancelled() else (False, "cancelled"))))
                     continue
 
                 if session is None or session.audio_source is None:

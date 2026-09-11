@@ -14,7 +14,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-
 WT_VARINT = 0
 WT_LEN = 2
 

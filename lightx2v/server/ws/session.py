@@ -80,9 +80,11 @@ class RunnerThread(threading.Thread):
         except Exception:
             logger.error(f"Rank {self.rank} pipeline failed: {traceback.format_exc()}")
         finally:
+
             async def set_future_result():
                 if not self.future.done():
                     self.future.set_result((status, err))
+
             asyncio.run_coroutine_threadsafe(set_future_result(), self.loop)
 
 
