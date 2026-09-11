@@ -96,32 +96,15 @@ def split_qkv_norm_rope(
     if triton is None:
         raise RuntimeError("Fused QKV norm + RoPE requires Triton")
     dim = q_weight.numel()
-    if (
-        packed.ndim != 2
-        or dim == 0
-        or packed.shape[1] == 0
-        or packed.shape[1] % (3 * dim)
-        or packed.stride(1) != 1
-    ):
+    if packed.ndim != 2 or dim == 0 or packed.shape[1] == 0 or packed.shape[1] % (3 * dim) or packed.stride(1) != 1:
         raise ValueError("Expected packed [tokens, 3 * heads * head_dim] with contiguous channels")
-    if (
-        q_weight.ndim != 1
-        or k_weight.shape != q_weight.shape
-        or not q_weight.is_contiguous()
-        or not k_weight.is_contiguous()
-    ):
+    if q_weight.ndim != 1 or k_weight.shape != q_weight.shape or not q_weight.is_contiguous() or not k_weight.is_contiguous():
         raise ValueError("Norm weights must be contiguous [head_dim] tensors")
     if packed.dtype not in _SUPPORTED_DTYPES or any(w.dtype != packed.dtype for w in (q_weight, k_weight)):
         raise ValueError("QKV and norm weights must have matching FP16/BF16/FP32 dtypes")
     if any(t.device != packed.device for t in (q_weight, k_weight, cos, sin)):
         raise ValueError("All inputs must be on the same device")
-    if (
-        cos.ndim != 2
-        or sin.shape != cos.shape
-        or cos.shape[0] != packed.shape[0]
-        or not 0 < cos.shape[1] <= dim
-        or cos.shape[1] % 2
-    ):
+    if cos.ndim != 2 or sin.shape != cos.shape or cos.shape[0] != packed.shape[0] or not 0 < cos.shape[1] <= dim or cos.shape[1] % 2:
         raise ValueError("Cos/sin must have shape [tokens, rotary_dim], with positive even rotary_dim <= head_dim")
     if cos.stride(1) != 1 or sin.stride(1) != 1 or cos.dtype != torch.float32 or sin.dtype != torch.float32:
         raise ValueError("Cos/sin must be FP32 with contiguous channels")
@@ -169,12 +152,7 @@ def prepare_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs):
     if not isinstance(freqs, tuple) or len(freqs) != 2:
         return None
     cos, sin = freqs
-    if (
-        cos.ndim != 2
-        or sin.shape != cos.shape
-        or cos.shape[0] != packed.shape[0]
-        or any(t.device != packed.device or t.dtype != torch.float32 or t.stride(1) != 1 for t in freqs)
-    ):
+    if cos.ndim != 2 or sin.shape != cos.shape or cos.shape[0] != packed.shape[0] or any(t.device != packed.device or t.dtype != torch.float32 or t.stride(1) != 1 for t in freqs):
         return None
     return cos, sin
 
