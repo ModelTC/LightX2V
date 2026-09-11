@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package lightx2v.v1;
+
+option go_package = "github.com/livekit-examples/mock-avatar/proto;avatarv1";
+
+message ClientMessage {
+  oneof body {
+    Start start = 1;
+    Empty audio_start = 2;  // 开始发送音频
+    AudioChunk audio = 3; // 音频片段
+    Empty audio_end = 4;
+    Interrupt interrupt = 5; // 打断
+    SetPrompt set_prompt = 6; // 设置提示词
+  }
+}
+
+message ServerMessage {
+  oneof body {
+    ServerEvent event = 1; // 事件
+    VideoStart video_start = 2; // 视频开始
+    VideoChunk video = 3; // 视频片段
+    Failure error = 4; // 错误
+  }
+}
+
+message ServerEvent {
+  enum Type {
+    START_SPEAKING = 0; // 开始说话
+    STOP_SPEAKING = 1;  // 说话结束，可能因为音频播放完毕或者中断
+    PROMPT_UPDATE = 2; // 提示词更新
+  }
+
+  Type type = 1;
+  string message = 2;
+}
+
+message Start {
+  string request_id = 1;
+  string audio_format = 2;
+  string image_fromat = 4;
+  repeated bytes image_data = 5;
+  string prompt = 6;
+  string negative_prompt = 7;
+  int64 seed = 8;
+  string aspect_ratio = 9;   // 1:1 | 16:9 | 9:16, default 16:9
+  uint32 chunk_frames = 10;  // 分片帧数，默认8帧，fps=16时等于0.5s
+}
+
+message AudioChunk {
+  uint64 sequence = 1;
+  bytes data = 3;
+}
+
+message VideoChunk {
+  uint64 sequence = 1;
+  bytes audio_data = 2;
+  bytes video_data = 3;
+}
+
+// 只有模型产出后才知道尺寸, 当前只有最小满足字段，后续需要补充fps等其他信息
+message VideoStart {
+  int32 video_width = 1;
+  int32 video_height = 2;
+}
+
+message Interrupt { string reason = 1; }
+
+message SetPrompt { string prompt = 1; }
+
+message Failure {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message Empty {}
