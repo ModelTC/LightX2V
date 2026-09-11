@@ -24,6 +24,7 @@
   "feature_caching": "NoCaching",
   "use_compile": true,
   "use_fused_qkv_attn": true,
+  "qkv_norm_type": "int_xpu",
   "video_flow_shift": 12.0,
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,

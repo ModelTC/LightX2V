@@ -147,6 +147,32 @@ def test_split_qkv_norm_matches_reference(shape, dtype):
         torch.testing.assert_close(a, e, atol=0 if index == 2 else 2e-3, rtol=0 if index == 2 else 1e-2)
 
 
+@pytest.mark.skipif(not torch.xpu.is_available(), reason="XPU is unavailable")
+@pytest.mark.parametrize("tokens,heads", [(1, 1), (17, 1), (9, 28)])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
+def test_xpu_qkv_norm_kernel_matches_reference(tokens, heads, dtype):
+    import sycl_kernels
+
+    packed = torch.randn(tokens, 3 * heads * 128, device="xpu", dtype=dtype)
+    qw = torch.randn(128, device="xpu", dtype=dtype)
+    kw = torch.randn(128, device="xpu", dtype=dtype)
+    actual = sycl_kernels.minimax_h3_qkv_norm(packed, qw, kw, 1e-5, 1e-4)
+    expected = [x.unflatten(-1, (heads, 128)) for x in packed.chunk(3, -1)]
+    expected[0] = torch.nn.functional.rms_norm(
+        expected[0].float(), (128,), qw.float(), 1e-5
+    ).to(dtype)
+    expected[1] = torch.nn.functional.rms_norm(
+        expected[1].float(), (128,), kw.float(), 1e-4
+    ).to(dtype)
+    atol = 2e-5 if dtype == torch.float32 else 2e-3
+    rtol = 2e-5 if dtype == torch.float32 else 1e-2
+    for index, (a, e) in enumerate(zip(actual, expected)):
+        assert a.is_contiguous()
+        torch.testing.assert_close(
+            a, e, atol=0 if index == 2 else atol, rtol=0 if index == 2 else rtol
+        )
+
+
 def test_split_qkv_norm_fake_shapes():
     from torch._subclasses.fake_tensor import FakeTensorMode
 

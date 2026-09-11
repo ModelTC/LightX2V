@@ -207,6 +207,20 @@ add_sycl_to_target(TARGET minimax_h3_rope_torch SOURCES csrc/minimax_h3_rope.cpp
 target_link_libraries(minimax_h3_rope_torch PRIVATE
     ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
 
+# MiniMax-H3 packed QKV split + Q/K RMSNorm sidecar.
+add_library(minimax_h3_qkv_norm_torch SHARED csrc/minimax_h3_qkv_norm.cpp)
+set_target_properties(minimax_h3_qkv_norm_torch PROPERTIES
+    PREFIX ""
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    INSTALL_RPATH "\$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
+target_compile_features(minimax_h3_qkv_norm_torch PRIVATE cxx_std_17)
+target_include_directories(minimax_h3_qkv_norm_torch PRIVATE
+    ${Python_INCLUDE_DIRS} ${TORCH_INCLUDE_DIRS})
+add_sycl_to_target(TARGET minimax_h3_qkv_norm_torch
+    SOURCES csrc/minimax_h3_qkv_norm.cpp)
+target_link_libraries(minimax_h3_qkv_norm_torch PRIVATE
+    ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
+
 if(ENABLE_CUTE_FMHA)
     if(WIN32)
         message(FATAL_ERROR
@@ -444,6 +458,7 @@ endif()
 install(TARGETS ${MODULE_NAME} LIBRARY DESTINATION sycl_kernels)
 install(TARGETS rms_norm_torch LIBRARY DESTINATION sycl_kernels)
 install(TARGETS minimax_h3_rope_torch LIBRARY DESTINATION sycl_kernels)
+install(TARGETS minimax_h3_qkv_norm_torch LIBRARY DESTINATION sycl_kernels)
 install(FILES "${ESIMD_RUNTIME}" DESTINATION sycl_kernels)
 if(ENABLE_CUTE_FMHA)
     install(TARGETS cute_fmha_torch LIBRARY DESTINATION sycl_kernels)
