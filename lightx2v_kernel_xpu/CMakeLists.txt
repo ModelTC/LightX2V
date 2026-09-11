@@ -214,6 +214,11 @@ set_target_properties(minimax_h3_qkv_norm_torch PROPERTIES
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
     INSTALL_RPATH "\$ORIGIN;${TORCH_INSTALL_PREFIX}/lib")
 target_compile_features(minimax_h3_qkv_norm_torch PRIVATE cxx_std_17)
+if(NOT WIN32)
+    target_compile_options(minimax_h3_qkv_norm_torch PRIVATE -ffp-contract=off)
+else()
+    target_compile_options(minimax_h3_qkv_norm_torch PRIVATE /clang:-ffp-contract=off)
+endif()
 target_include_directories(minimax_h3_qkv_norm_torch PRIVATE
     ${Python_INCLUDE_DIRS} ${TORCH_INCLUDE_DIRS})
 add_sycl_to_target(TARGET minimax_h3_qkv_norm_torch

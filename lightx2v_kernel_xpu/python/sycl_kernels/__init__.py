@@ -177,6 +177,24 @@ def has_minimax_h3_qkv_norm():
         return False
 
 
+def minimax_h3_qkv_norm_rope(packed, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope=False):
+    """Fused XPU QKV split, RMSNorm and 96-dimensional split-half RoPE (head_dim=128)."""
+    import torch
+
+    _load_minimax_h3_qkv_norm()
+    return torch.ops.sycl_kernels_minimax_h3_qkv.qkv_norm_rope(packed, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope)
+
+
+def has_minimax_h3_qkv_norm_rope():
+    import torch
+
+    try:
+        _load_minimax_h3_qkv_norm()
+        return hasattr(torch.ops.sycl_kernels_minimax_h3_qkv, "qkv_norm_rope")
+    except (ImportError, OSError, RuntimeError):
+        return False
+
+
 def _load_cute_fmha():
     global _cute_fmha_loaded
 
