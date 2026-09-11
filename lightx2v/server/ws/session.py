@@ -17,7 +17,6 @@ from lightx2v.server.ws.protocol import (
     video_message,
     video_start_message,
 )
-from lightx2v.utils.input_info import update_input_info_from_dict
 from lightx2v.utils.va_reader_ws import WsAudioSource, parse_pcm_audio_format
 
 ASPECT_RATIOS = {
@@ -35,6 +34,28 @@ def resolve_aspect_ratio(value: str) -> tuple[str, list[int]]:
     if ar not in ASPECT_RATIOS:
         raise ValueError(f"invalid aspect_ratio {ar!r}, valid: {list(ASPECT_RATIOS)}")
     return ar, list(ASPECT_RATIOS[ar])
+
+
+def apply_run_input(input_info, *, prompt, negative_prompt, image_path, size, audio_source=None, on_output=None, chunk_frames=8):
+    audio_path = {"type": "ws", "source": audio_source} if audio_source else {"type": "ws"}
+    save_result_path = {"type": "ws"}
+    if on_output is not None:
+        save_result_path = {
+            "type": "ws",
+            "on_output": on_output,
+            "chunk_frames": int(chunk_frames or 8),
+        }
+    # 设置 seed 会导致片段间有雪花点，因此暂不设置 seed
+    input_info.update(
+        {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "size": size,
+            "image_path": image_path,
+            "audio_path": audio_path,
+            "save_result_path": save_result_path,
+        }
+    )
 
 
 class RunnerThread(threading.Thread):
@@ -137,7 +158,7 @@ class LiveSession:
         prompt = start.prompt or DEFAULT_PROMPT
         negative_prompt = start.negative_prompt or DEFAULT_NEGATIVE_PROMPT
         seed = int(start.seed or 42)
-        _, target_shape = resolve_aspect_ratio(start.aspect_ratio)
+        _, size = resolve_aspect_ratio(start.aspect_ratio)
 
         seg_duration = 1.0
         try:
@@ -155,22 +176,15 @@ class LiveSession:
             model_runner=self.runner,
         )
 
-        # 设置 seed 会导致片段间有雪花点，因此暂不设置 seed
-        update_input_info_from_dict(
+        apply_run_input(
             self.input_info,
-            {
-                "prompt": prompt,
-                "negative_prompt": negative_prompt,
-                # "seed": seed,
-                "target_shape": target_shape,
-                "image_path": image_path,
-                "audio_path": {"type": "ws", "source": self.audio_source},
-                "save_result_path": {
-                    "type": "ws",
-                    "on_output": self._on_output,
-                    "chunk_frames": int(start.chunk_frames or 8),
-                },
-            },
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            image_path=image_path,
+            size=size,
+            audio_source=self.audio_source,
+            on_output=self._on_output,
+            chunk_frames=start.chunk_frames,
         )
         logger.info(f"Rank {self.rank} input_info: {self.input_info}")
         return {
@@ -179,7 +193,7 @@ class LiveSession:
             "negative_prompt": negative_prompt,
             # "seed": seed,
             "image_path": image_path,
-            "target_shape": target_shape,
+            "size": size,
         }
 
     def start_pipeline(self):

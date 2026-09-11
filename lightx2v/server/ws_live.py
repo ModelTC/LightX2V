@@ -13,11 +13,11 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from loguru import logger
 
-from lightx2v.infer import init_runner
+from lightx2v.models.runners.runner_factory import build_runner
 from lightx2v.server.ws.protocol import ClientMessage, error_message
-from lightx2v.server.ws.session import LiveSession, join_pipeline, launch_pipeline
-from lightx2v.utils.input_info import init_empty_input_info, update_input_info_from_dict
-from lightx2v.utils.set_config import print_config, set_config, set_parallel_config
+from lightx2v.server.ws.session import LiveSession, apply_run_input, join_pipeline, launch_pipeline
+from lightx2v.utils.input_info import INPUT_INFO_TYPES
+from lightx2v.utils.set_config import build_startup_config, init_parallel, print_config
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
 
@@ -73,8 +73,7 @@ def build_parser():
     parser = argparse.ArgumentParser(description="LightX2V websocket live inference (seko_talk_ar)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--model_cls", type=str, default="seko_talk_ar")
-    parser.add_argument("--task", type=str, default="s2v")
-    parser.add_argument("--support_tasks", type=str, nargs="+", default=[])
+    parser.add_argument("--task", type=str, default="rs2v")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--ws_host", type=str, default="0.0.0.0")
@@ -95,17 +94,12 @@ async def follower_loop(runner, input_info):
             logger.info(f"Rank {RANK} received {op} message, skipping")
             continue
         try:
-            update_input_info_from_dict(
+            apply_run_input(
                 input_info,
-                {
-                    "prompt": cmd["prompt"],
-                    "negative_prompt": cmd["negative_prompt"],
-                    # "seed": cmd["seed"],
-                    "target_shape": cmd["target_shape"],
-                    "image_path": cmd["image_path"],
-                    "audio_path": {"type": "ws"},
-                    "save_result_path": {"type": "ws"},
-                },
+                prompt=cmd["prompt"],
+                negative_prompt=cmd["negative_prompt"],
+                image_path=cmd["image_path"],
+                size=cmd["size"],
             )
             logger.info(f"Rank {RANK} input_info: {input_info}")
             thread, future = launch_pipeline(runner, input_info, RANK, loop)
@@ -244,14 +238,21 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
     seed_all(args.seed)
-    config = set_config(args)
+    config = build_startup_config(
+        {
+            "config_json": args.config_json,
+            "model_cls": args.model_cls,
+            "model_path": args.model_path,
+            "task": args.task,
+        }
+    )
 
     if config.get("parallel") or WORLD_SIZE > 1:
         platform_device = PLATFORM_DEVICE_REGISTER.get(os.getenv("PLATFORM", "cuda"), None)
         if platform_device is not None and not dist.is_initialized():
             platform_device.init_parallel_env()
         if config.get("parallel"):
-            set_parallel_config(config)
+            init_parallel(config)
         if dist.is_initialized():
             torch.cuda.set_device(dist.get_rank())
 
@@ -261,8 +262,9 @@ def main():
         TARGET_RANK = int(os.getenv("WORKER_RANK", "0")) % WORLD_SIZE
 
     print_config(config)
-    runner = init_runner(config)
-    input_info = init_empty_input_info(args.task, args.support_tasks)
+    runner = build_runner(config)
+    input_info = INPUT_INFO_TYPES[args.task]()
+    input_info.update({"task": args.task})
     init_task_group()
 
     if RANK != TARGET_RANK:
