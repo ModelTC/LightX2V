@@ -2,6 +2,7 @@ from lightx2v_platform.registry_factory import PLATFORM_QKV_NORM_ROPE_REGISTER
 
 _XPU_ROPE_CLASS = ("lightx2v_platform.ops.rope.intel_xpu.minimax_h3_rope", "MiniMaxH3XpuRope")
 
+
 @PLATFORM_QKV_NORM_ROPE_REGISTER("intel_xpu")
 class XpuQKVNormRope:
     @staticmethod
