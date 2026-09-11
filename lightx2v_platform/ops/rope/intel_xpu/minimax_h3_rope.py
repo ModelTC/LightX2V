@@ -24,9 +24,6 @@ class MiniMaxH3XpuRope(RopeTemplate):
         except (AttributeError, ImportError, OSError, RuntimeError):
             return False
 
-    def fused_qkv_norm_rope_low_precision(self, q, cos, sin, rotary_dim):
-        return self._can_use_xpu_kernel(q, cos, sin, rotary_dim)
-
     def _torch_apply_single(self, x, cos, sin, rotary_dim):
         if rotary_dim <= 0 or rotary_dim > x.shape[-1] or rotary_dim % 2:
             raise ValueError(f"rotary_dim must be positive, even, and <= head_size; got rotary_dim={rotary_dim}, head_size={x.shape[-1]}")

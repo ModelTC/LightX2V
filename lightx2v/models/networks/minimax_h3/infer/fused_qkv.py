@@ -36,7 +36,6 @@ if triton is not None:
         SIN_STRIDE: tl.constexpr,
         Q_EPS: tl.constexpr,
         K_EPS: tl.constexpr,
-        LOW_PRECISION_ROPE: tl.constexpr,
         BLOCK: tl.constexpr,
     ):
         row = tl.program_id(0)
@@ -61,14 +60,8 @@ if triton is not None:
             paired = tl.gather(y, pair, axis=0)
             c = tl.load(cos + token * COS_STRIDE + d, d < ROTARY, other=0)
             s = tl.load(sin + token * SIN_STRIDE + d, d < ROTARY, other=0)
-            if LOW_PRECISION_ROPE:
-                c = c.to(x.dtype).to(tl.float32)
-                s = s.to(x.dtype).to(tl.float32)
-                a = (y * c).to(x.dtype).to(tl.float32)
-                b = (paired * s).to(x.dtype).to(tl.float32)
-            else:
-                a = y * c.to(tl.float32)
-                b = paired * s.to(tl.float32)
+            a = y * c.to(tl.float32)
+            b = paired * s.to(tl.float32)
             rotated = tl.where(d < ROTARY // 2, a - b, a + b)
             output = tl.where(d < ROTARY, rotated, y)
             if component == 0:
@@ -98,7 +91,6 @@ def split_qkv_norm_rope(
     sin: torch.Tensor,
     q_eps: float,
     k_eps: float,
-    low_precision_rope: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Fused RMSNorm and partial split-half RoPE with full-width cosine/sine caches."""
     if triton is None:
@@ -154,7 +146,6 @@ def split_qkv_norm_rope(
                 SIN_STRIDE=sin.stride(0),
                 Q_EPS=q_eps,
                 K_EPS=k_eps,
-                LOW_PRECISION_ROPE=low_precision_rope,
                 BLOCK=triton.next_power_of_2(dim),
                 num_warps=4,
                 enable_fp_fusion=False,
@@ -163,7 +154,7 @@ def split_qkv_norm_rope(
 
 
 @split_qkv_norm_rope.register_fake
-def _split_qkv_norm_rope_fake(packed, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope=False):
+def _split_qkv_norm_rope_fake(packed, q_weight, k_weight, cos, sin, q_eps, k_eps):
     dim = q_weight.numel()
     shape = (packed.shape[0], packed.shape[1] // (3 * dim), dim)
     return tuple(packed.new_empty(shape) for _ in range(3))
@@ -185,14 +176,10 @@ def prepare_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs):
         or any(t.device != packed.device or t.dtype != torch.float32 or t.stride(1) != 1 for t in freqs)
     ):
         return None
-    fused_precision = getattr(rope, "fused_qkv_norm_rope_low_precision", None)
-    if fused_precision is None:
-        return None
-    q = packed[:, : packed.shape[1] // 3].unflatten(-1, (-1, norm_q.weight.numel()))
-    return cos, sin, fused_precision(q, cos, sin, cos.shape[-1])
+    return cos, sin
 
 
-def run_triton_qkv_norm_rope(packed, norm_q, norm_k, cos, sin, low_precision=False):
+def run_triton_qkv_norm_rope(packed, norm_q, norm_k, cos, sin):
     if triton is None:
         return None
     return split_qkv_norm_rope(
@@ -203,7 +190,6 @@ def run_triton_qkv_norm_rope(packed, norm_q, norm_k, cos, sin, low_precision=Fal
         sin,
         norm_q.eps,
         norm_k.eps,
-        low_precision,
     )
 
 
@@ -214,8 +200,7 @@ class TritonQKVNormRope:
         prepared = prepare_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs)
         if prepared is None:
             return None
-        cos, sin, low_precision = prepared
-        return run_triton_qkv_norm_rope(packed, norm_q, norm_k, cos, sin, low_precision)
+        return run_triton_qkv_norm_rope(packed, norm_q, norm_k, *prepared)
 
 
 def try_split_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs, backend="triton"):

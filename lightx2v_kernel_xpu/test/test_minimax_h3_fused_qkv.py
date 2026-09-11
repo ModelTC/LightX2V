@@ -137,6 +137,8 @@ def test_xpu_offload_roundtrip(transpose, monkeypatch):
 def test_fused_norm_rope_matches_separate(device, dtype, shape, low_precision, kernel):
     if not getattr(torch, device).is_available() or qkv_ops.triton is None:
         pytest.skip(f"Triton/{device} unavailable")
+    if kernel == "triton" and low_precision:
+        pytest.skip("The Triton kernel always uses FP32 RoPE arithmetic")
     torch.manual_seed(0)
     tokens, heads, dim, rotary = shape
     op = qkv_ops.split_qkv_norm_rope
@@ -152,7 +154,8 @@ def test_fused_norm_rope_matches_separate(device, dtype, shape, low_precision, k
     phases = torch.randn(tokens, rotary + 16, device=device)
     cos, sin = (phases.cos()[:, :rotary], phases.sin()[:, :rotary])
     qw, kw = (torch.randn(dim, device=device, dtype=dtype) for _ in range(2))
-    actual = op(packed, qw, kw, cos, sin, 1e-5, 1e-4, low_precision)
+    args = (packed, qw, kw, cos, sin, 1e-5, 1e-4)
+    actual = op(*args, low_precision) if kernel == "esimd" else op(*args)
     expected = list(packed.chunk(3, -1))
     expected = [x.unflatten(-1, (heads, dim)) for x in expected]
     rounding_bounds = []
@@ -233,7 +236,8 @@ def test_fused_norm_rope_dispatch(device, rope_backend, norm_rope_backend, monke
     q, k, v = (x.unflatten(-1, (7, 128)) for x in packed.chunk(3, -1))
     q = torch.nn.functional.rms_norm(q.float(), (128,), norms[0].weight.float(), norms[0].eps).to(packed.dtype)
     k = torch.nn.functional.rms_norm(k.float(), (128,), norms[1].weight.float(), norms[1].eps).to(packed.dtype)
-    q, k = rope.apply(q, k, freqs, rotary_dim=96)
+    reference_rope = TorchRealRope(layout="split_half", compute_dtype=torch.float32) if norm_rope_backend == "triton" else rope
+    q, k = reference_rope.apply(q, k, freqs, rotary_dim=96)
     for a, e in zip(actual, (q, k, v)):
         torch.testing.assert_close(a, e, atol=2e-3, rtol=1e-2)
     norms[0].sensitive_layer_dtype = torch.float32
