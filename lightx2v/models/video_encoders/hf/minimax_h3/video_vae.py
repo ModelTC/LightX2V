@@ -307,13 +307,14 @@ class MiniMaxH3VideoEncoder3d(nn.Module):
 class MiniMaxH3VideoRotaryPosEmbed(nn.Module):
     """Three-axis rotary embedding used by the non-causal ViT decoder."""
 
-    def __init__(self, dim: int, theta: float = 100.0, num_axes: int = 3) -> None:
+    def __init__(self, dim: int, theta: float = 100.0, num_axes: int = 3, comfyui_implementation: bool = False) -> None:
         super().__init__()
         if dim % (2 * num_axes) != 0:
             raise ValueError(f"dim={dim} must be divisible by 2 * num_axes={2 * num_axes}")
         self.dim = dim
         self.theta = theta
         self.num_axes = num_axes
+        self.comfyui_implementation = comfyui_implementation
 
     def forward(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         inv_freq = 1.0 / self.theta ** torch.arange(
@@ -323,9 +324,19 @@ class MiniMaxH3VideoRotaryPosEmbed(nn.Module):
             dtype=torch.float32,
             device=position_ids.device,
         )
-        angles = 2.0 * math.pi * position_ids[:, :, :, None] * inv_freq[None, None, None, :]
+        comfyui_implementation = getattr(self, "comfyui_implementation", False)
+        if comfyui_implementation:
+            # ComfyUI registers this table in FP32, then casts the whole FP16
+            # VAE, so the frequencies are rounded to FP16 before use.
+            inv_freq = inv_freq.to(position_ids.dtype)
+        positions = position_ids.float() if comfyui_implementation else position_ids
+        angles = 2.0 * math.pi * positions[:, :, :, None] * inv_freq[None, None, None, :]
         angles = angles.flatten(2, 3).tile(2).unsqueeze(2)
-        return angles.cos(), angles.sin()
+        cos, sin = angles.cos(), angles.sin()
+        if comfyui_implementation:
+            cos = cos.to(position_ids.dtype)
+            sin = sin.to(position_ids.dtype)
+        return cos, sin
 
 
 class MiniMaxH3VideoAttention(nn.Module):
@@ -498,6 +509,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         norm_eps: float = 1e-5,
         infer_dtype: torch.dtype = torch.float16,
         sensitive_layer_dtype: torch.dtype = torch.float32,
+        comfyui_implementation: bool = False,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
     ) -> None:
@@ -505,6 +517,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         dim = num_attention_heads * attention_head_dim
         self.infer_dtype = infer_dtype
         self.sensitive_layer_dtype = sensitive_layer_dtype
+        self.comfyui_implementation = comfyui_implementation
         self.patch_size = patch_size
         self.patch_size_t = patch_size_t
         self.out_channels = out_channels
@@ -512,7 +525,11 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         self.use_compile = use_compile
         self.compiled_blocks = {}
 
-        self.rope = MiniMaxH3VideoRotaryPosEmbed(int(attention_head_dim * rope_dim_ratio), theta=rope_theta)
+        self.rope = MiniMaxH3VideoRotaryPosEmbed(
+            int(attention_head_dim * rope_dim_ratio),
+            theta=rope_theta,
+            comfyui_implementation=comfyui_implementation,
+        )
         self.proj_in = nn.Linear(in_channels, dim)
         self.register_tokens = nn.Parameter(torch.zeros(1, num_register_tokens, dim))
         self.transformer_blocks = nn.ModuleList(
@@ -551,6 +568,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
+        position_dtype = hidden_states.dtype if self.comfyui_implementation else torch.float32
         hidden_states = hidden_states.permute(0, 2, 3, 4, 1).reshape(batch_size, num_frames * height * width, num_channels)
         hidden_states = self.proj_in(hidden_states)
         num_patches = hidden_states.shape[1]
@@ -561,7 +579,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         cls_token = torch.zeros_like(hidden_states[:, :1, :])
         hidden_states = torch.cat([hidden_states, register_tokens, cls_token], dim=1)
 
-        grids = [2.0 * (torch.arange(0.5, size, dtype=torch.float32, device=hidden_states.device) / size) - 1.0 for size in (num_frames, height, width)]
+        grids = [2.0 * (torch.arange(0.5, size, dtype=position_dtype, device=hidden_states.device) / size) - 1.0 for size in (num_frames, height, width)]
         position_ids = torch.stack(torch.meshgrid(*grids, indexing="ij"), dim=-1).flatten(0, 2)
         position_ids = position_ids.unsqueeze(0).expand(batch_size, -1, -1)
         suffix_ids = position_ids.new_zeros((batch_size, self.num_register_tokens + 1, 3))
@@ -606,6 +624,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         cpu_offload: bool = False,
         quant_scheme: str | None = None,
         sensitive_layer_dtype: torch.dtype = torch.float32,
+        comfyui_implementation: bool = False,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
     ) -> None:
@@ -621,7 +640,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.decode_parallel = False
         self.encode_parallel = False
         self.infer_dtype = torch.float16
-        self.sensitive_layer_dtype = sensitive_layer_dtype
+        self.comfyui_implementation = comfyui_implementation
+        self.sensitive_layer_dtype = self.infer_dtype if comfyui_implementation else sensitive_layer_dtype
         if use_compile:
             logger.info("[Compile] Using torch.compile for MiniMaxH3VideoViTDecoder3d")
 
@@ -663,6 +683,7 @@ class MiniMaxH3VideoVAE(nn.Module):
             norm_eps=float(config.get("decoder_norm_eps", 1e-5)),
             infer_dtype=self.infer_dtype,
             sensitive_layer_dtype=self.sensitive_layer_dtype,
+            comfyui_implementation=comfyui_implementation,
             use_compile=use_compile,
             attn_type=attn_type,
         )
@@ -745,6 +766,18 @@ class MiniMaxH3VideoVAE(nn.Module):
         self._buffers["pixel_std"] = torch.tensor(MINIMAX_H3_PIXEL_STD, dtype=self.sensitive_layer_dtype)
 
     def _prepare_inference_weights(self, *, use_channels_last_encoder: bool) -> None:
+        if getattr(self, "comfyui_implementation", False):
+            if self.quant_scheme is not None:
+                raise ValueError("ComfyUI Video VAE dtype parity requires the original, non-quantized VAE checkpoint")
+            # The workflow's minimax_h3_video_vae_fp16 checkpoint contains
+            # every floating tensor in FP16. The HF checkpoint is FP32, so cast
+            # the complete module rather than retaining LightX2V's mixed
+            # FP16/FP32 normalization and residual path.
+            self.to(dtype=self.infer_dtype)
+            if use_channels_last_encoder:
+                self.encoder.to(memory_format=torch.channels_last_3d)
+            return
+
         # Keep normalization, residuals, and encoder boundaries in the
         # sensitive dtype; bulk convolution and matrix multiplication use FP16.
         for module in self.encoder.down_blocks.modules():
@@ -792,6 +825,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         quant_scheme: str | None = None,
         encoder_conv_mode: str = "torch",
         sensitive_layer_dtype: torch.dtype = torch.float32,
+        comfyui_implementation: bool = False,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
     ) -> "MiniMaxH3VideoVAE":
@@ -838,6 +872,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                 cpu_offload=cpu_offload,
                 quant_scheme=quant_scheme,
                 sensitive_layer_dtype=sensitive_layer_dtype,
+                comfyui_implementation=comfyui_implementation,
                 use_compile=use_compile,
                 attn_type=attn_type,
             )
@@ -1037,11 +1072,11 @@ class MiniMaxH3VideoVAE(nn.Module):
             moments = moments[:, :, : -self.token_drop]
         return moments
 
-    def _encode_parallel(self, pixels: torch.Tensor, video: bool) -> torch.Tensor:
+    def _encode_parallel(self, pixels: torch.Tensor, video: bool, sample_posterior: bool) -> torch.Tensor:
         """Encode the global ``(clip, row, column)`` tile pool across all ranks.
 
-        Rank 0 stitches and samples the conditioning latent, then broadcasts it
-        to every rank for the following DiT stage.
+        Rank 0 stitches and selects the conditioning latent from the posterior,
+        then broadcasts it to every rank for the following DiT stage.
         """
         num_frames = pixels.shape[2]
         if video and num_frames % self.clip_length:
@@ -1092,7 +1127,7 @@ class MiniMaxH3VideoVAE(nn.Module):
                     moments = moments[:, :, : -self.token_drop]
             else:
                 moments = clip_moments[0]
-            latents = self._sample_condition_latents(moments).contiguous()
+            latents = self._condition_latents(moments, sample_posterior=sample_posterior).contiguous()
             latent_shape = torch.tensor(latents.shape, dtype=torch.int64, device=pixels.device)
         else:
             latent_shape = torch.empty(5, dtype=torch.int64, device=pixels.device)
@@ -1100,7 +1135,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         dist.broadcast(latent_shape, src=0)
         if rank != 0:
             shape = tuple(latent_shape.tolist())
-            latents = torch.empty(shape, dtype=self.sensitive_layer_dtype, device=pixels.device)
+            latent_dtype = torch.float32 if getattr(self, "comfyui_implementation", False) else self.sensitive_layer_dtype
+            latents = torch.empty(shape, dtype=latent_dtype, device=pixels.device)
         dist.broadcast(latents, src=0)
         return latents
 
@@ -1118,31 +1154,65 @@ class MiniMaxH3VideoVAE(nn.Module):
         latents = self._sample_posterior(moments, generator).to(self.infer_dtype)
         return self.normalize_latents(latents)
 
+    def _mean_condition_latents(self, moments: torch.Tensor) -> torch.Tensor:
+        mean, _ = torch.chunk(moments.float(), 2, dim=1)
+        return self.normalize_latents(mean)
+
+    def _condition_latents(self, moments: torch.Tensor, *, sample_posterior: bool) -> torch.Tensor:
+        if sample_posterior:
+            return self._sample_condition_latents(moments)
+        return self._mean_condition_latents(moments)
+
     def normalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
-        mean = self.latents_mean.to(latents.device).view(1, -1, 1, 1, 1)
-        std = self.latents_std.to(latents.device).view(1, -1, 1, 1, 1)
-        return (latents.to(self.sensitive_layer_dtype) - mean) / std
+        if getattr(self, "comfyui_implementation", False):
+            # MiniMaxH3VideoVAE.encode() in ComfyUI promotes the posterior mean
+            # to FP32, then promotes the already-FP16 latent statistics to it.
+            latents = latents.float()
+        else:
+            latents = latents.to(self.sensitive_layer_dtype)
+        mean = self.latents_mean.to(latents).view(1, -1, 1, 1, 1)
+        std = self.latents_std.to(latents).view(1, -1, 1, 1, 1)
+        return (latents - mean) / std
 
     def preprocess(self, pixels: torch.Tensor) -> torch.Tensor:
-        mean = self.pixel_mean.to(pixels.device).view(1, -1, 1, 1, 1)
-        std = self.pixel_std.to(pixels.device).view(1, -1, 1, 1, 1)
-        return (pixels.to(self.sensitive_layer_dtype) - mean) / std
+        if getattr(self, "comfyui_implementation", False):
+            # The generic ComfyUI VAE wrapper maps [0, 1] to [-1, 1] before
+            # casting to FP16; the H3 VAE then maps it back before ImageNet
+            # normalization. Keeping both operations preserves its rounding.
+            pixels = (pixels * 2.0 - 1.0).to(dtype=self.infer_dtype)
+            pixels = pixels.add(1.0).mul_(0.5)
+        else:
+            pixels = pixels.to(self.sensitive_layer_dtype)
+        mean = self.pixel_mean.to(pixels).view(1, -1, 1, 1, 1)
+        std = self.pixel_std.to(pixels).view(1, -1, 1, 1, 1)
+        return (pixels - mean) / std
 
-    def encode_condition(self, pixels: torch.Tensor, *, video: bool = False, return_cpu: bool = True) -> torch.Tensor:
-        """Encode an RGB ``[1,3,F,H,W]`` reference with the released seed-42 posterior."""
+    def encode_condition(
+        self,
+        pixels: torch.Tensor,
+        *,
+        video: bool = False,
+        return_cpu: bool = True,
+        sample_posterior: bool = True,
+    ) -> torch.Tensor:
+        """Encode an RGB ``[1,3,F,H,W]`` condition.
+
+        Released LightX2V inference samples the posterior from a seed-42 CPU
+        generator. ComfyUI reference conditioning instead uses its mean.
+        """
         try:
             if pixels.ndim != 5 or pixels.shape[0] != 1 or pixels.shape[1] != 3:
                 raise ValueError(f"reference pixels must be [1,3,F,H,W], got {tuple(pixels.shape)}")
             device = self._activate()
-            pixels = self.preprocess(pixels.to(device=device, dtype=self.sensitive_layer_dtype))
+            pixels = self.preprocess(pixels.to(device=device))
             if self._use_channels_last_encoder_input:
                 pixels = pixels.contiguous(memory_format=torch.channels_last_3d)
             with torch.no_grad():
                 if self.encode_parallel:
-                    latents = self._encode_parallel(pixels, video)
+                    latents = self._encode_parallel(pixels, video, sample_posterior)
                 else:
                     moments = self._encode(pixels) if video else self._encode_clip(pixels)
-                    latents = self._sample_condition_latents(moments)
+                    latents = self._condition_latents(moments, sample_posterior=sample_posterior)
             return latents.cpu() if return_cpu else latents
         finally:
             if self.cpu_offload:
@@ -1297,9 +1367,15 @@ class MiniMaxH3VideoVAE(nn.Module):
         return latents.to(self.sensitive_layer_dtype) * std + mean
 
     def postprocess(self, video: torch.Tensor) -> torch.Tensor:
-        mean = self.pixel_mean.to(device=video.device).view(1, -1, 1, 1, 1)
-        std = self.pixel_std.to(device=video.device).view(1, -1, 1, 1, 1)
-        return (video.to(self.sensitive_layer_dtype) * std + mean).clamp_(0, 1)
+        if getattr(self, "comfyui_implementation", False):
+            # ComfyUI streams decoder chunks to a float32 output buffer and
+            # explicitly performs the final ImageNet de-normalization in FP32.
+            video = video.float()
+        else:
+            video = video.to(self.sensitive_layer_dtype)
+        mean = self.pixel_mean.to(video).view(1, -1, 1, 1, 1)
+        std = self.pixel_std.to(video).view(1, -1, 1, 1, 1)
+        return (video * std + mean).clamp_(0, 1)
 
     def _activate(self) -> torch.device:
         if self.cpu_offload:

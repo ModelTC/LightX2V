@@ -60,11 +60,6 @@ def _bilinear_indices_weights(grid_thw, side, merge_size):
     return torch.stack([torch.cat(part) for part in index_parts]), torch.stack([torch.cat(part) for part in weight_parts])
 
 
-def _rotate_half(value):
-    first, second = value.chunk(2, dim=-1)
-    return torch.cat((-second, first), dim=-1)
-
-
 class _PatchEmbed(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -91,10 +86,16 @@ class _VisionAttention(nn.Module):
     def forward(self, hidden_states, cu_seqlens, cos, sin):
         length = hidden_states.shape[0]
         query, key, value = self.qkv(hidden_states).reshape(length, 3, self.num_heads, self.head_dim).permute(1, 0, 2, 3).unbind(0)
-        query_f, key_f = query.float(), key.float()
         cos_f, sin_f = cos.unsqueeze(-2).float(), sin.unsqueeze(-2).float()
-        query = (query_f * cos_f + _rotate_half(query_f) * sin_f).to(query.dtype)
-        key = (key_f * cos_f + _rotate_half(key_f) * sin_f).to(key.dtype)
+        midpoint = query.shape[-1] // 2
+        rotated_query = query * cos_f
+        rotated_query[..., :midpoint].addcmul_(query[..., midpoint:], -sin_f[..., midpoint:])
+        rotated_query[..., midpoint:].addcmul_(query[..., :midpoint], sin_f[..., :midpoint])
+        query = rotated_query.to(query.dtype)
+        rotated_key = key * cos_f
+        rotated_key[..., :midpoint].addcmul_(key[..., midpoint:], -sin_f[..., midpoint:])
+        rotated_key[..., midpoint:].addcmul_(key[..., :midpoint], sin_f[..., :midpoint])
+        key = rotated_key.to(key.dtype)
         outputs = []
         for start, end in zip(cu_seqlens[:-1].tolist(), cu_seqlens[1:].tolist()):
             q = query[start:end].transpose(0, 1).unsqueeze(0)
@@ -173,7 +174,9 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
         position_ids = _vision_position_ids(grid_thw, self.spatial_merge_size)
         cu_seqlens = _vision_cu_seqlens(grid_thw)
         hidden_states = self.patch_embed(pixels)
-        pos_embed = (self.pos_embed(indices) * weights[:, :, None]).sum(0)
+        # Keep the position table and interpolation arithmetic in the checkpoint dtype.
+        corners = self.pos_embed(indices) * weights.to(self.pos_embed.weight.dtype)[:, :, None]
+        pos_embed = corners[0] + corners[1] + corners[2] + corners[3]
         hidden_states = hidden_states + pos_embed.to(hidden_states.dtype)
         rotary = (position_ids.unsqueeze(-1) * self.rotary_inv_freq.to(position_ids.device)).flatten(1)
         rotary = torch.cat((rotary, rotary), dim=-1)
@@ -210,6 +213,9 @@ class MiniMaxH3Qwen3VLVisionTower(nn.Module):
             raise RuntimeError(f"Qwen3-VL vision checkpoint mismatch: missing={missing}, unexpected={unexpected}")
         head_dim = vision_config["hidden_size"] // vision_config["num_heads"]
         model.rotary_inv_freq = 1.0 / (10000.0 ** (torch.arange(0, head_dim // 2, 2, dtype=torch.float32) / (head_dim // 2)))
+        position_dtype = model.pos_embed.weight.dtype
+        model.float()
+        model.pos_embed.to(dtype=position_dtype)
         return model.eval().requires_grad_(False)
 
 

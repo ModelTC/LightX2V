@@ -224,6 +224,34 @@ def _resample_audio(container: av.container.Container, audio_stream: av.audio.Au
         container.mux(packet)
 
 
+def _set_comfyui_srgb_color_properties(target) -> None:
+    from av.video.reformatter import ColorPrimaries, ColorRange, ColorTrc
+
+    target.color_primaries = ColorPrimaries.BT709
+    target.color_trc = ColorTrc.IEC61966_2_1
+    target.colorspace = 1  # AVCOL_SPC_BT709
+    target.color_range = ColorRange.MPEG
+
+
+def _write_comfyui_audio(container: av.container.Container, audio_stream: av.audio.AudioStream, audio: Audio, max_samples: int) -> None:
+    samples = audio.waveform
+    if samples.ndim == 1:
+        samples = samples.unsqueeze(0)
+    if samples.ndim != 2:
+        raise ValueError(f"Expected audio samples with 2 dimensions; got shape {samples.shape}.")
+    if samples.shape[0] != 2 and samples.shape[1] == 2:
+        samples = samples.T
+    if samples.shape[0] != 2:
+        raise ValueError(f"Expected samples with 2 channels; got shape {samples.shape}.")
+
+    samples = samples[:, :max_samples].float().cpu().contiguous()
+    frame = av.AudioFrame.from_ndarray(samples.numpy(), format="fltp", layout="stereo")
+    frame.sample_rate = audio.sampling_rate
+    frame.pts = 0
+    container.mux(audio_stream.encode(frame))
+    container.mux(audio_stream.encode(None))
+
+
 def encode_video(
     video: torch.Tensor | Iterator[torch.Tensor],
     fps: int,
@@ -231,6 +259,8 @@ def encode_video(
     output_path: str,
     video_chunks_number: int,
     video_codec_options: Mapping[str, str] | None = None,
+    *,
+    comfyui_implementation: bool = False,
 ) -> None:
     if isinstance(video, torch.Tensor):
         video = iter([video])
@@ -240,34 +270,58 @@ def encode_video(
     _, height, width, _ = first_chunk.shape
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    container = av.open(output_path, mode="w")
-    stream = container.add_stream("libx264", rate=int(fps))
+    if comfyui_implementation:
+        container = av.open(output_path, mode="w", format="mp4", options={"movflags": "use_metadata_tags+faststart"})
+        frame_rate = Fraction(round(fps * 1000), 1000)
+        stream = container.add_stream("h264", rate=frame_rate)
+    else:
+        container = av.open(output_path, mode="w")
+        frame_rate = int(fps)
+        stream = container.add_stream("libx264", rate=frame_rate)
     stream.width = width
     stream.height = height
     stream.pix_fmt = "yuv420p"
-    if video_codec_options:
+    if comfyui_implementation:
+        stream.options = dict(video_codec_options or {})
+        _set_comfyui_srgb_color_properties(stream.codec_context)
+    elif video_codec_options:
         stream.options = dict(video_codec_options)
 
     if audio is not None:
-        audio_stream = _prepare_audio_stream(container, audio.sampling_rate)
+        if comfyui_implementation:
+            audio_stream = container.add_stream("aac", rate=audio.sampling_rate, layout="stereo")
+        else:
+            audio_stream = _prepare_audio_stream(container, audio.sampling_rate)
 
     def all_tiles(first_chunk: torch.Tensor, tiles_generator: Generator[tuple[torch.Tensor, int], None, None]) -> Generator[tuple[torch.Tensor, int], None, None]:
         yield first_chunk
         yield from tiles_generator
 
+    encoded_frames = 0
     for video_chunk in tqdm(all_tiles(first_chunk, video), total=video_chunks_number):
         video_chunk_cpu = video_chunk.to("cpu").numpy()
         for frame_array in video_chunk_cpu:
             frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
+            if comfyui_implementation:
+                frame = frame.reformat(format="yuv420p", dst_colorspace=1)
+                _set_comfyui_srgb_color_properties(frame)
             for packet in stream.encode(frame):
                 container.mux(packet)
+            encoded_frames += 1
 
     # Flush encoder
-    for packet in stream.encode():
-        container.mux(packet)
+    if comfyui_implementation:
+        container.mux(stream.encode(None))
+    else:
+        for packet in stream.encode():
+            container.mux(packet)
 
     if audio is not None:
-        _write_audio(container, audio_stream, audio)
+        if comfyui_implementation:
+            max_audio_samples = math.ceil((audio.sampling_rate / frame_rate) * encoded_frames)
+            _write_comfyui_audio(container, audio_stream, audio, max_audio_samples)
+        else:
+            _write_audio(container, audio_stream, audio)
 
     container.close()
     logger.info(f"Video saved to {output_path}")

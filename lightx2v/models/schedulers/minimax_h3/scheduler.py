@@ -27,6 +27,60 @@ def _make_schedule(infer_steps: int, shift: float, device) -> tuple[torch.Tensor
     return sigmas, 1.0 - sigmas[:-1]
 
 
+def _time_shift_sigma(sigma: torch.Tensor, from_shift: float, to_shift: float) -> torch.Tensor:
+    """Map a sigma from one shifted flow schedule onto another."""
+    base = sigma / (from_shift + sigma * (1.0 - from_shift))
+    return to_shift * base / (1.0 + (to_shift - 1.0) * base)
+
+
+def _audio_from_carry(
+    carry: torch.Tensor,
+    video_sigma: torch.Tensor,
+    audio_sigma: torch.Tensor,
+    audio_scale: float,
+) -> torch.Tensor:
+    """Convert ComfyUI's video-schedule audio carry to the model's audio stream."""
+    video_sigma = video_sigma.to(device=carry.device, dtype=torch.float32)
+    if bool(video_sigma == 0):
+        return carry.float() / audio_scale
+    audio_sigma = audio_sigma.to(device=carry.device, dtype=torch.float32)
+    return carry.float() * (audio_sigma / video_sigma)
+
+
+def _comfy_res_multistep_step(
+    sample: torch.Tensor,
+    denoised: torch.Tensor,
+    sigmas: torch.Tensor,
+    step_index: int,
+    old_denoised: torch.Tensor | None,
+    old_sigma_down: torch.Tensor | None,
+) -> torch.Tensor:
+    """Apply ComfyUI's deterministic ``res_multistep`` update (eta=0)."""
+    sample = sample.float()
+    denoised = denoised.float()
+    sigma = sigmas[step_index].to(device=sample.device, dtype=torch.float32)
+    sigma_down = sigmas[step_index + 1].to(device=sample.device, dtype=torch.float32)
+
+    if old_denoised is None or bool(sigma_down == 0):
+        derivative = (sample - denoised) / sigma
+        return sample + derivative * (sigma_down - sigma)
+
+    old_sigma_down = old_sigma_down.to(device=sample.device, dtype=torch.float32)
+    t = -sigma.log()
+    t_old = -old_sigma_down.log()
+    t_next = -sigma_down.log()
+    t_prev = -sigmas[step_index - 1].to(device=sample.device, dtype=torch.float32).log()
+    h = t_next - t
+    c2 = (t_prev - t_old) / h
+
+    neg_h = -h
+    phi1 = torch.expm1(neg_h) / neg_h
+    phi2 = (phi1 - 1.0) / neg_h
+    b1 = torch.nan_to_num(phi1 - phi2 / c2, nan=0.0)
+    b2 = torch.nan_to_num(phi2 / c2, nan=0.0)
+    return torch.exp(-h) * sample + h * (b1 * denoised + b2 * old_denoised.float())
+
+
 def _layout_to_device(layout: MiniMaxH3PackedSequence, device) -> MiniMaxH3PackedSequence:
     return replace(
         layout,
@@ -47,12 +101,20 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.video_shift = float(config.get("video_flow_shift", 12.0))
         self.audio_shift = float(config.get("audio_flow_shift", 3.0))
         self.step_update = config.get("h3_step_update", "reference_blend")
-        if self.step_update not in {"reference_blend", "training_euler"}:
-            raise ValueError(f"MiniMax-H3 h3_step_update must be 'reference_blend' or 'training_euler', got {self.step_update!r}")
+        valid_step_updates = {"reference_blend", "training_euler", "comfyui_res_multistep"}
+        if self.step_update not in valid_step_updates:
+            raise ValueError(f"MiniMax-H3 h3_step_update must be one of {sorted(valid_step_updates)}, got {self.step_update!r}")
         if self.video_shift <= 0 or self.audio_shift <= 0:
             raise ValueError("MiniMax-H3 flow shifts must be positive")
+        self.audio_scale = self.video_shift / self.audio_shift
         self.video_sigmas, self.video_timesteps = _make_schedule(infer_steps, self.video_shift, AI_DEVICE)
-        self.audio_sigmas, self.audio_timesteps = _make_schedule(infer_steps, self.audio_shift, AI_DEVICE)
+        if self.step_update == "comfyui_res_multistep":
+            # ComfyUI carries both streams on the video grid and derives audio
+            # sigma from that exact float32 value inside the model.
+            self.audio_sigmas = _time_shift_sigma(self.video_sigmas, self.video_shift, self.audio_shift)
+            self.audio_timesteps = 1.0 - self.audio_sigmas[:-1]
+        else:
+            self.audio_sigmas, self.audio_timesteps = _make_schedule(infer_steps, self.audio_shift, AI_DEVICE)
         if self.video_timesteps.numel() != self.audio_timesteps.numel():
             raise ValueError("video and audio schedules collapsed to different step counts")
         self.infer_steps = int(self.video_timesteps.numel())
@@ -60,6 +122,10 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.audio_latents = None
         self.video_noise_pred = None
         self.audio_noise_pred = None
+        self.audio_carry_latents = None
+        self.old_video_denoised = None
+        self.old_audio_carry_denoised = None
+        self.old_sigma_down = None
         self.layout = None
         self.layout_cpu = None
 
@@ -83,23 +149,33 @@ class MiniMaxH3Scheduler(BaseScheduler):
         num_audio_latents = audio_latent_num_frames(num_frames)
         patch_size = tuple(self.config.get("patch_size", (1, 2, 2)))
 
-        # The released pipeline uses one CPU random stream even when inference
-        # runs on CUDA: float32 video noise first, then channel-major audio.
+        comfyui_mode = self.step_update == "comfyui_res_multistep"
         self.generator = torch.Generator(device="cpu").manual_seed(int(seed))
         condition_video_latents = condition_video_latents or []
         condition_audio_latents = condition_audio_latents or []
         condition_video_rows = []
         for clean in condition_video_latents:
-            noise = torch.randn(clean.shape, generator=self.generator, device="cpu", dtype=torch.float32)
-            clean_rows = patchify_video_latents(clean.float(), patch_size).to(AI_DEVICE)
-            noise_rows = patchify_video_latents(noise.to(AI_DEVICE), patch_size)
-            # Match Diffusers' ``scheduler.scale_noise`` exactly: the
-            # conditioning VAE rows are moved first and mixed on the execution
-            # device, with the scalar represented in the sample dtype.  Doing
-            # this FP32 operation on CPU differs by an ulp on CUDA and that
-            # perturbation is amplified by the 48-layer denoiser.
-            timestep = torch.tensor(KEYFRAME_NOISE_AUG, dtype=clean_rows.dtype, device=clean_rows.device)
-            condition_video_rows.append(timestep * clean_rows + (1.0 - timestep) * noise_rows)
+            clean_rows_cpu = patchify_video_latents(clean.float(), patch_size)
+            if comfyui_mode:
+                # ComfyUI restarts the same CPU stream for every visual
+                # condition and draws in patch-row order. These draws are
+                # independent from the target video/audio noise stream. Its
+                # VAE returns conditions on the intermediate (CPU) device, so
+                # preserve the CPU mix before moving the completed rows.
+                condition_generator = torch.Generator(device="cpu").manual_seed(int(seed))
+                noise_rows = torch.randn(clean_rows_cpu.shape, generator=condition_generator, device="cpu", dtype=torch.float32)
+                mixed_rows = KEYFRAME_NOISE_AUG * clean_rows_cpu + (1.0 - KEYFRAME_NOISE_AUG) * noise_rows
+                condition_video_rows.append(mixed_rows.to(AI_DEVICE))
+            else:
+                clean_rows = clean_rows_cpu.to(AI_DEVICE)
+                noise = torch.randn(clean.shape, generator=self.generator, device="cpu", dtype=torch.float32)
+                noise_rows = patchify_video_latents(noise.to(AI_DEVICE), patch_size)
+                # Match Diffusers' ``scheduler.scale_noise`` exactly: the
+                # conditioning VAE rows are moved first and mixed on the
+                # execution device, with the scalar represented in the sample
+                # dtype.
+                timestep = torch.tensor(KEYFRAME_NOISE_AUG, dtype=clean_rows.dtype, device=clean_rows.device)
+                condition_video_rows.append(timestep * clean_rows + (1.0 - timestep) * noise_rows)
 
         video_noise = torch.randn(
             (1, int(self.config.get("in_channels", 24)), latent_frames, latent_height, latent_width),
@@ -109,15 +185,24 @@ class MiniMaxH3Scheduler(BaseScheduler):
         )
         target_video_rows = patchify_video_latents(video_noise, patch_size)
         self.video_latents = torch.cat(condition_video_rows + [target_video_rows.to(AI_DEVICE)])
-        target_audio_rows = torch.randn(
-            (
-                num_audio_latents * AUDIO_CHANNELS,
-                int(self.config.get("audio_in_channels", 32)),
-            ),
-            generator=self.generator,
-            device="cpu",
-            dtype=torch.float32,
-        )
+        audio_in_channels = int(self.config.get("audio_in_channels", 32))
+        if comfyui_mode:
+            # ComfyUI samples the nested audio tensor after video as
+            # [1, 32, 2, T], then MiniMax packs it channel-major.
+            target_audio = torch.randn(
+                (1, audio_in_channels, AUDIO_CHANNELS, num_audio_latents),
+                generator=self.generator,
+                device="cpu",
+                dtype=torch.float32,
+            )
+            target_audio_rows = target_audio[0].permute(1, 2, 0).reshape(num_audio_latents * AUDIO_CHANNELS, audio_in_channels).contiguous()
+        else:
+            target_audio_rows = torch.randn(
+                (num_audio_latents * AUDIO_CHANNELS, audio_in_channels),
+                generator=self.generator,
+                device="cpu",
+                dtype=torch.float32,
+            )
         condition_audio_rows = [latent.transpose(1, 2).reshape(-1, latent.shape[1]).float() for latent in condition_audio_latents]
         self.audio_latents = torch.cat(condition_audio_rows + [target_audio_rows]).to(AI_DEVICE)
 
@@ -135,12 +220,24 @@ class MiniMaxH3Scheduler(BaseScheduler):
         self.num_audio_latents = num_audio_latents
         self.num_condition_video_rows = self.layout_cpu.num_condition_video_rows
         self.num_condition_audio_rows = self.layout_cpu.num_condition_audio_rows
+        if comfyui_mode:
+            self.audio_carry_latents = self.audio_latents[self.num_condition_audio_rows :].clone()
         self.step_index = 0
         self.video_noise_pred = None
         self.audio_noise_pred = None
+        self.old_video_denoised = None
+        self.old_audio_carry_denoised = None
+        self.old_sigma_down = None
 
     def step_pre(self, step_index):
         self.step_index = int(step_index)
+        if self.step_update == "comfyui_res_multistep":
+            self.audio_latents[self.num_condition_audio_rows :] = _audio_from_carry(
+                self.audio_carry_latents,
+                self.video_sigmas[self.step_index],
+                self.audio_sigmas[self.step_index],
+                self.audio_scale,
+            )
         video_timestep = float(self.video_timesteps[self.step_index])
         audio_timestep = float(self.audio_timesteps[self.step_index])
         unique, inverse = build_row_timesteps(self.layout_cpu, video_timestep, audio_timestep)
@@ -162,11 +259,58 @@ class MiniMaxH3Scheduler(BaseScheduler):
         ratio = sigma_next / sigma
         return ratio * sample.float() + (1.0 - ratio) * denoised.float()
 
+    def _step_comfyui_res_multistep(self, condition_video_rows: int, condition_audio_rows: int) -> None:
+        video_sigma = self.video_sigmas[self.step_index].to(device=self.video_latents.device, dtype=torch.float32)
+        audio_sigma = self.audio_sigmas[self.step_index].to(device=self.audio_latents.device, dtype=torch.float32)
+        target_video = self.video_latents[condition_video_rows:].float()
+        target_audio = self.audio_latents[condition_audio_rows:].float()
+        video_velocity = self.video_noise_pred[condition_video_rows:].float()
+        audio_velocity = self.audio_noise_pred[condition_audio_rows:].float()
+
+        video_denoised = target_video + video_sigma * video_velocity
+        audio_carry_velocity = (self.audio_scale - 1.0) * target_audio
+        audio_carry_velocity = audio_carry_velocity + (1.0 + (self.audio_scale - 1.0) * audio_sigma) * audio_velocity
+        audio_carry_denoised = self.audio_carry_latents.float() + video_sigma * audio_carry_velocity
+
+        next_video = _comfy_res_multistep_step(
+            target_video,
+            video_denoised,
+            self.video_sigmas,
+            self.step_index,
+            self.old_video_denoised,
+            self.old_sigma_down,
+        )
+        next_audio_carry = _comfy_res_multistep_step(
+            self.audio_carry_latents,
+            audio_carry_denoised,
+            self.video_sigmas,
+            self.step_index,
+            self.old_audio_carry_denoised,
+            self.old_sigma_down,
+        )
+
+        self.video_latents[condition_video_rows:] = next_video
+        self.audio_carry_latents = next_audio_carry
+        video_sigma_next = self.video_sigmas[self.step_index + 1]
+        audio_sigma_next = self.audio_sigmas[self.step_index + 1]
+        self.audio_latents[condition_audio_rows:] = _audio_from_carry(
+            next_audio_carry,
+            video_sigma_next,
+            audio_sigma_next,
+            self.audio_scale,
+        )
+        self.old_video_denoised = video_denoised
+        self.old_audio_carry_denoised = audio_carry_denoised
+        self.old_sigma_down = video_sigma_next.to(device=next_video.device, dtype=torch.float32)
+
     def step_post(self):
         if self.video_noise_pred is None or self.audio_noise_pred is None:
             raise RuntimeError("MiniMax-H3 transformer did not populate both velocity predictions")
         condition_video_rows = self.layout.num_condition_video_rows
         condition_audio_rows = self.layout.num_condition_audio_rows
+        if self.step_update == "comfyui_res_multistep":
+            self._step_comfyui_res_multistep(condition_video_rows, condition_audio_rows)
+            return
         self.video_latents[condition_video_rows:] = self._step(
             self.video_latents[condition_video_rows:],
             self.video_noise_pred[condition_video_rows:].float(),
@@ -190,6 +334,10 @@ class MiniMaxH3Scheduler(BaseScheduler):
             "audio_latents",
             "video_noise_pred",
             "audio_noise_pred",
+            "audio_carry_latents",
+            "old_video_denoised",
+            "old_audio_carry_denoised",
+            "old_sigma_down",
             "layout",
             "layout_cpu",
             "unique_timesteps_cpu",
