@@ -38,7 +38,7 @@ from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight as _TorchSDPAWei
 from lightx2v.common.ops.embedding.embedding_weight import EmbeddingWeight as _EmbeddingWeight  # noqa: F401
 from lightx2v.common.ops.mm.mm_weight import MMWeight as _MMWeight  # noqa: F401
 from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightFP32Qwen as _RMSWeightFP32Qwen  # noqa: F401
-from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl_vision import MiniMaxH3Qwen3VLVisionTower, _apply_comfy_rope, _prepare_comfy_images
+from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl_vision import MiniMaxH3Qwen3VLVisionTower
 from lightx2v.models.networks.minimax_h3.packing import VIDEO_TAG
 from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     build_ref2av_presentation,
@@ -101,33 +101,6 @@ def _repeat_kv(x, num_groups):
         return x
     tokens, num_kv_heads, head_dim = x.shape
     return x[:, :, None, :].expand(tokens, num_kv_heads, num_groups, head_dim).reshape(tokens, num_kv_heads * num_groups, head_dim)
-
-
-def _encode_vision_items(vision_encoder, pixels, grid_thw, separate_items=False):
-    if not separate_items or grid_thw.shape[0] == 1:
-        return vision_encoder(pixels, grid_thw)
-
-    features = []
-    deepstack_by_layer = None
-    offset = 0
-    for grid in grid_thw:
-        patch_count = int(grid.prod())
-        item_features, item_deepstack = vision_encoder(
-            pixels[offset : offset + patch_count],
-            grid.unsqueeze(0),
-        )
-        features.append(item_features)
-        if deepstack_by_layer is None:
-            deepstack_by_layer = [[] for _ in item_deepstack]
-        elif len(deepstack_by_layer) != len(item_deepstack):
-            raise RuntimeError("Qwen3-VL vision items returned inconsistent deepstack layers")
-        for layer_values, item_values in zip(deepstack_by_layer, item_deepstack):
-            layer_values.append(item_values)
-        offset += patch_count
-    if offset != pixels.shape[0]:
-        raise RuntimeError(f"Qwen3-VL grids describe {offset} patches, but received {pixels.shape[0]}")
-    deepstack = [] if deepstack_by_layer is None else [torch.cat(values) for values in deepstack_by_layer]
-    return torch.cat(features), deepstack
 
 
 class _Qwen3VLVocabParallelEmbedding(_EmbeddingWeight):
@@ -352,8 +325,15 @@ class _Qwen3VLAttentionWeights(WeightModule):
         cos = cos[:, None, :]
         sin = sin[:, None, :]
         if self.h3_implementation == "comfyui":
-            query = _apply_comfy_rope(query, cos, sin)
-            key = _apply_comfy_rope(key, cos, sin)
+            midpoint = query.shape[-1] // 2
+            rotated_query = query * cos
+            rotated_query[..., :midpoint].addcmul_(query[..., midpoint:], -sin[..., midpoint:])
+            rotated_query[..., midpoint:].addcmul_(query[..., :midpoint], sin[..., :midpoint])
+            query = rotated_query.to(query.dtype)
+            rotated_key = key * cos
+            rotated_key[..., :midpoint].addcmul_(key[..., midpoint:], -sin[..., midpoint:])
+            rotated_key[..., midpoint:].addcmul_(key[..., :midpoint], sin[..., :midpoint])
+            key = rotated_key.to(key.dtype)
         else:
             query = query * cos + _rotate_half(query) * sin
             key = key * cos + _rotate_half(key) * sin
@@ -770,11 +750,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
             self.tp_group = None
             self.tp_size = 1
             self.tp_rank = 0
-        requested_rank0_only = bool(config.get("text_encoder_rank0_only", False))
-        self.rank0_only = requested_rank0_only and dist.is_initialized() and dist.get_world_size() > 1
-        if self.rank0_only and self.tensor_parallel:
-            raise ValueError("MiniMax-H3 text_encoder_rank0_only and text_encoder_tensor_parallel cannot both be enabled")
-        self.is_encoder_rank = not self.rank0_only or dist.get_rank() == 0
         text_encoder_cpu_offload = bool(config.get("text_encoder_cpu_offload", config.get("cpu_offload", False)))
         if "qwen3vl_cpu_offload" in config and bool(config["qwen3vl_cpu_offload"]) != text_encoder_cpu_offload:
             raise ValueError("qwen3vl_cpu_offload cannot override text_encoder_cpu_offload for MiniMax-H3; the runner schedules the native conditioner through text_encoder_cpu_offload")
@@ -1144,7 +1119,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
             return self.vision_encoder
         text_encoder_path = self._component_path("text_encoder_path", "text_encoder")
         model_config = self._read_model_config(text_encoder_path)
-        vision_config = {**model_config["vision_config"], "h3_implementation": self.config.get("h3_implementation")}
+        vision_config = model_config["vision_config"]
         logger.info(f"Building native MiniMax-H3 Qwen3-VL vision tower from {text_encoder_path}")
         self.vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config)
         return self.vision_encoder
@@ -1173,8 +1148,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
         return self
 
     def load(self):
-        if not self.is_encoder_rank:
-            return self
         self.load_tokenizer()
         self.load_text_encoder()
         return self
@@ -1190,29 +1163,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
             self.load_tokenizer()
         if self.text_encoder is None:
             self.load_text_encoder()
-
-    def _broadcast_rank0_output(self, output):
-        if not self.rank0_only:
-            return output
-
-        rank = dist.get_rank()
-        if rank == 0:
-            prompt_embeds = output["prompt_embeds"]
-            text_token_tags = output["text_token_tags"]
-            metadata = torch.tensor(prompt_embeds.shape, dtype=torch.long, device=prompt_embeds.device)
-        else:
-            metadata = torch.empty(2, dtype=torch.long, device=AI_DEVICE)
-        dist.broadcast(metadata, src=0)
-
-        if rank != 0:
-            prompt_embeds = torch.empty(tuple(metadata.tolist()), dtype=GET_DTYPE(), device=AI_DEVICE)
-            text_token_tags = torch.empty(prompt_embeds.shape[0], dtype=torch.long, device=AI_DEVICE)
-        dist.broadcast(prompt_embeds, src=0)
-        dist.broadcast(text_token_tags, src=0)
-        return {
-            "prompt_embeds": prompt_embeds,
-            "text_token_tags": text_token_tags,
-        }
 
     def _prepare_t2av_input_ids(self, prompt, device):
         if not isinstance(prompt, str):
@@ -1264,14 +1214,9 @@ class MiniMaxH3Qwen3VLTextEncoder:
             raise RuntimeError(f"Qwen3-VL M-RoPE produced {result.shape[1]} positions for {input_ids.shape[0]} tokens")
         return result
 
-    def _process_images(self, images):
-        if self.config.get("h3_implementation") == "comfyui":
-            return _prepare_comfy_images(images)
-        return self.load_processor().image_processor(images=images, return_tensors="pt")
-
     def _prepare_keyframe_inputs(self, prompt, images):
         processor = self.load_processor()
-        vision = self._process_images(images)
+        vision = processor.image_processor(images=images, return_tensors="pt")
         image_grid_thw = vision["image_grid_thw"]
         merge_unit = processor.image_processor.merge_size**2
         token_ids, token_tags = [], []
@@ -1295,7 +1240,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
         images = [reference.image for reference in references if reference.kind == "image"]
         merge_unit = processor.image_processor.merge_size**2
         if images:
-            vision = self._process_images(images)
+            vision = processor.image_processor(images=images, return_tensors="pt")
             pixel_values, image_grid_thw = vision["pixel_values"], vision["image_grid_thw"]
             image_counts = [int(grid.prod()) // merge_unit for grid in image_grid_thw]
         pixel_values_videos = video_grid_thw = None
@@ -1322,18 +1267,14 @@ class MiniMaxH3Qwen3VLTextEncoder:
         try:
             with torch.no_grad():
                 if pixel_values is not None:
-                    image_features, image_deepstack = _encode_vision_items(
-                        vision_encoder,
+                    image_features, image_deepstack = vision_encoder(
                         pixel_values.to(AI_DEVICE, parameter.dtype),
                         image_grid_thw.to(AI_DEVICE),
-                        separate_items=self.config.get("h3_implementation") == "comfyui",
                     )
                 if pixel_values_videos is not None:
-                    video_features, video_deepstack = _encode_vision_items(
-                        vision_encoder,
+                    video_features, video_deepstack = vision_encoder(
                         pixel_values_videos.to(AI_DEVICE, parameter.dtype),
                         video_grid_thw.to(AI_DEVICE),
-                        separate_items=self.config.get("h3_implementation") == "comfyui",
                     )
             image_token_id = self.tokenizer.convert_tokens_to_ids("<|image_pad|>")
             video_token_id = self.tokenizer.convert_tokens_to_ids("<|video_pad|>")
@@ -1366,8 +1307,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
     @torch.inference_mode()
     def infer(self, prompt, image_list=None, references=None):
         """Return unbatched ``[tokens, 5120]`` conditioning and text tags."""
-        if self.rank0_only and not self.is_encoder_rank:
-            return self._broadcast_rank0_output(None)
         self._ensure_loaded()
         try:
             # Input encoding happens before DefaultRunner enters its main-model
@@ -1417,11 +1356,10 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 raise RuntimeError(f"MiniMax-H3 expected conditioner hidden shape {expected_shape}, but native Qwen3-VL returned {tuple(prompt_embeds.shape)}")
 
             prompt_embeds = prompt_embeds.to(device=AI_DEVICE, dtype=GET_DTYPE()).contiguous()
-            output = {
+            return {
                 "prompt_embeds": prompt_embeds,
                 "text_token_tags": token_tags.to(prompt_embeds.device),
             }
-            return self._broadcast_rank0_output(output)
         finally:
             if self.block_offload:
                 if self.release_block_offload_buffers and self.text_encoder is not None:
