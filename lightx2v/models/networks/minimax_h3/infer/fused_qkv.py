@@ -1,4 +1,4 @@
-"""Split packed QKV and normalize Q/K without materializing their input copies."""
+"""Fused MiniMax-H3 QKV normalization and RoPE kernels."""
 
 import math
 
@@ -12,6 +12,10 @@ try:
 except ImportError:
     triton = None
     tl = None
+
+_SUPPORTED_DTYPES = (torch.float16, torch.bfloat16, torch.float32)
+_TORCH_ROPE_CLASS = ("lightx2v.common.ops.rope.torch_rope", "TorchRealRope")
+_XPU_ROPE_CLASS = ("lightx2v_platform.ops.rope.intel_xpu.minimax_h3_rope", "MiniMaxH3XpuRope")
 
 
 if triton is not None:
@@ -75,10 +79,9 @@ if triton is not None:
                 tl.store(k + row * DIM + d, output, d < DIM)
 
 
-def can_split_qkv_norm(packed, norm_q, norm_k):
-    # Match RMSNorm's FP32 arithmetic and final output cast on any Triton backend.
-    # Sensitive FP32 modes retain their own semantics.
-    return packed.dtype in (torch.float16, torch.bfloat16, torch.float32) and all(
+def _norms_are_compatible(packed, norm_q, norm_k):
+    """Check that the fused kernel preserves the configured RMSNorm semantics."""
+    return packed.dtype in _SUPPORTED_DTYPES and all(
         getattr(norm, "weight", None) is not None
         and norm.weight.device == packed.device
         and norm.weight.dtype == packed.dtype
@@ -90,21 +93,45 @@ def can_split_qkv_norm(packed, norm_q, norm_k):
 
 @torch.library.custom_op("lightx2v::minimax_h3_split_qkv_norm_rope", mutates_args=())
 def split_qkv_norm_rope(
-    packed: torch.Tensor, q_weight: torch.Tensor, k_weight: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, q_eps: float, k_eps: float, low_precision_rope: bool = False
+    packed: torch.Tensor,
+    q_weight: torch.Tensor,
+    k_weight: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    q_eps: float,
+    k_eps: float,
+    low_precision_rope: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Fused RMSNorm and partial split-half RoPE with full-width cosine/sine caches."""
-    if triton is None or packed.device.type not in ("cuda", "xpu"):
-        raise RuntimeError("Fused QKV norm + RoPE requires Triton on CUDA or XPU")
+    if triton is None:
+        raise RuntimeError("Fused QKV norm + RoPE requires Triton")
     dim = q_weight.numel()
-    if packed.ndim != 2 or dim == 0 or packed.shape[1] == 0 or packed.shape[1] % (3 * dim) or packed.stride(1) != 1:
+    if (
+        packed.ndim != 2
+        or dim == 0
+        or packed.shape[1] == 0
+        or packed.shape[1] % (3 * dim)
+        or packed.stride(1) != 1
+    ):
         raise ValueError("Expected packed [tokens, 3 * heads * head_dim] with contiguous channels")
-    if q_weight.ndim != 1 or k_weight.shape != q_weight.shape or not q_weight.is_contiguous() or not k_weight.is_contiguous():
+    if (
+        q_weight.ndim != 1
+        or k_weight.shape != q_weight.shape
+        or not q_weight.is_contiguous()
+        or not k_weight.is_contiguous()
+    ):
         raise ValueError("Norm weights must be contiguous [head_dim] tensors")
-    if packed.dtype not in (torch.float16, torch.bfloat16, torch.float32) or any(w.dtype != packed.dtype for w in (q_weight, k_weight)):
+    if packed.dtype not in _SUPPORTED_DTYPES or any(w.dtype != packed.dtype for w in (q_weight, k_weight)):
         raise ValueError("QKV and norm weights must have matching FP16/BF16/FP32 dtypes")
     if any(t.device != packed.device for t in (q_weight, k_weight, cos, sin)):
         raise ValueError("All inputs must be on the same device")
-    if cos.ndim != 2 or sin.shape != cos.shape or cos.shape[0] != packed.shape[0] or not 0 < cos.shape[1] <= dim or cos.shape[1] % 2:
+    if (
+        cos.ndim != 2
+        or sin.shape != cos.shape
+        or cos.shape[0] != packed.shape[0]
+        or not 0 < cos.shape[1] <= dim
+        or cos.shape[1] % 2
+    ):
         raise ValueError("Cos/sin must have shape [tokens, rotary_dim], with positive even rotary_dim <= head_dim")
     if cos.stride(1) != 1 or sin.stride(1) != 1 or cos.dtype != torch.float32 or sin.dtype != torch.float32:
         raise ValueError("Cos/sin must be FP32 with contiguous channels")
@@ -113,7 +140,7 @@ def split_qkv_norm_rope(
     heads = packed.shape[1] // (3 * dim)
     outputs = tuple(packed.new_empty((packed.shape[0], heads, dim)) for _ in range(3))
     if packed.shape[0]:
-        with getattr(torch, packed.device.type).device(packed.device):
+        with torch.get_device_module(packed.device).device(packed.device):
             _split_qkv_norm_rope_kernel[(packed.shape[0] * heads, 3)](
                 packed,
                 q_weight,
@@ -145,22 +172,27 @@ def _split_qkv_norm_rope_fake(packed, q_weight, k_weight, cos, sin, q_eps, k_eps
 
 
 def prepare_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs):
-    """Return None when the configured norm/RoPE semantics require the original path."""
-    if not can_split_qkv_norm(packed, norm_q, norm_k) or packed.device.type not in ("cuda", "xpu"):
+    """Prepare fused inputs, or return None when semantics are incompatible."""
+    if not _norms_are_compatible(packed, norm_q, norm_k):
         return None
     if rope.layout != "split_half" or rope.compute_dtype != torch.float32:
         return None
     if not isinstance(freqs, tuple) or len(freqs) != 2:
         return None
     cos, sin = freqs
-    if cos.ndim != 2 or sin.shape != cos.shape or cos.shape[0] != packed.shape[0] or any(t.device != packed.device or t.dtype != torch.float32 or t.stride(1) != 1 for t in freqs):
+    if (
+        cos.ndim != 2
+        or sin.shape != cos.shape
+        or cos.shape[0] != packed.shape[0]
+        or any(t.device != packed.device or t.dtype != torch.float32 or t.stride(1) != 1 for t in freqs)
+    ):
         return None
     rope_class = (type(rope).__module__, type(rope).__name__)
     low_precision = False
-    if rope_class == ("lightx2v_platform.ops.rope.intel_xpu.minimax_h3_rope", "MiniMaxH3XpuRope"):
+    if rope_class == _XPU_ROPE_CLASS:
         view = packed[:, : packed.shape[1] // 3].unflatten(-1, (-1, norm_q.weight.numel()))
         low_precision = rope._can_use_xpu_kernel(view, cos, sin, cos.shape[-1])
-    elif rope_class != ("lightx2v.common.ops.rope.torch_rope", "TorchRealRope"):
+    elif rope_class != _TORCH_ROPE_CLASS:
         return None
     return cos, sin, low_precision
 
@@ -173,7 +205,16 @@ class TritonQKVNormRope:
         if prepared is None or triton is None:
             return None
         cos, sin, low_precision = prepared
-        return split_qkv_norm_rope(packed, norm_q.weight, norm_k.weight, cos, sin, norm_q.eps, norm_k.eps, low_precision)
+        return split_qkv_norm_rope(
+            packed,
+            norm_q.weight,
+            norm_k.weight,
+            cos,
+            sin,
+            norm_q.eps,
+            norm_k.eps,
+            low_precision,
+        )
 
 
 def try_split_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs, backend="triton"):
