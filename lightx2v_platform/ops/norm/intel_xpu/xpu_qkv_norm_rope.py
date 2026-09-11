@@ -1,14 +1,13 @@
 from lightx2v_platform.registry_factory import PLATFORM_QKV_NORM_ROPE_REGISTER
 
-
 @PLATFORM_QKV_NORM_ROPE_REGISTER("intel_xpu")
 class XpuQKVNormRope:
     @staticmethod
     def apply(packed, norm_q, norm_k, rope, freqs):
         # Import lazily to avoid a platform/model import cycle during registry setup.
         from lightx2v.models.networks.minimax_h3.infer.fused_qkv import (
-            TritonQKVNormRope,
             prepare_qkv_norm_rope,
+            run_triton_qkv_norm_rope,
         )
 
         prepared = prepare_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs)
@@ -31,4 +30,4 @@ class XpuQKVNormRope:
                     norm_k.eps,
                     low_precision,
                 )
-        return TritonQKVNormRope.apply(packed, norm_q, norm_k, rope, freqs)
+        return run_triton_qkv_norm_rope(packed, norm_q, norm_k, cos, sin, low_precision)
