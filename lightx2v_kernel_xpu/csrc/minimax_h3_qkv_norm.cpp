@@ -52,29 +52,34 @@ void launch_qkv_norm(const T* packed, const T* q_weight,
                     return;
                 }
 
-                simd<float, kBlockSize> squares = 0;
+                // Keep the complete Q/K row in registers. RMSNorm needs the
+                // values both for the reduction and for the final scaling;
+                // retaining them avoids reading every Q/K element twice.
+                simd<float, kHeadDim> values;
 #pragma unroll
                 for (int block = 0; block < kBlocks; ++block) {
-                    simd<float, kBlockSize> values =
-                        block_load<T, kBlockSize>(input + block * kBlockSize);
-                    squares += values * values;
+                    values.template select<kBlockSize, 1>(
+                        block * kBlockSize) =
+                        block_load<T, kBlockSize>(
+                            input + block * kBlockSize);
                 }
                 const float sum =
                     sycl::ext::intel::esimd::detail::sum<
-                        float, float, kBlockSize>(squares);
+                        float, float, kHeadDim>(values * values);
                 const float scale = rsqrt(
                     sum / static_cast<float>(kHeadDim) +
                     (component == 0 ? q_eps : k_eps));
                 const T* weight = component == 0 ? q_weight : k_weight;
 #pragma unroll
                 for (int block = 0; block < kBlocks; ++block) {
-                    simd<float, kBlockSize> values =
-                        block_load<T, kBlockSize>(input + block * kBlockSize);
                     simd<float, kBlockSize> weights =
                         block_load<T, kBlockSize>(weight + block * kBlockSize);
                     block_store<T, kBlockSize>(
                         output + block * kBlockSize,
-                        simd<T, kBlockSize>(values * scale * weights));
+                        simd<T, kBlockSize>(
+                            values.template select<kBlockSize, 1>(
+                                block * kBlockSize) *
+                            scale * weights));
                 }
             });
     });
