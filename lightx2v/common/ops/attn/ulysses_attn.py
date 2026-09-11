@@ -18,6 +18,7 @@ class UlyssesAttnWeight(AttnWeightTemplate):
     def __init__(self, a2a_backend="torch"):
         self.config = {}
         self.default_a2a_backend = a2a_backend
+        self._aux_gather_buffers = {}
 
     def apply(
         self,
@@ -101,6 +102,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         head_parallel=False,
         aux_first=False,
         attention_kwargs=None,
+        async_aux_gather=False,
+        reuse_aux_gather_buffers=False,
+        aux_gather_buffer_cache_max=16,
     ):
         """Run Ulysses attention over QKV and optional auxiliary token regions.
 
@@ -161,13 +165,16 @@ class UlyssesAttnWeight(AttnWeightTemplate):
             world_size=world_size,
             rank=rank,
             attention_kwargs=attention_kwargs,
+            async_aux_gather=async_aux_gather,
+            reuse_aux_gather_buffers=reuse_aux_gather_buffers,
+            aux_gather_buffer_cache_max=aux_gather_buffer_cache_max,
         )
         if head_parallel:
             return self._apply_head_pipeline(**common_args)
         return self._apply_bulk(**common_args)
 
-    @staticmethod
     def _apply_bulk(
+        self,
         prepost,
         a2a,
         q,
@@ -184,6 +191,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         world_size,
         rank,
         attention_kwargs,
+        async_aux_gather,
+        reuse_aux_gather_buffers,
+        aux_gather_buffer_cache_max,
     ):
         local_len, q_heads, hidden_dims = q.shape
         shard_heads = q_heads // world_size
@@ -214,15 +224,40 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         ).reshape(attn_q.shape[0], -1)
         output, local_aux_attn = split_main_aux_output(attn, global_len, aux_len, aux_first)
 
+        aux_output = None
+        aux_gather_work = None
+        if async_aux_gather and local_aux_attn is not None:
+            aux_output, aux_gather_work = self._gather_aux(
+                local_aux_attn,
+                world_size,
+                seq_p_group,
+                reuse_buffers=reuse_aux_gather_buffers,
+                cache_max=aux_gather_buffer_cache_max,
+                async_op=True,
+            )
+
         packed_attn = prepost.pack_attn(output, local_len, world_size, shard_heads, hidden_dims, quant_scheme)
+        # Collectives on the same process group must remain ordered. The async
+        # auxiliary gather may overlap with the local packing above, but must
+        # finish before the output all-to-all starts.
+        if aux_gather_work is not None:
+            aux_gather_work.wait()
+            aux_output = torch.cat(aux_output, dim=1)
         exchanged_attn = UlyssesAttnWeight._exchange_packed(packed_attn, a2a, seq_p_group)
         output = prepost.unpack_attn(exchanged_attn, attn.dtype, hidden_dims)
 
-        aux_output = UlyssesAttnWeight._gather_aux(local_aux_attn, world_size, seq_p_group)
+        if not async_aux_gather:
+            aux_output, _ = self._gather_aux(
+                local_aux_attn,
+                world_size,
+                seq_p_group,
+                reuse_buffers=reuse_aux_gather_buffers,
+                cache_max=aux_gather_buffer_cache_max,
+            )
         return output, aux_output
 
-    @staticmethod
     def _apply_head_pipeline(
+        self,
         prepost,
         a2a,
         q,
@@ -239,6 +274,9 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         world_size,
         rank,
         attention_kwargs,
+        async_aux_gather,
+        reuse_aux_gather_buffers,
+        aux_gather_buffer_cache_max,
     ):
         local_len, q_heads, hidden_dims = q.shape
         shard_heads = q_heads // world_size
@@ -303,7 +341,14 @@ class UlyssesAttnWeight(AttnWeightTemplate):
 
         if local_aux_heads:
             local_aux = torch.cat(local_aux_heads, dim=1)
-            aux_output = UlyssesAttnWeight._gather_aux(local_aux, world_size, seq_p_group).reshape(local_aux.shape[0], -1)
+            aux_output, _ = self._gather_aux(
+                local_aux,
+                world_size,
+                seq_p_group,
+                reuse_buffers=reuse_aux_gather_buffers,
+                cache_max=aux_gather_buffer_cache_max,
+            )
+            aux_output = aux_output.reshape(local_aux.shape[0], -1)
         else:
             aux_output = None
         return output, aux_output
@@ -347,13 +392,31 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         dense_kwargs.setdefault("max_seqlen_kv", k.shape[0])
         return dense_kwargs
 
-    @staticmethod
-    def _gather_aux(local_aux, world_size, group):
+    def _gather_aux(self, local_aux, world_size, group, reuse_buffers=False, cache_max=16, async_op=False):
         if local_aux is None:
-            return None
-        gathered = [torch.empty_like(local_aux) for _ in range(world_size)]
-        dist.all_gather(gathered, local_aux, group=group)
-        return torch.cat(gathered, dim=1)
+            return None, None
+        gathered = self._get_aux_gather_buffers(local_aux, world_size, reuse_buffers, cache_max)
+        work = dist.all_gather(gathered, local_aux, group=group, async_op=async_op)
+        if async_op:
+            return gathered, work
+        return torch.cat(gathered, dim=1), work
+
+    def _get_aux_gather_buffers(self, tensor, world_size, reuse_buffers, cache_max):
+        if not reuse_buffers:
+            return [torch.empty_like(tensor) for _ in range(world_size)]
+
+        try:
+            cache_max = max(1, int(cache_max))
+        except (TypeError, ValueError):
+            cache_max = 16
+        key = (world_size, tuple(tensor.shape), tensor.dtype, tensor.device)
+        buffers = self._aux_gather_buffers.get(key)
+        if buffers is None:
+            if len(self._aux_gather_buffers) >= cache_max:
+                self._aux_gather_buffers.clear()
+            buffers = [torch.empty_like(tensor) for _ in range(world_size)]
+            self._aux_gather_buffers[key] = buffers
+        return buffers
 
     def _resolve_options(self, prepost_backend, a2a_backend, q, k, quant_scheme, qkv_fusion, head_parallel):
         prepost_name = "torch" if prepost_backend is None else prepost_backend
