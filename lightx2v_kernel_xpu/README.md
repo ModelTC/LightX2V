@@ -14,6 +14,9 @@ Exposed as the Python package `sycl_kernels`:
   passes the remaining 32 dimensions through.
 - `sycl_kernels.minimax_h3_rope_cached(input, cos, sin)` applies the same
   operation with the FP32 cosine/sine caches produced by LightX2V.
+- `sycl_kernels.minimax_h3_qkv_norm(packed, q_weight, k_weight, q_eps, k_eps)`
+  splits packed MiniMax-H3 QKV, applies FP32 RMSNorm to Q/K, and copies V in a
+  single XPU kernel. Select it with `"qkv_norm_type": "int_xpu"`.
 
 | Function | Description |
 |----------|-------------|
