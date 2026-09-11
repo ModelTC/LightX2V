@@ -846,6 +846,13 @@ def convert_weights(args):
                 comfyui_keys=args.comfyui_keys,
                 quantization_policy=args.quantization_policy,
             )
+            if args.model_type == "h3_video_vae_decoder" and args.linear_type == "fp8":
+                # FP8 decoder linears require FP16 bias; preserve other VAE tensors.
+                for key in converted_weights:
+                    if key.startswith("decoder.") and key.endswith(".weight_scale"):
+                        bias_key = key.removesuffix(".weight_scale") + ".bias"
+                        if bias_key in converted_weights:
+                            converted_weights[bias_key] = converted_weights[bias_key].to(torch.float16)
 
     os.makedirs(args.output, exist_ok=True)
 
