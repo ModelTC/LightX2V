@@ -72,19 +72,17 @@ if triton is not None:
             else:
                 tl.store(k + row * DIM + d, output, d < DIM)
 
+
 def can_split_qkv_norm(packed, norm_q, norm_k):
     # Match RMSNorm's FP32 arithmetic and final output cast on any Triton backend.
     # Sensitive FP32 modes retain their own semantics.
-    return (
-        packed.dtype in (torch.float16, torch.bfloat16, torch.float32)
-        and all(
-            getattr(norm, "weight", None) is not None
-            and norm.weight.device == packed.device
-            and norm.weight.dtype == packed.dtype
-            and norm.weight.is_contiguous()
-            and norm.sensitive_layer_dtype == norm.infer_dtype
-            for norm in (norm_q, norm_k)
-        )
+    return packed.dtype in (torch.float16, torch.bfloat16, torch.float32) and all(
+        getattr(norm, "weight", None) is not None
+        and norm.weight.device == packed.device
+        and norm.weight.dtype == packed.dtype
+        and norm.weight.is_contiguous()
+        and norm.sensitive_layer_dtype == norm.infer_dtype
+        for norm in (norm_q, norm_k)
     )
 
 

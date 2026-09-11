@@ -62,7 +62,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         dist.all_gather(gathered, tensor.contiguous(), group=self.tp_group)
         return torch.cat(gathered, dim=-1)
 
-    def _project_qkv(self, weights, hidden_states, rotary_emb):
+    def _prepare_qkv(self, weights, hidden_states, rotary_emb):
+        """Project QKV and return Q/K with normalization and RoPE applied."""
         if self.use_fused_qkv_attn and weights.has_fused_qkv:
             packed = weights.to_qkv.apply(hidden_states)
             if self.use_fused_qkv_norm_rope:
@@ -99,7 +100,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return q, k, v
 
     def _attention(self, weights, hidden_states, pre_infer_out):
-        q, k, v = self._project_qkv(weights, hidden_states, pre_infer_out.rotary_emb)
+        q, k, v = self._prepare_qkv(weights, hidden_states, pre_infer_out.rotary_emb)
         sp_state = pre_infer_out.sequence_parallel_state
         attention_kwargs = {
             "causal": False,

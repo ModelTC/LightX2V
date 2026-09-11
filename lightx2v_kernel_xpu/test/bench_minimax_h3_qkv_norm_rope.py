@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 
 import torch
-import triton
-
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lightx2v_kernel_xpu/python"))
@@ -73,9 +71,19 @@ def main():
 
             def separate():
                 qkv_ops._split_qkv_norm_kernel[(tokens * heads, 3)](
-                    packed, qw, kw, q0, k0, v0,
-                    HEADS=heads, DIM=dim, ROW_STRIDE=packed.stride(0),
-                    Q_EPS=1e-5, K_EPS=1e-5, BLOCK=128, num_warps=4,
+                    packed,
+                    qw,
+                    kw,
+                    q0,
+                    k0,
+                    v0,
+                    HEADS=heads,
+                    DIM=dim,
+                    ROW_STRIDE=packed.stride(0),
+                    Q_EPS=1e-5,
+                    K_EPS=1e-5,
+                    BLOCK=128,
+                    num_warps=4,
                 )
                 return (
                     sycl_kernels.minimax_h3_rope_cached(q0, cos, sin),
@@ -84,15 +92,28 @@ def main():
 
             def fused():
                 if args.fused_backend == "intel_xpu":
-                    return sycl_kernels.minimax_h3_qkv_norm_rope(
-                        packed, qw, kw, cos, sin, 1e-5, 1e-5, True
-                    )
+                    return sycl_kernels.minimax_h3_qkv_norm_rope(packed, qw, kw, cos, sin, 1e-5, 1e-5, True)
                 qkv_ops._split_qkv_norm_rope_kernel[(tokens * heads, 3)](
-                    packed, qw, kw, cos, sin, fq, fk, fv,
-                    HEADS=heads, DIM=dim, ROTARY=rotary, STRIDE=packed.stride(0),
-                    COS_STRIDE=cos.stride(0), SIN_STRIDE=sin.stride(0),
-                    Q_EPS=1e-5, K_EPS=1e-5, LOW_PRECISION_ROPE=True,
-                    BLOCK=128, num_warps=4, enable_fp_fusion=False,
+                    packed,
+                    qw,
+                    kw,
+                    cos,
+                    sin,
+                    fq,
+                    fk,
+                    fv,
+                    HEADS=heads,
+                    DIM=dim,
+                    ROTARY=rotary,
+                    STRIDE=packed.stride(0),
+                    COS_STRIDE=cos.stride(0),
+                    SIN_STRIDE=sin.stride(0),
+                    Q_EPS=1e-5,
+                    K_EPS=1e-5,
+                    LOW_PRECISION_ROPE=True,
+                    BLOCK=128,
+                    num_warps=4,
+                    enable_fp_fusion=False,
                 )
                 return fq, fk, fv
 
@@ -128,14 +149,11 @@ def main():
 
             separate_ms = statistics.median(timings["separate"])
             fused_ms = statistics.median(timings["fused"])
-            print(
-                f"{tokens:6d} {heads:5d} {separate_ms:12.4f} {fused_ms:9.4f} "
-                f"{separate_ms / fused_ms:7.3f}x {100 * (1 - fused_ms / separate_ms):8.2f}%"
-            )
+            print(f"{tokens:6d} {heads:5d} {separate_ms:12.4f} {fused_ms:9.4f} {separate_ms / fused_ms:7.3f}x {100 * (1 - fused_ms / separate_ms):8.2f}%")
             print(
                 " " * 13
-                + f"p10/p90 separate={percentile(timings['separate'], .1):.4f}/{percentile(timings['separate'], .9):.4f} ms "
-                + f"fused={percentile(timings['fused'], .1):.4f}/{percentile(timings['fused'], .9):.4f} ms"
+                + f"p10/p90 separate={percentile(timings['separate'], 0.1):.4f}/{percentile(timings['separate'], 0.9):.4f} ms "
+                + f"fused={percentile(timings['fused'], 0.1):.4f}/{percentile(timings['fused'], 0.9):.4f} ms"
             )
 
 
