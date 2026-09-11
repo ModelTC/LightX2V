@@ -4,6 +4,8 @@ import math
 
 import torch
 
+from lightx2v.utils.registry_factory import QKV_NORM_ROPE_REGISTER
+
 try:
     import triton
     import triton.language as tl
@@ -142,7 +144,7 @@ def _split_qkv_norm_rope_fake(packed, q_weight, k_weight, cos, sin, q_eps, k_eps
     return tuple(packed.new_empty(shape) for _ in range(3))
 
 
-def try_split_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs, backend="triton"):
+def prepare_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs):
     """Return None when the configured norm/RoPE semantics require the original path."""
     if not can_split_qkv_norm(packed, norm_q, norm_k) or packed.device.type not in ("cuda", "xpu"):
         return None
@@ -160,13 +162,20 @@ def try_split_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs, backend="triton
         low_precision = rope._can_use_xpu_kernel(view, cos, sin, cos.shape[-1])
     elif rope_class != ("lightx2v.common.ops.rope.torch_rope", "TorchRealRope"):
         return None
-    if backend == "intel_xpu" and packed.device.type == "xpu" and norm_q.weight.numel() == 128 and cos.shape[1] == 96:
-        try:
-            import sycl_kernels
-        except ImportError:
-            sycl_kernels = None
-        if sycl_kernels is not None and getattr(sycl_kernels, "has_minimax_h3_qkv_norm_rope", lambda: False)():
-            return sycl_kernels.minimax_h3_qkv_norm_rope(packed, norm_q.weight, norm_k.weight, cos, sin, norm_q.eps, norm_k.eps, low_precision)
-    if triton is None:
-        return None
-    return split_qkv_norm_rope(packed, norm_q.weight, norm_k.weight, cos, sin, norm_q.eps, norm_k.eps, low_precision)
+    return cos, sin, low_precision
+
+
+@QKV_NORM_ROPE_REGISTER("triton")
+class TritonQKVNormRope:
+    @staticmethod
+    def apply(packed, norm_q, norm_k, rope, freqs):
+        prepared = prepare_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs)
+        if prepared is None or triton is None:
+            return None
+        cos, sin, low_precision = prepared
+        return split_qkv_norm_rope(packed, norm_q.weight, norm_k.weight, cos, sin, norm_q.eps, norm_k.eps, low_precision)
+
+
+def try_split_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs, backend="triton"):
+    """Apply a registered fused backend, returning None when it cannot run."""
+    return QKV_NORM_ROPE_REGISTER[backend]().apply(packed, norm_q, norm_k, rope, freqs)
