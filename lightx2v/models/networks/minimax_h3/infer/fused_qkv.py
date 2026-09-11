@@ -14,8 +14,6 @@ except ImportError:
     tl = None
 
 _SUPPORTED_DTYPES = (torch.float16, torch.bfloat16, torch.float32)
-_TORCH_ROPE_CLASS = ("lightx2v.common.ops.rope.torch_rope", "TorchRealRope")
-_XPU_ROPE_CLASS = ("lightx2v_platform.ops.rope.intel_xpu.minimax_h3_rope", "MiniMaxH3XpuRope")
 
 
 if triton is not None:
@@ -187,14 +185,26 @@ def prepare_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs):
         or any(t.device != packed.device or t.dtype != torch.float32 or t.stride(1) != 1 for t in freqs)
     ):
         return None
-    rope_class = (type(rope).__module__, type(rope).__name__)
-    low_precision = False
-    if rope_class == _XPU_ROPE_CLASS:
-        view = packed[:, : packed.shape[1] // 3].unflatten(-1, (-1, norm_q.weight.numel()))
-        low_precision = rope._can_use_xpu_kernel(view, cos, sin, cos.shape[-1])
-    elif rope_class != _TORCH_ROPE_CLASS:
+    fused_precision = getattr(rope, "fused_qkv_norm_rope_low_precision", None)
+    if fused_precision is None:
         return None
-    return cos, sin, low_precision
+    q = packed[:, : packed.shape[1] // 3].unflatten(-1, (-1, norm_q.weight.numel()))
+    return cos, sin, fused_precision(q, cos, sin, cos.shape[-1])
+
+
+def run_triton_qkv_norm_rope(packed, norm_q, norm_k, cos, sin, low_precision=False):
+    if triton is None:
+        return None
+    return split_qkv_norm_rope(
+        packed,
+        norm_q.weight,
+        norm_k.weight,
+        cos,
+        sin,
+        norm_q.eps,
+        norm_k.eps,
+        low_precision,
+    )
 
 
 @QKV_NORM_ROPE_REGISTER("triton")
@@ -202,19 +212,10 @@ class TritonQKVNormRope:
     @staticmethod
     def apply(packed, norm_q, norm_k, rope, freqs):
         prepared = prepare_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs)
-        if prepared is None or triton is None:
+        if prepared is None:
             return None
         cos, sin, low_precision = prepared
-        return split_qkv_norm_rope(
-            packed,
-            norm_q.weight,
-            norm_k.weight,
-            cos,
-            sin,
-            norm_q.eps,
-            norm_k.eps,
-            low_precision,
-        )
+        return run_triton_qkv_norm_rope(packed, norm_q, norm_k, cos, sin, low_precision)
 
 
 def try_split_qkv_norm_rope(packed, norm_q, norm_k, rope, freqs, backend="triton"):
