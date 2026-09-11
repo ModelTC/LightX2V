@@ -1,20 +1,9 @@
-#!/usr/bin/env python3
-"""Generate persistent MiniMax-H3 timestep modulation without loading the model."""
-
 import argparse
-import sys
-from pathlib import Path
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPOSITORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPOSITORY_ROOT))
+from builder import build_persistent_adaln_cache
+from loguru import logger
 
-from loguru import logger  # noqa: E402
-
-from lightx2v.utils.set_config import build_startup_config  # noqa: E402
-from tools.cache_minimax_h3_adaln.builder import (  # noqa: E402
-    build_persistent_adaln_cache,
-)
+from lightx2v.utils.set_config import build_startup_config
 
 
 def parse_args():
