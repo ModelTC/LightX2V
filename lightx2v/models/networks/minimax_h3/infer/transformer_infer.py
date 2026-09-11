@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
-from lightx2v.models.networks.minimax_h3.infer import fused_qkv  # noqa: F401
+from lightx2v.models.networks.minimax_h3.infer import fused_qkv
 from lightx2v.utils.envs import GET_DTYPE
 from lightx2v.utils.registry_factory import QKV_NORM_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -27,7 +27,11 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.infer_dtype = GET_DTYPE()
         self.use_fused_qkv_attn = bool(config.get("use_fused_qkv_attn", False))
+        self.use_fused_qkv_norm_rope = bool(config.get("use_fused_qkv_norm_rope", False))
         qkv_norm_type = config.get("qkv_norm_type", "triton")
+        self.qkv_norm_rope_type = config.get("qkv_norm_rope_type", "intel_xpu" if qkv_norm_type == "int_xpu" else "triton")
+        if self.qkv_norm_rope_type not in ("triton", "intel_xpu"):
+            raise ValueError(f"Unsupported qkv_norm_rope_type: {self.qkv_norm_rope_type}")
         self.qkv_norm = QKV_NORM_REGISTER[qkv_norm_type]()
         if config.get("seq_parallel", False):
             self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
@@ -62,9 +66,17 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         return torch.cat(gathered, dim=-1)
 
     def _attention(self, weights, hidden_states, pre_infer_out):
+        rope_applied = False
         if self.use_fused_qkv_attn and weights.has_fused_qkv:
             packed = weights.to_qkv.apply(hidden_states)
-            q, k, v = self.qkv_norm.apply(packed, weights.norm_q, weights.norm_k, self.num_heads, self.head_dim)
+            fused = None
+            if self.use_fused_qkv_norm_rope:
+                fused = fused_qkv.try_split_qkv_norm_rope(packed, weights.norm_q, weights.norm_k, weights.rope, pre_infer_out.rotary_emb, backend=self.qkv_norm_rope_type)
+            if fused is not None:
+                q, k, v = fused
+                rope_applied = True
+            else:
+                q, k, v = self.qkv_norm.apply(packed, weights.norm_q, weights.norm_k, self.num_heads, self.head_dim)
             del packed
         else:
             q = weights.to_q.apply(hidden_states)
@@ -75,12 +87,13 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             v = v.unflatten(-1, (self.num_heads, self.head_dim))
             q = weights.norm_q.apply(q)
             k = weights.norm_k.apply(k)
-        q, k = weights.rope.apply(
-            q,
-            k,
-            pre_infer_out.rotary_emb,
-            rotary_dim=pre_infer_out.rotary_emb[0].shape[-1],
-        )
+        if not rope_applied:
+            q, k = weights.rope.apply(
+                q,
+                k,
+                pre_infer_out.rotary_emb,
+                rotary_dim=pre_infer_out.rotary_emb[0].shape[-1],
+            )
         sp_state = pre_infer_out.sequence_parallel_state
         attention_kwargs = {
             "causal": False,
