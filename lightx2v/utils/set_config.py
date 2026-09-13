@@ -503,7 +503,7 @@ def set_parallel_config(config):
 
                 config["pipefusion_parallel"] = True
                 _validate_pipefusion_config(config)
-                from lightx2v.common.distributed import init_pipeline_parallel_state
+                from lightx2v.models.networks.flux2.infer.pipefusion import init_pipeline_parallel_state
 
                 pp_group = config["device_mesh"].get_group(mesh_dim="pp")
                 init_pipeline_parallel_state(pp_group)
