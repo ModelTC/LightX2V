@@ -263,7 +263,7 @@ class Flux2TransformerWeights(WeightModule):
         # -- Pipeline-parallel block splitting --------------------------------
         pp_size = config.get("pipefusion_parallel", False)
         if pp_size:
-            from lightx2v.common.distributed import (
+            from lightx2v.models.networks.flux2.infer.pipefusion import (
                 get_pipeline_parallel_rank,
                 get_pipeline_parallel_world_size,
             )
@@ -282,8 +282,11 @@ class Flux2TransformerWeights(WeightModule):
             total_blocks = self.num_layers + self.num_single_layers
             base = total_blocks // pp_world_size
             remainder = total_blocks % pp_world_size
-            stage_start = pp_rank * base + min(pp_rank, remainder)
-            stage_end = stage_start + base + (1 if pp_rank < remainder else 0)
+            # Leftover blocks go to the LAST ranks: they hold the cheaper
+            # single blocks, keeping the heavier front (double) ranks lighter.
+            num_base_ranks = pp_world_size - remainder
+            stage_start = pp_rank * base + max(0, pp_rank - num_base_ranks)
+            stage_end = stage_start + base + (1 if pp_rank >= num_base_ranks else 0)
 
             double_start = min(stage_start, self.num_layers)
             double_end = min(stage_end, self.num_layers)

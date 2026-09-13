@@ -11,15 +11,16 @@ Orchestrates the denoising loop across pipeline stages:
 import torch
 import torch.distributed as dist
 
-from lightx2v.common.distributed import (
-    PipelineComm,
+from lightx2v.utils.envs import GET_DTYPE
+
+from .pipeline_comm import PipelineComm
+from .pipeline_state import (
     get_pipeline_parallel_world_size,
     get_pipeline_runtime_state,
     get_pp_group,
     is_pipeline_first_stage,
     is_pipeline_last_stage,
 )
-from lightx2v.utils.envs import GET_DTYPE
 
 
 class Flux2PipelineDriver:
@@ -183,7 +184,7 @@ class Flux2PipelineDriver:
         inner_dim = self.config.get("num_attention_heads", 24) * self.config.get("attention_head_dim", 64)
         # Raw latent channels (before x_embedder): rank=0 recv from last stage
         # gets raw latents [1, L, C_in]; other stages recv embedded [L, D]
-        raw_channels = getattr(self.model, "in_channels", self.config.get("transformer_in_channels", self.config.get("in_channels", 128)))
+        raw_channels = latents.shape[-1]
 
         # Split latents into patches (dim=1 for [B, L, C])
         if self._is_first or self._is_last:

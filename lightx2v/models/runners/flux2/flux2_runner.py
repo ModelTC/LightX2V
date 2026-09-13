@@ -328,7 +328,7 @@ class Flux2Runner(DefaultRunner):
 
     def _run_pipefusion(self, total_steps=None):
         """PipeFusion denoising loop: pipeline driver controls all timesteps."""
-        from lightx2v.common.distributed import (
+        from lightx2v.models.networks.flux2.infer.pipefusion import (
             get_pipeline_runtime_state,
             is_pipeline_last_stage,
         )
@@ -483,23 +483,22 @@ class Flux2Runner(DefaultRunner):
         self.set_target_shape()
         self.set_img_shapes()
 
+        # Clear stale-KV cache at request start so a failed prior request can't
+        # leave stale KV / full K-V buffers behind (PipeFusion only).
+        if self.config.get("pipefusion_parallel", False) and hasattr(self.model.transformer_infer, "clear_kv_cache"):
+            self.model.transformer_infer.clear_kv_cache()
+
         latents, generator = self.run_dit()
 
         # In PipeFusion mode, only the last stage has final latents
         if self.config.get("pipefusion_parallel", False):
-            from lightx2v.common.distributed import is_pipeline_last_stage
+            from lightx2v.models.networks.flux2.infer.pipefusion import is_pipeline_last_stage
 
             if input_info.return_result_tensor:
                 # Final latents/images exist only on the last pipeline stage and
                 # there is no cross-rank gather implemented, so rank 0 cannot
                 # return them under the standard tensor-return contract.
                 raise NotImplementedError("PipeFusion does not support return_result_tensor yet; the result exists only on the last pipeline stage.")
-
-            # Clear the stale-KV cache on EVERY rank between requests. Only the
-            # last stage runs VAE decode, but each stage holds its own cache and
-            # must not carry stale KV / full K-V buffers into the next request.
-            if hasattr(self.model.transformer_infer, "clear_kv_cache"):
-                self.model.transformer_infer.clear_kv_cache()
 
             if is_pipeline_last_stage():
                 # Offload transformer weights before VAE decode to avoid OOM,
@@ -508,8 +507,10 @@ class Flux2Runner(DefaultRunner):
                 self.model.transformer_weights.to_cpu()
                 torch_device_module.empty_cache()
                 gc.collect()
-                images = self.run_vae_decoder(latents)
-                self.model.transformer_weights.to_cuda()
+                try:
+                    images = self.run_vae_decoder(latents)
+                finally:
+                    self.model.transformer_weights.to_cuda()
             else:
                 images = None
         else:

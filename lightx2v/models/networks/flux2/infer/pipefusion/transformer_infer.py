@@ -22,7 +22,7 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
 
     def __init__(self, config):
         super().__init__(config)
-        from lightx2v.common.distributed import (
+        from .pipeline_state import (
             get_pipeline_runtime_state,
             is_pipeline_first_stage,
             is_pipeline_last_stage,
