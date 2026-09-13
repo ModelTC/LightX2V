@@ -39,16 +39,11 @@ class Flux2PipelineDriver:
     # Public entry point
     # ==================================================================
 
-    def run_pipeline(self, latents, prompt_embeds, text_ids, latent_image_ids, timesteps, scheduler, do_cfg=False, negative_prompt_embeds=None, negative_text_ids=None):
+    def run_pipeline(self, latents, prompt_embeds, text_ids, latent_image_ids, timesteps, scheduler):
         """Run the full denoising loop with PipeFusion.
 
         Returns final latents on the last stage, ``None`` on other stages.
         """
-        if do_cfg:
-            # PipeFusion does not maintain separate cond/uncond pipelines and
-            # KV caches, so CFG is not supported. The async path would silently
-            # drop CFG (see set_config validation, which rejects this earlier).
-            raise NotImplementedError("PipeFusion does not support CFG. Set sample_guide_scale <= 1.0 or enable_cfg=False.")
         warmup_steps = self.state.warmup_steps
 
         if self._pp_world_size > 1 and len(timesteps) > warmup_steps:
@@ -59,9 +54,6 @@ class Flux2PipelineDriver:
                 latent_image_ids,
                 timesteps[:warmup_steps],
                 scheduler,
-                do_cfg=do_cfg,
-                negative_prompt_embeds=negative_prompt_embeds,
-                negative_text_ids=negative_text_ids,
             )
             latents = self._async_pipeline(
                 latents,
@@ -70,9 +62,6 @@ class Flux2PipelineDriver:
                 latent_image_ids,
                 timesteps[warmup_steps:],
                 scheduler,
-                do_cfg=do_cfg,
-                negative_prompt_embeds=negative_prompt_embeds,
-                negative_text_ids=negative_text_ids,
             )
         else:
             latents = self._sync_pipeline(
@@ -82,9 +71,6 @@ class Flux2PipelineDriver:
                 latent_image_ids,
                 timesteps,
                 scheduler,
-                do_cfg=do_cfg,
-                negative_prompt_embeds=negative_prompt_embeds,
-                negative_text_ids=negative_text_ids,
             )
         return latents
 
@@ -92,55 +78,26 @@ class Flux2PipelineDriver:
     # Sync pipeline (warmup)
     # ==================================================================
 
-    def _sync_pipeline(self, latents, prompt_embeds, text_ids, latent_image_ids, timesteps, scheduler, do_cfg=False, negative_prompt_embeds=None, negative_text_ids=None):
+    def _sync_pipeline(self, latents, prompt_embeds, text_ids, latent_image_ids, timesteps, scheduler):
         self.state.set_patched_mode(patch_mode=False)
 
         for step_idx, t in enumerate(timesteps):
             scheduler.step_index = step_idx
             scheduler.step_pre(step_idx)
 
-            if do_cfg:
-                # Conditional pass
-                cond_result = self._sync_pass(
-                    latents,
-                    prompt_embeds,
-                    text_ids,
-                    latent_image_ids,
-                    t,
-                    scheduler,
-                )
-                # Unconditional pass
-                uncond_result = self._sync_pass(
-                    latents,
-                    negative_prompt_embeds,
-                    negative_text_ids if negative_text_ids is not None else text_ids,
-                    latent_image_ids,
-                    t,
-                    scheduler,
-                )
-                if self._is_last:
-                    noise_pred_cond = cond_result
-                    noise_pred_uncond = uncond_result
-                    guidance_scale = self.config.get("sample_guide_scale", 1.0)
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
-                    scheduler.noise_pred = noise_pred
-                    scheduler.latents = latents
-                    scheduler.step_post()
-                    latents = scheduler.latents
-            else:
-                noise_pred = self._sync_pass(
-                    latents,
-                    prompt_embeds,
-                    text_ids,
-                    latent_image_ids,
-                    t,
-                    scheduler,
-                )
-                if self._is_last:
-                    scheduler.noise_pred = noise_pred
-                    scheduler.latents = latents
-                    scheduler.step_post()
-                    latents = scheduler.latents
+            noise_pred = self._sync_pass(
+                latents,
+                prompt_embeds,
+                text_ids,
+                latent_image_ids,
+                t,
+                scheduler,
+            )
+            if self._is_last:
+                scheduler.noise_pred = noise_pred
+                scheduler.latents = latents
+                scheduler.step_post()
+                latents = scheduler.latents
 
             # P2P: last stage sends updated latents to first stage (circular)
             # Only rank 0 needs updated latents (for x_embedder in next step).
@@ -180,10 +137,9 @@ class Flux2PipelineDriver:
             if self._is_last:
                 return self._run_post_infer(hidden_states, enc_hidden, num_txt, pre_infer_out.timestep)
             else:
-                # Always send both latent and encoder_hidden_state (skip_shape
-                # to avoid .item() CPU-GPU sync on receiver)
-                self.pp_comm.pipeline_send(hidden_states, name="latent", skip_shape=True)
-                self.pp_comm.pipeline_send(enc_hidden, name="encoder_hidden_state", skip_shape=True)
+                # Always send both latent and encoder_hidden_state
+                self.pp_comm.pipeline_send(hidden_states)
+                self.pp_comm.pipeline_send(enc_hidden)
                 return None
         else:
             # Non-first stage: always receive both streams
@@ -197,8 +153,8 @@ class Flux2PipelineDriver:
                 txt_len = prompt_embeds.shape[1] if prompt_embeds.ndim == 3 else prompt_embeds.shape[0]
             else:
                 txt_len = 0
-            hidden_states = self.pp_comm.pipeline_recv(name="latent", shape=(img_len, inner_dim), dtype=self._dtype)
-            enc_hidden = self.pp_comm.pipeline_recv(name="encoder_hidden_state", shape=(txt_len, inner_dim), dtype=self._dtype)
+            hidden_states = self.pp_comm.pipeline_recv(shape=(img_len, inner_dim), dtype=self._dtype)
+            enc_hidden = self.pp_comm.pipeline_recv(shape=(txt_len, inner_dim), dtype=self._dtype)
 
             pre_infer_out = self.model.pre_infer.infer_partial(
                 weights=self.model.pre_weight,
@@ -212,15 +168,15 @@ class Flux2PipelineDriver:
             if self._is_last:
                 return self._run_post_infer(hidden_states, enc_hidden, num_txt, pre_infer_out.timestep)
             else:
-                self.pp_comm.pipeline_send(hidden_states, name="latent", skip_shape=True)
-                self.pp_comm.pipeline_send(enc_hidden, name="encoder_hidden_state", skip_shape=True)
+                self.pp_comm.pipeline_send(hidden_states)
+                self.pp_comm.pipeline_send(enc_hidden)
                 return None
 
     # ==================================================================
     # Async pipeline (main loop)
     # ==================================================================
 
-    def _async_pipeline(self, latents, prompt_embeds, text_ids, latent_image_ids, timesteps, scheduler, do_cfg=False, negative_prompt_embeds=None, negative_text_ids=None):
+    def _async_pipeline(self, latents, prompt_embeds, text_ids, latent_image_ids, timesteps, scheduler):
         self.state.set_patched_mode(patch_mode=True)
         num_patch = self.state.num_pipeline_patch
         patch_token_nums = self.state.pp_patches_token_num

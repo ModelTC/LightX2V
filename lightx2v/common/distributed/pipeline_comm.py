@@ -31,7 +31,6 @@ class PipelineComm:
         self.ranks = list(dist.get_process_group_ranks(pp_group))
         self.prev_rank = self.ranks[(self.rank - 1) % self.world_size]
         self.next_rank = self.ranks[(self.rank + 1) % self.world_size]
-        self._device_group = pp_group
 
         self._recv_tasks_queue: List[Tuple[str, int]] = []
         self._receiving_tasks: List[Tuple[object, str, int]] = []
@@ -41,32 +40,14 @@ class PipelineComm:
     # Synchronous send / recv (sync pipeline)
     # ------------------------------------------------------------------
 
-    def pipeline_send(self, tensor: torch.Tensor, name: str = "latent", skip_shape: bool = False):
-        tensor = tensor.contiguous()
-        if not skip_shape:
-            shape_info = torch.tensor(
-                [tensor.ndim] + list(tensor.shape),
-                device=tensor.device,
-                dtype=torch.int64,
-            )
-            padded = torch.zeros(9, device=tensor.device, dtype=torch.int64)
-            padded[: len(shape_info)] = shape_info
-            dist.send(padded, dst=self.next_rank, group=self._device_group)
-        dist.send(tensor, dst=self.next_rank, group=self._device_group)
+    def pipeline_send(self, tensor: torch.Tensor):
+        dist.send(tensor.contiguous(), dst=self.next_rank, group=self.pp_group)
 
-    def pipeline_recv(self, name: str = "latent", shape=None, dtype=None) -> torch.Tensor:
+    def pipeline_recv(self, shape, dtype=None) -> torch.Tensor:
         if dtype is None:
             dtype = torch.bfloat16
-        if shape is not None:
-            buf = torch.empty(shape, dtype=dtype, device=torch.cuda.current_device())
-            dist.recv(buf, src=self.prev_rank, group=self._device_group)
-            return buf
-        shape_info = torch.zeros(9, device=torch.cuda.current_device(), dtype=torch.int64)
-        dist.recv(shape_info, src=self.prev_rank, group=self._device_group)
-        ndim = shape_info[0].item()
-        recv_shape = tuple(shape_info[1 : 1 + ndim].tolist())
-        buf = torch.empty(recv_shape, dtype=dtype, device=torch.cuda.current_device())
-        dist.recv(buf, src=self.prev_rank, group=self._device_group)
+        buf = torch.empty(shape, dtype=dtype, device=torch.cuda.current_device())
+        dist.recv(buf, src=self.prev_rank, group=self.pp_group)
         return buf
 
     # ------------------------------------------------------------------
@@ -86,7 +67,7 @@ class PipelineComm:
         block the CPU thread.
         """
         tensor = tensor.contiguous()
-        return dist.isend(tensor, dst=self.next_rank, group=self._device_group), tensor
+        return dist.isend(tensor, dst=self.next_rank, group=self.pp_group), tensor
 
     def add_pipeline_recv_task(self, idx: int = 0, name: str = "latent", shape=None, dtype=None):
         self._recv_tasks_queue.append((name, idx))
@@ -105,7 +86,7 @@ class PipelineComm:
         name, idx = self._recv_tasks_queue.pop(0)
         buf = self._recv_buffers.get((name, idx))
         assert buf is not None
-        req = dist.irecv(buf, src=self.prev_rank, group=self._device_group)
+        req = dist.irecv(buf, src=self.prev_rank, group=self.pp_group)
         self._receiving_tasks.append((req, name, idx))
 
     def get_pipeline_recv_data(self, idx: int = 0, name: str = "latent") -> torch.Tensor:

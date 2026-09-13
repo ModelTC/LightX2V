@@ -292,18 +292,9 @@ class Flux2TransformerWeights(WeightModule):
 
             self.double_blocks = WeightModuleList([Flux2DoubleBlockWeights(config, i) for i in range(double_start, double_end)])
             self.single_blocks = WeightModuleList([Flux2SingleBlockWeights(config, i) for i in range(single_start, single_end)])
-            # Track whether this stage crosses the double→single boundary
-            self._has_double = double_end > double_start
-            self._has_single = single_end > single_start
-            self._stage_start = stage_start
-            self._stage_end = stage_end
         else:
             self.double_blocks = WeightModuleList([Flux2DoubleBlockWeights(config, i) for i in range(self.num_layers)])
             self.single_blocks = WeightModuleList([Flux2SingleBlockWeights(config, i) for i in range(self.num_single_layers)])
-            self._has_double = True
-            self._has_single = True
-            self._stage_start = 0
-            self._stage_end = self.num_layers + self.num_single_layers
 
         self.register_offload_buffers(config)
 

@@ -93,49 +93,21 @@ class PipelineRuntimeState:
         self.pp_patches_token_num: List[int] = [0]
         self.pp_patches_token_start_end_idx_global: List[List[int]] = [[0, 0]]
 
-        # Input parameters
-        self.height: int = 0
-        self.width: int = 0
-        self.batch_size: int = 1
-        self.packed_h: int = 0
-        self.packed_w: int = 0
-        self.vae_scale_factor: int = 16
-        self.patch_size: int = 1
-
     # -- configuration -------------------------------------------------------
 
     def set_input_parameters(
         self,
-        height: int,
-        width: int,
-        batch_size: int = 1,
         num_pipeline_patch: Optional[int] = None,
         warmup_steps: int = 1,
-        vae_scale_factor: int = 16,
-        patch_size: int = 1,
-        total_tokens: Optional[int] = None,
+        total_tokens: int = 0,
     ):
-        self.height = height
-        self.width = width
-        self.batch_size = batch_size
-        self.vae_scale_factor = vae_scale_factor
-        self.patch_size = patch_size
         self.warmup_steps = warmup_steps
         if warmup_steps <= 0:
             raise ValueError(f"pipeline_warmup_steps must be >= 1, got {warmup_steps}.")
         if num_pipeline_patch is not None:
             self.num_pipeline_patch = num_pipeline_patch
 
-        if total_tokens is not None:
-            self.packed_h = 0
-            self.packed_w = 0
-            tok_count = total_tokens
-        else:
-            # Compute packed dimensions
-            multiple_of = vae_scale_factor * 2
-            self.packed_h = height // multiple_of
-            self.packed_w = width // multiple_of
-            tok_count = self.packed_h * self.packed_w
+        tok_count = total_tokens
 
         if self.num_pipeline_patch <= 0:
             raise ValueError(f"num_pipeline_patch must be >= 1, got {self.num_pipeline_patch}.")
@@ -165,7 +137,3 @@ class PipelineRuntimeState:
             self.pipeline_patch_idx += 1
             if self.pipeline_patch_idx >= self.num_pipeline_patch:
                 self.pipeline_patch_idx = 0
-
-    @property
-    def current_patch_token_start_end(self) -> List[int]:
-        return self.pp_patches_token_start_end_idx_global[self.pipeline_patch_idx]

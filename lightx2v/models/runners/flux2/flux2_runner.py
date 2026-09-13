@@ -336,26 +336,14 @@ class Flux2Runner(DefaultRunner):
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
 
-        # Initialize pipeline runtime state with image dimensions
+        # Initialize pipeline runtime state (patch splitting)
         pipeline_state = get_pipeline_runtime_state()
-        height = self.input_info.latent_shape[1]  # packed_h * packed_w tokens
-        # Reconstruct actual height/width from latent_image_ids
-        latent_image_ids = self.model.scheduler.latent_image_ids
-        if self.input_info.target_shape is not None:
-            actual_height, actual_width = self.input_info.target_shape
-        else:
-            actual_height = actual_width = 1024
-
         num_pipeline_patch = self.config.get("parallel", {}).get("num_pipeline_patch", 4)
         warmup_steps = self.config.get("parallel", {}).get("pipeline_warmup_steps", 1)
 
         pipeline_state.set_input_parameters(
-            height=actual_height,
-            width=actual_width,
-            batch_size=1,
             num_pipeline_patch=num_pipeline_patch,
             warmup_steps=warmup_steps,
-            vae_scale_factor=self.config.get("vae_scale_factor", 16),
             total_tokens=self.input_info.latent_shape[1],
         )
 
@@ -365,10 +353,6 @@ class Flux2Runner(DefaultRunner):
         prompt_embeds = text_encoder_output["prompt_embeds"]
         text_ids = text_encoder_output.get("text_ids")
         latent_image_ids = self.model.scheduler.latent_image_ids
-
-        do_cfg = self.config.get("enable_cfg", True) and self.config.get("sample_guide_scale", 1.0) > 1.0
-        negative_prompt_embeds = text_encoder_output.get("negative_prompt_embeds") if do_cfg else None
-        negative_text_ids = text_encoder_output.get("negative_text_ids") if do_cfg else None
 
         timesteps = self.model.scheduler.timesteps
 
@@ -385,9 +369,6 @@ class Flux2Runner(DefaultRunner):
             latent_image_ids=latent_image_ids,
             timesteps=timesteps,
             scheduler=self.model.scheduler,
-            do_cfg=do_cfg,
-            negative_prompt_embeds=negative_prompt_embeds,
-            negative_text_ids=negative_text_ids,
         )
 
         if latents is not None and is_pipeline_last_stage():
