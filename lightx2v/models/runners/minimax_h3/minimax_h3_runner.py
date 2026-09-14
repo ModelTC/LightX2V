@@ -114,7 +114,8 @@ class MiniMaxH3Runner(DefaultRunner):
         """Return tasks supported by the loaded transformer weights."""
         if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
-        return ("t2av", "i2av", "l2av", "fl2av")
+        # Allow ref2av requests to use the base transformer for better visual quality.
+        return ("t2av", "i2av", "l2av", "fl2av", "ref2av")
 
     def init_modules(self):
         super().init_modules()
@@ -499,13 +500,8 @@ class MiniMaxH3Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Run Input Encoder")
     def _run_input_encoder_local_h3(self):
         task = self.input_info.task
-        requested_partition = "transformer_ref" if task == "ref2av" else "transformer"
-        if requested_partition != self.loaded_transformer_partition:
-            raise ValueError(
-                "MiniMax-H3 cannot switch between the base and reference transformer partitions after initialization; "
-                f"loaded {self.loaded_transformer_partition!r}, requested {requested_partition!r}. "
-                "Create a separate LightX2VPipeline for ref2av."
-            )
+        if self.loaded_transformer_partition == "transformer_ref" and task != "ref2av":
+            raise ValueError(f"MiniMax-H3 transformer_ref only supports ref2av requests; received task {task!r}. Use model_variant='fl2av' for base-transformer tasks.")
         self.clear_conditioning_state()
         if task == "ref2av":
             self._resolve_request_geometry()
