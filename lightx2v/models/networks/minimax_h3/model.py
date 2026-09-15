@@ -1,6 +1,8 @@
+import gc
 import glob
 import math
 import os
+from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
@@ -46,6 +48,27 @@ H3_CHANNEL_QUANT_SCHEMES = {
     "int8-intel-xpu",
     "int8-convrot",
 }
+
+
+def _collect_declared_base_tensor_names(*roots):
+    names = []
+    seen = set()
+    stack = list(roots)
+    visited = set()
+    while stack:
+        obj = stack.pop()
+        if obj is None or id(obj) in visited:
+            continue
+        visited.add(id(obj))
+        for name, _, _ in getattr(unwrap_tp_linear(obj), "base_attrs", ()):
+            if name.startswith("transformer_blocks."):
+                raise ValueError(f"MiniMax-H3 pre/post disk-streaming tensor list unexpectedly contains block tensor: {name}")
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+        stack.extend(getattr(obj, "_modules", {}).values())
+        stack.extend(getattr(obj, "_parameters", {}).values())
+    return tuple(sorted(names))
 
 
 class MiniMaxH3Model(BaseTransformerModel):
@@ -98,6 +121,21 @@ class MiniMaxH3Model(BaseTransformerModel):
             raise ValueError("MiniMax-H3 dit_quant_scheme requires a dit_quantized_ckpt")
         if config.get("cpu_offload", False) and config.get("offload_granularity", "model") not in {"model", "block"}:
             raise NotImplementedError("MiniMax-H3 supports model and block CPU offload")
+        if config.get("dit_disk_streaming", False):
+            if not config.get("cpu_offload", False):
+                raise ValueError("MiniMax-H3 dit_disk_streaming requires cpu_offload=true.")
+            if config.get("offload_granularity", "model") != "block":
+                raise ValueError("MiniMax-H3 dit_disk_streaming requires offload_granularity='block'.")
+            if config.get("lazy_load", False):
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming cannot be combined with lazy_load.")
+            if config.get("dit_quantized", False):
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support quantized DiT checkpoints yet.")
+            if config.get("tensor_parallel", False):
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming does not support tensor parallel inference yet.")
+            if (lora_path is not None or config.get("lora_configs")) and not config.get("lora_dynamic_apply", False):
+                raise NotImplementedError("MiniMax-H3 dit_disk_streaming requires dynamic LoRA; dense load-time merging is not supported.")
+            if config.get("lora_configs") and lora_path is None:
+                raise ValueError("MiniMax-H3 streamed LoRA must be initialized through build_minimax_h3_model_with_lora.")
         if config.get("attn_type") == "sol_attn":
             reorder = str(config.get("sol_attn_setting", {}).get("reorder", "none")).lower()
             if reorder != "none":
@@ -134,6 +172,63 @@ class MiniMaxH3Model(BaseTransformerModel):
             source = weight_dict if weight_dict is not None else self.original_weight_dict
             self._h3_weight_shapes = {key: tuple(tensor.shape) for key, tensor in source.items() if isinstance(tensor, torch.Tensor) and tensor.ndim == 2}
         return super()._apply_weights(weight_dict)
+
+    def _init_weights(self, weight_dict=None):
+        if not self.config.get("dit_disk_streaming", False):
+            return super()._init_weights(weight_dict)
+        if weight_dict is not None:
+            raise ValueError("MiniMax-H3 dit_disk_streaming loads weights directly from the diffusers checkpoint; explicit weight_dict is not supported.")
+
+        self.transformer_weights = self.transformer_weight_class(self.config)
+        self.pre_weight = self.pre_weight_class(self.config)
+        self.post_weight = self.post_weight_class(self.config)
+
+        checkpoint = self.transformer_weights.checkpoint
+        prepost_tensor_names = _collect_declared_base_tensor_names(self.pre_weight, self.post_weight)
+        missing = sorted(name for name in prepost_tensor_names if name not in checkpoint.weight_map)
+        if missing:
+            raise KeyError(f"MiniMax-H3 dit_disk_streaming checkpoint is missing pre/post tensors: {missing}")
+
+        prepost_weights = checkpoint.load_tensors(prepost_tensor_names, device="cpu")
+        try:
+            self.pre_weight.load(prepost_weights)
+            self.post_weight.load(prepost_weights)
+            if prepost_weights:
+                raise RuntimeError(f"MiniMax-H3 dit_disk_streaming pre/post tensors were not consumed: {sorted(prepost_weights)}")
+        finally:
+            del prepost_weights
+            gc.collect()
+            device_module = getattr(torch, torch.device(self.device).type, None)
+            if device_module is not None and hasattr(device_module, "empty_cache"):
+                if torch.device(self.device).type == "mps":
+                    device_module.synchronize()
+                device_module.empty_cache()
+        self._init_streaming_lora()
+        return None
+
+    def _init_streaming_lora(self):
+        if self.lora_path is None:
+            return
+        from lightx2v.models.networks.minimax_h3.streaming_lora import MiniMaxH3StreamingLora, streaming_target_shapes
+
+        weights = self.transformer_weights
+        shapes = streaming_target_shapes(weights.checkpoint, weights.streaming_block, self.pre_weight, self.post_weight)
+        weights.streaming_lora = MiniMaxH3StreamingLora(
+            self.lora_path,
+            normalize_key=self._normalize_dynamic_lora_key,
+            target_shapes=shapes,
+            strength=self.lora_strength,
+            alpha=self.lora_alpha,
+            dtype=GET_DTYPE(),
+        )
+        adapter = weights.streaming_lora
+        logger.info(
+            "Indexed MiniMax-H3 streamed LoRA: {} main-block pairs, {} pre/post pairs, ranks={}, strength={}",
+            sum(len(pairs) for pairs in adapter.blocks.values()),
+            len(adapter.resident),
+            sorted({pair.rank for pair in adapter.pairs.values()}),
+            adapter.strength,
+        )
 
     @staticmethod
     def _normalize_dynamic_lora_key(key):
@@ -193,6 +288,8 @@ class MiniMaxH3Model(BaseTransformerModel):
         return model_keys, ranks
 
     def _load_lora_file(self, file_path, alpha=None):
+        if self.config.get("dit_disk_streaming", False):
+            raise NotImplementedError("MiniMax-H3 disk streaming uses the selective LoRA index, not the full-factor loader.")
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"MiniMax-H3 LoRA file not found: {file_path}")
 
@@ -295,6 +392,8 @@ class MiniMaxH3Model(BaseTransformerModel):
         logger.info("Registered {} MiniMax-H3 dynamic LoRA branches with strength={}", len(self._pending_dynamic_lora_model_keys), strength)
 
     def _register_lora(self, lora_path, strength):
+        if self.config.get("dit_disk_streaming", False):
+            raise NotImplementedError("MiniMax-H3 streamed LoRA is configured at initialization; runtime adapter switching is not supported.")
         lora_weights = self._load_lora_file(lora_path)
         self._register_dynamic_lora_weights(lora_weights, strength)
         self.lora_path = lora_path
@@ -304,12 +403,21 @@ class MiniMaxH3Model(BaseTransformerModel):
             offload_manager.need_init_first_buffer = True
 
     def _remove_lora(self):
+        if self.config.get("dit_disk_streaming", False):
+            adapter = getattr(self.transformer_weights, "streaming_lora", None)
+            if adapter is not None:
+                blocks = self.transformer_weights.offload_block_cuda_buffers if self.config.get("dit_mps_shared_buffer", False) else [self.transformer_weights.streaming_block]
+                for root in (self.pre_weight, self.post_weight, *blocks):
+                    adapter.clear(root)
+                self.transformer_weights.streaming_lora = None
         super()._remove_lora()
         transformer_infer = getattr(self, "transformer_infer", None)
         if transformer_infer is not None:
             transformer_infer._clear_adaln_cache()
 
     def _update_lora(self, lora_path, strength, alpha=None):
+        if self.config.get("dit_disk_streaming", False):
+            raise NotImplementedError("MiniMax-H3 streamed LoRA is configured at initialization; runtime adapter switching is not supported.")
         if isinstance(lora_path, dict):
             raise NotImplementedError("MiniMax-H3 dynamic LoRA switching expects one checkpoint path, not a merged tensor dictionary")
         lora_weights = self._load_lora_file(lora_path, alpha=alpha)
@@ -500,7 +608,10 @@ class MiniMaxH3Model(BaseTransformerModel):
         if self.config.get("feature_caching", "NoCaching") != "NoCaching":
             raise NotImplementedError("MiniMax-H3 feature caching is not implemented")
         self.pre_infer_class = MiniMaxH3PreInfer
-        self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
+        if self.config.get("dit_disk_streaming", False) and not self.config.get("dit_mps_shared_buffer", False):
+            self.transformer_infer_class = MiniMaxH3TransformerInfer
+        else:
+            self.transformer_infer_class = MiniMaxH3OffloadTransformerInfer if self.cpu_offload else MiniMaxH3TransformerInfer
         self.post_infer_class = MiniMaxH3PostInfer
 
     def _init_infer(self):
@@ -515,13 +626,16 @@ class MiniMaxH3Model(BaseTransformerModel):
         if not infer_condition:
             raise ValueError("MiniMax-H3 does not execute an unconditional pass")
         prompt_embeds = inputs["text_encoder_output"]["prompt_embeds"]
-        pre = self.pre_infer.infer(self.pre_weight, prompt_embeds)
+        adapter = getattr(self.transformer_weights, "streaming_lora", None)
+        with adapter.resident_scope(self.pre_weight) if adapter is not None else nullcontext():
+            pre = self.pre_infer.infer(self.pre_weight, prompt_embeds)
         if self.config.get("seq_parallel", False):
             pre = self._seq_parallel_pre_process(pre)
         hidden_states = self.transformer_infer.infer(self.transformer_weights, pre)
         if self.config.get("seq_parallel", False):
             hidden_states = self._seq_parallel_post_process(hidden_states, pre)
-        return self.post_infer.infer(self.post_weight, hidden_states, pre)
+        with adapter.resident_scope(self.post_weight) if adapter is not None else nullcontext():
+            return self.post_infer.infer(self.post_weight, hidden_states, pre)
 
     @torch.no_grad()
     def infer(self, inputs):
@@ -595,8 +709,16 @@ class MiniMaxH3Model(BaseTransformerModel):
         return output
 
     def to_cpu(self):
+        if self.config.get("dit_mps_shared_buffer", False):
+            self.release_disk_streaming_buffer()
         super().to_cpu()
         if hasattr(self.transformer_infer, "offload_manager"):
             # Full teardown moves the active aliases away from the persistent
             # device buffers. Force buffer 0 to be populated again next run.
             self.transformer_infer.offload_manager.need_init_first_buffer = True
+
+    def release_disk_streaming_buffer(self):
+        if self.config.get("dit_mps_shared_buffer", False):
+            self.transformer_infer.offload_manager.close()
+            self.transformer_infer.compiled_blocks.clear()
+        self.transformer_weights.release_disk_streaming_buffer()

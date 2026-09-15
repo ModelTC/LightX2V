@@ -7,8 +7,12 @@ from safetensors import safe_open
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import LN_WEIGHT_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
 
-from .triton_ops import norm_infer
+if str(AI_DEVICE) == "mps":
+    norm_infer = None
+else:
+    from .triton_ops import norm_infer
 
 try:
     from magi_compiler import magi_register_custom_op

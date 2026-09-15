@@ -147,6 +147,15 @@ class MiniMaxH3VideoCausalConv3d(nn.Conv3d):
         self.temporal_padding = temporal_padding
         self.spatial_padding_mode = spatial_padding_mode
 
+    def _pad_temporal(self, hidden_states):
+        if hidden_states.device.type == "mps":
+            # pytorch/pytorch#194922: rank-5 MPS constant padding can corrupt data.
+            # Fixed upstream on main, but supported stable versions may still be affected.
+            batch, channels, _, height, width = hidden_states.shape
+            zeros = hidden_states.new_zeros((batch, channels, self.temporal_padding, height, width))
+            return torch.cat((zeros, hidden_states), dim=2)
+        return F.pad(hidden_states, (0, 0, 0, 0, self.temporal_padding, 0))
+
     def _enable_fp8(self, policy: Fp8EncoderConvPolicy) -> None:
         # The model is still on meta here, so replacing the parameter only
         # changes the expected checkpoint schema; no materialized weight is lost.
@@ -180,7 +189,7 @@ class MiniMaxH3VideoCausalConv3d(nn.Conv3d):
             p = self.spatial_padding
             hidden_states = F.pad(hidden_states, (p, p, p, p, 0, 0), mode=self.spatial_padding_mode)
         if self.temporal_padding > 0:
-            hidden_states = F.pad(hidden_states, (0, 0, 0, 0, self.temporal_padding, 0))
+            hidden_states = self._pad_temporal(hidden_states)
         if self.weight.dtype == torch.float8_e4m3fn:
             return self._run_fp8_conv3d(hidden_states)
         return F.conv3d(hidden_states, self.weight, self.bias, stride=self.stride, dilation=self.dilation)
@@ -800,6 +809,8 @@ class MiniMaxH3VideoVAE(nn.Module):
             raise ValueError(f"Unsupported MiniMax-H3 VAE encoder_conv_mode {encoder_conv_mode!r}; expected one of {sorted(_SUPPORTED_ENCODER_CONV_MODES)}")
         if (checkpoint_path is None) != (quant_scheme is None):
             raise ValueError("MiniMax-H3 video VAE checkpoint_path and quant_scheme must be configured together")
+        with (vae_dir / "config.json").open(encoding="utf-8") as handle:
+            config = json.load(handle)
         weight_path = checkpoint_path if checkpoint_path is not None else vae_dir
         encoder_conv_checkpoint_info = inspect_fp8_encoder_conv_checkpoint(weight_path)
         if encoder_conv_mode in FP8_ENCODER_CONV_MODES:
@@ -826,8 +837,6 @@ class MiniMaxH3VideoVAE(nn.Module):
                 )
             else:
                 logger.warning("MiniMax-H3 Video VAE FP8-F16 accumulation requested but {}; falling back to FP8-SGL", fallback_reason)
-        with (vae_dir / "config.json").open("r", encoding="utf-8") as handle:
-            config = json.load(handle)
 
         # The released decoder is several GiB.  Constructing it on meta avoids
         # allocating and then immediately overwriting random initialized weights.

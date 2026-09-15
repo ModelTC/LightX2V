@@ -5,16 +5,24 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.norm.triton_ops import (
-    fused_norm_3drope,
-    fused_qk_norm_3drope,
-    fused_qk_rms_norm,
-    rms_norm_kernel,
-)
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+if str(AI_DEVICE) == "mps":
+    fused_norm_3drope = None
+    fused_qk_norm_3drope = None
+    fused_qk_rms_norm = None
+    rms_norm_kernel = None
+else:
+    from lightx2v.common.ops.norm.triton_ops import (
+        fused_norm_3drope,
+        fused_qk_norm_3drope,
+        fused_qk_rms_norm,
+        rms_norm_kernel,
+    )
+
 from lightx2v.common.ops.utils import *
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RMS_WEIGHT_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 try:
     import sgl_kernel
