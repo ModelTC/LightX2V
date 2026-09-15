@@ -5,9 +5,10 @@ import torch
 from loguru import logger
 
 from lightx2v.models.networks.worldplay.ar_model import WorldPlayARModel
-from lightx2v.models.networks.worldplay.pose_utils import pose_to_input
+from lightx2v.models.networks.worldplay.pose_utils import load_pose, pose_to_input
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner
 from lightx2v.models.schedulers.worldplay.ar_scheduler import WorldPlayARScheduler
+from lightx2v.utils.input_info import UNSET, WorldPlayI2VInputInfo, WorldPlayT2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -33,6 +34,9 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     - Memory window selection for long videos
     """
 
+    input_info_cls_by_task = {"t2v": WorldPlayT2VInputInfo, "i2v": WorldPlayI2VInputInfo}
+    supported_request_fields_by_task = {task: request_fields | {"pose"} for task, request_fields in HunyuanVideo15Runner.supported_request_fields_by_task.items()}
+
     def __init__(self, config):
         # AR-specific parameters
         self.chunk_latent_frames = config.get("chunk_latent_frames", 4)
@@ -53,6 +57,19 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
         self.select_window_out_flag = config.get("select_window_out_flag", True)
 
         super().__init__(config)
+
+    def prepare_request(self, request_data):
+        input_info = super().prepare_request(request_data)
+        if input_info.pose is None:
+            return input_info
+
+        input_info.pose = load_pose(input_info.pose)
+        num_frames = (len(input_info.pose) - 1) * self.config["vae_stride"][0] + 1
+        requested_frames = request_data.get("num_frames")
+        if requested_frames is not None and requested_frames is not UNSET and requested_frames != num_frames:
+            raise ValueError(f"pose corresponds to {num_frames} frames, but num_frames is {requested_frames}; they must match.")
+        input_info.num_frames = num_frames
+        return input_info
 
     def init_scheduler(self):
         """Initialize WorldPlay AR scheduler."""
@@ -81,14 +98,6 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     def _run_input_encoder_local_i2v(self):
         """Run encoders with pose processing for i2v task."""
         img_ori = self.read_image_input(self.input_info.image_path)
-        if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
-            from lightx2v.models.networks.worldplay.pose_utils import get_latent_num_from_pose
-
-            latent_num = get_latent_num_from_pose(self.input_info.pose)
-            vae_stride_t = self.config["vae_stride"][0]
-            with self.config.temporarily_unlocked():
-                self.config["target_video_length"] = latent_num * vae_stride_t - (vae_stride_t - 1)
-            logger.info(f"Auto-set target_video_length={self.config['target_video_length']} from pose ({latent_num} latent frames)")
         if self.sr_version and self.config_sr["is_sr_running"]:
             self.latent_sr_shape = self.get_sr_latent_shape_with_target_hw()
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw(origin_size=img_ori.size)
@@ -99,7 +108,7 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
 
         # Process pose input if available
         pose_output = None
-        if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
+        if self.input_info.pose is not None:
             pose_output = self._process_pose_input(self.input_info.pose, self.input_info.latent_shape[1])
 
         torch_device_module.empty_cache()
@@ -118,14 +127,6 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_t2v(self):
         """Run encoders with pose processing for t2v task."""
-        if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
-            from lightx2v.models.networks.worldplay.pose_utils import get_latent_num_from_pose
-
-            latent_num = get_latent_num_from_pose(self.input_info.pose)
-            vae_stride_t = self.config["vae_stride"][0]
-            with self.config.temporarily_unlocked():
-                self.config["target_video_length"] = latent_num * vae_stride_t - (vae_stride_t - 1)
-            logger.info(f"Auto-set target_video_length={self.config['target_video_length']} from pose ({latent_num} latent frames)")
         self.input_info.latent_shape = self.get_latent_shape_with_target_hw()
         text_encoder_output = self.run_text_encoder(self.input_info)
 
@@ -134,7 +135,7 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
 
         # Process pose input if available
         pose_output = None
-        if hasattr(self.input_info, "pose") and self.input_info.pose is not None:
+        if self.input_info.pose is not None:
             pose_output = self._process_pose_input(self.input_info.pose, self.input_info.latent_shape[1])
 
         torch_device_module.empty_cache()

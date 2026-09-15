@@ -1,7 +1,6 @@
 {
-  "target_video_length": 81,
-  "target_height": 1080,
-  "target_width": 1920,
+  "num_frames": 81,
+  "size": [1080, 1920],
   "infer_steps": 1,
   "fps": 16,
   "model_size": "7b",

@@ -1,9 +1,8 @@
 {
     "infer_steps": 4,
-    "target_video_length": 77,
+    "num_frames": 77,
     "text_len": 512,
-    "target_height": 720,
-    "target_width": 1280,
+    "size": [720, 1280],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",

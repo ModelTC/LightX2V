@@ -37,6 +37,7 @@ class MiniMaxH3PreInfer:
         self.rope_freq_dim = int(config.get("rope_freq_dim", 16))
         self.rope_theta = float(config.get("rope_theta", 10000.0))
         self.freq_dim = int(config.get("freq_dim", 256))
+        self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -107,8 +108,13 @@ class MiniMaxH3PreInfer:
         hidden_states.index_copy_(0, layout.audio_indices, audio_embeds)
         hidden_states.index_copy_(0, layout.video_indices, video_embeds)
 
-        temb = timestep_embedding(self.scheduler.unique_timesteps, self.freq_dim)
-        temb = weights.time_linear_2.apply(F.silu(weights.time_linear_1.apply(temb.float())))
+        temb = None
+        if not self.use_adaln_cache:
+            # ADALN CACHE SYNC: Any change to this time-MLP sequence, activation,
+            # or dtype must also be made in the offline AdaLN cache builder and
+            # followed by regenerating the cache when cached values can change.
+            temb = timestep_embedding(self.scheduler.unique_timesteps, self.freq_dim)
+            temb = weights.time_linear_2.apply(F.silu(weights.time_linear_1.apply(temb.float())))
         timestep_indices = self.scheduler.timestep_indices
         adaln_indices = timestep_indices * 3 + layout.token_tags.clamp(min=0)
 

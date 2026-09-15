@@ -19,8 +19,7 @@ pipe = LightX2VPipeline(
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=50,
-    height=704,
-    width=1280,
+    size=(704, 1280),
     num_frames=121,
     fps=25,
     guidance_scale=5.0,

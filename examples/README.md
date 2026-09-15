@@ -36,8 +36,7 @@ pipe = LightX2VPipeline(
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=50,
-    height=480,
-    width=832,
+    size=(480, 832),
     num_frames=81,
     guidance_scale=5.0,
     sample_shift=5.0,
@@ -109,8 +108,7 @@ pipe.create_generator(
     attn_mode="flash_attn2",  # Options: flash_attn2, flash_attn3, sage_attn2, sage_attn3 (B-architecture GPUs)
     infer_steps=50,           # Number of inference steps
     num_frames=81,            # Number of video frames
-    height=480,               # Video height
-    width=832,                # Video width
+    size=(480, 832),  # Height, width
     guidance_scale=5.0,       # CFG guidance strength (CFG disabled when =1)
     sample_shift=5.0,         # Sample shift
     fps=16,                   # Frame rate

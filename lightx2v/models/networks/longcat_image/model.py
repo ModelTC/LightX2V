@@ -118,6 +118,7 @@ class LongCatImageTransformerModel(BaseTransformerModel):
         latents = self.scheduler.latents
 
         if self.config.get("enable_cfg", True):
+            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
             # Check if CFG parallel should be used
             # Note: I2I task may have different sequence lengths for positive/negative prompts,
             # which is not yet supported in CFG parallel mode

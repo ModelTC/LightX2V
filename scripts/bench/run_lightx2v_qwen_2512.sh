@@ -23,7 +23,7 @@ ts=$(date +"%y%m%d%H%M%S")
 source ${lightx2v_path}/scripts/base/base.sh
 
 python -m lightx2v.infer \
---target_shape 1024 1024 \
+--size 1024 1024 \
 --seed 42 \
 --model_cls ${model_cls} \
 --task ${task} \

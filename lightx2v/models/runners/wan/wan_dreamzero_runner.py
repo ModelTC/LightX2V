@@ -15,6 +15,7 @@ from safetensors import safe_open
 from lightx2v.models.input_encoders.hf.wan.t5.model import T5EncoderModel
 from lightx2v.models.input_encoders.hf.wan.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.wan.dreamzero_model import DreamZeroModel
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, PROMPT_FIELDS
 from lightx2v.models.runners.wan.wan_runner import WanRunner
 from lightx2v.models.schedulers.wan.dreamzero.scheduler import DreamZeroFlowUniPCScheduler
 from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
@@ -31,6 +32,10 @@ torch_device_module = getattr(torch, AI_DEVICE)
 
 @RUNNER_REGISTER("dreamzero")
 class WanDreamZeroRunner(WanRunner):
+    supported_request_fields_by_task = {
+        "i2va": COMMON_REQUEST_FIELDS | PROMPT_FIELDS | {"image_path", "save_action_path", "state_path"},
+    }
+
     def __init__(self, config):
         config["enable_cfg"] = config.get("enable_cfg", config.get("sample_guide_scale", 1.0) > 1)
         super().__init__(config)
@@ -209,13 +214,9 @@ class WanDreamZeroRunner(WanRunner):
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2va(self):
         original_prompt = self.input_info.prompt
-        original_negative_prompt = self.input_info.negative_prompt
         self.input_info.prompt = self._format_droid_prompt(original_prompt)
-        if not original_negative_prompt:
-            self.input_info.negative_prompt = self.config.get("negative_prompt", "")
         text_encoder_output = self.run_text_encoder(self.input_info)
         self.input_info.prompt = original_prompt
-        self.input_info.negative_prompt = original_negative_prompt
         torch_device_module.empty_cache()
         gc.collect()
         return {"text_encoder_output": text_encoder_output, "image_encoder_output": None}
@@ -371,8 +372,8 @@ class WanDreamZeroRunner(WanRunner):
         return (tensor * 255.0).to(torch.uint8).permute(0, 2, 3, 1).numpy()
 
     def _compose_droid_video(self, camera_sequences, frame_indices):
-        view_height = int(self.config.get("view_height", self.config["target_height"] // 2))
-        view_width = int(self.config.get("view_width", self.config["target_width"] // 2))
+        view_height = int(self.config.get("view_height", self.config["size"][0] // 2))
+        view_width = int(self.config.get("view_width", self.config["size"][1] // 2))
         selected = []
         for seq in camera_sequences:
             idx = np.clip(np.asarray(frame_indices, dtype=np.int64), 0, seq.shape[0] - 1)
@@ -397,7 +398,7 @@ class WanDreamZeroRunner(WanRunner):
         image_zeros = torch.zeros(
             videos.shape[0],
             3,
-            self.config["target_video_length"] - 1,
+            self.get_num_frames() - 1,
             height,
             width,
             dtype=videos.dtype,
@@ -683,14 +684,16 @@ class WanDreamZeroRunner(WanRunner):
 
     def process_images_after_vae_decoder(self):
         self.gen_video_final = self.gen_video
-        video_path = getattr(self.input_info, "save_result_path", None)
+        video_path = self.input_info.save_result_path
         if not video_path:
             raise ValueError("DreamZero requires save_result_path from input_info.")
         video_path = str(video_path)
-        action_path = getattr(self.input_info, "save_action_path", "") or str(Path(video_path).with_suffix(".actions.npy"))
-        if not os.path.isabs(str(action_path)):
-            action_path = os.path.join(os.path.dirname(video_path) or ".", str(action_path))
-        save_to_video(self.gen_video_final, video_path, fps=self.config.get("target_fps", 10), method=self.config.get("save_video_method", "imageio"))
+        action_path = self.input_info.save_action_path
+        if not action_path:
+            action_path = str(Path(video_path).with_suffix(".actions.npy"))
+        elif not os.path.isabs(action_path):
+            action_path = os.path.join(os.path.dirname(video_path), action_path)
+        save_to_video(self.gen_video_final, video_path, fps=self.config.get("fps", 10), method=self.config.get("save_video_method", "imageio"))
         os.makedirs(os.path.dirname(action_path) or ".", exist_ok=True)
         np.save(action_path, self.pred_action.numpy())
         logger.info("Saved DreamZero video to {}", video_path)

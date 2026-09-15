@@ -17,5 +17,5 @@ torchrun --standalone --nproc_per_node=2 "${lightx2v_path}/examples/neopp/replay
     --index_offset_cond 298 \
     --index_offset_uncond 9 \
     --seed 200 \
-    --target_shape 1024 1024 \
+    --size 1024 1024 \
     --save_result_path "${lightx2v_path}/save_results/output_lightx2v_neopp_dense_t2i_1k_cfg2.png"

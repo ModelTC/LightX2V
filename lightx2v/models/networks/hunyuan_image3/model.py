@@ -578,7 +578,9 @@ class HunyuanImage3Model(BaseTransformerModel):
         self.scheduler.noise_pred = noise_pred_guided
 
     def combine_cfg_predictions(self, noise_pred_cond, noise_pred_uncond):
-        return noise_pred_uncond + self._guidance_scale() * (noise_pred_cond - noise_pred_uncond)
+        guidance_scale = self._guidance_scale()
+        assert guidance_scale != 1.0, "CFG requires guidance_scale != 1"
+        return noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
     @torch.no_grad()
     def infer_branch(self, inputs, infer_condition=True):

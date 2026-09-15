@@ -7,6 +7,7 @@ from torchvision.transforms import v2
 from lightx2v.models.input_encoders.hf.wan.matrix_game2.clip import CLIPModel
 from lightx2v.models.input_encoders.hf.wan.matrix_game2.conditions import Bench_actions_gta_drive, Bench_actions_templerun, Bench_actions_universal
 from lightx2v.models.networks.wan.matrix_game2_model import WanSFMtxg2Model
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.runners.wan.wan_sf_runner import WanSFRunner
 from lightx2v.models.video_encoders.hf.wan.vae_sf import WanMtxg2VAE
 from lightx2v.server.metrics import monitor_cli
@@ -152,6 +153,10 @@ def get_current_action(mode="universal"):
 
 @RUNNER_REGISTER("wan2.1_sf_mtxg2")
 class WanSFMtxg2Runner(WanSFRunner):
+    supported_request_fields_by_task = {
+        "i2v": COMMON_REQUEST_FIELDS | {"image_path"},
+    }
+
     def __init__(self, config):
         super().__init__(config)
         self.frame_process = v2.Compose(

@@ -1,3 +1,5 @@
+from functools import partial
+
 import torch
 from loguru import logger
 
@@ -77,8 +79,9 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         if not 0.0 <= self.sparsity_ratio < 1.0:
             raise ValueError(f"dynamic sparse attention sparsity_ratio must be in [0, 1), got {self.sparsity_ratio}")
 
-        self.arch = get_cuda_arch(torch.cuda.current_device())
         self.topk = 1 - self.sparsity_ratio
+        self.arch = get_cuda_arch(torch.cuda.current_device()) if torch.cuda.is_available() else None
+
         if self.operator == "triton":
             self.BLKQ, self.BLKK = 64, 64
             self.apply_func = self.apply_triton
@@ -100,6 +103,16 @@ class DynamicSparseAttnWeight(AttnWeightTemplate):
         elif self.operator == "magi":
             self.BLKQ, self.BLKK = 128, 128
             self.apply_func = self.apply_magi
+        elif self.operator == "intel_xpu_cute_attn":
+            self.BLKQ, self.BLKK = 128, 128
+            from lightx2v_platform.ops.attn.intel_xpu.xpu_sla_attn import apply_intel_xpu_cute_attn
+
+            self.apply_func = partial(
+                apply_intel_xpu_cute_attn,
+                keep_ratio=self.topk,
+                block_q=self.BLKQ,
+                block_k=self.BLKK,
+            )
         else:
             raise NotImplementedError(f"Not supported SLA operator: {self.operator}.")
 

@@ -98,12 +98,10 @@ else
     user_max_requests=${DISAGG_AUTO_REQUEST_COUNT}
 fi
 
-seed_args=()
-if [[ -v SEED ]]; then
-    seed_args=(--seed "${SEED}")
-fi
+seed=${SEED:-42}
 prompt=${PROMPT:-"Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard."}
 negative_prompt=${NEGATIVE_PROMPT:-"镜头晃动，色调艳丽，过曝，静态"}
+image_path=${IMAGE_PATH:-${lightx2v_path}/assets/inputs/imgs/img_0.jpg}
 save_result_path=${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/wan22_i2v_dynamic.mp4}
 
 controller_log=${lightx2v_path}/save_results/disagg_wan22_i2v_dynamic_controller.log
@@ -480,9 +478,10 @@ python -m lightx2v.disagg.examples.run_service \
     --task i2v \
     --model_path ${model_path} \
     --config_json ${controller_cfg} \
-    "${seed_args[@]}" \
+    --seed "${seed}" \
     --prompt "${prompt}" \
     --negative_prompt "${negative_prompt}" \
+    --image_path "${image_path}" \
     --save_result_path ${save_result_path} \
     > ${controller_log} 2>&1 &
 controller_pid=$!
@@ -495,9 +494,14 @@ if [[ "${LOAD_FROM_USER}" != "0" ]]; then
         echo "waiting ${user_start_delay_s}s before run_user to let remote services warm up"
         sleep "${user_start_delay_s}"
     fi
+    export DISAGG_WORKLOAD_SAVE_PREFIX=${DISAGG_WORKLOAD_SAVE_PREFIX:-${save_result_path}}
     python -m lightx2v.disagg.examples.run_user \
         --controller_host "${DISAGG_CONTROLLER_HOST}" \
         --controller_request_port "${DISAGG_CONTROLLER_REQUEST_PORT}" \
+        --seed "${seed}" \
+        --prompt "${prompt}" \
+        --negative_prompt "${negative_prompt}" \
+        --image_path "${image_path}" \
         --max_requests "${user_max_requests}" \
         > ${user_log} 2>&1 &
     user_pid=$!

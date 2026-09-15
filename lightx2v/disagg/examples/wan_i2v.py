@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 def get_latent_shape_with_lat_hw(config, latent_h, latent_w):
     return [
         config.get("num_channels_latents", 16),
-        (config["target_video_length"] - 1) // config["vae_stride"][0] + 1,
+        (config["num_frames"] - 1) // config["vae_stride"][0] + 1,
         latent_h,
         latent_w,
     ]
@@ -34,7 +34,7 @@ def get_latent_shape_with_lat_hw(config, latent_h, latent_w):
 def compute_latent_shape_from_image(config, image_tensor):
     h, w = image_tensor.shape[2:]
     aspect_ratio = h / w
-    max_area = config["target_height"] * config["target_width"]
+    max_area = config["size"][0] * config["size"][1]
 
     latent_h = round(np.sqrt(max_area * aspect_ratio) // config["vae_stride"][1] // config["patch_size"][1] * config["patch_size"][1])
     latent_w = round(np.sqrt(max_area / aspect_ratio) // config["vae_stride"][2] // config["patch_size"][2] * config["patch_size"][2])
@@ -48,7 +48,7 @@ def get_vae_encoder_output(vae_encoder, config, first_frame, latent_h, latent_w)
 
     msk = torch.ones(
         1,
-        config["target_video_length"],
+        config["num_frames"],
         latent_h,
         latent_w,
         device=torch.device(AI_DEVICE),
@@ -61,7 +61,7 @@ def get_vae_encoder_output(vae_encoder, config, first_frame, latent_h, latent_w)
     vae_input = torch.concat(
         [
             torch.nn.functional.interpolate(first_frame.cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
-            torch.zeros(3, config["target_video_length"] - 1, h, w),
+            torch.zeros(3, config["num_frames"] - 1, h, w),
         ],
         dim=1,
     ).to(AI_DEVICE)
@@ -103,9 +103,8 @@ def main():
         model_cls=model_cls,
         attn_mode="sage_attn2",
         infer_steps=40,
-        target_height=480,
-        target_width=832,
-        target_video_length=81,
+        size=(480, 832),
+        num_frames=81,
         sample_guide_scale=[3.5, 3.5],
         sample_shift=5.0,
         fps=16,

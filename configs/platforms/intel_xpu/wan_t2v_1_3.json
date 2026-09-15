@@ -1,9 +1,8 @@
 {
     "infer_steps": 4,
-    "target_video_length": 81,
+    "num_frames": 81,
     "text_len": 512,
-    "target_height": 480,
-    "target_width": 832,
+    "size": [480, 832],
     "self_attn_1_type": "torch_sdpa",
     "cross_attn_1_type": "torch_sdpa",
     "cross_attn_2_type": "torch_sdpa",

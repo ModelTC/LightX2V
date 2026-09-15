@@ -1,9 +1,8 @@
 {
     "infer_steps": 8,
-    "target_video_length": 241,
+    "num_frames": 241,
     "auto_duration": false,
-    "target_height": 1024,
-    "target_width": 1536,
+    "size": [1024, 1536],
     "fps": 24,
     "attn_type": "sage_attn2",
     "rms_norm_type": "ltx25_fast",

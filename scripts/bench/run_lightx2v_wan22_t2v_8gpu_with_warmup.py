@@ -32,7 +32,7 @@ prompt = "A cat and a dog baking a cake together in a kitchen. The cat is carefu
 
 negative_prompt = " "
 
-target_shape = [720, 1280]
+size = [720, 1280]
 
 save_result_path = f"{lightx2v_path}/save_results/{model_cls}_{task}_{ts}.mp4"
 
@@ -40,7 +40,7 @@ save_result_path = f"{lightx2v_path}/save_results/{model_cls}_{task}_{ts}.mp4"
 pipe.generate(
     seed=seed,
     prompt=prompt,
-    target_shape=target_shape,
+    size=size,
     negative_prompt=negative_prompt,
     save_result_path=save_result_path,
 )
@@ -49,7 +49,7 @@ pipe.generate(
 pipe.generate(
     seed=seed,
     prompt=prompt,
-    target_shape=target_shape,
+    size=size,
     negative_prompt=negative_prompt,
     save_result_path=save_result_path,
     return_result_tensor=True,

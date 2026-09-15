@@ -130,7 +130,7 @@ class AutoencoderKLQwenImageVAE:
     def decode(self, latents, input_info):
         if self.cpu_offload:
             self.model.to(AI_DEVICE)
-        width, height = input_info.auto_width, input_info.auto_height
+        height, width = input_info.size
         if self.is_layered:
             latents = self._unpack_latents(latents, height, width, self.config["vae_scale_factor"], self.layers)
         else:

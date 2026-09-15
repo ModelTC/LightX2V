@@ -118,29 +118,40 @@ class BaseGenerationService(ABC):
         with open(config_path, "w") as f:
             json.dump({"talk_objects": task_data["talk_objects"]}, f)
 
-    def _prepare_output_path(self, save_result_path: str, task_data: Dict[str, Any]) -> None:
-        actual_save_path = self.file_service.get_output_path(save_result_path)
-        if not actual_save_path.suffix:
-            actual_save_path = actual_save_path.with_suffix(self.get_output_extension())
-        task_data["save_result_path"] = str(actual_save_path)
+    def prepare_task_data(self, message):
+        task_data = {field: getattr(message, field) for field in message.model_fields_set}
+        task_data["task_id"] = message.task_id
+        output_path = task_data.get("save_result_path")
+        if output_path:
+            actual_save_path = self.file_service.get_output_path(output_path)
+            if not actual_save_path.suffix:
+                actual_save_path = actual_save_path.with_suffix(self.get_output_extension())
+            task_data["save_result_path"] = str(actual_save_path)
+        else:
+            task_data["save_result_path"] = None
+        return task_data
 
     async def generate_with_stop_event(self, message: Any, stop_event) -> Optional[Any]:
         try:
-            task_data = {field: getattr(message, field) for field in message.model_fields_set if field != "task_id"}
-            task_data["task_id"] = message.task_id
-            task_data["target_shape"] = message.target_shape
+            task_data = self.prepare_task_data(message)
 
             if stop_event.is_set():
                 logger.info(f"Task {message.task_id} cancelled before processing")
                 return None
 
-            if hasattr(message, "image_path") and message.image_path:
+            if message.image_path:
                 task_data["image_path"] = await self._resolve_image_path(message.image_path)
                 logger.info(f"Task {message.task_id} image path: {task_data.get('image_path')}")
 
             if message.last_frame_path:
                 task_data["last_frame_path"] = await self._resolve_image_path(message.last_frame_path)
                 logger.info(f"Task {message.task_id} last frame path: {task_data.get('last_frame_path')}")
+
+            reference_images = getattr(message, "ref_image_paths", None)
+            if reference_images:
+                reference_image_paths = [await self._resolve_image_path(image) for image in reference_images]
+                task_data["ref_image_paths"] = ",".join(reference_image_paths)
+                logger.info(f"Task {message.task_id} reference image paths: {task_data['ref_image_paths']}")
 
             if hasattr(message, "image_mask_path") and message.image_mask_path:
                 task_data["image_mask_path"] = await self._resolve_image_path(message.image_mask_path)
@@ -155,9 +166,9 @@ class BaseGenerationService(ABC):
             if hasattr(message, "talk_objects") and message.talk_objects:
                 await self._process_talk_objects(message.talk_objects, task_data)
 
-            self._prepare_output_path(message.save_result_path, task_data)
-            task_data["seed"] = message.seed
-            task_data["resize_mode"] = message.resize_mode
+            task_data.pop("image_mask_path", None)
+            task_data.pop("talk_objects", None)
+            task_data.pop("presigned_url", None)
 
             result = await self.inference_service.submit_task_async(task_data)
 
@@ -168,13 +179,11 @@ class BaseGenerationService(ABC):
                 raise RuntimeError("Task processing failed")
 
             if result.get("status") == "success":
-                actual_save_path = self.file_service.get_output_path(message.save_result_path)
-                if not actual_save_path.suffix:
-                    actual_save_path = actual_save_path.with_suffix(self.get_output_extension())
+                output_path = result["save_result_path"]
                 return TaskResponse(
                     task_id=message.task_id,
                     task_status="completed",
-                    save_result_path=actual_save_path.name,
+                    save_result_path=str(Path(output_path).absolute()) if output_path is not None else None,
                 )
             else:
                 error_msg = result.get("error", "Inference failed")

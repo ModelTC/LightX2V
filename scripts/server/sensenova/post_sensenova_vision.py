@@ -146,7 +146,7 @@ def main() -> None:
         "prompt": args.prompt,
         "images": [image_source_for_request(source) for source in args.image],
         "seed": args.seed,
-        "target_shape": list(args.target_shape or []),
+        "size": list(args.size or []),
         "visualize": not args.no_visualize,
         "postprocess_3d": args.postprocess_3d,
     }

@@ -1,4 +1,3 @@
-import json
 import logging
 import math
 import os
@@ -8,20 +7,12 @@ import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
 
-from lightx2v.models.networks.lora_adapter import LoraAdapter
 from lightx2v.utils.envs import GET_DTYPE
-from lightx2v.utils.set_config import set_config as set_config_base
+from lightx2v.utils.set_config import build_startup_config
 from lightx2v.utils.utils import find_torch_model_path
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 logger = logging.getLogger(__name__)
-
-
-class ConfigObj:
-    """Helper class to convert dictionary to object with attributes"""
-
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
 
 
 def read_image_input(image_path):
@@ -38,19 +29,17 @@ def set_config(
     attn_mode="flash_attn2",
     rope_type="torch_complex_rope",
     infer_steps=50,
-    target_video_length=81,
-    target_height=480,
-    target_width=832,
+    num_frames=81,
+    size=(480, 832),
     sample_guide_scale=5.0,
     sample_shift=5.0,
-    fps=16,
+    fps=None,
     aspect_ratio="16:9",
     boundary=0.900,
     boundary_step_index=2,
     denoising_step_list=None,
-    audio_fps=24000,
     double_precision_rope=True,
-    norm_modulate_backend="torch",
+    modulate_type=None,
     distilled_sigma_values=None,
     cpu_offload=False,
     offload_granularity="block",
@@ -77,26 +66,20 @@ def set_config(
         "clip_cpu_offload": image_encoder_offload,  # Map to internal keys
         "vae_cpu_offload": vae_offload,  # Map to internal keys
     }
+    if modulate_type is not None:
+        args_dict["modulate_type"] = modulate_type
+    if fps is not None:
+        args_dict["fps"] = fps
 
-    # Simulate logic from LightX2VPipeline.create_generator
-    # which calls set_infer_config / set_infer_config_json
-    # Here we directly populate args_dict with the required inference config
-
-    if config_path is not None:
-        with open(config_path, "r") as f:
-            config_json_content = json.load(f)
-        args_dict.update(config_json_content)
-    else:
-        # Replicating set_infer_config logic
+    if config_path is None:
         if model_cls == "ltx2":
             args_dict["distilled_sigma_values"] = distilled_sigma_values
             args_dict["infer_steps"] = len(distilled_sigma_values) - 1 if distilled_sigma_values is not None else infer_steps
         else:
             args_dict["infer_steps"] = infer_steps
 
-        args_dict["target_width"] = target_width
-        args_dict["target_height"] = target_height
-        args_dict["target_video_length"] = target_video_length
+        args_dict["size"] = list(size)
+        args_dict["num_frames"] = num_frames
         args_dict["sample_guide_scale"] = sample_guide_scale
         args_dict["sample_shift"] = sample_shift
 
@@ -106,12 +89,10 @@ def set_config(
             args_dict["enable_cfg"] = True
 
         args_dict["rope_type"] = rope_type
-        args_dict["fps"] = fps
         args_dict["aspect_ratio"] = aspect_ratio
         args_dict["boundary"] = boundary
         args_dict["boundary_step_index"] = boundary_step_index
         args_dict["denoising_step_list"] = denoising_step_list
-        args_dict["audio_fps"] = audio_fps
         args_dict["double_precision_rope"] = double_precision_rope
 
         if model_cls.startswith("wan"):
@@ -122,45 +103,11 @@ def set_config(
         elif model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "z_image"]:
             args_dict["attn_type"] = attn_mode
 
-        args_dict["norm_modulate_backend"] = norm_modulate_backend
+        if model_cls in ["ltx2", "ltx2_5"]:
+            args_dict.setdefault("modulate_type", "torch")
 
     args_dict.update(kwargs)
-
-    # Convert to object for set_config compatibility
-    args = ConfigObj(**args_dict)
-
-    # Use existing set_config from utils
-    config = set_config_base(args)
-
-    return config
-
-
-def build_wan_model_with_lora(wan_module, config, model_kwargs, lora_configs, model_type="high_noise_model"):
-    lora_dynamic_apply = config.get("lora_dynamic_apply", False)
-
-    if lora_dynamic_apply:
-        if model_type in ["high_noise_model", "low_noise_model"]:
-            # For wan2.2
-            lora_name_to_info = {item["name"]: item for item in lora_configs}
-            lora_path = lora_name_to_info[model_type]["path"]
-            lora_strength = lora_name_to_info[model_type]["strength"]
-        else:
-            # For wan2.1
-            lora_path = lora_configs[0]["path"]
-            lora_strength = lora_configs[0]["strength"]
-
-        model_kwargs["lora_path"] = lora_path
-        model_kwargs["lora_strength"] = lora_strength
-        model = wan_module(**model_kwargs)
-    else:
-        assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
-        assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
-        model = wan_module(**model_kwargs)
-        lora_wrapper = LoraAdapter(model)
-        if model_type in ["high_noise_model", "low_noise_model"]:
-            lora_configs = [lora_config for lora_config in lora_configs if lora_config["name"] == model_type]
-        lora_wrapper.apply_lora(lora_configs, model_type=model_type)
-    return model
+    return build_startup_config(args_dict)
 
 
 def load_wan_text_encoder(config: Dict[str, Any]):
@@ -344,7 +291,7 @@ def load_wan_transformer(config: Dict[str, Any]):
         flush=True,
     )
     from lightx2v.models.networks.wan.model import WanModel
-    from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, get_wan_model_class
+    from lightx2v.models.runners.wan.wan_runner import MultiModelStruct, build_wan_model_with_lora, get_wan_model_class
     from lightx2v.models.schedulers.wan.scheduler_factory import get_wan_distill_method
 
     print(
@@ -440,11 +387,10 @@ def estimate_encoder_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     stride_h = int(vae_stride[1])
     stride_w = int(vae_stride[2])
 
-    target_video_length = int(config.get("target_video_length", 81))
-    target_height = int(config.get("target_height", 480))
-    target_width = int(config.get("target_width", 832))
+    num_frames = int(config.get("num_frames", 81))
+    target_height, target_width = map(int, config.get("size", (480, 832)))
 
-    t_prime = 1 + (target_video_length - 1) // stride_t
+    t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))
     w_prime = int(math.ceil(target_width / stride_w))
 
@@ -480,11 +426,10 @@ def estimate_transformer_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     stride_h = int(vae_stride[1])
     stride_w = int(vae_stride[2])
 
-    target_video_length = int(config.get("target_video_length", 81))
-    target_height = int(config.get("target_height", 480))
-    target_width = int(config.get("target_width", 832))
+    num_frames = int(config.get("num_frames", 81))
+    target_height, target_width = map(int, config.get("size", (480, 832)))
 
-    t_prime = 1 + (target_video_length - 1) // stride_t
+    t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))
     w_prime = int(math.ceil(target_width / stride_w))
 

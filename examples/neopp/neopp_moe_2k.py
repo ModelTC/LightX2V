@@ -35,7 +35,8 @@ pipe.runner.set_inference_params(
 )
 
 pipe.generate(
+    task="t2i",
     seed=200,
     save_result_path="/path/to/save_results/output_lightx2v_neopp_moe_2k_0.png",
-    target_shape=[2048, 2048],  # Height, Width
+    size=[2048, 2048],  # Height, Width
 )

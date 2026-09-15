@@ -57,7 +57,7 @@
         "cfg_mode": "serial"
     },
     "enable_cfg": true,
-    "infer_align_image_size": true,
+    "align_image_size": true,
     "bot_task": "think_recaption",
     "use_system_prompt": "en_unified",
     "max_new_tokens": 2048,

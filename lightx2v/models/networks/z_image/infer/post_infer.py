@@ -56,9 +56,9 @@ class ZImagePostInfer:
             raise ValueError(f"out_dim mismatch: {out_dim} != {expected_out_dim} (transformer_out_channels={transformer_out_channels})")
 
         out_channels = transformer_out_channels
-        target_shape = self.scheduler.input_info.target_shape
+        latent_shape = self.scheduler.input_info.latent_shape
 
-        _, _, height, width = target_shape
+        _, _, height, width = latent_shape
         num_frames = 1
         pH = pW = patch_size
         pF = f_patch_size
@@ -68,7 +68,7 @@ class ZImagePostInfer:
 
         expected_T = F_tokens * H_tokens * W_tokens
         if T != expected_T:
-            raise ValueError(f"Token count mismatch: T={T} != expected_T={expected_T} (from target_shape={target_shape})")
+            raise ValueError(f"Token count mismatch: T={T} != expected_T={expected_T} (from latent_shape={latent_shape})")
 
         # Unpatchify: [T, out_dim] -> [C, H, W]
         # Reshape: [T, out_dim] -> [F_tokens, H_tokens, W_tokens, pF, pH, pW, out_channels]

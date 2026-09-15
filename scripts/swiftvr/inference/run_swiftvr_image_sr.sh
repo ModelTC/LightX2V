@@ -13,8 +13,8 @@ export CUDA_VISIBLE_DEVICES=0
 # set environment variables
 source "${lightx2v_path}/scripts/base/base.sh"
 
-# Choose one output-size option: --target_shape uses HEIGHT WIDTH; --sr_ratio scales both input dimensions.
-# The command below uses --sr_ratio. Replace it with --target_shape 1440 2520 to set an exact output size.
+# Choose one output-size option: --size uses HEIGHT WIDTH; --sr_ratio scales both input dimensions.
+# The command below uses --sr_ratio. Replace it with --size 1440 2520 to set an exact output size.
 python -m lightx2v.infer \
   --model_cls swiftvr \
   --task sr \

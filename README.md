@@ -176,6 +176,8 @@ For attention operators installation, please refer to our documentation: **[Engl
 
 ### Usage Example
 
+See the [MiniMax-H3 guide](scripts/minimax_h3/README.md) for checkpoint layout, local LoRA paths, CLI presets, and server/POST examples.
+
 ```python
 # examples/minimax_h3/minimax_h3_t2av_dmd.py
 """
@@ -188,13 +190,13 @@ from lightx2v import LightX2VPipeline
 pipe = LightX2VPipeline(
     model_path="/path/to/MiniMax-H3",
     model_cls="minimax_h3",
-    task="t2av",
+    model_variant="fl2av",
 )
 
 # The DMD config uses the released 768p LoRA, 4 inference steps,
 # video_flow_shift=6, audio_flow_shift=3, and lora alpha=128.
 pipe.create_generator(
-    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step_single_gpu_offload.json"
+    config_json="configs/minimax_h3/dmd/minimax_h3_bf16_4step.json"
 )
 
 # Generation parameters
@@ -204,6 +206,7 @@ save_result_path = "outputs/minimax_h3_t2av_768p.mp4"
 
 # Generate video with synchronized audio.
 pipe.generate(
+    task="t2av",
     seed=seed,
     prompt=prompt,
     save_result_path=save_result_path,
@@ -287,7 +290,6 @@ We provide multiple frontend interface deployment options:
 - **🔄 Parallel Inference**: Multi-GPU parallel processing for enhanced performance
 - **📱 Flexible Deployment Options**: Support for Gradio, service deployment, ComfyUI and other deployment methods
 - **🎛️ Dynamic Resolution Inference**: Adaptive resolution adjustment for optimal generation quality
-- **🎞️ Video Frame Interpolation**: RIFE-based frame interpolation for smooth frame rate enhancement
 
 
 ## 📚 Technical Documentation
@@ -300,7 +302,6 @@ We provide multiple frontend interface deployment options:
 - [Parallel Inference](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/parallel.html) - Multi-GPU acceleration strategies
 - [Changing Resolution Inference](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/changing_resolution.html) - U-shaped resolution strategy
 - [Step Distillation](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/step_distill.html) - 4-step inference technology
-- [Video Frame Interpolation](https://lightx2v-en.readthedocs.io/en/latest/method_tutorials/video_frame_interpolation.html) - Base on the RIFE technology
 
 ### 🛠️ **Deployment Guides**
 - [Low-Resource Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_resource.html) - Optimized 8GB VRAM solutions

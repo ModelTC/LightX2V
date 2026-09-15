@@ -109,6 +109,7 @@ class ZImageTransformerModel(BaseTransformerModel):
         latents_input = latents
 
         if self.config["enable_cfg"]:
+            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
             if self.config["cfg_parallel"]:
                 # ==================== CFG Parallel Processing ====================
                 cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")

@@ -5,6 +5,7 @@ Wan2.1 T2V 三段式 Disagg request script.
   2. 再发请求到 Transformer (启动 Phase1 接收 + Phase2 发送)
   3. 最后发请求到 Encoder (运行 T5 编码 + Phase1 发送)
   4. Poll Decoder 等待最终结果（视频由 Decoder 节点保存）
+仅 Encoder 接收完整生成参数；下游通过 Mooncake 接收编码结果、seed 和尺寸，Decoder 单独接收保存路径。
 """
 
 import time
@@ -43,13 +44,13 @@ def poll_task(url, task_id, timeout=600, interval=5):
 if __name__ == "__main__":
     # Step 1: Send to Decoder first (sets up Phase2 receiver, starts blocking)
     logger.info("Step 1: Sending request to Decoder...")
-    resp_d = requests.post(f"{DECODER_URL}{ENDPOINT}", json=PAYLOAD, timeout=30)
+    resp_d = requests.post(f"{DECODER_URL}{ENDPOINT}", json={"save_result_path": PAYLOAD["save_result_path"]}, timeout=30)
     decoder_task_id = resp_d.json().get("task_id")
     logger.info(f"Decoder task_id: {decoder_task_id}")
 
     # Step 2: Send to Transformer (sets up Phase1 receiver + Phase2 sender)
     logger.info("Step 2: Sending request to Transformer...")
-    resp_t = requests.post(f"{TRANSFORMER_URL}{ENDPOINT}", json=PAYLOAD, timeout=30)
+    resp_t = requests.post(f"{TRANSFORMER_URL}{ENDPOINT}", json={}, timeout=30)
     transformer_task_id = resp_t.json().get("task_id")
     logger.info(f"Transformer task_id: {transformer_task_id}")
 

@@ -189,6 +189,10 @@ class DecoderService(BaseService):
         return MemoryHandle(buffers=buffers)
 
     def process(self, config):
+        save_result_path = config.get("save_result_path")
+        if not save_result_path:
+            raise ValueError("save_result_path is required for disaggregated generation requests")
+
         seed_all(config["seed"])
         self.logger.info("Starting processing in DecoderService...")
         room = config.get("data_bootstrap_room", 0)
@@ -238,11 +242,10 @@ class DecoderService(BaseService):
             stride_t = int(vae_stride[0])
             stride_h = int(vae_stride[1])
             stride_w = int(vae_stride[2])
-            target_video_length = int(config.get("target_video_length", 81))
-            target_height = int(config.get("target_height", 480))
-            target_width = int(config.get("target_width", 832))
+            num_frames = int(config.get("num_frames", 81))
+            target_height, target_width = map(int, config.get("size", (480, 832)))
 
-            t_prime = 1 + (target_video_length - 1) // stride_t
+            t_prime = 1 + (num_frames - 1) // stride_t
             h_prime = int(math.ceil(target_height / stride_h))
             w_prime = int(math.ceil(target_width / stride_w))
             return (z_dim, t_prime, h_prime, w_prime)
@@ -301,16 +304,12 @@ class DecoderService(BaseService):
         gen_video_final = wan_vae_to_comfy(gen_video)
         decoder_metrics["compute_end_ts"] = time.time()
 
-        save_path = config.get("save_path")
-        if save_path is None:
-            raise ValueError("save_path is required in config.")
-
-        self.logger.info(f"Saving video to {save_path}...")
-        save_to_video(gen_video_final, save_path, fps=config.get("fps", 16), method="ffmpeg")
+        self.logger.info(f"Saving video to {save_result_path}...")
+        save_to_video(gen_video_final, save_result_path, fps=config.get("fps", 16), method="ffmpeg")
         decoder_metrics["output_enqueued_ts"] = time.time()
         self.logger.info("Done!")
 
-        return save_path
+        return save_result_path
 
     def release_memory(self, room: int):
         if room in self._rdma_buffers:
@@ -427,7 +426,7 @@ class DecoderService(BaseService):
             if exec_queue:
                 room, config = exec_queue.popleft()
                 try:
-                    save_path = self.process(config)
+                    save_result_path = self.process(config)
                     callback_host = str(config.get("controller_result_host", "127.0.0.1"))
                     callback_port = int(config.get("controller_result_port")) if config.get("controller_result_port") is not None else None
                     if callback_port is not None:
@@ -437,7 +436,7 @@ class DecoderService(BaseService):
                             {
                                 "ok": True,
                                 "data_bootstrap_room": int(room),
-                                "save_path": save_path,
+                                "save_result_path": save_result_path,
                                 "request_metrics": config.get("request_metrics"),
                             },
                         )
@@ -452,7 +451,7 @@ class DecoderService(BaseService):
                             {
                                 "ok": False,
                                 "data_bootstrap_room": int(room),
-                                "save_path": None,
+                                "save_result_path": None,
                                 "error": "decoder process failed",
                                 "request_metrics": config.get("request_metrics"),
                             },

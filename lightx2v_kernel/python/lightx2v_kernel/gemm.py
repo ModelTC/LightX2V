@@ -1,6 +1,24 @@
 import torch
 
 
+def _fp8_f16_accum_meta(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=None):
+    del scales_a, scales_b, bias
+    return torch.empty((mat_a.shape[0], mat_b.shape[1]), dtype=out_dtype, device=mat_a.device)
+
+
+FP8_F16_ACCUM_MM_AVAILABLE = hasattr(torch.ops.lightx2v_kernel, "cutlass_scaled_fp8_mm_f16_accum_sm120")
+if FP8_F16_ACCUM_MM_AVAILABLE:
+    _fp8_f16_accum_op = torch.ops.lightx2v_kernel.cutlass_scaled_fp8_mm_f16_accum_sm120.default
+    if not _fp8_f16_accum_op.has_kernel_for_dispatch_key("Meta"):
+        torch.library.register_fake(_fp8_f16_accum_op, _fp8_f16_accum_meta)
+
+
+def cutlass_scaled_fp8_mm_f16_accum(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=None):
+    if not FP8_F16_ACCUM_MM_AVAILABLE:
+        raise ImportError("lightx2v-kernel was built without the SM120 FP8 GEMM with FP16 accumulation")
+    return _fp8_f16_accum_op(mat_a, mat_b, scales_a, scales_b, out_dtype, bias)
+
+
 def cutlass_scaled_nvfp4_mm(mat_a, mat_b, scales_a, scales_b, alpha, bias=None):
     m, n = mat_a.shape[0], mat_b.shape[0]
     out = torch.empty((m, n), dtype=torch.bfloat16, device=mat_a.device)

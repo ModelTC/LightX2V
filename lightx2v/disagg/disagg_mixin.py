@@ -43,11 +43,23 @@ try:
 except ImportError:
     RDMAClient = None
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 logger = logging.getLogger(__name__)
 
 _DISAGG_PROFILING = os.environ.get("DISAGG_PROFILING", "0") == "1"
+
+_DISAGG_REQUEST_FIELDS = (
+    "prompt",
+    "negative_prompt",
+    "save_result_path",
+    "return_result_tensor",
+    "seed",
+    "num_frames",
+    "aspect_ratio",
+    "i2i_denoise_strength",
+)
 
 
 def _prof_log(tag: str, elapsed: float):
@@ -69,11 +81,10 @@ def _estimate_encoder_buffer_sizes(config) -> List[int]:
     vae_stride = config.get("vae_stride", (4, 8, 8))
     stride_t, stride_h, stride_w = int(vae_stride[0]), int(vae_stride[1]), int(vae_stride[2])
 
-    target_video_length = int(config.get("target_video_length", 81))
-    target_height = int(config.get("target_height", 480))
-    target_width = int(config.get("target_width", 832))
+    num_frames = int(config.get("num_frames", 81))
+    target_height, target_width = map(int, config.get("size", (480, 832)))
 
-    t_prime = 1 + (target_video_length - 1) // stride_t
+    t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))
     w_prime = int(math.ceil(target_width / stride_w))
 
@@ -99,6 +110,26 @@ def _estimate_encoder_buffer_sizes(config) -> List[int]:
     buffer_sizes.append(4096)
 
     return buffer_sizes
+
+
+def validate_disagg_buffer_capacity(buffers: List[torch.Tensor], required_sizes: List[int], phase: str) -> None:
+    capacities = [buffer.numel() for buffer in buffers]
+    if len(capacities) != len(required_sizes) or any(required > capacity for required, capacity in zip(required_sizes, capacities)):
+        raise ValueError(
+            f"[Disagg] {phase} request exceeds the configured transfer buffer capacity: "
+            f"required={required_sizes}, capacity={capacities}. "
+            "Increase num_frames or size in every stage's startup config, then restart the services."
+        )
+
+
+def wait_for_disagg_transfer(transfer, description: str) -> None:
+    while True:
+        status = transfer.poll()
+        if status == DataPoll.Success:
+            return
+        if status == DataPoll.Failed:
+            raise RuntimeError(f"[Disagg] {description} failed")
+        time.sleep(0.01)
 
 
 def _buffer_view(buf: torch.Tensor, dtype: torch.dtype, shape: tuple) -> torch.Tensor:
@@ -166,6 +197,7 @@ class DisaggMixin:
         self._disagg_active_encoder_room: Optional[int] = None
         self._disagg_active_transformer_room: Optional[int] = None
         self._disagg_active_decoder_room: Optional[int] = None
+        self._disagg_request_config: Optional[Dict[str, Any]] = None
 
         if self._disagg_mode == "encoder":
             if self._disagg_decentralized:
@@ -321,54 +353,65 @@ class DisaggMixin:
             return {str(k): self._disagg_json_safe_value(v) for k, v in obj.items()}
         return str(obj)
 
-    def _disagg_build_request_config_snapshot(self) -> Dict[str, Any]:
+    def resolve_request_seed(self, request_data):
+        # CLI preparation can precede init_disagg; dispatched requests already carry the upstream seed.
+        request_config = getattr(self, "_disagg_request_config", None)
+        if request_config is None or "seed" not in request_config:
+            if self.config.get("disagg_mode") in ("transformer", "decode"):
+                # Static workers receive the resolved seed with the tensor metadata.
+                return None
+            return super().resolve_request_seed(request_data)
+        return request_config["seed"]
+
+    def build_disagg_request_config(self, input_info, request_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Build the generation and routing state for one Disagg request."""
+        source_config = self._disagg_request_config if request_config is None else request_config
+        request_config = dict(source_config or {})
+        disagg_cfg = self.config.get("disagg_config", {})
+
+        if not self._disagg_decentralized:
+            request_config.setdefault("data_bootstrap_room", int(disagg_cfg.get("bootstrap_room", self._disagg_bootstrap_room)))
+
+        for key in _DISAGG_REQUEST_FIELDS:
+            value = getattr(input_info, key, None)
+            if value is not None:
+                request_config[key] = value
+
+        size = getattr(input_info, "size", None)
+        if size:
+            request_config["size"] = list(size)
+
+        return request_config
+
+    def _disagg_effective_config(self, request_config: Dict[str, Any]) -> Dict[str, Any]:
+        config = dict(self.config)
+        request_config = dict(request_config)
+        request_disagg_cfg = request_config.pop("disagg_config", None)
+        config.update(request_config)
+        if request_disagg_cfg is not None:
+            config["disagg_config"] = {**dict(self.config.get("disagg_config", {})), **dict(request_disagg_cfg)}
+        return config
+
+    def _disagg_build_request_config_snapshot(self, request_config: Dict[str, Any]) -> Dict[str, Any]:
         """Payload for phase1/phase2 ring: per-request fields for workers."""
-        disagg_cfg = dict(self.config.get("disagg_config", {}) or {})
-        room = int(self.config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", self._disagg_bootstrap_room)))
-        payload: Dict[str, Any] = {
-            "data_bootstrap_room": room,
-            "task": self.config.get("task"),
-            "model_cls": self.config.get("model_cls"),
-        }
+        config = self._disagg_effective_config(request_config)
+        disagg_cfg = dict(config.get("disagg_config", {}) or {})
+        room = int(config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", self._disagg_bootstrap_room)))
+        payload: Dict[str, Any] = {"data_bootstrap_room": room}
         for key in (
-            "seed",
-            "infer_steps",
-            "aspect_ratio",
-            "enable_cfg",
-            "sample_guide_scale",
-            "target_height",
-            "target_width",
-            "text_len",
+            *_DISAGG_REQUEST_FIELDS,
             "controller_result_host",
             "controller_result_port",
+            "size",
         ):
-            if key in self.config and self.config.get(key) is not None:
-                payload[key] = self._disagg_json_safe_value(self.config.get(key))
+            if key in config and config.get(key) is not None:
+                payload[key] = self._disagg_json_safe_value(config.get(key))
 
-        ii = getattr(self, "input_info", None)
-        if ii is not None:
-            if getattr(ii, "prompt", None):
-                payload["prompt"] = ii.prompt
-            if getattr(ii, "negative_prompt", None) is not None:
-                payload["negative_prompt"] = ii.negative_prompt
-            if getattr(ii, "save_result_path", None):
-                payload["save_result_path"] = ii.save_result_path
-                payload["save_path"] = ii.save_result_path
-            if getattr(ii, "target_shape", None) is not None:
-                payload["target_shape"] = self._disagg_json_safe_value(ii.target_shape)
-            if getattr(ii, "aspect_ratio", None) and "aspect_ratio" not in payload:
-                payload["aspect_ratio"] = ii.aspect_ratio
-            if getattr(ii, "seed", None) is not None and "seed" not in payload:
-                payload["seed"] = ii.seed
+        phase1_receiver_rank = config.get("disagg_phase1_receiver_engine_rank")
+        if phase1_receiver_rank is not None:
+            payload["disagg_phase1_receiver_engine_rank"] = int(phase1_receiver_rank)
 
-        dpr = self.config.get("disagg_phase1_receiver_engine_rank")
-        if dpr is not None:
-            try:
-                payload["disagg_phase1_receiver_engine_rank"] = int(dpr)
-            except (TypeError, ValueError):
-                pass
-
-        return {k: v for k, v in payload.items() if v is not None}
+        return payload
 
     def _disagg_connect_queue_client(
         self,
@@ -479,29 +522,25 @@ class DisaggMixin:
 
         req = dict(packet.get("request_config") or {})
         enc_addr = str(packet.get("encoder_node_address", "127.0.0.1"))
-
-        with self.config.temporarily_unlocked():
-            self.config.update(req)
-
-        disagg_cfg = self.config.get("disagg_config", {})
-        room = int(self.config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0)))
-
         self.disagg_transformer_teardown_session()
+        self._disagg_request_config = None
+        config = self._disagg_effective_config(req)
+        disagg_cfg = config.get("disagg_config", {})
+        room = int(config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0)))
 
-        self._disagg_sender_rank = int(disagg_cfg.get("sender_engine_rank", self._disagg_sender_rank))
+        sender_rank = int(disagg_cfg.get("sender_engine_rank", self._disagg_sender_rank))
         pkt_recv_rank = req.get("disagg_phase1_receiver_engine_rank")
         if pkt_recv_rank is not None:
-            self._disagg_receiver_rank = int(pkt_recv_rank)
+            receiver_rank = int(pkt_recv_rank)
         else:
-            self._disagg_receiver_rank = int(disagg_cfg.get("receiver_engine_rank", self._disagg_receiver_rank))
+            receiver_rank = int(disagg_cfg.get("receiver_engine_rank", self._disagg_receiver_rank))
 
-        buffer_sizes = _estimate_encoder_buffer_sizes(self.config)
-        self._disagg_alloc_buffers(buffer_sizes)
+        self._disagg_alloc_buffers(packet["buffer_sizes"])
         data_ptrs = [buf.data_ptr() for buf in self._disagg_rdma_buffers]
         data_lens = [buf.numel() for buf in self._disagg_rdma_buffers]
         data_args = DataArgs(
-            sender_engine_rank=self._disagg_sender_rank,
-            receiver_engine_rank=self._disagg_receiver_rank,
+            sender_engine_rank=sender_rank,
+            receiver_engine_rank=receiver_rank,
             data_ptrs=data_ptrs,
             data_lens=data_lens,
             data_item_lens=data_lens,
@@ -516,11 +555,11 @@ class DisaggMixin:
         if disagg_cfg.get("decoder_engine_rank") is None:
             raise RuntimeError("decentralized transformer requires decoder_engine_rank in disagg_config")
 
-        p2_transformer_rank = int(self._disagg_receiver_rank)
+        p2_transformer_rank = receiver_rank
         p2_decoder_rank = int(disagg_cfg.get("decoder_engine_rank", 2))
         p2_bootstrap_addr = str(disagg_cfg.get("bootstrap_addr", "127.0.0.1"))
 
-        buffer_sizes_p2 = estimate_transformer_buffer_sizes(self.config)
+        buffer_sizes_p2 = estimate_transformer_buffer_sizes(config)
         self._disagg_alloc_p2_buffers(buffer_sizes_p2)
         p2_ptrs = [buf.data_ptr() for buf in self._disagg_p2_rdma_buffers]
         p2_lens = [buf.numel() for buf in self._disagg_p2_rdma_buffers]
@@ -540,9 +579,9 @@ class DisaggMixin:
         if self._disagg_phase2_queue is None:
             raise RuntimeError("phase2 meta queue not connected; check Controller and rdma_phase2_* config")
 
-        merged_req = {**self._disagg_build_request_config_snapshot(), **req}
+        merged_req = self._disagg_build_request_config_snapshot(req)
         dc_out = {**dict(disagg_cfg)}
-        dc_out["sender_engine_rank"] = int(self._disagg_receiver_rank)
+        dc_out["sender_engine_rank"] = receiver_rank
         dc_out["receiver_engine_rank"] = int(disagg_cfg.get("decoder_engine_rank", 4))
         dc_out["bootstrap_room"] = room
         merged_req["disagg_config"] = dc_out
@@ -552,6 +591,7 @@ class DisaggMixin:
             "transformer_session_id": self._disagg_p2_data_mgr.get_session_id(),
         }
         self._disagg_phase2_queue.produce(phase2_meta)
+        self._disagg_request_config = merged_req
         self._disagg_active_transformer_room = room
         logger.info("[Disagg] Transformer dispatch prepared for room=%s", room)
 
@@ -586,21 +626,18 @@ class DisaggMixin:
 
         req = dict(packet.get("request_config") or {})
         trans_addr = str(packet.get("transformer_node_address", "127.0.0.1"))
-
-        with self.config.temporarily_unlocked():
-            self.config.update(req)
-
-        disagg_cfg = self.config.get("disagg_config", {})
-        room = int(self.config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0)))
-
         self.disagg_decoder_teardown_session()
+        self._disagg_request_config = None
+        config = self._disagg_effective_config(req)
+        disagg_cfg = config.get("disagg_config", {})
+        room = int(config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0)))
 
         p2_transformer_rank = int(disagg_cfg.get("sender_engine_rank", 1))
         p2_decoder_rank = int(disagg_cfg.get("receiver_engine_rank", 2))
 
         from lightx2v.disagg.utils import estimate_transformer_buffer_sizes
 
-        buffer_sizes = estimate_transformer_buffer_sizes(self.config)
+        buffer_sizes = estimate_transformer_buffer_sizes(config)
         self._disagg_alloc_p2_buffers(buffer_sizes)
         data_ptrs = [buf.data_ptr() for buf in self._disagg_p2_rdma_buffers]
         data_lens = [buf.numel() for buf in self._disagg_p2_rdma_buffers]
@@ -615,6 +652,7 @@ class DisaggMixin:
         self._disagg_p2_data_mgr.init(data_args, room)
         self._disagg_p2_receiver = DataReceiver(self._disagg_p2_data_mgr, trans_addr, room)
         self._disagg_p2_receiver.init()
+        self._disagg_request_config = self._disagg_build_request_config_snapshot(req)
         self._disagg_active_decoder_room = room
         logger.info("[Disagg] Decoder dispatch prepared for room=%s", room)
 
@@ -644,20 +682,20 @@ class DisaggMixin:
         if self._disagg_active_encoder_room == room:
             self._disagg_active_encoder_room = None
 
-    def _disagg_encoder_setup_room(self, room: int) -> None:
+    def _disagg_encoder_setup_room(self, room: int, request_config: Dict[str, Any], buffer_sizes: List[int]) -> None:
         if self._disagg_active_encoder_room == room and self._disagg_sender is not None:
             return
         if self._disagg_active_encoder_room is not None and self._disagg_active_encoder_room != room:
             self._disagg_encoder_teardown_room(self._disagg_active_encoder_room)
 
+        config = self._disagg_effective_config(request_config)
         recv_rank = int(
-            self.config.get(
+            config.get(
                 "disagg_phase1_receiver_engine_rank",
-                self.config.get("disagg_config", {}).get("receiver_engine_rank", self._disagg_receiver_rank),
+                config.get("disagg_config", {}).get("receiver_engine_rank", self._disagg_receiver_rank),
             )
         )
 
-        buffer_sizes = _estimate_encoder_buffer_sizes(self.config)
         self._disagg_alloc_buffers(buffer_sizes)
         data_ptrs = [buf.data_ptr() for buf in self._disagg_rdma_buffers]
         data_lens = [buf.numel() for buf in self._disagg_rdma_buffers]
@@ -673,13 +711,14 @@ class DisaggMixin:
         self._disagg_sender = DataSender(self._disagg_data_mgr, self._disagg_bootstrap_addr, room)
         self._disagg_active_encoder_room = room
 
-    def _disagg_produce_phase1_for_encoder(self) -> None:
+    def _disagg_produce_phase1_for_encoder(self, request_config: Dict[str, Any]) -> None:
         if self._disagg_phase1_queue is None:
             raise RuntimeError("phase1 meta queue not connected")
-        req = self._disagg_build_request_config_snapshot()
+        req = self._disagg_build_request_config_snapshot(request_config)
         room = int(req.get("data_bootstrap_room", self._disagg_bootstrap_room))
         phase1_meta = {
             "request_config": req,
+            "buffer_sizes": [buf.numel() for buf in self._disagg_rdma_buffers],
             "encoder_node_address": self._disagg_data_mgr.get_localhost(),
             "encoder_session_id": self._disagg_data_mgr.get_session_id(),
         }
@@ -690,21 +729,12 @@ class DisaggMixin:
     #  Encoder role: serialize and send
     # ------------------------------------------------------------------ #
 
-    def send_encoder_outputs(self, inputs: dict, latent_shape: list):
+    def send_encoder_outputs(self, inputs: dict, latent_shape: list, request_config: Optional[Dict[str, Any]] = None):
         """Serialize encoder outputs into RDMA buffers and send via Mooncake."""
         _t_send_start = time.perf_counter()
-        config = self.config
+        config = self._disagg_effective_config(request_config or {})
         disagg_cfg = config.get("disagg_config", {})
 
-        if getattr(self, "_disagg_decentralized", False):
-            room = int(config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0)))
-            self._ensure_disagg_phase1_queue_producer(disagg_cfg)
-            if self._disagg_phase1_queue is None:
-                raise RuntimeError("[Disagg] decentralized encoder could not connect phase1 queue")
-            _t0 = time.perf_counter()
-            self._disagg_encoder_setup_room(room)
-            self._disagg_produce_phase1_for_encoder()
-            _prof_log("send_enc/phase1_ring_produce", time.perf_counter() - _t0)
         text_encoder_output = inputs["text_encoder_output"]
         image_encoder_output = inputs.get("image_encoder_output")
 
@@ -738,24 +768,40 @@ class DisaggMixin:
                 item = image_encoder_output[0]
                 vae_encoder_out = item.get("image_latents", item) if isinstance(item, dict) else item
 
-        text_len = int(config.get("text_len", 512))
-        text_dim = int(config.get("text_encoder_dim", 4096))
         clip_dim = int(config.get("clip_embed_dim", 1024))
         z_dim = int(config.get("vae_z_dim", 16))
 
         vae_stride = config.get("vae_stride", (4, 8, 8))
         stride_t, stride_h, stride_w = int(vae_stride[0]), int(vae_stride[1]), int(vae_stride[2])
-        target_video_length = int(config.get("target_video_length", 81))
-        target_height = int(config.get("target_height", 480))
-        target_width = int(config.get("target_width", 832))
+        num_frames = int(config.get("num_frames", 81))
+        target_height, target_width = map(int, config.get("size", (480, 832)))
 
-        t_prime = 1 + (target_video_length - 1) // stride_t
+        t_prime = 1 + (num_frames - 1) // stride_t
         h_prime = int(math.ceil(target_height / stride_h))
         w_prime = int(math.ceil(target_width / stride_w))
 
         task = config.get("task")
         enable_cfg = bool(config.get("enable_cfg", False))
         use_image_encoder = bool(config.get("use_image_encoder", True))
+
+        request_sizes = _estimate_encoder_buffer_sizes(config)
+        if vae_encoder_out is not None:
+            # Reference-image latents can be larger than the requested output image.
+            vae_buffer_index = 1 + int(enable_cfg) + int(use_image_encoder)
+            request_sizes[vae_buffer_index] = vae_encoder_out.numel() * torch.tensor([], dtype=GET_DTYPE()).element_size()
+
+        if self._disagg_decentralized:
+            room = int(config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0)))
+            self._ensure_disagg_phase1_queue_producer(disagg_cfg)
+            if self._disagg_phase1_queue is None:
+                raise RuntimeError("[Disagg] decentralized encoder could not connect phase1 queue")
+            _t0 = time.perf_counter()
+            self._disagg_encoder_setup_room(room, request_config or {}, request_sizes)
+            self._disagg_produce_phase1_for_encoder(request_config or {})
+            _prof_log("send_enc/phase1_ring_produce", time.perf_counter() - _t0)
+        else:
+            validate_disagg_buffer_capacity(self._disagg_rdma_buffers, request_sizes, "Phase 1")
+            self._disagg_data_mgr.data_args[self._disagg_bootstrap_room].data_item_lens = request_sizes
 
         buffer_index = 0
 
@@ -790,7 +836,7 @@ class DisaggMixin:
             vae_buf = _buffer_view(
                 self._disagg_rdma_buffers[buffer_index],
                 GET_DTYPE(),
-                (z_dim + 4, t_prime, h_prime, w_prime),
+                tuple(vae_encoder_out.shape) if vae_encoder_out is not None else (z_dim + 4, t_prime, h_prime, w_prime),
             )
             vae_buf.zero_()
             if vae_encoder_out is not None:
@@ -809,6 +855,7 @@ class DisaggMixin:
         # meta includes shapes, hashes, and image_info (for QwenImage)
         meta = {
             "version": 1,
+            "seed": self.input_info.seed,
             "task": task,
             "context_shape": list(context.shape),
             "context_hash": _sha256_tensor(context),
@@ -847,15 +894,9 @@ class DisaggMixin:
         buffer_ptrs = [buf.data_ptr() for buf in self._disagg_rdma_buffers]
         _t_mooncake_start = time.perf_counter()
         self._disagg_sender.send(buffer_ptrs)
-
-        # Wait for transfer completion
-        while True:
-            status = self._disagg_sender.poll()
-            if status == DataPoll.Success:
-                _prof_log("send_enc/mooncake_transfer", time.perf_counter() - _t_mooncake_start)
-                logger.info("Disagg: encoder outputs sent successfully.")
-                break
-            time.sleep(0.01)
+        wait_for_disagg_transfer(self._disagg_sender, "Encoder to Transformer transfer")
+        _prof_log("send_enc/mooncake_transfer", time.perf_counter() - _t_mooncake_start)
+        logger.info("Disagg: encoder outputs sent successfully.")
 
         if getattr(self, "_disagg_decentralized", False):
             self._disagg_encoder_teardown_room(int(config.get("data_bootstrap_room", disagg_cfg.get("bootstrap_room", 0))))
@@ -865,19 +906,17 @@ class DisaggMixin:
     #  Transformer role: receive and deserialize
     # ------------------------------------------------------------------ #
 
-    def receive_encoder_outputs(self) -> dict:
+    def receive_encoder_outputs(self, request_config: Optional[Dict[str, Any]] = None) -> dict:
         """Poll for data from Encoder and reconstruct standard inputs dict."""
         _t_recv_start = time.perf_counter()
-        config = self.config
+        config = self._disagg_effective_config(request_config or {})
 
-        # Wait for data
-        while True:
-            status = self._disagg_receiver.poll()
-            if status == DataPoll.Success:
-                _prof_log("recv_enc/mooncake_poll_wait", time.perf_counter() - _t_recv_start)
-                logger.info("Disagg: encoder outputs received successfully.")
-                break
-            time.sleep(0.01)
+        if not getattr(self, "_disagg_decentralized", False):
+            validate_disagg_buffer_capacity(self._disagg_rdma_buffers, _estimate_encoder_buffer_sizes(config), "Phase 1")
+
+        wait_for_disagg_transfer(self._disagg_receiver, "Encoder to Transformer transfer")
+        _prof_log("recv_enc/mooncake_poll_wait", time.perf_counter() - _t_recv_start)
+        logger.info("Disagg: encoder outputs received successfully.")
 
         # Immediately snapshot all RDMA destination buffers after poll() returns.
         # Without this, a concurrent Encoder send for the next request can overwrite
@@ -900,11 +939,10 @@ class DisaggMixin:
         z_dim = int(config.get("vae_z_dim", 16))
 
         vae_stride = config.get("vae_stride", (4, 8, 8))
-        target_video_length = int(config.get("target_video_length", 81))
-        target_height = int(config.get("target_height", 480))
-        target_width = int(config.get("target_width", 832))
+        num_frames = int(config.get("num_frames", 81))
+        target_height, target_width = map(int, config.get("size", (480, 832)))
 
-        t_prime = 1 + (target_video_length - 1) // int(vae_stride[0])
+        t_prime = 1 + (num_frames - 1) // int(vae_stride[0])
         h_prime = int(math.ceil(target_height / int(vae_stride[1])))
         w_prime = int(math.ceil(target_width / int(vae_stride[2])))
 
@@ -1003,6 +1041,10 @@ class DisaggMixin:
         if meta:
             self._disagg_verify_integrity(meta, context, context_null, clip_encoder_out, vae_encoder_out, latent_shape, enable_cfg, task)
 
+        if self.input_info.seed is None:
+            self.input_info.seed = meta["seed"]
+            seed_all(self.input_info.seed)
+
         _prof_log("recv_enc/deserialize_total", time.perf_counter() - _t_recv_start)
 
         return {
@@ -1067,16 +1109,16 @@ class DisaggMixin:
 
         import numpy as _np
 
-        # Include pixel-space dimensions so the Decoder can reconstruct auto_height/width
-        # correctly even when latents are in packed (sequence) format (e.g. QwenImage).
         _input_info = getattr(self, "input_info", None)
+        size = getattr(_input_info, "size", None)
         latents_meta = {
             "version": 1,
+            "seed": self.input_info.seed,
             "latents_shape": list(latents_to_send.shape),
             "latents_dtype": str(latents_to_send.dtype),
             "latents_hash": _sha256_tensor(latents_to_send),
-            "auto_height": getattr(_input_info, "auto_height", None),
-            "auto_width": getattr(_input_info, "auto_width", None),
+            "auto_height": size[0] if size else None,
+            "auto_width": size[1] if size else None,
         }
         meta_bytes = json.dumps(latents_meta, ensure_ascii=True).encode("utf-8")
         meta_buf = self._disagg_p2_rdma_buffers[1]
@@ -1086,25 +1128,24 @@ class DisaggMixin:
         meta_view.zero_()
         meta_view[: len(meta_bytes)].copy_(torch.from_numpy(_np.frombuffer(meta_bytes, dtype=_np.uint8).copy()))
 
+        room = self._disagg_p2_sender.bootstrap_room
+        self._disagg_p2_data_mgr.data_args[room].data_item_lens = [latents_nbytes, meta_buf.numel()]
+
         torch.cuda.synchronize()
         _prof_log("send_trans/serialize_buffers", time.perf_counter() - _t_p2_send_start)
         buffer_ptrs = [buf.data_ptr() for buf in self._disagg_p2_rdma_buffers]
         _t_p2_mooncake = time.perf_counter()
         self._disagg_p2_sender.send(buffer_ptrs)
-        while True:
-            status = self._disagg_p2_sender.poll()
-            if status == DataPoll.Success:
-                _prof_log("send_trans/mooncake_transfer", time.perf_counter() - _t_p2_mooncake)
-                _prof_log("send_trans/total", time.perf_counter() - _t_p2_send_start)
-                logger.info("[Disagg] Transformer latents sent to Decoder successfully.")
-                break
-            time.sleep(0.01)
+        wait_for_disagg_transfer(self._disagg_p2_sender, "Transformer to Decoder transfer")
+        _prof_log("send_trans/mooncake_transfer", time.perf_counter() - _t_p2_mooncake)
+        _prof_log("send_trans/total", time.perf_counter() - _t_p2_send_start)
+        logger.info("[Disagg] Transformer latents sent to Decoder successfully.")
 
     # ------------------------------------------------------------------ #
     #  Decoder role: receive latents from Transformer (Phase 2)
     # ------------------------------------------------------------------ #
 
-    def receive_transformer_outputs(self) -> torch.Tensor:
+    def receive_transformer_outputs(self, request_config: Optional[Dict[str, Any]] = None) -> torch.Tensor:
         """Poll Phase 2 and reconstruct latents tensor from RDMA buffer."""
         _t_p2_recv_start = time.perf_counter()
         if self._disagg_p2_receiver is None:
@@ -1112,13 +1153,15 @@ class DisaggMixin:
         if len(self._disagg_p2_rdma_buffers) < 2:
             raise RuntimeError("[Disagg] Phase2 RDMA buffers require [latents, meta] entries.")
 
-        while True:
-            status = self._disagg_p2_receiver.poll()
-            if status == DataPoll.Success:
-                _prof_log("recv_trans/mooncake_poll_wait", time.perf_counter() - _t_p2_recv_start)
-                logger.info("[Disagg] Decoder received latents from Transformer successfully.")
-                break
-            time.sleep(0.01)
+        if not getattr(self, "_disagg_decentralized", False):
+            from lightx2v.disagg.utils import estimate_transformer_buffer_sizes
+
+            config = self._disagg_effective_config(request_config or {})
+            validate_disagg_buffer_capacity(self._disagg_p2_rdma_buffers, estimate_transformer_buffer_sizes(config), "Phase 2")
+
+        wait_for_disagg_transfer(self._disagg_p2_receiver, "Transformer to Decoder transfer")
+        _prof_log("recv_trans/mooncake_poll_wait", time.perf_counter() - _t_p2_recv_start)
+        logger.info("[Disagg] Decoder received latents from Transformer successfully.")
 
         # Immediately snapshot all Phase2 RDMA destination buffers after poll() returns.
         # Without this, a concurrent Transformer send for the next request can overwrite
@@ -1154,11 +1197,12 @@ class DisaggMixin:
         latents = _buffer_view(received_p2_buffers[0], latents_dtype, latent_shape)
         if meta.get("latents_hash") is not None and _sha256_tensor(latents) != meta.get("latents_hash"):
             raise ValueError("[Disagg] Latents hash mismatch between transformer and decoder")
+        if self.input_info.seed is None:
+            self.input_info.seed = meta["seed"]
+            seed_all(self.input_info.seed)
         latents = latents.to(AI_DEVICE).contiguous()
         logger.info(f"[Disagg] Phase2 latents restored: shape={latent_shape}, dtype={latents_dtype}")
-        # Store the Phase 2 metadata so the caller (e.g. QwenImageRunner decode mode) can
-        # access pixel-space dimensions (auto_height/auto_width) that are not recoverable
-        # from the packed latent tensor shape alone.
+        # Packed latents do not retain their pixel-space dimensions.
         self._p2_receive_meta = meta
         _prof_log("recv_trans/deserialize_total", time.perf_counter() - _t_p2_recv_start)
         return latents

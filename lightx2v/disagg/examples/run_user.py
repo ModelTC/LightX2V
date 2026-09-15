@@ -19,6 +19,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--controller_request_port", type=int, default=REQUEST_POLLING_PORT - 2)
     parser.add_argument("--max_requests", type=int, default=0, help="0 means no hard cap")
     parser.add_argument("--sleep_min_ms", type=float, default=5.0, help="minimum loop sleep in ms")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--prompt", type=str)
+    parser.add_argument("--negative_prompt", type=str)
+    parser.add_argument("--image_path", type=str)
     return parser
 
 
@@ -28,6 +32,8 @@ def main():
     req_mgr = ReqManager()
     stages = load_stage_specs()
     base_config = load_base_config()
+    request_data = {"seed": args.seed, "prompt": args.prompt, "negative_prompt": args.negative_prompt, "image_path": args.image_path}
+    base_config.update({key: value for key, value in request_data.items() if value is not None})
     shape = DisaggLoadShape()
 
     start_workload_clock()

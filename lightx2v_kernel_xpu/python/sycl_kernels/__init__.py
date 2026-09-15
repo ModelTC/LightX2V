@@ -6,6 +6,7 @@ import os
 _pkg_dir = os.path.dirname(os.path.abspath(__file__))
 _cute_fmha_loaded = False
 _cute_fmha_minimax_h3_loaded = False
+_cute_fmha_minimax_h3_sparse_loaded = False
 _rms_norm_loaded = False
 _minimax_h3_rope_loaded = False
 
@@ -174,6 +175,19 @@ def _load_cute_fmha_minimax_h3():
     _cute_fmha_minimax_h3_loaded = True
 
 
+def _load_cute_fmha_minimax_h3_sparse():
+    global _cute_fmha_minimax_h3_sparse_loaded
+    if _cute_fmha_minimax_h3_sparse_loaded:
+        return
+    import torch
+
+    candidates = sorted(glob.glob(os.path.join(_pkg_dir, "cute_fmha_minimax_h3_sparse_torch*.so")))
+    if not candidates:
+        raise ImportError("cute_fmha_minimax_h3_sparse_torch.so not found")
+    torch.ops.load_library(candidates[0])
+    _cute_fmha_minimax_h3_sparse_loaded = True
+
+
 def _use_minimax_h3_cute(q, k, v):
     import torch
 
@@ -222,3 +236,24 @@ def has_cute_fmha():
         return True
     except (ImportError, OSError, RuntimeError):
         return False
+
+
+def sla_block_map(q, k, keep_ratio=0.2, block_q=128, block_k=128):
+    """Build an SLA block LUT for BLHD query/key tensors."""
+    from .sla import sla_block_map as _sla_block_map
+
+    return _sla_block_map(q, k, keep_ratio, block_q, block_k)
+
+
+def sparse_block_attention(q, k, v, lut, block_q=128, block_k=128, scale=None):
+    """Run fused BF16 block-sparse attention on Intel XPU."""
+    from .sla import sparse_block_attention as _sparse_block_attention
+
+    return _sparse_block_attention(q, k, v, lut, block_q, block_k, scale)
+
+
+def sla_sparse_attention(q, k, v, keep_ratio=0.2, block_q=128, block_k=128, scale=None):
+    """Build the SLA routing LUT and run fused sparse attention."""
+    from .sla import sla_sparse_attention as _sla_sparse_attention
+
+    return _sla_sparse_attention(q, k, v, keep_ratio, block_q, block_k, scale)

@@ -513,21 +513,22 @@ class Cosmos3Scheduler(BaseScheduler):
         return Cosmos3UniPCMultistepScheduler(**kwargs)
 
     def prepare_latents(self, input_info):
-        shape = tuple(input_info.target_shape)
+        shape = tuple(input_info.latent_shape)
+        num_frames = getattr(input_info, "num_frames", None)
+        num_frames = int(self.config.get("num_frames", 1) if num_frames is None else num_frames)
         condition_latents = getattr(input_info, "vision_condition_latents", None)
         condition_frame_indexes = getattr(input_info, "vision_condition_frame_indexes", None)
         if condition_latents is not None:
             shape = tuple(condition_latents.shape)
-            input_info.target_shape = shape
+            input_info.latent_shape = shape
         if not shape:
-            height = int(self.config.get("target_height", 1024))
-            width = int(self.config.get("target_width", 1024))
+            height, width = map(int, self.config.get("size", (1024, 1024)))
             scale = int(self.config.get("vae_scale_factor_spatial", self.config.get("vae_scale_factor", 16)))
             channels = int(self.config.get("latent_channel", 48))
             temporal_scale = int(self.config.get("vae_scale_factor_temporal", 4))
-            frames = (int(self.config.get("target_video_length", 1)) - 1) // temporal_scale + 1
+            frames = (num_frames - 1) // temporal_scale + 1
             shape = (1, channels, frames, height // scale, width // scale)
-            input_info.target_shape = shape
+            input_info.latent_shape = shape
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(int(input_info.seed))
         noise = torch.randn(shape, generator=self.generator, device=AI_DEVICE, dtype=GET_DTYPE())
         self.vision_condition_frame_indexes = None
@@ -554,8 +555,7 @@ class Cosmos3Scheduler(BaseScheduler):
                 sound_dim = int(self.config.get("sound_dim", 64))
                 sound_len = int(self.config.get("sound_latent_length", 0))
                 if sound_len <= 0:
-                    num_frames = int(self.config.get("target_video_length", 189))
-                    fps = float(self.config.get("target_fps", 24.0))
+                    fps = float(self.config.get("fps", 24.0))
                     sampling_rate = int(self.config.get("sound_sampling_rate", 48000))
                     hop_size = int(self.config.get("sound_hop_size", 1920))
                     sound_len = (int(num_frames / fps * sampling_rate) + hop_size - 1) // hop_size

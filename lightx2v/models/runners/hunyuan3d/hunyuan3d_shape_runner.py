@@ -13,6 +13,7 @@ from lightx2v.models.networks.hunyuan3d.model import Hunyuan3DDiTModel
 from lightx2v.models.networks.hunyuan3d.utils import torchvision_fix
 from lightx2v.models.networks.hunyuan3d.utils.checkpoint import load_checkpoint_dict, resolve_ckpt_paths, resolve_model_dir
 from lightx2v.models.runners.default_runner import DefaultRunner
+from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS
 from lightx2v.models.schedulers.hunyuan3d.scheduler import Hunyuan3DShapeScheduler
 from lightx2v.models.video_encoders.hf.hunyuan3d.decoder import Hunyuan3DShapeVAEDecoder
 from lightx2v.server.metrics import monitor_cli
@@ -27,6 +28,10 @@ torch_device_module = getattr(torch, AI_DEVICE)
 @RUNNER_REGISTER("hunyuan3d")
 class Hunyuan3DShapeRunner(DefaultRunner):
     """Image-to-3D-mesh runner for Hunyuan3D-2.1 shape pipeline."""
+
+    supported_request_fields_by_task = {
+        "i23d": (COMMON_REQUEST_FIELDS - {"return_result_tensor"}) | {"image_path"},
+    }
 
     def __init__(self, config):
         super().__init__(config)
@@ -166,7 +171,7 @@ class Hunyuan3DShapeRunner(DefaultRunner):
     def run_main(self):
         latent_shape = (self.inputs["image_tensor"].shape[0], *self.vae_decoder.vae.latent_shape)
         self.scheduler.prepare(
-            seed=getattr(self.input_info, "seed", None),
+            seed=self.input_info.seed,
             batch_size=latent_shape[0],
             latent_shape=latent_shape,
         )

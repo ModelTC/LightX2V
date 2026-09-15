@@ -48,14 +48,13 @@ class BagelScheduler(BaseScheduler):
         self.dts = timesteps[:-1] - timesteps[1:]
         self.timesteps = timesteps[:-1]
 
-    def prepare_vae_latent(self, curr_kvlens, curr_rope, image_sizes, new_token_ids, seed=None):
+    def prepare_vae_latent(self, curr_kvlens, curr_rope, image_sizes, new_token_ids, seed):
         packed_text_ids, packed_text_indexes = list(), list()
         packed_vae_position_ids, packed_vae_token_indexes, packed_init_noises = list(), list(), list()
         packed_position_ids, packed_seqlens, packed_indexes = list(), list(), list()
         packed_key_value_indexes = list()
 
         query_curr = curr = 0
-        seed = int(seed if seed is not None else self.config.get("seed", 42))
         # A CLI/request seed must describe this request, not merely the first
         # request that happened to initialize the scheduler.
         self.generator = torch.Generator(device="cpu").manual_seed(seed)

@@ -581,7 +581,7 @@ class QwenImageScheduler(BaseScheduler):
         if self.latents.shape[0] != 1:
             raise ValueError(f"i2i_denoise_strength currently supports single-image single-output editing only, got output latent batch {self.latents.shape[0]}.")
 
-        shape = input_info.target_shape
+        shape = input_info.latent_shape
         target_height, target_width = shape[-2], shape[-1]
         num_channels_latents = self.latents.shape[-1] // 4
         image_latents = self._resize_i2i_image_latents(image_latents, target_height, target_width, num_channels_latents)
@@ -592,7 +592,7 @@ class QwenImageScheduler(BaseScheduler):
 
     def prepare_latents(self, input_info):
         self.input_info = input_info
-        shape = input_info.target_shape
+        shape = input_info.latent_shape
         # shape: [B, T, C, H, W]
         width, height = shape[-1], shape[-2]
         num_channels_latents = self.config.get("num_channels_latents", 16)

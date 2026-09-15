@@ -95,7 +95,6 @@ def main():
 
     # Build runner and force-init modules (loads model + installs adapters).
     from lightx2v.models.runners.worldmirror.worldmirror_runner import WorldMirrorRunner  # noqa: E402
-    from lightx2v.utils.input_info import init_empty_input_info  # noqa: E402
 
     logger.info("[calib] Building WorldMirrorRunner...")
     runner = WorldMirrorRunner(config)
@@ -116,14 +115,16 @@ def main():
             continue
         logger.info(f"[calib] ({i + 1}/{len(args.scenes)}) scene={scene}")
 
-        input_info = init_empty_input_info("recon")
-        input_info.input_path = scene_path
-        # Send output into a throwaway tmp dir — save_* are all off above
-        # but the runner still wants a writable path.
-        input_info.save_result_path = "/tmp/wm_calib_output"
-
         t0 = time.perf_counter()
-        runner.run_pipeline(input_info)
+        input_info = runner.prepare_request(
+            {
+                "input_path": scene_path,
+                # Send output into a throwaway tmp dir — save_* are all off above
+                # but the runner still wants a writable path.
+                "save_result_path": "/tmp/wm_calib_output",
+            }
+        )
+        runner.run_request(input_info)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         logger.info(f"[calib]   done in {time.perf_counter() - t0:.1f}s")

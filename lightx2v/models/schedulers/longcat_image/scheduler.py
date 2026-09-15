@@ -309,9 +309,8 @@ class LongCatImageScheduler(BaseScheduler):
     def prepare_latents(self, input_info):
         """Prepare random latents for denoising."""
         self.input_info = input_info
-        shape = input_info.target_shape
-        # target_shape is already in latent space: (B, C, H, W)
-        # where C=16 (VAE latent channels), H and W are latent dimensions
+        shape = input_info.latent_shape
+        # C=16 (VAE latent channels); H and W are latent dimensions.
         vae_latent_channels = shape[1]  # 16
         latent_height = shape[-2]
         latent_width = shape[-1]

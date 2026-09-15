@@ -23,6 +23,5 @@ echo "Service stopped"
 
 # {
 #   "prompt": "a beautiful sunset over the ocean",
-#   "aspect_ratio": "16:9",
-#   "infer_steps": 50
+#   "aspect_ratio": "16:9"
 # }

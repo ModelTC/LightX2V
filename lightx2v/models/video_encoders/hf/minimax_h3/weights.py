@@ -30,6 +30,11 @@ import torch
 import torch.nn as nn
 from safetensors import safe_open
 
+from lightx2v.models.video_encoders.hf.minimax_h3.fp8_encoder_conv_policy import (
+    FP8_ENCODER_CONV_PROFILE_METADATA_KEY,
+    FP8_ENCODER_CONV_WEIGHT_QMAX_METADATA_KEY,
+)
+
 
 @dataclass(frozen=True)
 class SafetensorsSubsetReport:
@@ -37,6 +42,15 @@ class SafetensorsSubsetReport:
     files: tuple[Path, ...]
     loaded_keys: tuple[str, ...]
     ignored_keys: int
+
+
+@dataclass(frozen=True)
+class Fp8EncoderConvCheckpointInfo:
+    """FP8 Conv3D weights and optional numerical constraints in a checkpoint."""
+
+    quantized_module_names: tuple[str, ...]
+    checkpoint_profile: str | None
+    weight_qmax: float | None
 
 
 def _component_files(component_dir: str | Path) -> tuple[Path, ...]:
@@ -88,6 +102,43 @@ _SAFETENSORS_DTYPES = {
 
 def _expected_specs(module: nn.Module) -> dict[str, tuple[tuple[int, ...], torch.dtype]]:
     return {key: (tuple(value.shape), value.dtype) for key, value in module.state_dict().items()}
+
+
+def inspect_fp8_encoder_conv_checkpoint(
+    checkpoint_path: str | Path,
+) -> Fp8EncoderConvCheckpointInfo | None:
+    """Find quantized H3 Encoder Conv3D weights without loading them."""
+
+    checkpoint_path = Path(checkpoint_path)
+    if not checkpoint_path.is_file():
+        return None
+    with safe_open(checkpoint_path, framework="pt", device="cpu") as checkpoint:
+        metadata = checkpoint.metadata() or {}
+        checkpoint_profile = metadata.get(FP8_ENCODER_CONV_PROFILE_METADATA_KEY)
+        try:
+            weight_qmax = float(metadata[FP8_ENCODER_CONV_WEIGHT_QMAX_METADATA_KEY])
+        except (KeyError, TypeError, ValueError):
+            weight_qmax = None
+
+        keys = set(checkpoint.keys())
+        quantized_module_names = []
+        scale_keys = sorted(key for key in keys if key.startswith("encoder.") and key.endswith(".weight_scale"))
+        for scale_key in scale_keys:
+            weight_key = scale_key.removesuffix("_scale")
+            if weight_key not in keys:
+                raise KeyError(f"MiniMax-H3 FP8 Encoder Conv3D checkpoint is missing {weight_key!r}")
+            weight = checkpoint.get_slice(weight_key)
+            if len(weight.get_shape()) != 5 or str(weight.get_dtype()) != "F8_E4M3":
+                raise TypeError(f"MiniMax-H3 FP8 Encoder Conv3D weight {weight_key!r} must be 5D float8_e4m3fn")
+            module_name = weight_key.removeprefix("encoder.").removesuffix(".weight")
+            quantized_module_names.append(module_name)
+    if not quantized_module_names:
+        return None
+    return Fp8EncoderConvCheckpointInfo(
+        tuple(quantized_module_names),
+        checkpoint_profile,
+        weight_qmax,
+    )
 
 
 def validate_safetensors_subset(module: nn.Module, component_dir: str | Path) -> SafetensorsSubsetReport:

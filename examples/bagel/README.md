@@ -48,7 +48,7 @@ python -m lightx2v.infer \
 
 ## Shape Options
 
-`target_shape` has priority over `aspect_ratio`. It is `[H W]`, must contain positive integers, and each dimension must be divisible by BAGEL latent downsample.
+`size` has priority over `aspect_ratio`. It is `[H W]`, must contain positive integers, and each dimension must be divisible by BAGEL latent downsample.
 
 Supported `aspect_ratio` presets:
 
@@ -69,7 +69,7 @@ python -m lightx2v.infer \
   --model_path /path/to/BAGEL-7B-MoT \
   --config_json configs/bagel/bagel_t2i.json \
   --prompt "A glass greenhouse in a snowy garden" \
-  --target_shape 576 1024 \
+  --size 576 1024 \
   --save_result_path save_results/bagel_t2i_576x1024.png \
   --seed 42
 ```
@@ -99,7 +99,7 @@ python -m lightx2v.infer \
   --seed 42
 ```
 
-For I2I, `target_shape [H W]` overrides the automatic size. Without `target_shape`, LightX2V preserves the input aspect ratio, limits the long edge to 1024, and aligns both dimensions to BAGEL latent downsample. `aspect_ratio` is ignored for I2I to avoid changing the input image shape unexpectedly.
+For I2I, `size [H W]` overrides the automatic size. Without `size`, LightX2V preserves the input aspect ratio, limits the long edge to 1024, and aligns both dimensions to BAGEL latent downsample. `aspect_ratio` is ignored for I2I to avoid changing the input image shape unexpectedly.
 
 Target shape example:
 
@@ -111,7 +111,7 @@ python -m lightx2v.infer \
   --config_json configs/bagel/bagel_i2i.json \
   --image_path assets/inputs/imgs/img_0.jpg \
   --prompt "Make it look like a watercolor illustration." \
-  --target_shape 576 1024 \
+  --size 576 1024 \
   --save_result_path save_results/bagel_i2i_576x1024.png \
   --seed 42
 ```
@@ -125,7 +125,7 @@ Supported:
 - PNG saving
 - `seed`
 - T2I `aspect_ratio`
-- `target_shape`
+- `size`
 - service in-memory image return through `return_result_tensor=True`
 
 Not supported:

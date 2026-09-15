@@ -11,6 +11,11 @@ try:
 except ImportError:
     magi_register_custom_op = None
 
+from lightx2v.common.ops.mm.fp8_f16_accum import (
+    fp8_f16_accum_linear,
+    fp8_f16_accum_mm_available,
+    validate_fp8_f16_accum_qmax,
+)
 from lightx2v.common.ops.mm.sgl_kernel import sgl_fp8_scaled_mm, sgl_fp8_scaled_mm_meta
 from lightx2v.common.ops.mm.triton_kernels import (
     fp8_gemm_bias_triton,
@@ -66,6 +71,36 @@ try:
     import comfy_kitchen
 except ImportError:
     comfy_kitchen = None
+
+
+if comfy_kitchen is not None:
+    # Keep comfy-kitchen's DLPack implementation opaque to FakeTensor tracing.
+    @torch.library.custom_op(
+        "lightx2v::int8_convrot_linear",
+        mutates_args=(),
+        device_types="cuda",
+    )
+    def _int8_convrot_linear(
+        input_tensor: torch.Tensor,
+        weight: torch.Tensor,
+        weight_scale: torch.Tensor,
+        bias: torch.Tensor | None,
+        out_dtype: torch.dtype,
+        convrot_groupsize: int,
+    ) -> torch.Tensor:
+        return comfy_kitchen.int8_linear(
+            input_tensor,
+            weight,
+            weight_scale,
+            bias,
+            out_dtype=out_dtype,
+            convrot=True,
+            convrot_groupsize=convrot_groupsize,
+        )
+
+    @_int8_convrot_linear.register_fake
+    def _int8_convrot_linear_fake(input_tensor, weight, weight_scale, bias, out_dtype, convrot_groupsize):
+        return input_tensor.new_empty((*input_tensor.shape[:-1], weight.shape[0]), dtype=out_dtype)
 
 
 if magi_register_custom_op is not None and sgl_kernel is not None:
@@ -1842,14 +1877,13 @@ class MMWeightWint8ConvRot(MMWeightQuantTemplate):
         if input_tensor.shape[-1] % self._convrot_groupsize != 0:
             raise ValueError(f"INT8 ConvRot requires input width divisible by {self._convrot_groupsize}, got {input_tensor.shape[-1]}")
 
-        output_tensor = comfy_kitchen.int8_linear(
+        output_tensor = _int8_convrot_linear(
             input_tensor.contiguous(),
             self.weight.contiguous(),
             self.weight_scale.contiguous(),
             self._get_actual_bias(),
-            out_dtype=self.infer_dtype,
-            convrot=True,
-            convrot_groupsize=self._convrot_groupsize,
+            self.infer_dtype,
+            self._convrot_groupsize,
         )
         if self.has_lora_branch:
             output_tensor = output_tensor + self.apply_lora(input_tensor)
@@ -1972,6 +2006,33 @@ class MMWeightWfp8channelAfp8channeldynamicSgl(MMWeightQuantTemplate):
                 self.infer_dtype,
                 self._get_actual_bias(),
             )
+        if self.has_lora_branch:
+            return output_tensor + self.apply_lora(input_tensor)
+        return output_tensor
+
+
+@MM_WEIGHT_REGISTER("fp8-f16-accum")
+class MMWeightWfp8channelAfp8channelF16Accum(MMWeightWfp8channelAfp8channeldynamicSgl):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fp8_activation_qmax = None
+
+    def enable_fp8_f16_accum(self, activation_qmax):
+        activation_qmax = validate_fp8_f16_accum_qmax(activation_qmax)
+        if fp8_f16_accum_mm_available():
+            self.fp8_activation_qmax = activation_qmax
+
+    def apply(self, input_tensor):
+        if self.fp8_activation_qmax is None:
+            return super().apply(input_tensor)
+
+        output_tensor = fp8_f16_accum_linear(
+            input_tensor,
+            self.weight,
+            self.weight_scale,
+            self._get_actual_bias(),
+            self.fp8_activation_qmax,
+        )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)
         return output_tensor

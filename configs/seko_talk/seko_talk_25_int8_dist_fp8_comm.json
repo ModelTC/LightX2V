@@ -1,9 +1,9 @@
 {
     "infer_steps": 2,
-    "target_fps": 16,
+    "fps": 16,
     "video_duration": 5,
     "audio_sr": 16000,
-    "target_video_length": 81,
+    "num_frames": 81,
     "self_attn_1_type": "spas_sage_attn3",
     "cross_attn_1_type": "sage_attn2",
     "cross_attn_2_type": "sage_attn2",

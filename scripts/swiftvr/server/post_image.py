@@ -6,8 +6,8 @@ if __name__ == "__main__":
 
     message = {
         "image_path": "path/to/test.png",
-        # Choose one output-size option: sr_ratio scales both dimensions; target_shape sets [height, width].
-        # "target_shape": [1440, 2520],
+        # Choose one output-size option: sr_ratio scales both dimensions; size sets [height, width].
+        # "size": [1440, 2520],
         "sr_ratio": 2,
         "save_result_path": "path/to/output.png",
     }

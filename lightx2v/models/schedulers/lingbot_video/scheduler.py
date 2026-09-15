@@ -54,7 +54,7 @@ class LingBotVideoScheduler(WanScheduler):
         return values
 
     def prepare(self, input_info):
-        super().prepare(int(input_info.seed), input_info.target_shape)
+        super().prepare(int(input_info.seed), input_info.latent_shape)
 
     def set_timesteps(self, infer_steps=None, device=None, sigmas=None, mu=None, shift=None):
         if self.distilled_sigma_values is None:

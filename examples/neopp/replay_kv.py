@@ -1,5 +1,4 @@
 import argparse
-import json
 
 import torch.distributed as dist
 
@@ -13,13 +12,10 @@ parser.add_argument("--cond_kv", required=True)
 parser.add_argument("--uncond_kv")
 parser.add_argument("--index_offset_cond", type=int, required=True)
 parser.add_argument("--index_offset_uncond", type=int)
-parser.add_argument("--seed", type=int)
-parser.add_argument("--target_shape", type=int, nargs=2, required=True, metavar=("HEIGHT", "WIDTH"))
+parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--size", type=int, nargs=2, required=True, metavar=("HEIGHT", "WIDTH"))
 parser.add_argument("--save_result_path", required=True)
 args = parser.parse_args()
-
-with open(args.config_json, "r") as f:
-    config = json.load(f)
 
 pipe = LightX2VPipeline(
     model_path=args.model_path,
@@ -37,10 +33,9 @@ pipe.runner.set_inference_params(
     index_offset_uncond=args.index_offset_uncond,
     **inference_params,
 )
-seed = args.seed if args.seed is not None else config.get("seed")
 pipe.generate(
-    seed=42 if seed is None else seed,
-    target_shape=args.target_shape,
+    seed=args.seed,
+    size=args.size,
     save_result_path=args.save_result_path,
 )
 

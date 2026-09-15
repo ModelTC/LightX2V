@@ -81,13 +81,13 @@ def build_sync_payload(args: argparse.Namespace, presigned_url: str = "") -> Dic
     payload: Dict[str, Any] = {
         "prompt": args.prompt,
         "negative_prompt": args.negative_prompt,
-        "infer_steps": args.infer_steps,
         "seed": args.seed,
         "aspect_ratio": args.aspect_ratio,
         "save_result_path": args.save_result_path,
     }
-    if args.target_shape:
-        payload["target_shape"] = args.target_shape
+    payload = {key: value for key, value in payload.items() if value is not None}
+    if args.size is not None:
+        payload["size"] = args.size
     if presigned_url:
         payload["presigned_url"] = presigned_url
     return payload
@@ -176,12 +176,11 @@ def main() -> None:
     parser.add_argument("--order", type=str, default="alternate", choices=["alternate", "client_first", "server_first"])
 
     parser.add_argument("--prompt", type=str, required=True, help="Prompt text")
-    parser.add_argument("--negative_prompt", type=str, default="", help="Negative prompt text")
-    parser.add_argument("--infer_steps", type=int, default=30, help="Inference steps")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--aspect_ratio", type=str, default="16:9", help="Aspect ratio")
-    parser.add_argument("--target_shape", type=int, nargs="+", default=None, help="Target shape, e.g. 1536 2752")
-    parser.add_argument("--save_result_path", type=str, default="", help="Server-side save_result_path")
+    parser.add_argument("--negative_prompt", type=str, default=None, help="Negative prompt text")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--aspect_ratio", type=str, default=None, help="Aspect ratio")
+    parser.add_argument("--size", type=int, nargs="+", default=None, help="Target shape, e.g. 1536 2752")
+    parser.add_argument("--save_result_path", type=str, default=None, help="Server-side save_result_path")
     parser.add_argument("--timeout_seconds", type=int, default=600)
     parser.add_argument("--poll_interval_seconds", type=float, default=0.5)
 
@@ -217,8 +216,8 @@ def main() -> None:
         raise ValueError("--warmup_runs must be >= 0")
     if args.presign_expires <= 0:
         raise ValueError("--presign_expires must be > 0")
-    if args.target_shape is not None and len(args.target_shape) < 2:
-        raise ValueError("--target_shape must provide at least 2 integers")
+    if args.size is not None and len(args.size) < 2:
+        raise ValueError("--size must provide at least 2 integers")
 
     bucket = args.s3_bucket or os.getenv("S3_BUCKET", "")
     if not bucket:

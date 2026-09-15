@@ -88,15 +88,8 @@ class Flux2Scheduler(BaseScheduler):
         else:
             logger.info(f"Generator is not None, using existing generator for latents")
 
-        if hasattr(input_info, "latent_image_ids"):
-            self.latent_image_ids = input_info.latent_image_ids
-        else:
-            self.latent_image_ids = None
-
-        if hasattr(input_info, "txt_ids"):
-            self.txt_ids = input_info.txt_ids
-        else:
-            self.txt_ids = None
+        self.latent_image_ids = input_info.latent_image_ids
+        self.txt_ids = input_info.txt_ids
 
         self.latents = randn_tensor(input_info.latent_shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
 

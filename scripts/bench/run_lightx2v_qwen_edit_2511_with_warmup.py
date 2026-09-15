@@ -30,7 +30,7 @@ prompt = "Transform into anime style"
 
 negative_prompt = " "
 
-target_shape = [1024, 1024]
+size = [1024, 1024]
 
 # https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/cat.png
 image_path = "/path/to/cat.png"
@@ -41,7 +41,7 @@ save_result_path = f"{lightx2v_path}/save_results/{model_cls}_{task}_{ts}.png"
 pipe.generate(
     seed=seed,
     prompt=prompt,
-    target_shape=target_shape,
+    size=size,
     negative_prompt=negative_prompt,
     image_path=image_path,
     save_result_path=save_result_path,
@@ -51,7 +51,7 @@ pipe.generate(
 pipe.generate(
     seed=seed,
     prompt=prompt,
-    target_shape=target_shape,
+    size=size,
     negative_prompt=negative_prompt,
     save_result_path=save_result_path,
     image_path=image_path,

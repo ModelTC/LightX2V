@@ -53,14 +53,13 @@ bash scripts/self_forcing/run_wan_t2v_sf.sh
 
 - `lightx2v_path`：你的 LightX2V 仓库路径
 - `model_path`：原始 BF16 `Wan2.1-T2V-1.3B` 模型目录路径
-- `sf_model_path`：`self_forcing_dmd.pt` 的路径（从 `gdhe17/Self-Forcing` 下载）
+- 配置文件中的 `dit_original_ckpt`：`self_forcing_dmd.pt` 的路径（从 `gdhe17/Self-Forcing` 下载）
 
 该脚本实际会执行：
 
 - `python -m lightx2v.infer`
 - `--model_cls wan2.1_sf`：使用 Wan2.1 的 Self-Forcing pipeline
 - `--task t2v`：文生视频
-- `--sf_model_path`：Self-Forcing checkpoint
 - `--config_json configs/self_forcing/wan_t2v_sf.json`：Self-Forcing 的运行配置
 
 注意：`configs/self_forcing/wan_t2v_sf.json` 中默认 `enable_cfg=false`。

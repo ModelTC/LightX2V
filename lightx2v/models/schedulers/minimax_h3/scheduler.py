@@ -18,10 +18,10 @@ from lightx2v.models.schedulers.scheduler import BaseScheduler
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
-def _make_schedule(num_grid_points: int, shift: float, device) -> tuple[torch.Tensor, torch.Tensor]:
-    if num_grid_points < 2:
-        raise ValueError(f"MiniMax-H3 infer_steps must be at least 2, got {num_grid_points}")
-    base = torch.linspace(1.0, 0.0, num_grid_points, dtype=torch.float32, device="cpu")
+def _make_schedule(infer_steps: int, shift: float, device) -> tuple[torch.Tensor, torch.Tensor]:
+    if infer_steps < 1:
+        raise ValueError(f"MiniMax-H3 infer_steps must be at least 1, got {infer_steps}")
+    base = torch.linspace(1.0, 0.0, infer_steps + 1, dtype=torch.float32, device="cpu")
     sigmas = shift * base / (1.0 + (shift - 1.0) * base)
     sigmas = torch.unique_consecutive(sigmas).to(device)
     return sigmas, 1.0 - sigmas[:-1]
@@ -43,7 +43,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
 
     def __init__(self, config):
         super().__init__(config)
-        self.num_grid_points = int(config["infer_steps"])
+        infer_steps = int(config["infer_steps"])
         self.video_shift = float(config.get("video_flow_shift", 12.0))
         self.audio_shift = float(config.get("audio_flow_shift", 3.0))
         self.step_update = config.get("h3_step_update", "reference_blend")
@@ -51,12 +51,10 @@ class MiniMaxH3Scheduler(BaseScheduler):
             raise ValueError(f"MiniMax-H3 h3_step_update must be 'reference_blend' or 'training_euler', got {self.step_update!r}")
         if self.video_shift <= 0 or self.audio_shift <= 0:
             raise ValueError("MiniMax-H3 flow shifts must be positive")
-        self.video_sigmas, self.video_timesteps = _make_schedule(self.num_grid_points, self.video_shift, AI_DEVICE)
-        self.audio_sigmas, self.audio_timesteps = _make_schedule(self.num_grid_points, self.audio_shift, AI_DEVICE)
+        self.video_sigmas, self.video_timesteps = _make_schedule(infer_steps, self.video_shift, AI_DEVICE)
+        self.audio_sigmas, self.audio_timesteps = _make_schedule(infer_steps, self.audio_shift, AI_DEVICE)
         if self.video_timesteps.numel() != self.audio_timesteps.numel():
             raise ValueError("video and audio schedules collapsed to different step counts")
-        # The user-facing value counts sigma grid points including terminal 0.
-        # LightX2V's loop count is the number of model evaluations.
         self.infer_steps = int(self.video_timesteps.numel())
         self.video_latents = None
         self.audio_latents = None
