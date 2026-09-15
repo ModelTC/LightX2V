@@ -151,10 +151,11 @@ def test_fused_norm_rope_matches_separate(device, dtype, shape, low_precision, k
         op = sycl_kernels.minimax_h3_qkv_norm_rope
     # Exercise padded token strides for both packed QKV and the caches.
     packed = torch.randn(tokens, 3 * heads * dim + 16, device=device, dtype=dtype)[:, : 3 * heads * dim]
+    inputs = packed.chunk(3, -1)
     phases = torch.randn(tokens, rotary + 16, device=device)
     cos, sin = (phases.cos()[:, :rotary], phases.sin()[:, :rotary])
     qw, kw = (torch.randn(dim, device=device, dtype=dtype) for _ in range(2))
-    args = (packed, qw, kw, cos, sin, 1e-5, 1e-4)
+    args = (*inputs, qw, kw, cos, sin, 1e-5, 1e-4)
     actual = op(*args, low_precision) if kernel == "esimd" else op(*args)
     expected = list(packed.chunk(3, -1))
     expected = [x.unflatten(-1, (heads, dim)) for x in expected]
@@ -191,8 +192,12 @@ def test_fused_norm_rope_fake_shapes():
         packed = torch.empty(9, 3 * 28 * 128)
         weight = torch.empty(128)
         cache = torch.empty(9, 96)
-        outputs = qkv_ops.split_qkv_norm_rope(packed, weight, weight, cache, cache, 1e-5, 1e-4)
+        outputs = qkv_ops.split_qkv_norm_rope(*packed.chunk(3, -1), weight, weight, cache, cache, 1e-5, 1e-4)
         assert all(x.shape == (9, 28, 128) and x.is_contiguous() for x in outputs)
+
+
+def test_unknown_norm_rope_backend_returns_none():
+    assert qkv_ops.try_split_qkv_norm_rope(None, None, None, None, None, None, None, backend="missing") is None
 
 
 @pytest.mark.parametrize("device", ["cuda", "xpu"])
@@ -207,6 +212,7 @@ def test_fused_norm_rope_dispatch(device, rope_backend, norm_rope_backend, monke
 
     rope = (TorchRealRope if rope_backend == "torch" else MiniMaxH3XpuRope)(layout="split_half", compute_dtype=torch.float32)
     packed = torch.randn(17, 3 * 7 * 128, device=device, dtype=torch.bfloat16)
+    inputs = packed.chunk(3, -1)
     norms = [SimpleNamespace(weight=torch.randn(128, device=device, dtype=packed.dtype), eps=eps, sensitive_layer_dtype=packed.dtype, infer_dtype=packed.dtype) for eps in (1e-5, 1e-4)]
     phases = torch.randn(17, 96, device=device)
     freqs = (phases.cos(), phases.sin())
@@ -221,17 +227,20 @@ def test_fused_norm_rope_dispatch(device, rope_backend, norm_rope_backend, monke
             return original(*args)
 
         monkeypatch.setattr(sycl_kernels, "minimax_h3_qkv_norm_rope", tracked)
-    actual = qkv_ops.try_split_qkv_norm_rope(packed, *norms, rope, freqs, backend=norm_rope_backend)
+    actual = qkv_ops.try_split_qkv_norm_rope(*inputs, *norms, rope, freqs, backend=norm_rope_backend)
+    if norm_rope_backend not in qkv_ops.QKV_NORM_ROPE_REGISTER:
+        assert actual is None
+        return
     assert actual is not None
     if device == "xpu" and norm_rope_backend == "intel_xpu":
         assert calls == [True]
         with monkeypatch.context() as native_only:
             native_only.setattr(qkv_ops, "triton", None)
-            native = qkv_ops.try_split_qkv_norm_rope(packed, *norms, rope, freqs, backend=norm_rope_backend)
+            native = qkv_ops.try_split_qkv_norm_rope(*inputs, *norms, rope, freqs, backend=norm_rope_backend)
             assert native is not None and calls == [True, True]
         calls.pop()
         monkeypatch.setattr(sycl_kernels, "has_minimax_h3_qkv_norm_rope", lambda: False)
-        fallback = qkv_ops.try_split_qkv_norm_rope(packed, *norms, rope, freqs, backend=norm_rope_backend)
+        fallback = qkv_ops.try_split_qkv_norm_rope(*inputs, *norms, rope, freqs, backend=norm_rope_backend)
         assert fallback is not None and calls == [True]
     q, k, v = (x.unflatten(-1, (7, 128)) for x in packed.chunk(3, -1))
     q = torch.nn.functional.rms_norm(q.float(), (128,), norms[0].weight.float(), norms[0].eps).to(packed.dtype)
@@ -241,10 +250,10 @@ def test_fused_norm_rope_dispatch(device, rope_backend, norm_rope_backend, monke
     for a, e in zip(actual, (q, k, v)):
         torch.testing.assert_close(a, e, atol=2e-3, rtol=1e-2)
     norms[0].sensitive_layer_dtype = torch.float32
-    assert qkv_ops.try_split_qkv_norm_rope(packed, *norms, rope, freqs) is None
+    assert qkv_ops.try_split_qkv_norm_rope(*inputs, *norms, rope, freqs) is None
     norms[0].sensitive_layer_dtype = packed.dtype
     rope.layout = "interleaved"
-    assert qkv_ops.try_split_qkv_norm_rope(packed, *norms, rope, freqs) is None
+    assert qkv_ops.try_split_qkv_norm_rope(*inputs, *norms, rope, freqs) is None
 
 
 @pytest.mark.skipif(not torch.xpu.is_available(), reason="XPU is unavailable")
@@ -257,10 +266,10 @@ def test_esimd_norm_rope_meta_and_validation():
         packed = torch.empty(9, 3 * 7 * 128, device="xpu")
         weight = torch.empty(128, device="xpu")
         cache = torch.empty(9, 96, device="xpu")
-        outputs = sycl_kernels.minimax_h3_qkv_norm_rope(packed, weight, weight, cache, cache, 1e-5, 1e-5)
+        outputs = sycl_kernels.minimax_h3_qkv_norm_rope(*packed.chunk(3, -1), weight, weight, cache, cache, 1e-5, 1e-5)
         assert all(x.shape == (9, 7, 128) and x.is_contiguous() for x in outputs)
     packed = torch.empty(1, 384, device="xpu")
     weight = torch.empty(128, device="xpu")
     cache = torch.empty(1, 128, device="xpu")
     with pytest.raises(RuntimeError, match="cos/sin must have shape"):
-        sycl_kernels.minimax_h3_qkv_norm_rope(packed, weight, weight, cache, cache, 1e-5, 1e-5)
+        sycl_kernels.minimax_h3_qkv_norm_rope(*packed.chunk(3, -1), weight, weight, cache, cache, 1e-5, 1e-5)

@@ -157,12 +157,12 @@ def _load_minimax_h3_qkv_norm():
     _minimax_h3_qkv_norm_loaded = True
 
 
-def minimax_h3_qkv_norm_rope(packed, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope=False):
-    """Fused XPU QKV split, RMSNorm and 96-dimensional split-half RoPE (head_dim=128)."""
+def minimax_h3_qkv_norm_rope(q, k, v, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope=False):
+    """Fused XPU Q/K RMSNorm and 96-dimensional split-half RoPE (head_dim=128)."""
     import torch
 
     _load_minimax_h3_qkv_norm()
-    return torch.ops.sycl_kernels_minimax_h3_qkv.qkv_norm_rope(packed, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope)
+    return torch.ops.sycl_kernels_minimax_h3_qkv.qkv_norm_rope(q, k, v, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope)
 
 
 def has_minimax_h3_qkv_norm_rope():

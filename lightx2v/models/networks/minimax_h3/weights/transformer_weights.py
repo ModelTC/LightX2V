@@ -54,14 +54,14 @@ def _rms(config, name, eps, create_cuda_buffer=False):
 class MiniMaxH3AttentionWeights(WeightModule):
     def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
-        self.use_fused_qkv_attn = bool(config.get("use_fused_qkv_attn", False))
+        self.use_fused_qkv = bool(config.get("use_fused_qkv", False))
         self.add_module("to_q", _linear(config, f"{prefix}.to_q", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         self.add_module("to_k", _linear(config, f"{prefix}.to_k", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         self.add_module("to_v", _linear(config, f"{prefix}.to_v", create_cuda_buffer=create_cuda_buffer, tp_split="col"))
         # This is deliberately not registered as a child module: there is no
         # fused tensor in the released checkpoint. The checkpoint-backed
         # projections become views of its shared storage after loading.
-        self.to_qkv = _linear(config, f"{prefix}.to_qkv", create_cuda_buffer=create_cuda_buffer, tp_split="col") if self.use_fused_qkv_attn else None
+        self.to_qkv = _linear(config, f"{prefix}.to_qkv", create_cuda_buffer=create_cuda_buffer, tp_split="col") if self.use_fused_qkv else None
         self._qkv_storage = FusedQKVStorage(tuple(unwrap_tp_weight(module) for module in (self.to_q, self.to_k, self.to_v)), unwrap_tp_weight(self.to_qkv)) if self.to_qkv is not None else None
         qk_eps = float(config.get("qk_norm_eps", 1e-5))
         self.add_module(

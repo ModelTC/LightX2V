@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lightx2v_kernel_xpu/python"))
@@ -62,66 +63,28 @@ def main():
     for tokens in args.tokens:
         for heads in args.heads:
             packed = torch.randn(tokens, 3 * heads * dim, device=device, dtype=dtype)
+            q, k, v = packed.chunk(3, -1)
             qw = torch.randn(dim, device=device, dtype=dtype)
             kw = torch.randn(dim, device=device, dtype=dtype)
             phases = torch.randn(tokens, rotary, device=device, dtype=torch.float32)
             cos, sin = phases.cos(), phases.sin()
-            q0, k0, v0 = (torch.empty(tokens, heads, dim, device=device, dtype=dtype) for _ in range(3))
-            fq, fk, fv = (torch.empty_like(q0) for _ in range(3))
 
-            def separate():
-                qkv_ops._split_qkv_norm_kernel[(tokens * heads, 3)](
-                    packed,
-                    qw,
-                    kw,
-                    q0,
-                    k0,
-                    v0,
-                    HEADS=heads,
-                    DIM=dim,
-                    ROW_STRIDE=packed.stride(0),
-                    Q_EPS=1e-5,
-                    K_EPS=1e-5,
-                    BLOCK=128,
-                    num_warps=4,
-                )
-                return (
-                    sycl_kernels.minimax_h3_rope_cached(q0, cos, sin),
-                    sycl_kernels.minimax_h3_rope_cached(k0, cos, sin),
-                )
+            def separate(packed=packed, heads=heads, qw=qw, kw=kw, cos=cos, sin=sin):
+                q, k, v = (part.unflatten(-1, (heads, dim)) for part in packed.chunk(3, -1))
+                q = F.rms_norm(q.float(), (dim,), qw.float(), 1e-5).to(dtype)
+                k = F.rms_norm(k.float(), (dim,), kw.float(), 1e-5).to(dtype)
+                return sycl_kernels.minimax_h3_rope_cached(q, cos, sin), sycl_kernels.minimax_h3_rope_cached(k, cos, sin), v
 
-            def fused():
+            def fused(q=q, k=k, v=v, qw=qw, kw=kw, cos=cos, sin=sin):
                 if args.fused_backend == "intel_xpu":
-                    return sycl_kernels.minimax_h3_qkv_norm_rope(packed, qw, kw, cos, sin, 1e-5, 1e-5, True)
-                qkv_ops._split_qkv_norm_rope_kernel[(tokens * heads, 3)](
-                    packed,
-                    qw,
-                    kw,
-                    cos,
-                    sin,
-                    fq,
-                    fk,
-                    fv,
-                    HEADS=heads,
-                    DIM=dim,
-                    ROTARY=rotary,
-                    STRIDE=packed.stride(0),
-                    COS_STRIDE=cos.stride(0),
-                    SIN_STRIDE=sin.stride(0),
-                    Q_EPS=1e-5,
-                    K_EPS=1e-5,
-                    LOW_PRECISION_ROPE=True,
-                    BLOCK=128,
-                    num_warps=4,
-                    enable_fp_fusion=False,
-                )
-                return fq, fk, fv
+                    return sycl_kernels.minimax_h3_qkv_norm_rope(q, k, v, qw, kw, cos, sin, 1e-5, 1e-5, True)
+                return qkv_ops.split_qkv_norm_rope(q, k, v, qw, kw, cos, sin, 1e-5, 1e-5)
 
             # Compile both variants and validate that the benchmarked kernels agree.
-            q1, k1 = separate()
+            separate_outputs = separate()
             fused_outputs = fused()
             device_api.synchronize()
-            for index, (actual, expected) in enumerate(zip(fused_outputs, (q1, k1, v0))):
+            for index, (actual, expected) in enumerate(zip(fused_outputs, separate_outputs)):
                 if index == 2:
                     torch.testing.assert_close(actual, expected, atol=0, rtol=0)
                 else:

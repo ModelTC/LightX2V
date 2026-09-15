@@ -280,7 +280,7 @@ ESIMD/oneDNN extension, and `sycl_kernels.has_cute_fmha()` returns `False`.
 Enable the optional Triton path in the model config with:
 
 ```json
-{"use_fused_qkv_attn": true, "use_fused_qkv_norm_rope": true}
+{"use_fused_qkv": true, "use_fused_qkv_norm_rope": true}
 ```
 
 This combines Q/K RMSNorm, split-half RoPE, and V copying in one launch on
@@ -291,11 +291,15 @@ retain the separate configured operations. FP16, BF16 and FP32 inputs are
 supported, including partial rotation and padded token strides. The fused
 path preserves the norm output cast and the XPU BF16 RoPE intermediate
 rounding when that backend is active. The Triton path needs no C++ rebuild.
+The two switches are independent: `use_fused_qkv` controls only the QKV
+projection, while `use_fused_qkv_norm_rope` may also be enabled with separate
+Q/K/V projections. The norm/RoPE operator accepts Q, K and V separately, so
+the separate-projection path does not concatenate them first.
 
 To select the native XPU ESIMD kernel, use:
 
 ```json
-{"use_fused_qkv_attn": true, "use_fused_qkv_norm_rope": true, "qkv_norm_rope_type": "intel_xpu"}
+{"use_fused_qkv": true, "use_fused_qkv_norm_rope": true, "qkv_norm_rope_type": "intel_xpu"}
 ```
 
 `qkv_norm_rope_type` accepts `triton` or `intel_xpu` and defaults to `triton`. The ESIMD

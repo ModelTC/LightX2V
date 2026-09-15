@@ -22,9 +22,11 @@ class MiniMaxH3QKVNormRopeCombinedKernel;
 
 template <typename T>
 void launch_qkv_norm_rope_combined(
-        const T* packed, const T* q_weight, const T* k_weight,
+        const T* q_input, const T* k_input, const T* v_input,
+        const T* q_weight, const T* k_weight,
         T* q, T* k, T* v, float q_eps, float k_eps, int64_t tokens,
-        int64_t heads, int64_t row_stride, const c10::Device& device,
+        int64_t heads, int64_t q_stride, int64_t k_stride,
+        int64_t v_stride, const c10::Device& device,
         const float* cos, const float* sin, int64_t cos_stride,
         int64_t sin_stride, bool low_precision) {
     const int64_t rows = tokens * heads;
@@ -54,8 +56,10 @@ void launch_qkv_norm_rope_combined(
 
 #pragma unroll
                 for (int component = 0; component < 2; ++component) {
-                    const T* input = packed + token * row_stride +
-                        (component * heads + head) * kHeadDim;
+                    const T* component_input = component == 0 ? q_input : k_input;
+                    const int64_t component_stride = component == 0 ? q_stride : k_stride;
+                    const T* input = component_input + token * component_stride +
+                        head * kHeadDim;
                     T* output = (component == 0 ? q : k) + row * kHeadDim;
                     simd<float, kHeadDim> values;
 #pragma unroll
@@ -99,13 +103,12 @@ void launch_qkv_norm_rope_combined(
                         simd<T, 32>(values.template select<32, 1>(96)));
                 }
 
-                const T* v_input = packed + token * row_stride +
-                    (2 * heads + head) * kHeadDim;
+                const T* v_source = v_input + token * v_stride + head * kHeadDim;
                 T* v_output = v + row * kHeadDim;
 #pragma unroll
                 for (int block = 0; block < kBlocks; ++block) {
                     block_store<T, kBlockSize>(v_output + block * kBlockSize,
-                        block_load<T, kBlockSize>(v_input + block * kBlockSize));
+                        block_load<T, kBlockSize>(v_source + block * kBlockSize));
                 }
             });
     });
@@ -114,35 +117,42 @@ void launch_qkv_norm_rope_combined(
 }  // namespace
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-minimax_h3_qkv_norm_rope_impl(const torch::Tensor& packed,
-                        const torch::Tensor& q_weight,
-                        const torch::Tensor& k_weight, double q_eps,
-                        double k_eps, const torch::Tensor& cos,
-                        const torch::Tensor& sin, bool low_precision) {
-    TORCH_CHECK(packed.is_xpu() && q_weight.is_xpu() && k_weight.is_xpu(),
-                "packed QKV and norm weights must be XPU tensors");
-    TORCH_CHECK(packed.device() == q_weight.device() &&
-                    packed.device() == k_weight.device(),
-                "packed QKV and norm weights must be on the same XPU device");
-    TORCH_CHECK(packed.dim() == 2 && packed.stride(1) == 1,
-                "packed QKV must be [tokens, 3 * heads * 128] with contiguous channels");
-    TORCH_CHECK(packed.size(1) > 0 && packed.size(1) % (3 * kHeadDim) == 0,
-                "packed QKV width must be a positive multiple of 3 * 128");
+minimax_h3_qkv_norm_rope_impl(const torch::Tensor& q_input,
+                              const torch::Tensor& k_input,
+                              const torch::Tensor& v_input,
+                              const torch::Tensor& q_weight,
+                              const torch::Tensor& k_weight, double q_eps,
+                              double k_eps, const torch::Tensor& cos,
+                              const torch::Tensor& sin, bool low_precision) {
+    TORCH_CHECK(q_input.is_xpu() && k_input.is_xpu() && v_input.is_xpu() &&
+                    q_weight.is_xpu() && k_weight.is_xpu(),
+                "Q/K/V and norm weights must be XPU tensors");
+    TORCH_CHECK(k_input.device() == q_input.device() && v_input.device() == q_input.device() &&
+                    q_weight.device() == q_input.device() && k_weight.device() == q_input.device(),
+                "Q/K/V and norm weights must be on the same XPU device");
+    TORCH_CHECK(q_input.dim() == 2 && k_input.sizes() == q_input.sizes() &&
+                    v_input.sizes() == q_input.sizes() && q_input.stride(1) == 1 &&
+                    k_input.stride(1) == 1 && v_input.stride(1) == 1,
+                "Q/K/V must be equally shaped [tokens, heads * 128] tensors with contiguous channels");
+    TORCH_CHECK(q_input.size(1) > 0 && q_input.size(1) % kHeadDim == 0,
+                "Q/K/V width must be a positive multiple of 128");
     TORCH_CHECK(q_weight.dim() == 1 && q_weight.numel() == kHeadDim &&
                     k_weight.sizes() == q_weight.sizes(),
                 "Q/K RMSNorm weights must have shape [128]");
     TORCH_CHECK(q_weight.is_contiguous() && k_weight.is_contiguous(),
                 "Q/K RMSNorm weights must be contiguous");
-    TORCH_CHECK(packed.scalar_type() == q_weight.scalar_type() &&
-                    packed.scalar_type() == k_weight.scalar_type(),
-                "packed QKV and norm weight dtypes must match");
+    TORCH_CHECK(k_input.scalar_type() == q_input.scalar_type() &&
+                    v_input.scalar_type() == q_input.scalar_type() &&
+                    q_input.scalar_type() == q_weight.scalar_type() &&
+                    q_input.scalar_type() == k_weight.scalar_type(),
+                "Q/K/V and norm weight dtypes must match");
     TORCH_CHECK(std::isfinite(q_eps) && q_eps > 0.0 &&
                     std::isfinite(k_eps) && k_eps > 0.0,
                 "Q/K RMSNorm eps values must be positive and finite");
 
-    const int64_t tokens = packed.size(0);
-    TORCH_CHECK(cos.device() == packed.device() && sin.device() == packed.device(),
-                "cos/sin must be on the same XPU as packed QKV");
+    const int64_t tokens = q_input.size(0);
+    TORCH_CHECK(cos.device() == q_input.device() && sin.device() == q_input.device(),
+                "cos/sin must be on the same XPU as Q/K/V");
     TORCH_CHECK(cos.scalar_type() == torch::kFloat32 && sin.scalar_type() == torch::kFloat32,
                 "cos/sin must be FP32");
     TORCH_CHECK(cos.dim() == 2 && cos.size(0) == tokens && cos.size(1) == 96 && sin.sizes() == cos.sizes(),
@@ -153,40 +163,45 @@ minimax_h3_qkv_norm_rope_impl(const torch::Tensor& packed,
     const float* sin_ptr = sin.data_ptr<float>();
     const int64_t cos_stride = cos.stride(0);
     const int64_t sin_stride = sin.stride(0);
-    const int64_t heads = packed.size(1) / (3 * kHeadDim);
+    const int64_t heads = q_input.size(1) / kHeadDim;
     const auto shape = std::vector<int64_t>{tokens, heads, kHeadDim};
-    auto q = torch::empty(shape, packed.options());
-    auto k = torch::empty(shape, packed.options());
-    auto v = torch::empty(shape, packed.options());
+    auto q = torch::empty(shape, q_input.options());
+    auto k = torch::empty(shape, q_input.options());
+    auto v = torch::empty(shape, q_input.options());
     if (tokens == 0) return {q, k, v};
 
-    if (packed.scalar_type() == torch::kBFloat16) {
+    if (q_input.scalar_type() == torch::kBFloat16) {
         launch_qkv_norm_rope_combined<bf16>(
-            reinterpret_cast<const bf16*>(packed.data_ptr()),
+            reinterpret_cast<const bf16*>(q_input.data_ptr()),
+            reinterpret_cast<const bf16*>(k_input.data_ptr()),
+            reinterpret_cast<const bf16*>(v_input.data_ptr()),
             reinterpret_cast<const bf16*>(q_weight.data_ptr()),
             reinterpret_cast<const bf16*>(k_weight.data_ptr()),
             reinterpret_cast<bf16*>(q.data_ptr()),
             reinterpret_cast<bf16*>(k.data_ptr()),
             reinterpret_cast<bf16*>(v.data_ptr()),
             static_cast<float>(q_eps), static_cast<float>(k_eps), tokens,
-            heads, packed.stride(0), packed.device(), cos_ptr, sin_ptr, cos_stride, sin_stride, low_precision);
-    } else if (packed.scalar_type() == torch::kFloat16) {
+            heads, q_input.stride(0), k_input.stride(0), v_input.stride(0), q_input.device(), cos_ptr, sin_ptr, cos_stride, sin_stride, low_precision);
+    } else if (q_input.scalar_type() == torch::kFloat16) {
         launch_qkv_norm_rope_combined<fp16>(
-            reinterpret_cast<const fp16*>(packed.data_ptr()),
+            reinterpret_cast<const fp16*>(q_input.data_ptr()),
+            reinterpret_cast<const fp16*>(k_input.data_ptr()),
+            reinterpret_cast<const fp16*>(v_input.data_ptr()),
             reinterpret_cast<const fp16*>(q_weight.data_ptr()),
             reinterpret_cast<const fp16*>(k_weight.data_ptr()),
             reinterpret_cast<fp16*>(q.data_ptr()),
             reinterpret_cast<fp16*>(k.data_ptr()),
             reinterpret_cast<fp16*>(v.data_ptr()),
             static_cast<float>(q_eps), static_cast<float>(k_eps), tokens,
-            heads, packed.stride(0), packed.device(), cos_ptr, sin_ptr, cos_stride, sin_stride, low_precision);
-    } else if (packed.scalar_type() == torch::kFloat32) {
+            heads, q_input.stride(0), k_input.stride(0), v_input.stride(0), q_input.device(), cos_ptr, sin_ptr, cos_stride, sin_stride, low_precision);
+    } else if (q_input.scalar_type() == torch::kFloat32) {
         launch_qkv_norm_rope_combined<float>(
-            packed.data_ptr<float>(), q_weight.data_ptr<float>(),
+            q_input.data_ptr<float>(), k_input.data_ptr<float>(), v_input.data_ptr<float>(),
+            q_weight.data_ptr<float>(),
             k_weight.data_ptr<float>(), q.data_ptr<float>(), k.data_ptr<float>(),
             v.data_ptr<float>(), static_cast<float>(q_eps),
-            static_cast<float>(k_eps), tokens, heads, packed.stride(0),
-            packed.device(), cos_ptr, sin_ptr, cos_stride, sin_stride, low_precision);
+            static_cast<float>(k_eps), tokens, heads, q_input.stride(0),
+            k_input.stride(0), v_input.stride(0), q_input.device(), cos_ptr, sin_ptr, cos_stride, sin_stride, low_precision);
     } else {
         TORCH_CHECK(false, "MiniMax-H3 QKV norm supports fp32, fp16, and bf16");
     }
@@ -194,29 +209,30 @@ minimax_h3_qkv_norm_rope_impl(const torch::Tensor& packed,
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-minimax_h3_qkv_norm_rope_xpu(const torch::Tensor& packed, const torch::Tensor& qw,
-                           const torch::Tensor& kw, const torch::Tensor& cos,
-                           const torch::Tensor& sin, double q_eps, double k_eps,
-                           bool low_precision) {
-    return minimax_h3_qkv_norm_rope_impl(packed, qw, kw, q_eps, k_eps, cos, sin, low_precision);
+minimax_h3_qkv_norm_rope_xpu(const torch::Tensor& q, const torch::Tensor& k,
+                             const torch::Tensor& v, const torch::Tensor& qw,
+                             const torch::Tensor& kw, const torch::Tensor& cos,
+                             const torch::Tensor& sin, double q_eps, double k_eps,
+                             bool low_precision) {
+    return minimax_h3_qkv_norm_rope_impl(q, k, v, qw, kw, q_eps, k_eps, cos, sin, low_precision);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-minimax_h3_qkv_norm_meta(const torch::Tensor& packed,
+minimax_h3_qkv_norm_meta(const torch::Tensor& q,
                          const torch::Tensor& q_weight,
                          const torch::Tensor& k_weight, double q_eps,
                          double k_eps) {
-    TORCH_CHECK(packed.dim() == 2 && packed.size(1) % (3 * kHeadDim) == 0,
-                "packed QKV must have shape [tokens, 3 * heads * 128]");
+    TORCH_CHECK(q.dim() == 2 && q.size(1) % kHeadDim == 0,
+                "Q must have shape [tokens, heads * 128]");
     const auto shape = std::vector<int64_t>{
-        packed.size(0), packed.size(1) / (3 * kHeadDim), kHeadDim};
-    return {torch::empty(shape, packed.options()),
-            torch::empty(shape, packed.options()),
-            torch::empty(shape, packed.options())};
+        q.size(0), q.size(1) / kHeadDim, kHeadDim};
+    return {torch::empty(shape, q.options()),
+            torch::empty(shape, q.options()),
+            torch::empty(shape, q.options())};
 }
 
 TORCH_LIBRARY(sycl_kernels_minimax_h3_qkv, m) {
-    m.def("qkv_norm_rope(Tensor packed, Tensor q_weight, Tensor k_weight, Tensor cos, Tensor sin, float q_eps, float k_eps, bool low_precision_rope=False) -> (Tensor, Tensor, Tensor)");
+    m.def("qkv_norm_rope(Tensor q, Tensor k, Tensor v, Tensor q_weight, Tensor k_weight, Tensor cos, Tensor sin, float q_eps, float k_eps, bool low_precision_rope=False) -> (Tensor, Tensor, Tensor)");
 }
 
 TORCH_LIBRARY_IMPL(sycl_kernels_minimax_h3_qkv, XPU, m) {
@@ -224,12 +240,15 @@ TORCH_LIBRARY_IMPL(sycl_kernels_minimax_h3_qkv, XPU, m) {
 }
 
 TORCH_LIBRARY_IMPL(sycl_kernels_minimax_h3_qkv, Meta, m) {
-    m.impl("qkv_norm_rope", [](const torch::Tensor& packed, const torch::Tensor& qw,
+    m.impl("qkv_norm_rope", [](const torch::Tensor& q, const torch::Tensor& k,
+                             const torch::Tensor& v, const torch::Tensor& qw,
                              const torch::Tensor& kw, const torch::Tensor& cos,
                              const torch::Tensor& sin, double q_eps, double k_eps,
                              bool low_precision) {
-        TORCH_CHECK(cos.dim() == 2 && cos.size(0) == packed.size(0) && cos.size(1) == 96 && sin.sizes() == cos.sizes(),
+        TORCH_CHECK(k.sizes() == q.sizes() && v.sizes() == q.sizes(),
+                    "Q/K/V must have matching shapes");
+        TORCH_CHECK(cos.dim() == 2 && cos.size(0) == q.size(0) && cos.size(1) == 96 && sin.sizes() == cos.sizes(),
                     "cos/sin must have shape [tokens, 96]");
-        return minimax_h3_qkv_norm_meta(packed, qw, kw, q_eps, k_eps);
+        return minimax_h3_qkv_norm_meta(q, qw, kw, q_eps, k_eps);
     });
 }
