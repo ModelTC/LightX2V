@@ -635,8 +635,6 @@ def build_qwen_image(
         "num_layers": 60,
         "out_channels": 16,
         "patch_size": 2,
-        "attention_out_dim": 3072,
-        "attention_dim_head": 128,
         "transformer_in_channels": 64,
     }
 

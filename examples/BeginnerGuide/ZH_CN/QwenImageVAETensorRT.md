@@ -151,7 +151,7 @@
 #### 两组数据差异说明
 
 **Encoder 端到端加速更好（1.66x > 独立 1.45x）**：
-- I2I pipeline 中 `resize_mode: "adaptive"` 会将所有输入图像缩放到统一像素总数（`CONDITION_IMAGE_SIZE: 147456`），因此端到端 Encoder 实际编码的是**固定分辨率**，不受测试图像尺寸影响。该固定分辨率恰好是 TRT Multi-Profile 引擎表现较优的档位。
+- Qwen I2I 分别用 `CONDITION_IMAGE_SIZE` 和 `VAE_IMAGE_SIZE` 计算视觉语言编码器与 VAE 的尺寸，保持原图比例并对齐到 32 的倍数。分析加速比时，应对照实际 VAE 输入尺寸和 TensorRT profile。
 - GPU 资源争抢对 PyTorch 动态内存分配影响更大，进一步拉开差距。
 
 **Decoder 端到端加速大打折扣（1.08x < 独立 1.46x）**：

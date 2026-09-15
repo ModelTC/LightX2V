@@ -181,30 +181,13 @@ class LTX2TextEncoder:
     def infer(
         self,
         prompt: str,
-        negative_prompt: str = "",
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Infer text encoder outputs for prompt and negative prompt.
-
-        This is a convenience function that encodes both prompt and negative prompt,
-        and returns the video and audio contexts for both.
-
-        Args:
-            text_encoder: The Gemma text encoder instance.
-            prompt: Positive prompt string.
-            negative_prompt: Negative prompt string (default: empty string).
-
-        Returns:
-            Tuple containing:
-            - v_context_p: Video context for positive prompt
-            - a_context_p: Audio context for positive prompt
-            - v_context_n: Video context for negative prompt
-            - a_context_n: Audio context for negative prompt
-        """
-        contexts = self.encode_text(prompts=[prompt, negative_prompt])
-        context_p, context_n = contexts
-        v_context_p, a_context_p = context_p
-        v_context_n, a_context_n = context_n
+        negative_prompt: str | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        """Return positive and negative video/audio contexts; None skips negative encoding."""
+        prompts = [prompt] if negative_prompt is None else [prompt, negative_prompt]
+        contexts = self.encode_text(prompts=prompts)
+        v_context_p, a_context_p = contexts[0]
+        v_context_n, a_context_n = contexts[1] if negative_prompt is not None else (None, None)
         return v_context_p, a_context_p, v_context_n, a_context_n
 
     def apply_lora(self, lora_configs):

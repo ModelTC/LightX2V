@@ -36,7 +36,7 @@ class BaseTaskRequest(BaseModel):
     task_id: str = Field(default_factory=generate_task_id, description="Task ID (auto-generated)")
     task: Optional[str] = Field(None, description="Required for multi-task runners; single-task services use their only supported task")
     prompt: str = Field("", description="Generation prompt")
-    negative_prompt: str = Field("", description="Negative prompt")
+    negative_prompt: Optional[str] = Field("", description="Negative prompt")
     image_path: str = Field("", description="Base64 encoded image or URL")
     last_frame_path: str = Field("", description="Last frame image path (base64, or local path)")
     image_mask_path: str = Field("", description="Mask image path (supports URL, base64, or local path)")

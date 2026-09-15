@@ -25,8 +25,6 @@
   "h3_step_update": "training_euler",
   "vae_spatial_scale_factor": 16,
   "audio_sampling_rate": 32000,
-  "audio_latents_per_second": 40,
-  "audio_channels": 2,
   "keep_latents_dtype_in_scheduler": true,
   "lora_dynamic_apply": false,
   "lora_configs": [
