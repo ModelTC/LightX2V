@@ -18,6 +18,14 @@ def _warn_fused_qkv_fallback_once():
     logger.warning("Fused QKV projection is unavailable (for example, because LoRA/diff weights are active); falling back to separate Q/K/V projections")
 
 
+@cache
+def _warn_qkv_norm_rope_fallback_once(backend):
+    logger.warning(
+        "Fused QKV Norm/RoPE backend '{}' is unavailable or incompatible with the current inputs; falling back to separate Norm and RoPE operations",
+        backend,
+    )
+
+
 class MiniMaxH3TransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
         self.config = config
@@ -36,10 +44,10 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self.infer_dtype = GET_DTYPE()
         self.use_fused_qkv = bool(config.get("use_fused_qkv", False))
         self.use_fused_qkv_norm_rope = bool(config.get("use_fused_qkv_norm_rope", False))
-        qkv_norm_rope_type = config.get("qkv_norm_rope_type", "triton")
-        if qkv_norm_rope_type not in QKV_NORM_ROPE_REGISTER:
-            raise ValueError(f"Unsupported qkv_norm_rope_type: {qkv_norm_rope_type}")
-        self.qkv_norm_rope = QKV_NORM_ROPE_REGISTER[qkv_norm_rope_type]()
+        self.qkv_norm_rope_type = config.get("qkv_norm_rope_type", "triton")
+        if self.qkv_norm_rope_type not in QKV_NORM_ROPE_REGISTER:
+            raise ValueError(f"Unsupported qkv_norm_rope_type: {self.qkv_norm_rope_type}")
+        self.qkv_norm_rope = QKV_NORM_ROPE_REGISTER[self.qkv_norm_rope_type]()
         if config.get("seq_parallel", False):
             self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
             parallel = config.get("parallel", {})
@@ -97,6 +105,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             # fused backend exists; continue through the ordinary path.
             if fused is not None:
                 return fused
+            _warn_qkv_norm_rope_fallback_once(self.qkv_norm_rope_type)
 
         q = weights.norm_q.apply(q.unflatten(-1, (self.num_heads, self.head_dim)))
         k = weights.norm_k.apply(k.unflatten(-1, (self.num_heads, self.head_dim)))
