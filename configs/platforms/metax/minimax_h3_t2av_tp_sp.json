@@ -24,8 +24,6 @@
   "audio_flow_shift": 3.0,
   "vae_spatial_scale_factor": 16,
   "audio_sampling_rate": 32000,
-  "audio_latents_per_second": 40,
-  "audio_channels": 2,
   "keep_latents_dtype_in_scheduler": true,
   "parallel": {
     "tensor_p_size": 2,

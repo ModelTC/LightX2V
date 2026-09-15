@@ -37,7 +37,7 @@ class HunyuanVideo15Runner(DefaultRunner):
 
     def get_supported_request_fields(self, task):
         supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("video_super_resolution", {}).get("enable_cfg", False):
+        if self.sr_version is not None and self.config_sr["enable_cfg"]:
             supported_request_fields |= {"negative_prompt"}
         return supported_request_fields
 

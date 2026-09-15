@@ -24,11 +24,7 @@
     "max_latent_size_update": 64,
     "i2i_max_image_size": 1024,
     "llm_config_update": {
-        "dtype": "bfloat16",
-        "freeze_und": false,
-        "is_causal": true,
         "layer_module": "Qwen2MoTDecoderLayer",
-        "rope_scaling": null,
-        "sliding_window": null
+        "rope_scaling": null
     }
 }

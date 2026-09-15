@@ -151,7 +151,7 @@ To balance speed and flexibility, we use a **Multi-Profile engine** that bundles
 #### Performance Gap Between Standalone and E2E
 
 **Encoder is faster in E2E (1.66x > standalone 1.45x)**:
-- The I2I pipeline's `resize_mode: "adaptive"` normalizes all input images to a fixed total pixel count (`CONDITION_IMAGE_SIZE: 147456`). Therefore, the E2E Encoder always processes a **fixed resolution** regardless of the test image size. This particular resolution happens to hit a well-optimized TRT Multi-Profile slot.
+- Qwen I2I uses `CONDITION_IMAGE_SIZE` for the vision-language encoder and `VAE_IMAGE_SIZE` for the VAE. Dimensions follow the input aspect ratio and align to multiples of 32. Compare actual VAE input shapes and TensorRT profiles when interpreting speedups.
 - GPU resource contention impacts PyTorch's dynamic memory allocator more than TRT's fixed context, further widening the gap.
 
 **Decoder speedup is significantly diluted in E2E (1.08x < standalone 1.46x)**:
