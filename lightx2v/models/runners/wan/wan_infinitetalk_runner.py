@@ -183,7 +183,7 @@ class InfiniteTalkRunner(WanRunner):
 
         context = self.text_encoders[0].infer([prompt])
         context = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context])
-        if self.config.get("enable_cfg", False):
+        if self.config.get("enable_cfg", False) and self.config.get("enable_text_cfg", True):
             context_null = self.text_encoders[0].infer([input_info.negative_prompt])
             context_null = torch.stack([torch.cat([u, u.new_zeros(self.config["text_len"] - u.size(0), u.size(1))]) for u in context_null])
         else:

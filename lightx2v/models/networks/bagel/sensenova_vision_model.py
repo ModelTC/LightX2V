@@ -75,11 +75,8 @@ class SenseNovaVisionModel(BagelModel):
         text_temperature = float(profile.get("text_temperature", self.config.get("text_temperature", 0.3)))
 
         gen_context = self.init_gen_context()
-        cfg_text_context = deepcopy(gen_context)
-        cfg_img_context = deepcopy(gen_context)
-        self.transformer_infer.gen_context = gen_context
-        self.transformer_infer.cfg_text_context = cfg_text_context
-        self.transformer_infer.cfg_img_context = cfg_img_context
+        cfg_text_context = deepcopy(gen_context) if self.enable_cfg else None
+        cfg_img_context = deepcopy(gen_context) if self.enable_cfg and self.inference_hyper["cfg_img_scale"] > 1.0 else None
 
         size = tuple(getattr(input_info, "size", None) or ())
         image_shape = size if len(size) == 2 else (1024, 1024)
@@ -95,13 +92,16 @@ class SenseNovaVisionModel(BagelModel):
             if think:
                 system_prompt = VLM_THINK_SYSTEM_PROMPT if understanding_output else GEN_THINK_SYSTEM_PROMPT
                 gen_context = self.update_context_text(system_prompt, gen_context)
-                cfg_img_context = self.update_context_text(system_prompt, cfg_img_context)
+                if cfg_img_context is not None:
+                    cfg_img_context = self.update_context_text(system_prompt, cfg_img_context)
 
             for input_term in input_lists:
                 if isinstance(input_term, str):
-                    cfg_text_context = deepcopy(gen_context)
+                    if cfg_text_context is not None:
+                        cfg_text_context = deepcopy(gen_context)
                     gen_context = self.update_context_text(input_term, gen_context)
-                    cfg_img_context = self.update_context_text(input_term, cfg_img_context)
+                    if cfg_img_context is not None:
+                        cfg_img_context = self.update_context_text(input_term, cfg_img_context)
                 elif isinstance(input_term, Image.Image):
                     input_term = vae_transform.resize_transform(pil_img2rgb(input_term))
                     gen_context = self.update_context_image(
@@ -114,7 +114,8 @@ class SenseNovaVisionModel(BagelModel):
                         vit_transform=vit_transform,
                     )
                     image_shape = input_term.size[::-1]
-                    cfg_text_context = deepcopy(gen_context)
+                    if cfg_text_context is not None:
+                        cfg_text_context = deepcopy(gen_context)
                     preprocessed_images.append(input_term)
                 else:
                     raise TypeError(f"Unsupported SenseNova-Vision input type: {type(input_term)}")
@@ -161,39 +162,40 @@ class SenseNovaVisionModel(BagelModel):
         output_packed_seqlens = generation_input["packed_seqlens"].clone()
         self._collapse_generation_batch(generation_input)
 
-        cfg_text_past_key_values = cfg_text_context["past_key_values"]
-        cfg_text_kvlens = cfg_text_context["kv_lens"] + [0] * (num_output_vae - 1)
-        cfg_text_ropes = [cfg_text_context["ropes"][0] + index for index in range(num_output_vae)]
-        generation_input_cfg_text = scheduler.prepare_vae_latent_cfg(
-            curr_kvlens=cfg_text_kvlens,
-            curr_rope=cfg_text_ropes,
-            image_sizes=output_image_shapes,
-        )
-        self._collapse_cfg_batch(generation_input_cfg_text)
+        cfg_text_past_key_values = None
+        generation_input_cfg_text = None
+        if cfg_text_context is not None:
+            cfg_text_past_key_values = cfg_text_context["past_key_values"]
+            cfg_text_kvlens = cfg_text_context["kv_lens"] + [0] * (num_output_vae - 1)
+            cfg_text_ropes = [cfg_text_context["ropes"][0] + index for index in range(num_output_vae)]
+            generation_input_cfg_text = scheduler.prepare_vae_latent_cfg(
+                curr_kvlens=cfg_text_kvlens,
+                curr_rope=cfg_text_ropes,
+                image_sizes=output_image_shapes,
+            )
+            self._collapse_cfg_batch(generation_input_cfg_text)
 
-        cfg_img_past_key_values = cfg_img_context["past_key_values"]
-        cfg_img_kvlens = cfg_img_context["kv_lens"] + [0] * (num_output_vae - 1)
-        cfg_img_ropes = [cfg_img_context["ropes"][0] + index for index in range(num_output_vae)]
-        generation_input_cfg_img = scheduler.prepare_vae_latent_cfg(
-            curr_kvlens=cfg_img_kvlens,
-            curr_rope=cfg_img_ropes,
-            image_sizes=output_image_shapes,
-        )
-        self._collapse_cfg_batch(generation_input_cfg_img)
+        cfg_img_past_key_values = None
+        generation_input_cfg_img = None
+        if cfg_img_context is not None:
+            cfg_img_past_key_values = cfg_img_context["past_key_values"]
+            cfg_img_kvlens = cfg_img_context["kv_lens"] + [0] * (num_output_vae - 1)
+            cfg_img_ropes = [cfg_img_context["ropes"][0] + index for index in range(num_output_vae)]
+            generation_input_cfg_img = scheduler.prepare_vae_latent_cfg(
+                curr_kvlens=cfg_img_kvlens,
+                curr_rope=cfg_img_ropes,
+                image_sizes=output_image_shapes,
+            )
+            self._collapse_cfg_batch(generation_input_cfg_img)
 
         scheduler.generation_input = generation_input
         scheduler.generation_input_cfg_text = generation_input_cfg_text
         scheduler.generation_input_cfg_image = generation_input_cfg_img
         scheduler.latents = generation_input["packed_init_noises"]
 
-        if self.enable_taylorseer:
-            model_pred_cache_dic, model_pred_current = cache_init(self, scheduler.infer_steps)
-            model_pred_text_cache_dic, model_pred_text_current = cache_init(self, scheduler.infer_steps)
-            model_pred_img_cache_dic, model_pred_img_current = cache_init(self, scheduler.infer_steps)
-        else:
-            model_pred_cache_dic = model_pred_current = None
-            model_pred_text_cache_dic = model_pred_text_current = None
-            model_pred_img_cache_dic = model_pred_img_current = None
+        model_pred_cache_dic, model_pred_current = cache_init(self, scheduler.infer_steps) if self.enable_taylorseer else (None, None)
+        model_pred_text_cache_dic, model_pred_text_current = cache_init(self, scheduler.infer_steps) if self.enable_taylorseer and cfg_text_context is not None else (None, None)
+        model_pred_img_cache_dic, model_pred_img_current = cache_init(self, scheduler.infer_steps) if self.enable_taylorseer and cfg_img_context is not None else (None, None)
 
         inputs = BagelInputs(
             image_shapes=output_image_shapes,

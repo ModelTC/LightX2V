@@ -9,7 +9,6 @@ from lightx2v.models.networks.seedvr.infer.post_infer import SeedVRPostInfer
 from lightx2v.models.networks.seedvr.infer.pre_infer import SeedVRPreInfer
 from lightx2v.models.networks.seedvr.infer.transformer_infer import SeedVRTransformerInfer
 from lightx2v.models.networks.seedvr.utils import na as na_utils
-from lightx2v.models.networks.seedvr.utils.utils import classifier_free_guidance_dispatcher
 from lightx2v.models.networks.seedvr.weights.post_weights import SeedVRPostWeights
 from lightx2v.models.networks.seedvr.weights.pre_weights import SeedVRPreWeights
 from lightx2v.models.networks.seedvr.weights.transformer_weights import SeedVRTransformerWeights
@@ -194,7 +193,6 @@ class SeedVRNaDiTModel(BaseTransformerModel):
         noises = inputs.get("noises", None)
         conditions = inputs.get("conditions", None)
         texts_pos = inputs["text_encoder_output"]["texts_pos"]
-        texts_neg = inputs["text_encoder_output"]["texts_neg"]
 
         if self.cpu_offload and self.offload_granularity == "block":
             # Each request/segment must begin with block 0 even if a previous
@@ -208,37 +206,20 @@ class SeedVRNaDiTModel(BaseTransformerModel):
                 self.pre_weight.to_cuda()
                 self.post_weight.to_cuda()
             texts_pos[0] = texts_pos[0].to(AI_DEVICE)
-            texts_neg[0] = texts_neg[0].to(AI_DEVICE)
-
-        cfg_scale = 1.0
-        cfg_rescale = 0.0
-        cfg_partial = 1.0
 
         text_pos_embeds, text_pos_shapes = na_utils.flatten(texts_pos)
-        text_neg_embeds, text_neg_shapes = na_utils.flatten(texts_neg)
         latents, latents_shapes = na_utils.flatten(noises)
         latents_cond, _ = na_utils.flatten(conditions)
         batch_size = len(noises)
 
         latents = self.scheduler.sampler.sample(
             x=latents,
-            f=lambda args: classifier_free_guidance_dispatcher(
-                pos=lambda: self._infer_dit(
-                    vid=torch.cat([args.x_t, latents_cond], dim=-1),
-                    txt=text_pos_embeds,
-                    vid_shape=latents_shapes,
-                    txt_shape=text_pos_shapes,
-                    timestep=args.t.repeat(batch_size),
-                ),
-                neg=lambda: self._infer_dit(
-                    vid=torch.cat([args.x_t, latents_cond], dim=-1),
-                    txt=text_neg_embeds,
-                    vid_shape=latents_shapes,
-                    txt_shape=text_neg_shapes,
-                    timestep=args.t.repeat(batch_size),
-                ),
-                scale=(cfg_scale if (args.i + 1) / len(self.scheduler.sampler.timesteps) <= cfg_partial else 1.0),
-                rescale=cfg_rescale,
+            f=lambda args: self._infer_dit(
+                vid=torch.cat([args.x_t, latents_cond], dim=-1),
+                txt=text_pos_embeds,
+                vid_shape=latents_shapes,
+                txt_shape=text_pos_shapes,
+                timestep=args.t.repeat(batch_size),
             ),
         )
 
