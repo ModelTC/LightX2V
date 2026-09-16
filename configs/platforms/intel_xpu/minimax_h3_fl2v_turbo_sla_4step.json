@@ -15,7 +15,6 @@
   "vae_cpu_offload": true,
   "vae_use_compile": true,
   "vae_attn_type": "minimax_h3_vae_cute",
-  "vae_fused_qkv": false,
   "lazy_load": false,
   "unload_modules": false,
   "attn_type": "dynamic_sparse_attn",
