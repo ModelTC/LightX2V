@@ -32,11 +32,6 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
         self._is_first_stage = is_pipeline_first_stage()
         self._is_last_stage = is_pipeline_last_stage()
 
-        # Stale-KV cache: block_idx -> [ [k, v] per patch slot ]
-        self._kv_cache: dict = {}
-
-        # Pre-allocated full K/V buffers per block (lazily created on first async use).
-        # Avoids repeated torch.cat allocations per timestep.
         self._full_k_bufs: dict = {}
         self._full_v_bufs: dict = {}
 
@@ -48,83 +43,49 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
         """Per-patch-slot KV cache for PipeFusion.
 
         Semantics:
-        - Cache is indexed by ((block_type, block_idx), patch_slot). Double and
-          single blocks both number their blocks from 0, so ``block_idx`` alone
-          would collide across the two types; ``block_type`` disambiguates.
-        - SYNC mode: split full image K/V by patch, populate ALL slots.
-          Return input unchanged (full attention runs normally).
-        - ASYNC mode: update current patch's slot with fresh K/V; use full
-          cache (fresh + stale from prior timestep) for attention.
-
-        Optimization: pre-allocated buffers + copy_ instead of torch.cat
-        to avoid memory allocations per generation.
+        - Keyed by ((block_type, block_idx)); double and single blocks both
+          number their blocks from 0, so ``block_type`` disambiguates.
+        - SYNC mode: copy the full K/V into the persistent full buffer so async
+          mode can reuse it. Return input unchanged (full attention runs normally).
+        - ASYNC mode: refresh the text and the current patch's image slot; other
+          image slots keep their previous step's values (stale-KV approximation).
         """
         cache_key = (block_type, block_idx)
         num_patch = self.pipeline_state.num_pipeline_patch
         if num_patch <= 1 or num_txt_tokens <= 0:
             return key, value
 
-        # Split text / image along sequence dim
-        text_key, img_key = key.split([num_txt_tokens, key.shape[0] - num_txt_tokens], dim=0)
-        text_value, img_value = value.split([num_txt_tokens, value.shape[0] - num_txt_tokens], dim=0)
-
         patch_token_nums = self.pipeline_state.pp_patches_token_num
+        full_len = num_txt_tokens + sum(patch_token_nums)
+        buf_k, buf_v = self._get_full_bufs(cache_key, full_len, key, value)
 
         if not self.pipeline_state.patch_mode:
-            # Sync mode: split full image K/V by patch, populate all slots.
-            # .clone() ensures cached tensors own their storage (views of
-            # transient QKV would become invalid after this timestep).
-            if cache_key not in self._kv_cache:
-                self._kv_cache[cache_key] = [None] * num_patch
-            split_ks = img_key.split(patch_token_nums, dim=0)
-            split_vs = img_value.split(patch_token_nums, dim=0)
-            for i in range(num_patch):
-                self._kv_cache[cache_key][i] = [
-                    split_ks[i].clone(),
-                    split_vs[i].clone(),
-                ]
+            # Sync mode: store the full K/V for later async reuse.
+            buf_k.copy_(key)
+            buf_v.copy_(value)
             return key, value
 
         # ---- Async mode ----
-
         cur_slot = self.pipeline_state.pipeline_patch_idx
-        if cache_key not in self._kv_cache:
-            self._kv_cache[cache_key] = [None] * num_patch
 
-        # Store fresh K/V in cache (clone for persistence across timesteps)
-        self._kv_cache[cache_key][cur_slot] = [img_key.clone(), img_value.clone()]
+        # Refresh text K/V and the current patch's image slot; other image
+        # slots keep the previous step's (stale) values.
+        buf_k[:num_txt_tokens].copy_(key[:num_txt_tokens])
+        buf_v[:num_txt_tokens].copy_(value[:num_txt_tokens])
 
-        # Build full K/V using pre-allocated buffer + copy_ (avoids torch.cat)
-        total_img = sum(patch_token_nums)
-        full_len = num_txt_tokens + total_img
+        offset = num_txt_tokens + sum(patch_token_nums[:cur_slot])
+        n = patch_token_nums[cur_slot]
+        buf_k[offset : offset + n].copy_(key[num_txt_tokens:])
+        buf_v[offset : offset + n].copy_(value[num_txt_tokens:])
 
+        return buf_k[:full_len], buf_v[:full_len]
+
+    def _get_full_bufs(self, cache_key, full_len, key, value):
+        """Return (k_buf, v_buf) pre-allocated to the full sequence length."""
         if cache_key not in self._full_k_bufs or self._full_k_bufs[cache_key].shape[0] != full_len or self._full_k_bufs[cache_key].dtype != key.dtype:
             self._full_k_bufs[cache_key] = torch.empty(full_len, *key.shape[1:], dtype=key.dtype, device=key.device)
             self._full_v_bufs[cache_key] = torch.empty(full_len, *value.shape[1:], dtype=value.dtype, device=value.device)
-
-        buf_k = self._full_k_bufs[cache_key]
-        buf_v = self._full_v_bufs[cache_key]
-
-        # Copy text K/V (fresh, from current patch's computation)
-        buf_k[:num_txt_tokens].copy_(text_key)
-        buf_v[:num_txt_tokens].copy_(text_value)
-
-        # Copy each slot's image K/V into buffer
-        offset = num_txt_tokens
-        for slot in range(num_patch):
-            n = patch_token_nums[slot]
-            if slot == cur_slot:
-                # Fresh from this patch (copy from img_key, already cloned to cache)
-                buf_k[offset : offset + n].copy_(img_key)
-                buf_v[offset : offset + n].copy_(img_value)
-            else:
-                # Stale from cache (previous timestep)
-                cached = self._kv_cache[cache_key][slot]
-                buf_k[offset : offset + n].copy_(cached[0])
-                buf_v[offset : offset + n].copy_(cached[1])
-            offset += n
-
-        return buf_k[:full_len], buf_v[:full_len]
+        return self._full_k_bufs[cache_key], self._full_v_bufs[cache_key]
 
     def clear_kv_cache(self):
         """Clear stale-KV cache.
@@ -133,7 +94,6 @@ class Flux2PipeFusionTransformerInfer(Flux2TransformerInfer):
         whole point of "stale" KV. This method is provided for defensive
         cleanup only and should NOT be called between timesteps in async mode.
         """
-        self._kv_cache.clear()
         self._full_k_bufs.clear()
         self._full_v_bufs.clear()
 

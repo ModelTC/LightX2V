@@ -335,6 +335,10 @@ def _validate_pipefusion_config(config):
         raise ValueError(f"PipeFusion cannot be combined with feature_caching={config.get('feature_caching')!r}.")
     if config.get("cpu_offload", False):
         raise ValueError("PipeFusion cannot be combined with cpu_offload.")
+    if config.get("unload_modules", False) or config.get("lazy_load", False):
+        raise ValueError("PipeFusion does not support unload_modules / lazy_load.")
+    if config.get("fls", {}).get("enable", False):
+        raise ValueError("PipeFusion cannot be combined with FLS enhancement (fls.enable).")
     if config.get("enable_cfg", False) and config.get("sample_guide_scale", 1.0) > 1.0:
         raise ValueError("PipeFusion does not support CFG; set sample_guide_scale <= 1.0 or enable_cfg=False.")
     if config["parallel"].get("seq_p_size", 1) > 1:

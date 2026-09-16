@@ -476,7 +476,7 @@ class Flux2Runner(DefaultRunner):
 
         # Clear stale-KV cache at request start so a failed prior request can't
         # leave stale KV / full K-V buffers behind (PipeFusion only).
-        if self.config.get("pipefusion_parallel", False) and hasattr(self.model.transformer_infer, "clear_kv_cache"):
+        if self.config.get("pipefusion_parallel", False) and getattr(self, "model", None) is not None and hasattr(self.model.transformer_infer, "clear_kv_cache"):
             self.model.transformer_infer.clear_kv_cache()
 
         latents, generator = self.run_dit()
