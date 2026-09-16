@@ -27,6 +27,12 @@ FusedQKVStorage = _load_helper("weights/fused_qkv.py").FusedQKVStorage
 qkv_ops = _load_helper("infer/fused_qkv.py")
 
 
+def test_fused_projection_preserves_fp8_f16_accum_policy():
+    policy = _load_helper("fp8_f16_accum_policy.py")
+    projections = ("to_q", "to_k", "to_v", "to_qkv")
+    assert all(f"transformer_blocks.0.attn.{name}".endswith(policy.FP8_F16_ACCUM_PROJECTION_SUFFIXES) for name in projections)
+
+
 @pytest.mark.parametrize("layout", ["default", "int8", "transposed_int8"])
 @pytest.mark.parametrize("scale_shape", [(4,), (4, 1), (1, 4)])
 def test_projection_equivalence_and_shared_storage(layout, scale_shape):
