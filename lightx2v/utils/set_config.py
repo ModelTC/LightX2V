@@ -319,6 +319,8 @@ def init_parallel(config):
     tensor_p_size = int(parallel.get("tensor_p_size", 1))
     cfg_p_size = int(parallel.get("cfg_p_size", 1))
     seq_p_size = int(parallel.get("seq_p_size", 1))
+    if cfg_p_size > 1 and not config.get("enable_cfg", False):
+        raise ValueError("parallel.cfg_p_size > 1 requires enable_cfg=true")
     world_size = dist.get_world_size()
     expected_world_size = tensor_p_size * cfg_p_size * seq_p_size
     if expected_world_size != world_size:

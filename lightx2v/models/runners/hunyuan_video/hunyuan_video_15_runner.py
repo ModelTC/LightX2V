@@ -319,7 +319,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             }
 
         # run byt5
-        byt5_features, byt5_masks = self.text_encoders[1].infer([prompt])
+        byt5_features, byt5_masks = self.text_encoders[1].infer([prompt], enable_cfg=config.get("enable_cfg", False))
         text_encoder_output.update({"byt5_features": byt5_features, "byt5_masks": byt5_masks})
 
         return text_encoder_output

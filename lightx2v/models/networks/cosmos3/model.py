@@ -156,7 +156,7 @@ class Cosmos3TransformerModel(BaseTransformerModel):
         text_encoder_output = inputs["text_encoder_output"]
         do_cfg = self.config.get("enable_cfg", True)
         if do_cfg:
-            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
+            assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
             if self.config.get("cfg_parallel", False):
                 cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")
                 assert dist.get_world_size(cfg_p_group) == 2, "cfg_p_world_size must be equal to 2"

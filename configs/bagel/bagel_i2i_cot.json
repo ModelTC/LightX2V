@@ -10,6 +10,7 @@
         "cfg_renorm_min": 0.0,
         "cfg_renorm_type": "text_channel"
     },
+    "enable_cfg": true,
     "think": true,
     "understanding_output": false,
     "do_sample": false,
