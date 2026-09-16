@@ -374,6 +374,25 @@ class MiniMaxH3VideoAttention(nn.Module):
         self.to_k = None
         self.to_v = None
 
+    def _pack_dense_qkv(self) -> None:
+        """Merge dense Q/K/V projections while preserving a three-wide V view."""
+        linears = (self.to_q, self.to_k, self.to_v)
+        if not all(isinstance(linear, nn.Linear) for linear in linears):
+            raise TypeError("MiniMax-H3 video VAE dense Q/K/V projections must be nn.Linear")
+        with torch.device("meta"):
+            fused = nn.Linear(
+                linears[0].in_features,
+                sum(linear.out_features for linear in linears),
+                bias=linears[0].bias is not None,
+            )
+        fused.weight = nn.Parameter(torch.cat([linear.weight for linear in linears], dim=0), requires_grad=False)
+        if linears[0].bias is not None:
+            fused.bias = nn.Parameter(torch.cat([linear.bias for linear in linears], dim=0), requires_grad=False)
+        self.to_qkv = fused
+        self.to_q = None
+        self.to_k = None
+        self.to_v = None
+
     @staticmethod
     def _apply_rotary(
         hidden_states: torch.Tensor,
@@ -612,8 +631,11 @@ class MiniMaxH3VideoVAE(nn.Module):
         super().__init__()
         if quant_scheme not in {None, "fp8-f16-accum", "fp8-musa", "fp8-sgl"}:
             raise NotImplementedError(f"Unsupported MiniMax-H3 video VAE quantization scheme: {quant_scheme!r}")
-        if attn_type not in {"torch_sdpa", "sage_attn2"}:
-            raise ValueError(f"Unsupported MiniMax-H3 video VAE attention type: {attn_type!r}; expected torch_sdpa or sage_attn2")
+        if attn_type not in {"torch_sdpa", "sage_attn2", "minimax_h3_vae_cute"}:
+            raise ValueError(
+                f"Unsupported MiniMax-H3 video VAE attention type: {attn_type!r}; "
+                "expected torch_sdpa, sage_attn2, or minimax_h3_vae_cute"
+            )
         self.config = dict(config)
         self.execution_device = torch.device(device or AI_DEVICE)
         self.cpu_offload = cpu_offload
@@ -716,6 +738,10 @@ class MiniMaxH3VideoVAE(nn.Module):
             block.ff.net[0].proj.enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
             block.ff.net[2].enable_fp8_f16_accum(VIDEO_VAE_FP8_F16_ACCUM_ACTIVATION_QMAX)
 
+    def _pack_decoder_dense_qkv(self) -> None:
+        for block in self.decoder.transformer_blocks:
+            block.attn._pack_dense_qkv()
+
     def _make_fp8_linear(self, linear: nn.Linear) -> nn.Module:
         if self.quant_scheme == "fp8-f16-accum":
             from lightx2v.models.input_encoders.hf.q_linear import F16AccumQuantLinearFp8 as linear_cls
@@ -794,6 +820,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
+        pack_qkv: bool | None = None,
     ) -> "MiniMaxH3VideoVAE":
         vae_dir = _component_dir(model_path, "vae")
         if encoder_conv_mode not in _SUPPORTED_ENCODER_CONV_MODES:
@@ -848,8 +875,10 @@ class MiniMaxH3VideoVAE(nn.Module):
         if quant_scheme is not None:
             # Pack only after loading the checkpoint's original Q/K/V keys.
             model._pack_decoder_fp8_qkv()
-        if quant_scheme == "fp8-f16-accum":
-            model._configure_fp8_f16_accum_linears()
+            if quant_scheme == "fp8-f16-accum":
+                model._configure_fp8_f16_accum_linears()
+        elif pack_qkv is True or (pack_qkv is None and attn_type == "minimax_h3_vae_cute"):
+            model._pack_decoder_dense_qkv()
         use_channels_last_encoder = encoder_conv_mode == "torch_channels_last"
         model._prepare_inference_weights(use_channels_last_encoder=use_channels_last_encoder)
         model._use_channels_last_encoder_input = use_channels_last_encoder

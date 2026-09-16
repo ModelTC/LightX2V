@@ -7,6 +7,7 @@ from .flash_attn import (
     SparseFlashAttn4Weight,
 )
 from .general_sparse_attn import GeneralSparseAttnWeight
+from .minimax_h3_vae_cute import MiniMaxH3VaeCuteWeight
 from .nbhd_attn import NbhdAttnWeight, NbhdAttnWeightFlashInfer
 from .radial_attn import RadialAttnWeight
 from .rainfusion_attn import RainfusionAttnWeight

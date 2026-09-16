@@ -65,7 +65,7 @@ fi
 export PLATFORM=${PLATFORM:-intel_xpu}
 export PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-1}
 export PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
-export PYTHONPATH=${PYTHONPATH:-}
+export PYTHONPATH=${lightx2v_path}/lightx2v_kernel_xpu/python${PYTHONPATH:+:${PYTHONPATH}}
 
 if ((sp_size > 1)); then
   # oneCCL settings used by the Ulysses all-to-all path on Intel XPU.

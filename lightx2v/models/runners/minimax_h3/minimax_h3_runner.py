@@ -92,8 +92,7 @@ class MiniMaxH3Runner(DefaultRunner):
     """
 
     _WARMUP_SHAPES = (
-        (480, 480, 158),  # aligned from a 6-second request
-        (544, 960, 124),
+        (768, 1344, 124),  # match the 5-second production request
     )
     _WARMUP_STEP_COUNT = 2
     supported_request_fields_by_task = {
@@ -277,6 +276,7 @@ class MiniMaxH3Runner(DefaultRunner):
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
+            pack_qkv=self.config.get("vae_fused_qkv"),
         )
         self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
         self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
