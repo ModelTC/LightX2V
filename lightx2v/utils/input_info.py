@@ -76,6 +76,11 @@ class SRInputInfo(InputInfo):
 
 
 @dataclass
+class SeedVRInputInfo(SRInputInfo):
+    match_target_size: bool = True
+
+
+@dataclass
 class Flf2vInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str = ""
