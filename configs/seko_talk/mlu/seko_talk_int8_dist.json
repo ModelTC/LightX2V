@@ -8,7 +8,6 @@
     "self_attn_1_type": "mlu_sage_attn",
     "cross_attn_1_type": "mlu_sage_attn",
     "cross_attn_2_type": "mlu_sage_attn",
-    "seed": 42,
     "sample_guide_scale": 1.0,
     "sample_shift": 5,
     "enable_cfg": false,

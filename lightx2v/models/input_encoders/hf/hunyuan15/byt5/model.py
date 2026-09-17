@@ -315,7 +315,7 @@ class ByT5TextEncoder:
 
         return byt5_embeddings, byt5_mask
 
-    def _prepare_byt5_embeddings(self, prompts):
+    def _prepare_byt5_embeddings(self, prompts, enable_cfg):
         if isinstance(prompts, str):
             prompt_list = [prompts]
         elif isinstance(prompts, list):
@@ -333,7 +333,7 @@ class ByT5TextEncoder:
             positive_embeddings.append(pos_emb)
             positive_masks.append(pos_mask)
 
-            if self.enable_cfg:  # TODO: 把cfg拆出去，更适合并行
+            if enable_cfg:  # TODO: 把cfg拆出去，更适合并行
                 neg_emb, neg_mask = self._process_single_byt5_prompt("", AI_DEVICE)
                 negative_embeddings.append(neg_emb)
                 negative_masks.append(neg_mask)
@@ -341,7 +341,7 @@ class ByT5TextEncoder:
         byt5_positive = torch.cat(positive_embeddings, dim=0)
         byt5_positive_mask = torch.cat(positive_masks, dim=0)
 
-        if self.enable_cfg:  # TODO: 把cfg拆出去，更适合并行
+        if enable_cfg:  # TODO: 把cfg拆出去，更适合并行
             byt5_negative = torch.cat(negative_embeddings, dim=0)
             byt5_negative_mask = torch.cat(negative_masks, dim=0)
 
@@ -354,11 +354,11 @@ class ByT5TextEncoder:
         return byt5_embeddings, byt5_masks
 
     @torch.no_grad()
-    def infer(self, prompts):
+    def infer(self, prompts, enable_cfg=None):
         if self.cpu_offload:
             self.byt5_model = self.byt5_model.to(AI_DEVICE)
             self.byt5_mapper = self.byt5_mapper.to(AI_DEVICE)
-        byt5_embeddings, byt5_masks = self._prepare_byt5_embeddings(prompts)
+        byt5_embeddings, byt5_masks = self._prepare_byt5_embeddings(prompts, self.enable_cfg if enable_cfg is None else enable_cfg)
         byt5_features = self.byt5_mapper(byt5_embeddings.to(torch.bfloat16))
         if self.cpu_offload:
             self.byt5_model = self.byt5_model.to("cpu")

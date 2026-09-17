@@ -199,7 +199,6 @@ class SeedVRRunner(DefaultRunner):
             self.model_path = os.path.join(model_path_base, f"seedvr2_ema_{model_size}.pth")
         self.vae_path = os.path.join(model_path_base, "ema_vae.pth")
         self.pos_emb_path = os.path.join(model_path_base, "pos_emb.pt")
-        self.neg_emb_path = os.path.join(model_path_base, "neg_emb.pt")
 
     def _build_video_transform(self, img):
         from torchvision.transforms import Normalize
@@ -488,8 +487,8 @@ class SeedVRRunner(DefaultRunner):
     def load_text_encoder(self):
         """Load text encoder for SeedVR.
 
-        SeedVR uses pre-computed text embeddings (pos_emb.pt, neg_emb.pt).
-        We load them from disk and cache them.
+        SeedVR uses pre-computed positive text embeddings (pos_emb.pt).
+        They are loaded and cached by run_text_encoder.
         """
         # For SeedVR, text embeddings are pre-computed
         # Load them during run_text_encoder
@@ -639,21 +638,9 @@ class SeedVRRunner(DefaultRunner):
         else:
             pos_emb = None
 
-        # Load negative embeddings
-        if self.neg_emb_path:
-            try:
-                neg_emb = torch.load(self.neg_emb_path, map_location="cpu")
-                neg_emb = neg_emb.to(self.init_device)
-            except Exception as e:
-                logger.warning(f"[SeedVRRunner] Failed to load neg_emb: {e}")
-                neg_emb = None
-        else:
-            neg_emb = None
-
         # Return text encoder output
         text_encoder_output = {
             "texts_pos": [pos_emb],
-            "texts_neg": [neg_emb],
         }
         self.text_encoder_output = text_encoder_output
 

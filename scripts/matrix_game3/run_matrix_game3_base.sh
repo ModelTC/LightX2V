@@ -1,6 +1,7 @@
 #!/bin/bash
 # Run Matrix-Game-3.0 base model inference via LightX2V
 # Usage: ./run_matrix_game3_base.sh
+# Supply the official negative prompt explicitly to reproduce the base example.
 
 # Set model path (update this to your local Matrix-Game-3.0 model directory)
 MODEL_PATH="${MODEL_PATH:-/path/to/Matrix-Game-3.0}"
@@ -14,6 +15,7 @@ python -m lightx2v.infer \
     --model_path "${MODEL_PATH}" \
     --config_json "${CONFIG_JSON}" \
     --prompt "a city street scene with cars and pedestrians" \
+    --negative_prompt "Vibrant colors, overexposure, static, blurred details, subtitles, style, artwork, painting, still image, overall grayness, worst quality, low quality, JPEG compression residue, ugly, mutilated, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, malformed limbs, fused fingers, still image, cluttered background, three legs, crowded background, walking backwards" \
     --image_path "${IMAGE_PATH:-Matrix-Game-3/Matrix-Game-3/demo_images/001/image.png}" \
     --action_path "${ACTION_PATH:-}" \
     --save_result_path "${SAVE_PATH}" \

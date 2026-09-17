@@ -451,7 +451,7 @@ class Flux2KleinTransformerModel(_Flux2TransformerModelBase):
         do_cfg = self.config.get("enable_cfg", True)
 
         if do_cfg:
-            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
+            assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
             use_cfg_parallel = self.config.get("cfg_parallel", False)
             if use_cfg_parallel and hasattr(self.scheduler, "input_image_latents") and self.scheduler.input_image_latents is not None:
                 if hasattr(self.scheduler, "image_rotary_emb") and hasattr(self.scheduler, "negative_image_rotary_emb"):

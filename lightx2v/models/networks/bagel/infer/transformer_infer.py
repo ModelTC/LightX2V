@@ -1,4 +1,3 @@
-from copy import deepcopy
 from typing import Optional
 
 import torch
@@ -22,29 +21,14 @@ class BagelTransformerInfer(BaseTransformerInfer):
             raise ImportError("BAGEL T2I requires flash-attn (`flash_attn`). Install a flash-attn build compatible with your CUDA/PyTorch environment before running BAGEL.")
         self.config = config
         self.llm_config = llm_config
-        self.num_layers = llm_config["num_hidden_layers"]
         self.use_moe = "Mo" in llm_config["layer_module"]
         self.hidden_size = llm_config["hidden_size"]
         self.num_heads = llm_config["num_attention_heads"]
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = llm_config["num_key_value_heads"]
-        self.init_kv_cache()
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
-
-    def init_gen_context(self):
-        gen_context = {
-            "kv_lens": [0],
-            "ropes": [0],
-            "past_key_values": NaiveCache(self.num_layers),
-        }
-        return gen_context
-
-    def init_kv_cache(self):
-        self.gen_context = self.init_gen_context()
-        self.cfg_text_context = deepcopy(self.gen_context)
-        self.cfg_img_context = deepcopy(self.gen_context)
 
     def self_attn(
         self,

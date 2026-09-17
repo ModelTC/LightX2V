@@ -5,14 +5,6 @@ from typing import Any, Optional
 import torch
 
 
-class _UnsetType:
-    def __repr__(self):
-        return "UNSET"
-
-
-UNSET = _UnsetType()
-
-
 @dataclass
 class InputInfo:
     """Mutable context shared by the runner, models, and schedulers for one inference.
@@ -24,7 +16,7 @@ class InputInfo:
     dimensions belong in ``latent_shape``.
     """
 
-    task: str = ""
+    task: str | None = None
     seed: int = 0
     save_result_path: Optional[str] = None
     return_result_tensor: bool = False
@@ -124,7 +116,6 @@ class S2VInputInfo(InputInfo):
     with_mask: bool = False
     stream_config: dict = field(default_factory=dict)
     # shape related
-    fixed_area: str = ""
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
@@ -161,6 +152,7 @@ class RS2VInputInfo(InputInfo):
     overlap_latent: Optional[torch.Tensor] = None
     # input preprocess audio
     audio_clip: Optional[torch.Tensor] = None
+    person_mask_latens: Optional[torch.Tensor] = field(default=None, repr=False)
     # input reference state
     ref_state: int = 0
     # flags for first and last clip
@@ -191,7 +183,7 @@ class AnimateInputInfo(InputInfo):
 @dataclass
 class T2IInputInfo(InputInfo):
     prompt: str = ""
-    negative_prompt: str = ""
+    negative_prompt: str | None = ""
     # shape related
     size: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
@@ -232,7 +224,7 @@ class TI2TInputInfo(T2TInputInfo):
 @dataclass
 class I2IInputInfo(InputInfo):
     prompt: str = ""
-    negative_prompt: str = ""
+    negative_prompt: str | None = ""
     image_path: str = ""
     i2i_denoise_strength: Optional[float] = None
     # shape related
@@ -441,7 +433,7 @@ class WorldPlayT2VInputInfo(T2VInputInfo):
 class SenseNovaVisionInputInfo(InputInfo):
     prompt: str = ""
     image_path: str = ""
-    omni_vision_subtask: str = ""
+    omni_vision_subtask: str | None = None
     raw_output_path: str = ""
     glb_output_path: str = ""
     postprocess_predictions: Optional[bool] = None
@@ -503,34 +495,30 @@ def align_num_frames(num_frames: int, temporal_stride: int) -> int:
 
 @dataclass
 class SekoTalkInputs(InputInfo):
-    num_frames: int | Any = UNSET
-    seed: int | Any = UNSET
-    prompt: str | Any = UNSET
-    negative_prompt: str | Any = UNSET
-    image_path: str | Any = UNSET
-    audio_path: str | Any = UNSET
-    audio_num: int | Any = UNSET
-    video_duration: float | Any = UNSET
-    with_mask: bool | Any = UNSET
-    save_result_path: str | Any = UNSET
-    return_result_tensor: bool | Any = UNSET
-    stream_config: dict | Any = UNSET
+    num_frames: int | None = None
+    seed: int | None = None
+    prompt: str | None = None
+    negative_prompt: str | None = None
+    image_path: str | None = None
+    audio_path: str | None = None
+    audio_num: int | None = None
+    video_duration: float | None = None
+    with_mask: bool | None = None
+    return_result_tensor: bool | None = None
+    stream_config: dict | None = None
 
-    fixed_area: str | Any = UNSET
-    size: list | Any = UNSET
-    latent_shape: list | Any = UNSET
+    size: list | None = None
+    latent_shape: list | None = None
 
     # prev info
-    overlap_frame: torch.Tensor | Any = UNSET
-    overlap_latent: torch.Tensor | Any = UNSET
+    overlap_frame: torch.Tensor | None = None
+    overlap_latent: torch.Tensor | None = None
     # input preprocess audio
-    audio_clip: torch.Tensor | Any = UNSET
-    person_mask_latens: torch.Tensor | Any = field(default=UNSET, repr=False)
+    audio_clip: torch.Tensor | None = None
+    person_mask_latens: torch.Tensor | None = field(default=None, repr=False)
 
     # input reference state
-    ref_state: int | Any = UNSET
+    ref_state: int | None = None
     # flags for first and last clip
-    is_first: bool | Any = UNSET
-    is_last: bool | Any = UNSET
-    # if save video by stream
-    stream_save_video: bool | Any = UNSET
+    is_first: bool | None = None
+    is_last: bool | None = None

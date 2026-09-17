@@ -372,6 +372,14 @@ class LTX2Scheduler(BaseScheduler):
         self.a_noise_pred = None
         self.keep_latents_dtype_in_scheduler = config.get("keep_latents_dtype_in_scheduler", False)
 
+    @property
+    def needs_negative_prompt(self) -> bool:
+        if not self.config["enable_cfg"]:
+            return False
+        if not self.mm_guider_enabled:
+            return True
+        return any(not math.isclose(branch["cfg_scale"], 1.0) for branch in (self.mm_guider_video, self.mm_guider_audio))
+
     def step_pre(self, step_index):
         self.step_index = step_index
 

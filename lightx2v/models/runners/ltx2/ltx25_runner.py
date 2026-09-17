@@ -76,24 +76,6 @@ class LTX25Runner(LTX2Runner):
             cpu_offload=self.config.get("gemma_cpu_offload", self.config.get("cpu_offload", False)),
         )
 
-    def run_text_encoder(self, input_info):
-        """Encode the one positive caption consumed by the distilled source path.
-
-        The inherited LTX-2 runner always encodes a positive/negative pair for
-        CFG.  LTX-2.5 distilled runs with CFG disabled and upstream calls
-        ``PromptEncoder([prompt])`` exactly once.  Keeping a batch of one avoids
-        doubling Gemma 4 memory/compute and preserves the same kernel shapes.
-        The negative slots remain populated only to satisfy the shared input
-        contract; the model never selects them while CFG is disabled.
-        """
-        ((video_context, audio_context),) = self.text_encoders[0].encode_text([input_info.prompt])
-        return {
-            "v_context_p": video_context,
-            "a_context_p": audio_context,
-            "v_context_n": video_context,
-            "a_context_n": audio_context,
-        }
-
     def _resolve_num_frames(self, text_encoder_output) -> int:
         requested = int(self.input_info.num_frames or 0)
         if requested > 0:

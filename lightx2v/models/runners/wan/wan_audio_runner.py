@@ -28,7 +28,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import *
-from lightx2v.utils.input_info import UNSET, S2VInputInfo
+from lightx2v.utils.input_info import S2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import find_torch_model_path, fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, wan_vae_to_comfy
@@ -297,6 +297,12 @@ class WanAudioRunner(WanRunner):  # type:ignore
         for task in ("s2v", "rs2v")
     }
 
+    def get_supported_request_fields(self, task):
+        supported_request_fields = super().get_supported_request_fields(task)
+        if self.config.get("resize_mode") == "fixed_shape":
+            supported_request_fields |= {"size"}
+        return supported_request_fields
+
     def __init__(self, config):
         super().__init__(config)
         self.name = self.config.get("name", "WanAudioRunner")
@@ -341,7 +347,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
         # Segment audio (CLI / input_info wins over config_json; num_frames is not merged into config)
         num_frames = self.config.get("num_frames", 81)
         request_frames = self.input_info.num_frames
-        if request_frames is not None and request_frames is not UNSET and request_frames > 0:
+        if request_frames is not None and request_frames > 0:
             num_frames = request_frames
         if self.config.get("model_cls") == "seko_talk_ar":
             audio_start, audio_end = self._audio_processor.get_audio_range(0, expected_frames)
@@ -376,12 +382,15 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return audio_files, mask_files
 
     def _get_image_resize_kwargs(self):
-        input_info = getattr(self, "input_info", None)
+        resize_mode = self.config.get("resize_mode", "adaptive")
+        size = self.config.get("size")
+        if resize_mode == "fixed_shape":
+            size = self.input_info.size or size
         return {
-            "resize_mode": self.config.get("resize_mode", "adaptive"),
+            "resize_mode": resize_mode,
             "bucket_shape": self.config.get("bucket_shape", None),
-            "fixed_area": (getattr(input_info, "fixed_area", None) if input_info is not None else None) or self.config.get("fixed_area", None),
-            "size": self.config.get("size"),
+            "fixed_area": self.config.get("fixed_area"),
+            "size": size,
         }
 
     def _resolve_patched_spatial_size(self, h, w):
@@ -468,11 +477,13 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if self.config.get("f2v_process", False):
             self.ref_img = img
         self.input_info.latent_shape = latent_shape  # Important: set latent_shape in input_info
-        self.input_info.size = size  # Important: set size in input_info
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
 
         audio_segments, expected_frames, person_mask_latens, audio_num = self.read_audio_input(self.input_info.audio_path)
+        # Masks have now used the same requested crop size as the image.
+        # Write back the actual image size after VAE/patch alignment.
+        self.input_info.size = size
         self.input_info.audio_num = audio_num
         self.input_info.with_mask = person_mask_latens is not None
         text_encoder_output = self.run_text_encoder(self.input_info)
@@ -516,14 +527,9 @@ class WanAudioRunner(WanRunner):  # type:ignore
 
         inputs = self.inputs_static.copy()
 
-        person_mask_latens = getattr(self.input_info, "person_mask_latens", None)
+        person_mask_latens = self.input_info.person_mask_latens
         self.input_info.with_mask = person_mask_latens is not None
-
-        inputs.update(
-            {
-                "person_mask_latens": person_mask_latens,
-            }
-        )
+        inputs["person_mask_latens"] = person_mask_latens
 
         torch.cuda.empty_cache()
         gc.collect()
@@ -899,7 +905,6 @@ class WanAudioRunner(WanRunner):  # type:ignore
         if self.config.get("model_cls") == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             self.inputs["image_encoder_output"]["vae_encoder_out"] = None
 
-        self.input_info.seed = self.input_info.seed
         torch.manual_seed(self.input_info.seed)
 
         if self.config.get("f2v_process", False):
@@ -1043,9 +1048,9 @@ class WanAudioARRunner(WanAudioRunner):
         else:
             ref_img = load_image(img_path)
 
-        input_size = getattr(self.input_info, "size", None)
+        input_size = self.input_info.size
         target_h, target_w = self.config.get("size", (480, 832))
-        if input_size is not None and input_size is not UNSET and len(input_size) >= 2:
+        if input_size is not None and len(input_size) >= 2:
             target_h = input_size[0] or target_h
             target_w = input_size[1] or target_w
         target_h, target_w = int(target_h), int(target_w)
@@ -1060,8 +1065,8 @@ class WanAudioARRunner(WanAudioRunner):
 
         latent_h = target_h // self.config["vae_stride"][1]
         latent_w = target_w // self.config["vae_stride"][2]
-        num_frames = getattr(self.input_info, "num_frames", None)
-        if num_frames is not None and num_frames is not UNSET and num_frames > 0:
+        num_frames = self.input_info.num_frames
+        if num_frames is not None and num_frames > 0:
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w, num_frames)
         else:
             latent_shape = self.get_latent_shape_with_lat_hw(latent_h, latent_w)
@@ -1230,11 +1235,11 @@ class WanAudioARRunner(WanAudioRunner):
         if self.config.get("f2v_process", False):
             self.ref_img = img
         self.input_info.latent_shape = latent_shape
-        self.input_info.size = size
         clip_encoder_out = self.run_image_encoder(img) if self.config.get("use_image_encoder", True) else None
         vae_encode_out = self.run_vae_encoder(img)
 
         audio_segments, expected_frames, person_mask_latens, audio_num = self.read_audio_input(self.input_info.audio_path)
+        self.input_info.size = size
         self.input_info.audio_num = audio_num
         self.input_info.with_mask = person_mask_latens is not None
 

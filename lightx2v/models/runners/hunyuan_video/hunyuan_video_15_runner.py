@@ -37,7 +37,7 @@ class HunyuanVideo15Runner(DefaultRunner):
 
     def get_supported_request_fields(self, task):
         supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("video_super_resolution", {}).get("enable_cfg", False):
+        if self.sr_version is not None and self.config_sr["enable_cfg"]:
             supported_request_fields |= {"negative_prompt"}
         return supported_request_fields
 
@@ -319,7 +319,7 @@ class HunyuanVideo15Runner(DefaultRunner):
             }
 
         # run byt5
-        byt5_features, byt5_masks = self.text_encoders[1].infer([prompt])
+        byt5_features, byt5_masks = self.text_encoders[1].infer([prompt], enable_cfg=config.get("enable_cfg", False))
         text_encoder_output.update({"byt5_features": byt5_features, "byt5_masks": byt5_masks})
 
         return text_encoder_output

@@ -9,7 +9,6 @@ import torch
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
-from lightx2v.utils.input_info import UNSET
 from lightx2v.utils.set_config import build_startup_config, init_parallel
 from lightx2v.utils.utils import validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
@@ -35,7 +34,7 @@ class LightX2VPipeline:
 
         self.task = task
         # Select startup components without making support_tasks a request default.
-        if not task and support_tasks:
+        if task is None and support_tasks:
             task = support_tasks[0]
         self.model_path = model_path
         self.model_cls = model_cls
@@ -393,7 +392,7 @@ class LightX2VPipeline:
     @torch.no_grad()
     def generate(
         self,
-        seed=UNSET,
+        seed=None,
         prompt=None,
         negative_prompt=None,
         save_result_path=None,
@@ -417,9 +416,10 @@ class LightX2VPipeline:
     ):
         """Generate one result, validating task-specific inputs in the runner.
 
+        Omitted/None negative prompts default to ""; explicit strings require model support.
         Size is (height, width) in pixels, subject to the model's sizing rules.
         Seed is a non-negative integer; omitted/None defaults to 42.
-        NeoPP preserves explicit None for LightLLM session RNG continuation.
+        NeoPP continues LightLLM's session RNG when seed is omitted or None.
         An omitted output path is passed to the runner as None. Most runners skip saving;
         WorldMirror uses its default output directory.
         An omitted task uses the task explicitly set when creating the pipeline,

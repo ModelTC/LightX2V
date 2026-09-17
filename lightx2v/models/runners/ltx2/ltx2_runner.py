@@ -888,7 +888,7 @@ class LTX2Runner(DefaultRunner):
             self.text_encoders = self.load_text_encoder()
 
         prompt = input_info.prompt
-        neg_prompt = input_info.negative_prompt
+        neg_prompt = input_info.negative_prompt if self.scheduler.needs_negative_prompt else None
 
         v_context_p, a_context_p, v_context_n, a_context_n = self.text_encoders[0].infer(
             prompt=prompt,

@@ -212,7 +212,6 @@ class WanS2VRunner(WanRunner):
         motion_frames = self.config["motion_frames"]
         motion_latents = torch.zeros([1, 3, motion_frames, height, width], dtype=self.param_dtype, device=AI_DEVICE)
 
-        neg_prompt = self.input_info.negative_prompt or self.config.get("sample_neg_prompt", "")
         with ProfilingContext4DebugL1(
             "Run Text Encoder",
             recorder_mode=GET_RECORDER_MODE(),
@@ -220,26 +219,13 @@ class WanS2VRunner(WanRunner):
             metrics_labels=["WanS2VRunner"],
         ):
             text_encoder_output = self.run_text_encoder(self.input_info)
-        context = text_encoder_output["context"]
-        context_null = text_encoder_output.get("context_null")
-
-        if context_null is None:
-            with ProfilingContext4DebugL1("Run Text Encoder (negative)"):
-                t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload", False))
-                text_encoder = self.text_encoders[0]
-                if not t5_offload:
-                    text_encoder.model.to(AI_DEVICE)
-                context_null = text_encoder.infer([neg_prompt])
-                if t5_offload:
-                    text_encoder.model.cpu()
 
         return {
             "ref_pixel_values": ref_pixel_values,  # check
             "motion_latents": motion_latents,  # todo in pose
             "audio_emb": audio_emb,  # check diff: grade_fn
             "num_repeat": num_repeat,  # check
-            "context": context,  # check
-            "context_null": context_null,  # check
+            "text_encoder_output": text_encoder_output,
             "height": height,  # check
             "width": width,  # check
             "seed": self.input_info.seed,
@@ -327,10 +313,7 @@ class WanS2VRunner(WanRunner):
                     audio_input = inputs["audio_emb"][..., left_idx:right_idx]
 
                     dit_inputs = {
-                        "text_encoder_output": {
-                            "context": inputs["context"],
-                            "context_null": inputs["context_null"],
-                        },
+                        "text_encoder_output": inputs["text_encoder_output"],
                         "s2v": {
                             "ref_latents": ref_latents,
                             "motion_latents": motion_latents.clone(),
