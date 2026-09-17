@@ -168,14 +168,13 @@ class LNWeightTemplate(metaclass=ABCMeta):
                     self.is_post_adapter,
                 )
             with safe_open(lazy_load_file_path, framework="pt", device="cpu") as lazy_load_file:
-                weight_tensor = lazy_load_file.get_tensor(self.weight_name).to(self.infer_dtype)
-                self.pin_weight = self.pin_weight.copy_(weight_tensor)
+                weight_tensor = lazy_load_file.get_tensor(self.weight_name)
+                self.pin_weight = create_pin_tensor(weight_tensor, dtype=self.infer_dtype)
                 if self.bias_name is not None:
-                    bias_tensor = lazy_load_file.get_tensor(self.bias_name).to(self.infer_dtype)
-                    self.pin_bias = self.pin_bias.copy_(bias_tensor)
+                    bias_tensor = lazy_load_file.get_tensor(self.bias_name)
+                    self.pin_bias = create_pin_tensor(bias_tensor, dtype=self.infer_dtype)
                 else:
                     self.pin_bias = None
-            del weight_tensor
         else:
             self.weight = None
             self.bias = None
