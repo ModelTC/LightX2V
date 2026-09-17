@@ -27,6 +27,7 @@ from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3TransformerWeights,
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
+from lightx2v.models.networks.minimax_h3.weights.vdn import configure_vdn, load_vdn_weights
 from lightx2v.utils.envs import GET_DTYPE
 
 H3_CHANNEL_QUANT_SCHEMES = {
@@ -57,8 +58,15 @@ class MiniMaxH3Model(BaseTransformerModel):
 
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0, lora_alpha=None):
         self.lora_alpha = lora_alpha
+        self.vdn_checkpoint = config.get("vdn_checkpoint")
+        if self.vdn_checkpoint:
+            configure_vdn(config)
+            if config.get("tensor_parallel", False) or config.get("dit_quantized", False):
+                raise NotImplementedError("VDN currently supports unquantized BF16 with single-device or Ulysses sequence parallel inference")
+            if lora_path or config.get("lora_configs") or config.get("lora_dynamic_apply", False):
+                raise ValueError("VDN loads its default/turbo adapters from vdn_checkpoint; do not add lora_configs or dynamic LoRA")
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
-        if config.get("cpu_offload", False) and not self.use_adaln_cache:
+        if config.get("cpu_offload", False) and not self.use_adaln_cache and not self.vdn_checkpoint:
             message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{ADALN_CACHE_GUIDE}"
             logger.error(message)
             raise ValueError(message)
@@ -414,7 +422,10 @@ class MiniMaxH3Model(BaseTransformerModel):
         # BaseTransformerModel forces rank-0 TP loading through CPU. H3 shards
         # locally instead, so retain the runner-selected CPU/GPU target.
         if not self.use_tp:
-            return super()._load_ckpt(unified_dtype, sensitive_layer)
+            weight_dict = super()._load_ckpt(unified_dtype, sensitive_layer)
+            if self.vdn_checkpoint:
+                weight_dict = load_vdn_weights(weight_dict, self.config)
+            return weight_dict
         load_device = self._checkpoint_load_device()
         logger.info(
             "MiniMax-H3 rank {} (TP rank {}) loading TP checkpoint shards on {}",

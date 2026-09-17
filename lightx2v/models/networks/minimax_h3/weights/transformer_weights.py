@@ -9,6 +9,7 @@ from lightx2v.models.networks.minimax_h3.fp8_f16_accum_policy import (
 )
 from lightx2v.models.networks.minimax_h3.infer.triton_ops import MiniMaxH3TritonRope  # noqa: F401
 from lightx2v.models.networks.minimax_h3.weights.fused_qkv import FusedQKVStorage
+from lightx2v.models.networks.minimax_h3.weights.vdn import MiniMaxH3VDNWeights
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER, ROPE_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -105,6 +106,8 @@ class MiniMaxH3AttentionWeights(WeightModule):
                 ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")](a2a_backend=parallel.get("seq_p_a2a_backend", "torch")),
             )
         self.add_module("to_out", _linear(config, f"{prefix}.to_out.0", create_cuda_buffer=create_cuda_buffer, tp_split="row"))
+        if config.get("vdn_checkpoint"):
+            self.add_module("vdn", MiniMaxH3VDNWeights(prefix, create_cuda_buffer=create_cuda_buffer))
 
     def load(self, weight_dict):
         super().load(weight_dict)

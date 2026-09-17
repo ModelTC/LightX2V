@@ -46,6 +46,9 @@ class MiniMaxH3Scheduler(BaseScheduler):
         infer_steps = int(config["infer_steps"])
         self.video_shift = float(config.get("video_flow_shift", 12.0))
         self.audio_shift = float(config.get("audio_flow_shift", 3.0))
+        self.noise_device = config.get("h3_noise_device", "model" if config.get("vdn_checkpoint") else "cpu")
+        if self.noise_device not in {"cpu", "model"}:
+            raise ValueError("MiniMax-H3 h3_noise_device must be 'cpu' or 'model'")
         self.step_update = config.get("h3_step_update", "reference_blend")
         if self.step_update not in {"reference_blend", "training_euler"}:
             raise ValueError(f"MiniMax-H3 h3_step_update must be 'reference_blend' or 'training_euler', got {self.step_update!r}")
@@ -83,14 +86,15 @@ class MiniMaxH3Scheduler(BaseScheduler):
         num_audio_latents = audio_latent_num_frames(num_frames)
         patch_size = tuple(self.config.get("patch_size", (1, 2, 2)))
 
-        # The released pipeline uses one CPU random stream even when inference
-        # runs on CUDA: float32 video noise first, then channel-major audio.
-        self.generator = torch.Generator(device="cpu").manual_seed(int(seed))
+        # H3 draws on CPU; the VDN author sampler draws on the execution
+        # device. A shared seed does not make those random streams equal.
+        noise_device = AI_DEVICE if self.noise_device == "model" else "cpu"
+        self.generator = torch.Generator(device=noise_device).manual_seed(int(seed))
         condition_video_latents = condition_video_latents or []
         condition_audio_latents = condition_audio_latents or []
         condition_video_rows = []
         for clean in condition_video_latents:
-            noise = torch.randn(clean.shape, generator=self.generator, device="cpu", dtype=torch.float32)
+            noise = torch.randn(clean.shape, generator=self.generator, device=noise_device, dtype=torch.float32)
             clean_rows = patchify_video_latents(clean.float(), patch_size).to(AI_DEVICE)
             noise_rows = patchify_video_latents(noise.to(AI_DEVICE), patch_size)
             # Match Diffusers' ``scheduler.scale_noise`` exactly: the
@@ -104,7 +108,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
         video_noise = torch.randn(
             (1, int(self.config.get("in_channels", 24)), latent_frames, latent_height, latent_width),
             generator=self.generator,
-            device="cpu",
+            device=noise_device,
             dtype=torch.float32,
         )
         target_video_rows = patchify_video_latents(video_noise, patch_size)
@@ -115,11 +119,11 @@ class MiniMaxH3Scheduler(BaseScheduler):
                 int(self.config.get("audio_in_channels", 32)),
             ),
             generator=self.generator,
-            device="cpu",
+            device=noise_device,
             dtype=torch.float32,
         )
         condition_audio_rows = [latent.transpose(1, 2).reshape(-1, latent.shape[1]).float() for latent in condition_audio_latents]
-        self.audio_latents = torch.cat(condition_audio_rows + [target_audio_rows]).to(AI_DEVICE)
+        self.audio_latents = torch.cat([rows.to(AI_DEVICE) for rows in condition_audio_rows] + [target_audio_rows.to(AI_DEVICE)])
 
         if references is None:
             self.layout_cpu = build_packed_sequence(text_token_tags.cpu(), latent_frames, latent_height, latent_width, num_audio_latents, patch_size, keyframe_anchors)

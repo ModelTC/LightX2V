@@ -4,10 +4,13 @@ Offline generation lives in ``tools/cache_minimax_h3_adaln/builder.py`` so the
 inference path does not carry checkpoint-building concerns.
 """
 
+import hashlib
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from loguru import logger
 from safetensors import SafetensorError, safe_open
 
@@ -90,12 +93,99 @@ def _cache_entries(config, profiles: list[str]) -> list[dict]:
     return entries
 
 
+def is_adaln_cache_key(name: str) -> bool:
+    return name.startswith(("time_embedder.", "norm_out.linear.")) or (name.startswith("transformer_blocks.") and ".adaln_proj.linear." in name)
+
+
+def _checkpoint_files(config) -> list[Path]:
+    checkpoint = Path(config["dit_original_ckpt"]).expanduser().resolve()
+    files = sorted(checkpoint.glob("*.safetensors")) if checkpoint.is_dir() else [checkpoint]
+    if not files or any(not path.is_file() for path in files):
+        raise FileNotFoundError(f"MiniMax-H3 safetensors checkpoint not found: {checkpoint}")
+    return files
+
+
+def _file_signature(path):
+    path = Path(path).expanduser().resolve()
+    stat = path.stat()
+    return str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+@lru_cache(maxsize=32)
+def _file_sha256(signature):
+    with open(signature[0], "rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+@lru_cache(maxsize=8)
+def _base_modulation_sha256(signatures, num_layers):
+    """Hash actual cached-weight bytes, streaming without loading the DiT."""
+    expected = {f"time_embedder.linear_{index}.{kind}" for index in (1, 2) for kind in ("weight", "bias")}
+    expected.update(f"norm_out.linear.{kind}" for kind in ("weight", "bias"))
+    expected.update(f"transformer_blocks.{index}.adaln_proj.linear.{kind}" for index in range(num_layers) for kind in ("weight", "bias"))
+    found = set()
+    digest = hashlib.sha256()
+    for signature in signatures:
+        with open(signature[0], "rb") as handle:
+            header_size = int.from_bytes(handle.read(8), "little")
+            header = json.loads(handle.read(header_size))
+            for name in sorted(expected.intersection(header)):
+                if name in found:
+                    raise ValueError(f"Duplicate MiniMax-H3 modulation tensor: {name}")
+                found.add(name)
+                entry = header[name]
+                digest.update(json.dumps([name, entry["dtype"], entry["shape"]], separators=(",", ":")).encode())
+                start, end = entry["data_offsets"]
+                handle.seek(8 + header_size + start)
+                remaining = end - start
+                while remaining:
+                    data = handle.read(min(remaining, 8 * 1024 * 1024))
+                    if not data:
+                        raise ValueError(f"Truncated MiniMax-H3 tensor: {name}")
+                    digest.update(data)
+                    remaining -= len(data)
+    if found != expected:
+        raise ValueError(f"Missing MiniMax-H3 modulation tensors: {sorted(expected - found)[:4]}")
+    return digest.hexdigest()
+
+
+def _weight_identity(config):
+    files = _checkpoint_files(config)
+    identity = {
+        "base_checkpoint": str(Path(config["dit_original_ckpt"]).expanduser().resolve()),
+        "base_modulation_sha256": _base_modulation_sha256(tuple(_file_signature(path) for path in files), int(config.get("num_layers", 50))),
+    }
+    if config.get("vdn_checkpoint"):
+        from lightx2v.models.networks.minimax_h3.weights.vdn import vdn_adapter_paths
+
+        checkpoint = Path(config["vdn_checkpoint"]).expanduser().resolve()
+        identity["vdn"] = {
+            "checkpoint": str(checkpoint),
+            "spec_sha256": _file_sha256(_file_signature(checkpoint / "model_spec.json")),
+            "merge": "default_then_turbo_fp32_delta_cast_then_add_v1",
+            "adapters": [{"name": name, "sha256": _file_sha256(_file_signature(path))} for name, path in vdn_adapter_paths(config)],
+        }
+    if config.get("lora_configs"):
+        identity["loras"] = []
+        for adapter in config["lora_configs"]:
+            path = Path(adapter["path"]).expanduser().resolve()
+            # The standard Turbo adapters do not alter these projections.
+            # Never silently reuse an unadapted cache for another LoRA family.
+            with safe_open(path, framework="pt", device="cpu") as source:
+                if any(any(part in key for part in ("adaln_proj", "norm_out", "time_embedder")) for key in source.keys()):
+                    raise NotImplementedError("AdaLN cache for modulation-changing generic LoRAs is unsupported; use the VDN artifact path or disable the cache")
+            identity["loras"].append({"path": str(path), "sha256": _file_sha256(_file_signature(path)), "strength": float(adapter.get("strength", 1.0)), "alpha": adapter.get("alpha")})
+    return identity
+
+
 def _build_spec(config) -> dict:
     if not config.get("use_adaln_cache", False):
         raise ValueError("Building or loading an AdaLN cache requires use_adaln_cache=true")
     validate_adaln_cache_config(config)
     profiles = _selected_profiles(config)
     return {
+        "format_version": 2,
+        "weight_identity": _weight_identity(config),
         "infer_steps": int(config["infer_steps"]),
         "video_flow_shift": float(config.get("video_flow_shift", 12.0)),
         "audio_flow_shift": float(config.get("audio_flow_shift", 3.0)),
@@ -106,12 +196,14 @@ def _build_spec(config) -> dict:
     }
 
 
-def _cache_path(config) -> Path:
+def _cache_path(config, spec=None) -> Path:
     cache_name = config["model_variant"]
     infer_steps = int(config["infer_steps"])
     video_flow_shift = float(config.get("video_flow_shift", 12.0))
     audio_flow_shift = float(config.get("audio_flow_shift", 3.0))
-    return _cache_root(config) / "minimax_h3" / f"{cache_name}_{infer_steps:02d}steps_shift_{video_flow_shift}_{audio_flow_shift}"
+    spec = _build_spec(config) if spec is None else spec
+    identity = hashlib.sha256(json.dumps(spec["weight_identity"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+    return _cache_root(config) / "minimax_h3" / f"{cache_name}_{infer_steps:02d}steps_shift_{video_flow_shift}_{audio_flow_shift}_{identity}"
 
 
 def _expected_table_shape(spec: dict, entry: dict) -> tuple[int, int]:
@@ -166,8 +258,23 @@ def load_persistent_adaln_cache(
     dict[tuple[float, ...], torch.Tensor],
 ]:
     """Load cached block AdaLN and final-norm modulation onto the device."""
-    spec = _build_spec(config)
-    cache_path = _cache_path(config)
+    # Every inference rank calls this constructor. Hash large base tensors
+    # once on rank 0, then share the same content identity across CPU/GPU loads.
+    if dist.is_initialized() and dist.get_world_size() > 1:
+        payload = [None]
+        if dist.get_rank() == 0:
+            try:
+                spec = _build_spec(config)
+                payload[0] = {"spec": spec, "path": str(_cache_path(config, spec))}
+            except Exception as error:
+                payload[0] = {"error": str(error)}
+        dist.broadcast_object_list(payload, src=0)
+        if "error" in payload[0]:
+            raise RuntimeError(f"MiniMax-H3 AdaLN cache identity failed: {payload[0]['error']}")
+        spec, cache_path = payload[0]["spec"], Path(payload[0]["path"])
+    else:
+        spec = _build_spec(config)
+        cache_path = _cache_path(config, spec)
     if not _validate_cache(cache_path, spec):
         message = (
             "\nMINIMAX-H3 ADALN CACHE LOAD ERROR\n\n"
