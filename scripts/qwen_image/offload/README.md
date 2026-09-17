@@ -1,87 +1,68 @@
 # Qwen-Image-2512 CPU block offload 使用指南
 
-本目录用于 Qwen-Image-2512 文生图，提供 DiT block offload、host 共享和 NUMA 共享。可使用固定单卡／8 卡入口，或通过 `_auto.sh` 按可见 GPU 数启动。以下命令均在仓库根目录使用当前 Python 环境执行。
+共享 offload 使用不含任务名的统一入口：`qwen_image_2512_block_shared_offload.sh`，使用 `configs/qwen_image/offload/qwen_image_2512_block_shared.json`。默认 **TASK=t2i、host 共享、8 卡、Ulysses SP8**，通过环境变量切换 NUMA 或指定显卡。使用当前环境的 `python -m torch.distributed.run`，以下命令均为单机推理。
 
 ## 准备环境和权重
 
-先激活已安装项目依赖的 Python 环境，默认注意力后端为 FlashAttention 3。
+激活已安装项目依赖的 Python 环境，默认注意力后端为 FlashAttention 3。在仓库根目录执行：
 
 ```bash
 cd /path/to/lightx2v_offload_opt
 export QWEN_MODEL_PATH="$PWD/models/Qwen-Image-2512"
 ```
 
-将路径改为实际 BF16 Diffusers 模型根目录，保留 transformer、文本编码器、tokenizer 和 VAE 等组件，不需要重新切分权重。
+模型目录使用原始 BF16 Diffusers 权重，保留 transformer、文本编码器、tokenizer 和 VAE 等组件。
 
-## 固定卡数入口
-
-| 场景 | 启动脚本 |
-| --- | --- |
-| 单卡，私有 CPU 权重 | `qwen_image_t2i_2512_block_offload.sh` |
-| 8 卡，每进程私有 CPU 权重 | `qwen_image_t2i_2512_block_offload_sp8.sh` |
-| 8 卡，host 共享 | `qwen_image_t2i_2512_block_shared_offload_host_sp8.sh` |
-| 8 卡，NUMA 共享 | `qwen_image_t2i_2512_block_shared_offload_numa_sp8.sh` |
+## 启动命令
 
 ```bash
-# 单卡，私有 CPU 权重
-CUDA_VISIBLE_DEVICES=0 \
-bash scripts/qwen_image/offload/qwen_image_t2i_2512_block_offload.sh
+# 默认 host + 8 卡：未设置 CUDA_VISIBLE_DEVICES 时使用 0,1,2,3,4,5,6,7
+bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
 
-# 固定 8 卡，host 共享
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-bash scripts/qwen_image/offload/qwen_image_t2i_2512_block_shared_offload_host_sp8.sh
-```
+# NUMA + 8 卡
+SHARED_CPU_WEIGHT_SCOPE=numa \
+bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
 
-这些入口支持 `QWEN_MODEL_PATH`、`QWEN_SAVE_RESULT_PATH` 和 `CUDA_VISIBLE_DEVICES`，配置路径写在脚本中，不读取 `CONFIG_JSON`。`_sp8.sh` 固定启动 8 个进程；仅修改可见 GPU 或 `NPROC_PER_NODE` 不会改变进程数，其他卡数使用下一节的 `_auto.sh`。
-
-## 按可见 GPU 数启动（`_auto.sh`）
-
-每种共享方式都有独立入口。设置 `CUDA_VISIBLE_DEVICES` 后，脚本读取对应 `_auto.json` 模板，按卡数生成临时运行配置，并使用当前环境的 `python -m torch.distributed.run` 启动。
-
-```bash
-# 4 卡，host 共享
+# host + 4 卡
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
-bash scripts/qwen_image/offload/qwen_image_t2i_2512_block_shared_offload_host_auto.sh
+bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
 
-# 2 卡，NUMA 共享
-CUDA_VISIBLE_DEVICES=2,5 \
-bash scripts/qwen_image/offload/qwen_image_t2i_2512_block_shared_offload_numa_auto.sh
+# NUMA + 2 卡
+CUDA_VISIBLE_DEVICES=2,5 SHARED_CPU_WEIGHT_SCOPE=numa \
+bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
 
 # 单卡
 CUDA_VISIBLE_DEVICES=0 \
-bash scripts/qwen_image/offload/qwen_image_t2i_2512_block_shared_offload_host_auto.sh
+bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
 ```
 
-支持 **1、2、3、4、6、8、12、24 卡**，使用 Ulysses SP，SP 大小等于卡数。模型有 24 个注意力头，SP 必须整除 24；本入口不提供 TP 或 CFG 并行。CFG 引导计算仍启用。16 卡机器可显式选择其中 8 或 12 张，不支持的卡数会直接报错，不会自动减少使用的 GPU。
+支持 **1、2、3、4、6、8、12、24 卡**。模型有 24 个注意力头，Ulysses SP 大小必须整除 24。默认模板设置 SP 等于可见卡数，使用全部指定显卡，不支持的卡数会直接报错。本入口不使用 TP 或 CFG 并行，CFG 引导计算仍启用。无需设置 `NPROC_PER_NODE`。
 
-未设置 `CUDA_VISIBLE_DEVICES` 时使用 GPU 0。不需要设置 `NPROC_PER_NODE`，也不需要手工生成 JSON。可见 GPU 必须真实存在，单卡工作显存仍需足够。
+## 选择任务
 
-## `_auto.sh` 配置和常用参数
+任务通过 `TASK` 传给推理入口。当前 Qwen BF16 共享权重适配器仅支持 `t2i`，可显式设置 `TASK=t2i`；`i2i` 等任务会在启动前报错。文件名通用化不会扩展适配器的任务能力，图像编辑需要另行接入。
 
-配置位于 `configs/qwen_image/offload/`：
+## 参数与配置
 
-| 模式 | 配置模板 |
+| 环境变量 | 默认值／用途 |
 | --- | --- |
-| host | `qwen_image_t2i_2512_block_shared_host_auto.json` |
-| NUMA | `qwen_image_t2i_2512_block_shared_numa_auto.json` |
-
-模板保留 8 卡基准参数；`_auto.sh` 按可见卡数在临时副本中设置并行参数，再将副本传给推理。每次启动的临时文件独立，正常结束或报错退出后自动删除，模板本身不被修改。
-
-默认 50 步、16:9、CFG scale 4、seed 42。脚本使用当前环境的 `python -m torch.distributed.run`。
-
-| 环境变量 | 用途 |
-| --- | --- |
-| `CUDA_VISIBLE_DEVICES` | 参与本次推理的 GPU 列表，可不连续 |
-| `QWEN_MODEL_PATH` | 模型根目录 |
-| `QWEN_SAVE_RESULT_PATH` | 输出图片路径 |
-| `CONFIG_JSON` | 可选完整配置覆盖；显式指定时不改写并行设置，进程数和 scope 须匹配入口 |
-
-修改提示词时编辑对应脚本中的 `--prompt`；步数、长宽比、引导强度分别修改对应 `_auto.json` 模板的 `infer_steps`、`aspect_ratio`、`sample_guide_scale`。例如仅改变输出位置：
+| `TASK` | 默认 `t2i`，当前共享适配器仅支持此任务 |
+| `CUDA_VISIBLE_DEVICES` | 未设置时为 `0,1,2,3,4,5,6,7`；支持不连续编号 |
+| `SHARED_CPU_WEIGHT_SCOPE` | 未设置时读取 JSON 的 scope，默认 `host`；可设 `host` 或 `numa` |
+| `QWEN_MODEL_PATH` | 仓库内 `models/Qwen-Image-2512` |
+| `QWEN_PROMPT` | 默认提示词见脚本，可直接覆盖 |
+| `QWEN_SAVE_RESULT_PATH` | `save_results/qwen_image_t2i_2512_block_shared_offload.png` |
+| `SEED` | `42` |
+| `CONFIG_JSON` | 可选完整 JSON 配置，未设置时使用上述默认配置 |
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 \
-QWEN_SAVE_RESULT_PATH="$PWD/save_results/qwen_sp2.png" \
-bash scripts/qwen_image/offload/qwen_image_t2i_2512_block_shared_offload_host_auto.sh
+CUDA_VISIBLE_DEVICES=0,1 QWEN_PROMPT="A small coffee shop beside a lake." \
+QWEN_SAVE_RESULT_PATH="$PWD/save_results/qwen_custom.png" SEED=123 \
+bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
 ```
 
-host 在同机同一 IPC 域共享一份 CPU block 权重；NUMA 每个参与的 GPU NUMA 域一份。共享需要 Linux SysV 和 CUDA pinned memory，严格 NUMA 绑定不可用时可选择 host。当前共享入口支持原始 BF16、`t2i`、block 粒度及 `NoCaching`，不支持 TP、量化、LoRA、layered 或 lazy loading。文本编码器和 VAE 仍独立加载。
+默认 50 步、16:9、CFG scale 4；分别修改 JSON 的 `infer_steps`、`aspect_ratio`、`sample_guide_scale`。负面提示词位于脚本的 `--negative_prompt`。
+
+脚本从配置生成独立临时 JSON，退出时删除，不改写源文件。显式传入 `CONFIG_JSON` 时保留其中的并行设置，TP×SP×CFG 必须等于可见卡数；`SHARED_CPU_WEIGHT_SCOPE` 若设置则覆盖该配置的 scope，否则保留配置中的值。模型、配置和输出的相对路径以调用脚本时的目录为基准。
+
+host 在同机同一 IPC 域共享一份 CPU block 权重；NUMA 按参与 GPU 的 NUMA 域建立副本。依赖 Linux SysV 和 CUDA pinned memory，严格 NUMA 绑定不可用时会报错。当前共享入口支持原始 BF16、T2I、block 粒度及 `NoCaching`；不支持 TP、量化、LoRA、layered 或 lazy loading。文本编码器和 VAE 仍独立加载，各 GPU 仍需足够的工作显存。

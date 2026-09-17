@@ -35,7 +35,7 @@
 
 当前 adapter 要求 `cpu_offload=true`、`offload_granularity=block`、`dit_quantized=true`、`dit_quant_scheme=fp8-vllm`，并要求推理和 sensitive dtype 相同。其 TP、lazy、在线量化、LoRA／adapter 限制由 `_validate_config()` 定义。不要由该案例推断 BF16 Wan 或全部 Wan 家族已支持共享。
 
-启动入口在 [scripts/wan/offload](../../../../scripts/wan/offload/)，配置沿用 `configs/offload/block/`。当前 `run_wan_i2v_block_shared_offload_sp8.sh` 对应 `wan_i2v_block_shared_sp8.json`，scope 为 host；目录尚缺 NUMA 成对入口。这是历史案例的交付缺口，不代表公共 coordinator 不支持 NUMA。后续任务若补齐 Wan 接入，应添加真实 NUMA 配置与脚本并验证，不能将该 host-only 结构作为完整模板。
+启动入口在 [scripts/wan/offload](../../../../scripts/wan/offload/)，统一脚本为 `run_wan_block_shared_offload.sh`，配置沿用 `configs/offload/block/wan_block_shared.json`。默认 host + 8 卡，通过 `SHARED_CPU_WEIGHT_SCOPE=numa` 切换 NUMA，`CUDA_VISIBLE_DEVICES` 指定支持的卡数。
 
 现有示例中的 T5、CLIP 量化和 DiT 共享是不同能力；不能把编码器量化解释为 CPU 权重共享。
 
@@ -53,12 +53,7 @@
 
 `validate_qwen_shared_block_views()` 在公共地址校验之外，依据算子的 `base_attrs` 验证是否采用规定的转置方向。这可发现方阵上仅比较 shape 检测不到的布局错误。
 
-启动入口在 [scripts/qwen_image/offload](../../../../scripts/qwen_image/offload/)，配置在 `configs/qwen_image/offload/`。已有共享脚本成对使用：
-
-```text
-qwen_image_t2i_2512_block_shared_offload_host_sp8.sh
-qwen_image_t2i_2512_block_shared_offload_numa_sp8.sh
-```
+启动入口在 [scripts/qwen_image/offload](../../../../scripts/qwen_image/offload/)，统一脚本为 `qwen_image_2512_block_shared_offload.sh`，配置为 `configs/qwen_image/offload/qwen_image_2512_block_shared.json`。默认 host + 8 卡，通过 `SHARED_CPU_WEIGHT_SCOPE=numa` 切换 NUMA。
 
 当前示例共享 DiT blocks；编码器和 VAE 没有因此自动开启共享。扩展新组件需要独立 loader、owner、生命周期和证据。
 
@@ -110,12 +105,7 @@ DiT GPU buffer 可以在文本编码或 VAE 阶段释放，并在 denoise 前由
 
 `lightx2v/models/runners/minimax_h3/minimax_h3_runner.py` 的 `load_model()`、`init_run()`、`_offload_transformer()`、`run_main()` 决定组件加载顺序和阶段切换。所有 rank 必须按相同顺序进入各组件共享初始化，不能仅 rank 0 创建 text／VAE 共享模块。
 
-启动入口在 [scripts/minimax_h3/offload](../../../../scripts/minimax_h3/offload/)，已有 T2AV、I2AV、L2AV、FL2AV、REF2AV 的 host／NUMA 成对脚本。兼容任务复用：
-
-```text
-configs/minimax_h3/offload/minimax_h3_t2av_block_shared_offload_host_sp8.json
-configs/minimax_h3/offload/minimax_h3_t2av_block_shared_offload_numa_sp8.json
-```
+启动入口在 [scripts/minimax_h3/offload](../../../../scripts/minimax_h3/offload/)，共享启动入口为`run_minimax_h3_block_shared_offload.sh`，对应 `configs/minimax_h3/offload/minimax_h3_block_shared_offload.json`。`TASK` 选择 `t2av/i2av/l2av/fl2av/ref2av`，默认 `t2av`、host + 8 卡，通过 `SHARED_CPU_WEIGHT_SCOPE=numa` 切换 NUMA，`CUDA_VISIBLE_DEVICES` 指定支持的卡数。
 
 task 由 CLI 决定，不能只看配置文件名判定实际任务。普通 `scripts/minimax_h3/run_minimax_h3_i2av.sh` 也不能代替 offload 子目录的共享入口，应核对其实际引用配置。
 

@@ -1,6 +1,6 @@
 # Hunyuan Image 3.0 CPU block offload 使用指南
 
-本目录支持 T2I／TI2I、私有 CPU 权重、host 共享和 NUMA 共享。可使用默认 8 卡入口，或通过 `_auto.sh` 按可见 GPU 数匹配 TP／SP／CFG。以下均为单机命令，使用当前 Python 环境。
+共享 offload 使用统一入口：`run_hunyuan_image3_block_shared_offload.sh`，使用 `configs/hunyuan_image3/offload/hunyuan_image3_block_shared.json`。默认 **TASK=t2i、host 共享、8 卡，TP2 × SP2 × CFG2**，通过环境变量切换 NUMA 或指定显卡。使用当前环境的 `python -m torch.distributed.run`，以下命令均为单机推理。
 
 ## 准备环境和模型
 
@@ -12,53 +12,36 @@ export HUNYUAN_IMAGE3_MODEL_PATH="$PWD/../HunyuanImage-3-Instruct"
 export HUNYUAN_IMAGE3_REPO_PATH="$PWD/../HunyuanImage-3.0"
 ```
 
-两个路径分别为带 `model.safetensors.index.json` 的原始 BF16 权重目录，以及提供 tokenizer、图像处理、VAE／视觉模块的上游代码目录。按实际位置修改，默认值也是仓库相邻的这两个目录。
+两个路径分别为带 `model.safetensors.index.json` 的原始 BF16 权重目录，以及提供 tokenizer、图像处理、VAE／视觉模块的上游代码目录；默认值也是仓库相邻的这两个目录。
 
-默认启用 FlashInfer MoE、KV cache、50 步推理和 `think_recaption`。环境需提供 FlashInfer 的 `cutlass_fused_moe`、`ActivationType` 及支持缓存参数的 autotune 接口。
+默认启用 FlashInfer MoE、KV cache、50 步推理和 `think_recaption`。环境需要 FlashInfer 的 `cutlass_fused_moe`、`ActivationType` 和支持缓存参数的 autotune 接口。
 
-## 默认 8 卡入口
-
-以下入口默认使用 **TP2 × SP2 × CFG2 = 8 个进程**。`<task>` 为 `t2i` 或 `ti2i`，JSON 位于 `configs/hunyuan_image3/offload/`：
-
-| 模式 | 启动脚本 | 默认 JSON |
-| --- | --- | --- |
-| 私有 | `run_hunyuan_image3_<task>_block_offload.sh` | `hunyuan_image3_<task>_block_tp2_sp2_cfg2.json` |
-| host | `run_hunyuan_image3_<task>_block_shared_offload_host.sh` | `hunyuan_image3_<task>_block_shared_host_tp2_sp2_cfg2.json` |
-| NUMA | `run_hunyuan_image3_<task>_block_shared_offload_numa.sh` | `hunyuan_image3_<task>_block_shared_numa_tp2_sp2_cfg2.json` |
+## 启动命令
 
 ```bash
-# 默认 8 卡 TI2I，host 共享
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-bash scripts/hunyuan_image3/offload/run_hunyuan_image3_ti2i_block_shared_offload_host.sh
+# 默认 host + 8 卡：未设置 CUDA_VISIBLE_DEVICES 时使用 0,1,2,3,4,5,6,7
+bash scripts/hunyuan_image3/offload/run_hunyuan_image3_block_shared_offload.sh
 
-# 默认 8 卡 T2I，私有 CPU 权重
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-bash scripts/hunyuan_image3/offload/run_hunyuan_image3_t2i_block_offload.sh
-```
+# NUMA + 8 卡
+SHARED_CPU_WEIGHT_SCOPE=numa \
+bash scripts/hunyuan_image3/offload/run_hunyuan_image3_block_shared_offload.sh
 
-这些脚本通过 `run_hunyuan_image3_offload.sh` 读取配置并计算进程数，也支持用 `CONFIG_JSON` 选择与任务和共享模式匹配的完整配置。可见 GPU 数需与配置中的 TP×SP×CFG 一致；`NPROC_PER_NODE` 只作一致性检查。需要只指定可见 GPU、自动匹配拓扑时，使用下一节的 `_auto.sh`。
-
-## 按可见 GPU 数启动（`_auto.sh`）
-
-每种共享方式都有独立入口。设置 `CUDA_VISIBLE_DEVICES` 后，脚本读取对应 `_auto.json` 模板，按卡数生成临时运行配置，并使用当前环境的 `python -m torch.distributed.run` 启动。
-
-```bash
-# 4 卡 TI2I，host 共享
+# host + 4 卡
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
-bash scripts/hunyuan_image3/offload/run_hunyuan_image3_ti2i_block_shared_offload_host_auto.sh
+bash scripts/hunyuan_image3/offload/run_hunyuan_image3_block_shared_offload.sh
 
-# 2 卡 TI2I，NUMA 共享
-CUDA_VISIBLE_DEVICES=2,5 \
-bash scripts/hunyuan_image3/offload/run_hunyuan_image3_ti2i_block_shared_offload_numa_auto.sh
+# NUMA + 2 卡
+CUDA_VISIBLE_DEVICES=2,5 SHARED_CPU_WEIGHT_SCOPE=numa \
+bash scripts/hunyuan_image3/offload/run_hunyuan_image3_block_shared_offload.sh
 
-# 8 卡 T2I，host 共享
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-bash scripts/hunyuan_image3/offload/run_hunyuan_image3_t2i_block_shared_offload_host_auto.sh
+# 单卡
+CUDA_VISIBLE_DEVICES=0 \
+bash scripts/hunyuan_image3/offload/run_hunyuan_image3_block_shared_offload.sh
 ```
 
-T2I 的 NUMA 入口为 `run_hunyuan_image3_t2i_block_shared_offload_numa_auto.sh`。单卡只需 `CUDA_VISIBLE_DEVICES=0`，16 卡设置完整的 16 个 GPU 编号。
+默认模板按可见显卡数量选择以下并行配置：
 
-| 可见 GPU 数 | TP | SP | CFG 并行大小 | CFG 方式 |
+| GPU 数 | TP | SP | CFG 并行大小 | CFG 方式 |
 | --- | ---: | ---: | ---: | --- |
 | 1 | 1 | 1 | 1 | serial |
 | 2 | 2 | 1 | 1 | serial |
@@ -66,44 +49,49 @@ T2I 的 NUMA 入口为 `run_hunyuan_image3_t2i_block_shared_offload_numa_auto.sh
 | 8 | 2 | 2 | 2 | parallel |
 | 16 | 2 | 4 | 2 | parallel |
 
-脚本使用全部指定显卡，进程数等于 TP×SP×CFG。CFG=1 仍计算引导，只是串行运行两个分支。模型有 32 个 Q 头、8 个 KV 头，Ulysses 要求 TP×SP 同时整除它们；3、6 等卡数会直接报错，不会自动减少用卡。6 卡机器可以显式选择 4 张。
+支持 **1、2、4、8、16 卡**，使用全部指定显卡，进程数等于 TP×SP×CFG。模型有 32 个 Q 头、8 个 KV 头，Ulysses 要求 TP×SP 同时整除它们；不支持的卡数会直接报错。CFG=1 仍计算引导，两个分支串行执行。无需设置 `NPROC_PER_NODE` 或 TP／SP／CFG 环境变量。
 
-未设置 `CUDA_VISIBLE_DEVICES` 时使用 GPU 0。无需设置 `NPROC_PER_NODE`、TP／SP／CFG 环境变量或手工生成 JSON。拓扑满足切分条件不代表显存一定够，尤其单卡仍需容纳 block 缓冲、MoE 工作区、KV cache、视觉编码器和 VAE。
+单卡也需要容纳 block 缓冲、MoE 工作区、KV cache 及其他模型组件；并行切分条件满足不代表显存一定够。
 
-## 配置与输入
+## 选择任务与输入
 
-`_auto.sh` 的配置位于 `configs/hunyuan_image3/offload/`，按任务和 scope 使用四份模板：
+`TASK=t2i` 为文生图，`TASK=ti2i` 为参考图编辑，二者使用同一个脚本和配置模板：
 
-```text
-hunyuan_image3_t2i_block_shared_host_auto.json
-hunyuan_image3_t2i_block_shared_numa_auto.json
-hunyuan_image3_ti2i_block_shared_host_auto.json
-hunyuan_image3_ti2i_block_shared_numa_auto.json
+```bash
+TASK=ti2i CUDA_VISIBLE_DEVICES=0,1,2,3 \
+HUNYUAN_IMAGE3_IMAGE_PATH=/path/to/reference.png \
+HUNYUAN_IMAGE3_PROMPT="将参考图改成新年主题的宠物海报。" \
+bash scripts/hunyuan_image3/offload/run_hunyuan_image3_block_shared_offload.sh
 ```
 
-模板保留 8 卡基准参数；`_auto.sh` 按可见卡数在临时副本中设置并行参数，再将副本传给推理。每次启动的临时文件独立，正常结束或报错退出后自动删除，模板本身不被修改。
+TI2I 未指定图片时使用上游示例 `assets/demo_instruct_imgs/input_0_0.png`。使用默认模板时，T2I 默认 1024×1024；TI2I 设置 `image_size=auto` 和 `infer_align_image_size=true`，按参考图对齐输出尺寸。FlashInfer autotune 缓存按任务和 TP／SP／CFG 分开。
 
-不同任务／拓扑使用各自的 FlashInfer autotune 缓存，首次运行可能需要生成缓存。常用环境变量：
+## 参数与配置
 
-| 变量 | 用途 |
+| 环境变量 | 默认值／用途 |
 | --- | --- |
-| `CUDA_VISIBLE_DEVICES` | 本次推理使用的 GPU 列表 |
-| `HUNYUAN_IMAGE3_MODEL_PATH`／`HUNYUAN_IMAGE3_REPO_PATH` | 权重／上游代码目录 |
-| `HUNYUAN_IMAGE3_IMAGE_PATH` | TI2I 参考图，默认上游示例图片 |
-| `HUNYUAN_IMAGE3_PROMPT` | 提示词 |
-| `HUNYUAN_IMAGE3_SAVE_RESULT_PATH` | 输出图片路径 |
-| `SEED` | 随机种子，默认 42 |
-| `CONFIG_JSON` | 可选完整配置覆盖；显式指定时保留其中的拓扑和缓存路径，scope 和进程数须匹配入口 |
-| `LIGHTX2V_DIST_TIMEOUT_SECONDS` | 初始化通信超时，默认 3600 秒 |
+| `TASK` | 默认 `t2i`；可设为 `ti2i` |
+| `CUDA_VISIBLE_DEVICES` | 未设置时为 `0,1,2,3,4,5,6,7`；支持不连续编号 |
+| `SHARED_CPU_WEIGHT_SCOPE` | 未设置时读取 JSON 的 scope，默认 `host`；可设 `host` 或 `numa` |
+| `HUNYUAN_IMAGE3_MODEL_PATH` | 仓库相邻的 `HunyuanImage-3-Instruct` |
+| `HUNYUAN_IMAGE3_REPO_PATH` | 仓库相邻的 `HunyuanImage-3.0` |
+| `HUNYUAN_IMAGE3_IMAGE_PATH` | TI2I 参考图，默认使用上游示例 |
+| `HUNYUAN_IMAGE3_PROMPT` | 默认提示词见脚本，可直接覆盖 |
+| `HUNYUAN_IMAGE3_SAVE_RESULT_PATH` | `save_results/hunyuan_image3_<TASK>_block_shared_offload.png` |
+| `SEED` | `42` |
+| `CONFIG_JSON` | 可选完整 JSON 配置，未设置时使用上述默认配置 |
+| `LIGHTX2V_DIST_TIMEOUT_SECONDS` | 初始化通信超时，默认 `3600` 秒 |
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
-HUNYUAN_IMAGE3_IMAGE_PATH="$HUNYUAN_IMAGE3_REPO_PATH/assets/demo_instruct_imgs/input_0_0.png" \
-HUNYUAN_IMAGE3_PROMPT="将参考图改成新年主题的宠物海报。" \
-HUNYUAN_IMAGE3_SAVE_RESULT_PATH="$PWD/save_results/hunyuan_custom.png" \
-bash scripts/hunyuan_image3/offload/run_hunyuan_image3_ti2i_block_shared_offload_host_auto.sh
+HUNYUAN_IMAGE3_PROMPT="生成图片：雪山脚下的一座木屋，清晨阳光。" \
+HUNYUAN_IMAGE3_SAVE_RESULT_PATH="$PWD/save_results/hunyuan_custom.png" SEED=123 \
+bash scripts/hunyuan_image3/offload/run_hunyuan_image3_block_shared_offload.sh \
+  --max_new_tokens 512
 ```
 
-脚本也支持附加 `--max_new_tokens` 等请求参数。默认 `max_new_tokens=2048`，较长的思考／重描述文本会增加 offload 推理时间，可按任务需要调整。步数、图像尺寸等启动配置修改对应 `_auto.json` 模板；显式传入 `CONFIG_JSON` 时按完整配置使用，不改其并行参数、缓存路径或原文件。
+脚本支持附加 `lightx2v.infer` 的请求参数，例如 `--max_new_tokens`；任务通过 `TASK` 选择，启动配置通过 `CONFIG_JSON` 指定。默认 `max_new_tokens=2048`，较长的思考／重描述文本会增加推理耗时。默认 50 步，可修改 JSON 的 `infer_steps`；T2I 尺寸由 `target_height`、`target_width` 指定，TI2I 默认使用参考图尺寸策略。
 
-host 在同机同一 IPC 域共享一份 transformer block CPU 权重；NUMA 每个参与的 GPU NUMA 域一份。共享需要 Linux SysV、CUDA pinned memory，NUMA 还需要可用的拓扑及内存绑定。pre/post、VAE、视觉编码器及 GPU 的 KV cache／激活仍独立占用内存。当前接入不支持量化、LoRA、lazy loading、compile、CUDA Graph 或跨 GPU pipeline。
+脚本从配置生成独立临时 JSON，退出时删除，不改写源文件。使用默认模板时，FlashInfer autotune 缓存路径随任务和 TP／SP／CFG 改变，首次使用可能需要调优。显式传入 `CONFIG_JSON` 时须选择与 `TASK` 匹配的尺寸及缓存配置，脚本保留其中的拓扑、尺寸设置和缓存路径，TP×SP×CFG 必须等于可见卡数；`SHARED_CPU_WEIGHT_SCOPE` 若设置则覆盖该配置的 scope，否则保留配置中的值。模型、上游代码、配置和输出的相对路径以调用脚本时的目录为基准。
+
+host 在同机同一 IPC 域共享一份 transformer block CPU 权重；NUMA 按参与 GPU 的 NUMA 域建立副本。共享依赖 Linux SysV、CUDA pinned memory，严格 NUMA 绑定不可用时会报错。pre/post、VAE、视觉编码器及 GPU 的 KV cache／激活仍独立占用内存。当前共享路径不支持量化、LoRA、lazy loading、compile、CUDA Graph 或跨 GPU pipeline。

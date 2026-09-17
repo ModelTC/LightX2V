@@ -4,9 +4,9 @@
 
 ## 启动脚本与配置验收
 
-在 `scripts/<model>/offload/` 核对 host、NUMA 两个独立入口及 README；逐一追踪 `--config_json`，确认配置文件存在且 scope 分别为 `host`、`numa`。共享开关必须进入实际 loader，而不只是被 JSON 解析。
+在 `scripts/<model>/offload/` 核对统一共享启动脚本及 README；分别以默认参数和 `SHARED_CPU_WEIGHT_SCOPE=numa` 调用，追踪 `--config_json`，确认有效配置的 scope 分别为 `host`、`numa`。共享开关必须进入实际 loader，而不只是被 JSON 解析。
 
-针对交付文件执行 `bash -n` 和 JSON 解析。比较两份配置除 scope 外的推理字段，并检查脚本环境 dtype、模型路径、输入、seed、输出路径和进程数覆盖方式。`git diff --check` 检查改动格式；新建但未追踪的文件也应单独检查，不依赖 git diff 自动覆盖它们。
+针对交付文件执行 `bash -n` 和 JSON 解析。比较两种模式生成的配置除 scope 外的推理字段，并检查脚本环境 dtype、模型路径、输入、seed、输出路径和进程数覆盖方式。`git diff --check` 检查改动格式；新建但未追踪的文件也应单独检查，不依赖 git diff 自动覆盖它们。
 
 启动前核对：
 
@@ -108,7 +108,7 @@ host 减少 replica 数，NUMA 可能改善本地访存及 H2D 路径；具体�
 | rank 卡在初始化 | 最后一次 collective、组件加载顺序、各 rank preflight 状态 | 统一参与顺序，使用现有分阶段错误协调 |
 | 输出漂移 | 实际 dtype、scale 舍入、转置 stride、kernel 和 seed | 对齐加载语义，再追踪首个数值分歧 |
 | 随机错误或第二次请求失败 | ready/free/completion 记录、slot 覆盖时机、owner 是否仍有效 | 修复跨 stream／请求依赖和释放顺序 |
-| host／NUMA 实际效果相同 | 有效配置 scope、参与 GPU NUMA 节点、replica 日志 | 确认两入口没有引用同一配置；单 NUMA 域可能合理地产生相同 replica 数 |
+| host／NUMA 实际效果相同 | 有效配置 scope、参与 GPU NUMA 节点、replica 日志 | 确认 scope 切换已写入实际运行配置；单 NUMA 域可能合理地产生相同 replica 数 |
 | 共享后速度没有提升 | 加载／注册成本、H2D 字节、稳定 step 与拓扑 | 分别报告内存收益和速度；不要把共享等同加速 |
 
 每次修复后重跑能覆盖根因的检查和受影响路径；已通过且无新风险的检查不需要反复扩大。
