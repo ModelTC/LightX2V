@@ -47,6 +47,12 @@
 
 using namespace cute;
 
+// SYCL identifies device kernels by their mangled C++ names. Each library
+// compiles this file with a different mainloop (including a different Params
+// layout for sparse attention), so an anonymous namespace alone is insufficient:
+// it produces identical kernel names in all three shared libraries. Qualify the
+// launch tag with the library namespace to prevent cross-library image reuse.
+namespace CUTE_FMHA_TORCH_LIBRARY {
 namespace {
 
 // ---- launch glue: submit cutlass device kernel onto torch's XPU queue --------
@@ -495,6 +501,7 @@ at::Tensor sparse_sdp(
 #endif
 
 }  // namespace
+}  // namespace CUTE_FMHA_TORCH_LIBRARY
 
 TORCH_LIBRARY(CUTE_FMHA_TORCH_LIBRARY, m) {
   m.def("sdp(Tensor q, Tensor k, Tensor v) -> Tensor");
@@ -507,11 +514,11 @@ TORCH_LIBRARY(CUTE_FMHA_TORCH_LIBRARY, m) {
 }
 
 TORCH_LIBRARY_IMPL(CUTE_FMHA_TORCH_LIBRARY, XPU, m) {
-  m.impl("sdp", &sdp);
+  m.impl("sdp", &CUTE_FMHA_TORCH_LIBRARY::sdp);
 #if defined(OMNI_XPU_ARCH_BMG)
-  m.impl("sdp_minimax_h3_vae_d64", &sdp_minimax_h3_vae_d64);
+  m.impl("sdp_minimax_h3_vae_d64", &CUTE_FMHA_TORCH_LIBRARY::sdp_minimax_h3_vae_d64);
 #endif
 #if defined(CUTE_FMHA_SPARSE)
-  m.impl("sparse_sdp", &sparse_sdp);
+  m.impl("sparse_sdp", &CUTE_FMHA_TORCH_LIBRARY::sparse_sdp);
 #endif
 }
