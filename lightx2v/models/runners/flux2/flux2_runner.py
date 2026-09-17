@@ -298,6 +298,12 @@ class Flux2Runner(DefaultRunner):
         return latents, generator
 
     def run(self, total_steps=None):
+        if self.config.get("pipefusion_parallel", False):
+            return self._run_pipefusion(total_steps)
+        return self._run_sequential(total_steps)
+
+    def _run_sequential(self, total_steps=None):
+        """Existing synchronous denoising loop (single-GPU or non-PipeFusion)."""
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
 
@@ -319,6 +325,56 @@ class Flux2Runner(DefaultRunner):
                 self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
 
         self.model.force_cleanup_offload_weights()
+
+        return self.model.scheduler.latents, self.model.scheduler.generator
+
+    def _run_pipefusion(self, total_steps=None):
+        """PipeFusion denoising loop: pipeline driver controls all timesteps."""
+        from lightx2v.models.networks.flux2.infer.pipefusion import (
+            get_pipeline_runtime_state,
+            is_pipeline_last_stage,
+        )
+
+        if total_steps is None:
+            total_steps = self.model.scheduler.infer_steps
+
+        # Initialize pipeline runtime state (patch splitting)
+        pipeline_state = get_pipeline_runtime_state()
+        num_pipeline_patch = self.config.get("parallel", {}).get("num_pipeline_patch", 4)
+        warmup_steps = self.config.get("parallel", {}).get("pipeline_warmup_steps", 1)
+
+        pipeline_state.set_input_parameters(
+            num_pipeline_patch=num_pipeline_patch,
+            warmup_steps=warmup_steps,
+            total_tokens=self.input_info.latent_shape[1],
+        )
+
+        # Prepare inputs
+        latents = self.model.scheduler.latents
+        text_encoder_output = self.inputs["text_encoder_output"]
+        prompt_embeds = text_encoder_output["prompt_embeds"]
+        text_ids = text_encoder_output.get("text_ids")
+        latent_image_ids = self.model.scheduler.latent_image_ids
+
+        timesteps = self.model.scheduler.timesteps
+
+        # Run pipeline
+        from lightx2v.models.networks.flux2.infer.pipefusion.pipeline_driver import (
+            Flux2PipelineDriver,
+        )
+
+        driver = Flux2PipelineDriver(self.model, self.config)
+        latents = driver.run_pipeline(
+            latents=latents,
+            prompt_embeds=prompt_embeds,
+            text_ids=text_ids,
+            latent_image_ids=latent_image_ids,
+            timesteps=timesteps,
+            scheduler=self.model.scheduler,
+        )
+
+        if latents is not None and is_pipeline_last_stage():
+            self.model.scheduler.latents = latents
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
@@ -418,14 +474,48 @@ class Flux2Runner(DefaultRunner):
 
         self.set_latent_shape()
 
+        # Clear stale-KV cache at request start so a failed prior request can't
+        # leave stale KV / full K-V buffers behind (PipeFusion only).
+        if self.config.get("pipefusion_parallel", False) and getattr(self, "model", None) is not None and hasattr(self.model.transformer_infer, "clear_kv_cache"):
+            self.model.transformer_infer.clear_kv_cache()
+
         latents, generator = self.run_dit()
-        images = self.run_vae_decoder(latents)
+
+        # In PipeFusion mode, only the last stage has final latents
+        if self.config.get("pipefusion_parallel", False):
+            from lightx2v.models.networks.flux2.infer.pipefusion import is_pipeline_last_stage
+
+            if input_info.return_result_tensor:
+                # Final latents/images exist only on the last pipeline stage and
+                # there is no cross-rank gather implemented, so rank 0 cannot
+                # return them under the standard tensor-return contract.
+                raise NotImplementedError("PipeFusion does not support return_result_tensor yet; the result exists only on the last pipeline stage.")
+
+            if is_pipeline_last_stage():
+                # Offload transformer weights before VAE decode to avoid OOM,
+                # then move them back afterwards so a resident runner (serving)
+                # can process the next request with weights on the device.
+                self.model.transformer_weights.to_cpu()
+                torch_device_module.empty_cache()
+                gc.collect()
+                try:
+                    images = self.run_vae_decoder(latents)
+                finally:
+                    self.model.transformer_weights.to_cuda()
+            else:
+                images = None
+        else:
+            images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
-            image = images[0]
-            image.save(input_info.save_result_path)
-            logger.info(f"Image saved: {input_info.save_result_path}")
+        # Save image: in PipeFusion mode, last stage has the image;
+        # in normal mode, main process (rank 0) has it.
+        if not input_info.return_result_tensor and input_info.save_result_path is not None:
+            should_save = is_pipeline_last_stage() if self.config.get("pipefusion_parallel", False) else is_main_process()
+            if should_save and images is not None:
+                image = images[0]
+                image.save(input_info.save_result_path)
+                logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator
         torch_device_module.empty_cache()

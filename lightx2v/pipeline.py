@@ -378,11 +378,14 @@ class LightX2VPipeline:
                 magcache_ratios=list(magcache_ratios),
             )
 
-    def enable_parallel(self, cfg_p_size=1, seq_p_size=1, seq_p_attn_type="ulysses"):
+    def enable_parallel(self, cfg_p_size=1, seq_p_size=1, seq_p_attn_type="ulysses", pp_size=1, num_pipeline_patch=4, pipeline_warmup_steps=1):
         self.startup_config["parallel"] = {
             "cfg_p_size": cfg_p_size,
             "seq_p_size": seq_p_size,
             "seq_p_attn_type": seq_p_attn_type,
+            "pp_size": pp_size,
+            "num_pipeline_patch": num_pipeline_patch,
+            "pipeline_warmup_steps": pipeline_warmup_steps,
         }
 
     @torch.no_grad()
