@@ -13,6 +13,7 @@
   "text_encoder_host_pinned": false,
   "text_encoder_release_block_offload_buffers": true,
   "vae_cpu_offload": true,
+  "vae_attn_type": "minimax_h3_vae_cute",
   "lazy_load": false,
   "unload_modules": false,
   "attn_type": "intel_xpu_cute_attn",
