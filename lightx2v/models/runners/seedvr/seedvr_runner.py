@@ -31,6 +31,7 @@ from lightx2v.models.video_encoders.hf.seedvr.common.distributed.advanced import
 from lightx2v.models.video_encoders.hf.seedvr.common.distributed.ops import set_sequence_parallel_a2a_backend
 from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import SeedVRInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import mux_audio_from_video, save_to_video, wan_vae_to_comfy
@@ -142,9 +143,20 @@ def _get_read_video():
 class SeedVRRunner(DefaultRunner):
     """Runner for SeedVR video super-resolution model."""
 
+    input_info_cls_by_task = {"sr": SeedVRInputInfo}
     supported_request_fields_by_task = {
-        "sr": COMMON_REQUEST_FIELDS | {"image_path", "sr_ratio", "video_path"},
+        "sr": COMMON_REQUEST_FIELDS | {"image_path", "match_target_size", "size", "sr_ratio", "video_path"},
     }
+
+    def create_input_info(self, request_data):
+        input_info = super().create_input_info(request_data)
+        if "size" in request_data or "size" in self.config:
+            size = input_info.size
+            if not isinstance(size, (list, tuple)) or len(size) != 2 or any(type(dim) is not int or dim <= 0 for dim in size):
+                raise ValueError("SeedVR size must contain two positive integers: [height, width]")
+        if not isinstance(input_info.match_target_size, bool):
+            raise ValueError("SeedVR match_target_size must be a boolean")
+        return input_info
 
     def get_supported_request_fields(self, task):
         supported_request_fields = super().get_supported_request_fields(task)
@@ -203,18 +215,14 @@ class SeedVRRunner(DefaultRunner):
     def _build_video_transform(self, img):
         from torchvision.transforms import Normalize
 
+        from lightx2v.models.video_encoders.hf.seedvr.data.image.transforms.area_resize import AreaResize
         from lightx2v.models.video_encoders.hf.seedvr.data.image.transforms.divisible_crop import DivisibleCrop
-        from lightx2v.models.video_encoders.hf.seedvr.data.image.transforms.na_resize import NaResize
-        from lightx2v.models.video_encoders.hf.seedvr.data.video.transforms.rearrange import Rearrange
 
-        target_height, target_width = self.config.get("size", (720, 1280))
-        resolution = min((self.ori_h * self.ori_w) ** 0.5 * self.input_info.sr_ratio, (target_height * target_width) ** 0.5)
+        height, width = img.shape[-2:]
+        target_height, target_width = self.input_info.size or (720, 1280)
+        resolution = min((height * width) ** 0.5 * self.input_info.sr_ratio, (target_height * target_width) ** 0.5)
 
-        img = NaResize(
-            resolution=resolution,
-            mode="area",
-            downsample_only=False,
-        )(img)
+        img = AreaResize(max_area=resolution**2)(img)
 
         img.clamp_(0.0, 1.0)
 
@@ -222,9 +230,7 @@ class SeedVRRunner(DefaultRunner):
 
         Normalize(0.5, 0.5, inplace=True)(img)
 
-        img = Rearrange("t c h w -> c t h w")(img)
-
-        return img
+        return rearrange(img, "t c h w -> c t h w")
 
     def _get_sr_segment_params(self):
         seg_len = int(self.config.get("sr_segment_length", 81))
@@ -547,13 +553,9 @@ class SeedVRRunner(DefaultRunner):
         return vae_encoder, vae_decoder
 
     def _restore_target_size(self, sample):
-        if self.config.get("resize_mode") == "adaptive":
+        if not self.input_info.match_target_size or not self.input_info.size:
             return sample
-        target_height, target_width = self.config.get("size", sample.shape[-2:])
-        target_height = int(target_height or sample.shape[-2])
-        target_width = int(target_width or sample.shape[-1])
-        if target_height <= 0 or target_width <= 0:
-            return sample
+        target_height, target_width = self.input_info.size
 
         height, width = sample.shape[-2:]
         if (height, width) == (target_height, target_width):
@@ -566,9 +568,7 @@ class SeedVRRunner(DefaultRunner):
             return sample[..., top : top + target_height, left : left + target_width]
 
         logger.info(f"[SeedVRRunner] resize SR output from {width}x{height} to {target_width}x{target_height}")
-        dtype = sample.dtype
-        device = sample.device
-        return F.interpolate(sample.float(), size=(target_height, target_width), mode="bilinear", align_corners=False).to(device=device, dtype=dtype)
+        return F.interpolate(sample.float(), size=(target_height, target_width), mode="bilinear", align_corners=False).to(dtype=sample.dtype)
 
     @ProfilingContext4DebugL1(
         "Run VAE Decoder",
@@ -750,7 +750,6 @@ class SeedVRRunner(DefaultRunner):
             raise ValueError("SR task requires image_path or video_path")
 
         input_shape = tuple(img.shape)
-        _, _, self.ori_h, self.ori_w = img.shape
         img = self._build_video_transform(img)
         if self._seedvr_sp_size > 1:
             img = img.to(dtype=GET_DTYPE())

@@ -6,6 +6,6 @@
   "use_tiling_vae": true,
   "cpu_offload": true,
   "offload_granularity": "block",
-  "resize_mode": "adaptive",
+  "match_target_size": false,
   "color_fix": "gpu"
 }

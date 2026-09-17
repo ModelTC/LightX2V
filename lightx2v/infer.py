@@ -206,6 +206,7 @@ def main():
         help="(i2i) Layout boxes as a JSON string or JSON file path for HiDream layout-conditioned editing.",
     )
     parser.add_argument("--sr_ratio", type=float, default=None, help="super resolution ratio for sr task")
+    parser.add_argument("--match_target_size", action=argparse.BooleanOptionalAction, default=None, help="(SeedVR sr) Crop or resize decoded output to size; defaults to the startup config.")
     parser.add_argument(
         "--reference_video_strength", type=float, default=None, help="(v2av) IC-LoRA reference-video conditioning strength in [0.0, 1.0]. 1.0 = full adherence to the control signal, 0.0 = ignore it."
     )
