@@ -60,6 +60,8 @@ dependencies = [
     "gguf",
     "fastapi",
     "uvicorn",
+    "protobuf",
+    "websockets",
     "PyJWT",
     "requests",
     "aio-pika",

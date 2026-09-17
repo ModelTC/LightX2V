@@ -139,7 +139,7 @@ class DefaultRunner(BaseRunner):
         self.work_result_path = None
 
         output_path = self.input_info.save_result_path
-        local_output = bool(output_path) and not output_path.startswith(("http://", "https://", "rtmp://"))
+        local_output = bool(output_path) and not isinstance(output_path, dict) and not output_path.startswith(("http://", "https://", "rtmp://"))
         reuse_cache_enabled = self.enable_reuse and local_output and not self.input_info.return_result_tensor
         if self.reuse and not reuse_cache_enabled:
             raise ValueError(f"{type(self).__name__} reuse requires a local output and return_result_tensor=false")
