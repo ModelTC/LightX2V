@@ -1,8 +1,7 @@
-"""Native VDN frame statistics, bidirectional state recurrence and readout.
+"""VDN frame statistics and bidirectional state readout.
 
-Math adapted from OpenVDN/vdn-minimax-h3 e02ff077, Apache-2.0,
+Adapted from OpenVDN/vdn-minimax-h3 e02ff077 (Apache-2.0):
 models/linear_attention/{branch,scan,delta_rule,layers,features}.py.
-Only the released c1/anchor-both, vdn_solve, alpha-bridge configuration is used.
 """
 
 import torch

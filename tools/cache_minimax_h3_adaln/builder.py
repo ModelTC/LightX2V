@@ -42,7 +42,8 @@ class _CheckpointTensors:
 
     def __init__(self, files: list[Path], vdn_adapters=()):
         self.files = files
-        self.vdn_adapters = vdn_adapters
+        # Adapter factors are read-only; base tensors are merged in place.
+        self.vdn_adapters = [(name, safe_open(path, framework="pt", device="cpu")) for name, path in vdn_adapters]
         self.locations = self._find_locations()
 
     def _find_locations(self) -> dict[str, Path]:

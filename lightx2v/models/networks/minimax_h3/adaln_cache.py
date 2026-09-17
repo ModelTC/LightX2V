@@ -169,10 +169,9 @@ def _weight_identity(config):
         identity["loras"] = []
         for adapter in config["lora_configs"]:
             path = Path(adapter["path"]).expanduser().resolve()
-            # The standard Turbo adapters do not alter these projections.
-            # Never silently reuse an unadapted cache for another LoRA family.
+            # Modulation-changing generic LoRAs cannot use unadapted cache tables.
             with safe_open(path, framework="pt", device="cpu") as source:
-                if any(any(part in key for part in ("adaln_proj", "norm_out", "time_embedder")) for key in source.keys()):
+                if any(part in key for key in source.keys() for part in ("adaln_proj", "norm_out", "time_embedder")):
                     raise NotImplementedError("AdaLN cache for modulation-changing generic LoRAs is unsupported; use the VDN artifact path or disable the cache")
             identity["loras"].append({"path": str(path), "sha256": _file_sha256(_file_signature(path)), "strength": float(adapter.get("strength", 1.0)), "alpha": adapter.get("alpha")})
     return identity
@@ -196,14 +195,10 @@ def _build_spec(config) -> dict:
     }
 
 
-def _cache_path(config, spec=None) -> Path:
-    cache_name = config["model_variant"]
-    infer_steps = int(config["infer_steps"])
-    video_flow_shift = float(config.get("video_flow_shift", 12.0))
-    audio_flow_shift = float(config.get("audio_flow_shift", 3.0))
-    spec = _build_spec(config) if spec is None else spec
+def _cache_path(config, spec) -> Path:
     identity = hashlib.sha256(json.dumps(spec["weight_identity"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
-    return _cache_root(config) / "minimax_h3" / f"{cache_name}_{infer_steps:02d}steps_shift_{video_flow_shift}_{audio_flow_shift}_{identity}"
+    name = f"{config['model_variant']}_{spec['infer_steps']:02d}steps_shift_{spec['video_flow_shift']}_{spec['audio_flow_shift']}_{identity}"
+    return _cache_root(config) / "minimax_h3" / name
 
 
 def _expected_table_shape(spec: dict, entry: dict) -> tuple[int, int]:
@@ -258,8 +253,7 @@ def load_persistent_adaln_cache(
     dict[tuple[float, ...], torch.Tensor],
 ]:
     """Load cached block AdaLN and final-norm modulation onto the device."""
-    # Every inference rank calls this constructor. Hash large base tensors
-    # once on rank 0, then share the same content identity across CPU/GPU loads.
+    # Hash weights once on rank 0; broadcast errors too so peers cannot hang.
     if dist.is_initialized() and dist.get_world_size() > 1:
         payload = [None]
         if dist.get_rank() == 0:

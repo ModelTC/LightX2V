@@ -99,10 +99,6 @@ def _merge_adapter(weight_dict, path, name, *, skip_cached_modulation=False):
                 continue
             if target not in weight_dict:
                 raise KeyError(f"VDN {name} LoRA target is missing from the base checkpoint: {target}")
-            a_shape = source.get_slice(a_key).get_shape()
-            b_shape = source.get_slice(b_key).get_shape()
-            if len(a_shape) != 2 or len(b_shape) != 2 or a_shape[0] != b_shape[1] or tuple(weight_dict[target].shape) != (b_shape[0], a_shape[1]):
-                raise ValueError(f"VDN {name} LoRA shape mismatch for {target}: A={a_shape}, B={b_shape}, base={tuple(weight_dict[target].shape)}")
             pairs.append((a_key, b_key, target))
         for a_key, b_key, target in pairs:
             _add_vdn_delta(weight_dict[target], source.get_tensor(a_key), source.get_tensor(b_key))
@@ -127,19 +123,19 @@ def vdn_adapter_paths(config):
 
 
 def merge_vdn_tensor(weight, target, adapters):
-    """Apply the same ordered artifact adapters to one offline-cache tensor."""
+    """Merge one cache tensor using ordered, already-open adapter readers."""
     stem = target.removesuffix(".weight")
     if stem.startswith("transformer_blocks."):
         stem = stem.replace(".attn.", ".attn.orig.")
-    for name, path in adapters:
-        with safe_open(path, framework="pt", device="cpu") as source:
-            a_key = f"{stem}.lora_A.{name}.weight"
-            b_key = f"{stem}.lora_B.{name}.weight"
-            if a_key not in source.keys() and b_key not in source.keys():
-                continue
-            if a_key not in source.keys() or b_key not in source.keys():
-                raise ValueError(f"Incomplete VDN {name} LoRA pair for {target}")
-            _add_vdn_delta(weight, source.get_tensor(a_key), source.get_tensor(b_key))
+    for name, source in adapters:
+        a_key = f"{stem}.lora_A.{name}.weight"
+        b_key = f"{stem}.lora_B.{name}.weight"
+        keys = source.keys()
+        if a_key not in keys and b_key not in keys:
+            continue
+        if a_key not in keys or b_key not in keys:
+            raise ValueError(f"Incomplete VDN {name} LoRA pair for {target}")
+        _add_vdn_delta(weight, source.get_tensor(a_key), source.get_tensor(b_key))
     return weight
 
 
@@ -149,9 +145,10 @@ def load_vdn_weights(weight_dict, config):
     branch_path = checkpoint / "linear_branch" / "model.safetensors"
     expected = _branch_shapes(config)
     with safe_open(branch_path, framework="pt", device="cpu") as source:
-        if set(source.keys()) != set(expected):
-            missing = sorted(set(expected) - set(source.keys()))
-            extra = sorted(set(source.keys()) - set(expected))
+        keys = set(source.keys())
+        if keys != expected.keys():
+            missing = sorted(expected.keys() - keys)
+            extra = sorted(keys - expected.keys())
             raise ValueError(f"VDN branch tensor mismatch: missing={missing[:4]}, extra={extra[:4]}")
         for key, shape in expected.items():
             tensor = source.get_slice(key)
@@ -159,8 +156,7 @@ def load_vdn_weights(weight_dict, config):
                 raise ValueError(f"VDN branch {key} must be BF16 with shape {shape}")
             if key in weight_dict:
                 raise ValueError(f"VDN branch key already exists in the base checkpoint: {key}")
-        # Every SP rank retains the full branch. Native block offload then
-        # streams the same 16 per-block tensors through its two device slots.
+        # Keep the full branch on each SP rank for native block offload.
         device = next(iter(weight_dict.values())).device
         for key in expected:
             weight_dict[key] = source.get_tensor(key).to(device)

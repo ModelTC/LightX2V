@@ -118,11 +118,9 @@ class MiniMaxH3Runner(DefaultRunner):
         """Return tasks supported by the loaded transformer weights."""
         if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
-        if self.config.get("vdn_checkpoint"):
-            tasks = ("t2av", "i2av", "l2av", "fl2av")
-            # This explicit experiment uses only Qwen image features, without
-            # claiming the released VDN weights implement native Ref2VA.
-            return tasks + ("ref2av",) if self.config.get("h3_visual_reference_only", False) else tasks
+        # VDN accepts ref2av only through the Qwen image-reference experiment.
+        if self.config.get("vdn_checkpoint") and not self.config.get("h3_visual_reference_only", False):
+            return ("t2av", "i2av", "l2av", "fl2av")
         # Allow ref2av requests to use the base transformer for better visual quality.
         return ("t2av", "i2av", "l2av", "fl2av", "ref2av")
 

@@ -1,8 +1,6 @@
-"""VDN hybrid attention over LightX2V H3 weights and sequence-parallel layout.
+"""VDN window/linear attention with Ulysses sequence parallelism.
 
-Window/state semantics follow OpenVDN/vdn-minimax-h3 e02ff077 (Apache-2.0).
-The softmax branch reuses LightX2V Ulysses; the state branch exchanges its
-additional raw projections with the same TorchUlyssesA2A transport.
+Adapted from OpenVDN/vdn-minimax-h3 e02ff077 (Apache-2.0).
 """
 
 from dataclasses import dataclass
@@ -43,7 +41,7 @@ class VDNLayout:
 
 
 def build_window_block_mask(layout, device, block_size=128):
-    """Build exact block sparsity from intervals, without a token-by-token NxN mask."""
+    """Build block sparsity directly from frame windows."""
     start, end, spatial, frames = layout.video_start, layout.video_end, layout.tokens_per_frame, layout.num_frames
 
     def mask_mod(batch, head, query, key):
@@ -64,9 +62,8 @@ def build_window_block_mask(layout, device, block_size=128):
     full_indices = torch.zeros_like(partial_indices)
     partial_count = torch.zeros((1, 1, count), dtype=torch.int32)
     full_count = torch.zeros_like(partial_count)
-    # Global tokens and both boundary frames are dense rows/columns. For other
-    # query rows, the union/intersection of their monotonic windows gives the
-    # exact set of key blocks with any/all allowed token pairs.
+    # Global tokens/anchors are dense. Other rows use the union/intersection
+    # of their frame windows for partial/full blocks.
     normal_start, normal_end = start + spatial, end - spatial
     for row in range(count):
         q_start, q_end = row * block_size, min((row + 1) * block_size, layout.sequence_length)
@@ -195,8 +192,6 @@ def heads_to_sequence(output, aux_length, group):
 
 class VDNAttention:
     def __init__(self, config):
-        if config.get("tensor_parallel", False):
-            raise ValueError("VDN currently supports single-card and sequence parallel inference, not tensor parallel")
         self.num_heads = int(config.get("num_attention_heads", 56))
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.window = VDNWindowAttention()
@@ -241,13 +236,12 @@ class VDNAttention:
             frame, offset = divmod(start - layout.video_start, spatial)
             cursor = 0
 
-            # First partial frame, including a shard contained within one frame.
+            # Reduce disjoint frame slices; index_add_ uses nondeterministic atomics.
             if offset:
                 cursor = min(spatial - offset, rows.shape[0])
                 sums[frame] = rows[:cursor].sum(0, dtype=torch.float32)
                 frame += 1
 
-            # Each output row has a separate reduction over one complete frame.
             full_frames = (rows.shape[0] - cursor) // spatial
             if full_frames:
                 stop = cursor + full_frames * spatial
@@ -255,7 +249,6 @@ class VDNAttention:
                 cursor = stop
                 frame += full_frames
 
-            # Last partial frame. It is distinct from the first partial frame.
             if cursor < rows.shape[0]:
                 sums[frame] = rows[cursor:].sum(0, dtype=torch.float32)
 

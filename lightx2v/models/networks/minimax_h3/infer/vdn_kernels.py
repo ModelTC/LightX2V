@@ -1,9 +1,7 @@
-"""Tensor kernels ported from OpenVDN/vdn-minimax-h3 (Apache-2.0).
+"""VDN activation, readout and temporal-convolution kernels.
 
-Source e02ff077: models/ops/temporal_conv.py and
-models/linear_attention/kernels.py. Only VDN-specific operations live here;
-block pointwise operations and QK norm/RoPE use the shared H3 implementation.
-The functions consume LightX2V weight tensors; no upstream model is imported.
+Adapted from OpenVDN/vdn-minimax-h3 e02ff077 (Apache-2.0):
+models/ops/temporal_conv.py and models/linear_attention/kernels.py.
 """
 
 from functools import cache
@@ -24,17 +22,13 @@ def _compiled(fn):
     return torch.compile(fn, dynamic=False)
 
 
-def _run(fn, *args):
-    return _compiled(fn)(*args) if args[0].is_cuda else fn(*args)
-
-
 def _activate_body(x, normalize):
     y = F.silu(x)
     return F.normalize(y, dim=-1, eps=1e-6).to(y.dtype) if normalize else y
 
 
 def activate(x, normalize):
-    return _run(_activate_body, x, normalize)
+    return _compiled(_activate_body)(x, normalize) if x.is_cuda else _activate_body(x, normalize)
 
 
 def _epilogue_body(readout, weight, gate):
@@ -45,7 +39,7 @@ def _epilogue_body(readout, weight, gate):
 
 
 def linear_epilogue(readout, weight, gate):
-    return _run(_epilogue_body, readout, weight, gate)
+    return _compiled(_epilogue_body)(readout, weight, gate) if readout.is_cuda else _epilogue_body(readout, weight, gate)
 
 
 if triton is not None:

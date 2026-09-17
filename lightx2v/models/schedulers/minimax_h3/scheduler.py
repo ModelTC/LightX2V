@@ -86,8 +86,7 @@ class MiniMaxH3Scheduler(BaseScheduler):
         num_audio_latents = audio_latent_num_frames(num_frames)
         patch_size = tuple(self.config.get("patch_size", (1, 2, 2)))
 
-        # H3 draws on CPU; the VDN author sampler draws on the execution
-        # device. A shared seed does not make those random streams equal.
+        # Match each sampler's RNG device; CPU and CUDA differ even with the same seed.
         noise_device = AI_DEVICE if self.noise_device == "model" else "cpu"
         self.generator = torch.Generator(device=noise_device).manual_seed(int(seed))
         condition_video_latents = condition_video_latents or []
@@ -122,8 +121,8 @@ class MiniMaxH3Scheduler(BaseScheduler):
             device=noise_device,
             dtype=torch.float32,
         )
-        condition_audio_rows = [latent.transpose(1, 2).reshape(-1, latent.shape[1]).float() for latent in condition_audio_latents]
-        self.audio_latents = torch.cat([rows.to(AI_DEVICE) for rows in condition_audio_rows] + [target_audio_rows.to(AI_DEVICE)])
+        condition_audio_rows = [latent.transpose(1, 2).reshape(-1, latent.shape[1]).float().to(AI_DEVICE) for latent in condition_audio_latents]
+        self.audio_latents = torch.cat(condition_audio_rows + [target_audio_rows.to(AI_DEVICE)])
 
         if references is None:
             self.layout_cpu = build_packed_sequence(text_token_tags.cpu(), latent_frames, latent_height, latent_width, num_audio_latents, patch_size, keyframe_anchors)

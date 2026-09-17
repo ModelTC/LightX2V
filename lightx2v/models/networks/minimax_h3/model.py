@@ -61,9 +61,7 @@ class MiniMaxH3Model(BaseTransformerModel):
         self.vdn_checkpoint = config.get("vdn_checkpoint")
         if self.vdn_checkpoint:
             configure_vdn(config)
-            if config.get("tensor_parallel", False) or config.get("dit_quantized", False):
-                raise NotImplementedError("VDN currently supports unquantized BF16 with single-device or Ulysses sequence parallel inference")
-            if lora_path or config.get("lora_configs") or config.get("lora_dynamic_apply", False):
+            if lora_path or config.get("lora_dynamic_apply", False):
                 raise ValueError("VDN loads its default/turbo adapters from vdn_checkpoint; do not add lora_configs or dynamic LoRA")
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not self.use_adaln_cache and not self.vdn_checkpoint:
