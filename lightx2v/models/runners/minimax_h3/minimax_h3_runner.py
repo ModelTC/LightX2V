@@ -92,7 +92,8 @@ class MiniMaxH3Runner(DefaultRunner):
     """
 
     _WARMUP_SHAPES = (
-        (768, 1344, 124),  # match the 5-second production request
+        (480, 480, 158),  # aligned from a 6-second request
+        (544, 960, 124),
     )
     _WARMUP_STEP_COUNT = 2
     supported_request_fields_by_task = {
