@@ -42,6 +42,8 @@ def _has_supported_layout(q, k, v):
 class MiniMaxH3XpuCuteWeight(AttnWeightTemplate):
     """BMG CUTE D64 attention with a Torch SDPA fallback."""
 
+    _backend_status_logged = False
+
     def __init__(self):
         # Import lazily so platform ops finish registering before the framework
         # registry takes its one-time snapshot of platform implementations.
@@ -50,10 +52,12 @@ class MiniMaxH3XpuCuteWeight(AttnWeightTemplate):
         self.config = {}
         self.native_available = _has_native_kernel()
         self.fallback = TorchSDPAWeight()
-        if self.native_available:
-            logger.info("MiniMax-H3 Video VAE CUTE D64 attention enabled")
-        else:
-            logger.warning("MiniMax-H3 Video VAE CUTE D64 kernel unavailable; using Torch SDPA")
+        if not type(self)._backend_status_logged:
+            type(self)._backend_status_logged = True
+            if self.native_available:
+                logger.info("MiniMax-H3 Video VAE CUTE D64 attention enabled")
+            else:
+                logger.warning("MiniMax-H3 Video VAE CUTE D64 kernel unavailable; using Torch SDPA")
 
     def apply(
         self,
