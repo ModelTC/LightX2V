@@ -1,10 +1,8 @@
 import torch
 from loguru import logger
 
-from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-
-from .template import AttnWeightTemplate
-from .torch_sdpa import TorchSDPAWeight
+from lightx2v_platform.ops.attn.template import AttnWeightTemplate
+from lightx2v_platform.registry_factory import PLATFORM_ATTN_WEIGHT_REGISTER
 
 
 @torch.library.custom_op("lightx2v::minimax_h3_vae_sdp_d64", mutates_args=())
@@ -44,11 +42,15 @@ def _has_supported_layout(q, k, v):
     )
 
 
-@ATTN_WEIGHT_REGISTER("minimax_h3_vae_cute")
+@PLATFORM_ATTN_WEIGHT_REGISTER("minimax_h3_vae_cute")
 class MiniMaxH3VaeCuteWeight(AttnWeightTemplate):
     """BMG CUTE D64 attention with a Torch SDPA fallback."""
 
     def __init__(self):
+        # Import lazily so platform ops finish registering before the framework
+        # registry takes its one-time snapshot of platform implementations.
+        from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight
+
         self.config = {}
         self.native_available = _has_native_kernel()
         self.fallback = TorchSDPAWeight()
