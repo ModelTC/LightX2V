@@ -35,11 +35,7 @@ def _has_supported_layout(q, k, v):
         return False
     qk_stride = (sequence * heads * dim, dim, heads * dim, 1)
     packed_v_stride = (3 * sequence * heads * dim, 3 * dim, 3 * heads * dim, 1)
-    return (
-        tuple(q.stride()) == qk_stride
-        and tuple(k.stride()) == qk_stride
-        and tuple(v.stride()) in (qk_stride, packed_v_stride)
-    )
+    return tuple(q.stride()) == qk_stride and tuple(k.stride()) == qk_stride and tuple(v.stride()) in (qk_stride, packed_v_stride)
 
 
 @PLATFORM_ATTN_WEIGHT_REGISTER("minimax_h3_vae_cute")
