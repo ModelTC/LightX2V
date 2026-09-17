@@ -15,6 +15,7 @@ from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
 from lightx2v.server.ws.protocol import ClientMessage, error_message
+from lightx2v.server.ws import session as ws_session
 from lightx2v.server.ws.session import LiveSession, apply_run_input, join_pipeline, launch_pipeline
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
 from lightx2v.utils.set_config import build_startup_config, init_parallel, print_config
@@ -77,6 +78,16 @@ def build_parser():
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--ws_host", type=str, default="0.0.0.0")
     parser.add_argument("--ws_port", type=int, default=8765)
+    parser.add_argument(
+        "--aspect_ratios",
+        type=str,
+        default=None,
+        help=(
+            "Override aspect ratio map (JSON). "
+            'Format: {"width:height": [height, width], ...}, '
+            'e.g. \'{"1:1":[480,480],"16:9":[352,640],"9:16":[640,352]}\''
+        ),
+    )
     return parser
 
 
@@ -234,6 +245,9 @@ def main():
     global RANK, WORLD_SIZE, TARGET_RANK
     parser = build_parser()
     args = parser.parse_args()
+    if args.aspect_ratios is not None:
+        ws_session.ASPECT_RATIOS = ws_session.parse_aspect_ratios(args.aspect_ratios)
+        logger.info(f"Using custom aspect_ratios: {ws_session.ASPECT_RATIOS}")
     seed_all(args.seed)
     config = build_startup_config(
         {
