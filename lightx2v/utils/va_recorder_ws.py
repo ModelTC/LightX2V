@@ -59,10 +59,7 @@ class H264AnnexBEncoder:
                 out.extend(bytes(packet))
         encoded = bytes(out)
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug(
-            f"H.264 encode {frames.shape[0]}x{self.width}x{self.height}: "
-            f"rgb={raw_bytes} -> annexb={len(encoded)} elapsed={elapsed_ms:.1f}ms"
-        )
+        logger.debug(f"H.264 encode {frames.shape[0]}x{self.width}x{self.height}: rgb={raw_bytes} -> annexb={len(encoded)} elapsed={elapsed_ms:.1f}ms")
         return encoded
 
     def close(self):

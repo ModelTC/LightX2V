@@ -14,8 +14,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
-from lightx2v.server.ws.protocol import ClientMessage, error_message
 from lightx2v.server.ws import session as ws_session
+from lightx2v.server.ws.protocol import ClientMessage, error_message
 from lightx2v.server.ws.session import LiveSession, apply_run_input, join_pipeline, launch_pipeline
 from lightx2v.utils.input_info import INPUT_INFO_TYPES
 from lightx2v.utils.set_config import build_startup_config, init_parallel, print_config
@@ -82,11 +82,7 @@ def build_parser():
         "--aspect_ratios",
         type=str,
         default=None,
-        help=(
-            "Override aspect ratio map (JSON). "
-            'Format: {"width:height": [height, width], ...}, '
-            'e.g. \'{"1:1":[480,480],"16:9":[352,640],"9:16":[640,352]}\''
-        ),
+        help=('Override aspect ratio map (JSON). Format: {"width:height": [height, width], ...}, e.g. \'{"1:1":[480,480],"16:9":[352,640],"9:16":[640,352]}\''),
     )
     return parser
 

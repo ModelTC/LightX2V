@@ -87,9 +87,7 @@ def video_start_message(width: int, height: int) -> bytes:
 
 
 def video_message(sequence: int, audio_data: bytes, video_data: bytes) -> bytes:
-    return ServerMessage(
-        video=VideoChunk(sequence=sequence, audio_data=audio_data, video_data=video_data)
-    ).serialize()
+    return ServerMessage(video=VideoChunk(sequence=sequence, audio_data=audio_data, video_data=video_data)).serialize()
 
 
 def error_message(code: str, message: str, retryable: bool = False) -> bytes:
