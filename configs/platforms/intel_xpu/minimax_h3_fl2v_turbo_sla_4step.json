@@ -12,7 +12,7 @@
   "text_encoder_offload_granularity": "block",
   "text_encoder_host_pinned": false,
   "text_encoder_release_block_offload_buffers": true,
-  "vae_cpu_offload": true,
+  "vae_cpu_offload": false,
   "vae_use_compile": true,
   "vae_attn_type": "minimax_h3_vae_cute",
   "lazy_load": false,
@@ -23,6 +23,9 @@
     "sparsity_ratio": 0.85,
     "operator": "intel_xpu_cute_attn"
   },
+  "use_fused_qkv": true,
+  "use_fused_qkv_norm_rope": true,
+  "qkv_norm_rope_type": "intel_xpu",
   "rms_type": "intel_xpu",
   "rope_type": "minimax_h3_xpu_rope",
   "feature_caching": "NoCaching",
