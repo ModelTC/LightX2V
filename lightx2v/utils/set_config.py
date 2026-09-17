@@ -313,7 +313,8 @@ def build_cli_inputs(args):
 def init_parallel(config):
     """Create the model's parallel mesh and warm up its communication."""
     parallel = config["parallel"]
-    if not parallel:
+    if not parallel or config.get("model_cls") == "swiftvr":
+        # SwiftVR owns its chunk group and validates its parallel settings in the runner.
         return
 
     tensor_p_size = int(parallel.get("tensor_p_size", 1))
