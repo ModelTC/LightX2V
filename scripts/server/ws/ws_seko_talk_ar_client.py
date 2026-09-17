@@ -117,7 +117,7 @@ def parse_args():
     parser.add_argument("--prompt", type=str, default="")
     parser.add_argument("--negative_prompt", type=str, default="")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--aspect_ratio", type=str, default="16:9", choices=["1:1", "16:9", "9:16"])
+    parser.add_argument("--aspect_ratio", type=str, default="16:9")
     parser.add_argument("--chunk_frames", type=int, default=8)
     return parser.parse_args()
 

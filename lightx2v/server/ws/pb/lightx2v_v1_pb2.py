@@ -4,52 +4,56 @@
 # source: lightx2v_v1.proto
 # Protobuf Python Version: 7.35.1
 """Generated protocol buffer code."""
-
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import descriptor_pool as _descriptor_pool
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
-
-_runtime_version.ValidateProtobufRuntimeVersion(_runtime_version.Domain.PUBLIC, 7, 35, 1, "", "lightx2v_v1.proto")
+_runtime_version.ValidateProtobufRuntimeVersion(
+    _runtime_version.Domain.PUBLIC,
+    7,
+    35,
+    1,
+    '',
+    'lightx2v_v1.proto'
+)
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\x11lightx2v_v1.proto\x12\x0blightx2v.v1"\x99\x02\n\rClientMessage\x12#\n\x05start\x18\x01 \x01(\x0b\x32\x12.lightx2v.v1.StartH\x00\x12.\n\x0b\x61udio_start\x18\x02 \x01(\x0b\x32\x17.lightx2v.v1.AudioStartH\x00\x12(\n\x05\x61udio\x18\x03 \x01(\x0b\x32\x17.lightx2v.v1.AudioChunkH\x00\x12*\n\taudio_end\x18\x04 \x01(\x0b\x32\x15.lightx2v.v1.AudioEndH\x00\x12.\n\x0b\x63lear_audio\x18\x05 \x01(\x0b\x32\x17.lightx2v.v1.ClearAudioH\x00\x12%\n\x06\x63\x61ncel\x18\x06 \x01(\x0b\x32\x13.lightx2v.v1.CancelH\x00\x42\x06\n\x04\x62ody"\xb9\x01\n\rServerMessage\x12&\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\x0b\x32\x12.lightx2v.v1.EmptyH\x00\x12(\n\x05video\x18\x02 \x01(\x0b\x32\x17.lightx2v.v1.VideoChunkH\x00\x12%\n\x05\x65rror\x18\x03 \x01(\x0b\x32\x14.lightx2v.v1.FailureH\x00\x12\'\n\tcompleted\x18\x04 \x01(\x0b\x32\x12.lightx2v.v1.EmptyH\x00\x42\x06\n\x04\x62ody"\xd3\x01\n\x05Start\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x14\n\x0c\x61udio_format\x18\x02 \x01(\t\x12\x14\n\x0cvideo_format\x18\x03 \x01(\t\x12\x14\n\x0cimage_fromat\x18\x04 \x01(\t\x12\x12\n\nimage_data\x18\x05 \x01(\x0c\x12\x30\n\x07options\x18\x06 \x03(\x0b\x32\x1f.lightx2v.v1.Start.OptionsEntry\x1a.\n\x0cOptionsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01"\x1a\n\nAudioStart\x12\x0c\n\x04note\x18\x01 \x01(\t"\x18\n\x08\x41udioEnd\x12\x0c\n\x04note\x18\x01 \x01(\t"\x1a\n\nClearAudio\x12\x0c\n\x04note\x18\x01 \x01(\t",\n\nAudioChunk\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c"B\n\nVideoChunk\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x14\n\x0cinit_segment\x18\x03 \x01(\x08"\x18\n\x06\x43\x61ncel\x12\x0e\n\x06reason\x18\x01 \x01(\t";\n\x07\x46\x61ilure\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x11\n\tretryable\x18\x03 \x01(\x08"\x07\n\x05\x45mptyb\x06proto3'
-)
+
+
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11lightx2v_v1.proto\x12\x0blightx2v.v1\"\x95\x02\n\rClientMessage\x12#\n\x05start\x18\x01 \x01(\x0b\x32\x12.lightx2v.v1.StartH\x00\x12)\n\x0b\x61udio_start\x18\x02 \x01(\x0b\x32\x12.lightx2v.v1.EmptyH\x00\x12(\n\x05\x61udio\x18\x03 \x01(\x0b\x32\x17.lightx2v.v1.AudioChunkH\x00\x12\'\n\taudio_end\x18\x04 \x01(\x0b\x32\x12.lightx2v.v1.EmptyH\x00\x12+\n\tinterrupt\x18\x05 \x01(\x0b\x32\x16.lightx2v.v1.InterruptH\x00\x12,\n\nset_prompt\x18\x06 \x01(\x0b\x32\x16.lightx2v.v1.SetPromptH\x00\x42\x06\n\x04\x62ody\"\xc3\x01\n\rServerMessage\x12)\n\x05\x65vent\x18\x01 \x01(\x0b\x32\x18.lightx2v.v1.ServerEventH\x00\x12.\n\x0bvideo_start\x18\x02 \x01(\x0b\x32\x17.lightx2v.v1.VideoStartH\x00\x12(\n\x05video\x18\x03 \x01(\x0b\x32\x17.lightx2v.v1.VideoChunkH\x00\x12%\n\x05\x65rror\x18\x04 \x01(\x0b\x32\x14.lightx2v.v1.FailureH\x00\x42\x06\n\x04\x62ody\"\x8d\x01\n\x0bServerEvent\x12+\n\x04type\x18\x01 \x01(\x0e\x32\x1d.lightx2v.v1.ServerEvent.Type\x12\x0f\n\x07message\x18\x02 \x01(\t\"@\n\x04Type\x12\x12\n\x0eSTART_SPEAKING\x10\x00\x12\x11\n\rSTOP_SPEAKING\x10\x01\x12\x11\n\rPROMPT_UPDATE\x10\x02\"\xbe\x01\n\x05Start\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x14\n\x0c\x61udio_format\x18\x02 \x01(\t\x12\x14\n\x0cimage_fromat\x18\x04 \x01(\t\x12\x12\n\nimage_data\x18\x05 \x03(\x0c\x12\x0e\n\x06prompt\x18\x06 \x01(\t\x12\x17\n\x0fnegative_prompt\x18\x07 \x01(\t\x12\x0c\n\x04seed\x18\x08 \x01(\x03\x12\x14\n\x0c\x61spect_ratio\x18\t \x01(\t\x12\x14\n\x0c\x63hunk_frames\x18\n \x01(\r\",\n\nAudioChunk\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\"F\n\nVideoChunk\x12\x10\n\x08sequence\x18\x01 \x01(\x04\x12\x12\n\naudio_data\x18\x02 \x01(\x0c\x12\x12\n\nvideo_data\x18\x03 \x01(\x0c\"7\n\nVideoStart\x12\x13\n\x0bvideo_width\x18\x01 \x01(\x05\x12\x14\n\x0cvideo_height\x18\x02 \x01(\x05\"\x1b\n\tInterrupt\x12\x0e\n\x06reason\x18\x01 \x01(\t\"\x1b\n\tSetPrompt\x12\x0e\n\x06prompt\x18\x01 \x01(\t\";\n\x07\x46\x61ilure\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x11\n\tretryable\x18\x03 \x01(\x08\"\x07\n\x05\x45mptyB8Z6github.com/livekit-examples/mock-avatar/proto;avatarv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "lightx2v_v1_pb2", _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'lightx2v_v1_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-    DESCRIPTOR._loaded_options = None
-    _globals["_START_OPTIONSENTRY"]._loaded_options = None
-    _globals["_START_OPTIONSENTRY"]._serialized_options = b"8\001"
-    _globals["_CLIENTMESSAGE"]._serialized_start = 35
-    _globals["_CLIENTMESSAGE"]._serialized_end = 316
-    _globals["_SERVERMESSAGE"]._serialized_start = 319
-    _globals["_SERVERMESSAGE"]._serialized_end = 504
-    _globals["_START"]._serialized_start = 507
-    _globals["_START"]._serialized_end = 718
-    _globals["_START_OPTIONSENTRY"]._serialized_start = 672
-    _globals["_START_OPTIONSENTRY"]._serialized_end = 718
-    _globals["_AUDIOSTART"]._serialized_start = 720
-    _globals["_AUDIOSTART"]._serialized_end = 746
-    _globals["_AUDIOEND"]._serialized_start = 748
-    _globals["_AUDIOEND"]._serialized_end = 772
-    _globals["_CLEARAUDIO"]._serialized_start = 774
-    _globals["_CLEARAUDIO"]._serialized_end = 800
-    _globals["_AUDIOCHUNK"]._serialized_start = 802
-    _globals["_AUDIOCHUNK"]._serialized_end = 846
-    _globals["_VIDEOCHUNK"]._serialized_start = 848
-    _globals["_VIDEOCHUNK"]._serialized_end = 914
-    _globals["_CANCEL"]._serialized_start = 916
-    _globals["_CANCEL"]._serialized_end = 940
-    _globals["_FAILURE"]._serialized_start = 942
-    _globals["_FAILURE"]._serialized_end = 1001
-    _globals["_EMPTY"]._serialized_start = 1003
-    _globals["_EMPTY"]._serialized_end = 1010
+  _globals['DESCRIPTOR']._loaded_options = None
+  _globals['DESCRIPTOR']._serialized_options = b'Z6github.com/livekit-examples/mock-avatar/proto;avatarv1'
+  _globals['_CLIENTMESSAGE']._serialized_start=35
+  _globals['_CLIENTMESSAGE']._serialized_end=312
+  _globals['_SERVERMESSAGE']._serialized_start=315
+  _globals['_SERVERMESSAGE']._serialized_end=510
+  _globals['_SERVEREVENT']._serialized_start=513
+  _globals['_SERVEREVENT']._serialized_end=654
+  _globals['_SERVEREVENT_TYPE']._serialized_start=590
+  _globals['_SERVEREVENT_TYPE']._serialized_end=654
+  _globals['_START']._serialized_start=657
+  _globals['_START']._serialized_end=847
+  _globals['_AUDIOCHUNK']._serialized_start=849
+  _globals['_AUDIOCHUNK']._serialized_end=893
+  _globals['_VIDEOCHUNK']._serialized_start=895
+  _globals['_VIDEOCHUNK']._serialized_end=965
+  _globals['_VIDEOSTART']._serialized_start=967
+  _globals['_VIDEOSTART']._serialized_end=1022
+  _globals['_INTERRUPT']._serialized_start=1024
+  _globals['_INTERRUPT']._serialized_end=1051
+  _globals['_SETPROMPT']._serialized_start=1053
+  _globals['_SETPROMPT']._serialized_end=1080
+  _globals['_FAILURE']._serialized_start=1082
+  _globals['_FAILURE']._serialized_end=1141
+  _globals['_EMPTY']._serialized_start=1143
+  _globals['_EMPTY']._serialized_end=1150
 # @@protoc_insertion_point(module_scope)
