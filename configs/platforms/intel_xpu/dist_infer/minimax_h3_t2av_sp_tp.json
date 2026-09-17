@@ -12,7 +12,7 @@
   "text_encoder_tensor_parallel": true,
   "text_encoder_host_pinned": false,
   "vae_cpu_offload": true,
-  "vae_attn_type": "minimax_h3_vae_cute",
+  "vae_attn_type": "minimax_h3_xpu_cute",
   "lazy_load": false,
   "unload_modules": false,
   "attn_type": "intel_xpu_cute_attn",

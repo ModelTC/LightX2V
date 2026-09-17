@@ -331,7 +331,7 @@ The BMG CUTE FMHA sidecar exposes
 `sycl_kernels.minimax_h3_vae_sdp_d64(q, k, v)` for the Video VAE tile
 attention contract: FP16 Q/K/V shaped `[1, 32, S, 64]`, dense BLHD-backed Q/K,
 and a V view backed by a fused three-wide QKV projection. Select the LightX2V
-adapter with `"vae_attn_type": "minimax_h3_vae_cute"`; unsupported contracts
+adapter with `"vae_attn_type": "minimax_h3_xpu_cute"`; unsupported contracts
 fall back to Torch SDPA.
 
 Rebuild all three `cute_fmha*.so` libraries together after updating the CUTE

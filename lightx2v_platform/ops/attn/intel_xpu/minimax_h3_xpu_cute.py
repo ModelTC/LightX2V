@@ -38,8 +38,8 @@ def _has_supported_layout(q, k, v):
     return tuple(q.stride()) == qk_stride and tuple(k.stride()) == qk_stride and tuple(v.stride()) in (qk_stride, packed_v_stride)
 
 
-@PLATFORM_ATTN_WEIGHT_REGISTER("minimax_h3_vae_cute")
-class MiniMaxH3VaeCuteWeight(AttnWeightTemplate):
+@PLATFORM_ATTN_WEIGHT_REGISTER("minimax_h3_xpu_cute")
+class MiniMaxH3XpuCuteWeight(AttnWeightTemplate):
     """BMG CUTE D64 attention with a Torch SDPA fallback."""
 
     def __init__(self):
