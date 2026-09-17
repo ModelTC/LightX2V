@@ -80,7 +80,6 @@ TI2I 未指定图片时使用上游示例 `assets/demo_instruct_imgs/input_0_0.p
 | `HUNYUAN_IMAGE3_SAVE_RESULT_PATH` | `save_results/hunyuan_image3_<TASK>_block_shared_offload.png` |
 | `SEED` | `42` |
 | `CONFIG_JSON` | 可选完整 JSON 配置，未设置时使用上述默认配置 |
-| `LIGHTX2V_DIST_TIMEOUT_SECONDS` | 初始化通信超时，默认 `3600` 秒 |
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 \

@@ -72,8 +72,6 @@ export PYTHONPATH="${HUNYUAN_IMAGE3_REPO_PATH}:${PYTHONPATH:-}"
 export DTYPE=BF16 SENSITIVE_LAYER_DTYPE=None
 source "${lightx2v_path}/scripts/base/base.sh"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-# The leader may need to read ~150 GiB from remote storage while peers wait.
-export LIGHTX2V_DIST_TIMEOUT_SECONDS="${LIGHTX2V_DIST_TIMEOUT_SECONDS:-3600}"
 
 if [[ "${task}" == ti2i ]]; then
     default_prompt='新年宠物海报，Q版圆润的可爱标题“新年快乐汪”，副标题“HAPPY NEW YEAR”。鱼眼镜头，背景是房间门口，上传的主体歪头笑，围着红色围巾，戴着红色毛线帽，高清绒毛细节，面部特写，宝丽莱相纸，写实胶片摄影，复古颗粒感。'
