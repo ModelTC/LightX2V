@@ -14,6 +14,7 @@
   "text_encoder_release_block_offload_buffers": true,
   "vae_cpu_offload": false,
   "vae_use_compile": true,
+  "vae_attn_type": "minimax_h3_xpu_cute",
   "lazy_load": false,
   "unload_modules": false,
   "attn_type": "intel_xpu_cute_attn",

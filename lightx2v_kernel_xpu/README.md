@@ -325,6 +325,26 @@ Run correctness tests from the repository root with:
 PYTHONPATH=lightx2v_kernel_xpu/python:$PYTHONPATH python -m pytest lightx2v_kernel_xpu/test/test_minimax_h3_fused_qkv.py -q
 ```
 
+### MiniMax-H3 Video VAE D64 attention
+
+The BMG CUTE FMHA sidecar exposes
+`sycl_kernels.minimax_h3_vae_sdp_d64(q, k, v)` for the Video VAE tile
+attention contract: FP16 Q/K/V shaped `[1, 32, S, 64]`, dense BLHD-backed Q/K,
+and a V view backed by a fused three-wide QKV projection. Select the LightX2V
+adapter with `"vae_attn_type": "minimax_h3_xpu_cute"`; unsupported contracts
+fall back to Torch SDPA.
+
+Rebuild all three `cute_fmha*.so` libraries together after updating the CUTE
+wrapper. Their SYCL kernel names are isolated by library namespace: sharing a
+kernel name between the dense and sparse parameter layouts can cause
+`UR_RESULT_ERROR_DEVICE_LOST` when the VAE runs after SLA. The generic library
+also applies a coordinate-based tail mask for non-aligned lengths such as 1797.
+Run the load-order and numerical regressions on BMG from the repository root:
+
+```bash
+PYTHONPATH=lightx2v_kernel_xpu/python:$PYTHONPATH python -m pytest lightx2v_kernel_xpu/test/test_cute_library_isolation.py -q
+```
+
 ### MiniMax-H3 SLA block-sparse attention
 
 The Linux BMG build also exposes an SLA forward path for BF16 MiniMax-H3

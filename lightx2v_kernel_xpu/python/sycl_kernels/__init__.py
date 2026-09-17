@@ -271,6 +271,30 @@ def has_cute_fmha():
         return False
 
 
+def minimax_h3_vae_sdp_d64(q, k, v):
+    """Run the BMG MiniMax-H3 Video VAE FP16 D64 attention kernel."""
+    import torch
+
+    try:
+        op = torch.ops.sycl_kernels_cute.sdp_minimax_h3_vae_d64
+    except AttributeError:
+        _load_cute_fmha()
+        op = torch.ops.sycl_kernels_cute.sdp_minimax_h3_vae_d64
+    return op(q, k, v)
+
+
+def has_minimax_h3_vae_sdp_d64():
+    if os.name == "nt":
+        return False
+    try:
+        _load_cute_fmha()
+        import torch
+
+        return hasattr(torch.ops.sycl_kernels_cute, "sdp_minimax_h3_vae_d64")
+    except (ImportError, OSError, RuntimeError):
+        return False
+
+
 def sla_block_map(q, k, keep_ratio=0.2, block_q=128, block_k=128):
     """Build an SLA block LUT for BLHD query/key tensors."""
     from .sla import sla_block_map as _sla_block_map
