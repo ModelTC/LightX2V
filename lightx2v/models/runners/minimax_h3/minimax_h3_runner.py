@@ -206,6 +206,8 @@ class MiniMaxH3Runner(DefaultRunner):
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
         self.model = self.load_transformer()
+        if self.config.get("dit_release_block_offload_buffers", False):
+            self.model.release_block_offload_buffers()
         self.text_encoders = self.load_text_encoder()
         self.video_vae, self.audio_vae = self.load_vae()
 
@@ -276,6 +278,8 @@ class MiniMaxH3Runner(DefaultRunner):
             sensitive_layer_dtype=vae_sensitive_layer_dtype,
             use_compile=self.config.get("vae_use_compile", False),
             attn_type=self.config.get("vae_attn_type", "torch_sdpa"),
+            offload_granularity=self.config.get("video_vae_offload_granularity", "model"),
+            shared_cpu_config=self.config if self.config.get("video_vae_shared_cpu_weights", False) else None,
         )
         self._vae_decode_tile_shapes = self.config.get("vae_decode_tile_shape", {})
         self._validate_vae_decode_tile_shapes(self._vae_decode_tile_shapes, video_vae)
@@ -568,6 +572,8 @@ class MiniMaxH3Runner(DefaultRunner):
             self.model.to_cuda()
         else:
             logger.info("MiniMax-H3 block offload enabled; keeping source blocks on CPU and using two accelerator buffers")
+            if self.config.get("dit_release_block_offload_buffers", False):
+                self.model.ensure_block_offload_buffers()
         torch_device_module.synchronize()
 
     def run_segment(self, segment_idx=0):
@@ -597,9 +603,11 @@ class MiniMaxH3Runner(DefaultRunner):
             return
         if self.model.block_offload:
             if not self.model.prepost_resident:
-                logger.info("Offloading MiniMax-H3 pre/post weights; retaining the two block-offload device buffers")
+                logger.info("Offloading MiniMax-H3 pre/post weights")
                 self.model.pre_weight.to_cpu()
                 self.model.post_weight.to_cpu()
+            if self.config.get("dit_release_block_offload_buffers", False):
+                self.model.release_block_offload_buffers()
         else:
             logger.info("Offloading MiniMax-H3 transformer before VAE decode")
             self.model.to_cpu()

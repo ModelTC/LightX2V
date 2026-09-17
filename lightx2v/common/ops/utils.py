@@ -6,6 +6,7 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.offload.shared_weight_map import consume_weight
 from lightx2v.utils.envs import *
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -194,9 +195,11 @@ def create_default_tensors(base_attrs, weight_dict):
     if device.type == "cpu":
         for name, attr_name, transpose in base_attrs:
             if name in weight_dict:
-                tensor = weight_dict[name]
-                pin_tensors[attr_name] = create_pin_tensor(tensor, transpose=transpose)
-                del weight_dict[name]
+                tensor, is_shared = consume_weight(weight_dict, name)
+                if is_shared:
+                    pin_tensors[attr_name] = tensor.t() if transpose else tensor
+                else:
+                    pin_tensors[attr_name] = create_pin_tensor(tensor, transpose=transpose)
     else:
         for name, attr_name, transpose in base_attrs:
             if name in weight_dict:

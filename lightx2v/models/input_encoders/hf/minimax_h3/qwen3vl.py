@@ -1009,7 +1009,11 @@ class MiniMaxH3Qwen3VLTextEncoder:
             block_offload=self.block_offload,
             tp_group=self.tp_group,
         )
-        if quantized:
+        if self.config.get("text_encoder_shared_cpu_weights", False):
+            from lightx2v.models.input_encoders.hf.minimax_h3.shared_weights import load_shared_text_weights
+
+            load_shared_text_weights(self, text_encoder, text_encoder_path, text_config)
+        elif quantized:
             self._load_quantized_weights(text_encoder, checkpoint_path)
         else:
             self._load_native_weights(text_encoder, checkpoint_path, text_config)
@@ -1034,6 +1038,11 @@ class MiniMaxH3Qwen3VLTextEncoder:
         text_encoder = self.text_encoder
         self.text_encoder = None
         if text_encoder is not None:
+            owner = getattr(text_encoder, "shared_cpu_weight_owner", None)
+            if owner is not None:
+                torch_device_module.synchronize()
+                text_encoder.release_block_offload_buffers()
+                owner.close()
             del text_encoder
             gc.collect()
             _empty_device_cache()

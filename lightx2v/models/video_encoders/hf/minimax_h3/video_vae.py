@@ -459,6 +459,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         self.num_register_tokens = num_register_tokens
         self.use_compile = use_compile
         self.compiled_blocks = {}
+        self.block_offload_runner = None
 
         self.rope = MiniMaxH3VideoRotaryPosEmbed(int(attention_head_dim * rope_dim_ratio), theta=rope_theta)
         self.proj_in = nn.Linear(in_channels, dim)
@@ -515,8 +516,12 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         suffix_ids = position_ids.new_zeros((batch_size, self.num_register_tokens + 1, 3))
         rotary_emb = self.rope(torch.cat([position_ids, suffix_ids], dim=1))
 
-        for block_index, block in enumerate(self.transformer_blocks):
-            hidden_states = self._run_block(block_index, block, hidden_states, rotary_emb)
+        block_offload = self.block_offload_runner
+        if block_offload is not None:
+            hidden_states = block_offload.infer(hidden_states, rotary_emb)
+        else:
+            for block_index, block in enumerate(self.transformer_blocks):
+                hidden_states = self._run_block(block_index, block, hidden_states, rotary_emb)
 
         hidden_states = self.norm_out(hidden_states)
         if self.sensitive_layer_dtype != self.infer_dtype:
@@ -643,6 +648,9 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.register_buffer("pixel_std", torch.empty(3), persistent=False)
         self._reset_runtime_buffers()
         self.load_report: SafetensorsSubsetReport | None = None
+        self._cpu_weight_sources = None
+        self.shared_cpu_weight_owner = None
+        self._shared_weights_closed = False
 
     def _replace_decoder_linears_with_fp8(self, module: nn.Module) -> None:
         for name, child in module.named_children():
@@ -714,7 +722,14 @@ class MiniMaxH3VideoVAE(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
+        offload_granularity: str = "model",
+        shared_cpu_config: dict | None = None,
     ) -> "MiniMaxH3VideoVAE":
+        if offload_granularity not in {"model", "block"}:
+            raise ValueError("video_vae_offload_granularity must be model or block")
+        if offload_granularity == "block" or shared_cpu_config is not None:
+            if not cpu_offload or quant_scheme is not None or use_compile:
+                raise ValueError("H3 VAE shared/block mode requires CPU offload, original weights and vae_use_compile=false")
         vae_dir = _component_dir(model_path, "vae")
         if (checkpoint_path is None) != (quant_scheme is None):
             raise ValueError("MiniMax-H3 video VAE checkpoint_path and quant_scheme must be configured together")
@@ -746,7 +761,12 @@ class MiniMaxH3VideoVAE(nn.Module):
                 attn_type=attn_type,
             )
         model._reset_runtime_buffers()
-        model.load_report = load_safetensors_subset(model, weight_path)
+        if shared_cpu_config is not None:
+            from lightx2v.models.video_encoders.hf.minimax_h3.weights import load_shared_video_vae
+
+            model.load_report = load_shared_video_vae(model, weight_path, shared_cpu_config)
+        else:
+            model.load_report = load_safetensors_subset(model, weight_path)
         if quant_scheme is not None:
             # Pack only after loading the checkpoint's original Q/K/V keys.
             model._pack_decoder_fp8_qkv()
@@ -754,6 +774,13 @@ class MiniMaxH3VideoVAE(nn.Module):
             model._configure_fp8_f16_accum_linears()
         model._prepare_inference_dtypes()
         model.eval().requires_grad_(False)
+        if offload_granularity == "block" or shared_cpu_config is not None:
+            from lightx2v.common.offload.module_adapter import ModuleCPUWeights
+            from lightx2v.models.video_encoders.hf.minimax_h3.offload import VideoVAEDecoderOffload
+
+            if offload_granularity == "block":
+                model.decoder.block_offload_runner = VideoVAEDecoderOffload(model.decoder.transformer_blocks, model.execution_device, shared=shared_cpu_config is not None)
+            model._cpu_weight_sources = ModuleCPUWeights(model)
         if not cpu_offload:
             model.to(model.execution_device)
         if use_compile:
@@ -1033,7 +1060,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         try:
             if pixels.ndim != 5 or pixels.shape[0] != 1 or pixels.shape[1] != 3:
                 raise ValueError(f"reference pixels must be [1,3,F,H,W], got {tuple(pixels.shape)}")
-            device = self._activate()
+            device = self._activate("encode")
             pixels = self.preprocess(pixels.to(device=device, dtype=self.sensitive_layer_dtype))
             with torch.no_grad():
                 if self.encode_parallel:
@@ -1199,15 +1226,44 @@ class MiniMaxH3VideoVAE(nn.Module):
         std = self.pixel_std.to(device=video.device).view(1, -1, 1, 1, 1)
         return (video.to(self.sensitive_layer_dtype) * std + mean).clamp_(0, 1)
 
-    def _activate(self) -> torch.device:
+    def _activate(self, operation="decode") -> torch.device:
+        if self._shared_weights_closed:
+            raise RuntimeError("Video VAE shared weights have been closed; reload the model before inference")
+        sources = self._cpu_weight_sources
+        if sources is not None:
+            if operation == "encode":
+                prefixes = ("encoder", "quant_conv")
+            elif self.decoder.block_offload_runner is not None:
+                prefixes = ("post_quant_conv", "decoder.proj_in", "decoder.proj_out", "decoder.norm_out", "decoder.register_tokens", "decoder.rope")
+                self.decoder.block_offload_runner.activate()
+            else:
+                prefixes = ("post_quant_conv", "decoder")
+            sources.activate(prefixes, self.execution_device)
+            return self.execution_device
         if self.cpu_offload:
             self.to(self.execution_device)
         return next(self.parameters()).device
 
     def offload(self) -> None:
-        self.to("cpu")
+        sources = self._cpu_weight_sources
+        if sources is None:
+            self.to("cpu")
+        else:
+            torch.cuda.synchronize(self.execution_device)
+            block_offload = self.decoder.block_offload_runner
+            if block_offload is not None:
+                block_offload.release()
+            sources.restore()
         _empty_device_cache(self.execution_device)
         gc.collect()
+
+    def close_shared_cpu_weights(self):
+        owner = self.shared_cpu_weight_owner
+        if owner is not None:
+            self.offload()
+            owner.close()
+            self.shared_cpu_weight_owner = None
+            self._shared_weights_closed = True
 
     def _run_decode(
         self,
