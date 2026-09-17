@@ -65,9 +65,9 @@ def _try_recv(ws, chunks, size, timeout=0.01):
 def _mux_raw(output, width, height, fps, video_bytes, audio_bytes):
     os.makedirs(os.path.dirname(os.path.abspath(output)) or ".", exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ws_raw_") as tmp:
-        rgb_path = os.path.join(tmp, "video.rgb")
+        h264_path = os.path.join(tmp, "video.h264")
         pcm_path = os.path.join(tmp, "audio.pcm")
-        with open(rgb_path, "wb") as f:
+        with open(h264_path, "wb") as f:
             f.write(video_bytes)
         with open(pcm_path, "wb") as f:
             f.write(audio_bytes)
@@ -84,20 +84,14 @@ def _mux_raw(output, width, height, fps, video_bytes, audio_bytes):
             "1",
             "-i",
             pcm_path,
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "-s",
-            f"{width}x{height}",
             "-r",
             str(fps),
+            "-f",
+            "h264",
             "-i",
-            rgb_path,
+            h264_path,
             "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
+            "copy",
             "-c:a",
             "aac",
             output,

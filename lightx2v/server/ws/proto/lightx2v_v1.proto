@@ -54,8 +54,8 @@ message AudioChunk {
 
 message VideoChunk {
   uint64 sequence = 1;
-  bytes audio_data = 2;
-  bytes video_data = 3;
+  bytes audio_data = 2;  // pcm_s16le / 16000 / mono
+  bytes video_data = 3;  // H.264 Annex-B access units
 }
 
 // 只有模型产出后才知道尺寸, 当前只有最小满足字段，后续需要补充fps等其他信息

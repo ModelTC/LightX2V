@@ -2,8 +2,10 @@ import math
 import threading
 import time
 import traceback
+from fractions import Fraction
 from typing import Callable, Optional
 
+import av
 import torch
 from loguru import logger
 
@@ -11,12 +13,71 @@ START_SPEAKING = 0
 STOP_SPEAKING = 1
 
 
-def encode_video_frames(images: torch.Tensor) -> bytes:
-    out = bytearray()
-    for i in range(images.shape[0]):
-        frame = (images[i] * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
-        out.extend(frame.tobytes())
-    return bytes(out)
+class H264AnnexBEncoder:
+    """Stateful libx264 encoder that emits concatenated Annex-B access units."""
+
+    def __init__(self, width: int, height: int, fps: float, gop_size: int = 8):
+        if width % 2 or height % 2:
+            raise ValueError(f"H.264 yuv420p requires even size, got {width}x{height}")
+        self.width = width
+        self.height = height
+        fps_frac = Fraction(fps).limit_denominator(1000)
+        self.ctx = av.CodecContext.create("libx264", "w")
+        self.ctx.width = width
+        self.ctx.height = height
+        self.ctx.pix_fmt = "yuv420p"
+        self.ctx.framerate = fps_frac
+        self.ctx.time_base = 1 / fps_frac
+        self.ctx.gop_size = max(1, int(gop_size))
+        self.ctx.max_b_frames = 0
+        self.ctx.options = {
+            "preset": "ultrafast",
+            "tune": "zerolatency",
+            "profile": "baseline",
+            "repeat-headers": "1",
+            "annexb": "1",
+            "bf": "0",
+        }
+        self.ctx.open()
+        self.pts = 0
+
+    def encode(self, images: torch.Tensor) -> bytes:
+        frames = (images * 255).clamp(0, 255).to(torch.uint8).contiguous().cpu().numpy()
+        raw_bytes = frames.nbytes
+        out = bytearray()
+        t0 = time.perf_counter()
+        for i in range(frames.shape[0]):
+            vf = av.VideoFrame.from_ndarray(frames[i], format="rgb24")
+            vf = vf.reformat(format="yuv420p")
+            vf.pts = self.pts
+            vf.time_base = self.ctx.time_base
+            if i == 0:
+                # FFmpeg AV_PICTURE_TYPE_I = 1; older PyAV rejects the string "I"
+                vf.pict_type = 1
+            self.pts += 1
+            for packet in self.ctx.encode(vf):
+                out.extend(bytes(packet))
+        encoded = bytes(out)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.debug(
+            f"H.264 encode {frames.shape[0]}x{self.width}x{self.height}: "
+            f"rgb={raw_bytes} -> annexb={len(encoded)} elapsed={elapsed_ms:.1f}ms"
+        )
+        return encoded
+
+    def close(self):
+        try:
+            list(self.ctx.encode(None))
+        except Exception:
+            pass
+        try:
+            self.ctx.close()
+        except Exception:
+            pass
+
+
+def encode_video_frames(images: torch.Tensor, encoder: H264AnnexBEncoder) -> bytes:
+    return encoder.encode(images)
 
 
 def encode_audio_pcm(audios: torch.Tensor) -> bytes:
@@ -57,6 +118,8 @@ class WsVideoChunkRecorder:
         self.video_start_sent = False
         frames = int(chunk_frames or self.stream_config.get("chunk_frames") or 8)
         self.send_slices = max(1, math.ceil(frames / max(self.slice_frame, 1)))
+        self.encoder: Optional[H264AnnexBEncoder] = None
+        self.gop_size = max(1, frames)
 
     def start(self, width: int, height: int):
         self.set_video_size(width, height)
@@ -67,6 +130,9 @@ class WsVideoChunkRecorder:
             return
         self.width = width
         self.height = height
+        if self.encoder is not None:
+            self.encoder.close()
+        self.encoder = H264AnnexBEncoder(width, height, self.fps, gop_size=self.gop_size)
         self._emit(("video_start", width, height))
         self.video_start_sent = True
         self.schedule_thread = threading.Thread(target=self.schedule_stream_buffer, daemon=True)
@@ -138,8 +204,12 @@ class WsVideoChunkRecorder:
             logger.info(f"STOP_SPEAKING seq={self.sequence}")
         imgs = torch.cat([item[0] for item in batch], dim=0)
         auds = torch.cat([item[1].reshape(-1) for item in batch], dim=0)
-        video_data = encode_video_frames(imgs)
+        if self.encoder is None:
+            raise RuntimeError("H.264 encoder is not initialized")
+        video_data = encode_video_frames(imgs, self.encoder)
         audio_data = encode_audio_pcm(auds)
+        if not video_data:
+            logger.warning(f"empty H.264 output seq={self.sequence} frames={imgs.shape[0]}")
         self._emit(("video", self.sequence, audio_data, video_data))
         self.sequence += 1
         self.stoppable_t = time.time() + auds.numel() / self.sample_rate + 3
@@ -180,4 +250,7 @@ class WsVideoChunkRecorder:
         self.stop_schedule = True
         if self.schedule_thread is not None:
             self.schedule_thread.join(timeout=5)
+        if self.encoder is not None:
+            self.encoder.close()
+            self.encoder = None
         logger.info("WsVideoChunkRecorder stopped")
