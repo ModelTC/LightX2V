@@ -60,9 +60,11 @@ class MiniMaxH3Model(BaseTransformerModel):
         self.lora_alpha = lora_alpha
         self.vdn_checkpoint = config.get("vdn_checkpoint")
         if self.vdn_checkpoint:
-            configure_vdn(config)
-            if lora_path or config.get("lora_dynamic_apply", False):
+            if config.get("tensor_parallel", False) or config.get("dit_quantized", False):
+                raise NotImplementedError("VDN-H3 weights currently support unquantized inference without tensor parallelism")
+            if lora_path or config.get("lora_configs") or config.get("lora_dynamic_apply", False):
                 raise ValueError("VDN loads its default/turbo adapters from vdn_checkpoint; do not add lora_configs or dynamic LoRA")
+            configure_vdn(config)
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not self.use_adaln_cache and not self.vdn_checkpoint:
             message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{ADALN_CACHE_GUIDE}"

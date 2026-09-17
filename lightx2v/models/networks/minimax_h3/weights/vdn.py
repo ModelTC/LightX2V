@@ -13,44 +13,11 @@ from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
 
 
 def configure_vdn(config):
-    """Read the released artifact and expose its attention configuration."""
     checkpoint = Path(config["vdn_checkpoint"]).expanduser().resolve()
     with (checkpoint / "model_spec.json").open() as handle:
         spec = json.load(handle)
-    if spec.get("format_version") != 2 or spec["base"]["class_name"] != "MiniMaxH3Transformer3DModel":
-        raise ValueError(f"Unsupported VDN-H3 model specification: {checkpoint}")
-    transforms = spec["transforms"]
-    if len(transforms) != 1 or transforms[0]["type"] != "hybrid_attention" or transforms[0]["version"] != 2:
-        raise ValueError("VDN-H3 requires the released hybrid_attention v2 transform")
-    attention = transforms[0]["config"]
-    if attention["anchor_frames"] != "both" or not attention["enable_softmax_gate"] or attention["softmax_attention"] != {"chunk": 5, "radius": 1}:
-        raise ValueError("VDN-H3 requires the released gated 5-frame/radius-1 window with both boundary anchors")
-    linear = attention["linear_attention"]
-    if linear["linear_head_dim"] != 128:
-        raise ValueError("VDN-H3 requires the released 128-dimensional linear heads")
-    if linear["delta_rule"] != "vdn_solve" or linear["bridge"] != "alpha" or not linear["a_fp32"] or not linear["enable_text_state"] or linear["short_conv"]["targets"] != ["k", "v"]:
-        raise ValueError("VDN-H3 requires the released FP32-alpha, text-state, K/V short-convolution architecture")
-    if config.get("lora_configs"):
-        raise ValueError("VDN-H3 loads its default/turbo adapters from vdn_checkpoint; do not also set lora_configs")
-    if config.get("tensor_parallel", False) or config.get("dit_quantized", False):
-        raise NotImplementedError("VDN-H3 weights currently support unquantized inference without tensor parallelism")
-    names = [adapter["config"].get("name", "default") for adapter in spec["adapters"]]
-    if names not in (["default"], ["default", "turbo"]):
-        raise ValueError(f"Expected VDN Stage-B or DMD adapters, got {names}")
-    for adapter in spec["adapters"]:
-        cfg = adapter["config"]
-        # The author's artifact loader merges with scale=1. These released
-        # adapters have alpha=rank, including every per-target override.
-        if cfg["alpha"] != cfg["rank"] or cfg.get("alpha_pattern", {}) != cfg.get("rank_pattern", {}):
-            raise ValueError("VDN-H3 artifact adapters must have alpha=rank for every target")
-    paths = [checkpoint / "linear_branch" / "model.safetensors"]
-    paths += [checkpoint / "adapters" / name / "adapter_model.safetensors" for name in names]
-    for path in paths:
-        if not path.is_file():
-            raise FileNotFoundError(path)
     config["vdn_checkpoint"] = str(checkpoint)
-    config["vdn_attention"] = attention
-    return spec
+    config["vdn_attention"] = spec["transforms"][0]["config"]
 
 
 def _branch_shapes(config):
