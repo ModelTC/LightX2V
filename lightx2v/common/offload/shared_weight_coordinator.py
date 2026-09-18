@@ -4,19 +4,29 @@ This module is deliberately model agnostic.  A model adapter supplies a
 manifest and a callback that writes tensors into the leader's views; the
 coordinator discovers GPU/NUMA topology, elects one leader per memory domain,
 and makes every rank attach and CUDA-register the same physical pages.
+
+CPU status waits use the job's Store, never the default GPU process group.
+LIGHTX2V_SHARED_WEIGHT_TIMEOUT_SECONDS bounds each wait (default: 3600 seconds).
+Failures abort subsequent shared-weight initialization in the same job. A rank
+busy in CPU loading observes the failure when it next reaches coordination.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
+import pickle
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
+from weakref import WeakKeyDictionary
 
 import torch
 import torch.distributed as dist
 from loguru import logger
+from torch.distributed.distributed_c10d import _get_default_store
 
 from lightx2v.common.offload.shared_pinned_arena import (
     DEFAULT_REGISTER_CHUNK_BYTES,
@@ -74,12 +84,85 @@ def _distributed_rank_and_world() -> tuple[int, int]:
     return 0, 1
 
 
-def _all_gather_object(value: Any, world_size: int) -> list[Any]:
+class _CPUStatusExchange:
+    """Exchange small, trusted job metadata without enqueuing GPU collectives.
+
+    The Store belongs to the distributed job; our prefix and deadline are
+    independent of its process groups. Keep a terminal failure so late ranks
+    and enclosing initialization error handlers observe the same cause.
+    """
+
+    def __init__(self, store):
+        self.store = dist.PrefixStore("lightx2v/shared_cpu_weights/", store)
+        self.sequence = 0
+
+    def _abort(self, message: str) -> None:
+        first_failure = self.store.compare_set("failure", "", message).decode()
+        raise SharedWeightCoordinationError(first_failure)
+
+    def exchange(self, stage: str, status: Mapping[str, Any], world_size: int) -> list[Any]:
+        sequence = self.sequence
+        self.sequence += 1
+        rank = status["rank"]
+        started = time.monotonic()
+        try:
+            timeout = float(os.environ.get("LIGHTX2V_SHARED_WEIGHT_TIMEOUT_SECONDS", "3600"))
+            if not math.isfinite(timeout) or timeout <= 0:
+                raise ValueError("LIGHTX2V_SHARED_WEIGHT_TIMEOUT_SECONDS must be finite and positive")
+            self.store.set(f"{sequence}/{rank}", pickle.dumps((stage, status)))
+            failure = _failure_message(stage, [status])
+            if failure is not None:
+                self._abort(failure)
+
+            pending = set(range(world_size))
+            statuses = [None] * world_size
+            while True:
+                if self.store.check(["failure"]):
+                    raise SharedWeightCoordinationError(self.store.get("failure").decode())
+                for peer in list(pending):
+                    key = f"{sequence}/{peer}"
+                    if not self.store.check([key]):
+                        continue
+                    peer_stage, peer_status = pickle.loads(self.store.get(key))
+                    if peer_stage != stage:
+                        self._abort(f"shared CPU weight stage mismatch at exchange {sequence}: rank {rank} entered {stage!r}, rank {peer} entered {peer_stage!r}")
+                    failure = _failure_message(stage, [peer_status])
+                    if failure is not None:
+                        self._abort(failure)
+                    statuses[peer] = peer_status
+                    pending.remove(peer)
+                elapsed = time.monotonic() - started
+                if not pending:
+                    if elapsed >= 1:
+                        logger.info(f"[SharedCPUWeights] CPU coordination {stage!r}: rank {rank} waited {elapsed:.1f}s")
+                    return statuses
+                if elapsed >= timeout:
+                    self._abort(f"shared CPU weight {stage} timed out after {timeout:g}s on rank {rank}; missing ranks: {sorted(pending)}")
+                time.sleep(min(0.1, timeout - elapsed))
+        except SharedWeightCoordinationError:
+            raise
+        except Exception as error:
+            message = f"shared CPU weight {stage} CPU coordination failed on rank {rank}: {type(error).__name__}: {error}"
+            # A disconnected Store cannot propagate an error, but local arena
+            # cleanup must still run and retain the transport failure as cause.
+            try:
+                self._abort(message)
+            except SharedWeightCoordinationError:
+                raise
+            except Exception:
+                raise SharedWeightCoordinationError(message) from error
+
+
+_cpu_status_exchanges = WeakKeyDictionary()
+
+
+def _exchange_status(stage: str, status: Mapping[str, Any], world_size: int) -> list[Any]:
     if world_size == 1:
-        return [value]
-    gathered = [None] * world_size
-    dist.all_gather_object(gathered, value)
-    return gathered
+        return [status]
+    group = dist.group.WORLD
+    if group not in _cpu_status_exchanges:
+        _cpu_status_exchanges[group] = _CPUStatusExchange(_get_default_store())
+    return _cpu_status_exchanges[group].exchange(stage, status, world_size)
 
 
 def _failure_message(stage: str, statuses: list[Mapping[str, Any]]) -> str | None:
@@ -104,7 +187,12 @@ def coordinate_rank_local_error(stage: str, error: BaseException | None) -> None
         "ok": error is None,
         "error": None if error is None else f"{type(error).__name__}: {error}",
     }
-    statuses = _all_gather_object(status, world_size)
+    try:
+        statuses = _exchange_status(stage, status, world_size)
+    except SharedWeightCoordinationError as coordinated_error:
+        if error is not None:
+            raise coordinated_error from error
+        raise
     failure = _failure_message(stage, statuses)
     if failure is None:
         return
@@ -175,7 +263,7 @@ def materialize_shared_weight_arena(
         local_rank = None
         discovery_status = {"rank": rank, "ok": False, "error": repr(error)}
 
-    discovery_statuses = _all_gather_object(discovery_status, world_size)
+    discovery_statuses = _exchange_status("preflight/topology discovery", discovery_status, world_size)
     failure = _failure_message("preflight/topology discovery", discovery_statuses)
     if failure is not None:
         raise SharedWeightCoordinationError(failure)
@@ -216,7 +304,7 @@ def materialize_shared_weight_arena(
         except Exception as error:
             leader_status = {"rank": rank, "ok": False, "error": repr(error), "descriptor": None}
 
-        leader_statuses = _all_gather_object(leader_status, world_size)
+        leader_statuses = _exchange_status("leader creation/population", leader_status, world_size)
         failure = _failure_message("leader creation/population", leader_statuses)
         if failure is not None:
             raise SharedWeightCoordinationError(failure)
@@ -238,7 +326,7 @@ def materialize_shared_weight_arena(
         except Exception as error:
             attach_status = {"rank": rank, "ok": False, "error": repr(error)}
 
-        attach_statuses = _all_gather_object(attach_status, world_size)
+        attach_statuses = _exchange_status("attach/CUDA registration", attach_status, world_size)
         failure = _failure_message("attach/CUDA registration", attach_statuses)
         if failure is not None:
             raise SharedWeightCoordinationError(failure)
