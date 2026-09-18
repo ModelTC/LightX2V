@@ -1,13 +1,10 @@
 #!/bin/bash
-set -e
 
 lightx2v_path=/path/to/LightX2V
 model_path=/path/to/Wan2.1-I2V-14B-720P-Lightx2v
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 source "${lightx2v_path}/scripts/base/base.sh"
-export DTYPE=FP16
-export SENSITIVE_LAYER_DTYPE=FP16
 
 python -m torch.distributed.run --standalone --nproc_per_node=8 -m lightx2v.infer \
   --model_cls wan2.1 \

@@ -89,7 +89,6 @@ host 在同机同一 IPC 域按兼容的 TP 分片共享 transformer block CPU �
 | 修改位置 | 参数 | 默认值／用途 |
 | --- | --- | --- |
 | Shell 脚本 | 三个路径变量 | 项目、权重和上游代码目录 |
-| Shell 脚本 | `OMP_NUM_THREADS` | `1` |
 | 推理命令 | `--prompt`、`--save_result_path`、`--seed` | 提示词、输出文件、随机种子（默认 42） |
 | 推理命令 | `--shared_cpu_weight_scope` | `host`（默认）或 `numa` |
 | 推理命令 | `--config_json` | 使用其他配置时修改此路径 |

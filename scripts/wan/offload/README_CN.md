@@ -20,7 +20,7 @@ cd /path/to/LightX2V
 bash scripts/wan/offload/run_wan_block_shared_offload.sh
 ```
 
-默认配置需要模型配置、FP8-vLLM DiT `block_*.safetensors`、FP8 T5／CLIP 和 `Wan2.1_VAE.pth`。默认 FP16 推理，注意力后端为 FlashAttention 3。JSON 中的相对权重路径以运行时的工作目录为基准，因此使用上述仓库根目录启动方式；也可填写绝对路径。
+默认配置需要模型配置、FP8-vLLM DiT `block_*.safetensors`、FP8 T5／CLIP 和 `Wan2.1_VAE.pth`。沿用 `scripts/base/base.sh` 的默认 BF16 推理，注意力后端为 FlashAttention 3。JSON 中的相对权重路径以运行时的工作目录为基准，因此使用上述仓库根目录启动方式；也可填写绝对路径。
 
 ## 修改显卡数量
 

@@ -1,5 +1,7 @@
 # 公共实现与接入契约
 
+简体中文 | [English](implementation-patterns_en.md)
+
 路径相对仓库根目录。以下是现有实现的导航，修改前用函数名定位当前源码；不依赖固定行号。按任务读取加载、调度或生命周期部分。
 
 ## 启动到权重绑定
@@ -24,6 +26,8 @@ scripts/<model>/offload/*.sh
 ```
 
 配置与设备初始化见 `lightx2v/utils/set_config.py`、`lightx2v/models/runners/default_runner.py`。`set_init_device()` 根据 offload 选择 CPU；runner 管编排，模型和组件 loader 管权重。保留家族已经支持的 checkpoint 格式，不因增加共享强制转换全部模型格式。
+
+`--shared_cpu_weight_scope` 在 `build_cli_inputs()` 中归入 startup fields，`build_startup_config()` 在读取 JSON 后应用显式 CLI 值。因此 CLI 的 `host|numa` 优先于 JSON，JSON 优先于内部 `auto` 默认，且该设置不进入单次请求参数。当前共享启动脚本显式传入 `host`。
 
 [base_model.py](../../../../lightx2v/models/networks/base_model.py) 的关键契约：
 
@@ -58,7 +62,9 @@ scripts/<model>/offload/*.sh
 4. 交换每组的共享段描述符；同组 follower 挂接同一段，并为各自映射做 CUDA host registration。
 5. 协调挂接／注册结果，返回本进程的 `SharedArenaAllocation` owner。
 
-实际使用中应保留 coordinator 的分阶段错误传播；不要让一个 rank 在 peers 已进入 collective 后单独返回。它处理可协调的局部失败，不保证硬退出或通信组本身失效时仍能正常完成 collective。
+状态交换由 `_CPUStatusExchange` 使用作业的默认 Store 和独立 `PrefixStore` 完成，不在默认 NCCL 组上发起 CPU 加载等待所需的 collective。`LIGHTX2V_SHARED_WEIGHT_TIMEOUT_SECONDS` 限制每次交换的等待时间，默认 3600 秒；它不修改 NCCL 的超时。阶段序号和名称必须匹配，首次失败会保留给等待者、迟到的 rank 及外层初始化错误处理。
+
+保留 coordinator 的分阶段错误传播；不要让一个 rank 在 peers 已进入状态交换后单独返回。忙于 CPU 加载的 rank 在下次参与协调时观察失败；硬退出通过超时发现，Store 断连则可能只能本地清理，不能保证所有 peer 都收到原始错误。
 
 | scope | 分组规则 |
 |---|---|

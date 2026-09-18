@@ -89,7 +89,6 @@ To return to default T2I, change `--task` back to `t2i` and remove `--image_path
 | Where to edit | Option | Default / purpose |
 | --- | --- | --- |
 | Shell script | Three path variables | Project, checkpoint, and upstream code directories |
-| Shell script | `OMP_NUM_THREADS` | `1` |
 | Inference command | `--prompt`, `--save_result_path`, `--seed` | Prompt, output file, random seed (default 42) |
 | Inference command | `--shared_cpu_weight_scope` | `host` (default) or `numa` |
 | Inference command | `--config_json` | Path to another configuration file |

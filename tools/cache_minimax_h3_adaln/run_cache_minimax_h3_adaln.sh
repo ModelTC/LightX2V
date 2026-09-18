@@ -1,16 +1,14 @@
 #!/bin/bash
-set -eo pipefail
 
 # set path firstly
-lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-model_path="${MINIMAX_H3_MODEL_PATH:-${lightx2v_path}/models/MiniMax-H3}"
-cache_task="${MINIMAX_H3_CACHE_TASK:-fl2av}"
+lightx2v_path=/data/nvme1/yongyang/dan/LightX2V
+model_path=/data/nvme1/models/MiniMaxAI/MiniMax-H3
 
 # Select one platform. NVIDIA is enabled by default.
 
 # NVIDIA
 export PLATFORM=cuda
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+export CUDA_VISIBLE_DEVICES=0
 
 # Intel XPU
 # export PLATFORM=intel_xpu
@@ -55,8 +53,8 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 # set environment variables
 source "${lightx2v_path}/scripts/base/base.sh"
 
-# Supported model variants: fl2av, ref2av
-python -m tools.cache_minimax_h3_adaln.cache_minimax_h3_adaln \
+# Supported tasks: fl2av, ref2av
+python "${lightx2v_path}/tools/cache_minimax_h3_adaln/cache_minimax_h3_adaln.py" \
   --model_path "${model_path}" \
-  --config_json "${MINIMAX_H3_CONFIG:-${lightx2v_path}/configs/minimax_h3/minimax_h3.json}" \
-  --model-variant "${cache_task}"
+  --config_json "${lightx2v_path}/configs/minimax_h3/minimax_h3.json" \
+  --model-variant fl2av

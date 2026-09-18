@@ -1,16 +1,11 @@
 #!/bin/bash
-set -e
 
 lightx2v_path=/path/to/LightX2V
 model_path=/path/to/HunyuanImage-3-Instruct
 export HUNYUAN_IMAGE3_REPO_PATH=/path/to/HunyuanImage-3.0
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export PYTHONPATH="${HUNYUAN_IMAGE3_REPO_PATH}:${PYTHONPATH:-}"
 source "${lightx2v_path}/scripts/base/base.sh"
-export DTYPE=BF16
-export SENSITIVE_LAYER_DTYPE=None
-export OMP_NUM_THREADS=1
 
 python -m torch.distributed.run --standalone --nproc_per_node=8 -m lightx2v.infer \
   --model_cls hunyuan_image3 \

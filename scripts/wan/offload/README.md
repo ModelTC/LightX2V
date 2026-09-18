@@ -20,7 +20,7 @@ cd /path/to/LightX2V
 bash scripts/wan/offload/run_wan_block_shared_offload.sh
 ```
 
-The default configuration requires model configuration files, FP8-vLLM DiT `block_*.safetensors`, FP8 T5/CLIP weights, and `Wan2.1_VAE.pth`. It uses FP16 inference and FlashAttention 3. Relative checkpoint paths in the JSON are resolved from the working directory, so launch from the project root as shown above, or use absolute paths.
+The default configuration requires model configuration files, FP8-vLLM DiT `block_*.safetensors`, FP8 T5/CLIP weights, and `Wan2.1_VAE.pth`. It defaults to BF16 inference through `scripts/base/base.sh` and uses FlashAttention 3. Relative checkpoint paths in the JSON are resolved from the working directory, so launch from the project root as shown above, or use absolute paths.
 
 ## Change the GPU count
 
