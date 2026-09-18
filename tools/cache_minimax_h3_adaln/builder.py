@@ -25,6 +25,7 @@ from lightx2v.models.networks.minimax_h3.adaln_cache import (
     _block_key,
     _build_spec,
     _cache_path,
+    _checkpoint_files,
     _expected_table_shape,
     _norm_out_key,
     _timesteps_from_bits,
@@ -36,19 +37,13 @@ from lightx2v_platform.base.global_var import AI_DEVICE
 torch_device_module = getattr(torch, AI_DEVICE)
 
 
-def _checkpoint_files(config) -> list[Path]:
-    checkpoint = Path(config["dit_original_ckpt"]).expanduser().resolve()
-    files = sorted(checkpoint.glob("*.safetensors")) if checkpoint.is_dir() else [checkpoint]
-    if not files or any(not path.is_file() for path in files):
-        raise FileNotFoundError(f"MiniMax-H3 safetensors checkpoint not found: {checkpoint}")
-    return files
-
-
 class _CheckpointTensors:
     """Read individual tensors without materializing the whole checkpoint."""
 
-    def __init__(self, files: list[Path]):
+    def __init__(self, files: list[Path], vdn_adapters=()):
         self.files = files
+        # Adapter factors are read-only; base tensors are merged in place.
+        self.vdn_adapters = [(name, safe_open(path, framework="pt", device="cpu")) for name, path in vdn_adapters]
         self.locations = self._find_locations()
 
     def _find_locations(self) -> dict[str, Path]:
@@ -70,7 +65,12 @@ class _CheckpointTensors:
         if path is None:
             raise KeyError(f"MiniMax-H3 checkpoint tensor is missing: {name}")
         with safe_open(path, framework="pt", device="cpu") as source:
-            return source.get_tensor(name)
+            tensor = source.get_tensor(name)
+        if self.vdn_adapters and name.endswith(".weight"):
+            from lightx2v.models.networks.minimax_h3.weights.vdn import merge_vdn_tensor
+
+            tensor = merge_vdn_tensor(tensor, name, self.vdn_adapters)
+        return tensor
 
 
 def _linear(
@@ -94,10 +94,10 @@ def _empty_device_cache() -> None:
         torch_device_module.empty_cache()
 
 
-def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> None:
+def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path], vdn_adapters=()) -> None:
     stage_path = Path(tempfile.mkdtemp(prefix=".building-", dir=cache_path.parent))
     try:
-        checkpoint = _CheckpointTensors(checkpoint_files)
+        checkpoint = _CheckpointTensors(checkpoint_files, vdn_adapters)
         with torch.inference_mode():
             # ADALN CACHE SYNC: Keep activation placement and casts aligned with
             # the three online infer modules named in this file's contract.
@@ -161,14 +161,20 @@ def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> 
 
 def build_persistent_adaln_cache(config) -> Path:
     """Build the cache in this process for later inference processes to load."""
+    vdn_adapters = ()
+    if config.get("vdn_checkpoint"):
+        from lightx2v.models.networks.minimax_h3.weights.vdn import configure_vdn, vdn_adapter_paths
+
+        configure_vdn(config)
+        vdn_adapters = vdn_adapter_paths(config)
     spec = _build_spec(config)
-    cache_path = _cache_path(config)
+    cache_path = _cache_path(config, spec)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     if cache_path.exists():
         raise FileExistsError(f"MiniMax-H3 AdaLN cache path already exists: {cache_path}")
     checkpoint_files = _checkpoint_files(config)
     logger.info("Building MiniMax-H3 AdaLN cache on {}: {}", AI_DEVICE, cache_path)
-    _build_cache(spec, cache_path, checkpoint_files)
+    _build_cache(spec, cache_path, checkpoint_files, vdn_adapters)
 
     if not _validate_cache(cache_path, spec):
         raise RuntimeError(f"MiniMax-H3 AdaLN cache validation failed: {cache_path}")

@@ -1,0 +1,37 @@
+{
+  "infer_steps": 8,
+  "num_frames": 362,
+  "size": [
+    736,
+    1280
+  ],
+  "fps": 24,
+  "enable_cfg": false,
+  "cpu_offload": true,
+  "offload_granularity": "block",
+  "use_adaln_cache": false,
+  "text_encoder_cpu_offload": true,
+  "text_encoder_offload_granularity": "block",
+  "text_encoder_host_pinned": false,
+  "text_encoder_release_block_offload_buffers": true,
+  "vae_cpu_offload": true,
+  "vae_decode_parallel": true,
+  "lazy_load": false,
+  "unload_modules": false,
+  "attn_type": "flash_attn3",
+  "rms_type": "torch_native",
+  "rope_type": "torch_real_rope",
+  "feature_caching": "NoCaching",
+  "use_compile": false,
+  "video_flow_shift": 12.0,
+  "audio_flow_shift": 3.0,
+  "h3_step_update": "reference_blend",
+  "h3_noise_device": "model",
+  "vae_spatial_scale_factor": 16,
+  "audio_sampling_rate": 32000,
+  "parallel": {
+    "tensor_p_size": 8
+  },
+  "vdn_checkpoint": "/data/nvme1/models/vdn-minimax-h3/stage-dmd-step-250",
+  "tp_reproducible": true
+}

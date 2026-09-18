@@ -105,6 +105,10 @@ class MiniMaxH3Runner(DefaultRunner):
     }
 
     def __init__(self, config):
+        if config.get("vdn_checkpoint") and config["model_variant"] != "fl2av":
+            raise ValueError("VDN is based on the FL2AV transformer; use model_variant='fl2av'")
+        if config.get("h3_visual_reference_only", False) and config["model_variant"] != "fl2av":
+            raise ValueError("h3_visual_reference_only requires the base FL2AV transformer")
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
@@ -114,6 +118,9 @@ class MiniMaxH3Runner(DefaultRunner):
         """Return tasks supported by the loaded transformer weights."""
         if self.config["model_variant"] == "ref2av":
             return ("ref2av",)
+        # VDN accepts ref2av only through the Qwen image-reference experiment.
+        if self.config.get("vdn_checkpoint") and not self.config.get("h3_visual_reference_only", False):
+            return ("t2av", "i2av", "l2av", "fl2av")
         # Allow ref2av requests to use the base transformer for better visual quality.
         return ("t2av", "i2av", "l2av", "fl2av", "ref2av")
 
@@ -414,12 +421,15 @@ class MiniMaxH3Runner(DefaultRunner):
         for entry, kind in zip(entries, kinds):
             if kind == "image":
                 image = self._load_rgb_image(entry["image"])
-                height, width = resolve_reference_image_size(
-                    *image.size,
-                    target_width=self.request_width,
-                    target_height=self.request_height,
-                    mode=resize_mode,
-                )
+                if self.config.get("h3_visual_reference_only", False):
+                    height, width = self.request_height, self.request_width
+                else:
+                    height, width = resolve_reference_image_size(
+                        *image.size,
+                        target_width=self.request_width,
+                        target_height=self.request_height,
+                        mode=resize_mode,
+                    )
                 logger.info(f"MiniMax-H3 reference image resized with {resize_mode!r}: {image.width}x{image.height} -> {width}x{height}")
                 references.append(MiniMaxH3PreparedReference("image", image=prepare_reference_image(image, height, width)))
                 continue
@@ -506,14 +516,23 @@ class MiniMaxH3Runner(DefaultRunner):
         if task == "ref2av":
             self._resolve_request_geometry()
             self.prepared_references = self._prepare_references()
+            visual_only = self.config.get("h3_visual_reference_only", False)
+            if self.config.get("vdn_checkpoint") and not visual_only:
+                raise ValueError("VDN has no native Ref2VA path; enable h3_visual_reference_only only for the Qwen image-reference experiment")
+            if visual_only and any(reference.kind != "image" for reference in self.prepared_references):
+                raise ValueError("H3 visual-reference-only conditioning accepts image references only")
             text_encoder_output = self.run_text_encoder(self.input_info, references=self.prepared_references)
-            with ProfilingContext4DebugL1(
-                "Run VAE Encoder",
-                recorder_mode=GET_RECORDER_MODE(),
-                metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
-                metrics_labels=["MiniMaxH3Runner"],
-            ):
-                self.condition_video_latents, self.condition_audio_latents = self._encode_references(self.prepared_references)
+            if visual_only:
+                logger.info("H3 experimental Qwen image references: no VAE reference latents or first/last-frame anchors")
+                self.prepared_references = None
+            else:
+                with ProfilingContext4DebugL1(
+                    "Run VAE Encoder",
+                    recorder_mode=GET_RECORDER_MODE(),
+                    metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration,
+                    metrics_labels=["MiniMaxH3Runner"],
+                ):
+                    self.condition_video_latents, self.condition_audio_latents = self._encode_references(self.prepared_references)
         else:
             keyframes, self.keyframe_anchors = self._prepare_keyframes()
             if task == "t2av":

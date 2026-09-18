@@ -60,6 +60,11 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             self.seq_p_head_parallel = parallel.get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
+        self.vdn_attention = None
+        if config.get("vdn_checkpoint"):
+            from lightx2v.models.networks.minimax_h3.infer.vdn_attention import VDNAttention
+
+            self.vdn_attention = VDNAttention(config)
         self.infer_func = self.infer_without_offload
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         self._current_adaln_tables = None
@@ -80,8 +85,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         dist.all_gather(gathered, tensor.contiguous(), group=self.tp_group)
         return torch.cat(gathered, dim=-1)
 
-    def _prepare_qkv(self, weights, hidden_states, rotary_emb):
-        """Project QKV and return Q/K with normalization and RoPE applied."""
+    def _project_qkv(self, weights, hidden_states):
+        """Shared projections; VDN also consumes these raw tensors."""
         if self.use_fused_qkv and weights.has_fused_qkv:
             q, k, v = weights.to_qkv.apply(hidden_states).chunk(3, dim=-1)
         else:
@@ -90,7 +95,9 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             q = weights.to_q.apply(hidden_states)
             k = weights.to_k.apply(hidden_states)
             v = weights.to_v.apply(hidden_states)
+        return q, k, v
 
+    def _apply_qkv_norm_rope(self, weights, q, k, v, rotary_emb):
         if self.use_fused_qkv_norm_rope:
             fused = self.qkv_norm_rope.apply(
                 q,
@@ -119,8 +126,11 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         )
         return q, k, v
 
-    def _attention(self, weights, hidden_states, pre_infer_out):
-        q, k, v = self._prepare_qkv(weights, hidden_states, pre_infer_out.rotary_emb)
+    def _prepare_qkv(self, weights, hidden_states, rotary_emb):
+        return self._apply_qkv_norm_rope(weights, *self._project_qkv(weights, hidden_states), rotary_emb)
+
+    def _calculate_attention(self, weights, q, k, v, pre_infer_out, attention_module):
+        """Use the same single-card/Ulysses transport for dense and VDN softmax."""
         sp_state = pre_infer_out.sequence_parallel_state
         attention_kwargs = {
             "causal": False,
@@ -130,7 +140,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         if sp_state is None:
             seq_len = q.shape[0]
             cu_seqlens = torch.tensor((0, seq_len), dtype=torch.int32, device=q.device)
-            out = weights.calculate.apply(
+            out = attention_module.apply(
                 q=q,
                 k=k,
                 v=v,
@@ -149,7 +159,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
                 aux_q=q[:aux_length].contiguous() if aux_length else None,
                 aux_k=k[:aux_length].contiguous() if aux_length else None,
                 aux_v=v[:aux_length].contiguous() if aux_length else None,
-                attention_module=weights.calculate,
+                attention_module=attention_module,
                 seq_p_group=self.seq_p_group,
                 prepost_backend=self.seq_p_prepost_backend,
                 a2a_backend=self.seq_p_a2a_backend,
@@ -161,6 +171,13 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
             if aux_out is not None:
                 out = torch.cat((aux_out, out), dim=0)
+        return out
+
+    def _attention(self, weights, hidden_states, pre_infer_out):
+        if self.vdn_attention is not None:
+            return self.vdn_attention.apply(weights, hidden_states, pre_infer_out, self)
+        q, k, v = self._prepare_qkv(weights, hidden_states, pre_infer_out.rotary_emb)
+        out = self._calculate_attention(weights, q, k, v, pre_infer_out, weights.calculate)
         return weights.to_out.apply(out.to(self.infer_dtype))
 
     @staticmethod
