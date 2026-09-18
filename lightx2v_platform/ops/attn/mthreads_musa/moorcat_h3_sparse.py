@@ -10,7 +10,6 @@ from lightx2v_platform.registry_factory import PLATFORM_SPARSE_OPERATOR_REGISTER
 
 from .moorcat_h3_mask import PackedStreams, cube_topk_block_indices, precompute_cube_attention
 
-
 _SUPPORTED_CUBES = {(4, 4, 4): 64, (8, 4, 4): 128}
 
 
@@ -125,9 +124,7 @@ def _configure(scheduler, setting):
     precomputed.runtime.sparse_base_capacity = max(int(sparse_base_counts.max().item()), 1)
 
     sparse_tokens = sparse_blocks.repeat_interleave(tile)
-    dense_cube_indices = torch.nonzero(
-        (~sparse_tokens) & cube_layout.is_real.bool(), as_tuple=False
-    ).squeeze(1)
+    dense_cube_indices = torch.nonzero((~sparse_tokens) & cube_layout.is_real.bool(), as_tuple=False).squeeze(1)
     dense_original_indices = cube_layout.gather_indices.index_select(0, dense_cube_indices)
 
     kernel_len = cube_layout.padded_seqlen
@@ -212,9 +209,7 @@ class MusaMoorcatH3SparseOperator:
         state = _configure(scheduler, self.setting)
         layout = state.precomputed.layout
         if q.shape[0] != layout.real_total_len or k.shape[0] != layout.real_total_len:
-            raise ValueError(
-                f"packed sequence changed after Moorcat setup: q={q.shape[0]} k={k.shape[0]} expected={layout.real_total_len}"
-            )
+            raise ValueError(f"packed sequence changed after Moorcat setup: q={q.shape[0]} k={k.shape[0]} expected={layout.real_total_len}")
 
         ratio = state.topk_ratio
         softmax_scale = float(kwargs.get("softmax_scale", q.shape[-1] ** -0.5))
@@ -254,9 +249,7 @@ class MusaMoorcatH3SparseOperator:
         out = out.index_select(0, layout.expand_indices)
         if not state.logged:
             print(
-                "MINIMAX_H3_MOORCAT_ACTIVE "
-                f"path=native{state.tile} ratio={ratio} q={tuple(q.shape)} "
-                f"dense_q={state.dense_q_len} kernel_len={state.kernel_len} max_k={indices.shape[-1]}",
+                f"MINIMAX_H3_MOORCAT_ACTIVE path=native{state.tile} ratio={ratio} q={tuple(q.shape)} dense_q={state.dense_q_len} kernel_len={state.kernel_len} max_k={indices.shape[-1]}",
                 flush=True,
             )
             state.logged = True

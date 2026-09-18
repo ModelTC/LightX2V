@@ -5,7 +5,6 @@ import torch
 import triton
 import triton.language as tl
 
-
 _HEAD_DIM = 128
 _MAX_LABEL_ROWS = 128
 
