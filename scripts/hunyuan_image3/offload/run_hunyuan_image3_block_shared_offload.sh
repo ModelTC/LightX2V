@@ -12,7 +12,6 @@ python -m torch.distributed.run --standalone --nproc_per_node=8 -m lightx2v.infe
   --task t2i \
   --model_path "${model_path}" \
   --config_json "${lightx2v_path}/configs/hunyuan_image3/offload/hunyuan_image3_block_shared.json" \
-  --shared_cpu_weight_scope host \
   --prompt "生成图片：一辆汽车行驶在高速公路上，驾驶员在打电话，副驾驶坐着一只狗" \
   --save_result_path "${lightx2v_path}/save_results/hunyuan_image3_t2i_block_shared_offload.png" \
   --seed 42

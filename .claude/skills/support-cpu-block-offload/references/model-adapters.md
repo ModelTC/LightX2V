@@ -38,7 +38,7 @@
 
 当前 adapter 要求 `cpu_offload=true`、`offload_granularity=block`、`dit_quantized=true`、`dit_quant_scheme=fp8-vllm`，并要求推理和 sensitive dtype 相同。其 TP、lazy、在线量化、LoRA／adapter 限制由 `_validate_config()` 定义。FP8 checkpoint 格式与推理 dtype 是不同概念；默认 BF16 推理不等于支持未量化 BF16 checkpoint 共享，也不能推断全部 Wan 家族已支持共享。
 
-启动入口在 [scripts/wan/offload](../../../../scripts/wan/offload/)，统一脚本为 `run_wan_block_shared_offload.sh`，配置沿用 `configs/offload/block/wan_block_shared.json`。默认 I2V、host + 8 卡 SP8；将脚本中的 `--shared_cpu_weight_scope host` 改为 `numa` 切换模式。改卡数时同时编辑显卡列表、进程数和 JSON 并行布局。T2V 还需匹配的 T2V checkpoint、配置和输入参数。
+启动入口在 [scripts/wan/offload](../../../../scripts/wan/offload/)，统一脚本为 `run_wan_block_shared_offload.sh`，配置沿用 `configs/offload/block/wan_block_shared.json`。默认 I2V、host + 8 卡 SP8；将 JSON 中的 `shared_cpu_weight_scope` 改为 `numa` 切换模式。改卡数时同时编辑显卡列表、进程数和 JSON 并行布局。T2V 还需匹配的 T2V checkpoint、配置和输入参数。
 
 当前脚本沿用 `base.sh` 的 BF16 默认值，`SENSITIVE_LAYER_DTYPE=None` 跟随主 dtype；外部环境可改变这些值。旧 FP16 验证记录只覆盖当时精度，默认值变更后的 BF16 完整推理须有独立证据。
 
@@ -58,7 +58,7 @@
 
 `validate_qwen_shared_block_views()` 在公共地址校验之外，依据算子的 `base_attrs` 验证是否采用规定的转置方向。这可发现方阵上仅比较 shape 检测不到的布局错误。
 
-启动入口在 [scripts/qwen_image/offload](../../../../scripts/qwen_image/offload/)，统一脚本为 `qwen_image_2512_block_shared_offload.sh`，配置为 `configs/qwen_image/offload/qwen_image_2512_block_shared.json`。默认 T2I、host + 8 卡 SP8，通过命令中的 `--shared_cpu_weight_scope` 切换 NUMA。该共享 adapter 当前不支持 I2I。
+启动入口在 [scripts/qwen_image/offload](../../../../scripts/qwen_image/offload/)，统一脚本为 `qwen_image_2512_block_shared_offload.sh`，配置为 `configs/qwen_image/offload/qwen_image_2512_block_shared.json`。默认 T2I、host + 8 卡 SP8，在 JSON 中将 `shared_cpu_weight_scope` 改为 `numa` 切换 NUMA。该共享 adapter 当前不支持 I2I。
 
 当前示例共享 DiT blocks；编码器和 VAE 没有因此自动开启共享。扩展新组件需要独立 loader、owner、生命周期和证据。
 
@@ -128,7 +128,7 @@ DiT GPU buffer 可以在文本编码或 VAE 阶段释放，并在 denoise 前由
 
 `lightx2v/models/runners/minimax_h3/minimax_h3_runner.py` 的 `load_model()`、`init_run()`、`_offload_transformer()`、`run_main()` 决定组件加载顺序和阶段切换。所有 rank 必须按相同顺序进入各组件共享初始化，不能仅 rank 0 创建 text／VAE 共享模块。
 
-启动入口在 [scripts/minimax_h3/offload](../../../../scripts/minimax_h3/offload/)，共享启动入口为 `run_minimax_h3_block_shared_offload.sh`，对应 `configs/minimax_h3/offload/minimax_h3_block_shared_offload.json`。通过脚本中的 `--task` 选择 `t2av/i2av/l2av/fl2av/ref2av`，并提供对应输入；默认 `t2av`、`--model-variant fl2av`、host + 8 卡 SP8。通过 `--shared_cpu_weight_scope` 切换 NUMA，显卡列表、进程数与 JSON 并行布局一起修改。
+启动入口在 [scripts/minimax_h3/offload](../../../../scripts/minimax_h3/offload/)，共享启动入口为 `run_minimax_h3_block_shared_offload.sh`，对应 `configs/minimax_h3/offload/minimax_h3_block_shared_offload.json`。通过脚本中的 `--task` 选择 `t2av/i2av/l2av/fl2av/ref2av`，并提供对应输入；默认 `t2av`、`--model-variant fl2av`、host + 8 卡 SP8。在 JSON 中将 `shared_cpu_weight_scope` 改为 `numa` 切换 NUMA；调整卡数时，显卡列表、进程数与 JSON 并行布局一起修改。
 
 AdaLN cache 按 `--model-variant` 和实际 transformer 权重匹配，不能只按 task 名选择。`fl2av` variant 使用 `transformer/` 与 fl2av cache，专用 `ref2av` variant 使用 `transformer_ref/` 与 ref2av cache；步数、flow shifts 和 cache 目录也须一致。缓存工具已还原为上游的直接文件启动方式：
 

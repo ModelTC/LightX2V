@@ -12,7 +12,6 @@ python -m torch.distributed.run --standalone --nproc_per_node=8 -m lightx2v.infe
   --task t2av \
   --model_path "${model_path}" \
   --config_json "${lightx2v_path}/configs/minimax_h3/offload/minimax_h3_block_shared_offload.json" \
-  --shared_cpu_weight_scope host \
   --prompt "A cinematic fox walks through a snowy pine forest at dawn, with soft wind, crunching snow, and distant birds." \
   --save_result_path "${lightx2v_path}/save_results/minimax_h3_t2av_block_shared_offload.mp4" \
   --seed 42

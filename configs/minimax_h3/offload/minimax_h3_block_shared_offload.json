@@ -30,6 +30,7 @@
   "vae_spatial_scale_factor": 16,
   "audio_sampling_rate": 32000,
   "shared_cpu_weights": true,
+  "shared_cpu_weight_scope": "host",
   "text_encoder_shared_cpu_weights": true,
   "video_vae_shared_cpu_weights": true,
   "parallel": {

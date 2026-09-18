@@ -6,7 +6,7 @@ Launcher: `run_hunyuan_image3_block_shared_offload.sh`.
 Configuration: `configs/hunyuan_image3/offload/hunyuan_image3_block_shared.json`.
 Defaults: **T2I, host sharing, 8 GPUs, TP2 × SP2 × CFG2**.
 
-Edit paths, GPU selection, and inference arguments directly in the script; edit parallel settings in the JSON file. The script sets its arguments explicitly, does not infer the GPU count, and does not forward arguments appended to `bash script.sh`. Environment variables such as `TASK`, `CONFIG_JSON`, `SHARED_CPU_WEIGHT_SCOPE`, and `HUNYUAN_IMAGE3_MODEL_PATH` do not override the script. Set the upstream code path using `HUNYUAN_IMAGE3_REPO_PATH` inside the script. To change options without editing files, run the full `python -m torch.distributed.run ... -m lightx2v.infer ...` command directly.
+Edit paths, GPU selection, and inference arguments directly in the script; edit sharing scope and parallel settings in the JSON file. The script sets its arguments explicitly, does not infer the GPU count, and does not forward arguments appended to `bash script.sh`. Environment variables such as `TASK`, `CONFIG_JSON`, `SHARED_CPU_WEIGHT_SCOPE`, and `HUNYUAN_IMAGE3_MODEL_PATH` do not override the script. Set the upstream code path using `HUNYUAN_IMAGE3_REPO_PATH` inside the script. To change command-line options without editing the script, run the full `python -m torch.distributed.run ... -m lightx2v.infer ...` command directly.
 
 ## Setup and launch
 
@@ -57,13 +57,15 @@ The **1, 2, 4, 8, and 16 GPU** layouts above satisfy head-divisibility constrain
 
 ## Choose host or NUMA sharing
 
-The Python command in the script defaults to `--shared_cpu_weight_scope host`. To use NUMA sharing, replace that argument with the following fragment; it is not a standalone command:
+The JSON configuration defaults to `"shared_cpu_weight_scope": "host"`. To use NUMA sharing, change this field in the same JSON file:
 
-```bash
-  --shared_cpu_weight_scope numa \
+```json
+{
+  "shared_cpu_weight_scope": "numa"
+}
 ```
 
-The JSON does not need this field. The CLI argument takes precedence over the same setting in an older JSON file.
+Keep the other JSON fields unchanged and run the same launcher. Sharing scope is a startup configuration setting, not a command-line or per-request option.
 
 Host scope shares compatible TP shards of transformer block CPU weights within the same host and IPC namespace. NUMA scope creates the corresponding copies for the NUMA domains of the participating GPUs.
 
@@ -90,7 +92,7 @@ To return to default T2I, change `--task` back to `t2i` and remove `--image_path
 | --- | --- | --- |
 | Shell script | Three path variables | Project, checkpoint, and upstream code directories |
 | Inference command | `--prompt`, `--save_result_path`, `--seed` | Prompt, output file, random seed (default 42) |
-| Inference command | `--shared_cpu_weight_scope` | `host` (default) or `numa` |
+| JSON | `shared_cpu_weight_scope` | `host` (default) or `numa` |
 | Inference command | `--config_json` | Path to another configuration file |
 | JSON | `infer_steps`, `size` | 50 steps, default T2I size `[1024, 1024]` in height/width order |
 | JSON | `bot_task`, `max_new_tokens` | `"think_recaption"`, `2048`; longer reasoning text increases runtime |

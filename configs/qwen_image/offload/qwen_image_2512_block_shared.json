@@ -18,6 +18,7 @@
   "feature_caching": "NoCaching",
   "use_compile": false,
   "shared_cpu_weights": true,
+  "shared_cpu_weight_scope": "host",
   "parallel": {
     "seq_p_size": 8,
     "seq_p_attn_type": "ulysses",

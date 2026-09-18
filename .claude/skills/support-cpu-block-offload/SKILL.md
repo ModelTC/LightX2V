@@ -99,11 +99,11 @@ scripts/<model>/offload/
 
 配置优先放 `configs/<model>/offload/`；Wan 沿用 `configs/offload/block/`。当前四个示例默认 host + 8 卡，脚本显式设置 `CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7` 和 `--nproc_per_node=8`。Hunyuan 的默认布局是 TP2 × SP2 × CFG2，其余三个是 SP8。
 
-共享方式由推理命令中的 `--shared_cpu_weight_scope host|numa` 选择；该 CLI 参数覆盖旧 JSON 的同名字段，属于启动配置，不进入请求参数。当前四份 JSON 不重复填写 scope；省略 CLI 时沿用 JSON，二者都未设置时内部默认仍为 `auto`。不要把脚本的 host 默认与内部 auto 默认混为一谈。
+共享方式由 JSON 中的 `shared_cpu_weight_scope` 选择，属于启动配置，不作为 CLI 或单次请求参数。当前四份 JSON 显式配置 `host`；切换 NUMA 时将该字段改为 `numa`。JSON 未设置此字段时，内部默认仍为 `auto`。不要把示例配置的 host 默认与内部 auto 默认混为一谈。
 
-当前脚本不读取 `TASK`、`CONFIG_JSON`、`SHARED_CPU_WEIGHT_SCOPE` 等环境变量来覆盖命令，也不转发 `bash script.sh` 后追加的参数或自动推导卡数。修改路径、显卡、task、scope 和输入时，编辑脚本中的完整命令；修改并行参数时同步编辑 JSON。若不改文件，直接执行完整 Python 命令。不要重新引入环境变量包装器、临时 JSON 生成器或重复的 scope／卡数／任务启动脚本。
+当前脚本不读取 `TASK`、`CONFIG_JSON`、`SHARED_CPU_WEIGHT_SCOPE` 等环境变量来覆盖命令，也不转发 `bash script.sh` 后追加的参数或自动推导卡数。修改路径、显卡、task 和输入时，编辑脚本中的完整命令；共享范围和并行参数在 JSON 中修改。若要在不修改脚本的情况下调整命令行参数，直接执行完整 Python 命令。不要重新引入环境变量包装器、临时 JSON 生成器或重复的 scope／卡数／任务启动脚本。
 
-默认共享配置包含 `cpu_offload=true`、`offload_granularity="block"`、`shared_cpu_weights=true`、`shared_cpu_weight_backend="sysv"`、`shared_cpu_weight_strict_numa=true`、`shared_cpu_weight_register_chunk_mb=128`、`lazy_load=false`。额外组件仅开启已接通的对应共享开关。私有 block 基线可用于验证，不因该用途在共享入口目录新增永久脚本或专用配置；已有的其他入口不属于自动清理范围。
+默认共享配置包含 `cpu_offload=true`、`offload_granularity="block"`、`shared_cpu_weights=true`、`shared_cpu_weight_scope="host"`、`shared_cpu_weight_backend="sysv"`、`shared_cpu_weight_strict_numa=true`、`shared_cpu_weight_register_chunk_mb=128`、`lazy_load=false`。额外组件仅开启已接通的对应共享开关。私有 block 基线可用于验证，不因该用途在共享入口目录新增永久脚本或专用配置；已有的其他入口不属于自动清理范围。
 
 脚本和配置还须满足：
 

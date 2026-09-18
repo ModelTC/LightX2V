@@ -6,7 +6,7 @@
 配置文件：`configs/qwen_image/offload/qwen_image_2512_block_shared.json`。
 默认运行 **T2I、host 共享、8 卡、Ulysses SP8**。
 
-直接修改脚本中的路径、显卡和推理参数，并行设置修改 JSON。脚本固定设置参数，不自动推算卡数，也不转发 `bash 脚本.sh` 后追加的参数。`TASK`、`CONFIG_JSON`、`SHARED_CPU_WEIGHT_SCOPE`、`QWEN_*` 环境变量不能覆盖此脚本的设置。若不修改文件，需要直接运行完整的 `python -m torch.distributed.run ... -m lightx2v.infer ...` 命令。
+直接修改脚本中的路径、显卡和推理参数，共享范围和并行设置修改 JSON。脚本固定设置参数，不自动推算卡数，也不转发 `bash 脚本.sh` 后追加的参数。`TASK`、`CONFIG_JSON`、`SHARED_CPU_WEIGHT_SCOPE`、`QWEN_*` 环境变量不能覆盖此脚本的设置。若要在不修改脚本的情况下调整命令行参数，可直接运行完整的 `python -m torch.distributed.run ... -m lightx2v.infer ...` 命令。
 
 ## 准备与启动
 
@@ -46,13 +46,15 @@ bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
 
 ## 切换 host／NUMA
 
-脚本中的 Python 命令默认使用 `--shared_cpu_weight_scope host`。切换 NUMA 时将该参数改为下面的片段；这不是独立命令：
+对应 JSON 配置默认使用 `"shared_cpu_weight_scope": "host"`。切换 NUMA 时，在同一份 JSON 中修改此字段：
 
-```bash
-  --shared_cpu_weight_scope numa \
+```json
+{
+  "shared_cpu_weight_scope": "numa"
+}
 ```
 
-对应 JSON 无需填写此字段；命令行参数优先于旧 JSON 中的同名设置。
+其余 JSON 字段保留，修改后仍运行同一个启动脚本。共享范围属于启动配置，不作为命令行或单次请求参数。
 
 host 在同机同一 IPC 域共享一份兼容的 CPU block 权重；NUMA 按参与 GPU 所属的 NUMA 域建立副本。
 
@@ -65,7 +67,7 @@ host 在同机同一 IPC 域共享一份兼容的 CPU block 权重；NUMA 按参
 | Shell 脚本 | `lightx2v_path`、`model_path` | 项目和模型目录 |
 | 推理命令 | `--prompt`、`--negative_prompt` | 提示词和负面提示词 |
 | 推理命令 | `--save_result_path`、`--seed` | 输出文件和随机种子（默认 42） |
-| 推理命令 | `--shared_cpu_weight_scope` | `host`（默认）或 `numa` |
+| JSON | `shared_cpu_weight_scope` | `host`（默认）或 `numa` |
 | 推理命令 | `--config_json` | 配置文件路径 |
 | JSON | `infer_steps` | `50` |
 | JSON | `aspect_ratio` | `"16:9"` |

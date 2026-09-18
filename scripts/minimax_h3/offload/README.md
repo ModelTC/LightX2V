@@ -6,7 +6,7 @@ Launcher: `run_minimax_h3_block_shared_offload.sh`.
 Configuration: `configs/minimax_h3/offload/minimax_h3_block_shared_offload.json`.
 Defaults: **T2AV, host sharing, 8 GPUs, Ulysses SP8**.
 
-Edit paths, GPU selection, and inference arguments directly in the script; edit parallel settings in the JSON file. The script sets its arguments explicitly, does not infer the GPU count, and does not forward arguments appended to `bash script.sh`. Environment variables such as `TASK`, `SHARED_CPU_WEIGHT_SCOPE`, and `MINIMAX_H3_*` do not override this inference script. To change options without editing files, run the full `python -m torch.distributed.run ... -m lightx2v.infer ...` command directly.
+Edit paths, GPU selection, and inference arguments directly in the script; edit sharing scope and parallel settings in the JSON file. The script sets its arguments explicitly, does not infer the GPU count, and does not forward arguments appended to `bash script.sh`. Environment variables such as `TASK`, `SHARED_CPU_WEIGHT_SCOPE`, and `MINIMAX_H3_*` do not override this inference script. To change command-line options without editing the script, run the full `python -m torch.distributed.run ... -m lightx2v.infer ...` command directly.
 
 ## Setup and launch
 
@@ -69,13 +69,15 @@ The non-8-GPU examples disable VAE parallelism to start with serial decoding. Th
 
 ## Choose host or NUMA sharing
 
-The Python command in the script defaults to `--shared_cpu_weight_scope host`. To use NUMA sharing, replace that argument with the following fragment; it is not a standalone command:
+The JSON configuration defaults to `"shared_cpu_weight_scope": "host"`. To use NUMA sharing, change this field in the same JSON file:
 
-```bash
-  --shared_cpu_weight_scope numa \
+```json
+{
+  "shared_cpu_weight_scope": "numa"
+}
 ```
 
-The JSON does not need this field. The CLI argument takes precedence over the same setting in an older JSON file.
+Keep the other JSON fields unchanged and run the same launcher. Sharing scope is a startup configuration setting, not a command-line or per-request option.
 
 Host scope shares one copy of compatible CPU weights within the same host and IPC namespace. NUMA scope creates copies for the NUMA domains of the participating GPUs. Both use the same launcher.
 
@@ -109,7 +111,7 @@ Ref2AV accepts comma-separated paths for multiple references of the same type. A
 | --- | --- | --- |
 | Shell script | `lightx2v_path`, `model_path` | Project and checkpoint directories |
 | Inference command | `--prompt`, `--seed`, `--save_result_path` | Prompt, random seed (default 42), output file |
-| Inference command | `--shared_cpu_weight_scope` | `host` (default) or `numa` |
+| JSON | `shared_cpu_weight_scope` | `host` (default) or `numa` |
 | Inference command | `--config_json` | Path to another configuration file |
 | JSON | `infer_steps` | `29` |
 | JSON | `size` | `[544, 960]`, in height/width order |

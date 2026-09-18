@@ -27,7 +27,7 @@ scripts/<model>/offload/*.sh
 
 配置与设备初始化见 `lightx2v/utils/set_config.py`、`lightx2v/models/runners/default_runner.py`。`set_init_device()` 根据 offload 选择 CPU；runner 管编排，模型和组件 loader 管权重。保留家族已经支持的 checkpoint 格式，不因增加共享强制转换全部模型格式。
 
-`--shared_cpu_weight_scope` 在 `build_cli_inputs()` 中归入 startup fields，`build_startup_config()` 在读取 JSON 后应用显式 CLI 值。因此 CLI 的 `host|numa` 优先于 JSON，JSON 优先于内部 `auto` 默认，且该设置不进入单次请求参数。当前共享启动脚本显式传入 `host`。
+`build_startup_config()` 从 JSON 读取 `shared_cpu_weight_scope`，覆盖内部 `auto` 默认。当前四份共享配置显式设置 `host`，切换 NUMA 时在 JSON 中改为 `numa`。该字段没有 CLI 参数；`build_cli_inputs()` 返回的启动配置包含该值，单次请求参数不包含该字段。
 
 [base_model.py](../../../../lightx2v/models/networks/base_model.py) 的关键契约：
 

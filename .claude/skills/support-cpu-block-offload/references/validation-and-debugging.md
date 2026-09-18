@@ -6,9 +6,9 @@
 
 ## 启动脚本与配置验收
 
-在 `scripts/<model>/offload/` 核对统一共享启动脚本及中英文 README。当前脚本显式传入 `--shared_cpu_weight_scope host`；验证 NUMA 时改为 `numa`，或直接执行对应完整 Python 命令。`SHARED_CPU_WEIGHT_SCOPE=numa bash script.sh` 不会覆盖当前脚本。追踪 `--config_json` 和 CLI 合并结果，确认有效 scope；共享开关必须进入实际 loader，而不只是被 JSON 解析。
+在 `scripts/<model>/offload/` 核对统一共享启动脚本及中英文 README。当前 JSON 显式设置 `shared_cpu_weight_scope` 为 `host`；验证 NUMA 时在 JSON 中改为 `numa`，仍运行同一个启动脚本。`SHARED_CPU_WEIGHT_SCOPE=numa bash script.sh` 不会覆盖当前脚本。追踪 `--config_json` 指向的 JSON 及启动配置加载结果，确认有效 scope；共享开关必须进入实际 loader，而不只是被 JSON 解析。
 
-针对交付文件执行 `bash -n` 和 JSON 解析。比较两种模式的有效配置除 scope 外的推理字段，并检查有效 dtype、模型路径、输入、seed、输出路径、显卡列表和进程数。CLI scope 应覆盖旧 JSON 的同名值且不进入请求参数；省略 CLI 时保留 JSON／内部默认。验证需要改路径或参数时可用临时副本，不把临时配置生成逻辑加回正式脚本。`git diff --check` 检查改动格式；新建但未追踪的文件也应单独检查，不依赖 git diff 自动覆盖它们。
+针对交付文件执行 `bash -n` 和 JSON 解析。比较两种模式的有效配置除 scope 外的推理字段，并检查有效 dtype、模型路径、输入、seed、输出路径、显卡列表和进程数。确认 JSON 中的 `host`／`numa` 生效且不进入请求参数；JSON 省略该字段时使用内部 `auto` 默认，CLI 不再接受共享范围参数。验证需要改路径或参数时可用临时副本，不把临时配置生成逻辑加回正式脚本。`git diff --check` 检查改动格式；新建但未追踪的文件也应单独检查，不依赖 git diff 自动覆盖它们。
 
 启动前核对：
 
