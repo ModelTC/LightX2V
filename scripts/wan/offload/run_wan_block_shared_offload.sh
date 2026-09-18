@@ -1,0 +1,81 @@
+#!/bin/bash
+set -eo pipefail
+
+# Resolve user paths before switching to the repository root.
+caller_dir="${PWD}"
+absolute_path() {
+    case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "${caller_dir}" "$1" ;; esac
+}
+
+lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+model_path="$(absolute_path "${WAN_MODEL_PATH:-${lightx2v_path}/models/Wan2.1-I2V-14B-720P-Lightx2v}")"
+task="${TASK:-i2v}"
+image_args=()
+case "${task}" in
+    i2v) image_args=(--image_path "$(absolute_path "${WAN_IMAGE_PATH:-${lightx2v_path}/assets/inputs/imgs/img_0.jpg}")") ;;
+    t2v)
+        if [[ -z "${WAN_MODEL_PATH:-}" || -z "${CONFIG_JSON:-}" ]]; then
+            echo "TASK=t2v requires WAN_MODEL_PATH and CONFIG_JSON pointing to matching T2V FP8-vLLM block weights and configuration." >&2
+            exit 2
+        fi ;;
+    *) echo "Unsupported TASK: ${task}; choose i2v or t2v." >&2; exit 2 ;;
+esac
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES-0,1,2,3,4,5,6,7}"
+IFS=',' read -r -a gpu_ids <<< "${CUDA_VISIBLE_DEVICES}"
+nproc="${#gpu_ids[@]}"
+case "${nproc}" in
+    1|2|4|5|8|10|20|40) ;;
+    *) echo "Unsupported GPU count ${nproc}; supported: 1, 2, 4, 5, 8, 10, 20, 40." >&2; exit 2 ;;
+esac
+config_template="$(absolute_path "${CONFIG_JSON:-${lightx2v_path}/configs/offload/block/wan_block_shared.json}")"
+
+config_json="$(mktemp "${TMPDIR:-/tmp}/lightx2v-wan-XXXXXX.json")"
+trap 'rm -f -- "${config_json}"' EXIT
+
+python - "${config_template}" "${config_json}" "${nproc}" <<'PY_CHECK'
+import json
+import math
+import os
+import sys
+
+path, output, count = sys.argv[1:]
+count = int(count)
+devices = os.environ["CUDA_VISIBLE_DEVICES"].split(",")
+if any(not item or item.strip() != item or item == "-1" for item in devices) or len(set(devices)) != len(devices):
+    raise SystemExit("CUDA_VISIBLE_DEVICES must contain distinct, nonempty GPU IDs without spaces")
+with open(path) as source:
+    config = json.load(source)
+if not (config["cpu_offload"] and config["shared_cpu_weights"] and config["offload_granularity"] == "block"):
+    raise SystemExit("Expected CPU block offload with shared CPU weights")
+scope = os.environ.get("SHARED_CPU_WEIGHT_SCOPE", config["shared_cpu_weight_scope"])
+if scope not in ("host", "numa"):
+    raise SystemExit("SHARED_CPU_WEIGHT_SCOPE must be host or numa")
+config["shared_cpu_weight_scope"] = scope
+# Explicit config overrides retain their configured topology.
+if not os.environ.get("CONFIG_JSON"):
+    config["parallel"]["seq_p_size"] = count
+    if count != 8:
+        config["parallel"]["vae_parallel"] = False
+size = math.prod(config["parallel"].get(key, 1) for key in ("tensor_p_size", "seq_p_size", "cfg_p_size"))
+if size != count or size != len(devices):
+    raise SystemExit(f"Config TP*SP*CFG={size} must equal the number of visible GPUs ({len(devices)})")
+with open(output, "w") as destination:
+    json.dump(config, destination, indent=2)
+    destination.write("\n")
+print(f"GPUs: {os.environ['CUDA_VISIBLE_DEVICES']}; scope: {scope}; config: {output}")
+PY_CHECK
+
+export DTYPE=FP16 SENSITIVE_LAYER_DTYPE=FP16
+source "${lightx2v_path}/scripts/base/base.sh"
+default_prompt="Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's intricate details and the refreshing atmosphere of the seaside."
+cd -- "${lightx2v_path}"
+python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node="${nproc}" -m lightx2v.infer \
+  --model_cls wan2.1 \
+  --task "${task}" \
+  --model_path "${model_path}" \
+  --config_json "${config_json}" \
+  --prompt "${WAN_PROMPT:-${default_prompt}}" \
+  --negative_prompt "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走" \
+  "${image_args[@]}" \
+  --seed "${SEED:-42}" \
+  --save_result_path "$(absolute_path "${WAN_SAVE_RESULT_PATH:-${lightx2v_path}/save_results/output_lightx2v_wan_${task}_block_shared_offload.mp4}")"

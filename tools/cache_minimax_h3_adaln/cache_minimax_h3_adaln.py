@@ -1,9 +1,9 @@
 import argparse
 
-from builder import build_persistent_adaln_cache
 from loguru import logger
 
 from lightx2v.utils.set_config import build_startup_config
+from tools.cache_minimax_h3_adaln.builder import build_persistent_adaln_cache
 
 
 def parse_args():

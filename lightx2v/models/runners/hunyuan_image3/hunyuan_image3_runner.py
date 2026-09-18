@@ -1727,6 +1727,11 @@ class HunyuanImage3Runner(DefaultRunner):
             if controller is not None:
                 controller.close()
         finally:
-            context = self.config.get("parallel_context")
-            if context is not None:
-                context.close()
+            try:
+                model = getattr(self, "model", None)
+                if model is not None:
+                    model.close_shared_cpu_weights()
+            finally:
+                context = self.config.get("parallel_context")
+                if context is not None:
+                    context.close()

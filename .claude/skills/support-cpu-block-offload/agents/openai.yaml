@@ -1,0 +1,4 @@
+interface:
+  display_name: "LightX2V CPU Block Offload 与权重共享"
+  short_description: "接入 CPU 分块卸载与权重共享，交付默认 host 八卡、支持 NUMA 的统一入口"
+  default_prompt: "Use $support-cpu-block-offload to integrate CPU block offload and shared CPU weights for a LightX2V model, including one task-neutral launch script and config per model with TASK and host/NUMA selection, host with eight GPUs by default, and validation."
