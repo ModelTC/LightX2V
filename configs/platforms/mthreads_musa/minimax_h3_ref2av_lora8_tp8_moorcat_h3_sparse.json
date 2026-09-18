@@ -27,7 +27,7 @@
   "rms_type": "sgl-kernel",
   "rope_type": "torch_real_rope",
   "feature_caching": "NoCaching",
-  "use_compile": false,
+  "use_compile": true,
   "warmup": false,
   "vae_use_compile": false,
   "video_flow_shift": 6.0,
