@@ -93,25 +93,22 @@ class WanS2VTransformerInfer(WanTransformerInfer):
             k = wan_rms_norm(phase0.self_attn_norm_k, mm_weight_autocast_nd(phase0.self_attn_k, norm_x)).view(b, s, n, d)
             v = mm_weight_autocast_nd(phase0.self_attn_v, norm_x).view(b, s, n, d)
             q, k = phase0.s2v_rope.apply(q.float(), k.float(), freqs)
-            attn_out = (
-                phase0.self_attn_1_parallel.apply(
-                    q=q.squeeze(0).to(self.infer_dtype),
-                    k=k.squeeze(0).to(self.infer_dtype),
-                    v=v.squeeze(0).to(self.infer_dtype),
-                    slice_qkv_len=s,
-                    cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
-                    attention_module=phase0.self_attn_1,
-                    seq_p_group=self.seq_p_group,
-                    use_fp8_comm=self.seq_p_fp8_comm,
-                    use_fp4_comm=self.seq_p_fp4_comm,
-                    use_tensor_fusion=self.seq_p_tensor_fusion,
-                    enable_head_parallel=self.enable_head_parallel,
-                    block_idx=self.block_idx,
-                    scheduler=self.scheduler,
-                )
-                .float()
-                .view(b, s, -1)
+            attn_out, aux_attn_out = phase0.self_attn_1_parallel.apply_new(
+                q=q.squeeze(0).to(self.infer_dtype),
+                k=k.squeeze(0).to(self.infer_dtype),
+                v=v.squeeze(0).to(self.infer_dtype),
+                attention_module=phase0.self_attn_1,
+                seq_p_group=self.seq_p_group,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.seq_p_head_parallel,
+                attention_kwargs={"block_idx": self.block_idx, "scheduler": self.scheduler},
             )
+            if aux_attn_out is not None:
+                raise RuntimeError("Wan S2V self-attention does not have an auxiliary token output.")
+            attn_out = attn_out.float().view(b, s, -1)
             return mm_weight_autocast_nd(phase0.self_attn_o, attn_out)
 
         return s2v_self_attn_forward(phase0, norm_x, seq_lens, freqs, self.num_heads, self.head_dim)

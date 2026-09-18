@@ -46,12 +46,17 @@ class LTX2TransformerInfer(BaseTransformerInfer):
 
         if self.seq_parallel:
             self.seq_p_group = config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = config.get("parallel", {}).get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = config.get("parallel", {}).get("seq_p_fp4_comm", False)
+            parallel_config = config.get("parallel", {})
+            self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel_config.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel_config.get("seq_p_quant_scheme")
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
         else:
             self.seq_p_group = None
-            self.seq_p_fp8_comm = False
-            self.seq_p_fp4_comm = False
+            self.seq_p_prepost_backend = "torch"
+            self.seq_p_a2a_backend = "torch"
+            self.seq_p_quant_scheme = None
 
         # Initialize tensor parallel group
         if config.get("tensor_parallel", False):
@@ -291,23 +296,21 @@ class LTX2TransformerInfer(BaseTransformerInfer):
         seq_len = q.size(0)
         # For video self-attention with sequence parallel (non-TP only)
         if is_self_attn and not is_audio and self.seq_parallel and not use_tp:
-            # Cache cu_seqlens_qkv for self-attention (q, k, v have same length)
-            if self.v_attn_cu_seqlens_qkv is None:
-                self.v_attn_cu_seqlens_qkv = self._create_cu_seqlens(q.shape[0])
-
-            out = attn_phase.attn_func_parallel.apply(
+            out, aux_out = attn_phase.attn_func_parallel.apply_new(
                 q=q,
                 k=k,
                 v=v,
-                slice_qkv_len=seq_len,
-                cu_seqlens_qkv=self.v_attn_cu_seqlens_qkv,
                 attention_module=attn_phase.attn_func,
                 seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                use_tensor_fusion=False,
-                enable_head_parallel=False,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=False,
+                head_parallel=False,
+                attention_kwargs={},
             )
+            if aux_out is not None:
+                raise RuntimeError("LTX2 video self-attention received an unexpected auxiliary output.")
         else:
             # For all other attention types (cross-attn, audio self-attn, TP, non-parallel)
             # Cache cu_seqlens_qkv for self-attention only

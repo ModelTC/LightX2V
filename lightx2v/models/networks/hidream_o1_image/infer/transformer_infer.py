@@ -1,4 +1,3 @@
-import torch
 import torch.distributed as dist
 
 from lightx2v.models.networks.hidream_o1_image.infer.module_io import HidreamTransformerInferOutput
@@ -12,13 +11,20 @@ class HidreamO1ImageTransformerInfer:
         self.sensitive_layer_dtype = GET_SENSITIVE_DTYPE()
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
-            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            parallel_config = self.config["parallel"]
+            self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel_config.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel_config.get("seq_p_quant_scheme")
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
+            self.enable_head_parallel = parallel_config.get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
-            self.seq_p_fp8_comm = False
-            self.seq_p_fp4_comm = False
+            self.seq_p_prepost_backend = "torch"
+            self.seq_p_a2a_backend = "torch"
+            self.seq_p_quant_scheme = None
+            self.seq_p_tensor_fusion = False
             self.enable_head_parallel = False
 
     def _apply_rope(self, rope, q, k, rope_freqs, rope_positions):
@@ -66,7 +72,6 @@ class HidreamO1ImageTransformerInfer:
                 pre_infer_out.rope_positions_ar,
                 pre_infer_out.rope_cos_sin_gen,
                 pre_infer_out.rope_positions_gen,
-                pre_infer_out.seq_p_cu_seqlens_qkv,
             )
             if pre_infer_out.deepstack_visual_embeds is not None and pre_infer_out.visual_pos_masks is not None and layer_idx < len(pre_infer_out.deepstack_visual_embeds):
                 hidden_ar = self._deepstack_process(
@@ -107,7 +112,6 @@ class HidreamO1ImageTransformerInfer:
         rope_positions_ar,
         rope_gen,
         rope_positions_gen,
-        cu_seqlens_qkv,
     ):
         residual_ar, residual_gen = hidden_ar, hidden_gen
         normed_ar = weights.input_layernorm.apply(hidden_ar)
@@ -120,7 +124,6 @@ class HidreamO1ImageTransformerInfer:
             rope_positions_ar,
             rope_gen,
             rope_positions_gen,
-            cu_seqlens_qkv,
         )
         hidden_ar = residual_ar + attn_ar
         hidden_gen = residual_gen + attn_gen
@@ -154,7 +157,6 @@ class HidreamO1ImageTransformerInfer:
         rope_positions_ar,
         rope_gen,
         rope_positions_gen,
-        cu_seqlens_qkv,
     ):
         world_size = dist.get_world_size(self.seq_p_group)
         if weights.heads % world_size != 0 or weights.kv_heads % world_size != 0:
@@ -175,26 +177,28 @@ class HidreamO1ImageTransformerInfer:
             model_cls="hidream_o1_image",
         )
 
-        q_gen = q_gen.to(self.infer_dtype)
-        k = torch.cat([k_gen[0], k_ar[0]], dim=0).to(self.infer_dtype)
-        v = torch.cat([v_gen[0], v_ar[0]], dim=0).to(self.infer_dtype)
-        out_gen = weights.attn_parallel.apply(
-            q=q_gen[0],
-            k=k,
-            v=v,
-            slice_qkv_len=q_gen.shape[1],
-            cu_seqlens_qkv=cu_seqlens_qkv,
+        out_gen, aux_out = weights.attn_parallel.apply_new(
+            q=q_gen[0].to(self.infer_dtype),
+            k=k_gen[0].to(self.infer_dtype),
+            v=v_gen[0].to(self.infer_dtype),
+            aux_k=k_ar[0].to(self.infer_dtype),
+            aux_v=v_ar[0].to(self.infer_dtype),
             attention_module=weights.attn,
             seq_p_group=self.seq_p_group,
-            use_fp8_comm=self.seq_p_fp8_comm,
-            use_fp4_comm=self.seq_p_fp4_comm,
-            enable_head_parallel=self.enable_head_parallel,
-            img_first=True,
-            q_only_img=True,
-            causal=False,
-            softmax_scale=softmax_scale,
-            model_cls="hidream_o1_image",
+            prepost_backend=self.seq_p_prepost_backend,
+            a2a_backend=self.seq_p_a2a_backend,
+            quant_scheme=self.seq_p_quant_scheme,
+            tensor_fusion=self.seq_p_tensor_fusion,
+            head_parallel=self.enable_head_parallel,
+            aux_first=False,
+            attention_kwargs={
+                "causal": False,
+                "softmax_scale": softmax_scale,
+                "model_cls": "hidream_o1_image",
+            },
         )
+        if aux_out is not None:
+            raise RuntimeError("HiDream q-only joint attention received an unexpected auxiliary output.")
 
         out_ar = self._apply_linear(weights.o_proj, out_ar).reshape(1, q_ar.shape[1], -1)
         out_gen = self._apply_linear(weights.o_proj, out_gen).reshape(1, q_gen.shape[1], -1)

@@ -18,13 +18,20 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         # Sequence parallel settings
         if self.config.get("seq_parallel", False):
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
-            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            parallel_config = self.config["parallel"]
+            self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel_config.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel_config.get("seq_p_quant_scheme")
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
+            self.enable_head_parallel = parallel_config.get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
-            self.seq_p_fp8_comm = False
-            self.seq_p_fp4_comm = False
+            self.seq_p_prepost_backend = "torch"
+            self.seq_p_a2a_backend = "torch"
+            self.seq_p_quant_scheme = None
+            self.seq_p_tensor_fusion = False
             self.enable_head_parallel = False
 
     def set_scheduler(self, scheduler):
@@ -129,7 +136,6 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         # Concatenate [text, image] for joint attention: [L_txt + L_img, heads, head_dim]
         query = torch.cat([txt_query, img_query], dim=0)
         key = torch.cat([txt_key, img_key], dim=0)
-        value = torch.cat([txt_value, img_value], dim=0)
 
         # Apply rotary embedding: [L, H, D]
         rope_kwargs = {} if image_rotary_positions is None else {"positions": image_rotary_positions}
@@ -141,22 +147,28 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         # Use registered attention module
         if self.config["seq_parallel"]:
-            txt_len = encoder_hidden_states.shape[0]
-            attn_output = block_weights.calculate_parallel.apply(
-                q=query,
-                k=key,
-                v=value,
-                slice_qkv_len=txt_len,
-                cu_seqlens_qkv=cu_seqlens,
+            txt_len = txt_query.shape[0]
+            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply_new(
+                q=query[txt_len:],
+                k=key[txt_len:],
+                v=img_value,
+                aux_q=query[:txt_len],
+                aux_k=key[:txt_len],
+                aux_v=txt_value,
                 attention_module=block_weights.calculate,
                 seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                enable_head_parallel=self.enable_head_parallel,
-                img_first=False,
-                model_cls="longcat_image",
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.enable_head_parallel,
+                aux_first=True,
+                attention_kwargs={"model_cls": "longcat_image"},
             )
+            if txt_attn_output is None:
+                raise RuntimeError("LongCat double-stream attention expected a text auxiliary output.")
         else:
+            value = torch.cat([txt_value, img_value], dim=0)
             attn_output = block_weights.calculate.apply(
                 q=query,
                 k=key,
@@ -167,11 +179,9 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
                 max_seqlen_kv=total_len,
                 model_cls="longcat_image",
             )
-
-        # Split back to text and image
-        txt_len = encoder_hidden_states.shape[0]
-        txt_attn_output = attn_output[:txt_len]
-        img_attn_output = attn_output[txt_len:]
+            txt_len = encoder_hidden_states.shape[0]
+            txt_attn_output = attn_output[:txt_len]
+            img_attn_output = attn_output[txt_len:]
 
         # Output projections
         img_attn_output = block_weights.to_out.apply(img_attn_output)
@@ -270,20 +280,26 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         # Use registered attention module
         if self.config["seq_parallel"]:
-            attn_output = block_weights.calculate_parallel.apply(
-                q=query,
-                k=key,
-                v=value,
-                slice_qkv_len=txt_len,
-                cu_seqlens_qkv=cu_seqlens,
+            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply_new(
+                q=query[txt_len:],
+                k=key[txt_len:],
+                v=value[txt_len:],
+                aux_q=query[:txt_len],
+                aux_k=key[:txt_len],
+                aux_v=value[:txt_len],
                 attention_module=block_weights.calculate,
                 seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                enable_head_parallel=self.enable_head_parallel,
-                img_first=False,
-                model_cls="longcat_image",
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.enable_head_parallel,
+                aux_first=True,
+                attention_kwargs={"model_cls": "longcat_image"},
             )
+            if txt_attn_output is None:
+                raise RuntimeError("LongCat single-stream attention expected a text auxiliary output.")
+            attn_output = torch.cat([txt_attn_output, img_attn_output], dim=0)
         else:
             attn_output = block_weights.calculate.apply(
                 q=query,

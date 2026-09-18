@@ -40,13 +40,20 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         self.seq_parallel = config["seq_parallel"]
         if self.seq_parallel:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
-            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            parallel_config = self.config["parallel"]
+            self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel_config.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel_config.get("seq_p_quant_scheme")
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
+            self.enable_head_parallel = parallel_config.get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
-            self.seq_p_fp8_comm = False
-            self.seq_p_fp4_comm = False
+            self.seq_p_prepost_backend = "torch"
+            self.seq_p_a2a_backend = "torch"
+            self.seq_p_quant_scheme = None
+            self.seq_p_tensor_fusion = False
             self.enable_head_parallel = False
         self.use_triton_modulate = config.get("modulate_type", "triton") == "triton"
         if self.use_triton_modulate:
@@ -181,28 +188,32 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         hidden_states,
         encoder_hidden_states,
     ):
-        joint_query = torch.cat([txt_query, img_query], dim=0)
-        joint_key = torch.cat([txt_key, img_key], dim=0)
-        joint_value = torch.cat([txt_value, img_value], dim=0)
-
-        img_qkv_len = joint_query.shape[0]
-        cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu")
-
         if self.seq_parallel:
-            joint_hidden_states = cross_attn_phase.calculate_parallel.apply(
-                q=joint_query,
-                k=joint_key,
-                v=joint_value,
-                slice_qkv_len=seq_txt,
-                cu_seqlens_qkv=cu_seqlens_qkv,
+            img_attn_output, txt_attn_output = cross_attn_phase.calculate_parallel.apply_new(
+                q=img_query,
+                k=img_key,
+                v=img_value,
+                aux_q=txt_query,
+                aux_k=txt_key,
+                aux_v=txt_value,
                 attention_module=cross_attn_phase.calculate,
                 seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                enable_head_parallel=self.enable_head_parallel,
-                img_first=False,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.enable_head_parallel,
+                aux_first=True,
+                attention_kwargs={},
             )
+            if txt_attn_output is None:
+                raise RuntimeError("Qwen image joint attention expected a text auxiliary output.")
         else:
+            joint_query = torch.cat([txt_query, img_query], dim=0)
+            joint_key = torch.cat([txt_key, img_key], dim=0)
+            joint_value = torch.cat([txt_value, img_value], dim=0)
+            img_qkv_len = joint_query.shape[0]
+            cu_seqlens_qkv = torch.tensor([0, img_qkv_len], dtype=torch.int32, device="cpu")
             joint_hidden_states = cross_attn_phase.calculate.apply(
                 q=joint_query,
                 k=joint_key,
@@ -212,9 +223,8 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
                 max_seqlen_q=img_qkv_len,
                 max_seqlen_kv=img_qkv_len,
             )
-
-        txt_attn_output = joint_hidden_states[:seq_txt, :]
-        img_attn_output = joint_hidden_states[seq_txt:, :]
+            txt_attn_output = joint_hidden_states[:seq_txt, :]
+            img_attn_output = joint_hidden_states[seq_txt:, :]
 
         # Apply output projections
         img_attn_output = cross_attn_phase.to_out.apply(img_attn_output)
