@@ -114,8 +114,21 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
             self._mlp_forward = self._dense_mlp
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+            parallel_config = self.config["parallel"]
+            self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel_config.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel_config.get("seq_p_quant_scheme")
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
+            self.enable_head_parallel = parallel_config.get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
+            self.seq_p_prepost_backend = "torch"
+            self.seq_p_a2a_backend = "torch"
+            self.seq_p_quant_scheme = None
+            self.seq_p_tensor_fusion = False
+            self.enable_head_parallel = False
         self.kv_cache = KVCacheManager()
 
         # MagiCompiler enable/disable switch
@@ -325,21 +338,24 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
 
         if self.config["seq_parallel"]:
             kvcache_len = seq_len_k - seq_len_q
-            # Pass cu_seqlens_qkv as list[int] so that Dynamo sees a plain Python
-            # int when UlyssesAttnWeight.apply does cu_seqlens_qkv[1].  A Tensor
-            # index in fake-tensor mode returns a 0-d Tensor which Dynamo treats
-            # as data-dependent and refuses to trace through reshape.
-            attn_output = attn_w.cross_attn_parallel.apply(
+            attn_output, aux_attn_output = attn_w.cross_attn_parallel.apply(
                 q=query_states,
-                k=key_states,
-                v=value_states,
-                slice_qkv_len=kvcache_len,
-                cu_seqlens_qkv=[0, seq_len_k],
+                k=key_states[kvcache_len:],
+                v=value_states[kvcache_len:],
+                aux_k=key_states[:kvcache_len],
+                aux_v=value_states[:kvcache_len],
                 attention_module=attn_w.cross_attn,
                 seq_p_group=self.seq_p_group,
-                img_first=False,
-                q_only_img=True,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.enable_head_parallel,
+                aux_first=True,
+                attention_kwargs={},
             )
+            if aux_attn_output is not None:
+                raise RuntimeError("NeoPP q-only cached-prefix attention received an unexpected auxiliary output.")
         else:
             attn_output = attn_w.cross_attn.apply(
                 q=query_states,

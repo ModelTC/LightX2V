@@ -54,8 +54,8 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             self.seq_p_prepost_backend = parallel.get("seq_p_prepost_backend", "torch")
             self.seq_p_a2a_backend = parallel.get("seq_p_a2a_backend", "torch")
             self.seq_p_quant_scheme = parallel.get("seq_p_quant_scheme")
-            if self.seq_p_quant_scheme is None:
-                self.seq_p_quant_scheme = "fp8" if parallel.get("seq_p_fp8_comm", False) else "fp4" if parallel.get("seq_p_fp4_comm", False) else None
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
             self.seq_p_tensor_fusion = parallel.get("seq_p_tensor_fusion", False)
             self.seq_p_head_parallel = parallel.get("seq_p_head_parallel", False)
         else:
@@ -142,7 +142,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
         else:
             aux_length = sp_state.aux_length
-            out, aux_out = weights.calculate_parallel.apply_new(
+            out, aux_out = weights.calculate_parallel.apply(
                 q=q[aux_length:].contiguous(),
                 k=k[aux_length:].contiguous(),
                 v=v[aux_length:].contiguous(),

@@ -129,20 +129,21 @@ class WanInfiniteTalkTransformerInfer(WanOffloadTransformerInfer):
             "scheduler": self.scheduler,
         }
         if self.config["seq_parallel"]:
-            attn_out = phase.self_attn_1_parallel.apply(
+            attn_out, aux_attn_out = phase.self_attn_1_parallel.apply(
                 q=q,
                 k=k,
                 v=v,
-                slice_qkv_len=img_qkv_len,
-                cu_seqlens_qkv=self.self_attn_cu_seqlens_qkv,
                 attention_module=phase.self_attn_1,
                 seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                use_tensor_fusion=self.seq_p_tensor_fusion,
-                enable_head_parallel=self.seq_p_head_parallel,
-                **attn_running_args,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.seq_p_head_parallel,
+                attention_kwargs=attn_running_args,
             )
+            if aux_attn_out is not None:
+                raise RuntimeError("InfiniteTalk self-attention does not have an auxiliary token output.")
         else:
             attn_out = phase.self_attn_1.apply(
                 q=q,
