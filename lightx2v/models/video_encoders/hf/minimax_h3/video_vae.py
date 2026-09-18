@@ -759,17 +759,23 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.use_tiling = False
 
     def enable_decode_parallel(self) -> None:
+        """Enable tiled parallel decoding; must be called on every rank."""
         if not self.use_tiling:
             raise RuntimeError("MiniMax-H3 VAE decode parallel requires tiling")
         if not dist.is_initialized() or dist.get_world_size() <= 1:
             raise RuntimeError("MiniMax-H3 VAE decode parallel requires an initialized multi-rank process group")
+        # Initialize the full-group communicator on the VAE device before subset P2P.
+        dist.all_reduce(torch.zeros(1, device=self.execution_device))
         self.decode_parallel = True
 
     def enable_encode_parallel(self) -> None:
+        """Enable tiled parallel encoding; must be called on every rank."""
         if not self.use_tiling:
             raise RuntimeError("MiniMax-H3 VAE encode parallel requires tiling")
         if not dist.is_initialized() or dist.get_world_size() <= 1:
             raise RuntimeError("MiniMax-H3 VAE encode parallel requires an initialized multi-rank process group")
+        # Initialize the full-group communicator on the VAE device before subset P2P.
+        dist.all_reduce(torch.zeros(1, device=self.execution_device))
         self.encode_parallel = True
 
     def _split_tiles(self, length: int, tile_size: int, min_overlap: int) -> tuple[list[int], list[int], list[int]]:
@@ -929,8 +935,6 @@ class MiniMaxH3VideoVAE(nn.Module):
         num_tiles = num_clips * tiles_per_clip
         rank = dist.get_rank()
         world_size = dist.get_world_size()
-        if num_tiles < world_size:
-            raise ValueError(f"MiniMax-H3 VAE encode parallel requires at least {world_size} tiles, got {num_tiles}")
 
         local_tiles = []
         task_counts = self._balanced_task_counts(num_tiles, world_size)
@@ -1047,10 +1051,13 @@ class MiniMaxH3VideoVAE(nn.Module):
     def _gather_tiles(local_tiles: list[torch.Tensor], task_counts: list[int]) -> list[torch.Tensor] | None:
         """Collect tile results on rank 0 in global tile order."""
         rank = dist.get_rank()
-        # Each worker stacks and sends its tiles exactly once. Rank 0 keeps its
-        # local list and submits one receive per worker; there is no per-tile P2P.
+        # Each active worker sends once; idle ranks have no P2P operations.
+        # Rank 0 always owns the first tile and keeps its local list.
         if rank != 0:
-            local_tile_batch = torch.stack(local_tiles)
+            if not local_tiles:
+                return None
+            # Match the receive buffers even when tile outputs are channels-last.
+            local_tile_batch = torch.stack(local_tiles).contiguous()
             send_op = dist.P2POp(dist.isend, local_tile_batch, 0)
             for request in dist.batch_isend_irecv([send_op]):
                 request.wait()
@@ -1059,11 +1066,14 @@ class MiniMaxH3VideoVAE(nn.Module):
         receive_buffers = []
         receive_ops = []
         for source_rank, task_count in enumerate(task_counts[1:], start=1):
+            if task_count == 0:
+                continue
             receive_buffer = local_tiles[0].new_empty((task_count, *local_tiles[0].shape))
             receive_buffers.append(receive_buffer)
             receive_ops.append(dist.P2POp(dist.irecv, receive_buffer, source_rank))
-        for request in dist.batch_isend_irecv(receive_ops):
-            request.wait()
+        if receive_ops:
+            for request in dist.batch_isend_irecv(receive_ops):
+                request.wait()
 
         for receive_buffer in receive_buffers:
             for tile in receive_buffer:
@@ -1079,10 +1089,6 @@ class MiniMaxH3VideoVAE(nn.Module):
         world_size = dist.get_world_size()
 
         num_tiles = len(all_tiles)
-        if num_tiles < world_size:
-            message = f"VAE parallel needs at least {world_size} tiles, got {num_tiles}"
-            raise ValueError(message)
-
         task_counts = self._balanced_task_counts(num_tiles, world_size)
         local_start = sum(task_counts[:rank])
         local_end = local_start + task_counts[rank]
