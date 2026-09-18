@@ -30,8 +30,8 @@
   "vae_spatial_scale_factor": 16,
   "audio_sampling_rate": 32000,
   "parallel": {
-    "seq_p_size": 8,
-    "seq_p_attn_type": "ulysses"
+    "tensor_p_size": 8
   },
-  "vdn_checkpoint": "/data/nvme1/models/vdn-minimax-h3/stage-dmd-step-250"
+  "vdn_checkpoint": "/data/nvme1/models/vdn-minimax-h3/stage-dmd-step-250",
+  "tp_reproducible": true
 }

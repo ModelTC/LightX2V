@@ -1,4 +1,4 @@
-"""VDN window/linear attention with Ulysses sequence parallelism.
+"""VDN window/linear attention with tensor and Ulysses sequence parallelism.
 
 Adapted from OpenVDN/vdn-minimax-h3 e02ff077 (Apache-2.0).
 """
@@ -193,9 +193,13 @@ def heads_to_sequence(output, aux_length, group):
 class VDNAttention:
     def __init__(self, config):
         self.num_heads = int(config.get("num_attention_heads", 56))
+        if config.get("tensor_parallel", False):
+            tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
+            self.num_heads //= dist.get_world_size(tp_group)
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.window = VDNWindowAttention()
         self.linear_use_tf32 = bool(config.get("vdn_linear_use_tf32", True))
+        self.reproducible = bool(config.get("tp_reproducible", False))
         self.group = config["device_mesh"].get_group(mesh_dim="seq_p") if config.get("seq_parallel", False) else None
         self._layout_source = None
         self.layout = None
@@ -284,8 +288,28 @@ class VDNAttention:
             packed = sequence_to_heads(packed, state.aux_length, self.group)
             raw_q, raw_k, raw_v, beta, gate = packed.split((self.head_dim, self.head_dim, self.head_dim, 1, self.head_dim), dim=-1)
             beta = beta[..., 0]
+            # Branch parameters already contain this TP rank's heads.
             head_start = dist.get_rank(self.group) * (self.num_heads // dist.get_world_size(self.group))
-        linear = linear_readout(branch, raw_q, raw_k, raw_v, beta, gate, means, self.layout, head_start, self.linear_use_tf32)
+        if self.reproducible:
+            # Seven heads per call matches each rank of TP8, including the
+            # batched Cholesky/scan kernels and alpha projection shapes.
+            linear = torch.empty_like(raw_q)
+            for start in range(0, raw_q.shape[1], 7):
+                stop = start + 7
+                linear[:, start:stop] = linear_readout(
+                    branch,
+                    raw_q[:, start:stop].contiguous(),
+                    raw_k[:, start:stop].contiguous(),
+                    raw_v[:, start:stop].contiguous(),
+                    beta[:, start:stop].contiguous(),
+                    gate[:, start:stop].contiguous(),
+                    means,
+                    self.layout,
+                    head_start + start,
+                    self.linear_use_tf32,
+                )
+        else:
+            linear = linear_readout(branch, raw_q, raw_k, raw_v, beta, gate, means, self.layout, head_start, self.linear_use_tf32)
         if state is not None:
             linear = heads_to_sequence(linear, state.aux_length, self.group)
             rank = dist.get_rank(self.group)

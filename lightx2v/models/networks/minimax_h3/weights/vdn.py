@@ -9,7 +9,7 @@ from safetensors import safe_open
 
 from lightx2v.common.modules.weight_module import WeightModule
 from lightx2v.common.ops.tensor.tensor import DefaultTensor
-from lightx2v.utils.registry_factory import MM_WEIGHT_REGISTER
+from lightx2v.models.networks.minimax_h3.weights.linear import make_linear
 
 
 def configure_vdn(config):
@@ -90,7 +90,7 @@ def vdn_adapter_paths(config):
 
 
 def merge_vdn_tensor(weight, target, adapters):
-    """Merge one cache tensor using ordered, already-open adapter readers."""
+    """Merge one checkpoint tensor using ordered, already-open adapter readers."""
     stem = target.removesuffix(".weight")
     if stem.startswith("transformer_blocks."):
         stem = stem.replace(".attn.", ".attn.orig.")
@@ -144,26 +144,21 @@ class _VDNTensor(DefaultTensor):
 class MiniMaxH3VDNWeights(WeightModule):
     """The 16 extra tensors for one DiT attention block; no upstream modules."""
 
-    def __init__(self, prefix, create_cuda_buffer=False):
+    def __init__(self, prefix, config, create_cuda_buffer=False):
         super().__init__()
         linears = {
-            "alpha_down": ("linear_attention.alpha.down", False),
-            "alpha_up": ("linear_attention.alpha.up", False),
-            "beta_proj": ("linear_attention.beta_proj", False),
-            "output_gate_down": ("linear_attention.output_gate.down", False),
-            "output_gate_up": ("linear_attention.output_gate.up", True),
-            "softmax_gate": ("softmax_gate.up", True),
-            "to_out_linear": ("to_out_linear", False),
+            "alpha_down": ("linear_attention.alpha.down", False, None),
+            "alpha_up": ("linear_attention.alpha.up", False, "col"),
+            "beta_proj": ("linear_attention.beta_proj", False, "col"),
+            "output_gate_down": ("linear_attention.output_gate.down", False, None),
+            "output_gate_up": ("linear_attention.output_gate.up", True, "col"),
+            "softmax_gate": ("softmax_gate.up", True, "col"),
+            "to_out_linear": ("to_out_linear", False, "row"),
         }
-        for name, (suffix, bias) in linears.items():
+        for name, (suffix, bias, tp_split) in linears.items():
             self.add_module(
                 name,
-                MM_WEIGHT_REGISTER["Default"](
-                    f"{prefix}.{suffix}.weight",
-                    f"{prefix}.{suffix}.bias" if bias else None,
-                    create_cuda_buffer=create_cuda_buffer,
-                    lora_prefix="transformer_blocks",
-                ),
+                make_linear(config, f"{prefix}.{suffix}", bias=bias, create_cuda_buffer=create_cuda_buffer, tp_split=tp_split),
             )
         tensors = {
             "alpha_a_log": "linear_attention.alpha.A_log",

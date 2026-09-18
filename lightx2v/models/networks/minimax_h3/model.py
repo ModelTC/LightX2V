@@ -1,6 +1,7 @@
 import glob
 import math
 import os
+from contextlib import ExitStack
 
 import torch
 import torch.distributed as dist
@@ -27,7 +28,7 @@ from lightx2v.models.networks.minimax_h3.weights import (
     MiniMaxH3TransformerWeights,
 )
 from lightx2v.models.networks.minimax_h3.weights.tensor_parallel import unwrap_tp_linear
-from lightx2v.models.networks.minimax_h3.weights.vdn import configure_vdn, load_vdn_weights
+from lightx2v.models.networks.minimax_h3.weights.vdn import configure_vdn, load_vdn_weights, merge_vdn_tensor, vdn_adapter_paths
 from lightx2v.utils.envs import GET_DTYPE
 
 H3_CHANNEL_QUANT_SCHEMES = {
@@ -60,11 +61,18 @@ class MiniMaxH3Model(BaseTransformerModel):
         self.lora_alpha = lora_alpha
         self.vdn_checkpoint = config.get("vdn_checkpoint")
         if self.vdn_checkpoint:
-            if config.get("tensor_parallel", False) or config.get("dit_quantized", False):
-                raise NotImplementedError("VDN-H3 weights currently support unquantized inference without tensor parallelism")
+            if config.get("dit_quantized", False):
+                raise NotImplementedError("VDN-H3 weights currently support unquantized inference")
             if lora_path or config.get("lora_configs") or config.get("lora_dynamic_apply", False):
                 raise ValueError("VDN loads its default/turbo adapters from vdn_checkpoint; do not add lora_configs or dynamic LoRA")
             configure_vdn(config)
+        if config.get("tp_reproducible", False):
+            if config.get("dit_quantized", False) or lora_path or config.get("lora_configs") or config.get("lora_dynamic_apply", False):
+                raise ValueError("tp_reproducible requires unquantized weights with adapters merged before inference")
+            tp_size = dist.get_world_size(config["device_mesh"].get_group(mesh_dim="tensor_p")) if config.get("tensor_parallel", False) else 1
+            if tp_size not in (1, 2, 4, 8):
+                raise ValueError("tp_reproducible uses eight logical partitions and supports TP1/2/4/8")
+            logger.info("H3 reproducible TP: eight logical GEMM partitions, FP64 row reduction, seven heads per VDN linear call")
         self.use_adaln_cache = bool(config.get("use_adaln_cache", False))
         if config.get("cpu_offload", False) and not self.use_adaln_cache and not self.vdn_checkpoint:
             message = f"\nMINIMAX-H3 CPU OFFLOAD CONFIGURATION ERROR\n\ncpu_offload=true requires use_adaln_cache=true.\n\n{ADALN_CACHE_GUIDE}"
@@ -347,8 +355,21 @@ class MiniMaxH3Model(BaseTransformerModel):
     def _tp_split_type(key):
         if ".attn.to_q." in key or ".attn.to_k." in key or ".attn.to_v." in key:
             return "col"
-        if ".attn.to_out.0." in key:
+        if ".attn.to_out.0." in key or ".attn.to_out_linear." in key:
             return "row"
+        if any(
+            part in key
+            for part in (
+                ".attn.linear_attention.alpha.A_log",
+                ".attn.linear_attention.alpha.dt_bias",
+                ".attn.linear_attention.alpha.up.",
+                ".attn.linear_attention.beta_proj.",
+                ".attn.linear_attention.output_gate.up.",
+                ".attn.linear_attention.short_conv.",
+                ".attn.softmax_gate.up.",
+            )
+        ):
+            return "col"
         if ".ff.net.0.proj." in key:
             return "ff_fused_col"
         if ".ff.net.2." in key:
@@ -436,7 +457,11 @@ class MiniMaxH3Model(BaseTransformerModel):
         use_tp = self.use_tp
         self.use_tp = False
         try:
-            return super()._load_ckpt(unified_dtype, sensitive_layer)
+            weight_dict = super()._load_ckpt(unified_dtype, sensitive_layer)
+            if self.vdn_checkpoint:
+                branch_path = os.path.join(self.config["vdn_checkpoint"], "linear_branch", "model.safetensors")
+                weight_dict.update(self._load_safetensor_to_dict(branch_path, unified_dtype, sensitive_layer))
+            return weight_dict
         finally:
             self.use_tp = use_tp
 
@@ -480,9 +505,12 @@ class MiniMaxH3Model(BaseTransformerModel):
             preview = ", ".join(misplaced[:4])
             raise RuntimeError(f"MiniMax-H3 checkpoint tensors were not loaded on {expected}: {preview}")
 
-    def _load_local_tensor(self, source, key, load_device):
-        """Shard on CPU before copying only this TP rank's tensor to the accelerator."""
-        tensor = self._select_tensor_parallel_shard(key, source.get_tensor(key))
+    def _load_local_tensor(self, source, key, load_device, vdn_adapters=()):
+        """Merge VDN adapters and shard on CPU before copying to the accelerator."""
+        tensor = source.get_tensor(key)
+        if vdn_adapters:
+            tensor = merge_vdn_tensor(tensor, key, vdn_adapters)
+        tensor = self._select_tensor_parallel_shard(key, tensor)
         if torch.device(load_device).type != "cpu":
             tensor = tensor.to(load_device)
         return tensor
@@ -498,9 +526,13 @@ class MiniMaxH3Model(BaseTransformerModel):
         # Reading a full tensor directly on the accelerator and then slicing it
         # can retain the full safetensors storage behind a small TP view.  Shard
         # on CPU first so accelerator memory contains only this rank's weights.
-        with safe_open(file_path, framework="pt", device="cpu") as source:
+        with ExitStack() as stack:
+            source = stack.enter_context(safe_open(file_path, framework="pt", device="cpu"))
+            adapters = []
+            if self.vdn_checkpoint and self.config.get("tensor_parallel", False):
+                adapters = [(name, stack.enter_context(safe_open(path, framework="pt", device="cpu"))) for name, path in vdn_adapter_paths(self.config)]
             weight_dict = {
-                key: self._load_local_tensor(source, key, load_device)
+                key: self._load_local_tensor(source, key, load_device, adapters)
                 for key in source.keys()
                 if not any(remove_key in key for remove_key in remove_keys) and (preserve_keys is None or any(preserve_key in key for preserve_key in preserve_keys))
             }

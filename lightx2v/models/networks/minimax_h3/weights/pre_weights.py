@@ -1,26 +1,13 @@
-import torch.distributed as dist
-
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.models.networks.minimax_h3.weights.linear import make_linear
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
 def _linear(name, bias=False, force_fp32=False, config=None, tp_split=None):
     kind = "Default-ForceFp32" if force_fp32 else "Default"
     lora_kwargs = {"lora_prefix": "token_refiner"} if name.startswith("token_refiner.") else {}
-    if config is not None and config.get("tensor_parallel", False) and tp_split is not None:
-        tp_group = config["device_mesh"].get_group(mesh_dim="tensor_p")
-        tp_mm_type = config.get("tp_mm_type", "TensorParallel")
-        return MM_WEIGHT_REGISTER[tp_mm_type](
-            weight_name=f"{name}.weight",
-            bias_name=f"{name}.bias" if bias else None,
-            mm_type=kind,
-            tp_group=tp_group,
-            tp_rank=dist.get_rank(tp_group),
-            tp_size=dist.get_world_size(tp_group),
-            split_dim=tp_split,
-            lora_column_chunks=2 if ".ff.net.0.proj" in name else 1,
-            **lora_kwargs,
-        )
+    if config is not None and tp_split is not None:
+        return make_linear(config, name, bias=bias, tp_split=tp_split, mm_type=kind, **lora_kwargs)
     return MM_WEIGHT_REGISTER[kind](f"{name}.weight", f"{name}.bias" if bias else None, **lora_kwargs)
 
 

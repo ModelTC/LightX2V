@@ -7,6 +7,8 @@ models/linear_attention/{branch,scan,delta_rule,layers,features}.py.
 import torch
 import torch.nn.functional as F
 
+from lightx2v.common.ops.mm.mm_weight import unwrap_tp_weight
+
 from .vdn_kernels import activate, linear_epilogue, temporal_activate
 
 
@@ -78,7 +80,7 @@ def frame_alpha(weights, means, head_start, heads, dim):
     with torch.autocast(device_type=means.device.type, enabled=False):
         # LightX2V MMWeight stores [in_features, out_features].
         delta = means.float() @ weights.alpha_down.weight.float()
-        delta = delta @ weights.alpha_up.weight[:, channels].float()
+        delta = delta @ unwrap_tp_weight(weights.alpha_up).weight[:, channels].float()
         delta = delta + weights.alpha_dt_bias.weight[channels].float()
         scale = weights.alpha_a_log.weight[head_start : head_start + heads].float().exp()[:, None]
         return torch.exp(-scale * F.softplus(delta.view(-1, heads, dim)))
