@@ -189,7 +189,7 @@ class QwenImageTransformerInfer(BaseTransformerInfer):
         encoder_hidden_states,
     ):
         if self.seq_parallel:
-            img_attn_output, txt_attn_output = cross_attn_phase.calculate_parallel.apply_new(
+            img_attn_output, txt_attn_output = cross_attn_phase.calculate_parallel.apply(
                 q=img_query,
                 k=img_key,
                 v=img_value,

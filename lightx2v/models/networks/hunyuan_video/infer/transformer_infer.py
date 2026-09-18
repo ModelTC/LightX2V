@@ -169,7 +169,7 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
     def _infer_attn(self, weights, img_q, img_k, img_v, txt_q, txt_k, txt_v):
         img_seqlen = img_q.shape[1]
         if self.config["seq_parallel"]:
-            img_attn, txt_attn = weights.self_attention_parallel.apply_new(
+            img_attn, txt_attn = weights.self_attention_parallel.apply(
                 q=img_q,
                 k=img_k,
                 v=img_v,

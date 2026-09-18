@@ -99,13 +99,10 @@ class ZImageTransformerInfer(BaseTransformerInfer):
                 main_seq_len = int(image_tokens_len)
 
             if main_seq_len <= 0 or main_seq_len > total_seq_len:
-                raise ValueError(
-                    "Z-Image sequence parallel expects image_tokens_len to identify a non-empty main prefix: "
-                    f"got image_tokens_len={main_seq_len}, total sequence length={total_seq_len}."
-                )
+                raise ValueError(f"Z-Image sequence parallel expects image_tokens_len to identify a non-empty main prefix: got image_tokens_len={main_seq_len}, total sequence length={total_seq_len}.")
 
             has_aux = main_seq_len < total_seq_len
-            hidden_states_out, aux_hidden_states_out = attn_phase.calculate_parallel.apply_new(
+            hidden_states_out, aux_hidden_states_out = attn_phase.calculate_parallel.apply(
                 q=query[:main_seq_len],
                 k=key[:main_seq_len],
                 v=value[:main_seq_len],

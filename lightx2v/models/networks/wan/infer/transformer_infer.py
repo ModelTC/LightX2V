@@ -310,7 +310,7 @@ class WanTransformerInfer(WanMxfp8FuseMixin, BaseTransformerInfer):
         }
 
         if self.seq_parallel:
-            attn_out, aux_attn_out = phase.self_attn_1_parallel.apply_new(
+            attn_out, aux_attn_out = phase.self_attn_1_parallel.apply(
                 q=q,
                 k=k,
                 v=v,

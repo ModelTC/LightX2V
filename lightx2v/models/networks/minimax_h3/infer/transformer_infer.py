@@ -142,7 +142,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
         else:
             aux_length = sp_state.aux_length
-            out, aux_out = weights.calculate_parallel.apply_new(
+            out, aux_out = weights.calculate_parallel.apply(
                 q=q[aux_length:].contiguous(),
                 k=k[aux_length:].contiguous(),
                 v=v[aux_length:].contiguous(),

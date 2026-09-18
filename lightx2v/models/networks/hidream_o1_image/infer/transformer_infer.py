@@ -177,7 +177,7 @@ class HidreamO1ImageTransformerInfer:
             model_cls="hidream_o1_image",
         )
 
-        out_gen, aux_out = weights.attn_parallel.apply_new(
+        out_gen, aux_out = weights.attn_parallel.apply(
             q=q_gen[0].to(self.infer_dtype),
             k=k_gen[0].to(self.infer_dtype),
             v=v_gen[0].to(self.infer_dtype),

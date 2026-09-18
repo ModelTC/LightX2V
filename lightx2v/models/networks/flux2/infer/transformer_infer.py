@@ -114,7 +114,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
 
         if self.seq_p_group is not None:
             txt_len = txt_query.shape[0]
-            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply_new(
+            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply(
                 q=query[txt_len:],
                 k=key[txt_len:],
                 v=img_value,
@@ -223,7 +223,7 @@ class Flux2TransformerInfer(BaseTransformerInfer):
         model_cls = self.config.get("model_cls", "flux2_klein")
 
         if self.seq_p_group is not None:
-            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply_new(
+            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply(
                 q=query[num_txt_tokens:],
                 k=key[num_txt_tokens:],
                 v=value[num_txt_tokens:],

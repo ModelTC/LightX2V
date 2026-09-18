@@ -148,7 +148,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
         # Use registered attention module
         if self.config["seq_parallel"]:
             txt_len = txt_query.shape[0]
-            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply_new(
+            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply(
                 q=query[txt_len:],
                 k=key[txt_len:],
                 v=img_value,
@@ -280,7 +280,7 @@ class LongCatImageTransformerInfer(BaseTransformerInfer):
 
         # Use registered attention module
         if self.config["seq_parallel"]:
-            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply_new(
+            img_attn_output, txt_attn_output = block_weights.calculate_parallel.apply(
                 q=query[txt_len:],
                 k=key[txt_len:],
                 v=value[txt_len:],

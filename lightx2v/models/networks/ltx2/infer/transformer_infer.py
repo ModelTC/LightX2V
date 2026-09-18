@@ -296,7 +296,7 @@ class LTX2TransformerInfer(BaseTransformerInfer):
         seq_len = q.size(0)
         # For video self-attention with sequence parallel (non-TP only)
         if is_self_attn and not is_audio and self.seq_parallel and not use_tp:
-            out, aux_out = attn_phase.attn_func_parallel.apply_new(
+            out, aux_out = attn_phase.attn_func_parallel.apply(
                 q=q,
                 k=k,
                 v=v,

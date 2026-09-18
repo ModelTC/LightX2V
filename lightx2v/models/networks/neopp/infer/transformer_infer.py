@@ -338,7 +338,7 @@ class NeoppTransformerInfer(BaseTransformerInfer, torch.nn.Module):
 
         if self.config["seq_parallel"]:
             kvcache_len = seq_len_k - seq_len_q
-            attn_output, aux_attn_output = attn_w.cross_attn_parallel.apply_new(
+            attn_output, aux_attn_output = attn_w.cross_attn_parallel.apply(
                 q=query_states,
                 k=key_states[kvcache_len:],
                 v=value_states[kvcache_len:],
