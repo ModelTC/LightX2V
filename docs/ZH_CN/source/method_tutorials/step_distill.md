@@ -180,4 +180,4 @@ scripts/server/start_server.sh
 
 ### 在 Gradio 界面中使用
 
-见 [Gradio 文档](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/deploy_gradio.html)
+安装与使用方法见独立仓库 [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v)。

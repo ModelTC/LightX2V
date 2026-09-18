@@ -25,7 +25,6 @@ build/
 dist/
 .cache/
 server_cache/
-app/.gradio/
 *.pkl
 save_results/*
 *.egg-info/

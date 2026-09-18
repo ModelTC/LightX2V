@@ -67,6 +67,8 @@ class VideoTaskRequest(BaseTaskRequest):
     match_target_size: Optional[bool] = Field(None, description="Crop or resize output to size (SeedVR SR only)")
     audio_path: str = Field("", description="Input audio path (Wan-Audio)")
     video_duration: float = Field(5, description="Video duration in seconds (Wan-Audio)")
+    resize_mode: Optional[str] = Field(None, description="Image and mask resize mode for seko_talk s2v/rs2v; defaults to the startup config")
+    fixed_area: Optional[str] = Field(None, description="480p, 720p, or 1080p for seko_talk area/min-side resizing; defaults to the startup config")
     talk_objects: Optional[list[TalkObject]] = Field(None, description="Talk objects (Wan-Audio)")
     ref_image_paths: list[str] = Field(default_factory=list, description="VACE reference images as base64, URL, or server-local paths")
     ref_video_prompt: Optional[str] = Field(None, description="Prompt describing the driving video for Wan-Animate-2")

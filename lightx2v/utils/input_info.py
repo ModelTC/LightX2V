@@ -508,6 +508,8 @@ class SekoTalkInputs(InputInfo):
     audio_path: str | None = None
     audio_num: int | None = None
     video_duration: float | None = None
+    resize_mode: str | None = None
+    fixed_area: str | None = None
     with_mask: bool | None = None
     return_result_tensor: bool | None = None
     stream_config: dict | None = None
@@ -527,3 +529,15 @@ class SekoTalkInputs(InputInfo):
     # flags for first and last clip
     is_first: bool | None = None
     is_last: bool | None = None
+
+
+@dataclass
+class SekoTalkS2VInputInfo(S2VInputInfo):
+    resize_mode: str = "adaptive"
+    fixed_area: str | None = None
+
+
+@dataclass
+class SekoTalkRS2VInputInfo(RS2VInputInfo):
+    resize_mode: str = "adaptive"
+    fixed_area: str | None = None

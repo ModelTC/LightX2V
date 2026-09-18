@@ -261,15 +261,15 @@ pipe.generate(
 
 We provide multiple frontend interface deployment options:
 
-- **🎨 Gradio Interface**: Clean and user-friendly web interface, perfect for quick experience and prototyping
-  - 📖 [Gradio Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_gradio.html)
+- **🎨 Gradio Interface**: The web interface is maintained in the separate [Gradio-Lightx2v repository](https://github.com/ModelTC/Gradio-Lightx2v)
+  - 📖 See the new repository for installation and startup instructions
 - **🎯 ComfyUI Interface**: Powerful node-based workflow interface, supporting complex video generation tasks
   - 📖 [ComfyUI Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_comfyui.html)
-- **🚀 Windows One-Click Deployment**: Convenient deployment solution designed for Windows users, featuring automatic environment configuration and intelligent parameter optimization
-  - 📖 [Windows One-Click Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_local_windows.html)
+- **🚀 Windows Local Deployment**: Batch inference and legacy one-click bundle instructions; install the new Gradio application separately
+  - 📖 [Windows Local Deployment Guide](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_local_windows.html)
 
 **💡 Recommended Solutions**:
-- **First-time Users**: We recommend the Windows one-click deployment solution
+- **Windows Users**: Follow the Windows local deployment guide
 - **Advanced Users**: We recommend the ComfyUI interface for more customization options
 - **Quick Experience**: The Gradio interface provides the most intuitive operation experience
 
@@ -306,7 +306,7 @@ We provide multiple frontend interface deployment options:
 ### 🛠️ **Deployment Guides**
 - [Low-Resource Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_resource.html) - Optimized 8GB VRAM solutions
 - [Low-Latency Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/for_low_latency.html) - Ultra-fast inference optimization
-- [Gradio Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_gradio.html) - Web interface setup
+- [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) - Separate web application and setup instructions
 - [Service Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_service.html) - Production API service deployment
 - [Lora Model Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/lora_deploy.html) - Flexible Lora deployment
 

@@ -255,6 +255,8 @@ def main():
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
     parser.add_argument("--size", type=int, nargs=2, default=None, help="Output size in pixels: HEIGHT WIDTH (requires resize_mode=fixed_shape)")
+    parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk image and mask resize mode; defaults to the startup config.")
+    parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
     parser.add_argument("--video_duration", type=float, default=20, help="Video duration in seconds")
 
     args = parser.parse_args()
