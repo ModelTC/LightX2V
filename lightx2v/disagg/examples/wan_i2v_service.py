@@ -50,9 +50,8 @@ def main():
         model_cls=model_cls,
         attn_mode="sage_attn2",
         infer_steps=40,
-        target_height=480,
-        target_width=832,
-        target_video_length=81,
+        size=(480, 832),
+        num_frames=81,
         sample_guide_scale=[3.5, 3.5],
         sample_shift=5.0,
         fps=16,
@@ -70,7 +69,7 @@ def main():
         decoder_engine_rank=2,
     )
 
-    request_data = {"seed": seed, "prompt": prompt, "negative_prompt": negative_prompt, "image_path": image_path, "save_path": save_result_path}
+    request_data = {"seed": seed, "prompt": prompt, "negative_prompt": negative_prompt, "image_path": image_path, "save_result_path": save_result_path}
 
     logger.info(f"Config initialized for task: {task}")
     seed_all(seed)

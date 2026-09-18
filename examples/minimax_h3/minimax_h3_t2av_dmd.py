@@ -19,11 +19,12 @@ OUTPUT_PATH = "save_results/minimax_h3_t2av_dmd_768p.mp4"
 pipe = LightX2VPipeline(
     model_path=MODEL_PATH,
     model_cls="minimax_h3",
-    task="t2av",
+    model_variant="fl2av",
 )
 pipe.create_generator(config_json=CONFIG_PATH)
 
 pipe.generate(
+    task="t2av",
     seed=42,
     prompt=(
         "integrated_multimodal_description: [Shot 1] A cinematic red fox walks "

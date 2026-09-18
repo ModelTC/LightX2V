@@ -27,16 +27,16 @@ TENSOR_TRANSFORM = transforms.Compose(
 )
 
 
-def _resolve_target_size(height, width, ref_image_paths, keep_original_aspect):
+def _resolve_target_size(height, width, ref_image_paths, keep_aspect_ratio):
     preresized_ref_pil = None
-    if keep_original_aspect and ref_image_paths and len(ref_image_paths) == 1:
+    if keep_aspect_ratio and ref_image_paths and len(ref_image_paths) == 1:
         pil_orig = Image.open(ref_image_paths[0]).convert("RGB")
         preresized_ref_pil = resize_pilimage(pil_orig, 2048, PATCH_SIZE)
         width, height = preresized_ref_pil.size
-        logger.info(f"keep_original_aspect: target size set to {width}x{height} from reference image")
+        logger.info(f"keep_aspect_ratio: target size set to {width}x{height} from reference image")
     else:
-        if keep_original_aspect:
-            logger.warning("keep_original_aspect requires exactly one reference image; falling back to default resolution snapping.")
+        if keep_aspect_ratio:
+            logger.warning("keep_aspect_ratio requires exactly one reference image; falling back to default resolution snapping.")
         snapped_w, snapped_h = find_closest_resolution(width, height)
         if snapped_w != width or snapped_h != height:
             logger.warning(f"Resolution snapped from {width}x{height} to {snapped_w}x{snapped_h}")
@@ -49,7 +49,7 @@ def build_i2i_samples(
     ref_image_paths,
     height,
     width,
-    keep_original_aspect,
+    keep_aspect_ratio,
     layout_bboxes,
     tokenizer,
     processor,
@@ -59,7 +59,7 @@ def build_i2i_samples(
     enable_cfg,
     i2i_denoise_strength=None,
 ):
-    height, width, preresized_ref_pil = _resolve_target_size(height, width, ref_image_paths, keep_original_aspect)
+    height, width, preresized_ref_pil = _resolve_target_size(height, width, ref_image_paths, keep_aspect_ratio)
 
     image_token_id = model_config.image_token_id
     video_token_id = model_config.video_token_id

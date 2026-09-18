@@ -56,9 +56,8 @@ if not os.environ.get("CONFIG_JSON"):
     config["parallel"].update(tensor_p_size=tp, seq_p_size=sp, cfg_p_size=cfg, cfg_mode="parallel" if cfg == 2 else "serial")
     config["flashinfer_autotune_cache"] = f"save_results/hunyuan_image3_flashinfer_autotune_{task}_tp{tp}_sp{sp}_cfg{cfg}.json"
     if task == "ti2i":
-        config.pop("target_height", None)
-        config.pop("target_width", None)
-        config.update(image_size="auto", infer_align_image_size=True)
+        config.pop("size", None)
+        config.update(image_size="auto", align_image_size=True)
 size = math.prod(config["parallel"].get(key, 1) for key in ("tensor_p_size", "seq_p_size", "cfg_p_size"))
 if size != count or size != len(devices):
     raise SystemExit(f"Config TP*SP*CFG={size} must equal the number of visible GPUs ({len(devices)})")

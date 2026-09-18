@@ -37,17 +37,17 @@ def _cache_root(config) -> Path:
 
 
 def _selected_profiles(config) -> list[str]:
-    task = str(config.get("task", ""))
-    if task == "ref2av":
+    model_variant = config["model_variant"]
+    if model_variant == "ref2av":
         # Ref2AV always has visual reference rows and may additionally have
         # frozen audio rows. It uses transformer_ref, so its cache must remain
         # separate from every base-transformer task.
         return ["ref2av_video", "ref2av_video_audio"]
-    if task in {"t2av", "i2av", "l2av", "fl2av"}:
+    if model_variant == "fl2av":
         # All base-transformer tasks share this pair, so one FL2AV cache also
         # serves T2AV, I2AV, and L2AV without support_tasks-dependent paths.
         return ["t2av", "conditioned"]
-    raise ValueError(f"No persistent AdaLN cache profile is available for task: {task!r}")
+    raise ValueError(f"No persistent AdaLN cache profile is available for model_variant: {model_variant!r}")
 
 
 def _float32_bits(values) -> list[int]:
@@ -107,7 +107,7 @@ def _build_spec(config) -> dict:
 
 
 def _cache_path(config) -> Path:
-    cache_name = "ref2av" if config["task"] == "ref2av" else "fl2av"
+    cache_name = config["model_variant"]
     infer_steps = int(config["infer_steps"])
     video_flow_shift = float(config.get("video_flow_shift", 12.0))
     audio_flow_shift = float(config.get("audio_flow_shift", 3.0))

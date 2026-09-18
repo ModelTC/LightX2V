@@ -67,7 +67,7 @@ cd examples/worldmirror/
 python test_worldmirror.py \
     --model_path /path/to/HY-World-2.0 \
     --input_path /path/to/scene_dir \
-    --output_path /path/to/output
+    --save_result_path /path/to/output
 ```
 
 这是精度最高的推理路径，与上游 HY-World-2.0 pipeline 对齐：depth / normal MAE 在 1e-3 以内，点云包围盒体积差异在 1% 以内。
@@ -82,10 +82,12 @@ python test_worldmirror.py \
     --config_path /workspace/LightX2V/configs/worldmirror/worldmirror_recon_fp8.json \
     --model_path /path/to/HY-World-2.0 \
     --input_path /path/to/scene_dir \
-    --output_path /path/to/output
+    --save_result_path /path/to/output
 ```
 
-如果需要完整 CLI（逐 head 禁用、mask 控制、prior camera/depth 输入、Gaussian-splat 漫游渲染、`>>>` 交互循环等），请改用 `run_worldmirror.py` —— 它把上游 `python -m hyworld2.worldrecon.pipeline` 的所有 flag 一对一搬了过来：
+WorldMirror 通过文件交付重建结果。省略 `save_result_path` 或传入 `None` 时，默认保存到 `./inference_output/<场景>/<时间戳>/`；`strict_output_path` 优先，并直接使用指定目录。
+
+如果需要完整 CLI（逐 head 禁用、mask 控制、prior camera/depth 输入、Gaussian-splat 漫游渲染、`>>>` 交互循环等），请改用 `run_worldmirror.py` —— 它保留上游 `python -m hyworld2.worldrecon.pipeline` 的功能，输出路径参数统一为 `--save_result_path`：
 
 ```bash
 python run_worldmirror.py \

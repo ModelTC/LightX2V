@@ -95,7 +95,7 @@ DiT GPU buffer 可以在文本编码或 VAE 阶段释放，并在 denoise 前由
 
 入口为 [weights.py](../../../../lightx2v/models/video_encoders/hf/minimax_h3/weights.py) 的 `load_shared_video_vae()`、`video_vae.py` 的 `from_pretrained()`／`_activate()`，以及 [offload.py](../../../../lightx2v/models/video_encoders/hf/minimax_h3/offload.py) 的 `VideoVAEDecoderOffload`。
 
-先在 meta 模型上取得 checkpoint expected specs，再通过 `_prepare_inference_dtypes()` 确定运行 dtype，将 FP16／FP32 等目标类型直接落实到共享存储。显式绑定 Parameter 后验证并保存 owner，避免完整 CPU 模型转换产生第二份权重。
+先在 meta 模型上取得 checkpoint expected specs，再通过 `_prepare_inference_weights(use_channels_last_encoder=False)` 确定运行 dtype，将 FP16／FP32 等目标类型直接落实到共享存储。显式绑定 Parameter 后验证并保存 owner，避免完整 CPU 模型转换产生第二份权重。
 
 视频 VAE 静态共享权重可以同时包含 encoder 和 decoder；当前 block offload 在 decoder 上使用两个 `NativeModuleBlockSlot`。encode 阶段整体激活 encoder 及相关投影，decode 阶段激活必要非 block 权重并逐块执行 decoder。多 tile 通过 completion event 串联，释放时恢复原 CPU source。当前 block 路径有设备、量化及 compile 等边界，修改前核对 `video_vae.py` 的检查。
 

@@ -10,7 +10,7 @@ from loguru import logger
 from lightx2v.shot_runner.shot_base import ShotPipeline, load_clip_configs
 from lightx2v.shot_runner.utils import RS2V_SlidingWindowReader, save_audio, save_to_video
 from lightx2v.utils.audio_io import load_audio_file
-from lightx2v.utils.input_info import calculate_target_video_length_from_duration
+from lightx2v.utils.input_info import calculate_num_frames_from_duration
 from lightx2v.utils.profiler import *
 from lightx2v.utils.utils import is_main_process, seed_all, vae_to_comfyui_image, vae_to_comfyui_image_inplace
 from lightx2v.utils.va_controller import VAController
@@ -26,9 +26,6 @@ def get_reference_state_sequence(frames_per_clip=17, target_fps=16):
 
 
 class ShotRS2VPipeline(ShotPipeline):  # type:ignore
-    def __init__(self, clip_configs):
-        super().__init__(clip_configs)
-
     @staticmethod
     def _parse_audio_path(audio_path):
         if os.path.isdir(audio_path):
@@ -77,12 +74,12 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
         return torch.cat(latents, dim=0)
 
     @staticmethod
-    def _calc_total_clips(total_samples, audio_per_frame, target_video_length):
+    def _calc_total_clips(total_samples, audio_per_frame, num_frames):
         total_frames = int(np.ceil(total_samples / audio_per_frame))
-        if total_frames <= target_video_length:
+        if total_frames <= num_frames:
             return 1
-        remaining = total_frames - target_video_length
-        return 1 + int(np.ceil(remaining / (target_video_length + 3)))
+        remaining = total_frames - num_frames
+        return 1 + int(np.ceil(remaining / (num_frames + 3)))
 
     @staticmethod
     def _update_latent_shape(clip_input_info, target_len, vae_stride):
@@ -91,8 +88,8 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             new_t = (target_len - 1) // vae_stride + 1
             clip_input_info.latent_shape = [shape[0], new_t, shape[2], shape[3]]
 
-    def _compute_segment_params(self, idx, audio_clip, pad_len, target_video_length, target_fps, audio_per_frame, vae_stride, clip_input_info):
-        """Compute per-segment parameters (target_video_length, latent_shape, trimmed audio_clip).
+    def _compute_segment_params(self, idx, audio_clip, pad_len, num_frames, target_fps, audio_per_frame, vae_stride, clip_input_info):
+        """Compute per-segment parameters (num_frames, latent_shape, trimmed audio_clip).
 
         Returns:
             (is_first, is_last, segment_actual_video_frames, audio_clip)
@@ -106,20 +103,17 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             actual_video_frames = int(np.ceil(actual_audio_samples / audio_per_frame))
             segment_actual_video_frames = actual_video_frames
 
-            seg_target_len = calculate_target_video_length_from_duration(actual_video_frames / target_fps, target_fps)
-            clip_input_info.target_video_length = seg_target_len
+            seg_target_len = calculate_num_frames_from_duration(actual_video_frames / target_fps, target_fps)
+            clip_input_info.num_frames = seg_target_len
             self._update_latent_shape(clip_input_info, seg_target_len, vae_stride)
 
             logger.info(
-                f"Segment {idx}: Last segment with pad_len={pad_len}, "
-                f"actual_video_frames={actual_video_frames}, "
-                f"calculated target_video_length={seg_target_len}, "
-                f"latent_shape={clip_input_info.latent_shape}"
+                f"Segment {idx}: Last segment with pad_len={pad_len}, actual_video_frames={actual_video_frames}, calculated num_frames={seg_target_len}, latent_shape={clip_input_info.latent_shape}"
             )
-            audio_clip = audio_clip[:, : clip_input_info.target_video_length * audio_per_frame]
+            audio_clip = audio_clip[:, : clip_input_info.num_frames * audio_per_frame]
         else:
-            cur_clip_len = target_video_length if is_first else (target_video_length + 3)
-            clip_input_info.target_video_length = cur_clip_len
+            cur_clip_len = num_frames if is_first else (num_frames + 3)
+            clip_input_info.num_frames = cur_clip_len
             if not is_first:
                 self._update_latent_shape(clip_input_info, cur_clip_len, vae_stride)
 
@@ -155,43 +149,42 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
     def generate(self, args):
         rs2v = self.clip_generators["rs2v_clip"]
 
-        target_fps = rs2v.config.get("target_fps", 16)
+        target_fps = rs2v.config.get("fps", 16)
         audio_sr = rs2v.config.get("audio_sr", 16000)
         audio_per_frame = audio_sr // target_fps
         vae_stride = rs2v.config["vae_stride"][0]
+        stream_save_video = rs2v.config.get("stream_save_video", False)
 
-        clip_input_info = self.prepare_input_info(args, rs2v.config)
-        clip_input_info.seed = rs2v.resolve_request_seed({"seed": clip_input_info.seed})
+        request_data = self.prepare_request_data(args, rs2v)
+        clip_input_info = rs2v.prepare_request(request_data)
         seed_all(clip_input_info.seed)
 
-        if getattr(args, "target_video_length", None) is None and clip_input_info.video_duration is not None:
+        if request_data.get("num_frames") is None and clip_input_info.video_duration is not None:
             segment_duration = min(clip_input_info.video_duration, 5.0)
-            clip_input_info.target_video_length = calculate_target_video_length_from_duration(segment_duration, target_fps)
-            logger.info(f"Auto-calculated target_video_length={clip_input_info.target_video_length} from video_duration={clip_input_info.video_duration}s (segment={segment_duration}s)")
-        elif clip_input_info.target_video_length is None:
-            clip_input_info.target_video_length = rs2v.config.get("target_video_length", 81)
+            clip_input_info.num_frames = calculate_num_frames_from_duration(segment_duration, target_fps)
+            logger.info(f"Auto-calculated num_frames={clip_input_info.num_frames} from video_duration={clip_input_info.video_duration}s (segment={segment_duration}s)")
+        elif clip_input_info.num_frames is None:
+            clip_input_info.num_frames = rs2v.config.get("num_frames", 81)
 
-        target_video_length = clip_input_info.target_video_length
+        num_frames = clip_input_info.num_frames
         base_seed = clip_input_info.seed
 
         audio_files, mask_files = self._parse_audio_path(clip_input_info.audio_path)
         clip_input_info.audio_num = len(audio_files)
 
-        # should set before _load_mask_latents (rs2v.process_single_mask）
-        # it will resize mask image using config.resize_mode and input_info.fixed_area
-        # otherwise repeat generate will use the old input_info and cause error
+        # Resize masks with this request's size before image preprocessing writes back the aligned size.
         rs2v.input_info = clip_input_info
         audio_array = self._load_audio_array(audio_files, audio_sr, clip_input_info.video_duration)
-        person_mask_latens = self._load_mask_latents(rs2v, mask_files)
+        clip_input_info.person_mask_latens = self._load_mask_latents(rs2v, mask_files)
 
-        audio_reader = RS2V_SlidingWindowReader(audio_array, first_clip_len=target_video_length, clip_len=target_video_length + 3, sr=audio_sr, fps=target_fps)
-        total_clips = self._calc_total_clips(audio_array.shape[1], audio_per_frame, target_video_length)
-        ref_state_seq = get_reference_state_sequence(target_video_length - 3, target_fps)
+        audio_reader = RS2V_SlidingWindowReader(audio_array, first_clip_len=num_frames, clip_len=num_frames + 3, sr=audio_sr, fps=target_fps)
+        total_clips = self._calc_total_clips(audio_array.shape[1], audio_per_frame, num_frames)
+        ref_state_seq = get_reference_state_sequence(num_frames - 3, target_fps)
 
-        rs2v.inputs_static = rs2v._run_input_encoder_local_rs2v_static()
+        rs2v._run_input_encoder_local_rs2v_static()
 
         self.va_controller = None
-        if clip_input_info.stream_save_video:
+        if stream_save_video:
             self.va_controller = VAController(rs2v)
             logger.info(f"init va_recorder: {self.va_controller.recorder} and va_reader: {self.va_controller.reader}")
 
@@ -203,19 +196,17 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
                 break
             rs2v.check_stop()
 
-            is_first, is_last, segment_actual_frames, audio_clip = self._compute_segment_params(idx, audio_clip, pad_len, target_video_length, target_fps, audio_per_frame, vae_stride, clip_input_info)
+            is_first, is_last, segment_actual_frames, audio_clip = self._compute_segment_params(idx, audio_clip, pad_len, num_frames, target_fps, audio_per_frame, vae_stride, clip_input_info)
 
             clip_input_info.is_first = is_first
             clip_input_info.is_last = is_last
             clip_input_info.ref_state = ref_state_seq[idx % len(ref_state_seq)]
             clip_input_info.seed = base_seed + idx
             clip_input_info.audio_clip = audio_clip
-            clip_input_info.person_mask_latens = person_mask_latens
 
             if self.progress_callback:
                 self.progress_callback(idx + 1, total_clips)
 
-            rs2v.input_info = clip_input_info
             rs2v.inputs = rs2v._run_input_encoder_local_rs2v_dynamic()
             gen_clip_video, audio_clip, gen_latents = rs2v.run_clip_main()
 
@@ -224,7 +215,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             video_seg, audio_seg = self._trim_segment(gen_clip_video, audio_clip, segment_actual_frames, audio_per_frame)
             clip_input_info.overlap_latent = gen_latents[:, -1:]
 
-            if clip_input_info.return_result_tensor or not clip_input_info.stream_save_video:
+            if clip_input_info.return_result_tensor or not stream_save_video:
                 gen_video_list.append(video_seg.clone().cpu())
                 cut_audio_list.append(audio_seg.cpu())
             elif self.va_controller.recorder is not None:
@@ -232,7 +223,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
                 video_seg = vae_to_comfyui_image_inplace(video_seg)
                 self.va_controller.pub_livestream(video_seg, audio_seg, None)
 
-        if not clip_input_info.return_result_tensor and clip_input_info.stream_save_video:
+        if not clip_input_info.return_result_tensor and stream_save_video:
             return None, None, None
 
         gen_lvideo, merge_audio = self._merge_and_save(gen_video_list, cut_audio_list, target_fps, clip_input_info.save_result_path)
@@ -245,11 +236,7 @@ class ShotRS2VPipeline(ShotPipeline):  # type:ignore
             if self.va_controller is not None:
                 self.va_controller.clear()
                 self.va_controller = None
-        if isinstance(input_info, dict):
-            return_result_tensor = input_info.get("return_result_tensor", False)
-        else:
-            return_result_tensor = getattr(input_info, "return_result_tensor", False)
-        if return_result_tensor:
+        if self.clip_generators["rs2v_clip"].input_info.return_result_tensor:
             video = vae_to_comfyui_image(gen_lvideo)
             audio_tensor = torch.from_numpy(merge_audio).float()
             audio_waveform = audio_tensor.unsqueeze(0).unsqueeze(0)
@@ -262,24 +249,24 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="The seed for random generator")
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
-    parser.add_argument("--negative_prompt", type=str, default="")
+    parser.add_argument("--negative_prompt", type=str, default=None)
     parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
     parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
     parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
-    parser.add_argument("--target_shape", type=int, nargs="+", default=None, help="Set return video or image shape")
+    parser.add_argument("--size", type=int, nargs=2, default=None, help="Output size in pixels: HEIGHT WIDTH (requires resize_mode=fixed_shape)")
     parser.add_argument("--video_duration", type=float, default=20, help="Video duration in seconds")
-    parser.add_argument("--stream_save_video", action="store_true", help="Whether to save video by stream")
 
     args = parser.parse_args()
 
-    clip_configs = load_clip_configs(args.config_json)
+    request_data = vars(args)
+    clip_configs = load_clip_configs(request_data.pop("config_json"))
 
     with ProfilingContext4DebugL1("Init Pipeline Cost Time"):
         shot_rs2v_pipe = ShotRS2VPipeline(clip_configs)
 
     with ProfilingContext4DebugL1("Generate Cost Time"):
-        shot_rs2v_pipe.generate(args)
+        shot_rs2v_pipe.run_pipeline(request_data)
 
     # Clean up distributed process group
     if dist.is_initialized():

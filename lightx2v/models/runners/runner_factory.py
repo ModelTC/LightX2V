@@ -40,7 +40,6 @@ RUNNER_MODULES = {
     "wan2.2": "lightx2v.models.runners.wan.wan_runner",
     "wan2.2_animate": "lightx2v.models.runners.wan.wan_animate_runner",
     "wan2.2_animate2_distilled": "lightx2v.models.runners.wan.wan_animate2_runner",
-    "wan2.2_audio": "lightx2v.models.runners.wan.wan_audio_runner",
     "wan2.2_matrix_game3": "lightx2v.models.runners.wan.wan_matrix_game3_runner",
     "wan2.2_moe": "lightx2v.models.runners.wan.wan_runner",
     "wan2.2_moe_vace": "lightx2v.models.runners.wan.wan_vace_runner",

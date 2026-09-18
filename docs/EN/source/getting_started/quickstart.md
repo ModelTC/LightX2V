@@ -338,8 +338,7 @@ pipe = LightX2VPipeline(
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=50,
-    height=480,  # 720
-    width=832,   # 1280
+    size=(480, 832),  # Height, width; use (720, 1280) for 720p
     num_frames=81,
     guidance_scale=5.0,
     sample_shift=5.0,

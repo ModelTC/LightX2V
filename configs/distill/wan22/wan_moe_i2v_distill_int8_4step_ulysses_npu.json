@@ -1,9 +1,8 @@
 {
     "infer_steps": 4,
-    "target_video_length": 81,
+    "num_frames": 81,
     "text_len": 512,
-    "target_height": 720,
-    "target_width": 1280,
+    "size": [720, 1280],
     "distill_method": "dmd2",
     "rainfusion_attn_setting": {
         "pool_size": 128,
@@ -39,11 +38,6 @@
     "rms_norm_type": "npu_rms_norm",
     "high_noise_quantized_ckpt": "models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_high_noise_int8_lightx2v_4step.safetensors",
     "low_noise_quantized_ckpt": "models/Wan2.2-Distill-Models/wan2.2_i2v_A14b_low_noise_int8_lightx2v_4step.safetensors",
-    "video_frame_interpolation": {
-        "algo": "rife",
-        "target_fps": 30,
-        "model_path": "models/rife/train_log/flownet.pkl"
-    },
     "parallel": {
         "seq_p_size": 2,
         "seq_p_attn_type": "ulysses"

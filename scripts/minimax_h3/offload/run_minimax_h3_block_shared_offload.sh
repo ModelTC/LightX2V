@@ -42,6 +42,10 @@ case "${task}" in
         default_prompt='Generate an audio-video scene following the references.' ;;
     *) echo "Unsupported TASK: ${task}; choose t2av, i2av, l2av, fl2av or ref2av." >&2; exit 2 ;;
 esac
+model_variant=fl2av
+if [[ "${task}" == ref2av ]]; then
+    model_variant=ref2av
+fi
 input_args=()
 for kind in "${input_kinds[@]}"; do
     name="${kind}_path"
@@ -104,6 +108,7 @@ source "${lightx2v_path}/scripts/base/base.sh"
 cd -- "${lightx2v_path}"
 python -m torch.distributed.run --standalone --nnodes=1 --nproc-per-node="${nproc}" -m lightx2v.infer \
   --model_cls minimax_h3 \
+  --model-variant "${model_variant}" \
   --task "${task}" \
   --model_path "${model_path}" \
   --config_json "${config_json}" \

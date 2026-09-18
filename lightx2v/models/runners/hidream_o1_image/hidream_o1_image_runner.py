@@ -39,15 +39,15 @@ class HidreamO1ImageRunner(DefaultRunner):
 
     input_info_cls_by_task = {"i2i": HidreamI2IInputInfo}
     supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | {"prompt", "target_shape"},
+        "t2i": COMMON_REQUEST_FIELDS | {"prompt", "size"},
         "i2i": COMMON_REQUEST_FIELDS
         | {
             "i2i_denoise_strength",
             "image_path",
-            "keep_original_aspect",
+            "keep_aspect_ratio",
             "layout_bboxes",
             "prompt",
-            "target_shape",
+            "size",
         },
     }
 
@@ -136,8 +136,7 @@ class HidreamO1ImageRunner(DefaultRunner):
         from lightx2v.models.networks.hidream_o1_image.utils import build_t2i_text_sample, find_closest_resolution
 
         generation_config = self._resolve_generation_config()
-        height = self._resolve_size("height", "target_height", 2048)
-        width = self._resolve_size("width", "target_width", 2048)
+        height, width = self.get_target_size()
         width, height = find_closest_resolution(width, height)
 
         device = self.model.device
@@ -189,12 +188,13 @@ class HidreamO1ImageRunner(DefaultRunner):
         from lightx2v.models.networks.hidream_o1_image.i2i_utils import build_i2i_samples
 
         generation_config = self._resolve_generation_config()
+        height, width = self.get_target_size()
         inputs = build_i2i_samples(
             prompt=self.input_info.prompt,
             ref_image_paths=ref_image_paths,
-            height=self._resolve_size("height", "target_height", 2048),
-            width=self._resolve_size("width", "target_width", 2048),
-            keep_original_aspect=self.input_info.keep_original_aspect,
+            height=height,
+            width=width,
+            keep_aspect_ratio=self.input_info.keep_aspect_ratio,
             layout_bboxes=self.input_info.layout_bboxes or None,
             tokenizer=self.tokenizer,
             processor=self.processor,
@@ -219,14 +219,11 @@ class HidreamO1ImageRunner(DefaultRunner):
     def _sample_to_device(self, sample, device):
         return {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in sample.items()}
 
-    def _resolve_size(self, config_key, target_key, default):
-        if self.input_info.target_shape:
-            if len(self.input_info.target_shape) == 1:
-                return int(self.input_info.target_shape[0])
-            if config_key == "height":
-                return int(self.input_info.target_shape[0])
-            return int(self.input_info.target_shape[1])
-        return int(self.config.get(target_key, self.config.get(config_key, default)))
+    def get_target_size(self):
+        size = self.input_info.size or self.config.get("size", (2048, 2048))
+        if len(size) == 1:
+            return (int(size[0]),) * 2
+        return int(size[0]), int(size[1])
 
     @ProfilingContext4DebugL2("Run DiT")
     def _run_dit_local(self, total_steps=None):

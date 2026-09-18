@@ -73,7 +73,7 @@ WAN_SAVE_RESULT_PATH="$PWD/save_results/wan_custom.mp4" SEED=123 \
 bash scripts/wan/offload/run_wan_block_shared_offload.sh
 ```
 
-默认 40 步、81 帧、480×832，修改 JSON 中的 `infer_steps`、`target_video_length`、`target_height` 和 `target_width`。负面提示词位于脚本的 `--negative_prompt`。
+默认 40 步、81 帧、480×832，修改 JSON 中的 `infer_steps`、`num_frames` 和 `size`（高、宽）。负面提示词位于脚本的 `--negative_prompt`。
 
 脚本从配置生成独立临时 JSON，退出时删除，不改写源文件。显式传入 `CONFIG_JSON` 时保留其中的并行和 VAE 设置，TP×SP×CFG 必须等于可见卡数；`SHARED_CPU_WEIGHT_SCOPE` 若设置则覆盖该配置的 scope，否则保留配置中的值。环境变量中的模型、输入、配置和输出相对路径以调用脚本时的目录为基准。
 

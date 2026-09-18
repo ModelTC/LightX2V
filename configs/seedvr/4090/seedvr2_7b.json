@@ -1,7 +1,6 @@
 {
-    "target_video_length": 81,
-    "target_height": 1440,
-    "target_width": 2560,
+    "num_frames": 81,
+    "size": [1440, 2560],
     "infer_steps": 1,
     "fps": 16,
     "model_size": "7b",
@@ -14,7 +13,7 @@
     "vae_sp_color_chunk_size": 4,
     "stream_save_video": true,
     "cpu_offload": true,
-    "resize_mode": "adaptive",
+    "match_target_size": false,
     "color_fix": "gpu",
     "load_from_rank0": true,
     "dit_quantized_ckpt": "/path/to/seedvr2_ema_7b_fp8.safetensors",

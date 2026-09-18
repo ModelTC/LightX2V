@@ -12,15 +12,13 @@ pipe = LightX2VPipeline(model_path="Lightricks/LTX-2/", model_cls="ltx2", task="
 pipe.create_generator(
     attn_mode="sage_attn2",
     infer_steps=40,
-    height=512,
-    width=768,
+    size=(512, 768),
     num_frames=121,
     guidance_scale=4.0,
     sample_shift=[2.05, 0.95],
     fps=24,
-    audio_fps=24000,
     double_precision_rope=True,
-    norm_modulate_backend="triton",  # "torch"
+    modulate_type="triton",  # "torch"
 )
 
 seed = 42

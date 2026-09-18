@@ -87,7 +87,7 @@ def prepare_keyframe_image(image: Image.Image, height: int, width: int, stretch:
 
 def align_num_frames(num_frames: int) -> int:
     if num_frames < 1:
-        raise ValueError(f"target_video_length must be positive, got {num_frames}")
+        raise ValueError(f"num_frames must be positive, got {num_frames}")
     while num_frames % FRAMES_PER_CHUNK != LATENTS_PER_CHUNK:
         num_frames += 1
     return num_frames

@@ -188,7 +188,7 @@ class ZImageRunner(DefaultRunner):
             # embedding_list[0] shape is (seq_len, hidden_dim), use shape[0] for sequence length
             self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["enable_cfg"] and neg_prompt is not None:
+            if self.config["enable_cfg"]:
                 neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt])
                 neg_prompt_embeds = neg_prompt_embeds_list[0]
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -202,7 +202,7 @@ class ZImageRunner(DefaultRunner):
                 self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
                 text_encoder_output["prompt_embeds"] = prompt_embeds
                 text_encoder_output["image_info"] = image_info
-                if self.config["enable_cfg"] and neg_prompt is not None:
+                if self.config["enable_cfg"]:
                     neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt], image_list)
                     neg_prompt_embeds = neg_prompt_embeds_list[0]
                     self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -213,7 +213,7 @@ class ZImageRunner(DefaultRunner):
                 prompt_embeds = prompt_embeds_list[0]
                 self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
                 text_encoder_output["prompt_embeds"] = prompt_embeds
-                if self.config["enable_cfg"] and neg_prompt is not None:
+                if self.config["enable_cfg"]:
                     neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt])
                     neg_prompt_embeds = neg_prompt_embeds_list[0]
                     self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -224,7 +224,7 @@ class ZImageRunner(DefaultRunner):
             prompt_embeds = prompt_embeds_list[0]
             self.input_info.txt_seq_lens = [prompt_embeds.shape[0]]
             text_encoder_output["prompt_embeds"] = prompt_embeds
-            if self.config["enable_cfg"] and neg_prompt is not None:
+            if self.config["enable_cfg"]:
                 neg_prompt_embeds_list, _ = self.text_encoders[0].infer([neg_prompt])
                 neg_prompt_embeds = neg_prompt_embeds_list[0]
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[0])
@@ -278,8 +278,8 @@ class ZImageRunner(DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.target_shape) == 2:
-            height, width = self.input_info.target_shape
+        if len(self.input_info.size) == 2:
+            height, width = self.input_info.size
             height, width = int(height), int(width)
             if width > max_size or height > max_size:
                 scale = max_size / max(width, height)
@@ -311,7 +311,7 @@ class ZImageRunner(DefaultRunner):
 
     def set_latent_shape(self):
         width, height = self.get_input_target_shape()
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.

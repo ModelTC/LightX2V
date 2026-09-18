@@ -355,7 +355,7 @@ class TensorRTVAE:
     @torch.no_grad()
     def decode(self, latents, input_info):
         """Decode latents to image."""
-        height, width = input_info.target_shape
+        height, width = input_info.size
         if self.is_layered:
             latents = self._unpack_latents(latents, height, width, self.config["vae_scale_factor"], self.layers)
         else:

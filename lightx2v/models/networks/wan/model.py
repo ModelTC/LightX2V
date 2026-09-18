@@ -309,7 +309,7 @@ class WanModel(BaseTransformerModel):
 
         pre_infer_out.x = torch.chunk(x, world_size, dim=0)[cur_rank]
 
-        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] in ["i2v", "s2v", "rs2v"]:
+        if self.config["model_cls"] == "wan2.2" and self.config["task"] in ["i2v", "s2v", "rs2v"]:
             embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0
 
             padding_size = (world_size - (embed.shape[0] % world_size)) % world_size
@@ -340,7 +340,7 @@ class WanModel(BaseTransformerModel):
                 self.transformer_weights.non_block_weights_to_cuda()
 
         if self.config["enable_cfg"]:
-            assert self.scheduler.sample_guide_scale != 1.0, "enable_cfg=true requires sample_guide_scale != 1"
+            assert self.scheduler.sample_guide_scale is not None and self.scheduler.sample_guide_scale > 1.0, f"CFG requires sample_guide_scale > 1, got {self.scheduler.sample_guide_scale!r}"
             if self.config["cfg_parallel"]:
                 # ==================== CFG Parallel Processing ====================
                 cfg_p_group = self.config["device_mesh"].get_group(mesh_dim="cfg_p")

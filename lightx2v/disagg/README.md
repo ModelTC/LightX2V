@@ -109,7 +109,7 @@ bash scripts/disagg/run_dynamic.sh
 | `SAVE_RESULT_PATH` | 自动批次的输出基础路径，也作为 user 压测输出前缀的默认值。 | `save_results/wan22_i2v_dynamic.mp4` |
 | `DISAGG_WORKLOAD_SAVE_PREFIX` | user 压测输出基础路径；请求生成端追加阶段名称和请求编号。 | 脚本使用 `SAVE_RESULT_PATH` |
 
-独立 Disagg 服务通过文件交付结果，每个生成请求必须携带非空 `save_path`，缺失时会在派发前报错。自动批次缺少基础路径会直接失败；外部请求缺少路径会记录为该请求失败，并继续接收后续请求。只启动 Encoder、Transformer 或 Decoder 进程时无需提供输出路径，路径随请求传入。
+独立 Disagg 服务通过文件交付结果，每个生成请求必须携带非空 `save_result_path`，缺失时会在派发前报错。自动批次缺少基础路径会直接失败；外部请求缺少路径会记录为该请求失败，并继续接收后续请求。只启动 Encoder、Transformer 或 Decoder 进程时无需提供输出路径，路径随请求传入。
 
 `LOAD_FROM_USER=0` 时，Controller 将基础路径按实际 `room` 编号展开，例如 `output.mp4` 对应 `output0.mp4`、`output1.mp4`。外部请求的显式路径保持原样；`LOAD_FROM_USER=1` 的脚本复用 workload 的前缀功能生成不同文件名，并将 prompt、图片和 seed 传给请求生成端。
 

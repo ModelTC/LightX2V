@@ -222,10 +222,9 @@ wan_moe_t2v.json 内容如下
 ```
 {
     "infer_steps": 40,
-    "target_video_length": 81,
+    "num_frames": 81,
     "text_len": 512,
-    "target_height": 720,
-    "target_width": 1280,
+    "size": [720, 1280],
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
     "cross_attn_2_type": "flash_attn3",
@@ -245,11 +244,9 @@ wan_moe_t2v.json 内容如下
 ```
 `infer_steps` 表示推理的步数
 
-`target_video_length` 表示目标视频的帧数
+`num_frames` 表示目标视频的帧数
 
-`target_height` 表示目标视频的高度
-
-`target_width` 表示目标视频的宽度
+`size` 表示目标尺寸，按 `[高度, 宽度]` 填写。
 
 `self_attn_1_type`, `cross_attn_1_type`, `cross_attn_2_type` 表示wan2.2模型内部的三个注意力层的算子的类型，这里使用flash_attn3，仅限于Hopper架构的显卡(H100, H20等)，其他显卡可以使用flash_attn2进行替代
 
@@ -267,10 +264,9 @@ wan_moe_t2v_distill_lora.json内容如下：
 ```
 {
     "infer_steps": 4,
-    "target_video_length": 81,
+    "num_frames": 81,
     "text_len": 512,
-    "target_height": 480,
-    "target_width": 832,
+    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
@@ -314,10 +310,9 @@ wan_moe_i2v_distill_model.json内容如下
 ```
 {
     "infer_steps": 4,
-    "target_video_length": 81,
+    "num_frames": 81,
     "text_len": 512,
-    "target_height": 720,
-    "target_width": 1280,
+    "size": [720, 1280],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
@@ -353,10 +348,9 @@ wan_moe_i2v_distill_quant.json内容如下：
 ```
 {
     "infer_steps": 4,
-    "target_video_length": 81,
+    "num_frames": 81,
     "text_len": 512,
-    "target_height": 720,
-    "target_width": 1280,
+    "size": [720, 1280],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
@@ -545,7 +539,7 @@ if __name__ == "__main__":
 ```
 `url = "http://localhost:8000/v1/tasks/video/" `表示向本机ip的8000端口上，发送一个视频生成任务。如果是图像生成任务，url需改成 url = "http://localhost:8000/v1/tasks/image/"
 
-`message字典` 表示向服务端发送的请求的内容，其中`seed`若不指定，每次发送请求会随机生成一个`seed`，`save_result_path`若不指定也会生成一个和任务id一致命名的文件
+`message字典` 表示向服务端发送的请求的内容，其中 `seed` 若不指定或为 `None`，则默认使用 42，`save_result_path` 若不指定或为 `None`，则不保存结果文件
 
 ### python代码生成
 
@@ -606,8 +600,7 @@ pipe.create_generator(config_json="/home/user/LightX2V/configs/wan22/wan_moe_t2v
 #pipe.create_generator(
 #   attn_mode="sage_attn2",
 #   infer_steps=50,
-#    height=480,  # Can be set to 720 for higher resolution
-#    width=832,  # Can be set to 1280 for higher resolution
+#    size=(480, 832),  # Height, width; use (720, 1280) for 720p
 #    num_frames=81,
 #    guidance_scale=5.0,
 #    sample_shift=5.0,

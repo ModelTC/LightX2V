@@ -9,6 +9,7 @@ _cute_fmha_minimax_h3_loaded = False
 _cute_fmha_minimax_h3_sparse_loaded = False
 _rms_norm_loaded = False
 _minimax_h3_rope_loaded = False
+_minimax_h3_qkv_norm_loaded = False
 
 if os.name == "nt":
     os.add_dll_directory(_pkg_dir)
@@ -142,6 +143,38 @@ def has_minimax_h3_rope():
         return False
 
 
+def _load_minimax_h3_qkv_norm():
+    global _minimax_h3_qkv_norm_loaded
+    if _minimax_h3_qkv_norm_loaded:
+        return
+    import torch
+
+    suffix = "*.pyd" if os.name == "nt" else "*.so"
+    candidates = sorted(glob.glob(os.path.join(_pkg_dir, "minimax_h3_qkv_norm_torch" + suffix)))
+    if not candidates:
+        raise ImportError(f"minimax_h3_qkv_norm_torch library not found in {_pkg_dir}")
+    torch.ops.load_library(candidates[0])
+    _minimax_h3_qkv_norm_loaded = True
+
+
+def minimax_h3_qkv_norm_rope(q, k, v, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope=False):
+    """Fused XPU Q/K RMSNorm and 96-dimensional split-half RoPE (head_dim=128)."""
+    import torch
+
+    _load_minimax_h3_qkv_norm()
+    return torch.ops.sycl_kernels_minimax_h3_qkv.qkv_norm_rope(q, k, v, q_weight, k_weight, cos, sin, q_eps, k_eps, low_precision_rope)
+
+
+def has_minimax_h3_qkv_norm_rope():
+    import torch
+
+    try:
+        _load_minimax_h3_qkv_norm()
+        return hasattr(torch.ops.sycl_kernels_minimax_h3_qkv, "qkv_norm_rope")
+    except (ImportError, OSError, RuntimeError):
+        return False
+
+
 def _load_cute_fmha():
     global _cute_fmha_loaded
 
@@ -234,6 +267,30 @@ def has_cute_fmha():
     try:
         _load_cute_fmha()
         return True
+    except (ImportError, OSError, RuntimeError):
+        return False
+
+
+def minimax_h3_vae_sdp_d64(q, k, v):
+    """Run the BMG MiniMax-H3 Video VAE FP16 D64 attention kernel."""
+    import torch
+
+    try:
+        op = torch.ops.sycl_kernels_cute.sdp_minimax_h3_vae_d64
+    except AttributeError:
+        _load_cute_fmha()
+        op = torch.ops.sycl_kernels_cute.sdp_minimax_h3_vae_d64
+    return op(q, k, v)
+
+
+def has_minimax_h3_vae_sdp_d64():
+    if os.name == "nt":
+        return False
+    try:
+        _load_cute_fmha()
+        import torch
+
+        return hasattr(torch.ops.sycl_kernels_cute, "sdp_minimax_h3_vae_d64")
     except (ImportError, OSError, RuntimeError):
         return False
 

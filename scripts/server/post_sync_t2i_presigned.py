@@ -87,8 +87,8 @@ def build_payload(args: argparse.Namespace) -> Dict[str, Any]:
         "presigned_url": args.presigned_url,
     }
     payload = {key: value for key, value in payload.items() if value is not None}
-    if args.target_shape is not None:
-        payload["target_shape"] = args.target_shape
+    if args.size is not None:
+        payload["size"] = args.size
     return payload
 
 
@@ -115,11 +115,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--aspect_ratio", type=str, default=None, help="Aspect ratio for image task")
     parser.add_argument(
-        "--target_shape",
+        "--size",
         type=int,
         nargs="+",
         default=None,
-        help="Target output shape, e.g. --target_shape 1536 2752",
+        help="Target output shape, e.g. --size 1536 2752",
     )
     parser.add_argument("--save_result_path", type=str, default=None, help="Server-side save_result_path")
     parser.add_argument("--timeout_seconds", type=int, default=600, help="Sync API timeout_seconds")
@@ -167,9 +167,9 @@ def main() -> None:
     parser.add_argument("--download_timeout_seconds", type=int, default=120, help="Timeout for download verification")
     args = parser.parse_args()
 
-    target_shape: Optional[List[int]] = args.target_shape
-    if target_shape is not None and len(target_shape) < 2:
-        raise ValueError("--target_shape must provide at least 2 integers, e.g. --target_shape 1536 2752")
+    size: Optional[List[int]] = args.size
+    if size is not None and len(size) < 2:
+        raise ValueError("--size must provide at least 2 integers, e.g. --size 1536 2752")
     if args.presign_expires <= 0:
         raise ValueError("--presign_expires must be > 0")
     if args.download_timeout_seconds <= 0:

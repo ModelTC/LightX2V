@@ -1,12 +1,17 @@
 import os
+import shutil
+import tempfile
 import time
 from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from fractions import Fraction
 
+import av
 import imageio
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from PIL import Image
 from decord import VideoReader
@@ -27,31 +32,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import mux_audio_from_video, save_to_image
-
-
-def mark_stage(device: torch.device):
-    if device.type == "cuda":
-        event = torch.cuda.Event(enable_timing=True)
-        event.record()
-        return event
-    return time.perf_counter()
-
-
-def measure_stage_durations(marks, device: torch.device):
-    if device.type == "cuda":
-        marks[-1].synchronize()
-        return [start.elapsed_time(end) / 1000 for start, end in zip(marks, marks[1:])]
-    return [end - start for start, end in zip(marks, marks[1:])]
-
-
-@dataclass
-class PendingVideoWrite:
-    chunk_index: int
-    frame_count: int
-    read_seconds: float
-    reader_wait_seconds: float
-    future: Future
+from lightx2v.utils.utils import is_main_process, mux_audio_from_video, save_to_image
 
 
 @RUNNER_REGISTER("swiftvr")
@@ -59,19 +40,26 @@ class SwiftVRRunner(DefaultRunner):
     """Native LightX2V runner for SwiftVR image and video restoration."""
 
     supported_request_fields_by_task = {
-        "sr": COMMON_REQUEST_FIELDS | {"image_path", "sr_ratio", "target_shape", "video_path"},
+        "sr": COMMON_REQUEST_FIELDS | {"image_path", "sr_ratio", "size", "video_path"},
     }
 
     # Two spatial shapes trigger dynamic compilation before serving requests.
     WARMUP_RESOLUTIONS = ((720, 1280), (2048, 1536))
 
     def __init__(self, config):
-        if config.get("parallel"):
-            raise ValueError("SwiftVR currently supports single-GPU inference only.")
+        parallel = config.get("parallel") or {}
+        self.chunk_p_size = parallel.get("chunk_p_size", 1)
+        if any(parallel.get(name, 1) != 1 for name in ("seq_p_size", "cfg_p_size", "tensor_p_size")):
+            raise ValueError("SwiftVR supports chunk parallelism only.")
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        if self.chunk_p_size != world_size:
+            raise ValueError(f"SwiftVR requires parallel.chunk_p_size ({self.chunk_p_size}) to match world_size ({world_size}).")
         if config.get("cpu_offload"):
             raise NotImplementedError("SwiftVR does not support CPU offload yet.")
         normalize_swiftvr_config(config)
         super().__init__(config)
+        self.chunk_p_group = dist.group.WORLD if self.chunk_p_size > 1 else None
+        self.is_main_process = is_main_process()
         self.copy_stream = torch.cuda.Stream(device=self.init_device) if self.init_device.type == "cuda" else None
 
     def init_modules(self):
@@ -110,7 +98,10 @@ class SwiftVRRunner(DefaultRunner):
             padded_height = height + (-height) % 32
             padded_width = width + (-width) % 32
             logger.info(f"Warmup: {height}x{width}")
+            overlap = self.restorer.transformer.overlap
             try:
+                self.restorer.transformer.overlap = 0
+                self.restorer.autoencoder.chunk_p_group = self.chunk_p_group
                 for chunk in chunks:
                     video = torch.zeros(
                         1,
@@ -124,6 +115,8 @@ class SwiftVRRunner(DefaultRunner):
                     restored = self.restorer.restore_chunk(video, chunk, clip_latents)
                     del video, restored
             finally:
+                self.restorer.transformer.overlap = overlap
+                self.restorer.autoencoder.chunk_p_group = None
                 self.restorer.reset()
 
         logger.info("[Warmup] Warmup completed")
@@ -137,18 +130,18 @@ class SwiftVRRunner(DefaultRunner):
         *,
         require_even: bool = False,
     ) -> tuple[int, int]:
-        if input_info.target_shape:
-            if len(input_info.target_shape) != 2:
-                raise ValueError(f"SwiftVR target_shape must be [height, width], got {input_info.target_shape}")
-            height, width = input_info.target_shape
+        if input_info.size:
+            if len(input_info.size) != 2:
+                raise ValueError(f"SwiftVR size must be [height, width], got {input_info.size}")
+            height, width = input_info.size
         else:
             ratio = input_info.sr_ratio
             height, width = round(source_height * ratio), round(source_width * ratio)
         if height <= 0 or width <= 0:
             raise ValueError(f"SwiftVR output size must be positive, got {height}x{width}")
         if require_even:
-            height = max(2, int(round(height / 2)) * 2)
-            width = max(2, int(round(width / 2)) * 2)
+            height = max(2, round(height / 2) * 2)
+            width = max(2, round(width / 2) * 2)
         return height, width
 
     @staticmethod
@@ -170,53 +163,27 @@ class SwiftVRRunner(DefaultRunner):
         frames = torch.from_numpy(frame[:source_height, :source_width]).permute(2, 0, 1).contiguous().unsqueeze(0)
         return frames, source_height, source_width
 
-    def restore_frames(
-        self,
-        frames,
-        chunk,
-        clip_latents,
-        output_height,
-        output_width,
-        pad_height,
-        pad_width,
-        stage_marks=None,
-    ):
-        video = self.preprocess_frames(
-            frames,
-            output_height,
-            output_width,
-            pad_height,
-            pad_width,
-            GET_DTYPE(),
-            self.init_device,
-            self.config.get("upscale_mode", "bilinear"),
-        )
-        if stage_marks is not None:
-            stage_marks.append(mark_stage(self.init_device))
-        restored = self.restorer.restore_chunk(video, chunk, clip_latents)
-        if stage_marks is not None:
-            stage_marks.append(mark_stage(self.init_device))
-        return restored[..., :output_height, :output_width]
-
     @staticmethod
     def read_video_frames(reader, chunk, raw_frame_count: int, source_height: int, source_width: int, pin_memory: bool):
-        started_at = time.perf_counter()
         indices = [min(index, raw_frame_count - 1) for index in range(chunk.start, chunk.start + chunk.frame_count)]
         frames = reader.get_batch(indices)
         if not torch.is_tensor(frames):
-            frames = torch.from_numpy(frames.asnumpy())
-        frames = frames[:, :source_height, :source_width].permute(0, 3, 1, 2).contiguous()
+            frames = torch.from_dlpack(frames.to_dlpack())
+        frames = frames[:, :source_height, :source_width].permute(0, 3, 1, 2)
         if pin_memory:
             frames = frames.pin_memory()
-        return frames, time.perf_counter() - started_at
+        return frames
 
-    @staticmethod
-    def preprocess_frames(frames, height: int, width: int, pad_height: int, pad_width: int, dtype: torch.dtype, device: torch.device, mode: str):
-        frames = frames.to(device=device, dtype=dtype, non_blocking=frames.is_pinned())
+    def preprocess_frames(self, frames, height: int, width: int):
+        # Transfer only byte pixels; convert dtype and layout on the target device.
+        frames = frames.to(device=self.init_device, non_blocking=frames.is_pinned())
+        frames = frames.to(dtype=GET_DTYPE(), memory_format=torch.contiguous_format)
         if frames.shape[-2:] != (height, width):
+            mode = self.config.get("upscale_mode", "bilinear")
             interpolate_args = {"align_corners": False} if mode in {"linear", "bilinear", "bicubic", "trilinear"} else {}
             frames = F.interpolate(frames, size=(height, width), mode=mode, **interpolate_args)
         frames.div_(255)
+        pad_height, pad_width = (-height) % 32, (-width) % 32
         if pad_height or pad_width:
             frames = F.pad(frames, (0, pad_width, 0, pad_height))
         return frames.unsqueeze(0)
@@ -224,63 +191,127 @@ class SwiftVRRunner(DefaultRunner):
     @staticmethod
     def copy_frames_to_cpu(frames, copy_stream):
         if copy_stream is None:
-            return frames.cpu(), time.perf_counter()
+            return frames.cpu(), None
 
         cpu_frames = torch.empty(frames.shape, dtype=frames.dtype, device="cpu", pin_memory=True)
         copy_stream.wait_stream(torch.cuda.current_stream(frames.device))
         with torch.cuda.stream(copy_stream):
             cpu_frames.copy_(frames, non_blocking=True)
             frames.record_stream(copy_stream)
-            copy_complete = torch.cuda.Event(enable_timing=True)
+            copy_complete = torch.cuda.Event()
             copy_complete.record(copy_stream)
         return cpu_frames, copy_complete
 
-    def open_video_writer(self, output_path: str, fps: float):
+    def open_video_writer(self, output_path: str, fps: float, height: int, width: int, frame_counts=None):
+        """Write one video, or a numbered segment for each count in frame_counts."""
         quality = self.config.get("quality", 60)
         codec = self.config.get("video_codec", "libx265")
-        ffmpeg_params = ["-crf", str(round((100 - quality) * 51 / 100)), "-movflags", "+faststart"]
+        threads = min(16, max(1, len(os.sched_getaffinity(0)) // self.chunk_p_size)) if self.chunk_p_size > 1 else None
+        codec_options = {"crf": str(round((100 - quality) * 51 / 100))}
         if codec == "libx265":
-            ffmpeg_params.extend(["-x265-params", "log-level=warning", "-tag:v", "hvc1"])
-        # Common x264/x265 presets from fastest to slowest:
-        # ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow, placebo.
-        preset = self.config.get("ffmpeg_preset", "")
+            codec_options["x265-params"] = "log-level=warning"
+            if threads is not None:
+                codec_options["x265-params"] += f":pools={threads}"
+        elif threads is not None:
+            codec_options["threads"] = str(threads)
+
+        preset = self.config.get("ffmpeg_preset")
         if preset:
-            ffmpeg_params.extend(["-preset", preset])
+            codec_options["preset"] = preset
+
         pixel_format = "yuv444p" if self.config.get("save_format") == "yuv444p" else "yuv420p"
-        return imageio.get_writer(
-            output_path,
-            fps=fps,
-            codec=codec,
-            pixelformat=pixel_format,
-            macro_block_size=None,
-            ffmpeg_params=ffmpeg_params,
-        )
+
+        def write_video(path):
+            if self.chunk_p_size == 1:
+                ffmpeg_params = []
+                for name, value in codec_options.items():
+                    ffmpeg_params.extend([f"-{name}", value])
+                if codec == "libx265":
+                    ffmpeg_params.extend(["-tag:v", "hvc1"])
+                with closing(
+                    imageio.get_writer(
+                        path,
+                        fps=fps,
+                        codec=codec,
+                        pixelformat=pixel_format,
+                        macro_block_size=None,
+                        ffmpeg_params=ffmpeg_params,
+                    )
+                ) as writer:
+                    while True:
+                        writer.append_data((yield))
+            else:
+                with av.open(path, "w") as container:
+                    stream = container.add_stream(
+                        codec,
+                        rate=Fraction(f"{fps:.02f}"),
+                        options=codec_options,
+                        width=width,
+                        height=height,
+                        pix_fmt=pixel_format,
+                    )
+                    if codec == "libx265":
+                        stream.codec_context.codec_tag = "hvc1"
+                    reformatter = av.video.reformatter.VideoReformatter()
+                    frames_written = 0
+                    try:
+                        while True:
+                            array = yield
+                            # Share the pinned RGB buffer before color conversion.
+                            frame = av.VideoFrame.from_numpy_buffer(array, format="rgb24")
+                            frame = reformatter.reformat(frame, format=pixel_format, interpolation="BICUBIC", threads=min(4, threads))
+                            container.mux(stream.encode(frame))
+                            frames_written += 1
+                    except GeneratorExit:
+                        if frames_written:
+                            packets = stream.encode()
+                            if codec == "libx265" and frames_written < 3:
+                                # Short x265 segments still need the decode delay declared in their headers.
+                                decoder = av.CodecContext.create("hevc", "r")
+                                decoder.thread_count = 1
+                                decoder.extradata = stream.codec_context.extradata
+                                decoder.open()
+                                for packet in packets:
+                                    packet.dts = packet.pts - decoder.reorder_depth
+                            container.mux(packets)
+
+        def write_segments():
+            for segment, frame_count in enumerate(frame_counts):
+                # Each generator owns and releases one segment's encoder and packets.
+                with closing(write_video(output_path % segment)) as writer:
+                    next(writer)
+                    for _ in range(frame_count):
+                        writer.send((yield))
+            yield
+
+        writer = write_video(output_path) if frame_counts is None else write_segments()
+        next(writer)
+        return writer
 
     @staticmethod
-    def write_video_frames(writer, frames, stage_marks, device: torch.device):
-        stage_durations = measure_stage_durations(stage_marks, device)
+    def write_video_frames(writer, frames, copy_complete):
+        if copy_complete is not None:
+            copy_complete.synchronize()
         for frame in frames.numpy():
-            writer.append_data(frame)
-        return stage_durations
+            writer.send(frame)
 
-    @staticmethod
-    def finish_video_write(pending_write: PendingVideoWrite, stage_seconds, chunk_count: int):
-        wait_started_at = time.perf_counter()
-        preprocess_seconds, restore_seconds, postprocess_seconds = pending_write.future.result()
-        writer_wait_seconds = time.perf_counter() - wait_started_at
+    def join_video_chunks(self, work_dir, chunk_count, output_path, source_path):
+        manifest = os.path.join(work_dir, "chunks.txt")
+        with open(manifest, "w") as file:
+            file.write("ffconcat version 1.0\n")
+            for index in range(chunk_count):
+                segment, rank = divmod(index, self.chunk_p_size)
+                file.write(f"file '{rank:03d}-{segment:08d}.mp4'\n")
 
-        stage_seconds["read"] += pending_write.read_seconds
-        stage_seconds["reader_wait"] += pending_write.reader_wait_seconds
-        stage_seconds["preprocess"] += preprocess_seconds
-        stage_seconds["restore"] += restore_seconds
-        stage_seconds["postprocess_d2h"] += postprocess_seconds
-        stage_seconds["writer_wait"] += writer_wait_seconds
-        logger.info(
-            f"SwiftVR chunk {pending_write.chunk_index + 1}/{chunk_count} restored {pending_write.frame_count} frames "
-            f"(read={pending_write.read_seconds:.3f}s, reader_wait={pending_write.reader_wait_seconds:.3f}s, "
-            f"preprocess={preprocess_seconds:.3f}s, restore={restore_seconds:.3f}s, "
-            f"postprocess_d2h={postprocess_seconds:.3f}s, writer_wait={writer_wait_seconds:.3f}s)"
+        result = mux_audio_from_video(
+            source_path,
+            manifest,
+            output_path=output_path,
+            prefer_copy=self.config.get("audio_mux_prefer_copy", True),
+            trim_to_shortest=False,
         )
+        if result is None:
+            raise RuntimeError("SwiftVR failed to assemble the output video.")
 
     @ProfilingContext4DebugL1(
         "RUN pipeline",
@@ -291,13 +322,18 @@ class SwiftVRRunner(DefaultRunner):
     )
     @torch.inference_mode()
     def run_pipeline(self, input_info):
-        if GET_RECORDER_MODE():
-            monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
-        input_kind = self.resolve_input_kind(input_info)
-        if input_kind == "image":
-            return self.run_image_pipeline(input_info)
-        return self.run_video_pipeline(input_info)
+        try:
+            if self.is_main_process and GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_count.inc()
+            if self.resolve_input_kind(input_info) == "image":
+                self.check_stop()
+                return self.run_image_pipeline(input_info) if self.is_main_process else {}
+            self.restorer.autoencoder.chunk_p_group = self.chunk_p_group
+            return self.run_video_pipeline(input_info)
+        finally:
+            self.restorer.autoencoder.chunk_p_group = None
+            self.restorer.reset()
 
     def run_image_pipeline(self, input_info):
         if not input_info.return_result_tensor and not input_info.save_result_path:
@@ -305,8 +341,6 @@ class SwiftVRRunner(DefaultRunner):
 
         frames, source_height, source_width = self.read_image_frame(input_info.image_path)
         output_height, output_width = self.resolve_output_size(input_info, source_height, source_width)
-        pad_height = (-output_height) % 32
-        pad_width = (-output_width) % 32
         clip_length = self.config.get("clip_len", 24)
         chunk = build_video_chunks(1, clip_length)[0]
         clip_latents = clip_length // 4
@@ -315,25 +349,15 @@ class SwiftVRRunner(DefaultRunner):
         if output_path:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
         started_at = time.perf_counter()
-        self.restorer.reset()
-        try:
-            restored = self.restore_frames(
-                frames,
-                chunk,
-                clip_latents,
-                output_height,
-                output_width,
-                pad_height,
-                pad_width,
-            )
-            images = restored[0].permute(0, 2, 3, 1).contiguous()
-            if input_info.return_result_tensor:
-                images = images.to(device="cpu", dtype=torch.float32)
-            else:
-                save_to_image(images, output_path)
-                images = None
-        finally:
-            self.restorer.reset()
+        video = self.preprocess_frames(frames, output_height, output_width)
+        restored = self.restorer.restore_chunk(video, chunk, clip_latents)[..., :output_height, :output_width]
+        del video
+        images = restored[0].permute(0, 2, 3, 1).contiguous()
+        if input_info.return_result_tensor:
+            images = images.to(device="cpu", dtype=torch.float32)
+        else:
+            save_to_image(images, output_path)
+            images = None
 
         elapsed = time.perf_counter() - started_at
         stats = {
@@ -350,6 +374,11 @@ class SwiftVRRunner(DefaultRunner):
         return {"images": images, "stats": stats}
 
     def run_video_pipeline(self, input_info):
+        reader_executor = writer_executor = writer = None
+        work_dir = None
+        pending_reads = deque()
+        pending_writes = deque()
+        started_at = time.perf_counter()
         if not input_info.save_result_path:
             raise ValueError("SwiftVR video restoration requires `save_result_path`.")
         if input_info.return_result_tensor:
@@ -360,133 +389,109 @@ class SwiftVRRunner(DefaultRunner):
         first_frame = reader[0]
         source_height = first_frame.shape[0] // 8 * 8
         source_width = first_frame.shape[1] // 8 * 8
-        output_height, output_width = self.resolve_output_size(
-            input_info,
-            source_height,
-            source_width,
-            require_even=True,
-        )
-        pad_height = (-output_height) % 32
-        pad_width = (-output_width) % 32
+        output_height, output_width = self.resolve_output_size(input_info, source_height, source_width, require_even=True)
         fps = self.config.get("fps") or reader.get_avg_fps() or 30
-
         clip_length = self.config.get("clip_len", 24)
-        process_frame_count = padded_frame_count(raw_frame_count)
-        chunks = build_video_chunks(process_frame_count, clip_length)
+        chunks = build_video_chunks(padded_frame_count(raw_frame_count), clip_length)
         clip_latents = clip_length // 4
-
+        frames_to_trim = self.restorer.autoencoder.autoencoder.frames_to_trim
+        rank = dist.get_rank(self.chunk_p_group) if self.chunk_p_group is not None else 0
+        # Idle ranks in the final batch still participate in ReAE boundary exchanges.
+        local_chunks = [chunks[min(start + rank, len(chunks) - 1)] for start in range(0, len(chunks), self.chunk_p_size)]
         output_path = os.path.abspath(input_info.save_result_path)
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        self.restorer.reset()
-        writer = self.open_video_writer(output_path, fps)
-        reader_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="swiftvr-reader")
-        writer_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="swiftvr-writer")
-        max_pending = self.config.get("queue_size", 3)
-        pending_reads = deque()
-        pending_writes = deque()
-        written = 0
-        stage_seconds = {
-            "read": 0.0,
-            "reader_wait": 0.0,
-            "preprocess": 0.0,
-            "restore": 0.0,
-            "postprocess_d2h": 0.0,
-            "writer_wait": 0.0,
-        }
-        started_at = time.perf_counter()
-        for chunk in chunks[:max_pending]:
-            pending_reads.append(
-                reader_executor.submit(
-                    self.read_video_frames,
-                    reader,
-                    chunk,
-                    raw_frame_count,
-                    source_height,
-                    source_width,
-                    self.copy_stream is not None,
-                )
-            )
+
         try:
-            for chunk_index, chunk in enumerate(chunks):
-                self.check_stop()
-                reader_wait_started_at = time.perf_counter()
-                frames, read_seconds = pending_reads.popleft().result()
-                reader_wait_seconds = time.perf_counter() - reader_wait_started_at
-                next_read_index = chunk_index + max_pending
-                if next_read_index < len(chunks):
-                    pending_reads.append(
-                        reader_executor.submit(
-                            self.read_video_frames,
-                            reader,
-                            chunks[next_read_index],
-                            raw_frame_count,
-                            source_height,
-                            source_width,
-                            self.copy_stream is not None,
-                        )
-                    )
+            try:
+                if self.is_main_process:
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                    if self.chunk_p_group is not None:
+                        work_dir = tempfile.mkdtemp(prefix="swiftvr-", dir=os.path.dirname(output_path))
+                    else:
+                        writer = self.open_video_writer(output_path, fps, output_height, output_width)
+                reader_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="swiftvr-reader")
+                writer_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="swiftvr-writer")
+                max_pending = self.config.get("queue_size", 3)
+                output_batch_size = 4 if self.chunk_p_group is not None else clip_length + 4
+                # Keep the write queue's frame budget proportional to the original chunk budget.
+                max_pending_writes = max_pending * ((clip_length + output_batch_size - 1) // output_batch_size)
 
-                stage_marks = [mark_stage(self.init_device)]
-                restored = self.restore_frames(
-                    frames,
-                    chunk,
-                    clip_latents,
-                    output_height,
-                    output_width,
-                    pad_height,
-                    pad_width,
-                    stage_marks,
-                )
-                restored = restored[:, : raw_frame_count - written]
-                output_frames = (restored[0].permute(0, 2, 3, 1) * 255).clamp_(0, 255).to(torch.uint8)
-                cpu_frames, copy_complete = self.copy_frames_to_cpu(output_frames, self.copy_stream)
-                stage_marks.append(copy_complete)
+                def submit_read(chunk):
+                    return reader_executor.submit(self.read_video_frames, reader, chunk, raw_frame_count, source_height, source_width, self.copy_stream is not None)
 
-                if len(pending_writes) >= max_pending:
-                    self.finish_video_write(pending_writes.popleft(), stage_seconds, len(chunks))
-                pending_writes.append(
-                    PendingVideoWrite(
-                        chunk_index=chunk_index,
-                        frame_count=len(cpu_frames),
-                        read_seconds=read_seconds,
-                        reader_wait_seconds=reader_wait_seconds,
-                        future=writer_executor.submit(
-                            self.write_video_frames,
-                            writer,
-                            cpu_frames,
-                            stage_marks,
-                            self.init_device,
-                        ),
-                    )
-                )
-                written += len(cpu_frames)
+                for chunk in local_chunks[:max_pending]:
+                    pending_reads.append(submit_read(chunk))
+                if self.chunk_p_group is not None:
+                    directories = [work_dir]
+                    dist.broadcast_object_list(directories, src=0, group=self.chunk_p_group)
+                    work_dir = directories[0]
+                    if rank < len(chunks):
+                        frame_counts = [len(local_chunk.output_range(raw_frame_count, frames_to_trim)) for local_chunk in chunks[rank :: self.chunk_p_size]]
+                        writer = self.open_video_writer(os.path.join(work_dir, f"{rank:03d}-%08d.mp4"), fps, output_height, output_width, frame_counts)
 
-                if self.progress_callback:
-                    self.progress_callback((chunk.index + 1) / len(chunks) * 100, 100)
-            while pending_writes:
-                self.finish_video_write(pending_writes.popleft(), stage_seconds, len(chunks))
+                for local_index, chunk in enumerate(local_chunks):
+                    self.check_stop()
+                    active = local_index * self.chunk_p_size + rank < len(chunks)
+                    frames = pending_reads.popleft().result()
+                    next_read = local_index + max_pending
+                    if next_read < len(local_chunks):
+                        pending_reads.append(submit_read(local_chunks[next_read]))
+                    video = self.preprocess_frames(frames, output_height, output_width)
+                    del frames
+
+                    model_input, offset = self.restorer.encode_chunk(video, chunk, clip_latents)
+                    del video
+                    latents = model_input - self.model.predict(model_input, self.restorer.transformer.condition, offset) if active else model_input
+                    restored_frames = self.restorer.decode_chunk(latents, chunk, output_batch_size)
+                    del model_input, latents
+                    if not active:
+                        del restored_frames
+                        continue
+
+                    remaining_frames = len(chunk.output_range(raw_frame_count, frames_to_trim))
+                    for restored in restored_frames:
+                        if len(pending_writes) >= max_pending_writes:
+                            pending_writes.popleft().result()
+                        restored = restored[:, :remaining_frames, :, :output_height, :output_width]
+                        # Consume the decoded pixel buffer; ReAE already clamps it to [0, 1].
+                        output_frames = restored[0].permute(0, 2, 3, 1).mul_(255).to(dtype=torch.uint8, memory_format=torch.contiguous_format)
+                        cpu_frames, copy_complete = self.copy_frames_to_cpu(output_frames, self.copy_stream)
+                        del output_frames, restored
+                        pending_writes.append(writer_executor.submit(self.write_video_frames, writer, cpu_frames, copy_complete))
+                        remaining_frames -= len(cpu_frames)
+                        if remaining_frames == 0:
+                            break
+                    if self.is_main_process and self.progress_callback:
+                        self.progress_callback(min(chunk.index + self.chunk_p_size, len(chunks)) / len(chunks) * 100, 100)
+                    del restored_frames
+                while pending_writes:
+                    pending_writes.popleft().result()
+            finally:
+                if reader_executor is not None:
+                    reader_executor.shutdown(wait=True, cancel_futures=True)
+                if writer_executor is not None:
+                    writer_executor.shutdown(wait=True)
+                if writer is not None:
+                    writer.close()
+
+            if self.chunk_p_group is not None:
+                dist.barrier(group=self.chunk_p_group)
+            if not self.is_main_process:
+                return {}
+            if work_dir is not None:
+                self.join_video_chunks(work_dir, len(chunks), output_path, input_info.video_path)
+            else:
+                mux_audio_from_video(input_info.video_path, output_path, prefer_copy=self.config.get("audio_mux_prefer_copy", True), trim_to_shortest=False)
+            elapsed = time.perf_counter() - started_at
+            stats = {
+                "frames": raw_frame_count,
+                "seconds": elapsed,
+                "fps": raw_frame_count / elapsed if elapsed else 0.0,
+                "output": output_path,
+            }
+            if GET_RECORDER_MODE():
+                monitor_cli.lightx2v_worker_request_success.inc()
+            logger.info(f"SwiftVR restored {raw_frame_count} frames to {output_path} at {stats['fps']:.2f} fps")
+            return {"video": None, "stats": stats}
         finally:
-            reader_executor.shutdown(wait=True, cancel_futures=True)
-            writer_executor.shutdown(wait=True)
-            writer.close()
-            self.restorer.reset()
-
-        elapsed = time.perf_counter() - started_at
-        mux_audio_from_video(
-            input_info.video_path,
-            output_path,
-            prefer_copy=self.config.get("audio_mux_prefer_copy", True),
-            trim_to_shortest=False,
-        )
-        stats = {
-            "frames": written,
-            "seconds": elapsed,
-            "fps": written / elapsed if elapsed else 0.0,
-            "output": output_path,
-            "stage_seconds": stage_seconds,
-        }
-        if GET_RECORDER_MODE():
-            monitor_cli.lightx2v_worker_request_success.inc()
-        logger.info(f"SwiftVR restored {written} frames to {output_path} at {stats['fps']:.2f} fps")
-        logger.info("SwiftVR stage totals: " + ", ".join(f"{name}={seconds:.3f}s" for name, seconds in stage_seconds.items()))
-        return {"video": None, "stats": stats}
+            if self.is_main_process and work_dir is not None:
+                shutil.rmtree(work_dir)

@@ -56,7 +56,7 @@ _DISAGG_REQUEST_FIELDS = (
     "save_result_path",
     "return_result_tensor",
     "seed",
-    "target_video_length",
+    "num_frames",
     "aspect_ratio",
     "i2i_denoise_strength",
 )
@@ -81,11 +81,10 @@ def _estimate_encoder_buffer_sizes(config) -> List[int]:
     vae_stride = config.get("vae_stride", (4, 8, 8))
     stride_t, stride_h, stride_w = int(vae_stride[0]), int(vae_stride[1]), int(vae_stride[2])
 
-    target_video_length = int(config.get("target_video_length", 81))
-    target_height = int(config.get("target_height", 480))
-    target_width = int(config.get("target_width", 832))
+    num_frames = int(config.get("num_frames", 81))
+    target_height, target_width = map(int, config.get("size", (480, 832)))
 
-    t_prime = 1 + (target_video_length - 1) // stride_t
+    t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))
     w_prime = int(math.ceil(target_width / stride_w))
 
@@ -119,7 +118,7 @@ def validate_disagg_buffer_capacity(buffers: List[torch.Tensor], required_sizes:
         raise ValueError(
             f"[Disagg] {phase} request exceeds the configured transfer buffer capacity: "
             f"required={required_sizes}, capacity={capacities}. "
-            "Increase target_video_length, target_height, or target_width in every stage's startup config, then restart the services."
+            "Increase num_frames or size in every stage's startup config, then restart the services."
         )
 
 
@@ -378,10 +377,9 @@ class DisaggMixin:
             if value is not None:
                 request_config[key] = value
 
-        target_shape = getattr(input_info, "target_shape", None)
-        if target_shape:
-            request_config["target_shape"] = list(target_shape)
-            request_config["target_height"], request_config["target_width"] = target_shape
+        size = getattr(input_info, "size", None)
+        if size:
+            request_config["size"] = list(size)
 
         return request_config
 
@@ -402,17 +400,12 @@ class DisaggMixin:
         payload: Dict[str, Any] = {"data_bootstrap_room": room}
         for key in (
             *_DISAGG_REQUEST_FIELDS,
-            "target_height",
-            "target_width",
             "controller_result_host",
             "controller_result_port",
-            "target_shape",
+            "size",
         ):
             if key in config and config.get(key) is not None:
                 payload[key] = self._disagg_json_safe_value(config.get(key))
-
-        if payload.get("save_result_path"):
-            payload["save_path"] = payload["save_result_path"]
 
         phase1_receiver_rank = config.get("disagg_phase1_receiver_engine_rank")
         if phase1_receiver_rank is not None:
@@ -780,11 +773,10 @@ class DisaggMixin:
 
         vae_stride = config.get("vae_stride", (4, 8, 8))
         stride_t, stride_h, stride_w = int(vae_stride[0]), int(vae_stride[1]), int(vae_stride[2])
-        target_video_length = int(config.get("target_video_length", 81))
-        target_height = int(config.get("target_height", 480))
-        target_width = int(config.get("target_width", 832))
+        num_frames = int(config.get("num_frames", 81))
+        target_height, target_width = map(int, config.get("size", (480, 832)))
 
-        t_prime = 1 + (target_video_length - 1) // stride_t
+        t_prime = 1 + (num_frames - 1) // stride_t
         h_prime = int(math.ceil(target_height / stride_h))
         w_prime = int(math.ceil(target_width / stride_w))
 
@@ -947,11 +939,10 @@ class DisaggMixin:
         z_dim = int(config.get("vae_z_dim", 16))
 
         vae_stride = config.get("vae_stride", (4, 8, 8))
-        target_video_length = int(config.get("target_video_length", 81))
-        target_height = int(config.get("target_height", 480))
-        target_width = int(config.get("target_width", 832))
+        num_frames = int(config.get("num_frames", 81))
+        target_height, target_width = map(int, config.get("size", (480, 832)))
 
-        t_prime = 1 + (target_video_length - 1) // int(vae_stride[0])
+        t_prime = 1 + (num_frames - 1) // int(vae_stride[0])
         h_prime = int(math.ceil(target_height / int(vae_stride[1])))
         w_prime = int(math.ceil(target_width / int(vae_stride[2])))
 
@@ -1119,15 +1110,15 @@ class DisaggMixin:
         import numpy as _np
 
         _input_info = getattr(self, "input_info", None)
-        target_shape = getattr(_input_info, "target_shape", None)
+        size = getattr(_input_info, "size", None)
         latents_meta = {
             "version": 1,
             "seed": self.input_info.seed,
             "latents_shape": list(latents_to_send.shape),
             "latents_dtype": str(latents_to_send.dtype),
             "latents_hash": _sha256_tensor(latents_to_send),
-            "auto_height": target_shape[0] if target_shape else None,
-            "auto_width": target_shape[1] if target_shape else None,
+            "auto_height": size[0] if size else None,
+            "auto_width": size[1] if size else None,
         }
         meta_bytes = json.dumps(latents_meta, ensure_ascii=True).encode("utf-8")
         meta_buf = self._disagg_p2_rdma_buffers[1]

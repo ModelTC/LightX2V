@@ -8,7 +8,7 @@ from lightx2v.models.networks.worldplay.ar_model import WorldPlayARModel
 from lightx2v.models.networks.worldplay.pose_utils import load_pose, pose_to_input
 from lightx2v.models.runners.hunyuan_video.hunyuan_video_15_runner import HunyuanVideo15Runner
 from lightx2v.models.schedulers.worldplay.ar_scheduler import WorldPlayARScheduler
-from lightx2v.utils.input_info import UNSET, WorldPlayI2VInputInfo, WorldPlayT2VInputInfo
+from lightx2v.utils.input_info import WorldPlayI2VInputInfo, WorldPlayT2VInputInfo
 from lightx2v.utils.profiler import ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -65,10 +65,10 @@ class WorldPlayARRunner(HunyuanVideo15Runner):
 
         input_info.pose = load_pose(input_info.pose)
         num_frames = (len(input_info.pose) - 1) * self.config["vae_stride"][0] + 1
-        requested_frames = request_data.get("target_video_length")
-        if requested_frames is not None and requested_frames is not UNSET and requested_frames != num_frames:
+        requested_frames = request_data.get("num_frames")
+        if requested_frames is not None and requested_frames != num_frames:
             raise ValueError(f"pose corresponds to {num_frames} frames, but num_frames is {requested_frames}; they must match.")
-        input_info.target_video_length = num_frames
+        input_info.num_frames = num_frames
         return input_info
 
     def init_scheduler(self):

@@ -18,7 +18,7 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 @RUNNER_REGISTER("wan2.1_vace")
 class WanVaceRunner(WanRunner):
     supported_request_fields_by_task = {
-        "vace": VIDEO_REQUEST_FIELDS | {"mask_path", "src_ref_images", "video_path"},
+        "vace": VIDEO_REQUEST_FIELDS | {"mask_path", "ref_image_paths", "video_path"},
     }
 
     def __init__(self, config):
@@ -63,7 +63,7 @@ class WanVaceRunner(WanRunner):
                 src_mask[i] = torch.clamp((src_mask[i][:1, :, :, :] + 1) / 2, min=0, max=1)
                 image_sizes.append(src_video[i].shape[2:])
             elif sub_src_video is None:
-                src_video[i] = torch.zeros((3, self.get_target_video_length(), image_size[0], image_size[1]), device=device)
+                src_video[i] = torch.zeros((3, self.get_num_frames(), image_size[0], image_size[1]), device=device)
                 src_mask[i] = torch.ones_like(src_video[i], device=device)
                 image_sizes.append(image_size)
             else:

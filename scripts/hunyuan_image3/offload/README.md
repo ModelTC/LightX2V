@@ -64,7 +64,7 @@ HUNYUAN_IMAGE3_PROMPT="将参考图改成新年主题的宠物海报。" \
 bash scripts/hunyuan_image3/offload/run_hunyuan_image3_block_shared_offload.sh
 ```
 
-TI2I 未指定图片时使用上游示例 `assets/demo_instruct_imgs/input_0_0.png`。使用默认模板时，T2I 默认 1024×1024；TI2I 设置 `image_size=auto` 和 `infer_align_image_size=true`，按参考图对齐输出尺寸。FlashInfer autotune 缓存按任务和 TP／SP／CFG 分开。
+TI2I 未指定图片时使用上游示例 `assets/demo_instruct_imgs/input_0_0.png`。使用默认模板时，T2I 默认 1024×1024；TI2I 设置 `image_size=auto` 和 `align_image_size=true`，按参考图对齐输出尺寸。FlashInfer autotune 缓存按任务和 TP／SP／CFG 分开。
 
 ## 参数与配置
 
@@ -89,7 +89,7 @@ bash scripts/hunyuan_image3/offload/run_hunyuan_image3_block_shared_offload.sh \
   --max_new_tokens 512
 ```
 
-脚本支持附加 `lightx2v.infer` 的请求参数，例如 `--max_new_tokens`；任务通过 `TASK` 选择，启动配置通过 `CONFIG_JSON` 指定。默认 `max_new_tokens=2048`，较长的思考／重描述文本会增加推理耗时。默认 50 步，可修改 JSON 的 `infer_steps`；T2I 尺寸由 `target_height`、`target_width` 指定，TI2I 默认使用参考图尺寸策略。
+脚本支持附加 `lightx2v.infer` 的请求参数，例如 `--max_new_tokens`；任务通过 `TASK` 选择，启动配置通过 `CONFIG_JSON` 指定。默认 `max_new_tokens=2048`，较长的思考／重描述文本会增加推理耗时。默认 50 步，可修改 JSON 的 `infer_steps`；T2I 尺寸由 `size`（高、宽） 指定，TI2I 默认使用参考图尺寸策略。
 
 脚本从配置生成独立临时 JSON，退出时删除，不改写源文件。使用默认模板时，FlashInfer autotune 缓存路径随任务和 TP／SP／CFG 改变，首次使用可能需要调优。显式传入 `CONFIG_JSON` 时须选择与 `TASK` 匹配的尺寸及缓存配置，脚本保留其中的拓扑、尺寸设置和缓存路径，TP×SP×CFG 必须等于可见卡数；`SHARED_CPU_WEIGHT_SCOPE` 若设置则覆盖该配置的 scope，否则保留配置中的值。模型、上游代码、配置和输出的相对路径以调用脚本时的目录为基准。
 

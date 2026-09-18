@@ -33,21 +33,21 @@ def get_bagel_latent_downsample(config):
 
 def resolve_bagel_t2i_image_shape(input_info, config):
     latent_downsample = get_bagel_latent_downsample(config)
-    target_shape = getattr(input_info, "target_shape", None) or []
+    size = getattr(input_info, "size", None) or []
 
-    if len(target_shape) == 2:
+    if len(size) == 2:
         try:
-            height, width = int(target_shape[0]), int(target_shape[1])
+            height, width = int(size[0]), int(size[1])
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"BAGEL target_shape must be two positive integers [H W], got: {target_shape}") from exc
+            raise ValueError(f"BAGEL size must be two positive integers [H W], got: {size}") from exc
         if height <= 0 or width <= 0:
-            raise ValueError(f"BAGEL target_shape must be positive [H W], got: {target_shape}")
+            raise ValueError(f"BAGEL size must be positive [H W], got: {size}")
         if height % latent_downsample != 0 or width % latent_downsample != 0:
-            raise ValueError(f"BAGEL target_shape must be divisible by latent downsample {latent_downsample}, got: {[height, width]}")
+            raise ValueError(f"BAGEL size must be divisible by latent downsample {latent_downsample}, got: {[height, width]}")
         return (height, width)
 
-    if target_shape:
-        raise ValueError(f"BAGEL target_shape must be [H W] when set, got: {target_shape}")
+    if size:
+        raise ValueError(f"BAGEL size must be [H W] when set, got: {size}")
 
     aspect_ratio = getattr(input_info, "aspect_ratio", None) or get_config_value(config, "aspect_ratio", None) or "1:1"
     if aspect_ratio not in BAGEL_T2I_ASPECT_RATIOS:

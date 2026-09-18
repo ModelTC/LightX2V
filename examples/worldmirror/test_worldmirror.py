@@ -24,7 +24,6 @@ if _REPO_ROOT not in sys.path:
 DEFAULT_CONFIG_PATH = os.path.join(_REPO_ROOT, "configs/worldmirror/worldmirror_recon.json")
 DEFAULT_MODEL_PATH = "/path/to/HY-World-2.0"
 DEFAULT_INPUT_PATH = "/path/to/HY-World-2.0/examples/worldrecon/realistic/Workspace"
-DEFAULT_OUTPUT_PATH = os.path.join(_REPO_ROOT, "save_results/HY-WorldMirror")
 
 
 def main():
@@ -32,7 +31,7 @@ def main():
     parser.add_argument("--config_path", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
     parser.add_argument("--input_path", default=DEFAULT_INPUT_PATH)
-    parser.add_argument("--output_path", default=DEFAULT_OUTPUT_PATH)
+    parser.add_argument("--save_result_path", default=None)
     parser.add_argument("--strict_output_path", default=None, help="If set, write outputs directly here (no subdir/timestamp)")
     parser.add_argument("--enable_bf16", action="store_true")
     args = parser.parse_args()
@@ -47,14 +46,12 @@ def main():
     if args.enable_bf16:
         config_dict["enable_bf16"] = True
 
-    os.makedirs(args.output_path, exist_ok=True)
-
     runner = build_runner(build_startup_config(config_dict))
 
     input_info = runner.prepare_request(
         {
             "input_path": args.input_path,
-            "save_result_path": args.output_path,
+            "save_result_path": args.save_result_path,
             "strict_output_path": args.strict_output_path,
             "return_result_tensor": True,
         }

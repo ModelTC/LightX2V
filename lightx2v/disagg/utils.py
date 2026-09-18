@@ -29,19 +29,17 @@ def set_config(
     attn_mode="flash_attn2",
     rope_type="torch_complex_rope",
     infer_steps=50,
-    target_video_length=81,
-    target_height=480,
-    target_width=832,
+    num_frames=81,
+    size=(480, 832),
     sample_guide_scale=5.0,
     sample_shift=5.0,
-    fps=16,
+    fps=None,
     aspect_ratio="16:9",
     boundary=0.900,
     boundary_step_index=2,
     denoising_step_list=None,
-    audio_fps=24000,
     double_precision_rope=True,
-    norm_modulate_backend="torch",
+    modulate_type=None,
     distilled_sigma_values=None,
     cpu_offload=False,
     offload_granularity="block",
@@ -68,6 +66,10 @@ def set_config(
         "clip_cpu_offload": image_encoder_offload,  # Map to internal keys
         "vae_cpu_offload": vae_offload,  # Map to internal keys
     }
+    if modulate_type is not None:
+        args_dict["modulate_type"] = modulate_type
+    if fps is not None:
+        args_dict["fps"] = fps
 
     if config_path is None:
         if model_cls == "ltx2":
@@ -76,9 +78,8 @@ def set_config(
         else:
             args_dict["infer_steps"] = infer_steps
 
-        args_dict["target_width"] = target_width
-        args_dict["target_height"] = target_height
-        args_dict["target_video_length"] = target_video_length
+        args_dict["size"] = list(size)
+        args_dict["num_frames"] = num_frames
         args_dict["sample_guide_scale"] = sample_guide_scale
         args_dict["sample_shift"] = sample_shift
 
@@ -88,12 +89,10 @@ def set_config(
             args_dict["enable_cfg"] = True
 
         args_dict["rope_type"] = rope_type
-        args_dict["fps"] = fps
         args_dict["aspect_ratio"] = aspect_ratio
         args_dict["boundary"] = boundary
         args_dict["boundary_step_index"] = boundary_step_index
         args_dict["denoising_step_list"] = denoising_step_list
-        args_dict["audio_fps"] = audio_fps
         args_dict["double_precision_rope"] = double_precision_rope
 
         if model_cls.startswith("wan"):
@@ -104,7 +103,8 @@ def set_config(
         elif model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "z_image"]:
             args_dict["attn_type"] = attn_mode
 
-        args_dict["norm_modulate_backend"] = norm_modulate_backend
+        if model_cls in ["ltx2", "ltx2_5"]:
+            args_dict.setdefault("modulate_type", "torch")
 
     args_dict.update(kwargs)
     return build_startup_config(args_dict)
@@ -387,11 +387,10 @@ def estimate_encoder_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     stride_h = int(vae_stride[1])
     stride_w = int(vae_stride[2])
 
-    target_video_length = int(config.get("target_video_length", 81))
-    target_height = int(config.get("target_height", 480))
-    target_width = int(config.get("target_width", 832))
+    num_frames = int(config.get("num_frames", 81))
+    target_height, target_width = map(int, config.get("size", (480, 832)))
 
-    t_prime = 1 + (target_video_length - 1) // stride_t
+    t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))
     w_prime = int(math.ceil(target_width / stride_w))
 
@@ -427,11 +426,10 @@ def estimate_transformer_buffer_sizes(config: Dict[str, Any]) -> List[int]:
     stride_h = int(vae_stride[1])
     stride_w = int(vae_stride[2])
 
-    target_video_length = int(config.get("target_video_length", 81))
-    target_height = int(config.get("target_height", 480))
-    target_width = int(config.get("target_width", 832))
+    num_frames = int(config.get("num_frames", 81))
+    target_height, target_width = map(int, config.get("size", (480, 832)))
 
-    t_prime = 1 + (target_video_length - 1) // stride_t
+    t_prime = 1 + (num_frames - 1) // stride_t
     h_prime = int(math.ceil(target_height / stride_h))
     w_prime = int(math.ceil(target_width / stride_w))
 

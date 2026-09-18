@@ -668,7 +668,7 @@ class HunyuanImage3Model(BaseTransformerModel):
 
     def combine_cfg_predictions(self, noise_pred_cond, noise_pred_uncond):
         guidance_scale = self._guidance_scale()
-        assert guidance_scale != 1.0, "CFG requires guidance_scale != 1"
+        assert guidance_scale > 1.0, f"CFG requires guidance_scale > 1, got {guidance_scale!r}"
         return noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
     @torch.no_grad()

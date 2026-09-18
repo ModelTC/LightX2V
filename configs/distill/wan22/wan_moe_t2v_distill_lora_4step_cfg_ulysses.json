@@ -1,9 +1,8 @@
 {
     "infer_steps": 4,
-    "target_video_length": 81,
+    "num_frames": 81,
     "text_len": 512,
-    "target_height": 480,
-    "target_width": 832,
+    "size": [480, 832],
     "distill_method": "dmd2",
     "self_attn_1_type": "flash_attn3",
     "cross_attn_1_type": "flash_attn3",
@@ -13,7 +12,7 @@
         3.0
     ],
     "sample_shift": 5.0,
-    "enable_cfg": false,
+    "enable_cfg": true,
     "cpu_offload": false,
     "offload_granularity": "model",
     "t5_cpu_offload": false,

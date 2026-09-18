@@ -2,7 +2,7 @@
     "infer_steps": 50,
     "transformer_model_name": "720p_t2v",
     "fps": 24,
-    "target_video_length": 121,
+    "num_frames": 121,
     "aspect_ratio": "16:9",
     "vae_stride": [4, 16, 16],
     "sample_shift": 9.0,

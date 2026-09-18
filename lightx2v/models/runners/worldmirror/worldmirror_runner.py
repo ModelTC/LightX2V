@@ -441,7 +441,8 @@ class WorldMirrorRunner(BaseRunner):
             raise ValueError("input_info.input_path must be set")
 
         cfg = self.config
-        output_path = input_info.save_result_path
+        # Reconstruction results are delivered as files, so keep a default output directory.
+        output_path = input_info.save_result_path or "./inference_output"
         strict_output_path = input_info.strict_output_path
 
         target_size = cfg.get("target_size", 952)
@@ -499,10 +500,9 @@ class WorldMirrorRunner(BaseRunner):
         if log_time:
             timings["data_loading"] = time.perf_counter() - t0
 
-        outdir = None
         if strict_output_path is not None:
             outdir = Path(strict_output_path)
-        elif output_path is not None:
+        else:
             outdir = Path(output_path) / subdir_name / timestamp
 
         # 2. Adaptive resolution
@@ -546,7 +546,7 @@ class WorldMirrorRunner(BaseRunner):
                 timings["gpu_mem_peak_gb"] = peak
 
         # 4. Post-processing and saving — rank 0 only so files aren't duplicated.
-        if self.rank == 0 and outdir is not None:
+        if self.rank == 0:
             B, S, C, H, W = imgs.shape
             t0 = time.perf_counter()
 
@@ -665,7 +665,7 @@ class WorldMirrorRunner(BaseRunner):
             torch.cuda.empty_cache()
             dist.barrier()
 
-        result = {"output_dir": str(outdir) if outdir is not None else None}
+        result = {"output_dir": str(outdir)}
         if input_info.return_result_tensor:
             result["timings"] = timings if self.rank == 0 else None
         return result

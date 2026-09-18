@@ -17,7 +17,7 @@ if __name__ == "__main__":
         "last_frame_path": base64.b64encode(last_frame_path.read_bytes()).decode("utf-8"),
         "seed": 42,
         "num_frames": 81,
-        "target_shape": [720, 1280],
+        "size": [720, 1280],
         "save_result_path": "./output_lightx2v_wan_flf2v.mp4",
     }
 

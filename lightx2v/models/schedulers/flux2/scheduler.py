@@ -139,6 +139,25 @@ class Flux2Scheduler(BaseScheduler):
         )
         self.latents = latents
 
+    def set_step_index(self, step_index):
+        """Set the diffusers scheduler's internal step index.
+
+        The async PipeFusion driver steps patch-by-patch without going through
+        ``step_pre``/``step_post`` for every patch, so the underlying
+        scheduler's ``_step_index`` (used by ``step()`` to look up the correct
+        sigma) must be advanced explicitly.
+        """
+        self.scheduler._step_index = step_index
+
+    def step_post_patch(self, noise_pred, latents, t):
+        """Patch-level scheduler step for async PipeFusion mode.
+
+        Unlike ``step_post``, this operates on a single patch's latents and
+        noise_pred, and does not apply FLS enhancement (which requires the
+        full latent).
+        """
+        return self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+
     def _encode_image(self, image):
         image = image.to(device=AI_DEVICE, dtype=GET_DTYPE())
         encoder_output = self.vae.encode_vae_image(image)

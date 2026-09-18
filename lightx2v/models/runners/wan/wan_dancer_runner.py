@@ -43,6 +43,7 @@ class WanDancerRunner(WanRunner):
         return supported_request_fields
 
     def __init__(self, config):
+        config.setdefault("fps", 30 if config.get("dancer_stage") == "local" else 8)
         super().__init__(config)
         self.vae_cls = WanDancerVAE
         self.vae_name = "Wan2.1_VAE.pth"
@@ -116,7 +117,7 @@ class WanDancerRunner(WanRunner):
         return mask.view(1, mask.shape[1] // 4, 4, latent_height, latent_width).transpose(1, 2)[0]
 
     def _encode_keyframes(self, keyframes, mask):
-        height, width = self.config["target_height"], self.config["target_width"]
+        height, width = self.config["size"][0], self.config["size"][1]
         video = torch.full((1, 3, 149, height, width), -1, dtype=GET_DTYPE())
         for frame_index, image in keyframes.items():
             video[0, :, frame_index].copy_(TF.to_tensor(image).mul_(2).sub_(1).to(GET_DTYPE()))
@@ -140,7 +141,7 @@ class WanDancerRunner(WanRunner):
         }
 
     def _denoise(self, inputs, seed, segment_index=0, segment_count=1):
-        latent_shape = [16, 38, self.config["target_height"] // 8, self.config["target_width"] // 8]
+        latent_shape = [16, 38, self.config["size"][0] // 8, self.config["size"][1] // 8]
         self.inputs = inputs
         self.video_segment_num = segment_count
         self.scheduler.reset(seed, latent_shape)
@@ -153,7 +154,7 @@ class WanDancerRunner(WanRunner):
         return video.permute(1, 2, 3, 0).float().add_(1).mul_(0.5).clamp_(0, 1).cpu()
 
     def _global_pipeline(self):
-        width, height = self.config["target_width"], self.config["target_height"]
+        width, height = self.config["size"][1], self.config["size"][0]
         reference, crop_box = self._crop_and_resize(Image.open(self.input_info.image_path), width, height)
         music_feature = extract_music_features(self.input_info.audio_path)
         divisor = max(1, int(music_feature.shape[0] / 149.0 + 0.5))
@@ -211,7 +212,7 @@ class WanDancerRunner(WanRunner):
                     count += 1
             masks.append(mask)
 
-        width, height = self.config["target_width"], self.config["target_height"]
+        width, height = self.config["size"][1], self.config["size"][0]
         keyframes, source_index = [], 0
         for mask in masks:
             mapping = {}
@@ -233,7 +234,7 @@ class WanDancerRunner(WanRunner):
         if len(music_features) != len(keyframes):
             raise ValueError(f"Audio/global-plan segment mismatch: {len(music_features)} vs {len(keyframes)}")
 
-        width, height = self.config["target_width"], self.config["target_height"]
+        width, height = self.config["size"][1], self.config["size"][0]
         reference, crop_box = self._crop_and_resize(Image.open(self.input_info.image_path), width, height)
         first = keyframes[0][0]
         if min(first.size) < 512:

@@ -4,8 +4,9 @@ MiniMax-H3 reads ``hidden_states[50]`` from the released Qwen3-VL
 conditioner.  In Transformers' hidden-state convention that is the embedding
 output after decoder layers 0 through 49, before the final RMSNorm.  This
 module executes exactly that prefix with LightX2V weight and operator classes.
-The vision tower is loaded lazily for keyframe/reference requests; the last
-fourteen decoder layers, final norm, and LM head are never loaded.
+The tokenizer, pixel processor, text backbone, and vision tower are loaded
+together on initialization by default. The last fourteen decoder layers,
+final norm, and LM head are never loaded.
 
 Only the Hugging Face tokenizer and pixel processor are reused. By default,
 model tensors are streamed directly from the official sharded ``text_encoder``
@@ -1030,8 +1031,14 @@ class MiniMaxH3Qwen3VLTextEncoder:
         text_encoder_path = self._component_path("text_encoder_path", "text_encoder")
         model_config = self._read_model_config(text_encoder_path)
         vision_config = dict(model_config["vision_config"])
-        logger.info(f"Building native MiniMax-H3 Qwen3-VL vision tower from {text_encoder_path}")
-        self.vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config)
+        logger.info(
+            "Building native MiniMax-H3 Qwen3-VL vision tower from {} for image input task.",
+            text_encoder_path,
+        )
+        vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config)
+        if not self.cpu_offload:
+            vision_encoder.to(AI_DEVICE)
+        self.vision_encoder = vision_encoder
         return self.vision_encoder
 
     def unload_text_encoder(self):
@@ -1064,14 +1071,16 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     def load(self):
         self.load_tokenizer()
+        self.load_processor()
         self.load_text_encoder()
+        self.load_vision_encoder()
         return self
 
     def unload(self):
-        self.unload_vision_encoder()
-        self.unload_text_encoder()
-        self.unload_processor()
         self.unload_tokenizer()
+        self.unload_processor()
+        self.unload_text_encoder()
+        self.unload_vision_encoder()
 
     def _ensure_loaded(self):
         if self.tokenizer is None:

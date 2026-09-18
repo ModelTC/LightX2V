@@ -181,7 +181,7 @@ class LongCatImageRunner(DefaultRunner):
         image = image_processor.resize(image, height, width)
         image_tensor = image_processor.preprocess(image, height, width)
 
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
 
         return image_tensor.to(AI_DEVICE, dtype=GET_DTYPE())
 
@@ -213,8 +213,7 @@ class LongCatImageRunner(DefaultRunner):
         text_encoder_output["prompt_embeds"] = prompt_embeds
 
         # Encode negative prompt with image
-        if self.config.get("enable_cfg", True) and neg_prompt is not None:
-            neg_prompt = neg_prompt if neg_prompt else ""
+        if self.config["enable_cfg"]:
             neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer_with_image([neg_prompt], prompt_image)
             self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
             text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -245,7 +244,7 @@ class LongCatImageRunner(DefaultRunner):
         self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
         text_encoder_output["prompt_embeds"] = prompt_embeds
 
-        if self.config["enable_cfg"] and neg_prompt is not None:
+        if self.config["enable_cfg"]:
             neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer([neg_prompt])
             self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
             text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -303,8 +302,8 @@ class LongCatImageRunner(DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.target_shape) == 2:
-            height, width = self.input_info.target_shape
+        if len(self.input_info.size) == 2:
+            height, width = self.input_info.size
             if width > max_size or height > max_size:
                 scale = max_size / max(width, height)
                 width, height = int(width * scale), int(height * scale)
@@ -326,12 +325,12 @@ class LongCatImageRunner(DefaultRunner):
     def set_latent_shape(self):
         task = self.config.get("task", "t2i")
         if task == "i2i":
-            height, width = self.input_info.target_shape
+            height, width = self.input_info.size
         else:
             width, height = self.get_custom_shape()
 
         logger.info(f"LongCat Image Runner set target shape: {width}x{height}")
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
@@ -356,7 +355,6 @@ class LongCatImageRunner(DefaultRunner):
         self.text_encoders = self.load_text_encoder()
         self.image_encoder = self.load_image_encoder()
         self.vae = self.load_vae()
-        self.vfi_model = self.load_vfi_model() if "video_frame_interpolation" in self.config else None
 
     def run_pipeline(self, input_info):
         self.input_info = input_info

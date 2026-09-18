@@ -41,6 +41,23 @@ limitations under the License.
 
 
 /*
+ * From csrc/conv
+ */
+torch::Tensor fp8_conv3d_f16_accum_sm120(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    int64_t stride_d,
+    int64_t stride_h,
+    int64_t stride_w);
+
+torch::Tensor fp8_conv3d_f32_accum_sm120(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    int64_t stride_d,
+    int64_t stride_h,
+    int64_t stride_w);
+
+/*
  * From csrc/gemm
  */
 torch::Tensor cutlass_scaled_fp8_mm_f16_accum_sm120(

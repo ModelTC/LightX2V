@@ -33,9 +33,9 @@ classifiers = [
 dependencies = [
     "numpy",
     "scipy",
-    "torch<=2.11.0",
-    "torchvision<=0.26.0",
-    "torchaudio<=2.11.0",
+    "torch",
+    "torchvision",
+    "torchaudio",
     "diffusers",
     "transformers",
     "tokenizers",
@@ -69,7 +69,7 @@ dependencies = [
     "redis==6.4.0",
     "tos",
     "decord",
-    "av",
+    "av>=17",
     "torchada>=0.1.10",
 ]
 

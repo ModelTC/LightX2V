@@ -14,15 +14,14 @@ uses these LightX2V interfaces:
   bytes, and wraps `_run_infer_step` to check cancellation.
 - `runner.set_kvcache(...)` injects conditioning; `set_inference_params(...)`
   supplies matching position offsets, CFG settings and output format.
-- `generate(task="t2i", seed=None, save_result_path="", target_shape=[height, width])`
+- `generate(seed=None, save_result_path="", target_shape=[height, width])`
   continues the RNG state restored by LightLLM for later images in a session.
-  An explicit integer seed starts a seeded generation.
+  NeoPP converts this existing LightLLM argument to `size`; new LightX2V calls
+  use `size=[height, width]`. Omitting `seed` also preserves the current RNG state;
+  an explicit integer seed starts a seeded generation.
 
-Pipelines initialized with only `support_tasks` require `task` on every generation
-call. The linked LightLLM adapter currently omits it; add
-`task="t2i" if is_t2i else "i2i"` to its
-`self.pipe.generate(...)` call when upgrading LightX2V. Keep its KV injection and
-session RNG handling unchanged.
+NeoPP defaults an omitted `task` to `t2i`; both tasks share the same generation
+path with conditioning supplied through KV. LightLLM calls remain unchanged.
 
 An explicit constructor `task`, such as `LightX2VPipeline(..., task="t2i")`, is the
 default for calls that omit it. Passing `generate(task="i2i", ...)` selects a task
@@ -116,8 +115,8 @@ bash /path/to/LightX2V/scripts/neopp/run_neopp_dense_t2i_1k.sh
 ```
 
 For image editing, capture KV from a LightLLM request that includes the input
-images. CFG settings come from the selected JSON. In `replay_kv.py`, the seed
-comes from `--seed` and defaults to 42 when omitted.
+images. CFG settings come from the selected JSON. In `replay_kv.py`, an explicit
+`--seed` sets the seed; omitting it preserves the current RNG state.
 
 `run_neopp_dense_i2i_1k_cfg3.sh` has been removed because the current runner does
 not implement three-branch image guidance. Use the supported two-branch image

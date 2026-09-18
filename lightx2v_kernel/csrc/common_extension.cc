@@ -6,6 +6,19 @@
 
 TORCH_LIBRARY_FRAGMENT(lightx2v_kernel, m) {
 
+  // FP8 Conv3D
+  m.def(
+      "fp8_conv3d_f16_accum_sm120(Tensor input, Tensor weight, int stride_d, int stride_h, int stride_w) -> Tensor");
+  m.impl(
+      "fp8_conv3d_f16_accum_sm120",
+      torch::kCUDA,
+      &fp8_conv3d_f16_accum_sm120);
+  m.def(
+      "fp8_conv3d_f32_accum_sm120(Tensor input, Tensor weight, int stride_d, int stride_h, int stride_w) -> Tensor");
+  m.impl(
+      "fp8_conv3d_f32_accum_sm120",
+      torch::kCUDA,
+      &fp8_conv3d_f32_accum_sm120);
   m.def(
       "cutlass_scaled_fp8_mm_f16_accum_sm120(Tensor activation, Tensor weight, Tensor activation_scale, "
       "Tensor weight_scale, ScalarType out_dtype, Tensor? bias=None) -> Tensor");

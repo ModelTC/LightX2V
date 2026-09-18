@@ -1,9 +1,9 @@
 {
     "infer_steps": 4,
-    "target_fps": 16,
+    "fps": 16,
     "video_duration": 12,
     "audio_sr": 16000,
-    "target_video_length": 81,
+    "num_frames": 81,
     "prev_frame_length": 1,
     "resize_mode": "adaptive",
     "self_attn_1_type": "flash_attn3",

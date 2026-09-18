@@ -5,14 +5,6 @@ from typing import Any, Optional
 import torch
 
 
-class _UnsetType:
-    def __repr__(self):
-        return "UNSET"
-
-
-UNSET = _UnsetType()
-
-
 @dataclass
 class InputInfo:
     """Mutable context shared by the runner, models, and schedulers for one inference.
@@ -20,11 +12,11 @@ class InputInfo:
     Startup defaults and request values initialize the context. The inference
     pipeline then adds derived state to the same object.
 
-    ``target_shape`` is always ``[height, width]`` in pixels. Model tensor
+    ``size`` is always ``[height, width]`` in pixels. Model tensor
     dimensions belong in ``latent_shape``.
     """
 
-    task: str = ""
+    task: str | None = None
     seed: int = 0
     save_result_path: Optional[str] = None
     return_result_tensor: bool = False
@@ -40,9 +32,9 @@ class T2VInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str = ""
     # shape related
-    target_video_length: Optional[int] = None
+    num_frames: Optional[int] = None
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
+    size: list = field(default_factory=list)
 
 
 @dataclass
@@ -51,11 +43,11 @@ class I2VInputInfo(InputInfo):
     negative_prompt: str = ""
     image_path: str = ""
     # shape related
-    target_video_length: Optional[int] = None
+    num_frames: Optional[int] = None
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
+    size: list = field(default_factory=list)
 
 
 @dataclass
@@ -79,8 +71,13 @@ class SRInputInfo(InputInfo):
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
+    size: list = field(default_factory=list)
     output_fps: Optional[float] = field(default=None, repr=False)
+
+
+@dataclass
+class SeedVRInputInfo(SRInputInfo):
+    match_target_size: bool = True
 
 
 @dataclass
@@ -90,26 +87,26 @@ class Flf2vInputInfo(InputInfo):
     image_path: str = ""
     last_frame_path: str = ""
     # shape related
-    target_video_length: Optional[int] = None
+    num_frames: Optional[int] = None
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
+    size: list = field(default_factory=list)
 
 
 @dataclass
 class VaceInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str = ""
-    src_ref_images: Optional[str] = None
+    ref_image_paths: Optional[str] = None
     video_path: Optional[str] = None
     mask_path: Optional[str] = None
     # shape related
-    target_video_length: Optional[int] = None
+    num_frames: Optional[int] = None
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
+    size: list = field(default_factory=list)
 
 
 @dataclass
@@ -119,17 +116,16 @@ class S2VInputInfo(InputInfo):
     image_path: str = ""
     video_path: str = ""
     audio_path: str = ""
-    src_pose_path: str = ""
+    pose_video_path: str = ""
     audio_num: int = 0
     with_mask: bool = False
     stream_config: dict = field(default_factory=dict)
     # shape related
-    fixed_area: str = ""
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
-    target_video_length: Optional[int] = None
+    size: list = field(default_factory=list)
+    num_frames: Optional[int] = None
     video_duration: Optional[float] = None
 
     # prev info
@@ -152,8 +148,8 @@ class RS2VInputInfo(InputInfo):
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
-    target_video_length: Optional[int] = None
+    size: list = field(default_factory=list)
+    num_frames: Optional[int] = None
     video_duration: Optional[float] = None
 
     # prev info
@@ -161,6 +157,7 @@ class RS2VInputInfo(InputInfo):
     overlap_latent: Optional[torch.Tensor] = None
     # input preprocess audio
     audio_clip: Optional[torch.Tensor] = None
+    person_mask_latens: Optional[torch.Tensor] = field(default=None, repr=False)
     # input reference state
     ref_state: int = 0
     # flags for first and last clip
@@ -171,29 +168,29 @@ class RS2VInputInfo(InputInfo):
 @dataclass
 class AnimateInputInfo(InputInfo):
     prompt: str = ""
-    prompt_ref: str = "人物动作的参考视频"
+    ref_video_prompt: str = "人物动作的参考视频"
     negative_prompt: str = ""
     image_path: str = ""
-    src_pose_path: str = ""
-    src_face_path: str = ""
-    src_ref_images: str = ""
+    pose_video_path: str = ""
+    face_video_path: str = ""
+    ref_image_paths: str = ""
     video_path: str = ""
-    src_bg_path: str = ""
+    background_video_path: str = ""
     mask_path: str = ""
     # shape related
-    target_video_length: Optional[int] = None
+    num_frames: Optional[int] = None
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
+    size: list = field(default_factory=list)
 
 
 @dataclass
 class T2IInputInfo(InputInfo):
     prompt: str = ""
-    negative_prompt: str = ""
+    negative_prompt: str | None = ""
     # shape related
-    target_shape: list = field(default_factory=list)
+    size: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
     txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
@@ -206,7 +203,7 @@ class T2IInputInfo(InputInfo):
 @dataclass
 class NeoppInputInfo(InputInfo):
     seed: Optional[int] = 0
-    target_shape: list = field(default_factory=list)
+    size: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
 
 
@@ -226,17 +223,17 @@ class T2TInputInfo(InputInfo):
 @dataclass
 class TI2TInputInfo(T2TInputInfo):
     image_path: str = ""
-    infer_align_image_size: Optional[bool] = None
+    align_image_size: Optional[bool] = None
 
 
 @dataclass
 class I2IInputInfo(InputInfo):
     prompt: str = ""
-    negative_prompt: str = ""
+    negative_prompt: str | None = ""
     image_path: str = ""
     i2i_denoise_strength: Optional[float] = None
     # shape related
-    target_shape: list = field(default_factory=list)
+    size: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
     image_shapes: list = field(default_factory=list)
     txt_seq_lens: list = field(default_factory=list)  # [postive_txt_seq_len, negative_txt_seq_len]
@@ -257,13 +254,13 @@ class Flux2I2IInputInfo(I2IInputInfo):
 
 @dataclass
 class HidreamI2IInputInfo(I2IInputInfo):
-    keep_original_aspect: bool = False
+    keep_aspect_ratio: bool = False
     layout_bboxes: str = ""
 
 
 @dataclass
 class TI2IInputInfo(I2IInputInfo):
-    infer_align_image_size: Optional[bool] = None
+    align_image_size: Optional[bool] = None
 
 
 @dataclass
@@ -274,8 +271,8 @@ class T2AVInputInfo(InputInfo):
     video_latent_shape: list = field(default_factory=list)
     audio_latent_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
-    target_video_length: Optional[int] = None
+    size: list = field(default_factory=list)
+    num_frames: Optional[int] = None
 
 
 @dataclass
@@ -284,15 +281,15 @@ class I2AVInputInfo(InputInfo):
     negative_prompt: str = ""
     image_path: str = ""
     image_strength: float = 1.0
-    image_frame_idx: Optional[list[int]] = None
+    image_frame_indices: Optional[list[int]] = None
     # shape related
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     video_latent_shape: list = field(default_factory=list)
     audio_latent_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
-    target_video_length: Optional[int] = None
+    size: list = field(default_factory=list)
+    num_frames: Optional[int] = None
 
 
 @dataclass
@@ -331,8 +328,8 @@ class I2VAInputInfo(InputInfo):
     original_shape: list = field(default_factory=list)
     resized_shape: list = field(default_factory=list)
     latent_shape: list = field(default_factory=list)
-    target_shape: list = field(default_factory=list)
-    target_video_length: Optional[int] = None
+    size: list = field(default_factory=list)
+    num_frames: Optional[int] = None
     # Optional in-memory policy inputs.  Offline/CLI inference continues to use
     # image_path/state_path; long-running integrations (for example ROS) can
     # avoid writing a PNG and NPY file for every control step.
@@ -364,7 +361,7 @@ class V2AVInputInfo(I2AVInputInfo):
     ICEdit-Insight editing (restoration / HD / watermark / subtitle removal).
     The reference / control video is provided pre-processed via ``video_path``.
     Optional character image conditioning is supported through the i2av-style
-    ``image_path`` / ``image_strength`` / ``image_frame_idx`` fields.
+    ``image_path`` / ``image_strength`` / ``image_frame_indices`` fields.
     """
 
     # Pre-processed reference / control video (pose / canny / depth / track for
@@ -441,7 +438,7 @@ class WorldPlayT2VInputInfo(T2VInputInfo):
 class SenseNovaVisionInputInfo(InputInfo):
     prompt: str = ""
     image_path: str = ""
-    omni_vision_subtask: str = ""
+    omni_vision_subtask: str | None = None
     raw_output_path: str = ""
     glb_output_path: str = ""
     postprocess_predictions: Optional[bool] = None
@@ -475,9 +472,9 @@ INPUT_INFO_TYPES = {
 }
 
 
-def calculate_target_video_length_from_duration(duration_seconds: float, fps: int = 16) -> int:
-    """Calculate target_video_length from video duration using the formula:
-    target_video_length = (fps * seconds + 3) // 4 * 4 + 1
+def calculate_num_frames_from_duration(duration_seconds: float, fps: int = 16) -> int:
+    """Calculate num_frames from video duration using the formula:
+    num_frames = (fps * seconds + 3) // 4 * 4 + 1
 
     This ensures the result satisfies the VAE stride constraint: (n-1) % 4 == 0
 
@@ -493,44 +490,40 @@ def calculate_target_video_length_from_duration(duration_seconds: float, fps: in
         3s: (16*3 + 3) // 4 * 4 + 1 = 49 frames
         5s: (16*5 + 3) // 4 * 4 + 1 = 81 frames
     """
-    return align_target_video_length(int(fps * duration_seconds) + 3, 4)
+    return align_num_frames(int(fps * duration_seconds) + 3, 4)
 
 
-def align_target_video_length(num_frames: int, temporal_stride: int) -> int:
+def align_num_frames(num_frames: int, temporal_stride: int) -> int:
     """Align a frame count so that ``num_frames - 1`` is stride-divisible."""
     return num_frames // temporal_stride * temporal_stride + 1
 
 
 @dataclass
 class SekoTalkInputs(InputInfo):
-    target_video_length: int | Any = UNSET
-    seed: int | Any = UNSET
-    prompt: str | Any = UNSET
-    negative_prompt: str | Any = UNSET
-    image_path: str | Any = UNSET
-    audio_path: str | Any = UNSET
-    audio_num: int | Any = UNSET
-    video_duration: float | Any = UNSET
-    with_mask: bool | Any = UNSET
-    save_result_path: str | Any = UNSET
-    return_result_tensor: bool | Any = UNSET
-    stream_config: dict | Any = UNSET
+    num_frames: int | None = None
+    seed: int | None = None
+    prompt: str | None = None
+    negative_prompt: str | None = None
+    image_path: str | None = None
+    audio_path: str | None = None
+    audio_num: int | None = None
+    video_duration: float | None = None
+    with_mask: bool | None = None
+    return_result_tensor: bool | None = None
+    stream_config: dict | None = None
 
-    fixed_area: str | Any = UNSET
-    target_shape: list | Any = UNSET
-    latent_shape: list | Any = UNSET
+    size: list | None = None
+    latent_shape: list | None = None
 
     # prev info
-    overlap_frame: torch.Tensor | Any = UNSET
-    overlap_latent: torch.Tensor | Any = UNSET
+    overlap_frame: torch.Tensor | None = None
+    overlap_latent: torch.Tensor | None = None
     # input preprocess audio
-    audio_clip: torch.Tensor | Any = UNSET
-    person_mask_latens: torch.Tensor | Any = field(default=UNSET, repr=False)
+    audio_clip: torch.Tensor | None = None
+    person_mask_latens: torch.Tensor | None = field(default=None, repr=False)
 
     # input reference state
-    ref_state: int | Any = UNSET
+    ref_state: int | None = None
     # flags for first and last clip
-    is_first: bool | Any = UNSET
-    is_last: bool | Any = UNSET
-    # if save video by stream
-    stream_save_video: bool | Any = UNSET
+    is_first: bool | None = None
+    is_last: bool | None = None

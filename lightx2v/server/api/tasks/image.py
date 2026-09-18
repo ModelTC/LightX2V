@@ -96,7 +96,7 @@ async def create_image_task(message: ImageTaskRequest):
             if not await validate_url_async(message.image_mask_path):
                 raise HTTPException(status_code=400, detail=f"Image mask URL is not accessible: {message.image_mask_path}")
 
-        message.prefer_memory_result = False
+        message._prefer_memory_result = False
         task_id = task_manager.create_task(message)
         message.task_id = task_id
 
@@ -138,7 +138,7 @@ async def create_image_task_sync(
             if not message.presigned_url.startswith(("http://", "https://")):
                 raise HTTPException(status_code=400, detail=f"Invalid presigned_url: {message.presigned_url}")
 
-        message.prefer_memory_result = True
+        message._prefer_memory_result = True
         task_id = task_manager.create_task(message)
         message.task_id = task_id
 

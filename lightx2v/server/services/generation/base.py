@@ -147,11 +147,11 @@ class BaseGenerationService(ABC):
                 task_data["last_frame_path"] = await self._resolve_image_path(message.last_frame_path)
                 logger.info(f"Task {message.task_id} last frame path: {task_data.get('last_frame_path')}")
 
-            reference_images = getattr(message, "src_ref_images", None)
+            reference_images = getattr(message, "ref_image_paths", None)
             if reference_images:
                 reference_image_paths = [await self._resolve_image_path(image) for image in reference_images]
-                task_data["src_ref_images"] = ",".join(reference_image_paths)
-                logger.info(f"Task {message.task_id} reference image paths: {task_data['src_ref_images']}")
+                task_data["ref_image_paths"] = ",".join(reference_image_paths)
+                logger.info(f"Task {message.task_id} reference image paths: {task_data['ref_image_paths']}")
 
             if hasattr(message, "image_mask_path") and message.image_mask_path:
                 task_data["image_mask_path"] = await self._resolve_image_path(message.image_mask_path)
@@ -168,7 +168,6 @@ class BaseGenerationService(ABC):
 
             task_data.pop("image_mask_path", None)
             task_data.pop("talk_objects", None)
-            task_data.pop("prefer_memory_result", None)
             task_data.pop("presigned_url", None)
 
             result = await self.inference_service.submit_task_async(task_data)

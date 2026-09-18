@@ -28,8 +28,8 @@ def _has_save_path(input_info):
 @RUNNER_REGISTER("bagel")
 class BagelRunner(DefaultRunner):
     supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "target_shape"},
-        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt", "target_shape"},
+        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "size"},
+        "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt", "size"},
     }
 
     def __init__(self, config):
@@ -71,7 +71,7 @@ class BagelRunner(DefaultRunner):
     def set_t2i_image_shapes(self):
         image_shape = resolve_bagel_t2i_image_shape(self.input_info, self.config)
         self.input_info.image_shapes = image_shape
-        self.input_info.target_shape = list(image_shape)
+        self.input_info.size = list(image_shape)
         logger.info(f"BAGEL T2I image shape: {image_shape[0]}x{image_shape[1]}")
         return image_shape
 
@@ -82,11 +82,11 @@ class BagelRunner(DefaultRunner):
 
         self.input_info.input_image = processed_image
         self.input_info.image_shapes = image_shape
-        self.input_info.target_shape = list(image_shape)
+        self.input_info.size = list(image_shape)
         self.input_info.original_size = [input_image.size[1], input_image.size[0]]
         self.input_info.processed_image_size = list(image_shape)
         if getattr(self.input_info, "aspect_ratio", ""):
-            logger.warning("BAGEL I2I MVP ignores aspect_ratio and preserves the input image aspect ratio unless target_shape is set.")
+            logger.warning("BAGEL I2I MVP ignores aspect_ratio and preserves the input image aspect ratio unless size is set.")
         logger.info(f"BAGEL I2I image shape: {image_shape[0]}x{image_shape[1]} from input {input_image.size[1]}x{input_image.size[0]}")
         return image_shape
 

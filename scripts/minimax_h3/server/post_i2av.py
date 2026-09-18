@@ -20,7 +20,7 @@ if __name__ == "__main__":
         "image_path": image_to_base64("assets/inputs/imgs/img_0.jpg"),
         "seed": 42,
         "num_frames": 124,
-        "target_shape": [544, 960],
+        "size": [544, 960],
         "save_result_path": "./minimax_h3_i2av.mp4",
     }
 

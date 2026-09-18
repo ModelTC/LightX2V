@@ -69,8 +69,8 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base_config_json", type=str, default="/root/zht/LightX2V/configs/disagg/baseline/wan22_moe_i2v_baseline.json")
     parser.add_argument("--save_dir", type=str, default="/root/zht/LightX2V/save_results")
     parser.add_argument("--save_result_path", type=str, default="")
-    parser.add_argument("--prompt", type=str, default="")
-    parser.add_argument("--negative_prompt", type=str, default="")
+    parser.add_argument("--prompt", type=str, default=None)
+    parser.add_argument("--negative_prompt", type=str, default=None)
     parser.add_argument("--image_path", type=str, default="")
     parser.add_argument("--keep_parallel_config", action="store_true", default=True)
     parser.add_argument("--drop_parallel_config", action="store_true", default=False)
@@ -99,6 +99,7 @@ def _write_request_config(payload: dict[str, Any], request_id: int, keep_paralle
     request_config = copy.deepcopy(payload)
     request_config.pop("workload_end", None)
     request_config.pop("request_metrics", None)
+    request_config.pop("negative_prompt", None)
     if not keep_parallel_config:
         request_config.pop("parallel", None)
 
@@ -118,11 +119,11 @@ def _run_infer_once(args: argparse.Namespace, payload: dict[str, Any], worker_id
 
     keep_parallel = _effective_keep_parallel(args)
     temp_dir, config_json = _write_request_config(payload, request_id, keep_parallel_config=keep_parallel)
-    save_path = payload.get("save_path") or payload.get("save_result_path")
-    if not save_path:
+    save_result_path = payload.get("save_result_path")
+    if not save_result_path:
         save_dir = Path(args.save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
-        save_path = str(save_dir / f"baseline_worker{worker_id}_req{request_id}.mp4")
+        save_result_path = str(save_dir / f"baseline_worker{worker_id}_req{request_id}.mp4")
 
     infer_argv = [
         "-m",
@@ -136,12 +137,13 @@ def _run_infer_once(args: argparse.Namespace, payload: dict[str, Any], worker_id
         "--config_json",
         config_json,
         "--prompt",
-        str(payload.get("prompt", "")),
-        "--negative_prompt",
-        str(payload.get("negative_prompt", "")),
+        payload.get("prompt") or "",
         "--save_result_path",
-        str(save_path),
+        str(save_result_path),
     ]
+
+    if payload.get("negative_prompt") is not None:
+        infer_argv.extend(["--negative_prompt", payload["negative_prompt"]])
 
     image_path = payload.get("image_path")
     if image_path:
@@ -188,7 +190,7 @@ def _run_infer_once(args: argparse.Namespace, payload: dict[str, Any], worker_id
     except OSError:
         pass
 
-    return int(result.returncode), str(save_path)
+    return int(result.returncode), str(save_result_path)
 
 
 def _worker_main(args: argparse.Namespace) -> None:
@@ -221,7 +223,7 @@ def _worker_main(args: argparse.Namespace) -> None:
         client_send_ts = float(req_metrics.get("client_send_ts", time.time()))
 
         start_ts = time.time()
-        return_code, save_path = _run_infer_once(args, payload, args.worker_id)
+        return_code, save_result_path = _run_infer_once(args, payload, args.worker_id)
         finish_ts = time.time()
 
         # In cooperative parallel mode, all workers are ranks of one request.
@@ -238,7 +240,7 @@ def _worker_main(args: argparse.Namespace) -> None:
                     "client_send_ts": client_send_ts,
                     "e2e_latency_s": finish_ts - client_send_ts,
                     "return_code": return_code,
-                    "save_path": save_path,
+                    "save_result_path": save_result_path,
                 },
             )
 
@@ -354,11 +356,11 @@ def _build_generated_requests(args: argparse.Namespace) -> list[dict[str, Any]]:
     base.setdefault("task", args.task)
     base.setdefault("model_path", args.model_path)
     if args.save_result_path:
-        base["save_path"] = args.save_result_path
-    if args.prompt:
-        base.setdefault("prompt", args.prompt)
-    if args.negative_prompt:
-        base.setdefault("negative_prompt", args.negative_prompt)
+        base["save_result_path"] = args.save_result_path
+    if args.prompt is not None:
+        base["prompt"] = args.prompt
+    if args.negative_prompt is not None:
+        base["negative_prompt"] = args.negative_prompt
     if args.image_path:
         base.setdefault("image_path", args.image_path)
     if str(base.get("model_cls", args.model_cls)) == "wan2.2_moe":

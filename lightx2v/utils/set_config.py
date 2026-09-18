@@ -7,7 +7,7 @@ import torch.distributed as dist
 from loguru import logger
 from torch.distributed.tensor.device_mesh import init_device_mesh
 
-from lightx2v.utils.input_info import align_target_video_length
+from lightx2v.utils.input_info import align_num_frames
 from lightx2v.utils.lockable_dict import LockableDict
 from lightx2v.utils.utils import find_torch_model_path, is_main_process
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -33,6 +33,7 @@ def get_default_config():
             "parallel": False,
             "seq_parallel": False,
             "cfg_parallel": False,
+            "pipefusion_parallel": False,
             "enable_cfg": False,
             "warmup": False,
             "use_image_encoder": True,
@@ -49,7 +50,11 @@ def build_startup_config(config_data):
         with open(config["config_json"], "r") as f:
             config_json = json.load(f)
         config.update(config_json)
-    config["task"] = config_data["task"]
+    config["task"] = config_data.get("task")
+    if config_data.get("model_variant") is not None:
+        config["model_variant"] = config_data["model_variant"]
+    if config_data.get("fps") is not None:
+        config["fps"] = config_data["fps"]
 
     load_model_config(config)
     return config
@@ -157,8 +162,6 @@ def load_model_config(config):
             diffusion_model_config = action_head_config.get("diffusion_model_cfg", {})
             config.update(action_head_config)
             config.update(diffusion_model_config)
-            if "num_frames" in config:
-                config["target_video_length"] = config["num_frames"]
             if "out_dim" in config:
                 config["num_channels_latents"] = config["out_dim"]
     elif config["model_cls"] == "longcat_image":
@@ -173,14 +176,17 @@ def load_model_config(config):
             with open(transformer_config_path, "r") as f:
                 model_config = json.load(f)
             config.update(model_config)
-        config.setdefault("target_video_length", 1)
-        config.setdefault("target_fps", config.get("base_fps", 24) if config["model_cls"] == "cosmos3" else 24)
+        config.setdefault("num_frames", 1)
+        config.setdefault("fps", config.get("base_fps", 24) if config["model_cls"] == "cosmos3" else 24)
         if config["model_cls"] == "lingbot_video":
             config.setdefault("vae_scale_factor_spatial", 8)
             config.setdefault("vae_scale_factor_temporal", 4)
             config.setdefault("vae_scale_factor", 8)
     elif config["model_cls"] == "minimax_h3":
-        transformer_subfolder = "transformer_ref" if config["task"] == "ref2av" else "transformer"
+        model_variant = config.get("model_variant")
+        if model_variant not in ("fl2av", "ref2av"):
+            raise ValueError("MiniMax-H3 requires model_variant='fl2av' or 'ref2av'; set --model-variant when starting the model")
+        transformer_subfolder = "transformer_ref" if model_variant == "ref2av" else "transformer"
         transformer_path = os.path.join(config["model_path"], transformer_subfolder)
         transformer_config_path = os.path.join(transformer_path, "config.json")
         if not os.path.isfile(transformer_config_path):
@@ -188,6 +194,8 @@ def load_model_config(config):
         with open(transformer_config_path, "r") as f:
             model_config = json.load(f)
         config.update(model_config)
+        config["model_variant"] = model_variant
+        config.pop("task", None)
         config["dit_original_ckpt"] = transformer_path
         if config.get("dit_quantized_ckpt"):
             config["dit_quantized"] = True
@@ -276,35 +284,30 @@ def load_model_config(config):
 
         normalize_hunyuan_image3_config(config)
 
-    if config["model_cls"] == "lingbot_va" and "target_video_length" not in config:
+    if config["model_cls"] == "lingbot_va" and "num_frames" not in config:
         ar_config = config.get("ar_config", {})
         required_keys = ("num_frame_per_chunk", "num_chunks")
         missing_keys = [key for key in required_keys if key not in ar_config]
         if missing_keys:
-            raise ValueError(f"LingBot-VA requires ar_config.{', ar_config.'.join(missing_keys)} to derive target_video_length.")
+            raise ValueError(f"LingBot-VA requires ar_config.{', ar_config.'.join(missing_keys)} to derive num_frames.")
         latent_frames = int(ar_config["num_frame_per_chunk"]) * int(ar_config["num_chunks"])
         temporal_stride = int(config["vae_stride"][0])
         if latent_frames <= 0 or temporal_stride <= 0:
             raise ValueError(f"LingBot-VA requires positive latent frame count and VAE temporal stride, got latent_frames={latent_frames}, temporal_stride={temporal_stride}.")
-        config["target_video_length"] = (latent_frames - 1) * temporal_stride + 1
-        logger.info(f"Auto-set LingBot-VA target_video_length={config['target_video_length']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
+        config["num_frames"] = (latent_frames - 1) * temporal_stride + 1
+        logger.info(f"Auto-set LingBot-VA num_frames={config['num_frames']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
 
-    if (
-        config["model_cls"] != "minimax_h3"
-        and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]
-        and config.get("target_video_length") is not None
-        and "vae_stride" in config
-    ):
+    if config["model_cls"] != "minimax_h3" and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and config.get("num_frames") is not None and "vae_stride" in config:
         temporal_stride = int(config["vae_stride"][0])
-        if (config["target_video_length"] - 1) % temporal_stride != 0:
-            original_length = config["target_video_length"]
-            config["target_video_length"] = align_target_video_length(original_length, temporal_stride)
-            logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {config['target_video_length']} instead of {original_length}.")
+        if (config["num_frames"] - 1) % temporal_stride != 0:
+            original_length = config["num_frames"]
+            config["num_frames"] = align_num_frames(original_length, temporal_stride)
+            logger.warning(f"`num_frames - 1` must be divisible by {temporal_stride}; using {config['num_frames']} instead of {original_length}.")
 
 
 def build_cli_inputs(args):
     args_data = {key: value for key, value in vars(args).items() if value is not None}
-    startup_fields = {"config_json", "model_cls", "model_path", "sf_model_path", "task"}
+    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "task"}
     startup_args = {key: value for key, value in args_data.items() if key in startup_fields}
     request_data = {key: value for key, value in args_data.items() if key not in startup_fields}
     request_data["task"] = args.task
@@ -312,24 +315,88 @@ def build_cli_inputs(args):
     return startup_config, request_data
 
 
+def _validate_pipefusion_config(config):
+    """Reject unsupported PipeFusion combinations instead of silently misbehaving.
+
+    PipeFusion is currently a narrow feature: Flux2 Klein, T2I only, CUDA only,
+    no CFG, and no stacking with SP / TP / feature-caching / cpu-offload. The
+    pipeline driver only implements that slice; anything else must fail loudly
+    at config time rather than run incorrectly (e.g. dropping CFG) or crash.
+    """
+    model_cls = config.get("model_cls")
+    is_klein = model_cls == "flux2_klein" or (model_cls == "flux2" and config.get("model_variant") == "klein")
+    if not is_klein:
+        raise ValueError(
+            "PipeFusion is only supported for the Flux2 Klein model "
+            "(model_cls='flux2_klein', or model_cls='flux2' with model_variant='klein'); "
+            f"got model_cls={model_cls!r}, model_variant={config.get('model_variant')!r}."
+        )
+    if config.get("task", "t2i") != "t2i":
+        raise ValueError(f"PipeFusion currently supports only the 't2i' task, got {config.get('task', 't2i')!r}.")
+    if AI_DEVICE != "cuda":
+        raise ValueError(f"PipeFusion requires CUDA, but AI_DEVICE={AI_DEVICE!r}.")
+    if config.get("feature_caching", "NoCaching") not in ("NoCaching", "None"):
+        raise ValueError(f"PipeFusion cannot be combined with feature_caching={config.get('feature_caching')!r}.")
+    if config.get("cpu_offload", False):
+        raise ValueError("PipeFusion cannot be combined with cpu_offload.")
+    if config.get("unload_modules", False) or config.get("lazy_load", False):
+        raise ValueError("PipeFusion does not support unload_modules / lazy_load.")
+    if config.get("fls", {}).get("enable", False):
+        raise ValueError("PipeFusion cannot be combined with FLS enhancement (fls.enable).")
+    if config.get("enable_cfg", False) and config.get("sample_guide_scale", 1.0) > 1.0:
+        raise ValueError("PipeFusion does not support CFG; set sample_guide_scale <= 1.0 or enable_cfg=False.")
+    if config["parallel"].get("seq_p_size", 1) > 1:
+        raise ValueError("PipeFusion cannot be combined with sequence parallel (seq_p_size > 1).")
+    if config["parallel"].get("cfg_p_size", 1) > 1:
+        raise ValueError("PipeFusion cannot be combined with CFG parallel (cfg_p_size > 1).")
+
+    num_patch = int(config["parallel"].get("num_pipeline_patch", 4))
+    if num_patch <= 0:
+        raise ValueError(f"num_pipeline_patch must be >= 1, got {num_patch}.")
+    warmup_steps = int(config["parallel"].get("pipeline_warmup_steps", 1))
+    if warmup_steps <= 0:
+        raise ValueError(f"pipeline_warmup_steps must be >= 1, got {warmup_steps}.")
+
+
 def init_parallel(config):
     """Create the model's parallel mesh and warm up its communication."""
     parallel = config["parallel"]
-    if not parallel:
+    if not parallel or config.get("model_cls") == "swiftvr":
+        # SwiftVR owns its chunk group and validates its parallel settings in the runner.
         return
 
     tensor_p_size = int(parallel.get("tensor_p_size", 1))
     cfg_p_size = int(parallel.get("cfg_p_size", 1))
     seq_p_size = int(parallel.get("seq_p_size", 1))
+    pp_size = int(parallel.get("pp_size", 1))
+    if cfg_p_size > 1 and not config.get("enable_cfg", False):
+        raise ValueError("parallel.cfg_p_size > 1 requires enable_cfg=true")
     world_size = dist.get_world_size()
-    expected_world_size = tensor_p_size * cfg_p_size * seq_p_size
+    expected_world_size = tensor_p_size * cfg_p_size * seq_p_size * pp_size
     if expected_world_size != world_size:
-        raise ValueError(f"Parallel sizes must match the distributed world size: tensor_p_size ({tensor_p_size}) * cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) != world_size ({world_size}).")
+        raise ValueError(
+            f"Parallel sizes must match the distributed world size: tensor_p_size ({tensor_p_size}) * cfg_p_size ({cfg_p_size}) * seq_p_size ({seq_p_size}) * pp_size ({pp_size}) != world_size ({world_size})."
+        )
 
     if config.get("model_cls") == "hunyuan_image3" and parallel.get("phase_aware", False):
         from lightx2v.models.networks.hunyuan_image3.parallel import initialize_hunyuan_image3_parallel_runtime
 
         initialize_hunyuan_image3_parallel_runtime(config)
+        config["pipefusion_parallel"] = False
+    elif pp_size > 1:
+        if tensor_p_size > 1:
+            raise ValueError("PipeFusion pipeline parallelism cannot be combined with tensor parallelism")
+        # PipeFusion pipeline parallelism: 3D mesh (cfg_p, pp, seq_p).
+        config["device_mesh"] = init_device_mesh(AI_DEVICE, (cfg_p_size, pp_size, seq_p_size), mesh_dim_names=("cfg_p", "pp", "seq_p"))
+        config["tensor_parallel"] = False
+        config["seq_parallel"] = seq_p_size > 1
+        config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
+        config["pipefusion_parallel"] = True
+        _validate_pipefusion_config(config)
+        from lightx2v.models.networks.flux2.infer.pipefusion import init_pipeline_parallel_state
+
+        pp_group = config["device_mesh"].get_group(mesh_dim="pp")
+        init_pipeline_parallel_state(pp_group)
     else:
         # Keep the original CFG/SP dimensions without TP. With TP, omit unit
         # dimensions and place TP last so its ranks form contiguous groups.
@@ -345,6 +412,7 @@ def init_parallel(config):
         config["tensor_parallel"] = tensor_p_size > 1
         config["seq_parallel"] = seq_p_size > 1
         config["cfg_parallel"] = bool(config.get("enable_cfg", False) and cfg_p_size > 1)
+        config["pipefusion_parallel"] = False
 
     warmup_device = f"cuda:{torch.cuda.current_device()}" if AI_DEVICE == "cuda" else AI_DEVICE
     warmup_tensor = torch.zeros([1], device=warmup_device)

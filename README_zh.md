@@ -191,7 +191,7 @@ from lightx2v import LightX2VPipeline
 pipe = LightX2VPipeline(
     model_path="/path/to/MiniMax-H3",
     model_cls="minimax_h3",
-    task="t2av",
+    model_variant="fl2av",
 )
 
 # DMD 配置使用已发布的 768p LoRA、4 步推理、
@@ -207,6 +207,7 @@ save_result_path = "outputs/minimax_h3_t2av_768p.mp4"
 
 # 生成带同步音频的视频
 pipe.generate(
+    task="t2av",
     seed=seed,
     prompt=prompt,
     save_result_path=save_result_path,
@@ -289,7 +290,6 @@ pipe.generate(
 - **🔄 并行推理加速**: 多GPU并行处理，显著提升性能表现
 - **📱 灵活部署选择**: 支持Gradio、服务化部署、ComfyUI等多种部署方式
 - **🎛️ 动态分辨率推理**: 自适应分辨率调整，优化生成质量
-- **🎞️ 视频帧插值**: 基于RIFE的帧插值技术，实现流畅的帧率提升
 
 
 ## 📚 技术文档
@@ -302,7 +302,6 @@ pipe.generate(
 - [并行推理](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/parallel.html) - 多GPU加速策略
 - [变分辨率推理](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/changing_resolution.html) - U型分辨率策略
 - [步数蒸馏](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/step_distill.html) - 4步推理技术
-- [视频帧插值](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/method_tutorials/video_frame_interpolation.html) - 基于RIFE的帧插值技术
 
 ### 🛠️ **部署指南**
 - [低资源场景部署](https://lightx2v-zhcn.readthedocs.io/zh-cn/latest/deploy_guides/for_low_resource.html) - 优化的8GB显存解决方案

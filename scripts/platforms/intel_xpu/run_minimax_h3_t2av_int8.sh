@@ -2,9 +2,9 @@
 
 # AdaLN cache setup:
 # If the inference JSON config enables "use_adaln_cache": true, generate the cache before inference:
-# 1. Set lightx2v_path, model_path, --config_json, and --task in
+# 1. Set lightx2v_path, model_path, --config_json, and --model-variant in
 #    tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh.
-# 2. Use --task fl2av for t2av/i2av/l2av/fl2av, or --task ref2av for ref2av.
+# 2. Use --model-variant fl2av for t2av/i2av/l2av/fl2av, or --model-variant ref2av for ref2av.
 # 3. From the repository root, run:
 #    bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
 # Cache generation and inference must use the same JSON config and adaln_cache_dir.
@@ -29,7 +29,6 @@ mkdir -p "$(dirname -- "${output_path}")"
 [[ -d "${model_path}" ]] || { echo "Model directory not found: ${model_path}"; exit 1; }
 [[ -f "${config_json}" ]] || { echo "Config file not found: ${config_json}"; exit 1; }
 source "${lightx2v_path}/scripts/base/base.sh"
-export PYTHONPATH="${lightx2v_path}/lightx2v_kernel_xpu/python:${PYTHONPATH}"
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 echo "Effective dtype overrides: DTYPE=${DTYPE}, SENSITIVE_LAYER_DTYPE=${SENSITIVE_LAYER_DTYPE}"
@@ -39,6 +38,7 @@ seed=${SEED:-42}
 
 torchrun --standalone --nproc_per_node=1 -m lightx2v.infer \
   --model_cls minimax_h3 \
+  --model-variant fl2av \
   --task t2av \
   --model_path "${model_path}" \
   --config_json "${config_json}" \

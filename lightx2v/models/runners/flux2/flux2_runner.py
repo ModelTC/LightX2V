@@ -26,7 +26,7 @@ class Flux2Runner(DefaultRunner):
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
     input_info_cls_by_task = {"i2i": Flux2I2IInputInfo}
     supported_request_fields_by_task = {
-        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "target_shape"},
+        "t2i": COMMON_REQUEST_FIELDS | {"aspect_ratio", "prompt", "size"},
         "i2i": COMMON_REQUEST_FIELDS | {"image_path", "prompt"},
     }
 
@@ -177,21 +177,21 @@ class Flux2Runner(DefaultRunner):
         if inpaint_mask_enabled:
             main_img = input_image[0]
             image_processor.check_image_input(main_img)
-            processed_img, target_shape = self._preprocess_condition_image(image_processor, main_img, max_image_area, vae_scale_factor)
-            self.input_info.target_shape = list(target_shape)
+            processed_img, size = self._preprocess_condition_image(image_processor, main_img, max_image_area, vae_scale_factor)
+            self.input_info.size = list(size)
             processed_tensor = processed_img.to(AI_DEVICE)
             condition_images.extend([processed_tensor, processed_tensor])
 
             if len(input_image) > 1:
                 image_processor.check_image_input(input_image[1])
-                inpaint_mask = self._preprocess_inpaint_mask_image(image_processor, input_image[1], main_img, max_image_area, target_shape)
+                inpaint_mask = self._preprocess_inpaint_mask_image(image_processor, input_image[1], main_img, max_image_area, size)
         else:
             for index, img in enumerate(input_image):
                 image_processor.check_image_input(img)
-                processed_img, target_shape = self._preprocess_condition_image(image_processor, img, max_image_area, vae_scale_factor)
+                processed_img, size = self._preprocess_condition_image(image_processor, img, max_image_area, vae_scale_factor)
                 condition_images.append(processed_img.to(AI_DEVICE))
                 if index == 0:
-                    self.input_info.target_shape = list(target_shape)
+                    self.input_info.size = list(size)
 
         torch_device_module.empty_cache()
         gc.collect()
@@ -219,12 +219,12 @@ class Flux2Runner(DefaultRunner):
         img = image_processor.preprocess(img, height=image_height, width=image_width, resize_mode="crop")
         return img, (image_height, image_width)
 
-    def _preprocess_inpaint_mask_image(self, image_processor, mask_img, reference_img, max_image_area, target_shape):
+    def _preprocess_inpaint_mask_image(self, image_processor, mask_img, reference_img, max_image_area, size):
         mask_img = mask_img.convert("RGB")
         if mask_img.size != reference_img.size:
             mask_img = mask_img.resize(reference_img.size)
         mask_img = self._maybe_resize_to_max_area(image_processor, mask_img, max_image_area)
-        image_height, image_width = target_shape
+        image_height, image_width = size
         cropped_mask = image_processor.resize(mask_img, image_height, image_width, resize_mode="crop")
         return self._prepare_inpaint_mask(cropped_mask)
 
@@ -234,7 +234,7 @@ class Flux2Runner(DefaultRunner):
 
         from PIL import Image
 
-        height, width = self.input_info.target_shape
+        height, width = self.input_info.size
         multiple_of = self.config.get("vae_scale_factor", 8) * 2
         packed_h = height // multiple_of
         packed_w = width // multiple_of
@@ -298,6 +298,12 @@ class Flux2Runner(DefaultRunner):
         return latents, generator
 
     def run(self, total_steps=None):
+        if self.config.get("pipefusion_parallel", False):
+            return self._run_pipefusion(total_steps)
+        return self._run_sequential(total_steps)
+
+    def _run_sequential(self, total_steps=None):
+        """Existing synchronous denoising loop (single-GPU or non-PipeFusion)."""
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
 
@@ -322,6 +328,56 @@ class Flux2Runner(DefaultRunner):
 
         return self.model.scheduler.latents, self.model.scheduler.generator
 
+    def _run_pipefusion(self, total_steps=None):
+        """PipeFusion denoising loop: pipeline driver controls all timesteps."""
+        from lightx2v.models.networks.flux2.infer.pipefusion import (
+            get_pipeline_runtime_state,
+            is_pipeline_last_stage,
+        )
+
+        if total_steps is None:
+            total_steps = self.model.scheduler.infer_steps
+
+        # Initialize pipeline runtime state (patch splitting)
+        pipeline_state = get_pipeline_runtime_state()
+        num_pipeline_patch = self.config.get("parallel", {}).get("num_pipeline_patch", 4)
+        warmup_steps = self.config.get("parallel", {}).get("pipeline_warmup_steps", 1)
+
+        pipeline_state.set_input_parameters(
+            num_pipeline_patch=num_pipeline_patch,
+            warmup_steps=warmup_steps,
+            total_tokens=self.input_info.latent_shape[1],
+        )
+
+        # Prepare inputs
+        latents = self.model.scheduler.latents
+        text_encoder_output = self.inputs["text_encoder_output"]
+        prompt_embeds = text_encoder_output["prompt_embeds"]
+        text_ids = text_encoder_output.get("text_ids")
+        latent_image_ids = self.model.scheduler.latent_image_ids
+
+        timesteps = self.model.scheduler.timesteps
+
+        # Run pipeline
+        from lightx2v.models.networks.flux2.infer.pipefusion.pipeline_driver import (
+            Flux2PipelineDriver,
+        )
+
+        driver = Flux2PipelineDriver(self.model, self.config)
+        latents = driver.run_pipeline(
+            latents=latents,
+            prompt_embeds=prompt_embeds,
+            text_ids=text_ids,
+            latent_image_ids=latent_image_ids,
+            timesteps=timesteps,
+            scheduler=self.model.scheduler,
+        )
+
+        if latents is not None and is_pipeline_last_stage():
+            self.model.scheduler.latents = latents
+
+        return self.model.scheduler.latents, self.model.scheduler.generator
+
     def get_custom_shape(self):
         default_aspect_ratios = {
             "16:9": [1344, 768],
@@ -337,8 +393,8 @@ class Flux2Runner(DefaultRunner):
         max_size = self.config.get("max_custom_size", 1664)
         min_size = self.config.get("min_custom_size", 256)
 
-        if len(self.input_info.target_shape) == 2:
-            height, width = self.input_info.target_shape
+        if len(self.input_info.size) == 2:
+            height, width = self.input_info.size
             height = int(height)
             width = int(width)
             if width > max_size or height > max_size:
@@ -362,10 +418,10 @@ class Flux2Runner(DefaultRunner):
     def set_latent_shape(self):
         task = self.config.get("task", "t2i")
         if task == "i2i":
-            height, width = self.input_info.target_shape
+            height, width = self.input_info.size
         else:
             width, height = self.get_custom_shape()
-        self.input_info.target_shape = [height, width]
+        self.input_info.size = [height, width]
 
         multiple_of = self.config.get("vae_scale_factor", 8) * 2
 
@@ -418,14 +474,48 @@ class Flux2Runner(DefaultRunner):
 
         self.set_latent_shape()
 
+        # Clear stale-KV cache at request start so a failed prior request can't
+        # leave stale KV / full K-V buffers behind (PipeFusion only).
+        if self.config.get("pipefusion_parallel", False) and getattr(self, "model", None) is not None and hasattr(self.model.transformer_infer, "clear_kv_cache"):
+            self.model.transformer_infer.clear_kv_cache()
+
         latents, generator = self.run_dit()
-        images = self.run_vae_decoder(latents)
+
+        # In PipeFusion mode, only the last stage has final latents
+        if self.config.get("pipefusion_parallel", False):
+            from lightx2v.models.networks.flux2.infer.pipefusion import is_pipeline_last_stage
+
+            if input_info.return_result_tensor:
+                # Final latents/images exist only on the last pipeline stage and
+                # there is no cross-rank gather implemented, so rank 0 cannot
+                # return them under the standard tensor-return contract.
+                raise NotImplementedError("PipeFusion does not support return_result_tensor yet; the result exists only on the last pipeline stage.")
+
+            if is_pipeline_last_stage():
+                # Offload transformer weights before VAE decode to avoid OOM,
+                # then move them back afterwards so a resident runner (serving)
+                # can process the next request with weights on the device.
+                self.model.transformer_weights.to_cpu()
+                torch_device_module.empty_cache()
+                gc.collect()
+                try:
+                    images = self.run_vae_decoder(latents)
+                finally:
+                    self.model.transformer_weights.to_cuda()
+            else:
+                images = None
+        else:
+            images = self.run_vae_decoder(latents)
         self.end_run()
 
-        if not input_info.return_result_tensor and input_info.save_result_path is not None and is_main_process():
-            image = images[0]
-            image.save(input_info.save_result_path)
-            logger.info(f"Image saved: {input_info.save_result_path}")
+        # Save image: in PipeFusion mode, last stage has the image;
+        # in normal mode, main process (rank 0) has it.
+        if not input_info.return_result_tensor and input_info.save_result_path is not None:
+            should_save = is_pipeline_last_stage() if self.config.get("pipefusion_parallel", False) else is_main_process()
+            if should_save and images is not None:
+                image = images[0]
+                image.save(input_info.save_result_path)
+                logger.info(f"Image saved: {input_info.save_result_path}")
 
         del latents, generator
         torch_device_module.empty_cache()

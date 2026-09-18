@@ -60,6 +60,8 @@ bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
 
 同一个脚本通过 `TASK` 选择任务，省略时运行 `t2av`。五个任务共用同一份启动配置。
 
+脚本同时传入主线要求的 `--model-variant`：`ref2av` 任务选择 `ref2av` 权重，其余任务选择 `fl2av` 权重。缓存脚本保留 `MINIMAX_H3_CACHE_TASK` 环境变量，它现在对应缓存工具的 `--model-variant` 参数。
+
 | `TASK` | 输入环境变量 | AdaLN 缓存组 |
 | --- | --- | --- |
 | `t2av` | 无参考输入 | `fl2av` |
@@ -99,8 +101,10 @@ MINIMAX_H3_SAVE_RESULT_PATH="$PWD/save_results/h3_custom.mp4" SEED=123 \
 bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
 ```
 
-默认配置为 124 帧、544×960、24 fps。步数、分辨率、帧数及缓存目录修改 JSON 中的 `infer_steps`、`target_height`、`target_width`、`target_video_length` 和 `adaln_cache_dir`。
+默认配置为 124 帧、544×960、24 fps。步数、分辨率、帧数及缓存目录修改 JSON 中的 `infer_steps`、`size`（高、宽）、`num_frames` 和 `adaln_cache_dir`。
 
 脚本从配置生成独立临时 JSON，退出时删除，不改写源文件。显式传入 `MINIMAX_H3_CONFIG` 时保留其中的并行参数和 VAE 设置，TP×SP×CFG 必须等于可见卡数；`SHARED_CPU_WEIGHT_SCOPE` 若设置则覆盖该配置的 scope，否则保留配置中的值。模型、配置和输出的相对路径以调用脚本时的目录为基准。
 
 host 在同机同一 IPC 域共享一份 CPU 权重；NUMA 按参与 GPU 的 NUMA 域建立副本，严格绑定失败时会报错。配置分别开启 DiT、文本主干和视频 VAE 的权重共享，以及对应的 block offload。依赖 Linux SysV 和 CUDA pinned memory；GPU 激活和工作缓冲仍各自占用显存。当前共享路径不支持 TP、量化、LoRA、compile 或 lazy loading。
+
+共享视频 VAE 使用默认 `vae_encoder_conv_mode="torch"`。主线新增的 channels-last／FP8 Conv3D 布局尚未接入共享 manifest，不能用于这条共享加载路径；普通 VAE 路径保留主线支持。

@@ -37,9 +37,8 @@ def main():
         model_cls=model_cls,
         attn_mode="sage_attn2",
         infer_steps=50,
-        target_height=480,
-        target_width=832,
-        target_video_length=81,
+        size=(480, 832),
+        num_frames=81,
         sample_guide_scale=5.0,
         sample_shift=5.0,
         fps=16,
@@ -54,7 +53,7 @@ def main():
     logger.info(f"Config initialized for task: {task}")
     seed_all(seed)
 
-    request_data = {"seed": seed, "prompt": prompt, "negative_prompt": negative_prompt, "save_path": save_result_path}
+    request_data = {"seed": seed, "prompt": prompt, "negative_prompt": negative_prompt, "save_result_path": save_result_path}
 
     encoder_stop_event = threading.Event()
     transformer_stop_event = threading.Event()

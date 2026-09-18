@@ -7,7 +7,7 @@ import torch
 import torch.distributed as dist
 from loguru import logger
 
-from lightx2v.utils.input_info import INPUT_INFO_TYPES, UNSET, InputInfo
+from lightx2v.utils.input_info import INPUT_INFO_TYPES, InputInfo
 from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -24,9 +24,7 @@ class BaseRunner(ABC):
     def __init__(self, config):
         self.config = config
         task = config.get("task")
-        if not task:
-            raise ValueError("task must be set when the runner is created")
-        if task not in self.supported_request_fields_by_task:
+        if task is not None and task not in self.supported_request_fields_by_task:
             raise ValueError(f"{type(self).__name__} does not support task {task!r}")
         self.supported_tasks = self.get_supported_tasks()
         self.vae_encoder_need_img_original = False
@@ -81,7 +79,10 @@ class BaseRunner(ABC):
 
     def get_supported_tasks(self):
         """Return tasks accepted by this initialized runner."""
-        return (self.config["task"],)
+        task = self.config.get("task")
+        if task is None:
+            raise ValueError("task must be set when the runner is created")
+        return (task,)
 
     def create_input_info(self, request_data):
         """Create the runtime context for one inference request."""
@@ -91,17 +92,14 @@ class BaseRunner(ABC):
         input_info.update(self.config)
         input_info.update(request_data)
 
-        if "aspect_ratio" in request_data and "target_shape" not in request_data:
-            input_info.target_shape = []
-        elif "target_shape" not in request_data and "target_shape" not in self.config and "target_height" in self.config and "target_width" in self.config:
-            input_info.update({"target_shape": [self.config["target_height"], self.config["target_width"]]})
+        if "aspect_ratio" in request_data and "size" not in request_data:
+            input_info.size = []
 
         input_info.seed = self.resolve_request_seed(request_data)
         return input_info
 
     def resolve_request_seed(self, request_data):
-        seed = request_data.get("seed")
-        return 42 if seed is None else seed
+        return request_data.get("seed", 42)
 
     def get_supported_request_fields(self, task):
         """Return supported request fields for the given task."""
@@ -112,12 +110,12 @@ class BaseRunner(ABC):
 
     def prepare_request(self, request_data):
         """Build and validate the runtime context for one request."""
-        request_data = {key: value for key, value in request_data.items() if value is not UNSET and value is not None}
+        request_data = {key: value for key, value in request_data.items() if value is not None}
         task = request_data.get("task")
         if task is None:
             if len(self.supported_tasks) > 1:
                 raise ValueError("task is required when the runner supports multiple tasks")
-            task = self.config["task"]
+            task = self.supported_tasks[0]
         request_data["task"] = task
         if task not in self.supported_tasks:
             task_names = ", ".join(self.supported_tasks)
@@ -290,7 +288,7 @@ class BaseRunner(ABC):
     def end_run(self):
         pass
 
-    def compute_usage(self, prompt: str, target_shape: list[int], has_input_image: bool = False) -> dict | None:
+    def compute_usage(self, prompt: str, size: list[int], has_input_image: bool = False) -> dict | None:
         """Compute token usage for the current generation.
 
         Returns a dict with fields matching the OpenAI Usage schema, or None if
@@ -303,8 +301,8 @@ class BaseRunner(ABC):
             text_tokens = self._get_text_token_count(prompt)
 
             output_image_tokens = 0
-            if target_shape and len(target_shape) >= 2:
-                h, w = target_shape[0], target_shape[1]
+            if size and len(size) >= 2:
+                h, w = size[0], size[1]
                 patched_h = max(1, h // stride_h // patch_h)
                 patched_w = max(1, w // stride_w // patch_w)
                 output_image_tokens = patched_h * patched_w
