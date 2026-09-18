@@ -66,6 +66,9 @@ class MiniMaxH3Model(BaseTransformerModel):
             validate_adaln_cache_config(config)
             self.remove_keys = [".adaln_proj.", "time_embedder.", "norm_out.linear."]
         self.block_offload = config.get("cpu_offload", False) and config.get("offload_granularity", "model") == "block"
+        if config.get("dit_release_block_offload_buffers", False):
+            if not self.block_offload or any(config.get(key, False) for key in ("tensor_parallel", "dit_quantized", "use_compile", "lora_dynamic_apply")) or lora_path or config.get("lora_configs"):
+                raise ValueError("dit_release_block_offload_buffers requires unquantized block offload without TP, compile or LoRA")
         # Model offload moves pre/blocks/post together. Pre/post residency only applies
         # to block offload and is ignored otherwise.
         self.prepost_resident = self.block_offload and config.get("dit_prepost_resident", False)
@@ -134,6 +137,38 @@ class MiniMaxH3Model(BaseTransformerModel):
             source = weight_dict if weight_dict is not None else self.original_weight_dict
             self._h3_weight_shapes = {key: tuple(tensor.shape) for key, tensor in source.items() if isinstance(tensor, torch.Tensor) and tensor.ndim == 2}
         return super()._apply_weights(weight_dict)
+
+    def _load_shared_cpu_weights(self, unified_dtype, sensitive_layer):
+        from lightx2v.models.networks.minimax_h3.shared_block_weights import load_shared_dit
+
+        return load_shared_dit(self)
+
+    def release_block_offload_buffers(self):
+        if not self.block_offload:
+            return
+        torch.cuda.synchronize()
+        weights = self.transformer_weights
+        weights.offload_block_cuda_buffers = None
+        weights._modules.pop("offload_block_cuda_buffers", None)
+        self.transformer_infer.offload_manager = None
+
+    def ensure_block_offload_buffers(self):
+        if not self.block_offload or self.transformer_infer.offload_manager is not None:
+            return
+        from lightx2v.common.modules.weight_module import WeightModuleList
+        from lightx2v.common.offload.manager import WeightAsyncStreamManager
+        from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3TransformerBlockWeights
+
+        buffers = WeightModuleList([MiniMaxH3TransformerBlockWeights(i, self.config, create_cuda_buffer=True) for i in range(2)])
+        for index, buffer in enumerate(buffers):
+            source = self.transformer_weights.blocks[index].state_dict()
+            for weight in self._iter_weight_objects(buffer):
+                for name, attr, _ in getattr(weight, "base_attrs", ()):
+                    tensor = source[name]
+                    setattr(weight, f"{attr}_cuda_buffer", torch.empty_strided(tensor.shape, tensor.stride(), dtype=tensor.dtype, device=self.device if str(self.device) != "cpu" else "cuda"))
+        self.transformer_weights.add_module("offload_block_cuda_buffers", buffers)
+        self.transformer_infer.offload_manager = WeightAsyncStreamManager("block")
+        self._init_offload_manager()
 
     @staticmethod
     def _normalize_dynamic_lora_key(key):

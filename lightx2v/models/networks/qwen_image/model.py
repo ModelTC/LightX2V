@@ -2,11 +2,13 @@ import torch
 import torch.distributed as dist
 from torch.nn import functional as F
 
+from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.qwen_image.infer.offload.transformer_infer import QwenImageOffloadTransformerInfer
 from lightx2v.models.networks.qwen_image.infer.post_infer import QwenImagePostInfer
 from lightx2v.models.networks.qwen_image.infer.pre_infer import QwenImagePreInfer
 from lightx2v.models.networks.qwen_image.infer.transformer_infer import QwenImageTransformerInfer
+from lightx2v.models.networks.qwen_image.shared_block_weights import QwenBf16SharedBlockAdapter, validate_qwen_shared_block_views
 from lightx2v.models.networks.qwen_image.weights.post_weights import QwenImagePostWeights
 from lightx2v.models.networks.qwen_image.weights.pre_weights import QwenImagePreWeights
 from lightx2v.models.networks.qwen_image.weights.transformer_weights import QwenImageTransformerWeights
@@ -28,6 +30,26 @@ class QwenImageTransformerModel(BaseTransformerModel):
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
+
+    def _load_shared_cpu_weights(self, unified_dtype, sensitive_layer):
+        local_error = None
+        try:
+            adapter = QwenBf16SharedBlockAdapter(self.model_path, self.config, lora_path=self.lora_path)
+            private_weights = adapter.load_private_weights()
+        except Exception as error:
+            local_error = error
+        coordinate_rank_local_error("Qwen checkpoint preflight", local_error)
+
+        allocation = adapter.materialize()
+        try:
+            weight_map = adapter.build_weight_map(private_weights)
+        except BaseException:
+            allocation.close()
+            raise
+        return weight_map
+
+    def _validate_shared_cpu_weights(self, weight_map):
+        validate_qwen_shared_block_views(weight_map, self.transformer_weights.blocks)
 
     def _init_infer_class(self):
         if self.config["feature_caching"] == "NoCaching":

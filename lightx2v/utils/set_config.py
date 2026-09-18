@@ -18,6 +18,10 @@ def get_default_config():
         {
             "do_mm_calib": False,
             "cpu_offload": False,
+            "shared_cpu_weights": False,
+            "shared_cpu_weight_scope": "auto",
+            "shared_cpu_weight_strict_numa": True,
+            "shared_cpu_weight_register_chunk_mb": 128,
             "max_area": False,
             "vae_stride": (4, 8, 8),
             "patch_size": (1, 2, 2),

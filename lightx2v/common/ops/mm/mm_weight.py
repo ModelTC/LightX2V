@@ -755,13 +755,16 @@ class MMWeightWfp8channelAfp8channeldynamicVllm(MMWeightQuantTemplate):
         output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
 
         input_tensor_quant, input_tensor_scale = self.act_quant_func(input_tensor)
+        bias = self._get_actual_bias()
+        if bias is not None and bias.dtype != dtype:
+            bias = bias.to(dtype)
         torch.ops._C.cutlass_scaled_mm(
             output_tensor,
             input_tensor_quant,
             self.weight,
             input_tensor_scale,
             self.weight_scale,
-            self._get_actual_bias(),
+            bias,
         )
         if self.has_lora_branch:
             return output_tensor + self.apply_lora(input_tensor)

@@ -1,7 +1,11 @@
+import os
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from loguru import logger
 
+from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
 from lightx2v.models.networks.base_model import BaseTransformerModel
 from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import (
     WanTransformerInferAdaCaching,
@@ -20,6 +24,9 @@ from lightx2v.models.networks.wan.infer.post_infer import WanPostInfer
 from lightx2v.models.networks.wan.infer.pre_infer import WanPreInfer
 from lightx2v.models.networks.wan.infer.transformer_infer import (
     WanTransformerInfer,
+)
+from lightx2v.models.networks.wan.shared_block_weights import (
+    WanFp8VllmSharedBlockAdapter,
 )
 from lightx2v.models.networks.wan.weights.pre_weights import WanPreWeights
 from lightx2v.models.networks.wan.weights.transformer_weights import (
@@ -51,6 +58,34 @@ class WanModel(BaseTransformerModel):
         self._init_infer_class()
         self._init_weights()
         self._init_infer()
+
+    def _load_shared_cpu_weights(self, unified_dtype, sensitive_layer):
+        """Load rank-private non-block tensors plus NUMA-shared DiT blocks."""
+        local_error = None
+        try:
+            adapter = WanFp8VllmSharedBlockAdapter(self.config, lora_path=self.lora_path)
+            non_block_path = os.path.join(self.config["dit_quantized_ckpt"], "non_block.safetensors")
+            if not os.path.isfile(non_block_path):
+                raise FileNotFoundError(f"Wan non-block checkpoint not found: {non_block_path}")
+            logger.info(f"[SharedCPUWeightsInfo] Loading rank-private Wan non-block weights from {non_block_path}")
+            private_weights = self._load_safetensor_to_dict(non_block_path, unified_dtype, sensitive_layer)
+        except Exception as error:
+            local_error = error
+
+        # Every rank completes local checkpoint I/O before entering the arena
+        # collectives, so one bad file cannot strand healthy peers.
+        coordinate_rank_local_error("Wan checkpoint preflight", local_error)
+
+        allocation = adapter.materialize()
+        try:
+            weight_map = adapter.build_weight_map(private_weights)
+        except BaseException:
+            try:
+                allocation.close()
+            except Exception as cleanup_error:
+                logger.error(f"Failed to close Wan shared CPU weight arena after initialization error: {cleanup_error}")
+            raise
+        return weight_map
 
     # ------------------------------------------------------------------ TP --
     def _rank_device(self):

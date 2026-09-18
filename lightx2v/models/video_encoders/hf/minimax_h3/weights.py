@@ -65,16 +65,9 @@ def _component_files(component_dir: str | Path) -> tuple[Path, ...]:
     return files
 
 
-def _get_parent(module: nn.Module, key: str) -> tuple[nn.Module, str]:
-    parts = key.split(".")
-    parent: nn.Module = module
-    for part in parts[:-1]:
-        parent = parent[int(part)] if part.isdigit() else getattr(parent, part)
-    return parent, parts[-1]
-
-
 def _assign_tensor(module: nn.Module, key: str, tensor: torch.Tensor) -> None:
-    parent, name = _get_parent(module, key)
+    parent_name, _, name = key.rpartition(".")
+    parent = module.get_submodule(parent_name) if parent_name else module
     if name in parent._parameters:
         old_parameter = parent._parameters[name]
         requires_grad = False if old_parameter is None else old_parameter.requires_grad
@@ -210,3 +203,30 @@ def load_safetensors_subset(module: nn.Module, component_dir: str | Path) -> Saf
     if missing:
         raise RuntimeError(f"Failed to load MiniMax-H3 tensors: {missing[:20]}")
     return SafetensorsSubsetReport(report.component_dir, report.files, tuple(sorted(loaded)), report.ignored_keys)
+
+
+def load_shared_video_vae(module, component_dir, config):
+    """Convert directly into shared CPU storage using the existing dtype policy."""
+    from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
+    from lightx2v.common.offload.shared_weight_map import validate_shared_operator_views
+    from lightx2v.models.networks.minimax_h3.shared_block_weights import load_h3_shared_weights
+
+    expected = _expected_specs(module)
+    # Still on meta: determine final parameter dtypes without any payload copy.
+    module._prepare_inference_weights(use_channels_last_encoder=False)
+    runtime_dtypes = {name: dtype for name, (_, dtype) in _expected_specs(module).items()}
+    weights = load_h3_shared_weights(component_dir, config, "video_vae", expected=expected, runtime_dtypes=runtime_dtypes)
+    error = None
+    try:
+        for name in expected:
+            _assign_tensor(module, name, weights.take(name))
+        validate_shared_operator_views(weights, module.state_dict())
+    except Exception as exc:
+        error = exc
+    try:
+        coordinate_rank_local_error("H3 video VAE parameter binding", error)
+    except BaseException:
+        weights.owner.close()
+        raise
+    module.shared_cpu_weight_owner = weights.owner
+    return SafetensorsSubsetReport(Path(component_dir), _component_files(component_dir), tuple(sorted(expected)), 0)
