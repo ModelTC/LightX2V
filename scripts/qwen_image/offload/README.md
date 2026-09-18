@@ -1,68 +1,74 @@
-# Qwen-Image-2512 CPU block offload 使用指南
+# Qwen-Image-2512 CPU Block Offload Guide
 
-共享 offload 使用不含任务名的统一入口：`qwen_image_2512_block_shared_offload.sh`，使用 `configs/qwen_image/offload/qwen_image_2512_block_shared.json`。默认 **TASK=t2i、host 共享、8 卡、Ulysses SP8**，通过环境变量切换 NUMA 或指定显卡。使用当前环境的 `python -m torch.distributed.run`，以下命令均为单机推理。
+English | [简体中文](README_CN.md)
 
-## 准备环境和权重
+Launcher: `qwen_image_2512_block_shared_offload.sh`.
+Configuration: `configs/qwen_image/offload/qwen_image_2512_block_shared.json`.
+Defaults: **T2I, host sharing, 8 GPUs, Ulysses SP8**.
 
-激活已安装项目依赖的 Python 环境，默认注意力后端为 FlashAttention 3。在仓库根目录执行：
+Edit paths, GPU selection, and inference arguments directly in the script; edit parallel settings in the JSON file. The script sets its arguments explicitly, does not infer the GPU count, and does not forward arguments appended to `bash script.sh`. Environment variables such as `TASK`, `CONFIG_JSON`, `SHARED_CPU_WEIGHT_SCOPE`, and `QWEN_*` do not override this script. To change options without editing files, run the full `python -m torch.distributed.run ... -m lightx2v.infer ...` command directly.
+
+## Setup and launch
+
+1. Activate a Python environment with the project dependencies installed. The default attention backend is FlashAttention 3.
+2. Set `lightx2v_path` and `model_path` at the top of the script to your project and model directories. Use the original BF16 Diffusers weights, including the transformer, text encoder, tokenizer, and VAE components.
+3. Run from the project root:
 
 ```bash
-cd /path/to/lightx2v_offload_opt
-export QWEN_MODEL_PATH="$PWD/models/Qwen-Image-2512"
-```
-
-模型目录使用原始 BF16 Diffusers 权重，保留 transformer、文本编码器、tokenizer 和 VAE 等组件。
-
-## 启动命令
-
-```bash
-# 默认 host + 8 卡：未设置 CUDA_VISIBLE_DEVICES 时使用 0,1,2,3,4,5,6,7
-bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
-
-# NUMA + 8 卡
-SHARED_CPU_WEIGHT_SCOPE=numa \
-bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
-
-# host + 4 卡
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
-
-# NUMA + 2 卡
-CUDA_VISIBLE_DEVICES=2,5 SHARED_CPU_WEIGHT_SCOPE=numa \
-bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
-
-# 单卡
-CUDA_VISIBLE_DEVICES=0 \
+cd /path/to/LightX2V
 bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
 ```
 
-支持 **1、2、3、4、6、8、12、24 卡**。模型有 24 个注意力头，Ulysses SP 大小必须整除 24。默认模板设置 SP 等于可见卡数，使用全部指定显卡，不支持的卡数会直接报错。本入口不使用 TP 或 CFG 并行，CFG 引导计算仍启用。无需设置 `NPROC_PER_NODE`。
+## Change the GPU count
 
-## 选择任务
+Update `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` in the script, and `parallel.seq_p_size` in the JSON. All three must specify the same GPU count:
 
-任务通过 `TASK` 传给推理入口。当前 Qwen BF16 共享权重适配器仅支持 `t2i`，可显式设置 `TASK=t2i`；`i2i` 等任务会在启动前报错。文件名通用化不会扩展适配器的任务能力，图像编辑需要另行接入。
+| GPUs | `CUDA_VISIBLE_DEVICES` | `--nproc_per_node` | `parallel.seq_p_size` |
+| --- | --- | --- | --- |
+| 8 (default) | `0,1,2,3,4,5,6,7` | `8` | `8` |
+| 4 | `0,1,2,3` | `4` | `4` |
+| 2 | `2,5` | `2` | `2` |
+| 1 | `0` | `1` | `1` |
 
-## 参数与配置
+For example, to use GPUs 2 and 5, set `export CUDA_VISIBLE_DEVICES=2,5` and `--nproc_per_node=2` in the script, and replace the JSON `parallel` object with:
 
-| 环境变量 | 默认值／用途 |
-| --- | --- |
-| `TASK` | 默认 `t2i`，当前共享适配器仅支持此任务 |
-| `CUDA_VISIBLE_DEVICES` | 未设置时为 `0,1,2,3,4,5,6,7`；支持不连续编号 |
-| `SHARED_CPU_WEIGHT_SCOPE` | 未设置时读取 JSON 的 scope，默认 `host`；可设 `host` 或 `numa` |
-| `QWEN_MODEL_PATH` | 仓库内 `models/Qwen-Image-2512` |
-| `QWEN_PROMPT` | 默认提示词见脚本，可直接覆盖 |
-| `QWEN_SAVE_RESULT_PATH` | `save_results/qwen_image_t2i_2512_block_shared_offload.png` |
-| `SEED` | `42` |
-| `CONFIG_JSON` | 可选完整 JSON 配置，未设置时使用上述默认配置 |
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 QWEN_PROMPT="A small coffee shop beside a lake." \
-QWEN_SAVE_RESULT_PATH="$PWD/save_results/qwen_custom.png" SEED=123 \
-bash scripts/qwen_image/offload/qwen_image_2512_block_shared_offload.sh
+```json
+{
+  "seq_p_size": 2,
+  "seq_p_attn_type": "ulysses",
+  "cfg_p_size": 1
+}
 ```
 
-默认 50 步、16:9、CFG scale 4；分别修改 JSON 的 `infer_steps`、`aspect_ratio`、`sample_guide_scale`。负面提示词位于脚本的 `--negative_prompt`。
+Keep the other configuration fields. Launch with the same `bash` command afterward. Edit the GPU list inside the script; setting it in the environment before calling the script will not override it.
 
-脚本从配置生成独立临时 JSON，退出时删除，不改写源文件。显式传入 `CONFIG_JSON` 时保留其中的并行设置，TP×SP×CFG 必须等于可见卡数；`SHARED_CPU_WEIGHT_SCOPE` 若设置则覆盖该配置的 scope，否则保留配置中的值。模型、配置和输出的相对路径以调用脚本时的目录为基准。
+The model has 24 attention heads. Ulysses SP must divide 24, giving GPU counts of **1, 2, 3, 4, 6, 8, 12, or 24**. These are head-divisibility constraints, not a claim that every layout has been validated. This launcher runs on a single node and requires enough visible GPUs, host memory, and GPU memory. This configuration does not use TP or CFG parallelism; CFG guidance remains enabled.
 
-host 在同机同一 IPC 域共享一份 CPU block 权重；NUMA 按参与 GPU 的 NUMA 域建立副本。依赖 Linux SysV 和 CUDA pinned memory，严格 NUMA 绑定不可用时会报错。当前共享入口支持原始 BF16、T2I、block 粒度及 `NoCaching`；不支持 TP、量化、LoRA、layered 或 lazy loading。文本编码器和 VAE 仍独立加载，各 GPU 仍需足够的工作显存。
+## Choose host or NUMA sharing
+
+The Python command in the script defaults to `--shared_cpu_weight_scope host`. To use NUMA sharing, replace that argument with the following fragment; it is not a standalone command:
+
+```bash
+  --shared_cpu_weight_scope numa \
+```
+
+The JSON does not need this field. The CLI argument takes precedence over the same setting in an older JSON file.
+
+Host scope shares one copy of compatible CPU block weights within the same host and IPC namespace. NUMA scope creates copies for the NUMA domains of the participating GPUs.
+
+## Task and other options
+
+The current BF16 shared-weight adapter supports only `--task t2i`. Changing the task name does not enable `i2i` or layered generation; image editing requires a separate integration.
+
+| Where to edit | Option | Default / purpose |
+| --- | --- | --- |
+| Shell script | `lightx2v_path`, `model_path` | Project and model directories |
+| Inference command | `--prompt`, `--negative_prompt` | Prompt and negative prompt |
+| Inference command | `--save_result_path`, `--seed` | Output file and random seed (default 42) |
+| Inference command | `--shared_cpu_weight_scope` | `host` (default) or `numa` |
+| Inference command | `--config_json` | Configuration file path |
+| JSON | `infer_steps` | `50` |
+| JSON | `aspect_ratio` | `"16:9"` |
+| JSON | `sample_guide_scale` | `4.0` |
+
+Sharing requires Linux SysV shared memory and CUDA pinned memory. Strict NUMA binding failures raise an error. The current shared entry supports original BF16 weights, block granularity, and `NoCaching`; it does not support TP, quantization, LoRA, layered generation, or lazy loading. The text encoder and VAE are loaded separately by each process. GPU activations and work buffers also remain private to each process.

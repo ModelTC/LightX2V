@@ -85,6 +85,7 @@ def main():
     )
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
+    parser.add_argument("--shared_cpu_weight_scope", choices=("host", "numa"), default=None, help="CPU weight sharing scope; overrides the JSON setting.")
     parser.add_argument("--prompt", type=str, default=None, help="The input prompt for text-to-video generation")
     parser.add_argument("--ref_video_prompt", type=str, default=None, help="Reference/driving-video prompt for Wan-Animate-2.")
     parser.add_argument("--negative_prompt", type=str, default=None)

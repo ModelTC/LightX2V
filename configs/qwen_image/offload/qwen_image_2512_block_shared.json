@@ -24,7 +24,6 @@
     "cfg_p_size": 1
   },
   "shared_cpu_weight_backend": "sysv",
-  "shared_cpu_weight_scope": "host",
   "shared_cpu_weight_strict_numa": true,
   "shared_cpu_weight_register_chunk_mb": 128
 }

@@ -1,110 +1,121 @@
-# MiniMax-H3 CPU block offload 使用指南
+# MiniMax-H3 CPU Block Offload Guide
 
-共享 offload 使用统一入口：`run_minimax_h3_block_shared_offload.sh`，使用 `configs/minimax_h3/offload/minimax_h3_block_shared_offload.json`。默认 **TASK=t2av、host 共享、8 卡、Ulysses SP8**，通过 `TASK` 选择任务，通过环境变量切换 NUMA 或指定显卡。使用当前环境的 `python -m torch.distributed.run`，以下命令均为单机推理。
+English | [简体中文](README_CN.md)
 
-## 准备环境、权重和 AdaLN cache
+Launcher: `run_minimax_h3_block_shared_offload.sh`.
+Configuration: `configs/minimax_h3/offload/minimax_h3_block_shared_offload.json`.
+Defaults: **T2AV, host sharing, 8 GPUs, Ulysses SP8**.
 
-激活已安装项目依赖的 Python 环境，在仓库根目录执行：
+Edit paths, GPU selection, and inference arguments directly in the script; edit parallel settings in the JSON file. The script sets its arguments explicitly, does not infer the GPU count, and does not forward arguments appended to `bash script.sh`. Environment variables such as `TASK`, `SHARED_CPU_WEIGHT_SCOPE`, and `MINIMAX_H3_*` do not override this inference script. To change options without editing files, run the full `python -m torch.distributed.run ... -m lightx2v.infer ...` command directly.
+
+## Setup and launch
+
+1. Activate a Python environment with the project dependencies installed.
+2. Set `lightx2v_path` and `model_path` at the top of the script to your project and checkpoint directories.
+3. Generate a matching AdaLN cache as described below, unless one already exists.
+4. Run from the project root:
 
 ```bash
-cd /path/to/lightx2v_offload_opt
-export MINIMAX_H3_MODEL_PATH="$PWD/models/MiniMax-H3"
+cd /path/to/LightX2V
+bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
 ```
 
-基础任务的模型目录需要 `transformer/`、`text_encoder/`、`tokenizer/`、`processor/`、`vae/` 和 `audio_vae/`。Ref2AV 还需要 `transformer_ref/`。默认使用原始 BF16 权重、SageAttention2、SGL 和 Triton 算子。
+Base tasks require `transformer/`, `text_encoder/`, `tokenizer/`, `processor/`, `vae/`, and `audio_vae/` in the model directory. The dedicated Ref2AV variant also requires `transformer_ref/`. The default setup uses original BF16 weights, SageAttention2, SGL, and Triton kernels.
 
-**H3 CPU offload 需要匹配的 AdaLN cache。** 默认 29 步，video/audio flow shift 为 12／3；T2AV 使用基础任务的 `fl2av` 缓存：
+## Prepare the AdaLN cache
 
-```bash
-CUDA_VISIBLE_DEVICES=0 MINIMAX_H3_CACHE_TASK=fl2av \
-MINIMAX_H3_CONFIG="$PWD/configs/minimax_h3/offload/minimax_h3_block_shared_offload.json" \
-bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
-```
-
-缓存工具只用一张 GPU，JSON 中的 SP8 不会让它启动八个进程。默认缓存目录为 `~/.cache/lightx2v/adaln`，由 `adaln_cache_dir` 指定。已有匹配缓存可跳过；改变权重、步数或 flow shift 后需准备新缓存，只改变卡数或共享范围不需要重建。
-
-Ref2AV 使用独立的 AdaLN cache，首次运行前另行生成：
+The current H3 shared block offload integration requires a matching AdaLN cache. Run the following from the project root, using the same model path as the inference script:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 MINIMAX_H3_CACHE_TASK=ref2av \
-MINIMAX_H3_CONFIG="$PWD/configs/minimax_h3/offload/minimax_h3_block_shared_offload.json" \
-bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
-```
-
-## 启动命令
-
-```bash
-# 默认 host + 8 卡：未设置 CUDA_VISIBLE_DEVICES 时使用 0,1,2,3,4,5,6,7
-bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
-
-# NUMA + 8 卡
-SHARED_CPU_WEIGHT_SCOPE=numa \
-bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
-
-# host + 4 卡
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
-
-# NUMA + 2 卡，可使用不连续的显卡编号
-CUDA_VISIBLE_DEVICES=2,5 SHARED_CPU_WEIGHT_SCOPE=numa \
-bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
-
-# 单卡
 CUDA_VISIBLE_DEVICES=0 \
-bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
+MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3 \
+MINIMAX_H3_CACHE_TASK=fl2av \
+MINIMAX_H3_CONFIG="$PWD/configs/minimax_h3/offload/minimax_h3_block_shared_offload.json" \
+bash tools/cache_minimax_h3_adaln/run_cache_minimax_h3_adaln.sh
 ```
 
-支持 **1、2、4、7、8、14、28、56 卡**，使用全部指定显卡。模型有 56 个注意力头，Ulysses SP 大小必须整除 56；不支持的卡数会直接报错。默认模板按可见卡数调整 SP，8 卡保留 VAE tile 并行，其余卡数关闭它。无需设置 `NPROC_PER_NODE`。
+The cache tool accepts these environment variables and uses one GPU. Match the cache to `--model-variant`: `fl2av` weights use an `fl2av` cache, and `ref2av` weights use a `ref2av` cache. Set `MINIMAX_H3_CACHE_TASK=ref2av` to generate the latter.
 
-## 选择任务与输入
+Defaults are 29 steps, video/audio flow shifts of 12/3, and cache directory `~/.cache/lightx2v/adaln`. Cache generation and inference must use matching weights, `infer_steps`, flow shifts, and `adaln_cache_dir`. Changing only the GPU count or host/NUMA scope does not require rebuilding the cache.
 
-同一个脚本通过 `TASK` 选择任务，省略时运行 `t2av`。五个任务共用同一份启动配置。
+## Change the GPU count
 
-脚本同时传入主线要求的 `--model-variant`：`ref2av` 任务选择 `ref2av` 权重，其余任务选择 `fl2av` 权重。缓存脚本保留 `MINIMAX_H3_CACHE_TASK` 环境变量，它现在对应缓存工具的 `--model-variant` 参数。
+Update `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` in the script, and `parallel.seq_p_size` in the JSON. All three must specify the same GPU count.
 
-| `TASK` | 输入环境变量 | AdaLN 缓存组 |
+| GPUs | Script `CUDA_VISIBLE_DEVICES` | `--nproc_per_node` | JSON `parallel.seq_p_size` | Example JSON `vae_decode_parallel` |
+| --- | --- | --- | --- | --- |
+| 8 (default) | `0,1,2,3,4,5,6,7` | `8` | `8` | `true` |
+| 4 | `0,1,2,3` | `4` | `4` | `false` |
+| 2 | `2,5` | `2` | `2` | `false` |
+| 1 | `0` | `1` | `1` | `false` |
+
+For example, to use GPUs 2 and 5, set `export CUDA_VISIBLE_DEVICES=2,5` and `--nproc_per_node=2` in the script, then update these JSON fields:
+
+```json
+{
+  "parallel": {
+    "seq_p_size": 2,
+    "seq_p_attn_type": "ulysses"
+  },
+  "vae_decode_parallel": false
+}
+```
+
+This is a partial configuration; keep the other fields. Launch with the same `bash` command afterward. The script sets its own GPU list, so edit that list instead of prefixing the command with a different `CUDA_VISIBLE_DEVICES` value.
+
+H3 has 56 attention heads. Ulysses SP must divide 56, giving GPU counts of **1, 2, 4, 7, 8, 14, 28, or 56**. These are head-divisibility constraints, not a claim that every layout has been validated. This launcher runs on a single node and requires enough visible GPUs, host memory, and GPU memory.
+
+The non-8-GPU examples disable VAE parallelism to start with serial decoding. The current VAE distributes spatiotemporal tiles and is not limited to 8 GPUs: `vae_decode_parallel` can remain `true` on multiple GPUs, and the runner disables it automatically for a single GPU.
+
+## Choose host or NUMA sharing
+
+The Python command in the script defaults to `--shared_cpu_weight_scope host`. To use NUMA sharing, replace that argument with the following fragment; it is not a standalone command:
+
+```bash
+  --shared_cpu_weight_scope numa \
+```
+
+The JSON does not need this field. The CLI argument takes precedence over the same setting in an older JSON file.
+
+Host scope shares one copy of compatible CPU weights within the same host and IPC namespace. NUMA scope creates copies for the NUMA domains of the participating GPUs. Both use the same launcher.
+
+## Change the task and inputs
+
+Edit `--task` and `--model-variant` in the script's Python command, and add the required input arguments:
+
+| `--task` | `--model-variant` | Input arguments |
 | --- | --- | --- |
-| `t2av` | 无参考输入 | `fl2av` |
-| `i2av` | `MINIMAX_H3_IMAGE_PATH`：首帧 | `fl2av` |
-| `l2av` | `MINIMAX_H3_LAST_FRAME_PATH`：尾帧 | `fl2av` |
-| `fl2av` | 上述首帧和尾帧变量 | `fl2av` |
-| `ref2av` | `MINIMAX_H3_IMAGE_PATH`／`MINIMAX_H3_VIDEO_PATH`，可附加 `MINIMAX_H3_AUDIO_PATH` | `ref2av` |
+| `t2av` (default) | `fl2av` | None |
+| `i2av` | `fl2av` | `--image_path /path/to/first.png` |
+| `l2av` | `fl2av` | `--last_frame_path /path/to/last.png` |
+| `fl2av` | `fl2av` | Both `--image_path` and `--last_frame_path` |
+| `ref2av` | `ref2av` | `--image_path` or `--video_path`, optionally with `--audio_path` |
+
+The Ref2AV example uses the dedicated `transformer_ref/` weights. The runner also allows `--model-variant fl2av --task ref2av` with the base transformer. That combination requires the `fl2av` cache: do not choose the cache by task name alone.
+
+For Ref2AV, replace the corresponding arguments in the launch command with the following, keeping the remaining arguments:
 
 ```bash
-TASK=fl2av CUDA_VISIBLE_DEVICES=0,1 SHARED_CPU_WEIGHT_SCOPE=numa \
-MINIMAX_H3_IMAGE_PATH=/path/to/first.png \
-MINIMAX_H3_LAST_FRAME_PATH=/path/to/last.png \
-bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
-
-TASK=ref2av MINIMAX_H3_IMAGE_PATH=/path/to/reference.png \
-bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
+  --model-variant ref2av \
+  --task ref2av \
+  --image_path "${lightx2v_path}/assets/inputs/imgs/img_0.jpg" \
 ```
 
-需要图像的任务未指定输入时使用仓库示例。Ref2AV 同类参考素材可用逗号分隔，音频必须搭配图片或视频。脚本根据任务选择默认提示词和输出文件名；`MINIMAX_H3_PROMPT` 可覆盖提示词。
+Ref2AV accepts comma-separated paths for multiple references of the same type. Audio references must accompany images or video. The script does not supply a reference image automatically. Adjust `--prompt` and `--save_result_path` when changing tasks.
 
-## 参数与配置
+## Other options
 
-| 环境变量 | 默认值／用途 |
-| --- | --- |
-| `TASK` | 默认 `t2av`；支持上述五种任务 |
-| `CUDA_VISIBLE_DEVICES` | 未设置时为 `0,1,2,3,4,5,6,7`；已设置时使用指定显卡 |
-| `SHARED_CPU_WEIGHT_SCOPE` | 未设置时读取 JSON 的 `shared_cpu_weight_scope`，默认 `host`；可设 `host` 或 `numa` |
-| `MINIMAX_H3_MODEL_PATH` | 仓库内 `models/MiniMax-H3` |
-| `MINIMAX_H3_PROMPT` | 默认提示词见脚本，可直接覆盖 |
-| `MINIMAX_H3_SAVE_RESULT_PATH` | `save_results/minimax_h3_<TASK>_block_shared_offload.mp4` |
-| `SEED` | `42` |
-| `MINIMAX_H3_CONFIG` | 可选完整 JSON 配置，未设置时使用上述默认配置 |
+| Where to edit | Option | Default / purpose |
+| --- | --- | --- |
+| Shell script | `lightx2v_path`, `model_path` | Project and checkpoint directories |
+| Inference command | `--prompt`, `--seed`, `--save_result_path` | Prompt, random seed (default 42), output file |
+| Inference command | `--shared_cpu_weight_scope` | `host` (default) or `numa` |
+| Inference command | `--config_json` | Path to another configuration file |
+| JSON | `infer_steps` | `29` |
+| JSON | `size` | `[544, 960]`, in height/width order |
+| JSON | `num_frames`, `fps` | `124` frames, `24` fps |
+| JSON | `adaln_cache_dir` | `~/.cache/lightx2v/adaln` |
 
-```bash
-CUDA_VISIBLE_DEVICES=0,1 MINIMAX_H3_PROMPT="A fox walks through snow with natural ambient sound." \
-MINIMAX_H3_SAVE_RESULT_PATH="$PWD/save_results/h3_custom.mp4" SEED=123 \
-bash scripts/minimax_h3/offload/run_minimax_h3_block_shared_offload.sh
-```
+The shared configuration covers the DiT, text backbone, and video VAE, with block offload enabled for each. Sharing requires Linux SysV shared memory and CUDA pinned memory. GPU activations and work buffers remain private to each process. The current shared path does not support TP, quantization, LoRA, compile, or lazy loading.
 
-默认配置为 124 帧、544×960、24 fps。步数、分辨率、帧数及缓存目录修改 JSON 中的 `infer_steps`、`size`（高、宽）、`num_frames` 和 `adaln_cache_dir`。
-
-脚本从配置生成独立临时 JSON，退出时删除，不改写源文件。显式传入 `MINIMAX_H3_CONFIG` 时保留其中的并行参数和 VAE 设置，TP×SP×CFG 必须等于可见卡数；`SHARED_CPU_WEIGHT_SCOPE` 若设置则覆盖该配置的 scope，否则保留配置中的值。模型、配置和输出的相对路径以调用脚本时的目录为基准。
-
-host 在同机同一 IPC 域共享一份 CPU 权重；NUMA 按参与 GPU 的 NUMA 域建立副本，严格绑定失败时会报错。配置分别开启 DiT、文本主干和视频 VAE 的权重共享，以及对应的 block offload。依赖 Linux SysV 和 CUDA pinned memory；GPU 激活和工作缓冲仍各自占用显存。当前共享路径不支持 TP、量化、LoRA、compile 或 lazy loading。
-
-共享视频 VAE 使用默认 `vae_encoder_conv_mode="torch"`。主线新增的 channels-last／FP8 Conv3D 布局尚未接入共享 manifest，不能用于这条共享加载路径；普通 VAE 路径保留主线支持。
+The shared video VAE uses `vae_encoder_conv_mode="torch"`. Channels-last and FP8 Conv3D layouts are not represented in its shared manifest and cannot be used with this shared loading path.

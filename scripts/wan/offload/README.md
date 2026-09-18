@@ -1,80 +1,89 @@
-# Wan 2.1 CPU block offload 使用指南
+# Wan 2.1 CPU Block Offload Guide
 
-共享 offload 使用统一入口：`run_wan_block_shared_offload.sh`，使用 `configs/offload/block/wan_block_shared.json`。默认 **TASK=i2v、host 共享、8 卡、Ulysses SP8**，通过环境变量切换 NUMA 或指定显卡。使用当前环境的 `python -m torch.distributed.run`，以下命令均为单机推理。
+English | [简体中文](README_CN.md)
 
-## 准备环境和权重
+Launcher: `run_wan_block_shared_offload.sh`.
+Configuration: `configs/offload/block/wan_block_shared.json`.
+Defaults: **I2V, host sharing, 8 GPUs, Ulysses SP8**.
 
-激活已安装项目依赖的 Python 环境，在仓库根目录执行：
+Edit paths, GPU selection, and inference arguments directly in the script; edit parallel settings in the JSON file. The script sets its arguments explicitly, does not infer the GPU count, and does not forward arguments appended to `bash script.sh`. Environment variables such as `TASK`, `CONFIG_JSON`, `SHARED_CPU_WEIGHT_SCOPE`, and `WAN_*` do not override this script. To change options without editing files, run the full `python -m torch.distributed.run ... -m lightx2v.infer ...` command directly.
 
-```bash
-cd /path/to/lightx2v_offload_opt
-export WAN_MODEL_PATH="$PWD/models/Wan2.1-I2V-14B-720P-Lightx2v"
-```
+## Setup and launch
 
-默认模型目录需要模型配置、FP8 DiT block、FP8 T5／CLIP 和 `Wan2.1_VAE.pth`。默认 FP16 推理、FP8-vLLM 算子和 FlashAttention 3。
-
-权重放在其他目录时，除设置 `WAN_MODEL_PATH` 外，还需修改 JSON 中的 `dit_quantized_ckpt`、`t5_quantized_ckpt`、`clip_quantized_ckpt` 和 `vae_path`。JSON 内相对路径按仓库根目录解析。
-
-## 启动命令
+1. Activate a Python environment with the project dependencies installed.
+2. Set `lightx2v_path` and `model_path` at the top of the script to your project and checkpoint directories.
+3. Set `dit_quantized_ckpt`, `t5_quantized_ckpt`, `clip_quantized_ckpt`, and `vae_path` in the JSON to the actual checkpoint locations. Changing only `model_path` in the script does not update these paths.
+4. Run from the project root:
 
 ```bash
-# 默认 host + 8 卡：未设置 CUDA_VISIBLE_DEVICES 时使用 0,1,2,3,4,5,6,7
-bash scripts/wan/offload/run_wan_block_shared_offload.sh
-
-# NUMA + 8 卡
-SHARED_CPU_WEIGHT_SCOPE=numa \
-bash scripts/wan/offload/run_wan_block_shared_offload.sh
-
-# host + 4 卡
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-bash scripts/wan/offload/run_wan_block_shared_offload.sh
-
-# NUMA + 2 卡
-CUDA_VISIBLE_DEVICES=2,5 SHARED_CPU_WEIGHT_SCOPE=numa \
-bash scripts/wan/offload/run_wan_block_shared_offload.sh
-
-# 单卡
-CUDA_VISIBLE_DEVICES=0 \
+cd /path/to/LightX2V
 bash scripts/wan/offload/run_wan_block_shared_offload.sh
 ```
 
-支持 **1、2、4、5、8、10、20、40 卡**。默认模型有 40 个注意力头，Ulysses SP 大小必须整除 40。默认模板设置 SP 等于可见卡数，使用全部指定显卡，不支持的卡数会直接报错。8 卡保留 VAE 并行，其余卡数关闭它。本入口不使用 TP 或 CFG 并行，无需设置 `NPROC_PER_NODE`。
+The default configuration requires model configuration files, FP8-vLLM DiT `block_*.safetensors`, FP8 T5/CLIP weights, and `Wan2.1_VAE.pth`. It uses FP16 inference and FlashAttention 3. Relative checkpoint paths in the JSON are resolved from the working directory, so launch from the project root as shown above, or use absolute paths.
 
-## 选择任务与输入
+## Change the GPU count
 
-`TASK=i2v`（默认）传入 `WAN_IMAGE_PATH` 作为首帧。`TASK=t2v` 不传图片，需要显式提供对应的 `WAN_MODEL_PATH` 和 `CONFIG_JSON`，不能继续使用默认的 I2V checkpoint：
+Update `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` in the script, and `parallel.seq_p_size` in the JSON. All three must specify the same GPU count:
 
-```bash
-TASK=t2v WAN_MODEL_PATH=/path/to/Wan2.1-T2V-14B \
-CONFIG_JSON=/path/to/wan_t2v_shared.json \
-bash scripts/wan/offload/run_wan_block_shared_offload.sh
+| GPUs | `CUDA_VISIBLE_DEVICES` | `--nproc_per_node` | `parallel.seq_p_size` | Example `parallel.vae_parallel` |
+| --- | --- | --- | --- | --- |
+| 8 (default) | `0,1,2,3,4,5,6,7` | `8` | `8` | `true` |
+| 4 | `0,1,2,3` | `4` | `4` | `false` |
+| 2 | `2,5` | `2` | `2` | `false` |
+| 1 | `0` | `1` | `1` | `false` |
+
+For example, to use GPUs 2 and 5, set `export CUDA_VISIBLE_DEVICES=2,5` and `--nproc_per_node=2` in the script, and replace the JSON `parallel` object with:
+
+```json
+{
+  "seq_p_size": 2,
+  "seq_p_attn_type": "ulysses",
+  "cfg_p_size": 1,
+  "vae_parallel": false
+}
 ```
 
-T2V 配置可从默认 JSON 复制后修改：指定与 T2V 模型匹配的 FP8-vLLM DiT block、T5、VAE 路径，去掉 I2V 专用的 CLIP 路径设置，并使并行规模与可见卡数一致。此入口的卡数列表面向 40 个注意力头的 14B 模型。任务参数已接入启动链；对应 T2V 权重的完整推理效果需要用实际资产验证。
+Keep the other configuration fields. Launch with the same `bash` command afterward. Edit the GPU list inside the script; setting it in the environment before calling the script will not override it.
 
-## 参数与配置
+The default 14B model has 40 attention heads. Ulysses SP must divide 40, giving GPU counts of **1, 2, 4, 5, 8, 10, 20, or 40**. These are head-divisibility constraints, not a claim that every layout has been validated. This launcher runs on a single node and requires enough visible GPUs, host memory, and GPU memory. This configuration does not use TP or CFG parallelism; CFG guidance remains enabled.
 
-| 环境变量 | 默认值／用途 |
-| --- | --- |
-| `TASK` | 默认 `i2v`；可设 `t2v`，需匹配的模型和配置 |
-| `CUDA_VISIBLE_DEVICES` | 未设置时为 `0,1,2,3,4,5,6,7`；支持不连续编号 |
-| `SHARED_CPU_WEIGHT_SCOPE` | 未设置时读取 JSON 的 scope，默认 `host`；可设 `host` 或 `numa` |
-| `WAN_MODEL_PATH` | 仓库内 `models/Wan2.1-I2V-14B-720P-Lightx2v` |
-| `WAN_IMAGE_PATH` | 仓库内 `assets/inputs/imgs/img_0.jpg` |
-| `WAN_PROMPT` | 默认提示词见脚本，可直接覆盖 |
-| `WAN_SAVE_RESULT_PATH` | `save_results/output_lightx2v_wan_<TASK>_block_shared_offload.mp4` |
-| `SEED` | `42` |
-| `CONFIG_JSON` | 可选完整 JSON 配置，未设置时使用上述默认配置 |
+The non-8-GPU examples set `parallel.vae_parallel=false` to start with serial VAE execution. This is an example setting, not an 8-GPU restriction on the VAE. Enabling VAE parallelism also depends on the spatial partitioning of the image and latent dimensions.
+
+## Choose host or NUMA sharing
+
+The Python command in the script defaults to `--shared_cpu_weight_scope host`. To use NUMA sharing, replace that argument with the following fragment; it is not a standalone command:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 WAN_IMAGE_PATH="$PWD/assets/inputs/imgs/img_0.jpg" \
-WAN_PROMPT="A cat enjoys the sea breeze on a sunny beach." \
-WAN_SAVE_RESULT_PATH="$PWD/save_results/wan_custom.mp4" SEED=123 \
-bash scripts/wan/offload/run_wan_block_shared_offload.sh
+  --shared_cpu_weight_scope numa \
 ```
 
-默认 40 步、81 帧、480×832，修改 JSON 中的 `infer_steps`、`num_frames` 和 `size`（高、宽）。负面提示词位于脚本的 `--negative_prompt`。
+The JSON does not need this field. The CLI argument takes precedence over the same setting in an older JSON file.
 
-脚本从配置生成独立临时 JSON，退出时删除，不改写源文件。显式传入 `CONFIG_JSON` 时保留其中的并行和 VAE 设置，TP×SP×CFG 必须等于可见卡数；`SHARED_CPU_WEIGHT_SCOPE` 若设置则覆盖该配置的 scope，否则保留配置中的值。环境变量中的模型、输入、配置和输出相对路径以调用脚本时的目录为基准。
+Host scope shares one copy of compatible DiT block CPU weights within the same host and IPC namespace. NUMA scope creates copies for the NUMA domains of the participating GPUs.
 
-host 在同机同一 IPC 域共享一份 DiT block CPU 权重；NUMA 按参与 GPU 的 NUMA 域建立副本。依赖 Linux SysV 和 CUDA pinned memory，严格 NUMA 绑定不可用时会报错。当前共享路径要求 FP8-vLLM block 权重，不支持 TP、LoRA 或 lazy loading；T5、CLIP 和 VAE 未因此开启共享。各 GPU 的激活和工作缓冲仍需要足够显存。
+## Change the task and inputs
+
+The default task is `--task i2v`, with the reference image specified by `--image_path`. Edit `--prompt`, `--negative_prompt`, and `--save_result_path` to change the prompts and output location.
+
+To use T2V:
+
+1. Change `--task i2v` to `--task t2v` and remove the `--image_path` line.
+2. Set `model_path` to the corresponding T2V model directory.
+3. Prepare a matching T2V shared offload JSON and update `--config_json`. You can copy the default JSON, replace the DiT, T5, and VAE paths, and remove the I2V-specific CLIP settings.
+4. Update the prompts and output filename.
+
+The shared adapter requires FP8-vLLM block weights. Changing only the task name while keeping the I2V checkpoint is insufficient. The GPU-count list above applies to the 14B model; full T2V generation must be checked with the actual T2V weights.
+
+## Other options
+
+| Where to edit | Option | Default / purpose |
+| --- | --- | --- |
+| Shell script | `lightx2v_path`, `model_path` | Project and model directories |
+| Inference command | `--image_path`, `--prompt`, `--negative_prompt` | First frame and prompts |
+| Inference command | `--save_result_path`, `--seed` | Output file and random seed (default 42) |
+| Inference command | `--shared_cpu_weight_scope` | `host` (default) or `numa` |
+| Inference command | `--config_json` | Configuration file path |
+| JSON | `infer_steps`, `num_frames`, `size` | 40 steps, 81 frames, `[480, 832]` in height/width order |
+
+Sharing requires Linux SysV shared memory and CUDA pinned memory. Strict NUMA binding failures raise an error. The current shared path does not support TP, LoRA, or lazy loading. CPU weight sharing is not enabled for T5, CLIP, or the VAE. GPU activations and work buffers remain private to each process.

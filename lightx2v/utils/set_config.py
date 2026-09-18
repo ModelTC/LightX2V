@@ -53,6 +53,8 @@ def build_startup_config(config_data):
     config["task"] = config_data.get("task")
     if config_data.get("model_variant") is not None:
         config["model_variant"] = config_data["model_variant"]
+    if config_data.get("shared_cpu_weight_scope") is not None:
+        config["shared_cpu_weight_scope"] = config_data["shared_cpu_weight_scope"]
     if config_data.get("fps") is not None:
         config["fps"] = config_data["fps"]
 
@@ -307,7 +309,7 @@ def load_model_config(config):
 
 def build_cli_inputs(args):
     args_data = {key: value for key, value in vars(args).items() if value is not None}
-    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "task"}
+    startup_fields = {"config_json", "model_cls", "model_variant", "model_path", "task", "shared_cpu_weight_scope"}
     startup_args = {key: value for key, value in args_data.items() if key in startup_fields}
     request_data = {key: value for key, value in args_data.items() if key not in startup_fields}
     request_data["task"] = args.task
