@@ -83,6 +83,7 @@ To select another mode, change `--config_json` in the listed script to the corre
 | `dmd/minimax_h3_fp8_4step_5090_vae_fp8_sla.json` | `run_minimax_h3_t2av_parallel.sh` | SP8, FP8 VAE Encoder/Decoder + matching SLA LoRA |
 | `dmd/minimax_h3_fp8_4step_5090_vae_fp8_sol.json` | `run_minimax_h3_t2av_parallel.sh` | SP8, FP8 text encoder/VAE + Sol-Attn + 4-step LoRA |
 | `dmd/minimax_h3_ref2av_4step.json` | `run_minimax_h3_ref2av.sh`, with 8 processes as described below | Reference-task 4-step LoRA |
+| `../platforms/amd_rocm/minimax_h3_t2av_4step.json` | `scripts/platforms/amd_rocm/run_minimax_h3_t2av_4step.sh` | AMD ROCm (aiter attention), single GPU, 4-step LoRA, no offload |
 
 `run_minimax_h3_t2av_parallel.sh` defaults to SP4. To select another parallel preset, change `--config_json` and keep `torchrun --nproc_per_node` and `CUDA_VISIBLE_DEVICES` consistent with the JSON. The process count is `tensor_p_size × seq_p_size` for these presets; an omitted parallel size is 1.
 
