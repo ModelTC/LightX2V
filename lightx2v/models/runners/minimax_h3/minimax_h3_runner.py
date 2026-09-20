@@ -653,7 +653,10 @@ class MiniMaxH3Runner(DefaultRunner):
     def _video_to_uint8_frames(video):
         if video.ndim != 5 or video.shape[0] != 1 or video.shape[1] != 3:
             raise ValueError(f"decoded H3 video must be [1,3,F,H,W], got {tuple(video.shape)}")
-        return (video[0].permute(1, 2, 3, 0).float() * 255.0).round().to(torch.uint8).contiguous().cpu()
+        frames = video[0].permute(1, 2, 3, 0)
+        if frames.dtype != torch.uint8:
+            frames = (frames.float() * 255.0).round().to(torch.uint8)
+        return frames.contiguous().cpu()
 
     def process_images_after_vae_decoder(self):
         if self.video_vae.decode_parallel and dist.get_rank() != 0:
