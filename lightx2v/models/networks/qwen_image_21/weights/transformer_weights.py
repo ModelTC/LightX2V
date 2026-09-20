@@ -32,6 +32,9 @@ class QwenImage21BlockWeights(WeightModule):
         else:
             attention = attention_cls()
         self.add_module("attention", attention)
+        if config.get("seq_parallel", False):
+            parallel = config["parallel"]
+            self.add_module("calculate_parallel", ATTN_WEIGHT_REGISTER[parallel.get("seq_p_attn_type", "ulysses")]())
         # Arbitrary triangular prefix masks use the common SDPA backend.
         self.add_module("prefix_attention", ATTN_WEIGHT_REGISTER["torch_sdpa"]())
 

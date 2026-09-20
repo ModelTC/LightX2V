@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import cv2
 import numpy as np
 import torch
+import torch.distributed as dist
 from PIL import Image
 from loguru import logger
 
@@ -43,8 +44,6 @@ class QwenImage21Runner(DefaultRunner):
             "unload_modules",
             "text_encoder_quantized",
             "shared_cpu_weights",
-            "parallel",
-            "seq_parallel",
             "cfg_parallel",
             "tensor_parallel",
             "pipefusion_parallel",
@@ -56,6 +55,19 @@ class QwenImage21Runner(DefaultRunner):
         for key in unsupported:
             if config.get(key):
                 raise ValueError(f"qwen_image_21 does not yet support {key}")
+        if config.get("seq_parallel"):
+            parallel = config["parallel"]
+            seq_p_size = int(parallel.get("seq_p_size", 1))
+            seq_p_attn_type = parallel.get("seq_p_attn_type", "ulysses")
+            if seq_p_attn_type != "ulysses":
+                raise ValueError("qwen_image_21 sequence parallel currently supports only seq_p_attn_type='ulysses'")
+            if config["num_attention_heads"] % seq_p_size:
+                raise ValueError(
+                    f"qwen_image_21 Ulysses requires num_attention_heads ({config['num_attention_heads']}) "
+                    f"to be divisible by seq_p_size ({seq_p_size})"
+                )
+            if parallel.get("seq_p_quant_scheme") not in (None, "fp8", "fp4"):
+                raise ValueError("qwen_image_21 seq_p_quant_scheme supports only fp8 and fp4")
         if config.get("dit_quantized"):
             if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum"):
                 raise ValueError("qwen_image_21 DiT quantization supports only fp8-sgl and fp8-f16-accum")
@@ -226,6 +238,8 @@ class QwenImage21Runner(DefaultRunner):
 
     def process_images_after_vae_decoder(self, value):
         input_info = self.input_info
+        if input_info.save_result_path and not input_info.return_result_tensor and dist.is_initialized() and dist.get_rank() != 0:
+            return {"images": None}
         pixels = (value / 2 + 0.5).clamp(0, 1).float().permute(0, 2, 3, 1).cpu().numpy()
         # OpenCV expects BGRA; keep alpha as the last channel.
         images = [cv2.cvtColor((p * 255).round().astype(np.uint8), cv2.COLOR_RGBA2BGRA) for p in pixels]

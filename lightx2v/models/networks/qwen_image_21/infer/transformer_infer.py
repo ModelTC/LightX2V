@@ -18,6 +18,17 @@ class QwenImage21TransformerInfer:
             self.block_ops = triton_ops
         self.rope = ROPE_REGISTER[config.get("rope_type", "torch_complex_rope")](layout="interleaved", compute_dtype=torch.float32)
         self.rope.set_config(config)
+        self.seq_parallel = config.get("seq_parallel", False)
+        if self.seq_parallel:
+            self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
+            parallel = config["parallel"]
+            self.seq_p_prepost_backend = parallel.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel.get("seq_p_quant_scheme")
+            self.seq_p_tensor_fusion = parallel.get("seq_p_tensor_fusion", False)
+            self.seq_p_head_parallel = parallel.get("seq_p_head_parallel", False)
+        else:
+            self.seq_p_group = None
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
@@ -73,8 +84,29 @@ class QwenImage21TransformerInfer:
         modulation = self._modulation(state)
         for index, block in enumerate(weights.blocks):
             q, k, v = self._qkv(block, x, modulation[0], state)
-            k = torch.cat((cache.k_cache(index), k))
-            v = torch.cat((cache.v_cache(index), v))
-            attention = block.attention.apply(q, k, v)
+            cached_k = cache.k_cache(index)
+            cached_v = cache.v_cache(index)
+            if self.seq_parallel:
+                attention, _ = block.calculate_parallel.apply(
+                    q=q,
+                    k=k,
+                    v=v,
+                    aux_q=None,
+                    aux_k=cached_k,
+                    aux_v=cached_v,
+                    attention_module=block.attention,
+                    seq_p_group=self.seq_p_group,
+                    prepost_backend=self.seq_p_prepost_backend,
+                    a2a_backend=self.seq_p_a2a_backend,
+                    quant_scheme=self.seq_p_quant_scheme,
+                    tensor_fusion=self.seq_p_tensor_fusion,
+                    head_parallel=self.seq_p_head_parallel,
+                    aux_first=True,
+                    attention_kwargs={},
+                )
+            else:
+                k = torch.cat((cached_k, k))
+                v = torch.cat((cached_v, v))
+                attention = block.attention.apply(q, k, v)
             x = self._finish_block(block, x, attention, modulation)
         return x

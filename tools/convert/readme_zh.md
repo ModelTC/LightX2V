@@ -415,7 +415,7 @@ python tools/convert/converter.py \
 推理使用现有 `fp8-sgl` 后端（权重 E4M3 per-channel、激活动态 per-token 量化）。
 需安装支持当前 GPU 的 sgl-kernel。
 
-在 `configs/qwen_image_21/qwen_image_21_fp8_5090.json` 中设置 `dit_quantized_ckpt`；
+在 `configs/qwen_image_21/qwen_image_21_t2i_fp8_5090.json` 中设置 `dit_quantized_ckpt`；
 在 `scripts/qwen_image_21/qwen_image_21_t2i_fp8_5090.sh` 中设置项目路径及原模型路径后直接运行。
 脚本直接读取该 JSON，不生成或修改配置。`model_path` 指向原模型目录，用于加载模型配置、条件编码器、VAE 和 scheduler。
 
@@ -433,5 +433,5 @@ python tools/convert/converter.py \
     --quantized --linear_type fp8 --device cuda:0 --single_file
 ```
 
-该 profile 使用权重 qmax=14。`qwen_image_21_fp8_f16_accum_5090.json` 选择 `fp8-f16-accum`，并通过 `dit_fp8_activation_qmax` 设置激活 qmax=7。设置该配置的 checkpoint 路径，以及 `qwen_image_21_t2i_fp8_f16_accum_5090.sh` 的项目和原模型路径后运行。
+该 profile 使用权重 qmax=14。`qwen_image_21_t2i_fp8_f16_accum_5090.json` 选择 `fp8-f16-accum`，并通过 `dit_fp8_activation_qmax` 设置激活 qmax=7。设置该配置的 checkpoint 路径，以及 `qwen_image_21_t2i_fp8_f16_accum_5090.sh` 的项目和原模型路径后运行。
 需要 lightx2v-kernel 提供 SM120 FP16 累加算子；启动时拒绝普通 FP8 checkpoint 和不具备该算子的环境。增大激活 qmax 可能使 FP16 累加溢出，调整后需重新验证数值和画质。

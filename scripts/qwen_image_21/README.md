@@ -95,6 +95,20 @@ The RTX 5090 config retains the applicable general optimizations and uses:
 
 Both tasks were measured on the current code with 40 steps, seed 42, CFG disabled, and the median latency of three consecutive requests. I2I uses one 1024×1024 reference image and produces a 1024×1024 image. End-to-end latency covers input encoding, condition-KV prefill, denoising, VAE decoding, post-processing, and PNG saving; it excludes model loading and one-time runner initialization.
 
+### 3.3 Dual RTX 5090 sequence-parallel example
+
+The SP2 presets distribute the target image-token sequence across two GPUs with Ulysses and use FP8 sequence-parallel communication, while retaining the FP8-FP16-accumulation and SageAttention2 settings from the single-GPU RTX 5090 example. Set `dit_quantized_ckpt`, `lightx2v_path`, and `model_path` as described above, then run:
+
+```bash
+# Text-to-image
+bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2.sh
+
+# Image-to-image
+bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2.sh
+```
+
+The scripts launch two processes on GPUs 0 and 1. Keep `CUDA_VISIBLE_DEVICES`, `torchrun --nproc_per_node`, and `parallel.seq_p_size` consistent when changing the GPU count. The target-image token count must be divisible by `seq_p_size`.
+
 ## 4. Service Deployment and API Usage
 
 Set the repository path, model path, and GPU ID in `server/start_server.sh`, then start the server:
