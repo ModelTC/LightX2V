@@ -25,7 +25,13 @@ class QwenImage21BlockWeights(WeightModule):
             self.add_module(f"norm_{name}", RMS_WEIGHT_REGISTER[config.get("rms_norm_type", "fp32_variance")](f"{prefix}.attn.norm_{name}.weight", eps=config["eps"]))
         for name in ("norm1", "norm2"):
             self.add_module(name, LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](eps=config["eps"]))
-        self.add_module("attention", ATTN_WEIGHT_REGISTER[config.get("attn_type", "torch_sdpa")]())
+        attn_type = config.get("attn_type", "torch_sdpa")
+        attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
+        if attn_type == "dynamic_sparse_attn":
+            attention = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
+        else:
+            attention = attention_cls()
+        self.add_module("attention", attention)
         # Arbitrary triangular prefix masks use the common SDPA backend.
         self.add_module("prefix_attention", ATTN_WEIGHT_REGISTER["torch_sdpa"]())
 

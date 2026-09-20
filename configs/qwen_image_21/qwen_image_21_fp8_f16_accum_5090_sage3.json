@@ -2,7 +2,7 @@
     "infer_steps": 40,
     "resolution": 1024,
     "vae_scale_factor": 16,
-    "attn_type": "sage_attn2",
+    "attn_type": "sage_attn3",
     "rope_type": "flashinfer_rope",
     "rms_norm_type": "fp32_variance",
     "layer_norm_type": "Triton",
