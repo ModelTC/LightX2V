@@ -8,7 +8,9 @@ import torch
 from PIL import Image
 from loguru import logger
 
+from lightx2v.common.ops.mm.fp8_f16_accum import fp8_f16_accum_mm_unavailable_reason, validate_fp8_f16_accum_qmax
 from lightx2v.models.input_encoders.hf.qwen_image_21.qwen3vl import QwenImage21TextEncoder
+from lightx2v.models.networks.qwen_image_21.fp8_f16_accum_policy import ACTIVATION_QMAX, validate_checkpoint
 from lightx2v.models.networks.qwen_image_21.infer.pre_infer import build_token_layout
 from lightx2v.models.networks.qwen_image_21.model import QwenImage21TransformerModel
 from lightx2v.models.runners.default_runner import DefaultRunner
@@ -36,11 +38,9 @@ class QwenImage21Runner(DefaultRunner):
     def __init__(self, config):
         unsupported = (
             "cpu_offload",
-            "text_encoder_cpu_offload",
             "vae_cpu_offload",
             "lazy_load",
             "unload_modules",
-            "dit_quantized",
             "text_encoder_quantized",
             "shared_cpu_weights",
             "parallel",
@@ -56,6 +56,15 @@ class QwenImage21Runner(DefaultRunner):
         for key in unsupported:
             if config.get(key):
                 raise ValueError(f"qwen_image_21 does not yet support {key}")
+        if config.get("dit_quantized"):
+            if config.get("dit_quant_scheme") not in ("fp8-sgl", "fp8-f16-accum"):
+                raise ValueError("qwen_image_21 DiT quantization supports only fp8-sgl and fp8-f16-accum")
+            if not config.get("dit_quantized_ckpt"):
+                raise ValueError("qwen_image_21 FP8 requires dit_quantized_ckpt")
+            if config["dit_quant_scheme"] == "fp8-f16-accum":
+                validate_fp8_f16_accum_qmax(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
+        elif config.get("dit_quant_scheme", "Default") != "Default":
+            raise ValueError("dit_quant_scheme requires dit_quantized=true")
         if config.get("feature_caching", "NoCaching") != "NoCaching":
             raise ValueError("qwen_image_21 supports exact condition KV caching, not feature caching")
         if not config["causal_condition"]:
@@ -111,6 +120,11 @@ class QwenImage21Runner(DefaultRunner):
         self.scheduler = QwenImage21Scheduler(self.config)
 
     def load_transformer(self):
+        if self.config.get("dit_quant_scheme") == "fp8-f16-accum":
+            reason = fp8_f16_accum_mm_unavailable_reason()
+            if reason is not None:
+                raise RuntimeError(f"qwen_image_21 fp8-f16-accum is unavailable: {reason}")
+            validate_checkpoint(self.config["dit_quantized_ckpt"])
         return QwenImage21TransformerModel(str(Path(self.config["model_path"]) / "transformer"), self.config, self.init_device)
 
     def load_text_encoder(self):
@@ -168,10 +182,20 @@ class QwenImage21Runner(DefaultRunner):
         branches = [("cond", info.prompt)]
         if self.config["enable_cfg"]:
             branches.append(("uncond", info.negative_prompt or ""))
-        for name, prompt in branches:
-            branch = self.text_encoders[0].infer(prompt, images)
-            branch["layout"] = build_token_layout(branch["image_mask"], shapes, self.config["axes_dims_rope"], rope=self.model.transformer_infer.rope)
-            outputs[name] = branch
+        encoder = self.text_encoders[0]
+        offload = self.config.get("text_encoder_cpu_offload", False)
+        try:
+            if offload:
+                with ProfilingContext4DebugL1("Onload Text Encoder"):
+                    encoder.to_cuda()
+            for name, prompt in branches:
+                branch = encoder.infer(prompt, images)
+                branch["layout"] = build_token_layout(branch["image_mask"], shapes, self.config["axes_dims_rope"], rope=self.model.transformer_infer.rope)
+                outputs[name] = branch
+        finally:
+            if offload:
+                with ProfilingContext4DebugL1("Offload Text Encoder"):
+                    encoder.to_cpu()
         return outputs
 
     @ProfilingContext4DebugL1("Run VAE Encoder")

@@ -153,6 +153,7 @@ class QwenImage21TextEncoder(WeightModule):
         super().__init__()
         root = Path(config["model_path"])
         path = root / "text_encoder"
+        self.cpu_offload = config.get("text_encoder_cpu_offload", False)
         self.model_config = json.loads((path / "config.json").read_text())
         self.text_config = self.model_config["text_config"]
         self.processor = Qwen3VLProcessor.from_pretrained(root / "processor", local_files_only=True)
@@ -177,7 +178,7 @@ class QwenImage21TextEncoder(WeightModule):
         collect(self)
         # safetensors interprets bare "cuda" as cuda:0, unlike Tensor.to(),
         # so resolve the selected GPU index explicitly.
-        device = str(torch.empty(0, device=AI_DEVICE).device)
+        device = "cpu" if self.cpu_offload else str(torch.empty(0, device=AI_DEVICE).device)
         weights = {}
         for shard in sorted(path.glob("*.safetensors")):
             with safe_open(shard, framework="pt", device=device) as handle:
@@ -186,6 +187,26 @@ class QwenImage21TextEncoder(WeightModule):
         if missing := required - weights.keys():
             raise ValueError(f"Missing Qwen3-VL weights: {sorted(missing)}")
         self.load(weights)
+        if self.cpu_offload:
+            self.to_cpu()
+
+    def to_cpu(self, non_blocking=False):
+        if not self.cpu_offload:
+            return super().to_cpu(non_blocking=non_blocking)
+
+        # CPU loading retains immutable pinned weights. Drop device copies
+        # without copying them back, including after a partial failed onload.
+        def release(module):
+            if isinstance(module, WeightModule):
+                for child in module._modules.values():
+                    release(child)
+            else:
+                for name in ("weight", "bias"):
+                    tensor = getattr(module, f"pin_{name}", None)
+                    if tensor is not None:
+                        setattr(module, name, tensor)
+
+        release(self)
 
     def _position_ids(self, ids, image_mask, grid):
         merge = self.model_config["vision_config"]["spatial_merge_size"]
