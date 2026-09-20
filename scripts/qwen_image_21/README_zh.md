@@ -39,7 +39,9 @@ bash scripts/qwen_image_21/qwen_image_21_i2i.sh
 
 直接在脚本中修改提示词 `--prompt`、参考图 `--image_path`、尺寸 `--size`、种子 `--seed` 和输出路径 `--save_result_path`。
 
-`--size` 顺序为高、宽，均须为 32 的正整数倍。默认生成 1024×1024 图片。
+使用 `--size 高 宽`。宽高均须不小于 32，非 32 倍数会自动向下对齐。
+
+图生图可删除脚本中的 `--size` 参数，按参考图比例自动确定输出尺寸。总像素数约为config中的 `resolution²`（`resolution` 默认为 `1024`），宽高就近对齐到 32 的倍数。
 
 ## 4. 服务化部署与 API 调用
 
@@ -62,5 +64,7 @@ python scripts/qwen_image_21/server/post_i2i.py
 ```
 
 直接修改代码中的 `url`、`message`、`output_path`；图生图还需设置 `image_path`。两个脚本已分别设置 `task: "t2i"` 和 `task: "i2i"`。
+
+服务请求使用相同的尺寸规则。图生图需自动确定尺寸时，删除 `message` 中的 `size` 字段。
 
 图生图脚本读取客户端本地图片，将其编码为 Base64 后，通过请求的 `image_path` 字段上传。文生图和图生图均等待生成完成后，接收服务端返回的 PNG 二进制数据，并保存到客户端 `output_path`。
