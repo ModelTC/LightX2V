@@ -17,10 +17,10 @@ class QwenImage21BlockWeights(WeightModule):
         }.items():
             self.add_module(name, MM_WEIGHT_REGISTER["Default"](f"{prefix}.{key}.weight", bias_name=None))
         for name in ("q", "k"):
-            self.add_module(f"norm_{name}", RMS_WEIGHT_REGISTER["fp32_variance"](f"{prefix}.attn.norm_{name}.weight", eps=config["eps"]))
+            self.add_module(f"norm_{name}", RMS_WEIGHT_REGISTER[config.get("rms_norm_type", "fp32_variance")](f"{prefix}.attn.norm_{name}.weight", eps=config["eps"]))
         for name in ("norm1", "norm2"):
-            self.add_module(name, LN_WEIGHT_REGISTER["torch"](eps=config["eps"]))
-        self.add_module("attention", ATTN_WEIGHT_REGISTER[config["attn_type"]]())
+            self.add_module(name, LN_WEIGHT_REGISTER[config.get("layer_norm_type", "torch")](eps=config["eps"]))
+        self.add_module("attention", ATTN_WEIGHT_REGISTER[config.get("attn_type", "torch_sdpa")]())
         # Arbitrary triangular prefix masks use the common SDPA backend.
         self.add_module("prefix_attention", ATTN_WEIGHT_REGISTER["torch_sdpa"]())
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-lightx2v_path=/data/nvme1/yongyang/dan/LightX2V
-model_path=/data/nvme1/yongyang/dan/models/Qwen/Qwen-Image-2.1
+lightx2v_path=/Path/To/LightX2V
+model_path=/Path/To/Model
 
 export CUDA_VISIBLE_DEVICES=0
 
