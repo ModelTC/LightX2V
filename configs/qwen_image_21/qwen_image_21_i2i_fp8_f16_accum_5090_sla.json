@@ -16,6 +16,7 @@
     "fused_block_min_tokens": 1024,
     "enable_cfg": false,
     "sample_guide_scale": 1.0,
+    "warmup": true,
     "text_encoder_cpu_offload": true,
     "dit_quantized": true,
     "dit_quant_scheme": "fp8-f16-accum",
