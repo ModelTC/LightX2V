@@ -90,14 +90,14 @@ The RTX 5090 config retains the applicable general optimizations and uses:
 
 | GPU | Task | Output resolution | End-to-end latency |
 | --- | --- | ---: | ---: |
-| RTX 5090 | T2I | 1024×1024 | **5.930 s** |
-| RTX 5090 | I2I | 1024×1024 | **7.144 s** |
+| RTX 5090 ×1 | T2I | 1024×1024 | **5.914 s** |
+| RTX 5090 ×1 | I2I | 1024×1024 | **7.191 s** |
 
 Both tasks were measured on the current code with 40 steps, seed 42, CFG disabled, and the median latency of three consecutive requests. I2I uses one 1024×1024 reference image and produces a 1024×1024 image. End-to-end latency covers input encoding, condition-KV prefill, denoising, VAE decoding, post-processing, and PNG saving; it excludes model loading and one-time runner initialization.
 
 ### 3.3 Dual RTX 5090 sequence-parallel example
 
-The SP2 presets distribute the target image-token sequence across two GPUs with Ulysses and use FP8 sequence-parallel communication, while retaining the FP8-FP16-accumulation and SageAttention2 settings from the single-GPU RTX 5090 example. Set `dit_quantized_ckpt`, `lightx2v_path`, and `model_path` as described above, then run:
+The SP2 presets distribute the target image-token sequence across two GPUs with Ulysses, use FP8 sequence-parallel communication, and use an overlap-based spatial VAE decode: its global low-resolution attention remains exact, while a two-latent halo around each upsampling shard may introduce small boundary differences from serial decode. They retain the FP8-FP16-accumulation and SageAttention2 settings from the single-GPU RTX 5090 example. Set `dit_quantized_ckpt`, `lightx2v_path`, and `model_path` as described above, then run:
 
 ```bash
 # Text-to-image
@@ -108,6 +108,13 @@ bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2.sh
 ```
 
 The scripts launch two processes on GPUs 0 and 1. Keep `CUDA_VISIBLE_DEVICES`, `torchrun --nproc_per_node`, and `parallel.seq_p_size` consistent when changing the GPU count. The target-image token count must be divisible by `seq_p_size`.
+
+| GPU | Task | Output resolution | End-to-end latency |
+| --- | --- | ---: | ---: |
+| RTX 5090 ×2 | T2I | 1024×1024 | **3.954 s** |
+| RTX 5090 ×2 | I2I | 1024×1024 | **4.802 s** |
+
+These results use the same request settings and measurement boundary as the single-GPU table above, with the median latency of three consecutive requests.
 
 ## 4. Service Deployment and API Usage
 

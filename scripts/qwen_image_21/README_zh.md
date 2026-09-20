@@ -90,14 +90,14 @@ RTX 5090 配置保留适用的通用优化，并使用：
 
 | GPU | 任务 | 输出分辨率 | 端到端耗时 |
 | --- | --- | ---: | ---: |
-| RTX 5090 | T2I | 1024×1024 | **5.930 s** |
-| RTX 5090 | I2I | 1024×1024 | **7.144 s** |
+| RTX 5090 ×1 | T2I | 1024×1024 | **5.914 s** |
+| RTX 5090 ×1 | I2I | 1024×1024 | **7.191 s** |
 
 两类任务均使用当前代码，测试条件为 40 steps、seed 42、关闭 CFG，连续执行三次请求并取中位数。I2I 使用单张 1024×1024 参考图，输出尺寸为 1024×1024。端到端耗时包含输入编码、condition-KV prefill、去噪、VAE 解码、后处理和 PNG 保存，不包含模型加载及 Runner 的一次性初始化。
 
 ### 3.3 双 RTX 5090 序列并行案例
 
-SP2 配置通过 Ulysses 将目标图像 token 序列分布到两张 GPU，并使用 FP8 序列并行通信，同时沿用单卡 RTX 5090 案例的 FP8-FP16 累加和 SageAttention2 配置。按上文设置 `dit_quantized_ckpt`、`lightx2v_path` 和 `model_path` 后运行：
+SP2 配置通过 Ulysses 将目标图像 token 序列分布到两张 GPU，使用 FP8 序列并行通信，并使用重叠分片并行执行 VAE 解码：低分辨率全局 attention 保持精确，每个上采样分片周围的两个 latent halo 可能在边界处产生相对串行解码的轻微数值差异；同时沿用单卡 RTX 5090 案例的 FP8-FP16 累加和 SageAttention2 配置。按上文设置 `dit_quantized_ckpt`、`lightx2v_path` 和 `model_path` 后运行：
 
 ```bash
 # 文生图
@@ -108,6 +108,13 @@ bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2.sh
 ```
 
 脚本默认在 GPU 0、1 上启动两个进程。调整卡数时，需保持 `CUDA_VISIBLE_DEVICES`、`torchrun --nproc_per_node` 与 `parallel.seq_p_size` 一致。目标图像 token 数必须能被 `seq_p_size` 整除。
+
+| GPU | 任务 | 输出分辨率 | 端到端耗时 |
+| --- | --- | ---: | ---: |
+| RTX 5090 ×2 | T2I | 1024×1024 | **3.954 s** |
+| RTX 5090 ×2 | I2I | 1024×1024 | **4.802 s** |
+
+以上结果使用与单卡表格相同的请求参数和计时范围，均为连续三次请求的中位数。
 
 ## 4. 服务化部署与 API 调用
 

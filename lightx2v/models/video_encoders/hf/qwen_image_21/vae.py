@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from safetensors.torch import load_file
@@ -165,17 +166,20 @@ class Decoder(nn.Module):
         self.norm_out = ImageRMSNorm(dims[-1])
         self.conv_out = ImageConv(dims[-1], config["out_channels"], 3, padding=1)
 
-    def forward(self, x):
-        x = self.mid_block(self.conv_in(x))
+    def forward_up(self, x):
         for block in self.up_blocks:
             x = block(x)
         return self.conv_out(F.silu(self.norm_out(x)))
+
+    def forward(self, x):
+        return self.forward_up(self.mid_block(self.conv_in(x)))
 
 
 class QwenImage21VAE(nn.Module):
     def __init__(self, config):
         super().__init__()
         path = Path(config["model_path"]) / "vae"
+        self.vae_decode_parallel = config.get("vae_decode_parallel", False)
         self.config = json.loads((path / "config.json").read_text())
         cfg = self.config
         if not cfg["is_residual"] or cfg.get("patch_size") is not None or cfg["attn_scales"]:
@@ -200,8 +204,74 @@ class QwenImage21VAE(nn.Module):
         mean = self.quant_conv(self.encoder(image.to(device=AI_DEVICE, dtype=GET_DTYPE()))).chunk(2, dim=1)[0]
         return ((mean - self.latents_mean) / self.latents_std).flatten(2).transpose(1, 2)
 
+    @staticmethod
+    def _get_2d_grid(total_h, total_w, world_size):
+        best_h = best_w = None
+        min_aspect_diff = float("inf")
+        for grid_h in range(1, world_size + 1):
+            if world_size % grid_h == 0:
+                grid_w = world_size // grid_h
+                if total_h % grid_h == 0 and total_w % grid_w == 0:
+                    aspect_diff = abs(total_h / grid_h - total_w / grid_w)
+                    if aspect_diff < min_aspect_diff:
+                        min_aspect_diff = aspect_diff
+                        best_h, best_w = grid_h, grid_w
+        if best_h is None:
+            raise ValueError(f"Cannot split latent grid {total_h}x{total_w} evenly across {world_size} ranks")
+        return best_h, best_w
+
+    def _decode_dist(self, z):
+        """Decode spatial shards while keeping the global low-resolution attention exact."""
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        total_h, total_w = z.shape[-2:]
+        grid_h, grid_w = self._get_2d_grid(total_h, total_w, world_size)
+        rank_h, rank_w = divmod(rank, grid_w)
+        chunk_h, chunk_w = total_h // grid_h, total_w // grid_w
+        # A two-latent halo is the measured accuracy/performance tradeoff. It does
+        # not cover the full upsampling receptive field, so distributed decode is
+        # numerically close to, but not bitwise identical to, serial decode.
+        padding = 2
+
+        if rank_h == 0:
+            h_start, h_end = 0, chunk_h + 2 * padding
+        elif rank_h == grid_h - 1:
+            h_start, h_end = total_h - chunk_h - 2 * padding, total_h
+        else:
+            h_start, h_end = rank_h * chunk_h - padding, (rank_h + 1) * chunk_h + padding
+        if rank_w == 0:
+            w_start, w_end = 0, chunk_w + 2 * padding
+        elif rank_w == grid_w - 1:
+            w_start, w_end = total_w - chunk_w - 2 * padding, total_w
+        else:
+            w_start, w_end = rank_w * chunk_w - padding, (rank_w + 1) * chunk_w + padding
+
+        # Keep halo coordinates inside the image, including when the shard
+        # is smaller than its halo. Crop relative to the actual shard origin.
+        h_start, h_end = max(0, h_start), min(total_h, h_end)
+        w_start, w_end = max(0, w_start), min(total_w, w_end)
+
+        # Preserve the decoder's global low-resolution attention exactly,
+        # then parallelize the substantially more expensive upsampling path.
+        z = self.decoder.mid_block(self.decoder.conv_in(z))
+        decoded = self.decoder.forward_up(z[:, :, :, h_start:h_end, w_start:w_end].contiguous())
+        ratio = self.scale_factor
+        dh_start = (rank_h * chunk_h - h_start) * ratio
+        dh_end = dh_start + chunk_h * ratio
+        dw_start = (rank_w * chunk_w - w_start) * ratio
+        dw_end = dw_start + chunk_w * ratio
+        piece = decoded[:, :, :, dh_start:dh_end, dw_start:dw_end].contiguous()
+
+        pieces = [torch.empty_like(piece) for _ in range(world_size)]
+        dist.all_gather(pieces, piece)
+        rows = [torch.cat(pieces[row * grid_w : (row + 1) * grid_w], dim=-1) for row in range(grid_h)]
+        return torch.cat(rows, dim=-2)
+
     @torch.inference_mode()
     def decode(self, latents, size):
         h, w = size
         z = latents.transpose(1, 2).reshape(1, self.config["z_dim"], 1, h // self.scale_factor, w // self.scale_factor).to(GET_DTYPE())
-        return self.decoder(self.post_quant_conv(z * self.latents_std + self.latents_mean)).clamp(-1, 1)[:, :, 0]
+        z = self.post_quant_conv(z * self.latents_std + self.latents_mean)
+        use_parallel = self.vae_decode_parallel and dist.is_initialized() and dist.get_world_size() > 1
+        decoded = self._decode_dist(z) if use_parallel else self.decoder(z)
+        return decoded.clamp(-1, 1)[:, :, 0]
