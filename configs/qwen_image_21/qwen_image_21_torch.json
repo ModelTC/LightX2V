@@ -10,5 +10,6 @@
     "fused_qk_rms_norm": false,
     "fused_block_ops": false,
     "enable_cfg": false,
-    "sample_guide_scale": 1.0
+    "sample_guide_scale": 1.0,
+    "warmup": true
 }

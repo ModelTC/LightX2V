@@ -1,5 +1,6 @@
 import math
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import torch
@@ -15,6 +16,9 @@ from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Schedu
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v_platform.base.global_var import AI_DEVICE
+
+torch_device_module = getattr(torch, AI_DEVICE)
 
 
 def image_dimensions(resolution, ratio):
@@ -25,6 +29,7 @@ def image_dimensions(resolution, ratio):
 
 @RUNNER_REGISTER("qwen_image_21")
 class QwenImage21Runner(DefaultRunner):
+    _WARMUP_RESOLUTIONS = ((1024, 1024), (768, 960))
     supported_request_fields_by_task = {"t2i": IMAGE_REQUEST_FIELDS, "i2i": IMAGE_REQUEST_FIELDS | {"image_path"}}
 
     def __init__(self, config):
@@ -64,6 +69,42 @@ class QwenImage21Runner(DefaultRunner):
         if self.config.get("task") is not None:
             return super().get_supported_tasks()
         return ("t2i", "i2i")
+
+    @torch.inference_mode()
+    @ProfilingContext4DebugL1("Warmup")
+    def run_warmup(self):
+        if type(self) is not QwenImage21Runner:
+            raise NotImplementedError(f"Qwen-Image-2.1 warmup is not implemented for {type(self).__name__}")
+        self._run_warmup()
+        self._maybe_freeze_gc()
+
+    def _run_warmup(self):
+        # A temporary reference image reuses the complete I2I preprocessing path.
+        with TemporaryDirectory(prefix="qwen_image_21_warmup_") as directory:
+            image_path = Path(directory) / "reference.png"
+            for task in ("t2i", "i2i"):
+                for height, width in self._WARMUP_RESOLUTIONS:
+                    logger.info(f"Warmup: {task}, {height}x{width}")
+                    try:
+                        self.scheduler.generator = None
+                        request = {"task": task, "prompt": "warmup", "seed": 0, "size": [height, width]}
+                        if task == "i2i":
+                            Image.new("RGBA", (width, height), color=(0, 0, 0, 255)).save(image_path)
+                            request["image_path"] = str(image_path)
+                        # Internal warmup covers both paths even for a single-task runner.
+                        self.input_info = self.create_input_info(request)
+                        self.inputs = self.run_input_encoder()
+                        self.init_run()
+                        self.model.prefill_condition_kv(self.inputs)
+                        self.scheduler.step_pre(step_index=0)
+                        self.model.infer(self.inputs)
+                        self.scheduler.step_post()
+                        self.run_vae_decoder(self.scheduler.latents)
+                        torch_device_module.synchronize()
+                    finally:
+                        self.end_run()
+                        self.__dict__.pop("inputs", None)
+        logger.info("[Warmup] Warmup completed")
 
     def init_scheduler(self):
         self.scheduler = QwenImage21Scheduler(self.config)
