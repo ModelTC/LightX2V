@@ -2,6 +2,7 @@ import math
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
@@ -202,11 +203,13 @@ class QwenImage21Runner(DefaultRunner):
     def process_images_after_vae_decoder(self, value):
         input_info = self.input_info
         pixels = (value / 2 + 0.5).clamp(0, 1).float().permute(0, 2, 3, 1).cpu().numpy()
-        images = [Image.fromarray((p * 255).round().astype(np.uint8)) for p in pixels]
+        # OpenCV expects BGRA; keep alpha as the last channel.
+        images = [cv2.cvtColor((p * 255).round().astype(np.uint8), cv2.COLOR_RGBA2BGRA) for p in pixels]
         if input_info.save_result_path and not input_info.return_result_tensor:
             path = Path(input_info.save_result_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            images[0].save(path)
+            if not cv2.imwrite(str(path), images[0]):
+                raise RuntimeError(f"Failed to save image to: {path}")
             logger.info(f"✅ Image saved successfully to: {path} ✅")
         return {"images": images if input_info.return_result_tensor else None}
 
