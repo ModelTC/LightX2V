@@ -27,9 +27,10 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.async_vae import AsyncVAEChunkDecoder
 from lightx2v.utils.audio_io import load_audio_file
 from lightx2v.utils.envs import *
+from lightx2v.utils.input_info import SekoTalkRS2VInputInfo, SekoTalkS2VInputInfo
 from lightx2v.utils.profiler import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v.utils.utils import fixed_shape_resize, get_optimal_patched_size_with_sp, isotropic_crop_resize, load_weights, wan_vae_to_comfy
+from lightx2v.utils.utils import fixed_shape_resize, isotropic_crop_resize, load_weights, wan_vae_to_comfy
 from lightx2v.utils.va_controller import VAController
 from lightx2v_platform.base.global_var import AI_DEVICE
 
@@ -47,7 +48,7 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
 
     if bucket_shape is not None:
         """
-        "adaptive_shape": {
+        "bucket_shape": {
             "0.667": [[480, 832], [544, 960], [720, 1280]],
             "1.500": [[832, 480], [960, 544], [1280, 720]],
             "1.000": [[480, 480], [576, 576], [704, 704], [960, 960]]
@@ -56,23 +57,23 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
         bucket_config = {}
         for ratio, resolutions in bucket_shape.items():
             bucket_config[float(ratio)] = np.array(resolutions, dtype=np.int64)
-        # logger.info(f"[wan_audio] use custom bucket_shape: {bucket_config}")
     else:
         bucket_config = {
             0.667: np.array([[480, 832], [544, 960], [720, 1280]], dtype=np.int64),
             1.500: np.array([[832, 480], [960, 544], [1280, 720]], dtype=np.int64),
             1.000: np.array([[480, 480], [576, 576], [704, 704], [960, 960]], dtype=np.int64),
         }
-        # logger.info(f"[wan_audio] use default bucket_shape: {bucket_config}")
 
     ori_height = img.shape[-2]
     ori_weight = img.shape[-1]
     ori_ratio = ori_height / ori_weight
 
-    if resize_mode == "adaptive":
-        aspect_ratios = np.array(np.array(list(bucket_config.keys())))
+    if resize_mode in ("adaptive", "fixed_min_area", "fixed_max_area"):
+        aspect_ratios = np.array(list(bucket_config.keys()))
         closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
         closet_ratio = aspect_ratios[closet_aspect_idx]
+
+    if resize_mode == "adaptive":
         if ori_ratio < 1.0:
             target_h, target_w = 480, 832
         elif ori_ratio == 1.0:
@@ -83,7 +84,6 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
             if ori_height * ori_weight >= resolution[0] * resolution[1]:
                 target_h, target_w = resolution
     elif resize_mode == "keep_ratio_fixed_area":
-        area_in_pixels = 480 * 832
         if fixed_area == "480p":
             area_in_pixels = 480 * 832
         elif fixed_area == "720p":
@@ -95,12 +95,8 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
         target_h = round(np.sqrt(area_in_pixels * ori_ratio))
         target_w = round(np.sqrt(area_in_pixels / ori_ratio))
     elif resize_mode == "fixed_min_area":
-        aspect_ratios = np.array(np.array(list(bucket_config.keys())))
-        closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
-        closet_ratio = aspect_ratios[closet_aspect_idx]
         target_h, target_w = bucket_config[closet_ratio][0]
     elif resize_mode == "fixed_min_side":
-        min_side = 720
         if fixed_area == "1080p":
             min_side = 1080
         elif fixed_area == "720p":
@@ -117,9 +113,6 @@ def resize_image(img, resize_mode="adaptive", bucket_shape=None, fixed_area=None
             target_w = min_side
             target_h = round(target_w * ori_ratio)
     elif resize_mode == "fixed_max_area":
-        aspect_ratios = np.array(np.array(list(bucket_config.keys())))
-        closet_aspect_idx = np.argmin(np.abs(aspect_ratios - ori_ratio))
-        closet_ratio = aspect_ratios[closet_aspect_idx]
         target_h, target_w = bucket_config[closet_ratio][-1]
 
     cropped_img = isotropic_crop_resize(img, (target_h, target_w))
@@ -283,6 +276,7 @@ def load_image(image: Union[str, Image.Image], to_rgb: bool = True) -> Image.Ima
 
 @RUNNER_REGISTER("seko_talk")
 class WanAudioRunner(WanRunner):  # type:ignore
+    input_info_cls_by_task = {"s2v": SekoTalkS2VInputInfo, "rs2v": SekoTalkRS2VInputInfo}
     supported_request_fields_by_task = {
         task: COMMON_REQUEST_FIELDS
         | PROMPT_FIELDS
@@ -291,15 +285,24 @@ class WanAudioRunner(WanRunner):  # type:ignore
             "image_path",
             "num_frames",
             "video_duration",
+            "resize_mode",
+            "fixed_area",
+            "size",
         }
         for task in ("s2v", "rs2v")
     }
 
-    def get_supported_request_fields(self, task):
-        supported_request_fields = super().get_supported_request_fields(task)
-        if self.config.get("resize_mode") == "fixed_shape":
-            supported_request_fields |= {"size"}
-        return supported_request_fields
+    def create_input_info(self, request_data):
+        input_info = super().create_input_info(request_data)
+        # AR images use size directly and do not expose resize-mode requests.
+        if "resize_mode" in self.get_supported_request_fields(input_info.task):
+            if "size" in request_data and input_info.resize_mode != "fixed_shape":
+                raise ValueError("SekoTalk size requests require resize_mode=fixed_shape")
+            if input_info.resize_mode == "fixed_shape":
+                size = input_info.size
+                if not isinstance(size, (list, tuple)) or len(size) != 2 or any(type(dim) is not int or dim <= 0 for dim in size):
+                    raise ValueError("SekoTalk fixed_shape requires size with two positive integers: [height, width]")
+        return input_info
 
     def __init__(self, config):
         super().__init__(config)
@@ -380,21 +383,16 @@ class WanAudioRunner(WanRunner):  # type:ignore
         return audio_files, mask_files
 
     def _get_image_resize_kwargs(self):
-        resize_mode = self.config.get("resize_mode", "adaptive")
-        size = self.config.get("size")
-        if resize_mode == "fixed_shape":
-            size = self.input_info.size or size
         return {
-            "resize_mode": resize_mode,
+            "resize_mode": self.input_info.resize_mode,
             "bucket_shape": self.config.get("bucket_shape", None),
-            "fixed_area": self.config.get("fixed_area"),
-            "size": size,
+            "fixed_area": self.input_info.fixed_area,
+            "size": self.input_info.size or self.config.get("size"),
         }
 
     def _resolve_patched_spatial_size(self, h, w):
         patched_h = h // self.config["vae_stride"][1] // self.config["patch_size"][1]
         patched_w = w // self.config["vae_stride"][2] // self.config["patch_size"][2]
-        patched_h, patched_w = get_optimal_patched_size_with_sp(patched_h, patched_w, 1)
         latent_h = patched_h * self.config["patch_size"][1]
         latent_w = patched_w * self.config["patch_size"][2]
         size = [latent_h * self.config["vae_stride"][1], latent_w * self.config["vae_stride"][2]]
@@ -913,7 +911,7 @@ class WanAudioRunner(WanRunner):  # type:ignore
 @RUNNER_REGISTER("seko_talk_ar")
 class WanAudioARRunner(WanAudioRunner):
     supported_request_fields_by_task = {
-        "rs2v": (WanAudioRunner.supported_request_fields_by_task["rs2v"] - {"num_frames"}) | {"size"},
+        "rs2v": WanAudioRunner.supported_request_fields_by_task["rs2v"] - {"num_frames", "resize_mode", "fixed_area"},
     }
 
     def get_supported_request_fields(self, task):

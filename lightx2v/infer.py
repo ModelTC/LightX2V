@@ -116,6 +116,8 @@ def main():
         help="Input source video path. Its role is determined by the selected task.",
     )
     parser.add_argument("--video_duration", type=float, default=None, help="Requested output duration in seconds for audio-driven video generation.")
+    parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config.")
+    parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
     parser.add_argument("--image_strength", type=str, default=None, help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
     parser.add_argument(
         "--num_frames",

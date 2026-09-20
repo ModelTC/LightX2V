@@ -1,0 +1,8 @@
+{
+    "infer_steps": 40,
+    "resolution": 1024,
+    "vae_scale_factor": 16,
+    "attn_type": "flash_attn3",
+    "enable_cfg": false,
+    "sample_guide_scale": 1.0
+}

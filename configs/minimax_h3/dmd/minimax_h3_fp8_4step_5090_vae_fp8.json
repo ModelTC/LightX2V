@@ -52,6 +52,6 @@
     "seq_p_prepost_backend": "triton",
     "seq_p_tensor_fusion": true,
     "seq_p_head_parallel": true,
-    "seq_p_fp8_comm": true
+    "seq_p_quant_scheme": "fp8"
   }
 }

@@ -313,6 +313,8 @@ class VideoTaskRequest(BaseTaskRequest):
     sr_ratio: float = Field(2.0, gt=0)
     audio_path: str = ""
     video_duration: int = 5
+    resize_mode: Optional[str] = None
+    fixed_area: Optional[str] = None
     talk_objects: Optional[list[TalkObject]] = None
     ref_image_paths: list[str] = Field(default_factory=list)
 ```
@@ -342,7 +344,9 @@ Omitted or null `negative_prompt` defaults to `""`. Explicit strings, including 
 
 Single-task services use the task selected by `--task` at startup, so POST requests can omit `task`. For runners that support multiple tasks, every native JSON or form request must specify `task`; unsupported tasks are rejected. The OpenAI image generation and editing endpoints select `t2i` and `i2i`, respectively.
 
-Native image and video request schemas accept the inference fields supported by their runners, including animation conditions, action/state paths, LTX reference controls, and image-edit options. The runner validates whether a field is supported by the selected model, task, and startup configuration. Unknown JSON or form fields are rejected with HTTP 422; startup settings such as `infer_steps`, `resize_mode`, and `warmup` belong in the startup configuration.
+Native image and video request schemas accept the inference fields supported by their runners, including animation conditions, action/state paths, LTX reference controls, and image-edit options. The runner validates whether a field is supported by the selected model, task, and startup configuration. Unknown JSON or form fields are rejected with HTTP 422; startup settings such as `infer_steps` and `warmup` belong in the startup configuration.
+
+Only `seko_talk` tasks `s2v` and `rs2v` support `resize_mode` and `fixed_area` requests for image and mask resizing. Omitted or null values use the startup config. A `size` request for these tasks requires the configured or requested `resize_mode` to be `fixed_shape`.
 
 The `/form` endpoints accept the same named request fields as the JSON endpoints, alongside their existing file uploads. Encode structured values such as `size`, `image_frame_indices`, `image_strength` lists, `ref_image_paths`, `talk_objects`, and WorldPlay `pose` objects as JSON strings. For example, use `size='[480,832]'`. Text fields, including prompts and `layout_bboxes`, retain their submitted text.
 

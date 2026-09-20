@@ -12,7 +12,6 @@ imageio-ffmpeg
 einops
 loguru
 ftfy
-gradio
 aiohttp
 pydantic
 torchao

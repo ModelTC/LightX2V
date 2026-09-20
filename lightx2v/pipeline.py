@@ -122,7 +122,6 @@ class LightX2VPipeline:
         denoising_step_list=(1000, 750, 500, 250),
         config_json=None,
         rope_type="torch_complex_rope",
-        resize_mode=None,
         double_precision_rope=True,
         modulate_type=None,
         distilled_sigma_values=None,
@@ -151,8 +150,6 @@ class LightX2VPipeline:
         startup_config = dict(self.startup_config, config_json=config_json)
         if fps is not None:
             startup_config["fps"] = fps
-        if resize_mode is not None:
-            startup_config["resize_mode"] = resize_mode
 
         config = build_startup_config(startup_config)
         self.model_cls = config["model_cls"]

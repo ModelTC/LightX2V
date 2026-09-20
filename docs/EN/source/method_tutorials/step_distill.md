@@ -180,4 +180,4 @@ For more details, see [Service Deployment](https://lightx2v-en.readthedocs.io/en
 
 ### Usage in Gradio Interface
 
-See [Gradio Documentation](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_gradio.html)
+See the separate [Gradio-Lightx2v repository](https://github.com/ModelTC/Gradio-Lightx2v) for installation and usage instructions.
