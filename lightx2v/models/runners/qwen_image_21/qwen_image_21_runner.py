@@ -105,8 +105,12 @@ class QwenImage21Runner(DefaultRunner):
             width, height = images[-1].size
         else:
             height = width = resolution
-        if height < 32 or width < 32 or height % 32 or width % 32:
-            raise ValueError("Output height and width must be positive multiples of 32")
+        if height < 32 or width < 32:
+            raise ValueError("Output height and width must be at least 32")
+        if height % 32 or width % 32:
+            logger.warning(f"Output height and width ({height}, {width}) are not divisible by 32 and will be rounded down to multiples of 32")
+        height = height // 32 * 32
+        width = width // 32 * 32
         info.size = [height, width]
         scale = self.config["vae_scale_factor"]
         info.latent_shape = (1, 1, self.config["in_channels"], height // scale, width // scale)

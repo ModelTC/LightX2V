@@ -39,7 +39,9 @@ bash scripts/qwen_image_21/qwen_image_21_i2i.sh
 
 Edit `--prompt`, `--image_path`, `--size`, `--seed`, and `--save_result_path` directly in the script as needed.
 
-`--size` takes height followed by width, both positive multiples of 32. By default, the scripts generate 1024×1024 images.
+Use `--size HEIGHT WIDTH`. Both dimensions must be at least 32; non-multiples of 32 are rounded down automatically.
+
+For image-to-image, remove the script's `--size` argument to determine the output size from the reference image's aspect ratio. The pixel count is approximately `resolution²` (`resolution` defaults to `1024` in the config), with each dimension rounded to the nearest multiple of 32.
 
 ## 4. Service Deployment and API Usage
 
@@ -62,5 +64,7 @@ python scripts/qwen_image_21/server/post_i2i.py
 ```
 
 Edit `url`, `message`, and `output_path` directly; for image-to-image, also set `image_path`. The scripts already specify `task: "t2i"` and `task: "i2i"`, respectively.
+
+Service requests follow the same size rules. For automatic image-to-image sizing, remove `size` from `message`.
 
 The image-to-image script reads a local image on the client, encodes it as Base64, and uploads it in the request's `image_path` field. Both scripts wait for generation to finish, receive PNG binary data from the server, and save it to the client's `output_path`.

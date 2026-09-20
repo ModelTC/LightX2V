@@ -11,7 +11,7 @@ if __name__ == "__main__":
         "task": "t2i",
         "prompt": "A capybara wearing a wizard hat, oil painting",
         "seed": 42,
-        "size": [1024, 1024],
+        "size": [1024, 1024],  # [height, width]
     }
 
     logger.info(f"message: {message}")

@@ -14,7 +14,7 @@ if __name__ == "__main__":
         "prompt": "Keep the main subject unchanged and replace the background with a sunlit garden.",
         "image_path": base64.b64encode(image_path.read_bytes()).decode("utf-8"),
         "seed": 42,
-        "size": [1024, 1024],
+        "size": [1024, 1024],  # [height, width]
     }
 
     logger.info(f"image_path: {image_path}, prompt: {message['prompt']}")
