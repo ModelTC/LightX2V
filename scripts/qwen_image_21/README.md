@@ -1,4 +1,4 @@
-# Qwen-Image-2.1 Usage
+# Qwen-Image-2.1 Deployment Guide
 
 ## 1. Model Download
 
@@ -51,11 +51,9 @@ bash scripts/qwen_image_21/server/start_server.sh
 
 The default port is `8000`. One server loads a single set of weights and supports both text-to-image and image-to-image requests. No `task` is needed at startup.
 
-Once the server is ready, open another terminal, enter the same container, and send requests:
+Once the server is ready, open a new terminal in the same container and send requests:
 
 ```bash
-docker exec -it -w /workspace/LightX2V lightx2v-qwen21 bash
-
 # Text-to-image
 python scripts/qwen_image_21/server/post_t2i.py
 
