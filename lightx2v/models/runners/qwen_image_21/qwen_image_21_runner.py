@@ -36,7 +36,6 @@ class QwenImage21Runner(DefaultRunner):
     def __init__(self, config):
         unsupported = (
             "cpu_offload",
-            "text_encoder_cpu_offload",
             "vae_cpu_offload",
             "lazy_load",
             "unload_modules",
@@ -168,10 +167,20 @@ class QwenImage21Runner(DefaultRunner):
         branches = [("cond", info.prompt)]
         if self.config["enable_cfg"]:
             branches.append(("uncond", info.negative_prompt or ""))
-        for name, prompt in branches:
-            branch = self.text_encoders[0].infer(prompt, images)
-            branch["layout"] = build_token_layout(branch["image_mask"], shapes, self.config["axes_dims_rope"], rope=self.model.transformer_infer.rope)
-            outputs[name] = branch
+        encoder = self.text_encoders[0]
+        offload = self.config.get("text_encoder_cpu_offload", False)
+        try:
+            if offload:
+                with ProfilingContext4DebugL1("Onload Text Encoder"):
+                    encoder.to_cuda()
+            for name, prompt in branches:
+                branch = encoder.infer(prompt, images)
+                branch["layout"] = build_token_layout(branch["image_mask"], shapes, self.config["axes_dims_rope"], rope=self.model.transformer_infer.rope)
+                outputs[name] = branch
+        finally:
+            if offload:
+                with ProfilingContext4DebugL1("Offload Text Encoder"):
+                    encoder.to_cpu()
         return outputs
 
     @ProfilingContext4DebugL1("Run VAE Encoder")
