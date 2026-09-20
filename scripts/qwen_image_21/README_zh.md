@@ -1,4 +1,4 @@
-# Qwen-Image-2.1 使用说明
+# Qwen-Image-2.1 部署指南
 
 ## 1. 模型下载
 
@@ -51,11 +51,9 @@ bash scripts/qwen_image_21/server/start_server.sh
 
 默认端口为 `8000`。服务只加载一套权重，启动时无需指定 `task`，同一个服务支持文生图和图生图。
 
-服务启动完成后，新开终端进入同一容器并发送请求：
+服务启动完成后，在同一容器新开终端并发送请求：
 
 ```bash
-docker exec -it -w /workspace/LightX2V lightx2v-qwen21 bash
-
 # 文生图
 python scripts/qwen_image_21/server/post_t2i.py
 
