@@ -182,11 +182,22 @@ def load_model_config(config):
             config.setdefault("vae_scale_factor_spatial", 8)
             config.setdefault("vae_scale_factor_temporal", 4)
             config.setdefault("vae_scale_factor", 8)
-    elif config["model_cls"] == "minimax_h3":
-        model_variant = config.get("model_variant")
-        if model_variant not in ("fl2av", "ref2av"):
-            raise ValueError("MiniMax-H3 requires model_variant='fl2av' or 'ref2av'; set --model-variant when starting the model")
-        transformer_subfolder = "transformer_ref" if model_variant == "ref2av" else "transformer"
+    elif config["model_cls"] in ("minimax_h3", "minimax_h3_causal"):
+        causal = config["model_cls"] == "minimax_h3_causal"
+        if causal:
+            if config.get("task") != "refa2v":
+                raise ValueError("MiniMax-H3 causal currently supports task='refa2v'; set --task refa2v when starting the model")
+            if not config.get("dit_original_ckpt"):
+                raise ValueError("MiniMax-H3 causal inference requires dit_original_ckpt pointing to the causal checkpoint")
+            config.pop("model_variant", None)
+            # Read only the shared H3 architecture config here; causal weights
+            # are loaded from dit_original_ckpt.
+            transformer_subfolder = "transformer"
+        else:
+            model_variant = config.get("model_variant")
+            if model_variant not in ("fl2av", "ref2av"):
+                raise ValueError("MiniMax-H3 requires model_variant='fl2av' or 'ref2av'; set --model-variant when starting the model")
+            transformer_subfolder = "transformer_ref" if model_variant == "ref2av" else "transformer"
         transformer_path = os.path.join(config["model_path"], transformer_subfolder)
         transformer_config_path = os.path.join(transformer_path, "config.json")
         if not os.path.isfile(transformer_config_path):
@@ -194,9 +205,10 @@ def load_model_config(config):
         with open(transformer_config_path, "r") as f:
             model_config = json.load(f)
         config.update(model_config)
-        config["model_variant"] = model_variant
-        config.pop("task", None)
-        config["dit_original_ckpt"] = transformer_path
+        if not causal:
+            config["model_variant"] = model_variant
+            config.pop("task", None)
+            config["dit_original_ckpt"] = transformer_path
         if config.get("dit_quantized_ckpt"):
             config["dit_quantized"] = True
             config["dit_quant_scheme"] = {
@@ -263,7 +275,7 @@ def load_model_config(config):
         config["vae_scale_factor_spatial"] = int(config.get("vae_scale_factor_spatial", 8))
         config["vae_scale_factor_temporal"] = int(config.get("vae_scale_factor_temporal", 4))
         config["vae_scale_factor"] = config["vae_scale_factor_spatial"]
-    if config["model_cls"] == "minimax_h3":
+    if config["model_cls"] in ("minimax_h3", "minimax_h3_causal"):
         # The generic Diffusers-VAE heuristic above counts six encoder stages
         # and would incorrectly derive 32. H3 downsamples space by exactly 16.
         config["vae_spatial_scale_factor"] = 16
@@ -297,7 +309,12 @@ def load_model_config(config):
         config["num_frames"] = (latent_frames - 1) * temporal_stride + 1
         logger.info(f"Auto-set LingBot-VA num_frames={config['num_frames']} from {latent_frames} latent frames and temporal stride {temporal_stride}.")
 
-    if config["model_cls"] != "minimax_h3" and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"] and config.get("num_frames") is not None and "vae_stride" in config:
+    if (
+        config["model_cls"] not in ("minimax_h3", "minimax_h3_causal")
+        and config["task"] in ["i2v", "t2av", "i2av", "i2va", "s2v", "rs2v", "ltx2_s2v", "v2av"]
+        and config.get("num_frames") is not None
+        and "vae_stride" in config
+    ):
         temporal_stride = int(config["vae_stride"][0])
         if (config["num_frames"] - 1) % temporal_stride != 0:
             original_length = config["num_frames"]

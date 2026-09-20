@@ -1,7 +1,7 @@
 """Build a MiniMax-H3 AdaLN cache without loading the full model.
 
 ADALN CACHE SYNC CONTRACT:
-The calculations in ``_build_cache`` intentionally mirror the online BF16
+The calculations in ``_build_cache`` intentionally mirror the online mixed-precision
 path in ``infer/pre_infer.py``, ``infer/transformer_infer.py``, and
 ``infer/post_infer.py``. If timestep embedding, time-MLP activation/dtype,
 AdaLN projection/reshape, final-norm modulation, or their checkpoint keys are
@@ -40,7 +40,7 @@ def _checkpoint_files(config) -> list[Path]:
     checkpoint = Path(config["dit_original_ckpt"]).expanduser().resolve()
     files = sorted(checkpoint.glob("*.safetensors")) if checkpoint.is_dir() else [checkpoint]
     if not files or any(not path.is_file() for path in files):
-        raise FileNotFoundError(f"MiniMax-H3 safetensors checkpoint not found: {checkpoint}")
+        raise FileNotFoundError(f"MiniMax-H3 checkpoint not found: {checkpoint}")
     return files
 
 
@@ -49,7 +49,8 @@ class _CheckpointTensors:
 
     def __init__(self, files: list[Path]):
         self.files = files
-        self.locations = self._find_locations()
+        self.tensors = torch.load(files[0], mmap=True, weights_only=True, map_location="cpu") if len(files) == 1 and files[0].suffix == ".pt" else None
+        self.locations = self._find_locations() if self.tensors is None else {}
 
     def _find_locations(self) -> dict[str, Path]:
         directory = self.files[0].parent
@@ -66,11 +67,17 @@ class _CheckpointTensors:
         return locations
 
     def get(self, name: str) -> torch.Tensor:
-        path = self.locations.get(name)
-        if path is None:
-            raise KeyError(f"MiniMax-H3 checkpoint tensor is missing: {name}")
-        with safe_open(path, framework="pt", device="cpu") as source:
-            return source.get_tensor(name)
+        if self.tensors is not None:
+            tensor = self.tensors[name]
+        else:
+            path = self.locations.get(name)
+            if path is None:
+                raise KeyError(f"MiniMax-H3 checkpoint tensor is missing: {name}")
+            with safe_open(path, framework="pt", device="cpu") as source:
+                tensor = source.get_tensor(name)
+        # Both H3 variants compute the time MLP in FP32 and modulation projections in BF16.
+        dtype = torch.float32 if name.startswith("time_embedder.") else torch.bfloat16
+        return tensor.to(device=AI_DEVICE, dtype=dtype)
 
 
 def _linear(
@@ -101,10 +108,10 @@ def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> 
         with torch.inference_mode():
             # ADALN CACHE SYNC: Keep activation placement and casts aligned with
             # the three online infer modules named in this file's contract.
-            time_weight_1 = checkpoint.get("time_embedder.linear_1.weight").to(AI_DEVICE)
-            time_bias_1 = checkpoint.get("time_embedder.linear_1.bias").to(AI_DEVICE)
-            time_weight_2 = checkpoint.get("time_embedder.linear_2.weight").to(AI_DEVICE)
-            time_bias_2 = checkpoint.get("time_embedder.linear_2.bias").to(AI_DEVICE)
+            time_weight_1 = checkpoint.get("time_embedder.linear_1.weight")
+            time_bias_1 = checkpoint.get("time_embedder.linear_1.bias")
+            time_weight_2 = checkpoint.get("time_embedder.linear_2.weight")
+            time_bias_2 = checkpoint.get("time_embedder.linear_2.bias")
 
             adaln_inputs = {}
             for entry in spec["entries"]:
@@ -117,8 +124,8 @@ def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> 
             del time_weight_1, time_bias_1, time_weight_2, time_bias_2
             _empty_device_cache()
 
-            norm_out_weight = checkpoint.get("norm_out.linear.weight").to(AI_DEVICE)
-            norm_out_bias = checkpoint.get("norm_out.linear.bias").to(AI_DEVICE)
+            norm_out_weight = checkpoint.get("norm_out.linear.weight")
+            norm_out_bias = checkpoint.get("norm_out.linear.bias")
             cache_tables = {
                 _norm_out_key(entry): _linear(
                     adaln_inputs[entry["name"]],
@@ -135,8 +142,8 @@ def _build_cache(spec: dict, cache_path: Path, checkpoint_files: list[Path]) -> 
             # Only one full, unsharded block projection is resident at a time.
             for block_index in range(spec["num_layers"]):
                 prefix = f"transformer_blocks.{block_index}.adaln_proj.linear"
-                weight = checkpoint.get(f"{prefix}.weight").to(AI_DEVICE)
-                bias = checkpoint.get(f"{prefix}.bias").to(AI_DEVICE)
+                weight = checkpoint.get(f"{prefix}.weight")
+                bias = checkpoint.get(f"{prefix}.bias")
                 for entry in spec["entries"]:
                     modulation = _linear(adaln_inputs[entry["name"]], weight, bias)
                     table = modulation.view(*_expected_table_shape(spec, entry))

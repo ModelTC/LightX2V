@@ -94,20 +94,24 @@ class MiniMaxH3PreInfer:
         freqs = torch.cat((freqs, freqs), dim=-1)
         return freqs.cos(), freqs.sin()
 
-    def infer(self, weights, prompt_embeds):
+    def prepare_inputs(self, weights, prompt_embeds):
         layout = self.scheduler.layout
         bulk_dtype = GET_DTYPE()
 
         video_embeds = weights.proj_in.apply(self.scheduler.video_latents.float()).to(bulk_dtype)
         audio_embeds = weights.audio_proj_in.apply(self.scheduler.audio_latents.float()).to(bulk_dtype)
-        text_embeds = weights.context_embedder.apply(prompt_embeds.to(bulk_dtype))
-        text_embeds = self._refine_text(weights, text_embeds)
-
-        hidden_states = text_embeds.new_zeros((layout.sequence_length, self.hidden_size))
-        hidden_states.index_copy_(0, layout.text_indices, text_embeds)
+        hidden_states = video_embeds.new_zeros((layout.sequence_length, self.hidden_size))
+        if layout.text_indices.numel():
+            text_embeds = weights.context_embedder.apply(prompt_embeds.to(bulk_dtype))
+            text_embeds = self._refine_text(weights, text_embeds)
+            hidden_states.index_copy_(0, layout.text_indices, text_embeds)
         hidden_states.index_copy_(0, layout.audio_indices, audio_embeds)
         hidden_states.index_copy_(0, layout.video_indices, video_embeds)
+        return hidden_states, self._rotary_embedding(layout.position_ids)
 
+    def infer(self, weights, prompt_embeds):
+        layout = self.scheduler.layout
+        hidden_states, rotary_emb = self.prepare_inputs(weights, prompt_embeds)
         temb = None
         if not self.use_adaln_cache:
             # ADALN CACHE SYNC: Any change to this time-MLP sequence, activation,
@@ -123,7 +127,7 @@ class MiniMaxH3PreInfer:
             temb=temb,
             timestep_indices=timestep_indices,
             adaln_indices=adaln_indices,
-            rotary_emb=self._rotary_embedding(layout.position_ids),
+            rotary_emb=rotary_emb,
             video_indices=layout.video_indices,
             audio_indices=layout.audio_indices,
             text_indices=layout.text_indices,
