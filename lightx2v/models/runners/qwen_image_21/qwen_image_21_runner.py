@@ -6,7 +6,6 @@ import torch
 from PIL import Image
 from loguru import logger
 
-from lightx2v.common.kvcache.manager import KVCacheManager
 from lightx2v.models.input_encoders.hf.qwen_image_21.qwen3vl import QwenImage21TextEncoder
 from lightx2v.models.networks.qwen_image_21.infer.pre_infer import build_token_layout
 from lightx2v.models.networks.qwen_image_21.model import QwenImage21TransformerModel
@@ -16,7 +15,6 @@ from lightx2v.models.schedulers.qwen_image_21.scheduler import QwenImage21Schedu
 from lightx2v.models.video_encoders.hf.qwen_image_21.vae import QwenImage21VAE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1, ProfilingContext4DebugL2
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
-from lightx2v_platform.base.global_var import AI_DEVICE
 
 
 def image_dimensions(resolution, ratio):
@@ -61,7 +59,6 @@ class QwenImage21Runner(DefaultRunner):
         if config["infer_steps"] < 1:
             raise ValueError("infer_steps must be positive")
         super().__init__(config)
-        self.kv_cache_manager = None
 
     def init_scheduler(self):
         self.scheduler = QwenImage21Scheduler(self.config)
@@ -122,7 +119,7 @@ class QwenImage21Runner(DefaultRunner):
             branches.append(("uncond", info.negative_prompt or ""))
         for name, prompt in branches:
             branch = self.text_encoders[0].infer(prompt, images)
-            branch["layout"] = build_token_layout(branch["image_mask"], shapes, self.config["axes_dims_rope"])
+            branch["layout"] = build_token_layout(branch["image_mask"], shapes, self.config["axes_dims_rope"], rope=self.model.transformer_infer.rope)
             outputs[name] = branch
         return outputs
 
@@ -140,21 +137,12 @@ class QwenImage21Runner(DefaultRunner):
     def init_run(self):
         self.get_video_segment_num()
         self.scheduler.prepare(self.input_info)
-        cache_config = {
-            "num_layers": self.config["num_layers"],
-            "num_heads": self.config["num_attention_heads"],
-            "dim": self.config["num_attention_heads"] * self.config["attention_head_dim"],
-        }
-        self.kv_cache_manager = KVCacheManager(cache_config, device=torch.device(AI_DEVICE))
-        for name in ("cond", "uncond"):
-            if name in self.inputs:
-                branch = self.inputs[name]
-                # Condition K/V are timestep-independent and always use one static cache.
-                branch["cache"] = self.kv_cache_manager.create_self_attn_kv_cache(name, branch["layout"].prefix_len, kv_cache_scheme="static", step_kv_cache=False)
 
     @ProfilingContext4DebugL2("Run DiT")
     def run_main(self):
         self.init_run()
+        with ProfilingContext4DebugL1("Prefill condition KV"):
+            self.model.prefill_condition_kv(self.inputs)
         return self.run_segment()
 
     @ProfilingContext4DebugL1("Run VAE Decoder")
@@ -173,10 +161,7 @@ class QwenImage21Runner(DefaultRunner):
         return {"images": images if input_info.return_result_tensor else None}
 
     def end_run(self):
-        if self.kv_cache_manager is not None:
-            for cache in self.kv_cache_manager.self_attn_kv_caches.values():
-                cache.reset()
-        self.kv_cache_manager = None
+        self.model.clear_condition_kv()
         self.inputs = None
         self.scheduler.clear()
         self.input_info = None
