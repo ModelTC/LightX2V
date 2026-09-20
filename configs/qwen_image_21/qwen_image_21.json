@@ -11,5 +11,6 @@
     "fused_block_ops": true,
     "fused_block_min_tokens": 1024,
     "enable_cfg": false,
-    "sample_guide_scale": 1.0
+    "sample_guide_scale": 1.0,
+    "warmup": true
 }
