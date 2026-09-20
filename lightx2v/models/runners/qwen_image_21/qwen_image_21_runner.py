@@ -60,6 +60,11 @@ class QwenImage21Runner(DefaultRunner):
             raise ValueError("infer_steps must be positive")
         super().__init__(config)
 
+    def get_supported_tasks(self):
+        if self.config.get("task") is not None:
+            return super().get_supported_tasks()
+        return ("t2i", "i2i")
+
     def init_scheduler(self):
         self.scheduler = QwenImage21Scheduler(self.config)
 
@@ -83,7 +88,7 @@ class QwenImage21Runner(DefaultRunner):
         info = self.input_info
         resolution = self.config["resolution"]
         images = []
-        if self.config["task"] == "i2i":
+        if info.task == "i2i":
             if not info.image_path:
                 raise ValueError("Image editing requires --image_path (comma separated for multiple images)")
             for path in info.image_path.split(","):
