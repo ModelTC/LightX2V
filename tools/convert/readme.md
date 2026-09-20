@@ -468,3 +468,20 @@ Set `dit_quantized_ckpt` in `configs/qwen_image_21/qwen_image_21_fp8_5090.json`.
 Set the project and original model paths in `scripts/qwen_image_21/qwen_image_21_t2i_fp8_5090.sh`, then run the script.
 The script reads that JSON directly without generating or changing configuration.
 Keep `model_path` pointed at the original model for the encoder, VAE, scheduler and model configuration.
+
+### FP16 accumulation on SM120
+
+Use the reduced-range profile when converting weights for `fp8-f16-accum`:
+
+```bash
+python tools/convert/converter.py \
+    --source /path/to/Qwen-Image-2.1/transformer \
+    --output /path/to/Qwen-Image-2.1-fp8-f16-accum \
+    --output_name qwen_image_21_fp8_f16_accum \
+    --model_type qwen_image_21_dit \
+    --quantization_profile qwen-image-21-fp8-f16-accum \
+    --quantized --linear_type fp8 --device cuda:0 --single_file
+```
+
+This profile uses weight qmax=14. The `qwen_image_21_fp8_f16_accum_5090.json` config selects `fp8-f16-accum` and activation qmax=7 through `dit_fp8_activation_qmax`. Set its checkpoint path and the project/model paths in `qwen_image_21_t2i_fp8_f16_accum_5090.sh`.
+Requires the SM120 FP16 accumulation op in lightx2v-kernel. Startup rejects ordinary FP8 checkpoints and unavailable kernels. Raising activation qmax can overflow FP16 accumulation; validate numerical and image quality when changing it.

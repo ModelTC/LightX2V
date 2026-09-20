@@ -1,4 +1,5 @@
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
+from lightx2v.models.networks.qwen_image_21.fp8_f16_accum_policy import ACTIVATION_QMAX
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, LN_WEIGHT_REGISTER, MM_WEIGHT_REGISTER, RMS_WEIGHT_REGISTER
 
 
@@ -16,7 +17,10 @@ class QwenImage21BlockWeights(WeightModule):
             "gate": "img_mlp.gate_layer",
             "down": "img_mlp.out",
         }.items():
-            self.add_module(name, MM_WEIGHT_REGISTER[mm_type](f"{prefix}.{key}.weight", bias_name=None))
+            linear = MM_WEIGHT_REGISTER[mm_type](f"{prefix}.{key}.weight", bias_name=None)
+            if mm_type == "fp8-f16-accum":
+                linear.enable_fp8_f16_accum(config.get("dit_fp8_activation_qmax", ACTIVATION_QMAX))
+            self.add_module(name, linear)
         for name in ("q", "k"):
             self.add_module(f"norm_{name}", RMS_WEIGHT_REGISTER[config.get("rms_norm_type", "fp32_variance")](f"{prefix}.attn.norm_{name}.weight", eps=config["eps"]))
         for name in ("norm1", "norm2"):

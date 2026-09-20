@@ -29,6 +29,12 @@ from h3_fp8_f16_accum import (  # noqa: E402
     create_h3_fp8_f16_accum_quantization,
 )
 from quant import *  # noqa: E402
+from qwen_image_21_fp8_f16_accum import (  # noqa: E402
+    QUANTIZATION_PROFILE as QWEN_IMAGE_21_FP8_F16_ACCUM_PROFILE,
+)
+from qwen_image_21_fp8_f16_accum import (  # noqa: E402
+    QwenImage21FP8F16AccumQuantization,
+)
 
 from lightx2v.utils.lora_loader import LoRALoader  # noqa: E402
 from lightx2v.utils.registry_factory import CONVERT_WEIGHT_REGISTER  # noqa: E402
@@ -1052,7 +1058,7 @@ def main():
     parser.add_argument("--comfyui_mode", action="store_true")
     parser.add_argument("--full_quantized", action="store_true")
     parser.add_argument("--quantized", action="store_true")
-    parser.add_argument("--quantization_profile", choices=[FP8_F16_ACCUM_QUANTIZATION_PROFILE])
+    parser.add_argument("--quantization_profile", choices=[FP8_F16_ACCUM_QUANTIZATION_PROFILE, QWEN_IMAGE_21_FP8_F16_ACCUM_PROFILE])
     parser.add_argument("--bits", type=int, default=8, choices=[8], help="Quantization bit width")
     parser.add_argument("--vae_encoder_conv_mode", choices=FP8_ENCODER_CONV_MODES)
     parser.add_argument(
@@ -1247,9 +1253,12 @@ def main():
     args.quantization_policy = None
     if args.quantization_profile is not None:
         if not args.quantized or args.linear_type != "fp8" or not args.single_file or args.output_ext != ".safetensors" or args.comfyui_mode:
-            parser.error("H3 FP8-F16 accumulation conversion requires --quantized --linear_type fp8 --output_ext .safetensors --single_file without --comfyui_mode")
+            parser.error("FP8-F16 accumulation conversion requires --quantized --linear_type fp8 --output_ext .safetensors --single_file without --comfyui_mode")
         try:
-            args.quantization_policy = create_h3_fp8_f16_accum_quantization(args.quantization_profile, args.model_type)
+            if args.quantization_profile == QWEN_IMAGE_21_FP8_F16_ACCUM_PROFILE:
+                args.quantization_policy = QwenImage21FP8F16AccumQuantization(args.model_type)
+            else:
+                args.quantization_policy = create_h3_fp8_f16_accum_quantization(args.quantization_profile, args.model_type)
         except ValueError as profile_error:
             parser.error(str(profile_error))
 
