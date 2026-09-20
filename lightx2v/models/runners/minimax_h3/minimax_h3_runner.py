@@ -108,7 +108,7 @@ class MiniMaxH3Runner(DefaultRunner):
         if config.get("lazy_load", False) or config.get("unload_modules", False):
             raise NotImplementedError("MiniMax-H3 does not support lazy_load or unload_modules yet; use the released sharded checkpoint with model or block CPU offload.")
         super().__init__(config)
-        self.loaded_transformer_partition = "transformer_ref" if config["model_variant"] == "ref2av" else "transformer"
+        self.loaded_transformer_partition = "transformer_ref" if config.get("model_variant") == "ref2av" else "transformer"
 
     def get_supported_tasks(self):
         """Return tasks supported by the loaded transformer weights."""
@@ -610,6 +610,17 @@ class MiniMaxH3Runner(DefaultRunner):
         torch_device_module.synchronize()
         self.maybe_empty_cache(force=True, collect_garbage=True)
 
+    def set_vae_decode_tile_shape(self):
+        if self._vae_decode_tile_shapes:
+            resolution = f"{self.request_height}x{self.request_width}"
+            default_tile_shape = (
+                self.video_vae.tile_sample_min_height,
+                self.video_vae.tile_sample_min_width,
+            )
+            tile_shape = self._vae_decode_tile_shapes.get(resolution, default_tile_shape)
+            self.video_vae.set_decode_tile_shape(*tile_shape)
+            logger.info(f"MiniMax-H3 Video VAE decode tile shape for {resolution}: {tile_shape[0]}x{tile_shape[1]}")
+
     @ProfilingContext4DebugL1(
         "Run VAE Decoder",
         recorder_mode=GET_RECORDER_MODE(),
@@ -628,15 +639,7 @@ class MiniMaxH3Runner(DefaultRunner):
             patch_size=tuple(self.config.get("patch_size", (1, 2, 2))),
         )
         audio_latents = unpack_audio_tokens(audio_rows, self.scheduler.num_audio_latents)
-        if self._vae_decode_tile_shapes:
-            resolution = f"{self.request_height}x{self.request_width}"
-            default_tile_shape = (
-                self.video_vae.tile_sample_min_height,
-                self.video_vae.tile_sample_min_width,
-            )
-            tile_shape = self._vae_decode_tile_shapes.get(resolution, default_tile_shape)
-            self.video_vae.set_decode_tile_shape(*tile_shape)
-            logger.info(f"MiniMax-H3 Video VAE decode tile shape for {resolution}: {tile_shape[0]}x{tile_shape[1]}")
+        self.set_vae_decode_tile_shape()
 
         with ProfilingContext4DebugL1("Run Video VAE Decoder"):
             video = self.video_vae.decode(video_latents)

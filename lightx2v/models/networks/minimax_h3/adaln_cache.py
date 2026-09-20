@@ -37,6 +37,8 @@ def _cache_root(config) -> Path:
 
 
 def _selected_profiles(config) -> list[str]:
+    if config["model_cls"] == "minimax_h3_causal":
+        return ["refa2v_condition", "refa2v_media"]
     model_variant = config["model_variant"]
     if model_variant == "ref2av":
         # Ref2AV always has visual reference rows and may additionally have
@@ -76,6 +78,12 @@ def _cache_entries(config, profiles: list[str]) -> list[dict]:
     for profile in profiles:
         for step, (video_timestep, audio_timestep) in enumerate(zip(video_timesteps.tolist(), audio_timesteps.tolist())):
             values = [video_timestep, audio_timestep]
+            if profile == "refa2v_condition":
+                # Prefill has timestep-dependent text and fixed noisy references.
+                values = [video_timestep, 0.999]
+            elif profile == "refa2v_media":
+                # Each media chunk contains noisy video and clean audio.
+                values = [video_timestep, 1.0]
             if profile in {"conditioned", "ref2av_video", "ref2av_video_audio"}:
                 values.append(max(video_timestep, KEYFRAME_NOISE_AUG))
             if profile == "ref2av_video_audio":
@@ -95,7 +103,7 @@ def _build_spec(config) -> dict:
         raise ValueError("Building or loading an AdaLN cache requires use_adaln_cache=true")
     validate_adaln_cache_config(config)
     profiles = _selected_profiles(config)
-    return {
+    spec = {
         "infer_steps": int(config["infer_steps"]),
         "video_flow_shift": float(config.get("video_flow_shift", 12.0)),
         "audio_flow_shift": float(config.get("audio_flow_shift", 3.0)),
@@ -104,14 +112,23 @@ def _build_spec(config) -> dict:
         "freq_dim": int(config.get("freq_dim", 256)),
         "entries": _cache_entries(config, profiles),
     }
+    if config["model_cls"] == "minimax_h3_causal":
+        # Track the time-MLP precision so caches from the old all-BF16 policy
+        # cannot be reused. Checkpoint replacement also invalidates the cache.
+        checkpoint = Path(config["dit_original_ckpt"]).expanduser().resolve()
+        files = sorted(checkpoint.glob("*.safetensors")) if checkpoint.is_dir() else [checkpoint]
+        spec["projection_dtype"] = "fp32"
+        spec["checkpoint"] = [{"path": str(path), "size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns} for path in files]
+    return spec
 
 
 def _cache_path(config) -> Path:
-    cache_name = config["model_variant"]
+    model = config["model_cls"]
+    cache_name = "refa2v" if model == "minimax_h3_causal" else config["model_variant"]
     infer_steps = int(config["infer_steps"])
     video_flow_shift = float(config.get("video_flow_shift", 12.0))
     audio_flow_shift = float(config.get("audio_flow_shift", 3.0))
-    return _cache_root(config) / "minimax_h3" / f"{cache_name}_{infer_steps:02d}steps_shift_{video_flow_shift}_{audio_flow_shift}"
+    return _cache_root(config) / model / f"{cache_name}_{infer_steps:02d}steps_shift_{video_flow_shift}_{audio_flow_shift}"
 
 
 def _expected_table_shape(spec: dict, entry: dict) -> tuple[int, int]:

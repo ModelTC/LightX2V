@@ -313,6 +313,12 @@ class Ref2AVInputInfo(T2AVInputInfo):
 
 
 @dataclass
+class RefA2VInputInfo(T2AVInputInfo):
+    image_path: Any = ""
+    audio_path: str = ""
+
+
+@dataclass
 class I2VAInputInfo(InputInfo):
     prompt: str = ""
     negative_prompt: str = ""
@@ -463,6 +469,7 @@ INPUT_INFO_TYPES = {
     "l2av": L2AVInputInfo,
     "fl2av": FL2AVInputInfo,
     "ref2av": Ref2AVInputInfo,
+    "refa2v": RefA2VInputInfo,
     "i2va": I2VAInputInfo,
     "v2av": V2AVInputInfo,
     "ltx2_s2v": LTX2S2VInputInfo,

@@ -66,6 +66,7 @@ def main():
             "l2av",
             "fl2av",
             "ref2av",
+            "refa2v",
             "i2va",
             "v2av",
             "ltx2_s2v",
@@ -107,7 +108,7 @@ def main():
         "--audio_path",
         type=str,
         default=None,
-        help="Input audio path: Wan s2v / rs2v, LTX-2 ltx2_s2v, or MiniMax-H3 ref2av reference audio. H3 accepts comma-separated paths.",
+        help="Input audio path: driving audio for s2v / rs2v / ltx2_s2v / refa2v, or reference audio for MiniMax-H3 ref2av.",
     )
     parser.add_argument(
         "--video_path",
