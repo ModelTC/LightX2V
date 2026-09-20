@@ -16,6 +16,7 @@
 - `wan_dit`：Wan DiT 系列模型（默认）
 - `wan_animate_dit`：Wan Animate DiT 模型
 - `qwen_image_dit`：Qwen Image DiT 模型
+- `qwen_image_21_dit`：Qwen-Image-2.1 DiT block linear；保留非量化参数及其原始 dtype
 - `wan_t5`：Wan T5 文本编码器
 - `wan_clip`：Wan CLIP 视觉编码器
 
@@ -396,3 +397,24 @@ python tools/convert/export_dummy_meta.py \
     /data/temp/SekoTalk-v2.5-bf16-step4/ \
  -o /data/temp/SekoTalk-v2.5-bf16-step4-dummy
 ```
+
+## Qwen-Image-2.1 FP8 linear
+
+转换命令（先设置模型和输出路径）：
+
+```bash
+python tools/convert/converter.py \
+    --source /path/to/Qwen-Image-2.1/transformer \
+    --output /path/to/Qwen-Image-2.1-fp8 \
+    --output_name qwen_image_21_fp8 \
+    --model_type qwen_image_21_dit \
+    --quantized --linear_type fp8 --device cuda:0 --single_file
+```
+
+量化每层 Q/K/V/out 和 FFN gate/up/down，共 224 个矩阵，保留其他参数的原始 dtype。
+推理使用现有 `fp8-sgl` 后端（权重 E4M3 per-channel、激活动态 per-token 量化）。
+需安装支持当前 GPU 的 sgl-kernel。
+
+在 `configs/qwen_image_21/qwen_image_21_fp8_5090.json` 中设置 `dit_quantized_ckpt`；
+在 `scripts/qwen_image_21/qwen_image_21_t2i_fp8_5090.sh` 中设置项目路径及原模型路径后直接运行。
+脚本直接读取该 JSON，不生成或修改配置。`model_path` 指向原模型目录，用于加载模型配置、条件编码器、VAE 和 scheduler。

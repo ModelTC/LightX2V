@@ -18,6 +18,7 @@ A powerful model weight conversion tool that supports format conversion, quantiz
 - `wan_dit`: Wan DiT series models (default)
 - `wan_animate_dit`: Wan Animate DiT models
 - `qwen_image_dit`: Qwen Image DiT models
+- `qwen_image_21_dit`: Qwen-Image-2.1 DiT block linears; preserves non-quantized tensors and their dtypes
 - `wan_t5`: Wan T5 text encoder
 - `wan_clip`: Wan CLIP vision encoder
 
@@ -445,3 +446,25 @@ python converter.py \
     --output_name merged_model \
     --single_file
 ```
+
+## Qwen-Image-2.1 FP8 linears
+
+Set the source and output paths, then convert:
+
+```bash
+python tools/convert/converter.py \
+    --source /path/to/Qwen-Image-2.1/transformer \
+    --output /path/to/Qwen-Image-2.1-fp8 \
+    --output_name qwen_image_21_fp8 \
+    --model_type qwen_image_21_dit \
+    --quantized --linear_type fp8 --device cuda:0 --single_file
+```
+
+This quantizes the 224 block Q/K/V/out and FFN gate/up/down matrices while preserving other tensors and their dtypes.
+Inference uses the existing `fp8-sgl` backend with per-channel E4M3 weights and dynamic per-token activation quantization.
+Install sgl-kernel with support for your GPU.
+
+Set `dit_quantized_ckpt` in `configs/qwen_image_21/qwen_image_21_fp8_5090.json`.
+Set the project and original model paths in `scripts/qwen_image_21/qwen_image_21_t2i_fp8_5090.sh`, then run the script.
+The script reads that JSON directly without generating or changing configuration.
+Keep `model_path` pointed at the original model for the encoder, VAE, scheduler and model configuration.

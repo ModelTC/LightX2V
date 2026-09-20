@@ -1012,6 +1012,7 @@ def main():
             "wan_clip",
             "wan_animate_dit",
             "qwen_image_dit",
+            "qwen_image_21_dit",
             "qwen25vl_llm",
             "z_image_dit",
             "self_forcing",
@@ -1128,6 +1129,12 @@ def main():
 
         model_type_keys_map = {
             "z_image_dit": {"key_idx": 2, "target_keys": ["attention", "feed_forward", "adaLN_modulation", "linear"], "ignore_key": None},
+            "qwen_image_21_dit": {
+                "key_idx": 2,
+                "target_keys": ["attn", "img_mlp"],
+                "ignore_key": None,
+                "preserve_non_quant_dtype": True,
+            },
             "qwen_image_dit": {
                 "key_idx": 2,
                 "target_keys": ["attn", "img_mlp", "txt_mlp", "txt_mod", "img_mod"],

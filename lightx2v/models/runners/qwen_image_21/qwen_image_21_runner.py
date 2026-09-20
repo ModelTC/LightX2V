@@ -39,7 +39,6 @@ class QwenImage21Runner(DefaultRunner):
             "vae_cpu_offload",
             "lazy_load",
             "unload_modules",
-            "dit_quantized",
             "text_encoder_quantized",
             "shared_cpu_weights",
             "parallel",
@@ -55,6 +54,13 @@ class QwenImage21Runner(DefaultRunner):
         for key in unsupported:
             if config.get(key):
                 raise ValueError(f"qwen_image_21 does not yet support {key}")
+        if config.get("dit_quantized"):
+            if config.get("dit_quant_scheme") != "fp8-sgl":
+                raise ValueError("qwen_image_21 DiT quantization currently supports only fp8-sgl")
+            if not config.get("dit_quantized_ckpt"):
+                raise ValueError("qwen_image_21 FP8 requires dit_quantized_ckpt")
+        elif config.get("dit_quant_scheme", "Default") != "Default":
+            raise ValueError("dit_quant_scheme requires dit_quantized=true")
         if config.get("feature_caching", "NoCaching") != "NoCaching":
             raise ValueError("qwen_image_21 supports exact condition KV caching, not feature caching")
         if not config["causal_condition"]:

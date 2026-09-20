@@ -6,6 +6,7 @@ class QwenImage21BlockWeights(WeightModule):
     def __init__(self, index, config):
         super().__init__()
         prefix = f"transformer_blocks.{index}"
+        mm_type = config["dit_quant_scheme"] if config.get("dit_quantized", False) else "Default"
         for name, key in {
             "q": "attn.to_q",
             "k": "attn.to_k",
@@ -15,7 +16,7 @@ class QwenImage21BlockWeights(WeightModule):
             "gate": "img_mlp.gate_layer",
             "down": "img_mlp.out",
         }.items():
-            self.add_module(name, MM_WEIGHT_REGISTER["Default"](f"{prefix}.{key}.weight", bias_name=None))
+            self.add_module(name, MM_WEIGHT_REGISTER[mm_type](f"{prefix}.{key}.weight", bias_name=None))
         for name in ("q", "k"):
             self.add_module(f"norm_{name}", RMS_WEIGHT_REGISTER[config.get("rms_norm_type", "fp32_variance")](f"{prefix}.attn.norm_{name}.weight", eps=config["eps"]))
         for name in ("norm1", "norm2"):
