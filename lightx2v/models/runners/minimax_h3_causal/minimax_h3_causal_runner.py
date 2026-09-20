@@ -1,4 +1,7 @@
+import io
 import math
+import wave
+from contextlib import suppress
 
 import torch
 import torch.distributed as dist
@@ -16,7 +19,10 @@ from lightx2v.models.runners.request_fields import COMMON_REQUEST_FIELDS, VIDEO_
 from lightx2v.models.schedulers.minimax_h3_causal.scheduler import MiniMaxH3CausalScheduler
 from lightx2v.models.video_encoders.hf.minimax_h3_causal.streaming import MiniMaxH3StreamingVideoDecoder
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.input_info import INPUT_INFO_TYPES
+from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.utils import seed_all
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
@@ -38,8 +44,6 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
             raise ValueError("Causal H3 requires DTYPE=BF16 to match the training checkpoint")
         if config.get("lora_configs"):
             raise ValueError("Causal H3 loads the distilled checkpoint directly; released H3 LoRA adapters are not supported")
-        if config.get("warmup", False):
-            raise ValueError("Causal H3 warmup requires a complete RefA2V request; use a regular inference request to warm up")
         super().__init__(config)
         self.kv_cache_manager = None
         # Called on rank 0 with (RGB [1,3,F,H,W], start_frame, is_final).
@@ -53,6 +57,48 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
 
     def load_transformer(self):
         return MiniMaxH3CausalModel(self.config["model_path"], self.config, self.init_device)
+
+    @ProfilingContext4DebugL1("Warmup")
+    def run_warmup(self):
+        height, width = self.config["size"]
+        self.input_info = INPUT_INFO_TYPES["refa2v"](
+            task="refa2v",
+            seed=0,
+            prompt="A person speaks naturally into a microphone.",
+            image_path=Image.new("RGB", (width, height)),
+            size=[height, width],
+            num_frames=self.config["num_frames"],
+        )
+        transformer_offloaded = not self.config.get("cpu_offload", False)
+        try:
+            # Match the cuDNN settings installed by BaseRunner.run_request.
+            seed_all(self.input_info.seed)
+            self.scheduler.generator = None
+            # Exercise the normal audio reader too. Request preparation pads
+            # this short stereo PCM clip to the configured duration.
+            with io.BytesIO() as audio_file:
+                with wave.open(audio_file, "wb") as pcm:
+                    pcm.setnchannels(2)
+                    pcm.setsampwidth(2)
+                    pcm.setframerate(self.audio_vae.sampling_rate)
+                    pcm.writeframes(bytes(2 * 2 * self.audio_vae.hop_length))
+                audio_file.seek(0)
+                self.input_info.audio_path = audio_file
+                self.inputs = self._run_input_encoder_local_h3()
+            logger.info(f"Warmup refa2v: {self.request_height}x{self.request_width}x{self.request_num_frames}")
+            self.init_run()
+            video, audio_rows = self.run_segment()
+            self._offload_transformer()
+            transformer_offloaded = True
+            self.run_vae_decoder(video, audio_rows)
+            getattr(torch, AI_DEVICE).synchronize()
+            del video, audio_rows
+        finally:
+            if not transformer_offloaded:
+                with suppress(Exception):
+                    self._offload_transformer()
+            self.end_run()
+        self._maybe_freeze_gc()
 
     def _resolve_request_geometry(self, geometry_image=None):
         self.request_height, self.request_width = map(int, self.input_info.size or self.config["size"])
@@ -129,7 +175,12 @@ class MiniMaxH3CausalRunner(MiniMaxH3Runner):
             self.scheduler.step_pre(step)
             self.model.infer(self.inputs)
         self.set_vae_decode_tile_shape()
-        decoder = MiniMaxH3StreamingVideoDecoder(self.video_vae, self.request_num_frames)
+        # Callbacks and tensor returns retain their float RGB contract.
+        decoder = MiniMaxH3StreamingVideoDecoder(
+            self.video_vae,
+            self.request_num_frames,
+            output_uint8=not self.input_info.return_result_tensor and self.stream_callback is None,
+        )
         videos, left, right = [], [], []
         emitted = 0
         chunks = self.scheduler.plan.chunks

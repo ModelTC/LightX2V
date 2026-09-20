@@ -2,14 +2,23 @@ import torch
 
 
 class MiniMaxH3StreamingVideoDecoder:
-    """Decode 7-latent windows at stride 5, retaining the five-frame overlap."""
+    """Decode overlapping windows to CPU RGB [B,3,F,H,W], float32 or uint8."""
 
-    def __init__(self, vae, num_frames):
+    def __init__(self, vae, num_frames, *, output_uint8=False):
         self.vae = vae
         self.num_frames = num_frames
+        self.output_uint8 = output_uint8
         self.latents = None
         self.overlap = None
         self.emitted_frames = 0
+
+    def postprocess(self, video):
+        video = self.vae.postprocess(video).float()
+        if self.output_uint8:
+            # Quantize after blending, before the host copy. Channels-last
+            # lets the video encoder view FHWC frames without another copy.
+            video = (video * 255.0).round().to(dtype=torch.uint8, memory_format=torch.channels_last_3d)
+        return video.cpu()
 
     def _decode_window(self, latents: torch.Tensor) -> torch.Tensor | None:
         """Decode seven normalized latents to 28 raw frames for streaming overlap.
@@ -48,7 +57,7 @@ class MiniMaxH3StreamingVideoDecoder:
                 primary = decoded[:, :, 3:20]
                 if self.overlap is not None:
                     primary = self.vae._blend(self.overlap, primary, 5, dim=-3)
-                outputs.append(self.vae.postprocess(primary).float().cpu())
+                outputs.append(self.postprocess(primary))
                 self.overlap = decoded[:, :, 23:28].clone()
             self.latents = self.latents[:, :, 5:].clone()
             self.emitted_frames += 17
@@ -57,7 +66,7 @@ class MiniMaxH3StreamingVideoDecoder:
     def finish(self):
         if self.latents is None or self.latents.shape[2] != 2 or self.emitted_frames + 5 != self.num_frames:
             raise RuntimeError("H3 streaming decode ended with an incomplete latent window")
-        output = self.vae.postprocess(self.overlap).float().cpu() if self.overlap is not None else None
+        output = self.postprocess(self.overlap) if self.overlap is not None else None
         self.latents = self.overlap = None
         self.emitted_frames += 5
         return output
