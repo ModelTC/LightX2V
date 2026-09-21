@@ -180,6 +180,9 @@ class QwenImage21VAE(nn.Module):
         super().__init__()
         path = Path(config["model_path"]) / "vae"
         self.vae_decode_parallel = config.get("vae_decode_parallel", False)
+        self.vae_decode_parallel_mode = config.get("vae_decode_parallel_mode", "full")
+        if self.vae_decode_parallel_mode not in ("post_mid", "full"):
+            raise ValueError(f"vae_decode_parallel_mode must be 'post_mid' or 'full', got {self.vae_decode_parallel_mode!r}")
         self.config = json.loads((path / "config.json").read_text())
         cfg = self.config
         if not cfg["is_residual"] or cfg.get("patch_size") is not None or cfg["attn_scales"]:
@@ -221,7 +224,7 @@ class QwenImage21VAE(nn.Module):
         return best_h, best_w
 
     def _decode_dist(self, z):
-        """Decode spatial shards while keeping the global low-resolution attention exact."""
+        """Decode overlapping spatial shards using the configured cut point."""
         world_size = dist.get_world_size()
         rank = dist.get_rank()
         total_h, total_w = z.shape[-2:]
@@ -251,10 +254,18 @@ class QwenImage21VAE(nn.Module):
         h_start, h_end = max(0, h_start), min(total_h, h_end)
         w_start, w_end = max(0, w_start), min(total_w, w_end)
 
-        # Preserve the decoder's global low-resolution attention exactly,
-        # then parallelize the substantially more expensive upsampling path.
-        z = self.decoder.mid_block(self.decoder.conv_in(z))
-        decoded = self.decoder.forward_up(z[:, :, :, h_start:h_end, w_start:w_end].contiguous())
+        if self.vae_decode_parallel_mode == "post_mid":
+            # Preserve the decoder's global low-resolution attention exactly,
+            # then parallelize the substantially more expensive upsampling path.
+            z = self.decoder.mid_block(self.decoder.conv_in(z))
+            shard = z[:, :, :, h_start:h_end, w_start:w_end].contiguous()
+            decoded = self.decoder.forward_up(shard)
+        else:
+            # Maximize the parallel fraction by sharding the complete decoder.
+            # The mid-block attention is local to each overlapping shard, so this
+            # mode is faster in principle but less numerically faithful.
+            shard = z[:, :, :, h_start:h_end, w_start:w_end].contiguous()
+            decoded = self.decoder(shard)
         ratio = self.scale_factor
         dh_start = (rank_h * chunk_h - h_start) * ratio
         dh_end = dh_start + chunk_h * ratio

@@ -97,7 +97,7 @@ RTX 5090 配置保留适用的通用优化，并使用：
 
 ### 3.3 双 RTX 5090 序列并行案例
 
-SP2 配置通过 Ulysses 将目标图像 token 序列分布到两张 GPU，使用 FP8 序列并行通信，并使用重叠分片并行执行 VAE 解码：低分辨率全局 attention 保持精确，每个上采样分片周围的两个 latent halo 可能在边界处产生相对串行解码的轻微数值差异；同时沿用单卡 RTX 5090 案例的 FP8-FP16 累加和 SageAttention2 配置。按上文设置 `dit_quantized_ckpt`、`lightx2v_path` 和 `model_path` 后运行：
+SP2 配置通过 Ulysses 将目标图像 token 序列分布到两张 GPU，使用 FP8 序列并行通信，并通过带两个 latent halo 的重叠空间分片执行 VAE 解码。默认切分完整 decoder，因此低分辨率 attention 仅在各分片内执行，结果可能与串行解码存在轻微差异；同时沿用单卡 RTX 5090 案例的 FP8-FP16 累加和 SageAttention2 配置。按上文设置 `dit_quantized_ckpt`、`lightx2v_path` 和 `model_path` 后运行：
 
 ```bash
 # 文生图
@@ -116,6 +116,8 @@ bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2_2k.sh
 # 图生图
 bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2_2k.sh
 ```
+
+SP2 配置默认使用 `vae_decode_parallel_mode: full`。将其设为 `post_mid` 可使低分辨率全局 attention 与串行解码一致，同时继续并行计算量更大的上采样路径。
 
 脚本默认在 GPU 0、1 上启动两个进程。调整卡数时，需保持 `CUDA_VISIBLE_DEVICES`、`torchrun --nproc_per_node` 与 `parallel.seq_p_size` 一致。目标图像 token 数必须能被 `seq_p_size` 整除。
 

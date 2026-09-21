@@ -97,7 +97,7 @@ Both tasks were measured on the current code with 40 steps, seed 42, CFG disable
 
 ### 3.3 Dual RTX 5090 sequence-parallel example
 
-The SP2 presets distribute the target image-token sequence across two GPUs with Ulysses, use FP8 sequence-parallel communication, and use an overlap-based spatial VAE decode: its global low-resolution attention remains exact, while a two-latent halo around each upsampling shard may introduce small boundary differences from serial decode. They retain the FP8-FP16-accumulation and SageAttention2 settings from the single-GPU RTX 5090 example. Set `dit_quantized_ckpt`, `lightx2v_path`, and `model_path` as described above, then run:
+The SP2 presets distribute the target image-token sequence across two GPUs with Ulysses, use FP8 sequence-parallel communication, and decode overlapping spatial VAE shards with a two-latent halo. The complete decoder is sharded by default, so its low-resolution attention is local to each shard and the result can differ slightly from serial decode. They retain the FP8-FP16-accumulation and SageAttention2 settings from the single-GPU RTX 5090 example. Set `dit_quantized_ckpt`, `lightx2v_path`, and `model_path` as described above, then run:
 
 ```bash
 # Text-to-image
@@ -116,6 +116,8 @@ bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090_sp2_2k.sh
 # Image-to-image
 bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090_sp2_2k.sh
 ```
+
+The SP2 presets use `vae_decode_parallel_mode: full` by default. Set it to `post_mid` to keep the global low-resolution attention identical to serial decode while continuing to parallelize the more expensive upsampling path.
 
 The scripts launch two processes on GPUs 0 and 1. Keep `CUDA_VISIBLE_DEVICES`, `torchrun --nproc_per_node`, and `parallel.seq_p_size` consistent when changing the GPU count. The target-image token count must be divisible by `seq_p_size`.
 

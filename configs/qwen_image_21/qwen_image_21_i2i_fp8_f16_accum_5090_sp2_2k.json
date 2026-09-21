@@ -19,6 +19,7 @@
     "dit_quantized_ckpt": "/path/to/Qwen-Image-2.1-fp8-f16-accum/qwen_image_21_fp8_f16_accum.safetensors",
     "dit_fp8_activation_qmax": 7.0,
     "vae_decode_parallel": true,
+    "vae_decode_parallel_mode": "full",
     "parallel": {
         "seq_p_size": 2,
         "seq_p_attn_type": "ulysses",
