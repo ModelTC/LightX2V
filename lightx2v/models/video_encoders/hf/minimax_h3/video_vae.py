@@ -34,6 +34,7 @@ from __future__ import annotations
 import gc
 import json
 import math
+from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 
@@ -146,15 +147,14 @@ class MiniMaxH3VideoCausalConv3d(nn.Conv3d):
         self.spatial_padding = spatial_padding
         self.temporal_padding = temporal_padding
         self.spatial_padding_mode = spatial_padding_mode
+        self._pad_temporal = self._pad_temporal_mps if AI_DEVICE == "mps" else partial(F.pad, pad=(0, 0, 0, 0, temporal_padding, 0))
 
-    def _pad_temporal(self, hidden_states):
-        if hidden_states.device.type == "mps":
-            # pytorch/pytorch#194922: rank-5 MPS constant padding can corrupt data.
-            # Fixed upstream on main, but supported stable versions may still be affected.
-            batch, channels, _, height, width = hidden_states.shape
-            zeros = hidden_states.new_zeros((batch, channels, self.temporal_padding, height, width))
-            return torch.cat((zeros, hidden_states), dim=2)
-        return F.pad(hidden_states, (0, 0, 0, 0, self.temporal_padding, 0))
+    def _pad_temporal_mps(self, hidden_states):
+        # pytorch/pytorch#194922: rank-5 MPS constant padding can corrupt data.
+        # Fixed upstream on main, but supported stable versions may still be affected.
+        batch, channels, _, height, width = hidden_states.shape
+        zeros = hidden_states.new_zeros((batch, channels, self.temporal_padding, height, width))
+        return torch.cat((zeros, hidden_states), dim=2)
 
     def _enable_fp8(self, policy: Fp8EncoderConvPolicy) -> None:
         # The model is still on meta here, so replacing the parameter only

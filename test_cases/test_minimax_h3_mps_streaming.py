@@ -28,6 +28,7 @@ from lightx2v.models.networks.minimax_h3.infer.transformer_infer import MiniMaxH
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3AttentionWeights, MiniMaxH3TransformerWeights
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
+from lightx2v.models.video_encoders.hf.minimax_h3.video_vae import MiniMaxH3VideoCausalConv3d
 
 
 class MiniMaxH3MPSStreamingTest(unittest.TestCase):
@@ -118,7 +119,7 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                 v = torch.randn((*batch_shape, 11, kv_heads, 8), generator=generator).to(device="mps", dtype=dtype)
                 expected = TorchSDPAWeight().apply(q, k, v)
                 with patch.object(F, "scaled_dot_product_attention", wraps=F.scaled_dot_product_attention) as sdpa:
-                    actual = TorchSDPAMPSWeight().apply(q, k, v, mps_sdpa_query_chunk_size=4)
+                    actual = TorchSDPAMPSWeight(query_chunk_size=4).apply(q, k, v)
                     self.assertEqual([call.args[0].shape[2] for call in sdpa.call_args_list], [4, 4, 1])
                     self.assertEqual([call.args[1].shape[2] for call in sdpa.call_args_list], [11, 11, 11])
                 torch.testing.assert_close(actual, expected)
@@ -127,23 +128,23 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
         generator = torch.Generator().manual_seed(1497)
         q = torch.randn((1, 9, 2, 8), generator=generator).to("mps")
         cases = (
-            {"causal": True},
-            {"attn_mask": torch.ones((9, 9), dtype=torch.bool, device="mps").tril()},
-            {"attn_mask": torch.randn((9, 9), generator=generator).to("mps")},
-            {"drop_rate": 0.1},
-            {"mps_sdpa_query_chunk_size": 0},
-            {"mps_sdpa_query_chunk_size": -1},
-            {"mps_sdpa_query_chunk_size": 9},
+            (3, {"causal": True}),
+            (3, {"attn_mask": torch.ones((9, 9), dtype=torch.bool, device="mps").tril()}),
+            (3, {"attn_mask": torch.randn((9, 9), generator=generator).to("mps")}),
+            (3, {"drop_rate": 0.1}),
+            (0, {}),
+            (-1, {}),
+            (9, {}),
         )
-        for kwargs in cases:
-            with self.subTest(kwargs=tuple(kwargs)):
+        for chunk_size, kwargs in cases:
+            with self.subTest(chunk_size=chunk_size, kwargs=tuple(kwargs)):
                 # MPS SDPA rejects dropout, so verify its forwarding on CPU.
                 inputs = q.cpu() if "drop_rate" in kwargs else q
                 torch.manual_seed(1497)
                 expected = TorchSDPAWeight().apply(inputs, inputs, inputs, **kwargs)
                 torch.manual_seed(1497)
                 with patch.object(F, "scaled_dot_product_attention", wraps=F.scaled_dot_product_attention) as sdpa:
-                    actual = TorchSDPAMPSWeight().apply(inputs, inputs, inputs, **{"mps_sdpa_query_chunk_size": 3, **kwargs})
+                    actual = TorchSDPAMPSWeight(query_chunk_size=chunk_size).apply(inputs, inputs, inputs, **kwargs)
                     self.assertEqual(sdpa.call_count, 1)
                 torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
@@ -180,6 +181,33 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                     actual = infer._attention(weights, None, pre_infer_out)
                     self.assertEqual([call.args[0].shape[2] for call in sdpa.call_args_list], [chunk_size, 1])
                 torch.testing.assert_close(actual, expected)
+
+    def test_vae_temporal_padding_survives_meta_loading_and_cpu_offload(self):
+        source = torch.randn((2, 2, 4, 5, 7), generator=torch.Generator().manual_seed(1497))
+        reference = torch.nn.Conv3d(2, 3, kernel_size=3)
+        for temporal_padding in (0, 2):
+            expected_padding = F.pad(source, (0, 0, 0, 0, temporal_padding, 0))
+            with torch.inference_mode():
+                expected = reference(expected_padding)
+            for platform, device in (("mps", "mps"), ("cuda", "cpu"), ("xpu", "cpu")):
+                with self.subTest(platform=platform, temporal_padding=temporal_padding):
+                    # Production builds the VAE on meta before loading CPU weights.
+                    with patch("lightx2v.models.video_encoders.hf.minimax_h3.video_vae.AI_DEVICE", platform), torch.device("meta"):
+                        conv = MiniMaxH3VideoCausalConv3d(2, 3, kernel_size=3, temporal_padding=temporal_padding)
+                    conv.to_empty(device="cpu")
+                    conv.load_state_dict(reference.state_dict())
+                    for _ in range(2):
+                        conv.to(device)
+                        inputs = source.to(device)
+                        with torch.inference_mode():
+                            torch.testing.assert_close(conv._pad_temporal(inputs).cpu(), expected_padding, rtol=0, atol=0)
+                            torch.testing.assert_close(conv(inputs).cpu(), expected)
+                        conv.to("cpu")
+                    if platform == "cuda":
+                        # Check tracing without requiring NVIDIA hardware on this host.
+                        with torch.inference_mode():
+                            compiled = torch.compile(conv, backend="eager", fullgraph=True)
+                            torch.testing.assert_close(compiled(source), expected)
 
     def test_native_and_streaming_text_weights_share_checkpoint_validation(self):
         text_config = {

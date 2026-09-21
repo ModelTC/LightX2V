@@ -8,8 +8,12 @@ from .torch_sdpa import TorchSDPAWeight
 
 @ATTN_WEIGHT_REGISTER("torch_sdpa_mps")
 class TorchSDPAMPSWeight(TorchSDPAWeight):
+    def __init__(self, query_chunk_size=0):
+        super().__init__()
+        self.query_chunk_size = query_chunk_size
+
     def apply(self, q, k, v, drop_rate=0, attn_mask=None, causal=False, **kwargs):
-        chunk_size = kwargs.get("mps_sdpa_query_chunk_size", 0)
+        chunk_size = self.query_chunk_size
         if not isinstance(chunk_size, int) or chunk_size <= 0 or q.shape[-3] <= chunk_size or attn_mask is not None or causal or drop_rate != 0:
             return super().apply(q, k, v, drop_rate=drop_rate, attn_mask=attn_mask, causal=causal, **kwargs)
 

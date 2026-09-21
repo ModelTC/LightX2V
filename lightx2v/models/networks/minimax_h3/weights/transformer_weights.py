@@ -134,6 +134,8 @@ class MiniMaxH3AttentionWeights(WeightModule):
         attention_cls = ATTN_WEIGHT_REGISTER[attn_type]
         if attn_type == "dynamic_sparse_attn":
             calculate = attention_cls(config.get("dynamic_sparse_attn_setting", {}))
+        elif attn_type == "torch_sdpa_mps":
+            calculate = attention_cls(query_chunk_size=config.get("mps_sdpa_query_chunk_size", 0))
         else:
             calculate = attention_cls()
         if attn_type == "sol_attn":
