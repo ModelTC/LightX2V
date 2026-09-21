@@ -22,22 +22,27 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER, CONV3D_WEIGHT_
 from lightx2v_platform.base.global_var import AI_DEVICE
 
 
+def qwen3vl_linear(config, weight_name, bias_name):
+    mm_type = config.get("text_encoder_quant_scheme", "Default") if config.get("text_encoder_quantized", False) else "Default"
+    return MM_WEIGHT_REGISTER[mm_type](weight_name, bias_name)
+
+
 def rotate_half(x):
     first, second = x.chunk(2, -1)
     return torch.cat((-second, first), -1)
 
 
 class Qwen3VLTextLayer(WeightModule):
-    def __init__(self, index, config):
+    def __init__(self, index, text_config, runtime_config):
         super().__init__()
-        self.config = config
+        self.config = text_config
         prefix = f"model.language_model.layers.{index}"
         for name in ("q_proj", "k_proj", "v_proj", "o_proj"):
-            self.add_module(name, MM_WEIGHT_REGISTER["Default"](f"{prefix}.self_attn.{name}.weight", bias_name=None))
+            self.add_module(name, qwen3vl_linear(runtime_config, f"{prefix}.self_attn.{name}.weight", None))
         for name in ("gate_proj", "up_proj", "down_proj"):
-            self.add_module(name, MM_WEIGHT_REGISTER["Default"](f"{prefix}.mlp.{name}.weight", bias_name=None))
+            self.add_module(name, qwen3vl_linear(runtime_config, f"{prefix}.mlp.{name}.weight", None))
         for name in ("input_layernorm", "post_attention_layernorm", "self_attn.q_norm", "self_attn.k_norm"):
-            self.add_module(name.split(".")[-1], RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.{name}.weight", eps=config["rms_norm_eps"]))
+            self.add_module(name.split(".")[-1], RMS_WEIGHT_REGISTER["fp32_variance_qwen"](f"{prefix}.{name}.weight", eps=text_config["rms_norm_eps"]))
         self.add_module("attention", ATTN_WEIGHT_REGISTER["torch_sdpa"]())
 
     def forward(self, x, cos, sin):
@@ -156,34 +161,66 @@ class QwenImage21TextEncoder(WeightModule):
         self.cpu_offload = config.get("text_encoder_cpu_offload", False)
         self.model_config = json.loads((path / "config.json").read_text())
         self.text_config = self.model_config["text_config"]
+
+        quantized = bool(config.get("text_encoder_quantized", False))
+        quant_scheme = config.get("text_encoder_quant_scheme", "Default")
+        if quantized:
+            if quant_scheme != "fp8-sgl":
+                raise ValueError("Qwen-Image-2.1 QwenVL quantization supports only text_encoder_quant_scheme='fp8-sgl'")
+            if not config.get("text_encoder_quantized_ckpt"):
+                raise ValueError("Qwen-Image-2.1 quantized QwenVL requires text_encoder_quantized_ckpt")
+        elif quant_scheme != "Default":
+            raise ValueError("text_encoder_quant_scheme requires text_encoder_quantized=true")
+
         self.processor = Qwen3VLProcessor.from_pretrained(root / "processor", local_files_only=True)
         self.system = "Comprehend and analyze the provided prompt."
         system_tokens = self.processor.apply_chat_template([{"role": "system", "content": [{"type": "text", "text": self.system}]}], tokenize=True, return_dict=False)
         self.drop_index = len(system_tokens[0])
         self.image_id = self.processor.tokenizer.encode("<|image_pad|>")[0]
         self.add_module("embedding", EMBEDDING_WEIGHT_REGISTER["Default"]("model.language_model.embed_tokens.weight"))
-        self.add_module("layers", WeightModuleList(Qwen3VLTextLayer(i, self.text_config) for i in range(self.text_config["num_hidden_layers"])))
+        self.add_module("layers", WeightModuleList(Qwen3VLTextLayer(i, self.text_config, config) for i in range(self.text_config["num_hidden_layers"])))
         self.add_module("vision", Qwen3VLVision(self.model_config["vision_config"]))
+
         required = set()
 
         def collect(module):
             if isinstance(module, WeightModule):
                 for child in module._modules.values():
                     collect(child)
-            else:
-                for attr in ("weight_name", "bias_name"):
-                    if getattr(module, attr, None):
-                        required.add(getattr(module, attr))
+                return
+            attrs = getattr(module, "base_attrs", None)
+            if attrs is not None:
+                required.update(name for name, _, _ in attrs if name is not None)
+                return
+            for attr in ("weight_name", "bias_name"):
+                name = getattr(module, attr, None)
+                if name:
+                    required.add(name)
 
         collect(self)
-        # safetensors interprets bare "cuda" as cuda:0, unlike Tensor.to(),
-        # so resolve the selected GPU index explicitly.
+        vision_names = {name for name in required if name.startswith("model.visual.")}
+        original_names = vision_names if quantized else required
+        # safetensors treats bare "cuda" as cuda:0, so resolve the current
+        # device index explicitly before loading each rank's weights.
         device = "cpu" if self.cpu_offload else str(torch.empty(0, device=AI_DEVICE).device)
         weights = {}
         for shard in sorted(path.glob("*.safetensors")):
             with safe_open(shard, framework="pt", device=device) as handle:
-                for name in required.intersection(handle.keys()):
+                for name in original_names.intersection(handle.keys()):
                     weights[name] = handle.get_tensor(name).to(GET_DTYPE())
+
+        if quantized:
+            checkpoint_path = Path(config["text_encoder_quantized_ckpt"])
+            if not checkpoint_path.is_file():
+                raise FileNotFoundError(f"Qwen-Image-2.1 quantized QwenVL checkpoint was not found: {checkpoint_path}")
+            language_names = required - vision_names
+            with safe_open(checkpoint_path, framework="pt", device=device) as handle:
+                for name in language_names.intersection(handle.keys()):
+                    tensor = handle.get_tensor(name)
+                    if tensor.dtype in (torch.float16, torch.bfloat16, torch.float32) and not name.endswith(".weight_scale"):
+                        tensor = tensor.to(GET_DTYPE())
+                    weights[name] = tensor
+
         if missing := required - weights.keys():
             raise ValueError(f"Missing Qwen3-VL weights: {sorted(missing)}")
         self.load(weights)
@@ -200,11 +237,11 @@ class QwenImage21TextEncoder(WeightModule):
             if isinstance(module, WeightModule):
                 for child in module._modules.values():
                     release(child)
-            else:
-                for name in ("weight", "bias"):
-                    tensor = getattr(module, f"pin_{name}", None)
-                    if tensor is not None:
-                        setattr(module, name, tensor)
+                return
+            for name in ("weight", "weight_scale", "bias"):
+                tensor = getattr(module, f"pin_{name}", None)
+                if tensor is not None:
+                    setattr(module, name, tensor)
 
         release(self)
 

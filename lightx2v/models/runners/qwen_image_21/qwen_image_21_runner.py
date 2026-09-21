@@ -42,7 +42,6 @@ class QwenImage21Runner(DefaultRunner):
             "vae_cpu_offload",
             "lazy_load",
             "unload_modules",
-            "text_encoder_quantized",
             "shared_cpu_weights",
             "cfg_parallel",
             "tensor_parallel",

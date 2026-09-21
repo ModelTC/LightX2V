@@ -60,38 +60,28 @@ bash scripts/qwen_image_21/qwen_image_21_i2i.sh
 
 ### 3.2 RTX 5090 FP8 案例
 
-该案例使用 FP8 linear 和 FP16 累加。首先转换 DiT 权重：
+该实测配置使用 FP8 linear 和 FP16 累加，将 FP8 QwenVL 语言栈常驻显存，并从原始 `model_path` 加载 BF16 视觉塔。
 
-```bash
-python tools/convert/converter.py \
-    --source /path/to/Qwen-Image-2.1/transformer \
-    --output /path/to/Qwen-Image-2.1-fp8-f16-accum \
-    --output_name qwen_image_21_fp8_f16_accum \
-    --model_type qwen_image_21_dit \
-    --quantization_profile qwen-image-21-fp8-f16-accum \
-    --quantized --linear_type fp8 --device cuda:0 --single_file
-```
-
-将所选 JSON 配置中的 `dit_quantized_ckpt` 指向转换得到的 `.safetensors` 文件，然后设置脚本中的 `lightx2v_path` 和 `model_path`。`model_path` 仍须指向原始模型目录。FP16 累加路径要求 lightx2v-kernel 提供 SM120 算子。
+将所选 JSON 配置中的 `dit_quantized_ckpt` 和 `text_encoder_quantized_ckpt` 分别指向转换得到的 `.safetensors` 文件，然后设置脚本中的 `lightx2v_path` 和 `model_path`。`model_path` 仍须指向原始模型目录。FP16 累加路径要求 lightx2v-kernel 提供 SM120 算子。
 
 ```bash
 # 文生图
-bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_5090.sh
+bash scripts/qwen_image_21/qwen_image_21_t2i_fp8_f16_accum_qwenvl_fp8_5090.sh
 
 # 图生图
-bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_5090.sh
+bash scripts/qwen_image_21/qwen_image_21_i2i_fp8_f16_accum_qwenvl_fp8_5090.sh
 ```
 
 RTX 5090 配置保留适用的通用优化，并使用：
 
-- 条件编码器阶段 CPU offload；
+- QwenVL 语言栈 FP8 权重常驻显存，视觉塔保持 BF16；
 - qmax 14 的 FP8 DiT block linear 权重、qmax 7 的动态 FP8 激活及 FP16 累加；
 - dense SageAttention2。
 
 | GPU | 任务 | 输出分辨率 | 端到端耗时 |
 | --- | --- | ---: | ---: |
-| RTX 5090 ×1 | T2I | 1024×1024 | **5.914 s** |
-| RTX 5090 ×1 | I2I | 1024×1024 | **7.191 s** |
+| RTX 5090 ×1 | T2I | 1024×1024 | **5.515 s** |
+| RTX 5090 ×1 | I2I | 1024×1024 | **6.796 s** |
 
 两类任务均使用当前代码，测试条件为 40 steps、seed 42、关闭 CFG，连续执行三次请求并取中位数。I2I 使用单张 1024×1024 参考图，输出尺寸为 1024×1024。端到端耗时包含输入编码、condition-KV prefill、去噪、VAE 解码、后处理和 PNG 保存，不包含模型加载及 Runner 的一次性初始化。
 
