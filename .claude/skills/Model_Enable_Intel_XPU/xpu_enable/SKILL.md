@@ -228,6 +228,35 @@ torch.xpu.Stream()  # 不设 priority，copy 和 compute 均可用
 
 ---
 
+## Case 7: TP 报错 `torch.addmm` 维度不匹配（列并行 bias 未切分）
+
+**最可能原因**：TP 权重切分逻辑把"`tensor.ndim < 2` 就跳过切分"当成通用规则，导致列并行（column-parallel）linear 的 1-D bias/scale 也被一起跳过，权重 out_dim 切了但 bias 没切。例如 TP=2 时 AdaLN weight out_dim 被切成 48384，但 bias 仍是原始的 96768，`torch.addmm` 两者维度对不上。
+
+**修复**：按张量的语义区分处理，不能只看维度数：
+```python
+def _tp_split(self, tensor, key):
+    split_type = self._tp_split_type(key)
+    if split_type is None:
+        return tensor
+    if tensor.ndim == 0:          # 标量元数据（如 ConvRot 的 groupsize），所有 rank 共享
+        return tensor
+    if split_type == "row":
+        if tensor.ndim < 2:       # 行并行的 bias 属于已 reduce 的输出，保持复制
+            return tensor
+        ...                       # 行并行权重：按输入维度切分
+    # 列并行：weight 和 1-D 的 bias/scale 都要跟着输出维度一起切
+    ...
+```
+
+**判断标准**：新模型接入 TP 时，检查切分逻辑是否只按 `tensor.ndim < 2` 一刀切保留复制——真正应该复制的只有标量元数据和行并行 bias，列并行层的 1-D bias/scale 必须和它对应的权重一起切分。
+
+**Ask Claude**：
+```
+"Use xpu skill. TP=2 时报 torch.addmm 维度不匹配，bias shape 是权重 out_dim 的 2 倍"
+```
+
+---
+
 # XPU 平台约束
 
 ## 统一内存
@@ -275,6 +304,34 @@ def apply(self, input_tensor):
 
 ---
 
+## torch.compile 与融合算子（性能优化，MiniMax-H3 已在 Linux 验证）
+
+在 CUTE attention / INT8 GEMM 之上，MiniMax-H3 XPU 配置又叠加了三项可独立开关的性能优化，新模型稳定跑通后可评估是否适用：
+
+**DiT torch.compile**：`"use_compile": true`。首次调用有 JIT 编译耗时（属于正常现象，见 `xpu_exec` "推理卡住 2–5 分钟"）。
+
+**融合 QKV Norm + RoPE**（省掉 QKV norm/RoPE 之间的中间 tensor 往返）：
+```json
+{
+  "use_fused_qkv": true,
+  "use_fused_qkv_norm_rope": true,
+  "qkv_norm_rope_type": "intel_xpu"
+}
+```
+XPU 专用后端在 `lightx2v_platform/ops/norm/intel_xpu/xpu_qkv_norm_rope.py`，注册进 `QKV_NORM_ROPE_REGISTER`；没有 XPU 专用实现前可先用通用 Triton fallback（`qkv_norm_rope_type: "triton"`，实现见 `lightx2v/models/networks/minimax_h3/infer/fused_qkv.py`），语义上与逐步计算的 RMSNorm+RoPE 等价（FP32 中间量保精度）。
+
+**VAE CUTE Attention + Compile**：
+```json
+{
+  "vae_cpu_offload": false,
+  "vae_use_compile": true,
+  "vae_attn_type": "minimax_h3_xpu_cute"
+}
+```
+`vae_attn_type` 除通用的 `torch_sdpa`/`sage_attn2` 外新增 XPU 专用的 `minimax_h3_xpu_cute`（D64 CUTE kernel，`lightx2v_platform/ops/attn/intel_xpu/minimax_h3_xpu_cute.py`）。用它时通常把 VAE 从 `vae_cpu_offload: true` 切回 `false`（常驻 XPU）+ `vae_use_compile: true` 一起开，前提是显存够用。**注意**：VAE 的 `shared`/`block` 权重 offload 模式与 `vae_use_compile` 互斥，两者不能同时开。
+
+---
+
 ## 多卡分布式推理（Linux 仅）
 
 ⚠️ **Windows 不支持多卡**，仅 Linux 可用。XPU 多卡使用 `torchrun` + PyTorch XCCL/oneCCL。
@@ -317,6 +374,28 @@ torchrun --standalone --nproc_per_node=8 -m lightx2v.infer \
 - oneCCL 变量仅 SP/SP+TP 需要，TP 不需要
 - 多卡不一定线性加速，小模型/低分辨率可能通信开销更大
 - 文本编码器/VAE 可能仍在所有卡上复制，不能简单按卡数除以内存
+
+---
+
+## 长序列稀疏注意力（Turbo-SLA / `dynamic_sparse_attn`）
+
+长视频/长序列场景下，MiniMax-H3 在 XPU 上支持稀疏注意力路由（SLA）：只计算 top-k block，比全量 CUTE attention 更快，通常配合专门蒸馏的 Turbo-SLA LoRA 权重、少数几步（如 4-5 步）推理使用：
+
+```json
+{
+  "attn_type": "dynamic_sparse_attn",
+  "refiner_attn_type": "intel_xpu_cute_attn",
+  "dynamic_sparse_attn_setting": {
+    "sparsity_ratio": 0.85,
+    "operator": "intel_xpu_cute_attn"
+  }
+}
+```
+
+- **主 transformer**：`attn_type: dynamic_sparse_attn`，`operator: intel_xpu_cute_attn` 时走 XPU 版 SLA block-map + sparse-block attention；`sparsity_ratio` 越高跳过的 block 越多、越快，可能损失精度（`0.85` 是 Turbo-SLA 4-step 配置验证过的值，不是通用默认）。
+- **refiner**（早期少数精度敏感的 step/block）单独用 `refiner_attn_type: intel_xpu_cute_attn` 走稠密 CUTE attention，不做稀疏化。
+- XPU 实现依赖 `sycl_kernels` 新增的 `sla_block_map` / `sparse_block_attention` / `sla_sparse_attention` 三个 API（封装在 `lightx2v_platform/ops/attn/intel_xpu/xpu_sla_attn.py`），编译 `sycl_kernels` 时需要打开 SLA/CUTE sparse attention 支持，否则运行时报 `RuntimeError: sycl_kernels.xxx is unavailable`。
+- 该路径是长序列专用优化，不是常规接入新模型的必需项。
 
 ---
 
@@ -635,28 +714,46 @@ touch lightx2v/models/schedulers/$MODEL/__init__.py
 - `"torch"` = 标准旋转位置编码
 - `"minimax_h3_xpu_rope"` = MiniMax H3 XPU 优化版
 
+**qkv_norm_rope_type 选项**（可选融合优化，需同时开 `use_fused_qkv` + `use_fused_qkv_norm_rope`）：
+- 不设置 = QKV 投影、Q/K RMSNorm、RoPE 分步计算（默认，兼容性最好）
+- `"triton"` = 通用 Triton 融合 kernel（FP32 中间量，跨平台 fallback）
+- `"intel_xpu"` = XPU 专用融合 kernel（推荐，见下方"torch.compile 与融合算子"）
+
 ---
 
 ## 前置条件：编译 sycl_kernels
 
 使用新内核（CUTE attention、XPU RMSNorm、INT8 GEMM）需要先编译 `sycl_kernels`。
 
-**Windows**：
+**wheel 命名与 `XPU_TARGET` 强相关**：`build.sh`/`build.bat` 通过 `XPU_TARGET` 环境变量选择 AOT 目标，只能是 `bmg`（Battlemage 独立显卡，如 Arc Pro B60）或 `ptl-h`（Panther Lake-H 集成显卡，如 Arc 140V），**不设置时默认 `bmg`**。Linux 下 wheel 版本号会带上对应后缀（`+bmg` / `+ptlh`），Windows 下 wheel 版本号不带后缀（但 wheel tag 仍是 `cp311-abi3`）。**Arc 140V 等 PTL-H 平台必须显式设置 `XPU_TARGET=ptl-h`，否则默认编译出的是 BMG 版本，装上会在运行时报不支持/kernel 不可用。**
+
+**Windows**（PTL-H，如 Arc 140V）：
 ```cmd
 cd lightx2v_kernel_xpu
+set XPU_TARGET=ptl-h
 call build.bat
-pip install dist\sycl_kernels-0.0.1-cp311-win_amd64.whl --force-reinstall --no-deps
+pip install dist\sycl_kernels-0.0.1-cp311-abi3-win_amd64.whl --force-reinstall --no-deps
 ```
 
-**Linux**：
+**Linux**（PTL-H，如 Arc 140V）：
 ```bash
 source /opt/intel/oneapi/setvars.sh
 cd lightx2v_kernel_xpu
-./build.sh
-pip install dist/sycl_kernels-0.0.1-cp311-linux_x86_64.whl --force-reinstall --no-deps
+XPU_TARGET=ptl-h ./build.sh
+pip install dist/sycl_kernels-0.0.1+ptlh-cp311-abi3-linux_x86_64.whl --force-reinstall --no-deps
 ```
 
-版本对齐：oneAPI、oneDNN、PyTorch 版本必须匹配。
+**Linux**（BMG，如 Arc Pro B60，`XPU_TARGET` 不设时的默认值）：
+```bash
+source /opt/intel/oneapi/setvars.sh
+cd lightx2v_kernel_xpu
+XPU_TARGET=bmg ./build.sh   # 或不设 XPU_TARGET，默认就是 bmg
+pip install dist/sycl_kernels-0.0.1+bmg-cp311-abi3-linux_x86_64.whl --force-reinstall --no-deps
+```
+
+不确定实际生成的文件名时，直接用通配符安装即可：`pip install dist/sycl_kernels-*.whl --force-reinstall --no-deps`。
+
+版本对齐：oneAPI、oneDNN、PyTorch 版本必须匹配。**当前推荐**：PyTorch `2.13.0+xpu`，oneAPI `2026.0.0`。
 
 ---
 
@@ -891,6 +988,12 @@ python -c 'import torch; print(torch.xpu.is_available(), torch.xpu.device_count(
   - [ ] `dit_quant_scheme: fp8-intel-xpu`
 - [ ] 文本编码器体积接近 16 GB：启用 INT8 量化
 - [ ] `_model_on_device` flag 防止多次 infer OOM
+- [ ] 多卡 TP：列并行 layer 的 1-D bias/scale 是否跟着权重一起切分（不能只按 `tensor.ndim < 2` 一刀切保留复制，见 Case 7）
+- [ ] 性能优化（可选，先跑通再逐项加）：
+  - [ ] `use_compile: true`（DiT torch.compile）
+  - [ ] `use_fused_qkv` + `use_fused_qkv_norm_rope` + `qkv_norm_rope_type`（融合 QKV Norm+RoPE）
+  - [ ] 长序列：`attn_type: dynamic_sparse_attn` + `dynamic_sparse_attn_setting`（Turbo-SLA 稀疏注意力）
+  - [ ] `vae_attn_type: minimax_h3_xpu_cute` + `vae_use_compile: true`（VAE CUTE attn + compile，与 VAE shared/block offload 互斥）
 
 ## 调试工具
 
@@ -921,3 +1024,8 @@ torch.xpu.empty_cache()
 | `lightx2v/utils/registry_factory.py` | 所有 Register 注册表 |
 | `lightx2v_platform/ops/attn/template.py` | `AttnWeightTemplate`：`load_state_dict_from_disk` no-op |
 | `lightx2v_platform/ops/attn/intel_xpu/xpu_cute_attn.py` | `IntelXpuCuteAttnWeight`（CUTE 优化注意力） |
+| `lightx2v_platform/ops/attn/intel_xpu/xpu_sla_attn.py` | `sla_block_map`/`sparse_block_attention`/`sla_sparse_attention` XPU 封装，供 `dynamic_sparse_attn` 调用 |
+| `lightx2v_platform/ops/attn/intel_xpu/minimax_h3_xpu_cute.py` | VAE 专用 D64 CUTE attention，`vae_attn_type: minimax_h3_xpu_cute` |
+| `lightx2v_platform/ops/norm/intel_xpu/xpu_qkv_norm_rope.py` | `"intel_xpu"` 融合 QKV Norm+RoPE 后端，注册进 `QKV_NORM_ROPE_REGISTER` |
+| `lightx2v/models/networks/minimax_h3/infer/fused_qkv.py` | 融合 QKV Norm+RoPE 的通用 Triton fallback（`qkv_norm_rope_type: "triton"`） |
+| `lightx2v/models/networks/minimax_h3/model.py` | TP 权重切分 `_tp_split`：0-D 标量复制，列并行 1-D bias/scale 切分，行并行 bias 复制 |
