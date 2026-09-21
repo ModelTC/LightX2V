@@ -1,5 +1,4 @@
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
 
 import torch
 from loguru import logger
@@ -29,14 +28,6 @@ class WeightAsyncStreamManager(object):
         else:
             self.cuda_load_stream = torch_device_module.Stream(priority=0)
             self.compute_stream = torch_device_module.Stream(priority=-1)
-
-    def prepare_compute(self):
-        self.compute_stream.wait_stream(torch_device_module.current_stream())
-
-    def compute_context(self):
-        if AI_DEVICE == "xpu":
-            return nullcontext()
-        return torch_device_module.stream(self.compute_stream)
 
     def init_cpu_buffer(self, blocks_cpu_buffer=None, phases_cpu_buffer=None):
         self.need_init_first_buffer = True

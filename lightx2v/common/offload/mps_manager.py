@@ -1,7 +1,5 @@
 """Double-buffered disk offload into CPU-visible MPS weight storage."""
 
-from contextlib import nullcontext
-
 import torch
 from loguru import logger
 
@@ -36,12 +34,6 @@ class MpsSharedWeightAsyncStreamManager(WeightAsyncStreamManager):
     def _init_streams(self):
         # Disk I/O runs on a CPU thread; GPU work stays on the default stream.
         pass
-
-    def prepare_compute(self):
-        pass
-
-    def compute_context(self):
-        return nullcontext()
 
     def init_cuda_buffer(self, blocks_cuda_buffer=None, phases_cuda_buffer=None):
         if blocks_cuda_buffer is None or len(blocks_cuda_buffer) != 2:
