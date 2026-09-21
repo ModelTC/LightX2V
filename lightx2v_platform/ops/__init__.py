@@ -52,3 +52,11 @@ elif PLATFORM == "iluvatar_cuda":
     from .rope.iluvatar_cuda import *
 elif PLATFORM == "musa":
     from .mm.mthreads_musa import *
+elif PLATFORM == "biren_supa":
+    # Biren's shallow platform operators live in the core platform package,
+    # at the same layer as Ascend and MetaX. Model-specific patches are
+    # supplied by the optional lightx2v-patch-biren package.
+    from .attn.biren_supa import *
+    from .norm.biren_supa import *
+    from .rope.biren_supa import *
+    from .mm.biren_supa import *

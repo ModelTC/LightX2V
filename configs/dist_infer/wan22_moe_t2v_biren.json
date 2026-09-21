@@ -1,0 +1,29 @@
+{
+    "infer_steps": 40,
+    "num_frames": 81,
+    "text_len": 512,
+    "size": [1280, 720],
+    "self_attn_1_type": "biren_fmha_attn",
+    "cross_attn_1_type": "biren_fmha_attn",
+    "cross_attn_2_type": "biren_fmha_attn",
+    "rms_norm_type": "biren_rms_norm",
+    "rope_type": "biren_wan_rope",
+    "sample_guide_scale": [
+        4.0,
+        3.0
+    ],
+    "sample_shift": 12.0,
+    "enable_cfg": true,
+    "cpu_offload": true,
+    "offload_granularity": "model",
+    "t5_cpu_offload": true,
+    "vae_cpu_offload": false,
+    "boundary": 0.875,
+    "modulate_type": "python",
+    "use_tp_2die": true,
+    "parallel": {
+        "seq_p_size": 4,
+        "seq_p_attn_type": "biren_ulysses",
+        "vae_parallel": false
+    }
+}
