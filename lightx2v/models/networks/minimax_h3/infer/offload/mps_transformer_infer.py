@@ -26,7 +26,6 @@ class MiniMaxH3MpsOffloadTransformerInfer(MiniMaxH3TransformerInfer):
                     self.offload_manager.init_first_buffer(block_weights)
 
                 block = self.offload_manager.cuda_buffers[0]
-                block_weights.prepare_streaming_block(block, block_index)
                 self.offload_manager.prefetch_weights((block_index + 1) % num_blocks, block_weights)
                 self.block_idx = block_index
                 hidden_states = self.run_block(block_index, block, hidden_states, pre_infer_out)

@@ -408,6 +408,36 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                     MiniMaxH3Model("unused", {**config, **overrides}, "mps")
             checkpoint.assert_not_called()
 
+    def test_disk_streaming_rejects_lora_before_loading(self):
+        config = {"dit_disk_streaming": True, "cpu_offload": True, "offload_granularity": "block", "use_adaln_cache": True, "adaln_cache_dir": "unused"}
+        cases = (
+            ({}, "unused.safetensors"),
+            ({"lora_dynamic_apply": True}, "unused.safetensors"),
+            ({"lora_configs": [{"path": "unused.safetensors", "alpha": 8}]}, None),
+            ({"lora_configs": [{"path": "unused.safetensors", "alpha": 8}], "lora_dynamic_apply": True}, None),
+            ({"lora_dynamic_apply": True}, None),
+        )
+        with patch("lightx2v.models.networks.minimax_h3.model.BaseTransformerModel.__init__", side_effect=AssertionError("Loaded base weights before rejecting LoRA")):
+            for shared in (False, True):
+                for overrides, lora_path in cases:
+                    with self.subTest(shared=shared, overrides=overrides, lora_path=lora_path), self.assertRaisesRegex(NotImplementedError, "dit_disk_streaming does not support LoRA"):
+                        MiniMaxH3Model("unused", {**config, "dit_mps_shared_buffer": shared, **overrides}, "mps", lora_path=lora_path)
+
+    def test_disk_streaming_rejects_runtime_lora(self):
+        model = MiniMaxH3Model.__new__(MiniMaxH3Model)
+        model.config = {"dit_disk_streaming": True}
+        with patch("lightx2v.models.networks.minimax_h3.model.safe_open") as open_checkpoint:
+            for method, args in (
+                (model._load_lora_file, ("unused.safetensors",)),
+                (model._register_lora, ("unused.safetensors", 1.0)),
+                (model._update_lora, ("unused.safetensors", 1.0)),
+            ):
+                with self.subTest(method=method.__name__), self.assertRaisesRegex(NotImplementedError, "dit_disk_streaming does not support LoRA"):
+                    method(*args)
+            with self.assertRaisesRegex(NotImplementedError, "not a merged tensor dictionary"):
+                model._update_lora({}, 1.0)
+            open_checkpoint.assert_not_called()
+
     def test_supported_tasks_preserve_both_loading_modes(self):
         runner = MiniMaxH3Runner.__new__(MiniMaxH3Runner)
         runner.config = {"model_variant": "fl2av", "text_encoder_disk_streaming": True}
@@ -501,7 +531,7 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
         ):
             expected = tensors[f"transformer_blocks.{index}.{path}.weight"]
             torch.testing.assert_close(module.weight.cpu(), expected.t(), rtol=0, atol=0)
-        self.assertEqual(block.attn.has_fused_qkv, block.attn.use_fused_qkv and not block.attn.to_q.has_lora_branch)
+        self.assertEqual(block.attn.has_fused_qkv, block.attn.use_fused_qkv)
         if block.attn.use_fused_qkv:
             expected = torch.cat([tensors[f"transformer_blocks.{index}.attn.to_{part}.weight"] for part in ("q", "k", "v")])
             torch.testing.assert_close(block.attn.to_qkv.weight.cpu(), expected.t(), rtol=0, atol=0)
@@ -529,24 +559,13 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
     def test_streamed_weights_survive_block_changes_and_buffer_recreation(self):
         with tempfile.TemporaryDirectory() as directory:
             tensors = self._write_checkpoint(Path(directory))
-            adapter_dir = Path(directory) / "adapter"
-            adapter_dir.mkdir()
-            lora = {}
-            generator = torch.Generator().manual_seed(1497)
-            for index in range(2):
-                prefix = f"transformer_blocks.{index}.attn.to_q"
-                lora[f"{prefix}.lora_down.weight"] = torch.randn((2, 8), generator=generator).to(torch.bfloat16) / 16
-                lora[f"{prefix}.lora_up.weight"] = torch.randn((8, 2), generator=generator).to(torch.bfloat16) / 16
-                lora[f"{prefix}.alpha"] = torch.tensor(2.0, dtype=torch.bfloat16)
-            lora_path = str(adapter_dir / "lora.safetensors")
-            save_file(lora, lora_path)
             hidden_states = torch.arange(24, dtype=torch.bfloat16, device="mps").reshape(3, 8) / 16
             pre_infer_out = SimpleNamespace(hidden_states=hidden_states)
             for shared in (False, True):
-                for fused, use_lora in ((False, False), (True, False), (False, True), (True, True)):
+                for fused in (False, True):
                     if shared and not hasattr(torch.mps, "_host_alias_storage"):
                         continue
-                    with self.subTest(shared=shared, fused=fused, lora=use_lora):
+                    with self.subTest(shared=shared, fused=fused):
                         config = {
                             "num_layers": 2,
                             "cpu_offload": True,
@@ -563,9 +582,6 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                         model.cpu_offload = True
                         model.block_offload = True
                         model.device = "mps"
-                        model.lora_path = lora_path if use_lora else None
-                        model.lora_strength = 1.0
-                        model.lora_alpha = None
                         # This fixture contains only the main transformer blocks.
                         model.pre_weight_class = lambda config: WeightModule()
                         model.post_weight_class = lambda config: WeightModule()
@@ -578,10 +594,7 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                         expected = hidden_states
                         for index in range(2):
                             prefix = f"transformer_blocks.{index}.attn.to_q"
-                            value = expected @ tensors[f"{prefix}.weight"].to("mps").t()
-                            if use_lora:
-                                value = value + (expected @ lora[f"{prefix}.lora_down.weight"].to("mps").t()) @ lora[f"{prefix}.lora_up.weight"].to("mps").t()
-                            expected = value
+                            expected = expected @ tensors[f"{prefix}.weight"].to("mps").t()
 
                         def run_block(index, block, hidden, pre):
                             self._assert_block_weights(block, index, tensors)
@@ -597,10 +610,7 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
                                     for block in old_blocks:
                                         for module in (block.attn.to_q, block.attn.to_qkv, block.ff.in_proj, block.norm1):
                                             tensor_refs.extend(
-                                                weakref.ref(tensor)
-                                                for attr in ("weight", "weight_cuda_buffer", "lora_down", "lora_up")
-                                                for tensor in (getattr(module, attr, None),)
-                                                if isinstance(tensor, torch.Tensor)
+                                                weakref.ref(tensor) for attr in ("weight", "weight_cuda_buffer") for tensor in (getattr(module, attr, None),) if isinstance(tensor, torch.Tensor)
                                             )
                                         if shared:
                                             tensor_refs.extend(weakref.ref(tensor) for tensor in block.shared_host_tensors.values())

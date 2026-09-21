@@ -47,7 +47,6 @@ class MiniMaxH3StreamingTransformerWeights(WeightModule):
         self.config = config
         self.num_layers = int(config.get("num_layers", 50))
         self.shared_buffer = bool(config.get("dit_mps_shared_buffer", False))
-        self.streaming_lora = None
         checkpoint_dir = config.get("dit_original_ckpt")
         if checkpoint_dir is None:
             raise ValueError("MiniMax-H3 dit_disk_streaming requires config['dit_original_ckpt'] to point to the diffusers transformer checkpoint directory.")
@@ -99,29 +98,18 @@ class MiniMaxH3StreamingTransformerWeights(WeightModule):
         destinations = {resolve_block_name(name, block_index): tensor for name, tensor in block.shared_host_tensors.items()}
         self.checkpoint.load_tensors_into(destinations)
 
-    def prepare_streaming_block(self, block, block_index):
-        # LoRA binding can submit device work. Keep it on the compute thread,
-        # separate from the CPU-only weight reader.
-        if self.streaming_lora is not None:
-            self.streaming_lora.load_block(block, block_index)
-
     def load_streaming_block(self, block_index):
         block_index = int(block_index)
         if block_index not in self.checkpoint.block_indices:
             raise IndexError(f"MiniMax-H3 checkpoint does not contain transformer block {block_index}.")
 
         self._ensure_streaming_block()
-        if self.streaming_lora is not None:
-            # Finish the previous use before either base weights or factors change.
-            self.streaming_lora.clear(self.streaming_block)
         tensor_names = self.checkpoint.tensor_names_for_block(block_index)
         tensors = self.checkpoint.load_tensors(tensor_names, device="cpu")
         try:
             self.streaming_block.load_state_dict(self._prepare_streaming_state_dict(tensors, block_index), block_index)
         finally:
             del tensors
-        if self.streaming_lora is not None:
-            self.streaming_lora.load_block(self.streaming_block, block_index)
         return self.streaming_block
 
     def _ensure_streaming_block(self):
@@ -148,8 +136,6 @@ class MiniMaxH3StreamingTransformerWeights(WeightModule):
         getattr(torch, AI_DEVICE).synchronize()
         buffers = self.offload_block_cuda_buffers if self.shared_buffer else [self.streaming_block]
         for block in buffers:
-            if self.streaming_lora is not None:
-                self.streaming_lora.clear(block)
             if self.shared_buffer:
                 block.shared_host_tensors.clear()
             for module in _iter_weight_modules(block):
