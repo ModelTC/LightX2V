@@ -96,14 +96,6 @@ def _resolve_qwen_layer_name(name, layer_index):
     return name
 
 
-def _iter_base_attrs(module):
-    if hasattr(module, "base_attrs"):
-        yield from module.base_attrs
-    for child in getattr(module, "_modules", {}).values():
-        if child is not None:
-            yield from _iter_base_attrs(child)
-
-
 def _load_selected_checkpoint_tensors(text_encoder_path, weight_map, names):
     names = tuple(sorted(dict.fromkeys(names)))
     missing = sorted(name for name in names if name not in weight_map)
@@ -457,14 +449,7 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
 
     @staticmethod
     def _layer_tensor_names(layer, layer_index):
-        names = []
-        seen = set()
-        for name, _, _ in _iter_base_attrs(layer):
-            actual_name = _resolve_qwen_layer_name(name, layer_index)
-            if actual_name not in seen:
-                seen.add(actual_name)
-                names.append(actual_name)
-        return tuple(sorted(names))
+        return tuple(sorted({_resolve_qwen_layer_name(name, layer_index) for module in layer.weight_modules() for name, _, _ in module.base_attrs}))
 
     def select_tp_shard(self, name, tensor):
         if self.tp_size == 1:
@@ -587,11 +572,12 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
 
     def _prepare_streaming_state_dict(self, tensors, layer_index):
         state_dict = dict(tensors)
-        for name, _, transpose in _iter_base_attrs(self.streaming_layer):
-            if transpose:
-                actual_name = _resolve_qwen_layer_name(name, layer_index)
-                if actual_name in state_dict:
-                    state_dict[actual_name] = state_dict[actual_name].t()
+        for module in self.streaming_layer.weight_modules():
+            for name, _, transpose in module.base_attrs:
+                if transpose:
+                    actual_name = _resolve_qwen_layer_name(name, layer_index)
+                    if actual_name in state_dict:
+                        state_dict[actual_name] = state_dict[actual_name].t()
         return state_dict
 
     def load_streaming_layer(self, layer_index):
@@ -850,8 +836,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 raise NotImplementedError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming does not support quantized text encoder weights.")
             if self.tensor_parallel:
                 raise NotImplementedError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming does not support text encoder tensor parallel.")
-            if config.get("text_encoder_async_prefetch", False) or config.get("text_encoder_double_buffer", False):
-                raise NotImplementedError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming is synchronous and does not support prefetch or double buffering.")
         if self.tensor_parallel:
             if not dist.is_initialized():
                 raise RuntimeError("MiniMax-H3 text encoder TP requires an initialized distributed process group")
@@ -1056,42 +1040,11 @@ class MiniMaxH3Qwen3VLTextEncoder:
     def _load_native_weights(cls, backbone, text_encoder_path, text_config):
         text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
         modules = dict(backbone.named_weight_modules())
-        expected_shapes = cls._expected_weight_shapes(text_config)
-        if modules.keys() != expected_shapes.keys():
-            missing_native = sorted(expected_shapes.keys() - modules.keys())
-            unexpected_native = sorted(modules.keys() - expected_shapes.keys())
-            raise RuntimeError(f"Native Qwen3-VL weight declaration disagrees with its shape schema: missing={missing_native}, unexpected={unexpected_native}")
-
         root = Path(text_encoder_path)
-        weight_map = cls._checkpoint_weight_map(root, modules)
-        missing = sorted(modules.keys() - weight_map.keys())
-        if missing:
-            preview = ", ".join(missing[:8])
-            raise KeyError(f"MiniMax-H3 text encoder checkpoint is missing {len(missing)} required tensors: {preview}")
-
+        weight_map, checkpoint_dtype = cls._preflight_native_checkpoint(backbone, root, text_config)
         by_shard = defaultdict(list)
         for name in modules:
             by_shard[weight_map[name]].append(name)
-
-        # Header-only preflight avoids allocating tens of GiB before discovering
-        # a malformed or incompatible tensor near the end of the checkpoint.
-        checkpoint_dtypes = set()
-        for shard_name in sorted(by_shard):
-            shard_path = root / shard_name
-            if not shard_path.is_file():
-                raise FileNotFoundError(f"Safetensors shard from checkpoint index was not found: {shard_path}")
-            with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
-                shard_keys = set(checkpoint.keys())
-                for name in by_shard[shard_name]:
-                    if name not in shard_keys:
-                        raise KeyError(f"Checkpoint index maps {name} to {shard_path}, but the tensor is absent")
-                    tensor_slice = checkpoint.get_slice(name)
-                    actual_shape = tuple(tensor_slice.get_shape())
-                    if actual_shape != expected_shapes[name]:
-                        raise ValueError(f"Unexpected checkpoint shape for {name}: {actual_shape}, expected {expected_shapes[name]}")
-                    checkpoint_dtypes.add(tensor_slice.get_dtype())
-        if len(checkpoint_dtypes) != 1:
-            raise ValueError(f"MiniMax-H3 Qwen3-VL weights must use one floating dtype, got {sorted(checkpoint_dtypes)}")
 
         logger.info(
             "Loading {} native Qwen3-VL tensors (embedding + layers 0..{}) from {} shards with {} host weights",
@@ -1131,10 +1084,11 @@ class MiniMaxH3Qwen3VLTextEncoder:
         # CPU-loaded common weights keep their canonical copy in pin_weight.
         # Activate those copies so the object is usable before/after offload.
         backbone.to_cpu()
-        return checkpoint_dtypes.pop()
+        return checkpoint_dtype
 
     @classmethod
     def _preflight_native_checkpoint(cls, backbone, text_encoder_path, text_config):
+        # Check all headers before allocating host weights or device buffers.
         modules = dict(backbone.named_weight_modules())
         expected_shapes = cls._expected_weight_shapes(text_config)
         if modules.keys() != expected_shapes.keys():
@@ -1171,7 +1125,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
         if len(checkpoint_dtypes) != 1:
             raise ValueError(f"MiniMax-H3 Qwen3-VL weights must use one floating dtype, got {sorted(checkpoint_dtypes)}")
         logger.info(
-            "Preflighted {} native Qwen3-VL tensors (embedding + layers 0..{}) from {} shards for disk streaming",
+            "Preflighted {} native Qwen3-VL tensors (embedding + layers 0..{}) from {} shards",
             len(modules),
             MINIMAX_H3_TEXT_ENCODER_LAYER - 1,
             len(by_shard),

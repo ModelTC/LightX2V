@@ -8,19 +8,112 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import torch
+import torch.nn.functional as F
 from safetensors.torch import save_file
 
 if os.environ.get("PLATFORM") != "mps" or not torch.backends.mps.is_available():
     raise unittest.SkipTest("Requires the MPS platform and an Apple GPU")
 
 from lightx2v.common.offload.mps_manager import MpsSharedWeightAsyncStreamManager
-from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl import MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight
+from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl import MiniMaxH3Qwen3VLTextEncoder, _Qwen3VLTextBackboneWeights
+from lightx2v.models.networks.minimax_h3.infer.fused_qkv import prepare_qkv_norm_rope
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
-from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3TransformerWeights
+from lightx2v.models.networks.minimax_h3.weights.transformer_weights import MiniMaxH3AttentionWeights, MiniMaxH3TransformerWeights
 from lightx2v.models.runners.minimax_h3.minimax_h3_runner import MiniMaxH3Runner
 
 
 class MiniMaxH3MPSStreamingTest(unittest.TestCase):
+    def test_rope_precision_preserves_non_mps_fusion(self):
+        q = torch.zeros((2, 8), dtype=torch.bfloat16)
+        norm = SimpleNamespace(weight=torch.ones(4, dtype=torch.bfloat16), sensitive_layer_dtype=torch.bfloat16, infer_dtype=torch.bfloat16)
+        freqs = (torch.ones((2, 4)), torch.zeros((2, 4)))
+        for device in ("mps", "cuda", "xpu"):
+            with self.subTest(device=device), patch("lightx2v.models.networks.minimax_h3.weights.transformer_weights.AI_DEVICE", device):
+                rope = MiniMaxH3AttentionWeights("transformer_blocks.0.attn", {"attn_type": "torch_sdpa"}).rope
+                self.assertEqual(rope.compute_dtype, torch.bfloat16 if device == "mps" else torch.float32)
+                prepared = prepare_qkv_norm_rope(q, q, q, norm, norm, rope, freqs)
+                self.assertEqual(prepared is not None, device != "mps")
+
+    def test_query_chunking_supports_other_shapes_and_grouped_query_attention(self):
+        generator = torch.Generator().manual_seed(1497)
+        for batch, heads, kv_heads in ((1, 2, 2), (2, 4, 4), (2, 4, 2)):
+            with self.subTest(batch=batch, heads=heads, kv_heads=kv_heads):
+                q = torch.randn((batch, 9, heads, 8), generator=generator).to("mps")
+                k = torch.randn((batch, 11, kv_heads, 8), generator=generator).to("mps")
+                v = torch.randn((batch, 11, kv_heads, 8), generator=generator).to("mps")
+                expected = TorchSDPAWeight().apply(q, k, v)
+                with patch.object(F, "scaled_dot_product_attention", wraps=F.scaled_dot_product_attention) as sdpa:
+                    actual = TorchSDPAWeight().apply(q, k, v, mps_sdpa_query_chunk_size=3)
+                    self.assertEqual([call.args[0].shape[2] for call in sdpa.call_args_list], [3, 3, 3])
+                torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+
+    def test_query_chunking_preserves_masked_causal_and_cpu_attention(self):
+        generator = torch.Generator().manual_seed(1497)
+        source = torch.randn((1, 9, 2, 8), generator=generator)
+        cases = (("cpu", {}), ("mps", {"causal": True}), ("mps", {"attn_mask": torch.ones((9, 9), dtype=torch.bool, device="mps")}))
+        for device, kwargs in cases:
+            with self.subTest(device=device, kwargs=tuple(kwargs)):
+                q = source.to(device)
+                expected = TorchSDPAWeight().apply(q, q, q, **kwargs)
+                with patch.object(F, "scaled_dot_product_attention", wraps=F.scaled_dot_product_attention) as sdpa:
+                    actual = TorchSDPAWeight().apply(q, q, q, mps_sdpa_query_chunk_size=3, **kwargs)
+                    self.assertEqual(sdpa.call_count, 1)
+                torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    def test_native_and_streaming_text_weights_share_checkpoint_validation(self):
+        text_config = {
+            "hidden_size": 8,
+            "head_dim": 4,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "intermediate_size": 16,
+            "vocab_size": 16,
+            "rms_norm_eps": 1e-6,
+            "rope_theta": 10000,
+        }
+        config = {"text_encoder_host_pinned": False}
+        encoder = MiniMaxH3Qwen3VLTextEncoder
+        with tempfile.TemporaryDirectory() as directory, patch("lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl.MINIMAX_H3_TEXT_ENCODER_LAYER", 2):
+            generator = torch.Generator().manual_seed(1497)
+            tensors = {name: torch.randn(shape, generator=generator).to(torch.bfloat16) for name, shape in encoder._expected_weight_shapes(text_config).items()}
+            checkpoint_path = str(Path(directory) / "model.safetensors")
+            save_file(tensors, checkpoint_path)
+            native = _Qwen3VLTextBackboneWeights(config, text_config, num_layers=2)
+            self.assertEqual(encoder._load_native_weights(native, directory, text_config), "BF16")
+            torch.testing.assert_close(native.embed_tokens.weight, tensors[native.embed_tokens.weight_name], rtol=0, atol=0)
+            for layer in native.layers:
+                for module in layer.weight_modules():
+                    for name, attr, transpose in module.base_attrs:
+                        expected = tensors[name].t() if transpose else tensors[name]
+                        torch.testing.assert_close(getattr(module, attr), expected, rtol=0, atol=0)
+
+            streaming = _Qwen3VLTextBackboneWeights(config, text_config, num_layers=2, disk_streaming=True)
+            weight_map, dtype = encoder._preflight_native_checkpoint(streaming, directory, text_config)
+            self.assertEqual(dtype, "BF16")
+            try:
+                streaming.init_disk_streaming(directory, weight_map)
+                for index in (0, 1, 0):
+                    layer = streaming.load_streaming_layer(index)
+                    for actual, expected in zip(layer.weight_modules(), native.layers[index].weight_modules()):
+                        torch.testing.assert_close(actual.weight.cpu(), expected.weight, rtol=0, atol=0)
+            finally:
+                streaming.release_disk_streaming_buffer()
+
+            # A malformed tensor in the last layer must fail before loading any
+            # host weights, in both resident and disk-streaming modes.
+            del native, streaming
+            tensors["model.language_model.layers.1.mlp.down_proj.weight"] = torch.zeros((8, 15), dtype=torch.bfloat16)
+            save_file(tensors, checkpoint_path)
+            for loader in (encoder._load_native_weights, encoder._preflight_native_checkpoint):
+                with self.subTest(loader=loader.__name__):
+                    backbone = _Qwen3VLTextBackboneWeights(config, text_config, num_layers=2)
+                    with patch.object(encoder, "_adopt_pageable_weights", side_effect=AssertionError("Loaded weights before validation")):
+                        with self.assertRaisesRegex(ValueError, "Unexpected checkpoint shape"):
+                            loader(backbone, directory, text_config)
+                    self.assertIsNone(getattr(backbone.embed_tokens, "weight", None))
+                    self.assertIsNone(getattr(backbone.embed_tokens, "pin_weight", None))
+
     def test_text_only_streaming_does_not_load_visual_components(self):
         encoder = MiniMaxH3Qwen3VLTextEncoder.__new__(MiniMaxH3Qwen3VLTextEncoder)
         encoder.disk_streaming = True
@@ -108,9 +201,13 @@ class MiniMaxH3MPSStreamingTest(unittest.TestCase):
         ):
             expected = tensors[f"transformer_blocks.{index}.{path}.weight"]
             torch.testing.assert_close(module.weight.cpu(), expected.t(), rtol=0, atol=0)
-        if block.attn.has_fused_qkv:
+        self.assertEqual(block.attn.has_fused_qkv, block.attn.use_fused_qkv)
+        if block.attn.use_fused_qkv:
             expected = torch.cat([tensors[f"transformer_blocks.{index}.attn.to_{part}.weight"] for part in ("q", "k", "v")])
             torch.testing.assert_close(block.attn.to_qkv.weight.cpu(), expected.t(), rtol=0, atol=0)
+            hidden_states = torch.arange(24, dtype=torch.bfloat16, device="mps").reshape(3, 8) / 16
+            separate = torch.cat([module.apply(hidden_states) for module in (block.attn.to_q, block.attn.to_k, block.attn.to_v)], dim=-1)
+            torch.testing.assert_close(block.attn.to_qkv.apply(hidden_states), separate, rtol=1e-2, atol=1e-2)
 
     def test_streamed_weights_survive_block_changes_and_buffer_recreation(self):
         with tempfile.TemporaryDirectory() as directory:

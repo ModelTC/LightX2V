@@ -1,26 +1,26 @@
 #!/bin/bash
+set -euo pipefail
 
-# set paths firstly
-lightx2v_path=/Users/yongyang/Documents/x2v/LightX2V
-model_path=/Users/yongyang/Documents/x2v/models/MiniMaxAI/diffusers/MiniMax-H3
+lightx2v_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+: "${MODEL_PATH:?Set MODEL_PATH to the MiniMax-H3 diffusers checkpoint directory}"
+config_json="${CONFIG_JSON:-${lightx2v_path}/configs/platforms/mps/minimax_h3_t2av_4step_512_22.json}"
+save_result_path="${SAVE_RESULT_PATH:-${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av.mp4}"
 
-# set environment variables
 export PLATFORM=mps
 export DTYPE=BF16
 export SENSITIVE_LAYER_DTYPE=BF16
 export TOKENIZERS_PARALLELISM=false
-export PYTHONPATH="${lightx2v_path}:$PYTHONPATH"
+export PYTHONPATH="${lightx2v_path}${PYTHONPATH:+:${PYTHONPATH}}"
 
-prompt='A cinematic fox walking through a snowy forest'
+mkdir -p "$(dirname -- "${save_result_path}")"
 
-mkdir -p "${lightx2v_path}/save_results"
-
-/opt/miniconda3/envs/torch/bin/python -m lightx2v.infer \
+exec "${PYTHON:-python}" -m lightx2v.infer \
     --model_cls minimax_h3 \
     --model-variant fl2av \
     --task t2av \
-    --model_path "$model_path" \
-    --config_json "${lightx2v_path}/configs/platforms/mps/minimax_h3_t2av_4step_512_22.json" \
-    --prompt "$prompt" \
-    --save_result_path "${lightx2v_path}/save_results/output_lightx2v_minimax_h3_t2av.mp4" \
-    --seed 42
+    --model_path "${MODEL_PATH}" \
+    --config_json "${config_json}" \
+    --prompt "${PROMPT:-A cinematic fox walking through a snowy forest}" \
+    --save_result_path "${save_result_path}" \
+    --seed "${SEED:-42}" \
+    "$@"

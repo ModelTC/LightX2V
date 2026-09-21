@@ -8,21 +8,9 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 from .template import AttnWeightTemplate
 
 
-def _use_h3_mps_query_chunks(q, k, v, chunk_size, scope, attn_mask, causal, drop_rate):
+def _use_mps_query_chunks(q, k, v, chunk_size, attn_mask, causal, drop_rate):
     return (
-        scope == "minimax_h3_dit"
-        and isinstance(chunk_size, int)
-        and chunk_size > 0
-        and q.device.type == k.device.type == v.device.type == "mps"
-        and q.ndim == 4
-        and q.shape == k.shape == v.shape
-        and q.shape[0] == 1
-        and q.shape[1] == 56
-        and q.shape[-1] == 128
-        and q.shape[2] > 0
-        and attn_mask is None
-        and not causal
-        and drop_rate == 0
+        isinstance(chunk_size, int) and chunk_size > 0 and q.device.type == k.device.type == v.device.type == "mps" and q.shape[2] > chunk_size and attn_mask is None and not causal and drop_rate == 0
     )
 
 
@@ -30,7 +18,10 @@ def _query_chunked_sdpa(q, k, v, chunk_size):
     # Each query still attends to every key/value. Only the query workspace is
     # bounded; there is no context truncation or change to the softmax domain.
     return torch.cat(
-        [F.scaled_dot_product_attention(q[:, :, start : start + chunk_size, :], k, v, attn_mask=None, dropout_p=0.0, is_causal=False) for start in range(0, q.shape[2], chunk_size)],
+        [
+            F.scaled_dot_product_attention(q[:, :, start : start + chunk_size, :], k, v, attn_mask=None, dropout_p=0.0, is_causal=False, enable_gqa=q.shape[1] != k.shape[1])
+            for start in range(0, q.shape[2], chunk_size)
+        ],
         dim=2,
     )
 
@@ -72,7 +63,7 @@ class TorchSDPAWeight(AttnWeightTemplate):
             )
         with sdpa_ctx:
             chunk_size = kwargs.get("mps_sdpa_query_chunk_size", 0)
-            if _use_h3_mps_query_chunks(q, k, v, chunk_size, kwargs.get("attention_scope"), attn_mask, causal, drop_rate):
+            if _use_mps_query_chunks(q, k, v, chunk_size, attn_mask, causal, drop_rate):
                 x = _query_chunked_sdpa(q, k, v, chunk_size)
             else:
                 # q/k/v are (B, H, S, D) here, so head count is dim 1. GQA models such as

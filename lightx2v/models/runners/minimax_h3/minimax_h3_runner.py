@@ -1,4 +1,3 @@
-import gc
 import os
 from contextlib import suppress
 
@@ -250,14 +249,14 @@ class MiniMaxH3Runner(DefaultRunner):
     @staticmethod
     def _validate_vae_decode_tile_shapes(tile_shapes, video_vae):
         if not isinstance(tile_shapes, dict):
-            raise TypeError("vae_decode_tile_shape must map 'HEIGHTxWIDTH' to [tile_height, tile_width]")
+            raise ValueError("vae_decode_tile_shape must map 'HEIGHTxWIDTH' to [tile_height, tile_width]")
 
         ratio = video_vae.spatial_compression_ratio
         overlap_height = video_vae.tile_sample_min_overlap_height
         overlap_width = video_vae.tile_sample_min_overlap_width
         for resolution, tile_shape in tile_shapes.items():
             if not isinstance(resolution, str):
-                raise TypeError(f"invalid VAE tile resolution: {resolution!r}")
+                raise ValueError(f"invalid VAE tile resolution: {resolution!r}")
             dimensions = resolution.split("x")
             if len(dimensions) != 2:
                 raise ValueError(f"invalid VAE tile resolution: {resolution!r}")
@@ -500,23 +499,14 @@ class MiniMaxH3Runner(DefaultRunner):
         if self._is_mps_low_memory_streaming() and (self.video_vae is not None or self.audio_vae is not None):
             self.video_vae = None
             self.audio_vae = None
-            gc.collect()
             self.maybe_empty_cache(force=True, collect_garbage=True)
 
     def _encode_keyframes(self, keyframes):
-        if not keyframes:
-            return []
-        self._ensure_vae_loaded()
-        try:
-            latents = []
-            for image in keyframes:
-                pixels = torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1)[None, :, None].float().div_(255.0)
-                latents.append(self.video_vae.encode_condition(pixels, video=False))
-            return latents
-        finally:
-            # Switched i2av/l2av/fl2av requests need the VAE for conditioning,
-            # but MPS streaming must release it again before denoising.
-            self._release_low_memory_vae()
+        latents = []
+        for image in keyframes:
+            pixels = torch.from_numpy(np.asarray(image).copy()).permute(2, 0, 1)[None, :, None].float().div_(255.0)
+            latents.append(self.video_vae.encode_condition(pixels, video=False))
+        return latents
 
     def _encode_references(self, references):
         video_latents, audio_latents = [], []

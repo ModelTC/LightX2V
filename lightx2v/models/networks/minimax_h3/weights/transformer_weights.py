@@ -125,9 +125,9 @@ class MiniMaxH3AttentionWeights(WeightModule):
             "rope",
             ROPE_REGISTER[config.get("rope_type", "torch_real_rope")](
                 layout="split_half",
-                # H3 requires BF16 Q/K; the reference rounds frequencies and
-                # performs the rotation at that dtype, not in FP32.
-                compute_dtype=torch.bfloat16,
+                # MPS uses BF16 rotation; other platforms retain FP32 for the
+                # fused QKV norm/RoPE kernels.
+                compute_dtype=torch.bfloat16 if AI_DEVICE == "mps" else torch.float32,
             ),
         )
         attn_type = config.get("attn_type", "flash_attn3")
@@ -284,12 +284,6 @@ class MiniMaxH3TransformerWeights(WeightModule):
             self.offload_phase_cuda_buffers = None
         self.add_module("blocks", self.blocks)
 
-    @property
-    def streaming_block_indices(self):
-        if not self.disk_streaming:
-            raise RuntimeError("MiniMax-H3 streaming_block_indices is only available when dit_disk_streaming=true.")
-        return self.checkpoint.block_indices
-
     def __len__(self):
         return self.num_layers
 
@@ -305,13 +299,17 @@ class MiniMaxH3TransformerWeights(WeightModule):
             # Reuse the ordinary weight loaders, including their transpose and
             # dtype rules. These source tensors are already on the device.
             block.load(tensors)
-            block.shared_host_tensors = {}
             for module in _iter_weight_modules(block):
-                for name, attr, transpose in module.base_attrs:
+                for name, attr, _ in module.base_attrs:
                     buffer = getattr(module, f"{attr}_cuda_buffer")
                     if buffer.dtype != tensors[name].dtype:
                         raise ValueError(f"Shared weight loading requires matching file/inference dtypes: {name}")
                     setattr(module, attr, buffer)
+            block.attn._build_fused_qkv()
+            block.shared_host_tensors = {}
+            for module in _iter_weight_modules(block):
+                for name, attr, transpose in module.base_attrs:
+                    buffer = getattr(module, attr)
                     # Disk data keeps its original row-major layout; compute
                     # retains the existing transposed view of the same storage.
                     block.shared_host_tensors[name] = host_view(buffer.t() if transpose else buffer)
