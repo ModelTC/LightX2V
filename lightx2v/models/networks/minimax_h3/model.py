@@ -144,9 +144,11 @@ class MiniMaxH3Model(BaseTransformerModel):
         return super()._apply_weights(weight_dict)
 
     def _init_weights(self, weight_dict=None):
-        if not self.config.get("dit_disk_streaming", False):
-            return super()._init_weights(weight_dict)
+        if self.config.get("dit_disk_streaming", False):
+            return self._init_disk_streaming_weights()
+        return super()._init_weights(weight_dict)
 
+    def _init_disk_streaming_weights(self):
         self.transformer_weights = MiniMaxH3StreamingTransformerWeights(self.config)
         self.pre_weight = self.pre_weight_class(self.config)
         self.post_weight = self.post_weight_class(self.config)
