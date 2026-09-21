@@ -126,7 +126,10 @@ class HunyuanImage3Model(BaseTransformerModel):
     def __init__(self, model_path, config, device, lora_path=None, lora_strength=1.0):
         super().__init__(model_path, config, device, "hunyuan_image3", lora_path, lora_strength)
         self._init_tensor_parallel()
-        self.pipeline_devices = resolve_pipeline_devices(config, device)
+        self.block_offload = self.cpu_offload and self.offload_granularity == "block"
+        self._validate_offload_config()
+        execution_device = f"cuda:{torch.cuda.current_device()}" if self.block_offload else device
+        self.pipeline_devices = resolve_pipeline_devices(config, execution_device)
         self.pipeline_parallel = len(set(self.pipeline_devices)) > 1
         self.sequence_parallel_attn_type = self._resolve_sequence_parallel_attn_type()
         self._sp_gather_buffers = {}
@@ -156,7 +159,21 @@ class HunyuanImage3Model(BaseTransformerModel):
         }
         self._init_infer_class()
         self._init_weights()
-        self._init_infer()
+        try:
+            error = None
+            try:
+                self._init_infer()
+            except Exception as exc:
+                error = exc
+            if self.config.get("shared_cpu_weights", False):
+                from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
+
+                coordinate_rank_local_error("HunyuanImage3 GPU slot initialization", error)
+            elif error is not None:
+                raise error
+        except BaseException:
+            self.close_shared_cpu_weights()
+            raise
 
         if self.config.get("seq_parallel", False) and self.tensor_parallel:
             logger.info(
@@ -210,7 +227,7 @@ class HunyuanImage3Model(BaseTransformerModel):
             return
         if self.pipeline_parallel:
             raise ValueError("HunyuanImage3 tensor parallel cannot be combined with pipeline parallel; set parallel.pipeline_parallel=false.")
-        if self.config.get("cpu_offload", False):
+        if self.config.get("cpu_offload", False) and not self.block_offload:
             raise NotImplementedError("HunyuanImage3 tensor parallel does not support cpu_offload.")
         if self.config.get("lazy_load", False):
             raise NotImplementedError("HunyuanImage3 tensor parallel does not support lazy_load.")
@@ -259,14 +276,15 @@ class HunyuanImage3Model(BaseTransformerModel):
             return "col"
         return None
 
-    def _select_tensor_parallel_shard(self, key, tensor):
+    def _select_tensor_parallel_shard(self, key, tensor, tp_rank=None):
+        tp_rank = self.tp_rank if tp_rank is None else tp_rank
         split_type = self._tp_split_type(key)
         if split_type is None:
             return tensor
 
         if split_type == "row":
             # Row-parallel biases are replicated and added after the reduction.
-            return select_row_storage_shard(tensor, self.tp_rank, self.tp_size)
+            return select_row_storage_shard(tensor, tp_rank, self.tp_size)
 
         if split_type == "qkv_col":
             num_heads = int(self.config.get("num_attention_heads") or self.config["num_heads"])
@@ -274,7 +292,7 @@ class HunyuanImage3Model(BaseTransformerModel):
             head_dim = int(self.config.get("attention_head_dim", self.config["hidden_size"] // num_heads))
             return select_grouped_qkv_storage_shard(
                 tensor,
-                self.tp_rank,
+                tp_rank,
                 self.tp_size,
                 self.micro_shard_count,
                 num_heads,
@@ -283,9 +301,73 @@ class HunyuanImage3Model(BaseTransformerModel):
             )
 
         if split_type == "gate_up_col":
-            return select_fused_gate_up_storage_shard(tensor, self.tp_rank, self.tp_size, self.micro_shard_count)
+            return select_fused_gate_up_storage_shard(tensor, tp_rank, self.tp_size, self.micro_shard_count)
 
-        return select_column_storage_shard(tensor, self.tp_rank, self.tp_size)
+        return select_column_storage_shard(tensor, tp_rank, self.tp_size)
+
+    def _validate_offload_config(self):
+        if self.config.get("shared_cpu_weights", False) and not self.block_offload:
+            raise ValueError("HunyuanImage3 shared_cpu_weights requires CPU block offload")
+        if not self.cpu_offload:
+            return
+        if not self.block_offload:
+            raise ValueError("HunyuanImage3 CPU offload currently supports block granularity only")
+        parallel = self.config.get("parallel") or {}
+        if (
+            parallel.get("pipeline_parallel", self.config.get("pipeline_parallel", True))
+            or parallel.get("pipeline_devices")
+            or self.config.get("pipeline_parallel_devices")
+            or self.config.get("hunyuan_image3_pipeline_devices")
+        ):
+            raise ValueError("HunyuanImage3 block offload uses one GPU per rank; set parallel.pipeline_parallel=false and remove pipeline_devices")
+        unsupported = ("lazy_load", "unload_modules", "dit_quantized", "weight_auto_quant", "load_from_rank0", "use_compile", "enable_ar_cuda_graph", "dummy_model", "lora_dynamic_apply")
+        enabled = [key for key in unsupported if self.config.get(key, False)]
+        if enabled or self.lora_path or self.config.get("lora_configs"):
+            raise ValueError(f"HunyuanImage3 block offload requires original immutable weights without LoRA; incompatible options: {enabled}")
+        if self.config.get("dit_quant_scheme", "Default") != "Default":
+            raise ValueError("HunyuanImage3 block offload requires dit_quant_scheme='Default'")
+        if self.config.get("mlp_bias", False):
+            raise ValueError("HunyuanImage3 block offload uses the bias-free fused MoE path")
+        if self.config.get("shared_cpu_weights", False) and any(self.config.get(key) for key in ("dit_original_ckpt", "transformer_model_path", "adapter_model_path")):
+            raise ValueError("HunyuanImage3 shared block loading uses the original indexed checkpoint selected by model_path; checkpoint overrides are not supported")
+        if not torch.cuda.is_available():
+            raise ValueError("HunyuanImage3 block offload currently requires CUDA")
+        if self.config.get("moe_backend") in ("flashinfer", "multi_micro"):
+            from lightx2v.common.ops.moe.fused_moe import FlashInferFusedMoE
+
+            if not FlashInferFusedMoE.is_available():
+                raise ImportError(
+                    "HunyuanImage3 requires a compatible FlashInfer installation exposing fused_moe.cutlass_fused_moe and tllm_enums.ActivationType; check PYTHON_BIN/PYTHONPATH before loading weights"
+                )
+
+    def _load_shared_cpu_weights(self, unified_dtype, sensitive_layer):
+        from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
+        from lightx2v.models.networks.hunyuan_image3.shared_block_weights import HunyuanImage3SharedBlockAdapter
+
+        error = None
+        try:
+            adapter = HunyuanImage3SharedBlockAdapter(self, unified_dtype, sensitive_layer)
+            private = adapter.load_private_weights()
+        except Exception as exc:
+            error = exc
+        coordinate_rank_local_error("HunyuanImage3 checkpoint preflight", error)
+        return adapter.materialize(private)
+
+    def _validate_shared_cpu_weights(self, weight_map):
+        from lightx2v.models.networks.hunyuan_image3.shared_block_weights import validate_hunyuan_shared_views
+
+        validate_hunyuan_shared_views(weight_map, self.transformer_weights.blocks)
+
+    def _init_offload_manager(self):
+        from lightx2v.models.networks.hunyuan_image3.offload import HunyuanImage3BlockOffload
+
+        self.transformer_infer.offload_manager = HunyuanImage3BlockOffload(self.transformer_weights.blocks, self.config, self.pipeline_devices[0])
+
+    def close_shared_cpu_weights(self):
+        infer = self.__dict__.get("transformer_infer")
+        if infer is not None and infer.offload_manager is not None:
+            infer.offload_manager.close()
+        super().close_shared_cpu_weights()
 
     def _resolve_sequence_parallel_attn_type(self):
         if not self.config.get("seq_parallel", False):
@@ -332,13 +414,15 @@ class HunyuanImage3Model(BaseTransformerModel):
                 )
 
     def _tensor_target_device(self, key):
+        if self.block_offload and key.startswith("model.layers."):
+            return "cpu"
         return resolve_pipeline_device_for_key(key, self.config, self.pipeline_devices)
 
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
         ext = os.path.splitext(file_path)[-1]
         if ext in (".pt", ".pth", ".tar"):
-            if self.tensor_parallel:
-                raise NotImplementedError("HunyuanImage3 tensor parallel requires safetensors checkpoints.")
+            if self.tensor_parallel or self.block_offload:
+                raise NotImplementedError("HunyuanImage3 tensor parallel and block offload require safetensors checkpoints.")
             return super()._load_safetensor_to_dict(file_path, unified_dtype, sensitive_layer)
 
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
@@ -359,7 +443,12 @@ class HunyuanImage3Model(BaseTransformerModel):
                 else:
                     dtype = tensor.dtype
                 target_device = self._tensor_target_device(key)
-                weight_dict[key] = tensor.to(device=target_device, dtype=dtype)
+                tensor = tensor.to(device=target_device, dtype=dtype)
+                # Match ForceFp32 after the baseline dtype conversion, before
+                # pinning, so the router's CPU source remains registered.
+                if self.block_offload and key.endswith(".mlp.gate.wg.weight"):
+                    tensor = tensor.float()
+                weight_dict[key] = tensor
 
         if self.pipeline_parallel:
             logger.debug(f"HunyuanImage3 loaded {len(weight_dict)} tensors from {file_path} across {self.pipeline_devices}")
@@ -377,7 +466,7 @@ class HunyuanImage3Model(BaseTransformerModel):
         self.transformer_infer = self.transformer_infer_class(self.config)
         self.post_infer = self.post_infer_class(self.config)
         self.reset_taylor_cache()
-        if hasattr(self.transformer_infer, "offload_manager"):
+        if self.block_offload:
             self._init_offload_manager()
 
     def _active_seq_group(self):
@@ -579,7 +668,7 @@ class HunyuanImage3Model(BaseTransformerModel):
 
     def combine_cfg_predictions(self, noise_pred_cond, noise_pred_uncond):
         guidance_scale = self._guidance_scale()
-        assert guidance_scale != 1.0, "CFG requires guidance_scale != 1"
+        assert guidance_scale > 1.0, f"CFG requires guidance_scale > 1, got {guidance_scale!r}"
         return noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
     @torch.no_grad()

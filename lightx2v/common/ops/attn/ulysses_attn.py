@@ -24,71 +24,6 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         q,
         k,
         v,
-        slice_qkv_len,
-        cu_seqlens_qkv,
-        attention_module=None,
-        seq_p_group=None,
-        use_fp8_comm=False,
-        use_fp4_comm=False,
-        use_tensor_fusion=False,
-        enable_head_parallel=False,
-        img_first=True,
-        q_only_img=False,
-        **kwargs,
-    ):
-        """Deprecated compatibility adapter for the legacy joined-token interface.
-
-        New model integrations should call :meth:`apply_new`
-        with QKV and optional auxiliary token regions passed separately.
-        ``cu_seqlens_qkv`` is retained only for call-signature compatibility;
-        its value is ignored.
-        """
-        q = flatten_seq_p_tensor(q, "q")
-        k = flatten_seq_p_tensor(k, "k")
-        v = flatten_seq_p_tensor(v, "v")
-
-        split_len = int(slice_qkv_len.item()) if isinstance(slice_qkv_len, torch.Tensor) else int(slice_qkv_len)
-        main_first = img_first
-        main_q_only = q_only_img
-        if main_first:
-            main_len, aux_len = split_len, k.shape[0] - split_len
-        else:
-            main_len, aux_len = k.shape[0] - split_len, split_len
-        if main_q_only:
-            q = q.contiguous()
-            aux_q = None
-            k, aux_k = self._legacy_split_tensor(k, main_len, aux_len, main_first)
-            v, aux_v = self._legacy_split_tensor(v, main_len, aux_len, main_first)
-        else:
-            q, aux_q = self._legacy_split_tensor(q, main_len, aux_len, main_first)
-            k, aux_k = self._legacy_split_tensor(k, main_len, aux_len, main_first)
-            v, aux_v = self._legacy_split_tensor(v, main_len, aux_len, main_first)
-
-        if use_fp8_comm and use_fp4_comm:
-            raise ValueError("use_fp8_comm and use_fp4_comm cannot both be enabled.")
-        quant_scheme = "fp8" if use_fp8_comm else "fp4" if use_fp4_comm else None
-        output, aux_attn = self.apply_new(
-            q=q,
-            k=k,
-            v=v,
-            aux_q=aux_q,
-            aux_k=aux_k,
-            aux_v=aux_v,
-            attention_module=attention_module,
-            seq_p_group=seq_p_group,
-            quant_scheme=quant_scheme,
-            tensor_fusion=use_tensor_fusion,
-            head_parallel=enable_head_parallel,
-            aux_first=not main_first,
-            attention_kwargs=kwargs,
-        )
-        return self._legacy_join_output(output, aux_attn, main_first)
-
-    def apply_new(
-        self,
-        q,
-        k,
-        v,
         aux_q=None,
         aux_k=None,
         aux_v=None,
@@ -383,20 +318,6 @@ class UlyssesAttnWeight(AttnWeightTemplate):
         validate_seq_p_inputs(q, k, v, aux_q, aux_k, aux_v)
         if q.shape[1] % world_size or k.shape[1] % world_size:
             raise ValueError(f"q_heads and kv_heads must be divisible by world_size={world_size}.")
-
-    @staticmethod
-    def _legacy_split_tensor(tensor, main_len, aux_len, main_first):
-        if main_first:
-            return tensor[:main_len].contiguous(), tensor[main_len : main_len + aux_len].contiguous()
-        return tensor[aux_len : aux_len + main_len].contiguous(), tensor[:aux_len].contiguous()
-
-    @staticmethod
-    def _legacy_join_output(output, aux_output, main_first):
-        if aux_output is None or aux_output.shape[0] == 0:
-            return output
-        if main_first:
-            return torch.cat((output, aux_output), dim=0)
-        return torch.cat((aux_output, output), dim=0)
 
 
 ATTN_WEIGHT_REGISTER.register(

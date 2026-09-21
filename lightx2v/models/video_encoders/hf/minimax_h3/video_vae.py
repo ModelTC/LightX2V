@@ -520,6 +520,7 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         self.num_register_tokens = num_register_tokens
         self.use_compile = use_compile
         self.compiled_blocks = {}
+        self.block_offload_runner = None
 
         self.rope = MiniMaxH3VideoRotaryPosEmbed(int(attention_head_dim * rope_dim_ratio), theta=rope_theta)
         self.proj_in = nn.Linear(in_channels, dim)
@@ -576,8 +577,12 @@ class MiniMaxH3VideoViTDecoder3d(nn.Module):
         suffix_ids = position_ids.new_zeros((batch_size, self.num_register_tokens + 1, 3))
         rotary_emb = self.rope(torch.cat([position_ids, suffix_ids], dim=1))
 
-        for block_index, block in enumerate(self.transformer_blocks):
-            hidden_states = self._run_block(block_index, block, hidden_states, rotary_emb)
+        block_offload = self.block_offload_runner
+        if block_offload is not None:
+            hidden_states = block_offload.infer(hidden_states, rotary_emb)
+        else:
+            for block_index, block in enumerate(self.transformer_blocks):
+                hidden_states = self._run_block(block_index, block, hidden_states, rotary_emb)
 
         hidden_states = self.norm_out(hidden_states)
         if self.sensitive_layer_dtype != self.infer_dtype:
@@ -621,8 +626,8 @@ class MiniMaxH3VideoVAE(nn.Module):
         super().__init__()
         if quant_scheme not in {None, "fp8-f16-accum", "fp8-musa", "fp8-sgl"}:
             raise NotImplementedError(f"Unsupported MiniMax-H3 video VAE quantization scheme: {quant_scheme!r}")
-        if attn_type not in {"torch_sdpa", "sage_attn2"}:
-            raise ValueError(f"Unsupported MiniMax-H3 video VAE attention type: {attn_type!r}; expected torch_sdpa or sage_attn2")
+        if attn_type not in {"torch_sdpa", "sage_attn2", "minimax_h3_xpu_cute"}:
+            raise ValueError(f"Unsupported MiniMax-H3 video VAE attention type: {attn_type!r}; expected torch_sdpa, sage_attn2, or minimax_h3_xpu_cute")
         self.config = dict(config)
         self.execution_device = torch.device(device or AI_DEVICE)
         self.cpu_offload = cpu_offload
@@ -705,6 +710,9 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.register_buffer("pixel_std", torch.empty(3), persistent=False)
         self._reset_runtime_buffers()
         self.load_report: SafetensorsSubsetReport | None = None
+        self._cpu_weight_sources = None
+        self.shared_cpu_weight_owner = None
+        self._shared_weights_closed = False
 
     def _replace_decoder_linears_with_fp8(self, module: nn.Module) -> None:
         for name, child in module.named_children():
@@ -803,7 +811,16 @@ class MiniMaxH3VideoVAE(nn.Module):
         sensitive_layer_dtype: torch.dtype = torch.float32,
         use_compile: bool = False,
         attn_type: str = "torch_sdpa",
+        offload_granularity: str = "model",
+        shared_cpu_config: dict | None = None,
     ) -> "MiniMaxH3VideoVAE":
+        if offload_granularity not in {"model", "block"}:
+            raise ValueError("video_vae_offload_granularity must be model or block")
+        if offload_granularity == "block" or shared_cpu_config is not None:
+            if not cpu_offload or quant_scheme is not None or use_compile:
+                raise ValueError("H3 VAE shared/block mode requires CPU offload, original weights and vae_use_compile=false")
+        if shared_cpu_config is not None and encoder_conv_mode != "torch":
+            raise ValueError("H3 VAE shared weights require vae_encoder_conv_mode='torch'; other layouts need a matching shared manifest")
         vae_dir = _component_dir(model_path, "vae")
         if encoder_conv_mode not in _SUPPORTED_ENCODER_CONV_MODES:
             raise ValueError(f"Unsupported MiniMax-H3 VAE encoder_conv_mode {encoder_conv_mode!r}; expected one of {sorted(_SUPPORTED_ENCODER_CONV_MODES)}")
@@ -853,16 +870,29 @@ class MiniMaxH3VideoVAE(nn.Module):
         model._reset_runtime_buffers()
         if encoder_conv_policy is not None:
             model._enable_encoder_fp8_convs(encoder_conv_checkpoint_info, encoder_conv_policy)
-        model.load_report = load_safetensors_subset(model, weight_path)
+        if shared_cpu_config is not None:
+            from lightx2v.models.video_encoders.hf.minimax_h3.weights import load_shared_video_vae
+
+            model.load_report = load_shared_video_vae(model, weight_path, shared_cpu_config)
+        else:
+            model.load_report = load_safetensors_subset(model, weight_path)
         if quant_scheme is not None:
             # Pack only after loading the checkpoint's original Q/K/V keys.
             model._pack_decoder_fp8_qkv()
         if quant_scheme == "fp8-f16-accum":
             model._configure_fp8_f16_accum_linears()
         use_channels_last_encoder = encoder_conv_mode == "torch_channels_last"
-        model._prepare_inference_weights(use_channels_last_encoder=use_channels_last_encoder)
+        if shared_cpu_config is None:
+            model._prepare_inference_weights(use_channels_last_encoder=use_channels_last_encoder)
         model._use_channels_last_encoder_input = use_channels_last_encoder
         model.eval().requires_grad_(False)
+        if offload_granularity == "block" or shared_cpu_config is not None:
+            from lightx2v.common.offload.module_adapter import ModuleCPUWeights
+            from lightx2v.models.video_encoders.hf.minimax_h3.offload import VideoVAEDecoderOffload
+
+            if offload_granularity == "block":
+                model.decoder.block_offload_runner = VideoVAEDecoderOffload(model.decoder.transformer_blocks, model.execution_device, shared=shared_cpu_config is not None)
+            model._cpu_weight_sources = ModuleCPUWeights(model)
         if not cpu_offload:
             model.to(model.execution_device)
         if use_compile:
@@ -897,17 +927,23 @@ class MiniMaxH3VideoVAE(nn.Module):
         self.use_tiling = False
 
     def enable_decode_parallel(self) -> None:
+        """Enable tiled parallel decoding; must be called on every rank."""
         if not self.use_tiling:
             raise RuntimeError("MiniMax-H3 VAE decode parallel requires tiling")
         if not dist.is_initialized() or dist.get_world_size() <= 1:
             raise RuntimeError("MiniMax-H3 VAE decode parallel requires an initialized multi-rank process group")
+        # Initialize the full-group communicator on the VAE device before subset P2P.
+        dist.all_reduce(torch.zeros(1, device=self.execution_device))
         self.decode_parallel = True
 
     def enable_encode_parallel(self) -> None:
+        """Enable tiled parallel encoding; must be called on every rank."""
         if not self.use_tiling:
             raise RuntimeError("MiniMax-H3 VAE encode parallel requires tiling")
         if not dist.is_initialized() or dist.get_world_size() <= 1:
             raise RuntimeError("MiniMax-H3 VAE encode parallel requires an initialized multi-rank process group")
+        # Initialize the full-group communicator on the VAE device before subset P2P.
+        dist.all_reduce(torch.zeros(1, device=self.execution_device))
         self.encode_parallel = True
 
     def _split_tiles(self, length: int, tile_size: int, min_overlap: int) -> tuple[list[int], list[int], list[int]]:
@@ -1067,8 +1103,6 @@ class MiniMaxH3VideoVAE(nn.Module):
         num_tiles = num_clips * tiles_per_clip
         rank = dist.get_rank()
         world_size = dist.get_world_size()
-        if num_tiles < world_size:
-            raise ValueError(f"MiniMax-H3 VAE encode parallel requires at least {world_size} tiles, got {num_tiles}")
 
         local_tiles = []
         task_counts = self._balanced_task_counts(num_tiles, world_size)
@@ -1142,7 +1176,7 @@ class MiniMaxH3VideoVAE(nn.Module):
         try:
             if pixels.ndim != 5 or pixels.shape[0] != 1 or pixels.shape[1] != 3:
                 raise ValueError(f"reference pixels must be [1,3,F,H,W], got {tuple(pixels.shape)}")
-            device = self._activate()
+            device = self._activate("encode")
             pixels = self.preprocess(pixels.to(device=device, dtype=self.sensitive_layer_dtype))
             if self._use_channels_last_encoder_input:
                 pixels = pixels.contiguous(memory_format=torch.channels_last_3d)
@@ -1187,10 +1221,13 @@ class MiniMaxH3VideoVAE(nn.Module):
     def _gather_tiles(local_tiles: list[torch.Tensor], task_counts: list[int]) -> list[torch.Tensor] | None:
         """Collect tile results on rank 0 in global tile order."""
         rank = dist.get_rank()
-        # Each worker stacks and sends its tiles exactly once. Rank 0 keeps its
-        # local list and submits one receive per worker; there is no per-tile P2P.
+        # Each active worker sends once; idle ranks have no P2P operations.
+        # Rank 0 always owns the first tile and keeps its local list.
         if rank != 0:
-            local_tile_batch = torch.stack(local_tiles)
+            if not local_tiles:
+                return None
+            # Match the receive buffers even when tile outputs are channels-last.
+            local_tile_batch = torch.stack(local_tiles).contiguous()
             send_op = dist.P2POp(dist.isend, local_tile_batch, 0)
             for request in dist.batch_isend_irecv([send_op]):
                 request.wait()
@@ -1199,11 +1236,14 @@ class MiniMaxH3VideoVAE(nn.Module):
         receive_buffers = []
         receive_ops = []
         for source_rank, task_count in enumerate(task_counts[1:], start=1):
+            if task_count == 0:
+                continue
             receive_buffer = local_tiles[0].new_empty((task_count, *local_tiles[0].shape))
             receive_buffers.append(receive_buffer)
             receive_ops.append(dist.P2POp(dist.irecv, receive_buffer, source_rank))
-        for request in dist.batch_isend_irecv(receive_ops):
-            request.wait()
+        if receive_ops:
+            for request in dist.batch_isend_irecv(receive_ops):
+                request.wait()
 
         for receive_buffer in receive_buffers:
             for tile in receive_buffer:
@@ -1219,10 +1259,6 @@ class MiniMaxH3VideoVAE(nn.Module):
         world_size = dist.get_world_size()
 
         num_tiles = len(all_tiles)
-        if num_tiles < world_size:
-            message = f"VAE parallel needs at least {world_size} tiles, got {num_tiles}"
-            raise ValueError(message)
-
         task_counts = self._balanced_task_counts(num_tiles, world_size)
         local_start = sum(task_counts[:rank])
         local_end = local_start + task_counts[rank]
@@ -1310,15 +1346,44 @@ class MiniMaxH3VideoVAE(nn.Module):
         std = self.pixel_std.to(device=video.device).view(1, -1, 1, 1, 1)
         return (video.to(self.sensitive_layer_dtype) * std + mean).clamp_(0, 1)
 
-    def _activate(self) -> torch.device:
+    def _activate(self, operation="decode") -> torch.device:
+        if self._shared_weights_closed:
+            raise RuntimeError("Video VAE shared weights have been closed; reload the model before inference")
+        sources = self._cpu_weight_sources
+        if sources is not None:
+            if operation == "encode":
+                prefixes = ("encoder", "quant_conv")
+            elif self.decoder.block_offload_runner is not None:
+                prefixes = ("post_quant_conv", "decoder.proj_in", "decoder.proj_out", "decoder.norm_out", "decoder.register_tokens", "decoder.rope")
+                self.decoder.block_offload_runner.activate()
+            else:
+                prefixes = ("post_quant_conv", "decoder")
+            sources.activate(prefixes, self.execution_device)
+            return self.execution_device
         if self.cpu_offload:
             self.to(self.execution_device)
         return next(self.parameters()).device
 
     def offload(self) -> None:
-        self.to("cpu")
+        sources = self._cpu_weight_sources
+        if sources is None:
+            self.to("cpu")
+        else:
+            torch.cuda.synchronize(self.execution_device)
+            block_offload = self.decoder.block_offload_runner
+            if block_offload is not None:
+                block_offload.release()
+            sources.restore()
         _empty_device_cache(self.execution_device)
         gc.collect()
+
+    def close_shared_cpu_weights(self):
+        owner = self.shared_cpu_weight_owner
+        if owner is not None:
+            self.offload()
+            owner.close()
+            self.shared_cpu_weight_owner = None
+            self._shared_weights_closed = True
 
     def _run_decode(
         self,

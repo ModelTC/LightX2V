@@ -32,14 +32,10 @@ class MotusTransformerInfer(BaseTransformerInfer):
 
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
             self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
             self.seq_p_tensor_fusion = self.config["parallel"].get("seq_p_tensor_fusion", False)
         else:
             self.seq_p_group = None
-            self.seq_p_fp8_comm = False
-            self.seq_p_fp4_comm = False
             self.enable_head_parallel = False
             self.seq_p_tensor_fusion = False
 

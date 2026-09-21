@@ -21,6 +21,8 @@ import torch.distributed as dist
 from loguru import logger
 from safetensors import safe_open
 
+from lightx2v.common.offload.shared_weight_coordinator import coordinate_rank_local_error
+from lightx2v.common.offload.shared_weight_map import validate_shared_operator_views
 from lightx2v.utils.envs import *
 from lightx2v.utils.ggml_tensor import load_gguf_sd_ckpt
 from lightx2v.utils.utils import *
@@ -234,11 +236,37 @@ class BaseTransformerModel(ABC):
         return weight_dict
 
     def _init_weights(self, weight_dict=None):
+        if not self.config.get("shared_cpu_weights", False):
+            self._init_weights_impl(weight_dict)
+            return
+
+        try:
+            local_error = None
+            try:
+                self._init_weights_impl(weight_dict)
+            except Exception as error:
+                local_error = error
+            coordinate_rank_local_error("model initialization", local_error)
+        except BaseException:
+            try:
+                self.close_shared_cpu_weights()
+            except Exception as cleanup_error:
+                logger.error(f"Failed to close shared CPU weight arena after coordinated initialization error: {cleanup_error}")
+            raise
+
+    def _init_weights_impl(self, weight_dict=None):
         unified_dtype = GET_DTYPE() == GET_SENSITIVE_DTYPE()
         # Some layers run with float32 to achieve high accuracy
         sensitive_layer = self.sensitive_layer
+        shared_owner = None
         if weight_dict is None:
-            if self.config.get("dummy_model", False):
+            if self.config.get("shared_cpu_weights", False):
+                if self.config.get("dummy_model", False):
+                    raise ValueError("shared_cpu_weights does not support dummy_model")
+                weight_dict = self._load_shared_cpu_weights(unified_dtype, sensitive_layer)
+                shared_owner = weight_dict.owner
+                self._shared_cpu_weight_owner = shared_owner
+            elif self.config.get("dummy_model", False):
                 weight_dict = self._load_dummy_ckpt(unified_dtype, sensitive_layer)
                 if hasattr(self, "_load_adapter_ckpt"):
                     weight_dict.update(self._load_adapter_ckpt())
@@ -262,17 +290,37 @@ class BaseTransformerModel(ABC):
         else:
             self.original_weight_dict = weight_dict
 
-        # Initialize weight containers
         self.pre_weight = self.pre_weight_class(self.config)
         if self.lazy_load:
             self.transformer_weights = self.transformer_weight_class(self.config, self.lazy_load_path, self.lora_path)
         else:
             self.transformer_weights = self.transformer_weight_class(self.config)
-        if hasattr(self, "post_weight_class") and self.post_weight_class is not None:
+        if self.post_weight_class is not None:
             self.post_weight = self.post_weight_class(self.config)
 
         if not self._should_init_empty_model():
             self._apply_weights()
+
+        if shared_owner is not None:
+            self._validate_shared_cpu_weights(weight_dict)
+
+    def _load_shared_cpu_weights(self, unified_dtype, sensitive_layer):
+        """Return a model-specific mapping backed by a shared arena."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement shared CPU weight loading")
+
+    def _validate_shared_cpu_weights(self, weight_map):
+        validate_shared_operator_views(weight_map, self.transformer_weights.blocks.state_dict())
+        arena = weight_map.owner.arena
+        logger.info("[SharedCPUWeightsInfo] Validated {} {} tensor views in {:.3f} GiB arena", len(arena.manifest.tensors), type(self).__name__, arena.nbytes / 1024**3)
+
+    def close_shared_cpu_weights(self):
+        """Release the shared arena after all model transfers have stopped."""
+
+        owner = self.__dict__.get("_shared_cpu_weight_owner")
+        if owner is None:
+            return
+        owner.close()
+        del self._shared_cpu_weight_owner
 
     @abstractmethod
     def _init_infer(self):
@@ -406,7 +454,11 @@ class BaseTransformerModel(ABC):
         remove_keys = self.remove_keys if hasattr(self, "remove_keys") else []
         preserve_keys = self.preserved_keys if hasattr(self, "preserved_keys") else None  # None means all keys are preserved, otherwise only keys in preserve_keys are preserved
 
-        if self.device.type != "cpu" and dist.is_initialized():
+        # In PipeFusion mode, load weights to CPU first to avoid OOM — each
+        # stage only needs a subset of block weights on GPU.
+        if self.config.get("pipefusion_parallel", False):
+            device = "cpu"
+        elif self.device.type != "cpu" and dist.is_initialized():
             device = dist.get_rank()
         else:
             device = str(self.device)

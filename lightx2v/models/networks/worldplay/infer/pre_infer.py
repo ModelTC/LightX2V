@@ -39,7 +39,7 @@ class WorldPlayPreInfer(HunyuanVideo15PreInfer):
         else:
             txt, text_mask = inputs["text_encoder_output"]["context_null"][0], inputs["text_encoder_output"]["context_null"][1]
 
-        byt5_txt, byt5_text_mask = inputs["text_encoder_output"]["byt5_features"], inputs["text_encoder_output"]["byt5_masks"]
+        byt5_txt, byt5_text_mask = self.get_byt5_inputs(inputs)
         siglip_output, siglip_mask = inputs["image_encoder_output"]["siglip_output"], inputs["image_encoder_output"]["siglip_mask"]
         txt = txt.to(torch.bfloat16)
 

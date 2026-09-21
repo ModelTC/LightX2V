@@ -2,9 +2,9 @@ packaging
 ninja
 numpy
 scipy
-torch<=2.11.0
-torchvision<=0.26.0
-torchaudio<=2.11.0
+torch
+torchvision
+torchaudio
 torchao
 comfy-kitchen>=0.2.15
 diffusers
@@ -25,7 +25,6 @@ langdetect>=1.0.9
 sgl-kernel
 qtorch
 ftfy
-gradio
 aiohttp
 pydantic
 aio-pika
@@ -34,6 +33,7 @@ aioboto3>=12.0.0
 prometheus-client
 gguf
 fastapi
+python-multipart>=0.0.18
 uvicorn
 PyJWT
 requests

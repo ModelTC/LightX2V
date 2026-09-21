@@ -213,8 +213,7 @@ class LongCatImageRunner(DefaultRunner):
         text_encoder_output["prompt_embeds"] = prompt_embeds
 
         # Encode negative prompt with image
-        if self.config.get("enable_cfg", True) and neg_prompt is not None:
-            neg_prompt = neg_prompt if neg_prompt else ""
+        if self.config["enable_cfg"]:
             neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer_with_image([neg_prompt], prompt_image)
             self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
             text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
@@ -245,7 +244,7 @@ class LongCatImageRunner(DefaultRunner):
         self.input_info.txt_seq_lens = [prompt_embeds.shape[1]]
         text_encoder_output["prompt_embeds"] = prompt_embeds
 
-        if self.config["enable_cfg"] and neg_prompt is not None:
+        if self.config["enable_cfg"]:
             neg_prompt_embeds, neg_prompt_embeds_mask, _ = self.text_encoders[0].infer([neg_prompt])
             self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
             text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds

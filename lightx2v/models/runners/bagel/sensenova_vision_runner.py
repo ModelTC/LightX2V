@@ -60,6 +60,7 @@ class SenseNovaVisionRunner(BagelRunner):
 
     def _configure_mode(self, mode):
         profile = get_mode_profile(mode)
+        self.model.enable_cfg = self.config["enable_cfg"] and mode not in TEXT_OUTPUT_MODES and mode != "recon3d"
         if "num_timesteps" not in profile:
             return profile
 

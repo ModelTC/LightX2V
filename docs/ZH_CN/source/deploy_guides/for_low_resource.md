@@ -208,7 +208,7 @@ taew2_1.pth 权重可以从[这里](https://github.com/madebyollin/taehv/raw/ref
 
 - [参数卸载机制文档](../method_tutorials/offload.md) - 深入了解卸载技术原理
 - [量化技术指南](../method_tutorials/quantization.md) - 量化技术详细说明
-- [Gradio部署指南](deploy_gradio.md) - Gradio部署详细说明
+- [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) - 独立Gradio应用与部署说明
 
 ## ⚠️ 重要注意事项
 

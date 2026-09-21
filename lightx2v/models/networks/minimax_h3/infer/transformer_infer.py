@@ -1,11 +1,29 @@
+from functools import cache
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from loguru import logger
 
 from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerInfer
 from lightx2v.models.networks.minimax_h3.adaln_cache import load_persistent_adaln_cache
+from lightx2v.models.networks.minimax_h3.infer import fused_qkv  # noqa: F401 - registers the Triton backend
 from lightx2v.utils.envs import GET_DTYPE
+from lightx2v.utils.registry_factory import QKV_NORM_ROPE_REGISTER
 from lightx2v_platform.base.global_var import AI_DEVICE
+
+
+@cache
+def _warn_fused_qkv_fallback_once():
+    logger.warning("Fused QKV projection is unavailable (for example, because LoRA/diff weights are active); falling back to separate Q/K/V projections")
+
+
+@cache
+def _warn_qkv_norm_rope_fallback_once(backend):
+    logger.warning(
+        "Fused QKV Norm/RoPE backend '{}' is unavailable or incompatible with the current inputs; falling back to separate Norm and RoPE operations",
+        backend,
+    )
 
 
 class MiniMaxH3TransformerInfer(BaseTransformerInfer):
@@ -24,14 +42,20 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         self.num_heads = self.global_num_heads // self.tp_size
         self.head_dim = int(config.get("attention_head_dim", 128))
         self.infer_dtype = GET_DTYPE()
+        self.use_fused_qkv = bool(config.get("use_fused_qkv", False))
+        self.use_fused_qkv_norm_rope = bool(config.get("use_fused_qkv_norm_rope", False))
+        self.qkv_norm_rope_type = config.get("qkv_norm_rope_type", "triton")
+        if self.qkv_norm_rope_type not in QKV_NORM_ROPE_REGISTER:
+            raise ValueError(f"Unsupported qkv_norm_rope_type: {self.qkv_norm_rope_type}")
+        self.qkv_norm_rope = QKV_NORM_ROPE_REGISTER[self.qkv_norm_rope_type]()
         if config.get("seq_parallel", False):
             self.seq_p_group = config["device_mesh"].get_group(mesh_dim="seq_p")
             parallel = config.get("parallel", {})
             self.seq_p_prepost_backend = parallel.get("seq_p_prepost_backend", "torch")
             self.seq_p_a2a_backend = parallel.get("seq_p_a2a_backend", "torch")
             self.seq_p_quant_scheme = parallel.get("seq_p_quant_scheme")
-            if self.seq_p_quant_scheme is None:
-                self.seq_p_quant_scheme = "fp8" if parallel.get("seq_p_fp8_comm", False) else "fp4" if parallel.get("seq_p_fp4_comm", False) else None
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
             self.seq_p_tensor_fusion = parallel.get("seq_p_tensor_fusion", False)
             self.seq_p_head_parallel = parallel.get("seq_p_head_parallel", False)
         else:
@@ -58,18 +82,48 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
         dist.all_gather(gathered, tensor.contiguous(), group=self.tp_group)
         return torch.cat(gathered, dim=-1)
 
+    def _prepare_qkv(self, weights, hidden_states, rotary_emb):
+        """Project QKV and return Q/K with normalization and RoPE applied."""
+        if self.use_fused_qkv and weights.has_fused_qkv:
+            q, k, v = weights.to_qkv.apply(hidden_states).chunk(3, dim=-1)
+        else:
+            if self.use_fused_qkv:
+                _warn_fused_qkv_fallback_once()
+            q = weights.to_q.apply(hidden_states)
+            k = weights.to_k.apply(hidden_states)
+            v = weights.to_v.apply(hidden_states)
+
+        if self.use_fused_qkv_norm_rope and rotary_emb is not None:
+            fused = self.qkv_norm_rope.apply(
+                q,
+                k,
+                v,
+                weights.norm_q,
+                weights.norm_k,
+                weights.rope,
+                rotary_emb,
+            )
+            # None means the norm/RoPE contract is unsupported or no usable
+            # fused backend exists; continue through the ordinary path.
+            if fused is not None:
+                return fused
+            _warn_qkv_norm_rope_fallback_once(self.qkv_norm_rope_type)
+
+        q = weights.norm_q.apply(q.unflatten(-1, (self.num_heads, self.head_dim)))
+        k = weights.norm_k.apply(k.unflatten(-1, (self.num_heads, self.head_dim)))
+        v = v.unflatten(-1, (self.num_heads, self.head_dim))
+
+        if rotary_emb is not None:
+            q, k = weights.rope.apply(
+                q,
+                k,
+                rotary_emb,
+                rotary_dim=rotary_emb[0].shape[-1],
+            )
+        return q, k, v
+
     def _attention(self, weights, hidden_states, pre_infer_out):
-        q = weights.to_q.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
-        k = weights.to_k.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
-        v = weights.to_v.apply(hidden_states).unflatten(-1, (self.num_heads, self.head_dim))
-        q = weights.norm_q.apply(q)
-        k = weights.norm_k.apply(k)
-        q, k = weights.rope.apply(
-            q,
-            k,
-            pre_infer_out.rotary_emb,
-            rotary_dim=pre_infer_out.rotary_emb[0].shape[-1],
-        )
+        q, k, v = self._prepare_qkv(weights, hidden_states, pre_infer_out.rotary_emb)
         sp_state = pre_infer_out.sequence_parallel_state
         attention_kwargs = {
             "causal": False,
@@ -96,7 +150,7 @@ class MiniMaxH3TransformerInfer(BaseTransformerInfer):
             )
         else:
             aux_length = sp_state.aux_length
-            out, aux_out = weights.calculate_parallel.apply_new(
+            out, aux_out = weights.calculate_parallel.apply(
                 q=q[aux_length:].contiguous(),
                 k=k[aux_length:].contiguous(),
                 v=v[aux_length:].contiguous(),

@@ -1,0 +1,22 @@
+{
+  "model_cls": "flux2",
+  "model_variant": "klein",
+  "task": "t2i",
+  "infer_steps": 20,
+  "sample_guide_scale": 1.0,
+  "vae_scale_factor": 16,
+  "feature_caching": "None",
+  "enable_cfg": false,
+  "patch_size": 2,
+  "tokenizer_max_length": 512,
+  "rope_type": "flashinfer_rope",
+  "attn_type": "flash_attn2",
+  "max_custom_size": 2048,
+  "parallel": {
+    "cfg_p_size": 1,
+    "seq_p_size": 1,
+    "pp_size": 8,
+    "num_pipeline_patch": 8,
+    "pipeline_warmup_steps": 3
+  }
+}

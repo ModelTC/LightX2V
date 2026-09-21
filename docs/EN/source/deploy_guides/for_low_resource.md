@@ -205,7 +205,7 @@ When using the above distilled models, you can further optimize performance:
 
 - [Parameter Offloading Mechanism Documentation](../method_tutorials/offload.md) - In-depth understanding of offloading technology principles
 - [Quantization Technology Guide](../method_tutorials/quantization.md) - Detailed explanation of quantization technology
-- [Gradio Deployment Guide](deploy_gradio.md) - Detailed Gradio deployment instructions
+- [Gradio-Lightx2v](https://github.com/ModelTC/Gradio-Lightx2v) - Separate Gradio application and deployment instructions
 
 ## ⚠️ Important Notes
 

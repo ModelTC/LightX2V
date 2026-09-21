@@ -38,6 +38,7 @@ class BagelModel:
 
     def __init__(self, config):
         self.config = config
+        self.enable_cfg = config["enable_cfg"]
         self.model_path = config["model_path"]
         self._validate_config()
         # init llm config
@@ -700,11 +701,8 @@ class BagelModel:
     def prepare_inputs(self, input_info, scheduler, vae_model=None):
         self.set_scheduler(scheduler)
         gen_context = self.init_gen_context()
-        cfg_text_context = deepcopy(gen_context)
-        cfg_img_context = deepcopy(gen_context)
-        self.transformer_infer.gen_context = gen_context
-        self.transformer_infer.cfg_text_context = cfg_text_context
-        self.transformer_infer.cfg_img_context = cfg_img_context
+        cfg_text_context = deepcopy(gen_context) if self.enable_cfg else None
+        cfg_img_context = deepcopy(gen_context) if self.enable_cfg and self.inference_hyper["cfg_img_scale"] > 1.0 else None
 
         image_shape = tuple(input_info.image_shapes) if input_info.image_shapes else (1024, 1024)
         if len(image_shape) != 2:
@@ -727,16 +725,20 @@ class BagelModel:
                 else:
                     system_prompt = GEN_THINK_SYSTEM_PROMPT
                 gen_context = self.update_context_text(system_prompt, gen_context)
-                cfg_img_context = self.update_context_text(system_prompt, cfg_img_context)
+                if cfg_img_context is not None:
+                    cfg_img_context = self.update_context_text(system_prompt, cfg_img_context)
             for input_term in input_lists:
                 if isinstance(input_term, str):
-                    cfg_text_context = deepcopy(gen_context)
+                    if cfg_text_context is not None:
+                        cfg_text_context = deepcopy(gen_context)
                     gen_context = self.update_context_text(input_term, gen_context)
-                    cfg_img_context = self.update_context_text(input_term, cfg_img_context)
+                    if cfg_img_context is not None:
+                        cfg_img_context = self.update_context_text(input_term, cfg_img_context)
                 elif isinstance(input_term, Image.Image):
                     gen_context = self.update_context_image(input_term, gen_context, vae_model=vae_model, vae=not self.understanding_output, vit=True)
                     image_shape = input_term.size[::-1]
-                    cfg_text_context = deepcopy(gen_context)
+                    if cfg_text_context is not None:
+                        cfg_text_context = deepcopy(gen_context)
                 else:
                     raise ValueError(f"Unsupported input type: {type(input_term)}")
 
@@ -767,24 +769,26 @@ class BagelModel:
         )
 
         # text cfg
-        cfg_text_past_key_values = cfg_text_context["past_key_values"]
-        kv_lens_cfg = cfg_text_context["kv_lens"]
-        ropes_cfg = cfg_text_context["ropes"]
-        generation_input_cfg_text = scheduler.prepare_vae_latent_cfg(
-            curr_kvlens=kv_lens_cfg,
-            curr_rope=ropes_cfg,
-            image_sizes=[image_shape],
-        )
+        cfg_text_past_key_values = None
+        generation_input_cfg_text = None
+        if cfg_text_context is not None:
+            cfg_text_past_key_values = cfg_text_context["past_key_values"]
+            generation_input_cfg_text = scheduler.prepare_vae_latent_cfg(
+                curr_kvlens=cfg_text_context["kv_lens"],
+                curr_rope=cfg_text_context["ropes"],
+                image_sizes=[image_shape],
+            )
 
         # img cfg
-        cfg_img_past_key_values = cfg_img_context["past_key_values"]
-        kv_lens_cfg = cfg_img_context["kv_lens"]
-        ropes_cfg = cfg_img_context["ropes"]
-        generation_input_cfg_img = scheduler.prepare_vae_latent_cfg(
-            curr_kvlens=kv_lens_cfg,
-            curr_rope=ropes_cfg,
-            image_sizes=[image_shape],
-        )
+        cfg_img_past_key_values = None
+        generation_input_cfg_img = None
+        if cfg_img_context is not None:
+            cfg_img_past_key_values = cfg_img_context["past_key_values"]
+            generation_input_cfg_img = scheduler.prepare_vae_latent_cfg(
+                curr_kvlens=cfg_img_context["kv_lens"],
+                curr_rope=cfg_img_context["ropes"],
+                image_sizes=[image_shape],
+            )
 
         scheduler.generation_input = generation_input
         scheduler.generation_input_cfg_text = generation_input_cfg_text
@@ -792,14 +796,9 @@ class BagelModel:
         scheduler.latents = generation_input["packed_init_noises"]
 
         num_timesteps = scheduler.infer_steps
-        if self.enable_taylorseer:
-            model_pred_cache_dic, model_pred_current = cache_init(self, num_timesteps)
-            model_pred_text_cache_dic, model_pred_text_current = cache_init(self, num_timesteps)
-            model_pred_img_cache_dic, model_pred_img_current = cache_init(self, num_timesteps)
-        else:
-            model_pred_cache_dic, model_pred_current = None, None
-            model_pred_text_cache_dic, model_pred_text_current = None, None
-            model_pred_img_cache_dic, model_pred_img_current = None, None
+        model_pred_cache_dic, model_pred_current = cache_init(self, num_timesteps) if self.enable_taylorseer else (None, None)
+        model_pred_text_cache_dic, model_pred_text_current = cache_init(self, num_timesteps) if self.enable_taylorseer and cfg_text_context is not None else (None, None)
+        model_pred_img_cache_dic, model_pred_img_current = cache_init(self, num_timesteps) if self.enable_taylorseer and cfg_img_context is not None else (None, None)
 
         bagel_inputs = BagelInputs(
             image_shapes=input_info.image_shapes,
@@ -862,11 +861,16 @@ class BagelModel:
 
     @torch.no_grad
     def infer(self, inputs):
+        if self.enable_cfg:
+            assert self.inference_hyper["cfg_text_scale"] is not None and self.inference_hyper["cfg_text_scale"] > 1.0, (
+                f"CFG requires cfg_text_scale > 1, got {self.inference_hyper['cfg_text_scale']!r}"
+            )
+
         t = self.scheduler.timesteps[self.scheduler.step_index]
         x_t = self.scheduler.latents.to(torch.bfloat16).to(AI_DEVICE)
         timestep = torch.tensor([t] * x_t.shape[0])
 
-        if t > self.inference_hyper["cfg_interval"][0] and t <= self.inference_hyper["cfg_interval"][1]:
+        if self.enable_cfg and t > self.inference_hyper["cfg_interval"][0] and t <= self.inference_hyper["cfg_interval"][1]:
             cfg_text_scale = self.inference_hyper["cfg_text_scale"]
             cfg_img_scale = self.inference_hyper["cfg_img_scale"]
         else:

@@ -46,13 +46,20 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
         self.heads_num = config["heads_num"]
         if self.config["seq_parallel"]:
             self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-            self.seq_p_fp8_comm = self.config["parallel"].get("seq_p_fp8_comm", False)
-            self.seq_p_fp4_comm = self.config["parallel"].get("seq_p_fp4_comm", False)
-            self.enable_head_parallel = self.config["parallel"].get("seq_p_head_parallel", False)
+            parallel_config = self.config["parallel"]
+            self.seq_p_prepost_backend = parallel_config.get("seq_p_prepost_backend", "torch")
+            self.seq_p_a2a_backend = parallel_config.get("seq_p_a2a_backend", "torch")
+            self.seq_p_quant_scheme = parallel_config.get("seq_p_quant_scheme")
+            if self.seq_p_quant_scheme is not None and self.seq_p_quant_scheme not in ("fp8", "fp4"):
+                raise ValueError(f"Unknown seq_p_quant_scheme={self.seq_p_quant_scheme!r}; expected None, 'fp8', or 'fp4'.")
+            self.seq_p_tensor_fusion = parallel_config.get("seq_p_tensor_fusion", False)
+            self.enable_head_parallel = parallel_config.get("seq_p_head_parallel", False)
         else:
             self.seq_p_group = None
-            self.seq_p_fp8_comm = False
-            self.seq_p_fp4_comm = False
+            self.seq_p_prepost_backend = "torch"
+            self.seq_p_a2a_backend = "torch"
+            self.seq_p_quant_scheme = None
+            self.seq_p_tensor_fusion = False
             self.enable_head_parallel = False
         self.infer_func = self.infer_without_offload
         if self.config.get("modulate_type", "triton") == "triton":
@@ -161,29 +168,34 @@ class HunyuanVideo15TransformerInfer(BaseTransformerInfer):
     @torch.no_grad()
     def _infer_attn(self, weights, img_q, img_k, img_v, txt_q, txt_k, txt_v):
         img_seqlen = img_q.shape[1]
-        query = torch.cat([img_q, txt_q], dim=1)
-        key = torch.cat([img_k, txt_k], dim=1)
-        value = torch.cat([img_v, txt_v], dim=1)
-        seqlen = query.shape[1]
-        cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu")
-
         if self.config["seq_parallel"]:
-            attn_out = weights.self_attention_parallel.apply(
-                q=query,
-                k=key,
-                v=value,
-                slice_qkv_len=img_seqlen,
-                cu_seqlens_qkv=cu_seqlens_qkv,
+            img_attn, txt_attn = weights.self_attention_parallel.apply(
+                q=img_q,
+                k=img_k,
+                v=img_v,
+                aux_q=txt_q,
+                aux_k=txt_k,
+                aux_v=txt_v,
                 attention_module=weights.self_attention,
                 seq_p_group=self.seq_p_group,
-                use_fp8_comm=self.seq_p_fp8_comm,
-                use_fp4_comm=self.seq_p_fp4_comm,
-                enable_head_parallel=self.enable_head_parallel,
+                prepost_backend=self.seq_p_prepost_backend,
+                a2a_backend=self.seq_p_a2a_backend,
+                quant_scheme=self.seq_p_quant_scheme,
+                tensor_fusion=self.seq_p_tensor_fusion,
+                head_parallel=self.enable_head_parallel,
+                aux_first=False,
+                attention_kwargs={},
             )
+            if txt_attn is None:
+                raise RuntimeError("HunyuanVideo-1.5 joint attention expected a text auxiliary output.")
         else:
+            query = torch.cat([img_q, txt_q], dim=1)
+            key = torch.cat([img_k, txt_k], dim=1)
+            value = torch.cat([img_v, txt_v], dim=1)
+            seqlen = query.shape[1]
+            cu_seqlens_qkv = torch.tensor([0, seqlen], dtype=torch.int32, device="cpu")
             attn_out = weights.self_attention.apply(q=query, k=key, v=value, cu_seqlens_q=cu_seqlens_qkv, cu_seqlens_kv=cu_seqlens_qkv, max_seqlen_q=seqlen, max_seqlen_kv=seqlen)
-
-        img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
+            img_attn, txt_attn = attn_out[:img_seqlen], attn_out[img_seqlen:]
         return img_attn, txt_attn
 
     @torch.no_grad()

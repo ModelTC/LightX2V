@@ -346,12 +346,12 @@ class Cosmos3Runner(DefaultRunner):
 
     def tokenize_prompt(self, prompt, negative_prompt=None):
         prompt = self._resolve_prompt_text(prompt)
-        negative_prompt = self._resolve_prompt_text(negative_prompt) if negative_prompt is not None else None
+        enable_cfg = self.config.get("enable_cfg", False)
+        negative_prompt = self._resolve_prompt_text(negative_prompt) if enable_cfg else None
         height, width = self.input_info.size
         num_frames = self.get_num_frames()
         fps = float(self.config.get("fps", 24.0))
         is_image = num_frames == 1
-        negative_prompt = "" if negative_prompt is None else negative_prompt
 
         action_mode = self._get_action_mode()
         cond_text = prompt
@@ -385,14 +385,17 @@ class Cosmos3Runner(DefaultRunner):
                 )
         elif not is_image and self.config.get("add_duration_template", True):
             cond_text = self._append_prompt_template(cond_text, f"The video is {num_frames / fps:.1f} seconds long and is of {fps:.0f} FPS.")
-            uncond_text = self._append_prompt_template(uncond_text, f"The video is not {num_frames / fps:.1f} seconds long and is not of {fps:.0f} FPS.")
+            if enable_cfg:
+                uncond_text = self._append_prompt_template(uncond_text, f"The video is not {num_frames / fps:.1f} seconds long and is not of {fps:.0f} FPS.")
         if not action_mode and self.config.get("add_resolution_template", True):
             if is_image:
                 cond_text = self._append_prompt_template(cond_text, f"This image is of {height}x{width} resolution.")
-                uncond_text = self._append_prompt_template(uncond_text, f"This image is not of {height}x{width} resolution.")
+                if enable_cfg:
+                    uncond_text = self._append_prompt_template(uncond_text, f"This image is not of {height}x{width} resolution.")
             else:
                 cond_text = self._append_prompt_template(cond_text, f"This video is of {height}x{width} resolution.")
-                uncond_text = self._append_prompt_template(uncond_text, f"This video is not of {height}x{width} resolution.")
+                if enable_cfg:
+                    uncond_text = self._append_prompt_template(uncond_text, f"This video is not of {height}x{width} resolution.")
 
         eos_token_id = self.text_tokenizer.eos_token_id
         vision_start_id = self.text_tokenizer.convert_tokens_to_ids("<|vision_start|>")
@@ -401,7 +404,9 @@ class Cosmos3Runner(DefaultRunner):
 
         use_system_prompt = self.config.get("use_system_prompt", not bool(action_mode))
         cond_input_ids = self._tokenize_chat(cond_text, is_image=is_image, use_system_prompt=use_system_prompt) + [eos_token_id, vision_start_id]
-        uncond_input_ids = self._tokenize_chat(uncond_text, is_image=is_image, use_system_prompt=use_system_prompt) + [eos_token_id, vision_start_id]
+        uncond_input_ids = None
+        if enable_cfg:
+            uncond_input_ids = self._tokenize_chat(uncond_text, is_image=is_image, use_system_prompt=use_system_prompt) + [eos_token_id, vision_start_id]
         return cond_input_ids, uncond_input_ids
 
     @ProfilingContext4DebugL2("Run Encoders")
@@ -412,7 +417,9 @@ class Cosmos3Runner(DefaultRunner):
             self.input_info.prompt,
             negative_prompt=self.input_info.negative_prompt,
         )
-        self.input_info.txt_seq_lens = [len(cond_input_ids), len(uncond_input_ids)]
+        self.input_info.txt_seq_lens = [len(cond_input_ids)]
+        if uncond_input_ids is not None:
+            self.input_info.txt_seq_lens.append(len(uncond_input_ids))
         return {
             "text_encoder_output": {
                 "cond_input_ids": cond_input_ids,

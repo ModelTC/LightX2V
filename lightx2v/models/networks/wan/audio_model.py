@@ -96,14 +96,6 @@ class WanAudioModel(WanModel):
         if person_mask_latens is not None:
             pre_infer_out.adapter_args["person_mask_latens"] = torch.chunk(person_mask_latens, world_size, dim=1)[cur_rank]
 
-        if self.config["model_cls"] in ["wan2.2", "wan2.2_audio"] and self.config["task"] in ["i2v", "s2v", "rs2v"]:
-            embed, embed0 = pre_infer_out.embed, pre_infer_out.embed0
-            padding_size = (world_size - (embed.shape[0] % world_size)) % world_size
-            if padding_size > 0:
-                embed = F.pad(embed, (0, 0, 0, padding_size))
-                embed0 = F.pad(embed0, (0, 0, 0, 0, 0, padding_size))
-            pre_infer_out.embed = torch.chunk(embed, world_size, dim=0)[cur_rank]
-            pre_infer_out.embed0 = torch.chunk(embed0, world_size, dim=0)[cur_rank]
         return pre_infer_out
 
 

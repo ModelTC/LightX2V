@@ -4,8 +4,10 @@ MiniMax-H3 reads ``hidden_states[50]`` from the released Qwen3-VL
 conditioner.  In Transformers' hidden-state convention that is the embedding
 output after decoder layers 0 through 49, before the final RMSNorm.  This
 module executes exactly that prefix with LightX2V weight and operator classes.
-The vision tower is loaded lazily for keyframe/reference requests; the last
-fourteen decoder layers, final norm, and LM head are never loaded.
+The tokenizer, pixel processor, text backbone, and vision tower are loaded
+together on initialization by default. Text-only disk streaming skips the
+pixel processor and vision tower. The last fourteen decoder layers, final
+norm, and LM head are never loaded.
 
 Only the Hugging Face tokenizer and pixel processor are reused. By default,
 model tensors are streamed directly from the official sharded ``text_encoder``
@@ -836,6 +838,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
             raise ValueError("MiniMax-H3 quantized text encoder requires text_encoder_quantized_ckpt")
         self.tensor_parallel = bool(config.get("text_encoder_tensor_parallel", config.get("tensor_parallel", False)))
         if self.disk_streaming:
+            if config.get("text_encoder_shared_cpu_weights", False):
+                raise ValueError("MiniMax-H3 text_encoder_disk_streaming cannot be combined with text_encoder_shared_cpu_weights.")
             if torch.device(AI_DEVICE).type != "mps":
                 raise ValueError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming currently requires AI_DEVICE='mps'.")
             if config.get("model_variant") != "fl2av":
@@ -1270,6 +1274,10 @@ class MiniMaxH3Qwen3VLTextEncoder:
         if self.disk_streaming:
             weight_map, _ = self._preflight_native_checkpoint(text_encoder, checkpoint_path, text_config)
             text_encoder.init_disk_streaming(checkpoint_path, weight_map)
+        elif self.config.get("text_encoder_shared_cpu_weights", False):
+            from lightx2v.models.input_encoders.hf.minimax_h3.shared_weights import load_shared_text_weights
+
+            load_shared_text_weights(self, text_encoder, text_encoder_path, text_config)
         elif quantized:
             self._load_quantized_weights(text_encoder, checkpoint_path)
         else:
@@ -1287,14 +1295,25 @@ class MiniMaxH3Qwen3VLTextEncoder:
         text_encoder_path = self._component_path("text_encoder_path", "text_encoder")
         model_config = self._read_model_config(text_encoder_path)
         vision_config = dict(model_config["vision_config"])
-        logger.info(f"Building native MiniMax-H3 Qwen3-VL vision tower from {text_encoder_path}")
-        self.vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config)
+        logger.info(
+            "Building native MiniMax-H3 Qwen3-VL vision tower from {} for image input task.",
+            text_encoder_path,
+        )
+        vision_encoder = MiniMaxH3Qwen3VLVisionTower.from_pretrained(text_encoder_path, vision_config)
+        if not self.cpu_offload:
+            vision_encoder.to(AI_DEVICE)
+        self.vision_encoder = vision_encoder
         return self.vision_encoder
 
     def unload_text_encoder(self):
         text_encoder = self.text_encoder
         self.text_encoder = None
         if text_encoder is not None:
+            owner = getattr(text_encoder, "shared_cpu_weight_owner", None)
+            if owner is not None:
+                torch_device_module.synchronize()
+                text_encoder.release_block_offload_buffers()
+                owner.close()
             del text_encoder
             gc.collect()
             _empty_device_cache()
@@ -1316,14 +1335,18 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     def load(self):
         self.load_tokenizer()
+        if not self.disk_streaming:
+            self.load_processor()
         self.load_text_encoder()
+        if not self.disk_streaming:
+            self.load_vision_encoder()
         return self
 
     def unload(self):
-        self.unload_vision_encoder()
-        self.unload_text_encoder()
-        self.unload_processor()
         self.unload_tokenizer()
+        self.unload_processor()
+        self.unload_text_encoder()
+        self.unload_vision_encoder()
 
     def _ensure_loaded(self):
         if self.tokenizer is None:

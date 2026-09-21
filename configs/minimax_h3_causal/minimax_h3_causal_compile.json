@@ -1,0 +1,35 @@
+{
+  "infer_steps": 4,
+  "num_frames": 124,
+  "size": [544, 960],
+  "fps": 24,
+  "enable_cfg": false,
+  "cpu_offload": false,
+  "use_adaln_cache": true,
+  "adaln_cache_dir": "~/.cache/lightx2v/adaln",
+  "text_encoder_cpu_offload": false,
+  "text_encoder_tensor_parallel": true,
+  "vae_cpu_offload": false,
+  "vae_decode_parallel": true,
+  "reference_image_resize_mode": "match",
+  "attn_type": "flash_attn3",
+  "rms_type": "torch_native",
+  "rope_type": "torch_real_rope",
+  "feature_caching": "NoCaching",
+  "warmup": true,
+  "use_compile": true,
+  "video_flow_shift": 12.0,
+  "audio_flow_shift": 3.0,
+  "h3_step_update": "training_euler",
+  "audio_sampling_rate": 32000,
+  "dit_original_ckpt": "/path/to/gen-base_dit.pt",
+  "ar_config": {
+    "num_frame_per_chunk": 5,
+    "sink_chunk_num": 1,
+    "latest_chunk_num": 2,
+    "kv_cache_max_t_rope": 7
+  },
+  "parallel": {
+    "tensor_p_size": 8
+  }
+}

@@ -66,6 +66,7 @@ def main():
             "l2av",
             "fl2av",
             "ref2av",
+            "refa2v",
             "i2va",
             "v2av",
             "ltx2_s2v",
@@ -107,7 +108,7 @@ def main():
         "--audio_path",
         type=str,
         default=None,
-        help="Input audio path: Wan s2v / rs2v, LTX-2 ltx2_s2v, or MiniMax-H3 ref2av reference audio. H3 accepts comma-separated paths.",
+        help="Input audio path: driving audio for s2v / rs2v / ltx2_s2v / refa2v, or reference audio for MiniMax-H3 ref2av.",
     )
     parser.add_argument(
         "--video_path",
@@ -116,6 +117,8 @@ def main():
         help="Input source video path. Its role is determined by the selected task.",
     )
     parser.add_argument("--video_duration", type=float, default=None, help="Requested output duration in seconds for audio-driven video generation.")
+    parser.add_argument("--resize_mode", type=str, default=None, help="seko_talk s2v/rs2v image and mask resize mode; defaults to the startup config.")
+    parser.add_argument("--fixed_area", type=str, default=None, help="seko_talk area/min-side resize tier: 480p, 720p, or 1080p; defaults to the startup config.")
     parser.add_argument("--image_strength", type=str, default=None, help="i2av: single float, or comma-separated floats (one per image, or one value broadcast). Example: 1.0 or 1.0,0.85,0.9")
     parser.add_argument(
         "--num_frames",
@@ -206,6 +209,7 @@ def main():
         help="(i2i) Layout boxes as a JSON string or JSON file path for HiDream layout-conditioned editing.",
     )
     parser.add_argument("--sr_ratio", type=float, default=None, help="super resolution ratio for sr task")
+    parser.add_argument("--match_target_size", action=argparse.BooleanOptionalAction, default=None, help="(SeedVR sr) Crop or resize decoded output to size; defaults to the startup config.")
     parser.add_argument(
         "--reference_video_strength", type=float, default=None, help="(v2av) IC-LoRA reference-video conditioning strength in [0.0, 1.0]. 1.0 = full adherence to the control signal, 0.0 = ignore it."
     )

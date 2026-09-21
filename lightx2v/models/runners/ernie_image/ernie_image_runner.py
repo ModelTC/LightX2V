@@ -116,8 +116,6 @@ class ErnieImageRunner(DefaultRunner):
 
         text_encoder_output = {"prompt_embeds": prompt_embeds}
         if self.config.get("enable_cfg", False):
-            if neg_prompt is None:
-                neg_prompt = ""
             negative_prompt_embeds_list, _ = self.text_encoders[0].infer(
                 [neg_prompt],
                 use_pe=False,

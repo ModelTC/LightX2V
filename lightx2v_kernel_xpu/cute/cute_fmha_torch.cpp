@@ -47,6 +47,12 @@
 
 using namespace cute;
 
+// SYCL identifies device kernels by their mangled C++ names. Each library
+// compiles this file with a different mainloop (including a different Params
+// layout for sparse attention), so an anonymous namespace alone is insufficient:
+// it produces identical kernel names in all three shared libraries. Qualify the
+// launch tag with the library namespace to prevent cross-library image reuse.
+namespace CUTE_FMHA_TORCH_LIBRARY {
 namespace {
 
 // ---- launch glue: submit cutlass device kernel onto torch's XPU queue --------
@@ -106,7 +112,8 @@ template <
     int SubgroupLayoutQOverride = 0,
     int MmaKOverride = 0,
     int VTileOverride = 0,
-    int HeadDimOverride = 0>
+    int HeadDimOverride = 0,
+    int KvTileOverride = 0>
 struct D128TileKernel {
   using PlatformConfig = cute_fmha_config::ActiveConfig;
   static constexpr int QTile =
@@ -128,7 +135,8 @@ struct D128TileKernel {
   // K-dim match and tripped the gemm.hpp static_assert.)
   static constexpr int KvTile = 64;
 #else
-  static constexpr int KvTile = PlatformConfig::KV_TILE;
+  static constexpr int KvTile =
+      KvTileOverride > 0 ? KvTileOverride : PlatformConfig::KV_TILE;
 #endif
   using ShapeQK = Shape<
       Int<QTile>, Int<KvTile>, Int<MmaK>>;
@@ -206,7 +214,8 @@ template <
     int SubgroupLayoutQOverride = 0,
     int MmaKOverride = 0,
     int VTileOverride = 0,
-    int HeadDimOverride = 0>
+    int HeadDimOverride = 0,
+    int KvTileOverride = 0>
 void run_d128_tile(
     const void* q_ptr, const void* k_ptr, const void* v_ptr, void* o_ptr,
     int B, int H, int Lq, int Lkv, int D, float scale,
@@ -225,7 +234,8 @@ void run_d128_tile(
       SubgroupLayoutQOverride,
       MmaKOverride,
       VTileOverride,
-      HeadDimOverride>;
+      HeadDimOverride,
+      KvTileOverride>;
   using K    = typename KT::Kernel;
   using PS   = typename KT::ProblemShapeType;
 
@@ -384,6 +394,67 @@ at::Tensor sdp(const at::Tensor& q, const at::Tensor& k, const at::Tensor& v) {
   return o;
 }
 
+#if defined(OMNI_XPU_ARCH_BMG)
+at::Tensor sdp_minimax_h3_vae_d64(
+    const at::Tensor& q, const at::Tensor& k, const at::Tensor& v) {
+  TORCH_CHECK(
+      q.dim() == 4 && k.dim() == 4 && v.dim() == 4,
+      "sycl_kernels cute_fmha: MiniMax H3 VAE attention expects BHLD tensors");
+  TORCH_CHECK(
+      q.device().is_xpu() && k.device() == q.device() && v.device() == q.device(),
+      "sycl_kernels cute_fmha: MiniMax H3 VAE attention requires one XPU device");
+  TORCH_CHECK(
+      q.scalar_type() == at::kHalf && k.scalar_type() == at::kHalf &&
+          v.scalar_type() == at::kHalf,
+      "sycl_kernels cute_fmha: MiniMax H3 VAE attention requires FP16 Q/K/V");
+
+  constexpr int B = 1;
+  constexpr int H = 32;
+  constexpr int D = 64;
+  const int L = checked_int(q.size(2), "MiniMax H3 VAE sequence length");
+  TORCH_CHECK(
+      q.sizes() == at::IntArrayRef({B, H, L, D}) &&
+          k.sizes() == q.sizes() && v.sizes() == q.sizes() && L > 5,
+      "sycl_kernels cute_fmha: unsupported MiniMax H3 VAE attention shapes");
+
+  const int64_t qk_batch_stride = static_cast<int64_t>(L) * H * D;
+  const auto has_qk_layout = [qk_batch_stride](const at::Tensor& tensor) {
+    return tensor.stride(0) == qk_batch_stride && tensor.stride(1) == D &&
+        tensor.stride(2) == H * D && tensor.stride(3) == 1;
+  };
+  const bool has_v_layout = has_qk_layout(v) ||
+      (v.stride(0) == 3 * qk_batch_stride && v.stride(1) == 3 * D &&
+       v.stride(2) == 3 * H * D && v.stride(3) == 1);
+  TORCH_CHECK(
+      has_qk_layout(q) && has_qk_layout(k) && has_v_layout,
+      "sycl_kernels cute_fmha: unsupported MiniMax H3 VAE Q/K/V layout");
+
+  at::Tensor output =
+      at::empty({B, L, H, D}, q.options()).permute({0, 2, 1, 3});
+  const float scale = 1.0f / std::sqrt(static_cast<float>(D));
+  // The 256x256 decode tile produces S=1797.  Use the measured E210/E211
+  // KV64 policy for that dominant shape; other legal tile shapes retain KV32.
+  if (L == 1797) {
+    run_d128_tile<cutlass::half_t, 0, 0, 0, 0, 0, 64, 64>(
+        q.data_ptr(), k.data_ptr(), v.data_ptr(), output.data_ptr(), B, H, L,
+        L, D, scale, nullptr, 0, 0, 0,
+        q.stride(2), q.stride(1), q.stride(0),
+        k.stride(2), k.stride(1), k.stride(0),
+        v.stride(2), v.stride(1), v.stride(0),
+        output.stride(2), output.stride(1), output.stride(0));
+  } else {
+    run_d128_tile<cutlass::half_t, 0, 0, 0, 0, 0, 64>(
+        q.data_ptr(), k.data_ptr(), v.data_ptr(), output.data_ptr(), B, H, L,
+        L, D, scale, nullptr, 0, 0, 0,
+        q.stride(2), q.stride(1), q.stride(0),
+        k.stride(2), k.stride(1), k.stride(0),
+        v.stride(2), v.stride(1), v.stride(0),
+        output.stride(2), output.stride(1), output.stride(0));
+  }
+  return output;
+}
+#endif
+
 #if defined(CUTE_FMHA_SPARSE)
 at::Tensor sparse_sdp(
     const at::Tensor& q, const at::Tensor& k, const at::Tensor& v,
@@ -430,17 +501,24 @@ at::Tensor sparse_sdp(
 #endif
 
 }  // namespace
+}  // namespace CUTE_FMHA_TORCH_LIBRARY
 
 TORCH_LIBRARY(CUTE_FMHA_TORCH_LIBRARY, m) {
   m.def("sdp(Tensor q, Tensor k, Tensor v) -> Tensor");
+#if defined(OMNI_XPU_ARCH_BMG)
+  m.def("sdp_minimax_h3_vae_d64(Tensor q, Tensor k, Tensor v) -> Tensor");
+#endif
 #if defined(CUTE_FMHA_SPARSE)
   m.def("sparse_sdp(Tensor q, Tensor k, Tensor v, Tensor block_lut) -> Tensor");
 #endif
 }
 
 TORCH_LIBRARY_IMPL(CUTE_FMHA_TORCH_LIBRARY, XPU, m) {
-  m.impl("sdp", &sdp);
+  m.impl("sdp", &CUTE_FMHA_TORCH_LIBRARY::sdp);
+#if defined(OMNI_XPU_ARCH_BMG)
+  m.impl("sdp_minimax_h3_vae_d64", &CUTE_FMHA_TORCH_LIBRARY::sdp_minimax_h3_vae_d64);
+#endif
 #if defined(CUTE_FMHA_SPARSE)
-  m.impl("sparse_sdp", &sparse_sdp);
+  m.impl("sparse_sdp", &CUTE_FMHA_TORCH_LIBRARY::sparse_sdp);
 #endif
 }

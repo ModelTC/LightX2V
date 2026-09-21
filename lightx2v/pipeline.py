@@ -9,7 +9,6 @@ import torch
 from loguru import logger
 
 from lightx2v.models.runners.runner_factory import build_runner
-from lightx2v.utils.input_info import UNSET
 from lightx2v.utils.set_config import build_startup_config, init_parallel
 from lightx2v.utils.utils import validate_config_paths
 from lightx2v_platform.registry_factory import PLATFORM_DEVICE_REGISTER
@@ -35,7 +34,7 @@ class LightX2VPipeline:
 
         self.task = task
         # Select startup components without making support_tasks a request default.
-        if not task and support_tasks:
+        if task is None and support_tasks:
             task = support_tasks[0]
         self.model_path = model_path
         self.model_cls = model_cls
@@ -72,9 +71,9 @@ class LightX2VPipeline:
             self.startup_config["vae_stride"] = (4, 8, 8)
             if model_cls.startswith("wan2.2") and model_cls != "wan2.2_animate2_distilled":
                 self.startup_config["use_image_encoder"] = False
-        elif model_cls in ["wan2.2", "wan2.2_matrix_game3", "wan2.2_audio"]:
+        elif model_cls in ["wan2.2", "wan2.2_matrix_game3"]:
             self.startup_config.update(vae_stride=(4, 16, 16), num_channels_latents=48)
-            if model_cls in ["wan2.2_matrix_game3", "wan2.2_audio"]:
+            if model_cls == "wan2.2_matrix_game3":
                 self.startup_config["use_image_encoder"] = False
         elif model_cls == "hunyuan_video_1.5":
             self.startup_config.update(vae_stride=(4, 16, 16), num_channels_latents=32)
@@ -82,7 +81,7 @@ class LightX2VPipeline:
             self.startup_config.update(num_channels_latents=128, audio_mel_bins=16)
         elif model_cls == "cosmos3":
             self.startup_config.update(vae_stride=(4, 16, 16), num_channels_latents=48)
-        elif model_cls == "minimax_h3":
+        elif model_cls in ("minimax_h3", "minimax_h3_causal"):
             self.startup_config.update(
                 vae_spatial_scale_factor=16,
                 vae_scale_factor=16,
@@ -123,7 +122,6 @@ class LightX2VPipeline:
         denoising_step_list=(1000, 750, 500, 250),
         config_json=None,
         rope_type="torch_complex_rope",
-        resize_mode=None,
         double_precision_rope=True,
         modulate_type=None,
         distilled_sigma_values=None,
@@ -152,8 +150,6 @@ class LightX2VPipeline:
         startup_config = dict(self.startup_config, config_json=config_json)
         if fps is not None:
             startup_config["fps"] = fps
-        if resize_mode is not None:
-            startup_config["resize_mode"] = resize_mode
 
         config = build_startup_config(startup_config)
         self.model_cls = config["model_cls"]
@@ -223,9 +219,9 @@ class LightX2VPipeline:
             config["num_frames"] = None
         if self.model_cls.startswith("wan"):
             config.update(self_attn_1_type=attn_mode, cross_attn_1_type=attn_mode, cross_attn_2_type=attn_mode)
-        elif self.model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3"]:
+        elif self.model_cls in ["hunyuan_video_1.5", "qwen_image", "longcat_image", "ltx2", "ltx2_5", "z_image", "lingbot_video", "minimax_h3", "minimax_h3_causal"]:
             config["attn_type"] = attn_mode
-            if self.model_cls == "minimax_h3":
+            if self.model_cls in ("minimax_h3", "minimax_h3_causal"):
                 config.update(
                     video_flow_shift=sample_shift,
                     audio_sampling_rate=32000,
@@ -321,7 +317,6 @@ class LightX2VPipeline:
             "wan2.2_moe",
             "wan2.2",
             "wan2.2_matrix_game3",
-            "wan2.2_audio",
             "wan2.2_animate",
             "wan2.2_animate2_distilled",
             "wan2.2_s2v",
@@ -340,7 +335,7 @@ class LightX2VPipeline:
             self.startup_config["gemma_cpu_offload"] = text_encoder_offload
         elif self.model_cls == "z_image":
             self.startup_config["qwen3_cpu_offload"] = text_encoder_offload
-        elif self.model_cls == "minimax_h3":
+        elif self.model_cls in ("minimax_h3", "minimax_h3_causal"):
             self.startup_config["text_encoder_cpu_offload"] = text_encoder_offload
 
     def enable_lora(self, lora_configs, lora_dynamic_apply=False):
@@ -380,17 +375,20 @@ class LightX2VPipeline:
                 magcache_ratios=list(magcache_ratios),
             )
 
-    def enable_parallel(self, cfg_p_size=1, seq_p_size=1, seq_p_attn_type="ulysses"):
+    def enable_parallel(self, cfg_p_size=1, seq_p_size=1, seq_p_attn_type="ulysses", pp_size=1, num_pipeline_patch=4, pipeline_warmup_steps=1):
         self.startup_config["parallel"] = {
             "cfg_p_size": cfg_p_size,
             "seq_p_size": seq_p_size,
             "seq_p_attn_type": seq_p_attn_type,
+            "pp_size": pp_size,
+            "num_pipeline_patch": num_pipeline_patch,
+            "pipeline_warmup_steps": pipeline_warmup_steps,
         }
 
     @torch.no_grad()
     def generate(
         self,
-        seed=UNSET,
+        seed=None,
         prompt=None,
         negative_prompt=None,
         save_result_path=None,
@@ -414,9 +412,10 @@ class LightX2VPipeline:
     ):
         """Generate one result, validating task-specific inputs in the runner.
 
+        Omitted/None negative prompts default to ""; explicit strings require model support.
         Size is (height, width) in pixels, subject to the model's sizing rules.
         Seed is a non-negative integer; omitted/None defaults to 42.
-        NeoPP preserves explicit None for LightLLM session RNG continuation.
+        NeoPP continues LightLLM's session RNG when seed is omitted or None.
         An omitted output path is passed to the runner as None. Most runners skip saving;
         WorldMirror uses its default output directory.
         An omitted task uses the task explicitly set when creating the pipeline,

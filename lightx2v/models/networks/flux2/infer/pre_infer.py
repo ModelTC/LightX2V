@@ -135,6 +135,37 @@ class Flux2PreInfer:
             image_rotary_positions=image_rotary_positions,
         )
 
+    def infer_partial(self, weights, hidden_states, encoder_hidden_states, txt_ids=None, img_ids=None):
+        """Compute timestep embedding and RoPE only (skip x_embedder / context_embedder).
+
+        Used by non-first pipeline stages that receive already-embedded
+        hidden_states and encoder_hidden_states via P2P.
+        """
+        timesteps_proj = self.scheduler.timesteps_proj
+        timestep_embed = weights.timestep_embedder_linear_1.apply(timesteps_proj)
+        timestep_embed = F.silu(timestep_embed)
+        timestep_embed = weights.timestep_embedder_linear_2.apply(timestep_embed)
+
+        txt_ids_final = txt_ids if txt_ids is not None else getattr(self.scheduler, "txt_ids", None)
+        img_ids_final = img_ids if img_ids is not None else getattr(self.scheduler, "latent_image_ids", None)
+
+        num_txt_tokens = encoder_hidden_states.shape[0] if encoder_hidden_states is not None else 0
+        image_rotary_emb, image_rotary_positions = self.get_rope_cache(txt_ids_final, img_ids_final, num_txt_tokens)
+        if img_ids_final is not None and img_ids_final.ndim == 3:
+            img_ids_final = img_ids_final[0]
+        if txt_ids_final is not None and txt_ids_final.ndim == 3:
+            txt_ids_final = txt_ids_final[0]
+
+        return Flux2PreInferModuleOutput(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            timestep=timestep_embed,
+            txt_ids=txt_ids_final,
+            img_ids=img_ids_final,
+            image_rotary_emb=image_rotary_emb,
+            image_rotary_positions=image_rotary_positions,
+        )
+
 
 class Flux2DevPreInfer(Flux2PreInfer):
     """Pre-processing inference for Flux2 Dev.
