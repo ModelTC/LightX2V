@@ -5,9 +5,8 @@ conditioner.  In Transformers' hidden-state convention that is the embedding
 output after decoder layers 0 through 49, before the final RMSNorm.  This
 module executes exactly that prefix with LightX2V weight and operator classes.
 The tokenizer, pixel processor, text backbone, and vision tower are loaded
-together on initialization by default. Text-only disk streaming skips the
-pixel processor and vision tower. The last fourteen decoder layers, final
-norm, and LM head are never loaded.
+together on initialization by default. The last fourteen decoder layers,
+final norm, and LM head are never loaded.
 
 Only the Hugging Face tokenizer and pixel processor are reused. By default,
 model tensors are streamed directly from the official sharded ``text_encoder``
@@ -32,7 +31,6 @@ from safetensors import safe_open
 
 from lightx2v.common.modules.weight_module import WeightModule, WeightModuleList
 from lightx2v.common.offload.event_manager import EventSlotWeightAsyncStreamManager
-from lightx2v.common.offload.mps_manager import MpsSharedWeightAsyncStreamManager, host_view
 from lightx2v.common.ops.attn.template import AttnWeightTemplate
 
 # Import the concrete implementations so their registry decorators run even
@@ -41,9 +39,7 @@ from lightx2v.common.ops.attn.torch_sdpa import TorchSDPAWeight as _TorchSDPAWei
 from lightx2v.common.ops.embedding.embedding_weight import EmbeddingWeight as _EmbeddingWeight  # noqa: F401
 from lightx2v.common.ops.mm.mm_weight import MMWeight as _MMWeight  # noqa: F401
 from lightx2v.common.ops.norm.rms_norm_weight import RMSWeightFP32Qwen as _RMSWeightFP32Qwen  # noqa: F401
-from lightx2v.common.ops.utils import resolve_block_name
 from lightx2v.models.input_encoders.hf.minimax_h3.qwen3vl_vision import MiniMaxH3Qwen3VLVisionTower
-from lightx2v.models.networks.minimax_h3.checkpoint import MiniMaxH3ShardCheckpoint
 from lightx2v.models.networks.minimax_h3.packing import VIDEO_TAG
 from lightx2v.models.networks.minimax_h3.packing_ref2av import (
     build_ref2av_presentation,
@@ -347,27 +343,16 @@ class _Qwen3VLDecoderLayerWeights(WeightModule):
 class _Qwen3VLTextBackboneWeights(WeightModule):
     """Unbatched native prefix of Qwen3-VL's language backbone."""
 
-    def __init__(
-        self,
-        config,
-        text_config,
-        num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER,
-        attn_type="torch_sdpa",
-        block_offload=False,
-        tp_group=None,
-        disk_streaming=False,
-    ):
+    def __init__(self, config, text_config, num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER, attn_type="torch_sdpa", block_offload=False, tp_group=None):
         super().__init__()
         self.config = config
         self.text_config = text_config
         self.num_layers = int(num_layers)
         self.attn_type = attn_type
-        self.disk_streaming = bool(disk_streaming)
-        self.block_offload = bool(block_offload) and not self.disk_streaming
+        self.block_offload = bool(block_offload)
         self.offload_manager = None
         self.offload_cuda_buffers = None
         self._offload_completion_event = None
-        self.streaming_checkpoint = None
         self.hidden_size = int(text_config["hidden_size"])
         self.head_dim = int(text_config["head_dim"])
         self.rope_theta = float(text_config["rope_theta"])
@@ -499,98 +484,6 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
             allocated_bytes / (1024**3),
         )
 
-    def init_disk_streaming(self, text_encoder_path=None, weight_map=None):
-        if self.streaming_checkpoint is None:
-            self.streaming_checkpoint = MiniMaxH3ShardCheckpoint(text_encoder_path, weight_map)
-        if self.offload_cuda_buffers is not None:
-            return
-
-        buffers = WeightModuleList(
-            _Qwen3VLDecoderLayerWeights(
-                0,
-                self.config,
-                self.text_config,
-                self.attn_type,
-                tp_group=self.tp_group,
-                tp_rank=self.tp_rank,
-                tp_size=self.tp_size,
-                create_cuda_buffer=True,
-            )
-            for _ in range(2)
-        )
-        for layer in buffers:
-            tensors = {}
-            for module in layer.weight_modules():
-                for name, _, _ in module.base_attrs:
-                    dtype, shape, _, _ = self.streaming_checkpoint.tensor_metadata(name)
-                    if dtype != GET_DTYPE():
-                        raise ValueError(f"Text encoder prefetch requires matching file/inference dtypes: {name}")
-                    tensors[name] = torch.empty(shape, dtype=dtype, device=AI_DEVICE)
-            layer.load(tensors)
-            layer.shared_host_tensors = {}
-            for module in layer.weight_modules():
-                for name, attr, transpose in module.base_attrs:
-                    buffer = getattr(module, f"{attr}_cuda_buffer")
-                    setattr(module, attr, buffer)
-                    # Keep the file layout for I/O and the existing transposed view for GEMM.
-                    layer.shared_host_tensors[name] = host_view(buffer.t() if transpose else buffer)
-        self.offload_cuda_buffers = buffers
-        self.offload_manager = MpsSharedWeightAsyncStreamManager()
-        self.offload_manager.init_cuda_buffer(blocks_cuda_buffer=buffers)
-
-    def load_block_into(self, layer, layer_index):
-        """Read the next layer into idle shared storage; called by the prefetch worker."""
-        destinations = {resolve_block_name(name, layer_index): tensor for name, tensor in layer.shared_host_tensors.items()}
-        self.streaming_checkpoint.load_tensors_into(destinations)
-
-    def _forward_streaming_embedding(self, input_ids):
-        embedding_name = self.embed_tokens.weight_name
-        tensors = self.streaming_checkpoint.load_tensors((embedding_name,))
-        # Transfer only the selected token vectors, not the full vocabulary.
-        hidden_states = F.embedding(input_ids.cpu(), tensors[embedding_name])
-        return hidden_states.to(AI_DEVICE)
-
-    def _forward_with_disk_streaming(self, input_ids, position_ids):
-        hidden_states = self._forward_streaming_embedding(input_ids)
-        position_embeddings = self._position_embeddings(hidden_states, position_ids)
-        self.init_disk_streaming()
-        manager = self.offload_manager
-        try:
-            # Restart at layer zero for every prompt, including after a failed request.
-            manager.init_cuda_buffer(blocks_cuda_buffer=self.offload_cuda_buffers)
-            manager.init_first_buffer(self)
-            for layer_index in range(self.num_layers):
-                has_next = layer_index + 1 < self.num_layers
-                layer = manager.cuda_buffers[0]
-                if has_next:
-                    manager.prefetch_weights(layer_index + 1, self)
-                hidden_states = layer.forward(hidden_states, position_embeddings)
-                if has_next:
-                    manager.swap_blocks()
-                else:
-                    torch_device_module.synchronize()
-        except Exception:
-            manager.close()
-            raise
-        return hidden_states
-
-    def release_disk_streaming_buffer(self):
-        if self.offload_cuda_buffers is None:
-            return
-        self.offload_manager.close()
-        self.offload_manager = None
-        for layer in self.offload_cuda_buffers:
-            layer.shared_host_tensors.clear()
-            for module in layer.weight_modules():
-                for _, attr, _ in module.base_attrs:
-                    setattr(module, attr, None)
-                    setattr(module, f"{attr}_cuda_buffer", None)
-        self.offload_cuda_buffers = None
-        gc.collect()
-        torch_device_module.synchronize()
-        _empty_device_cache()
-        logger.info("MiniMax-H3 Qwen3-VL released its disk-streaming layer buffers")
-
     def release_block_offload_buffers(self):
         """Release transient device slots while retaining CPU checkpoint views."""
         if self.offload_manager is None:
@@ -607,14 +500,12 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
 
     @property
     def device(self):
-        if self.disk_streaming or self.block_offload:
+        if self.block_offload:
             return torch.device(AI_DEVICE)
         return self.embed_tokens.weight.device
 
     @property
     def dtype(self):
-        if self.disk_streaming:
-            return GET_DTYPE()
         return self.embed_tokens.weight.dtype
 
     def _position_embeddings(self, hidden_states, position_ids=None):
@@ -706,8 +597,6 @@ class _Qwen3VLTextBackboneWeights(WeightModule):
     def forward(self, input_ids, position_ids=None, vision_mask=None, vision_embeds=None, deepstack_embeds=None):
         if input_ids.ndim != 1:
             raise ValueError(f"MiniMax-H3's native Qwen3-VL backbone expects unbatched token IDs, got {tuple(input_ids.shape)}")
-        if self.disk_streaming:
-            return self._forward_with_disk_streaming(input_ids, position_ids)
         if self.block_offload:
             return self._forward_with_block_offload(input_ids, position_ids, vision_mask, vision_embeds, deepstack_embeds)
 
@@ -750,7 +639,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     def __init__(self, config):
         self.config = config
-        self.disk_streaming = bool(config.get("text_encoder_disk_streaming", False))
         if config.get("text_encoder_quantized", False) and not config.get("text_encoder_quantized_ckpt"):
             raise ValueError("MiniMax-H3 quantized text encoder requires text_encoder_quantized_ckpt")
         self.tensor_parallel = bool(config.get("text_encoder_tensor_parallel", config.get("tensor_parallel", False)))
@@ -776,9 +664,9 @@ class MiniMaxH3Qwen3VLTextEncoder:
         self.offload_granularity = config.get("text_encoder_offload_granularity", "model")
         if self.offload_granularity not in {"model", "block"}:
             raise ValueError(f"Unsupported text_encoder_offload_granularity={self.offload_granularity!r}; expected 'model' or 'block'")
-        if self.offload_granularity == "block" and not self.cpu_offload and not self.disk_streaming:
+        if self.offload_granularity == "block" and not self.cpu_offload:
             raise ValueError("text_encoder_offload_granularity='block' requires text_encoder_cpu_offload=true")
-        self.block_offload = self.cpu_offload and self.offload_granularity == "block" and not self.disk_streaming
+        self.block_offload = self.cpu_offload and self.offload_granularity == "block"
         self.release_block_offload_buffers = bool(config.get("text_encoder_release_block_offload_buffers", False))
         self.local_files_only = config.get("local_files_only", True)
         self.text_encoder = None
@@ -950,6 +838,48 @@ class MiniMaxH3Qwen3VLTextEncoder:
             storage.post_process()
 
     @classmethod
+    def _preflight_native_checkpoint(cls, backbone, text_encoder_path, text_config):
+        modules = dict(backbone.named_weight_modules())
+        expected_shapes = cls._expected_weight_shapes(text_config)
+        if modules.keys() != expected_shapes.keys():
+            missing_native = sorted(expected_shapes.keys() - modules.keys())
+            unexpected_native = sorted(modules.keys() - expected_shapes.keys())
+            raise RuntimeError(f"Native Qwen3-VL weight declaration disagrees with its shape schema: missing={missing_native}, unexpected={unexpected_native}")
+
+        root = Path(text_encoder_path)
+        weight_map = cls._checkpoint_weight_map(root, modules)
+        missing = sorted(modules.keys() - weight_map.keys())
+        if missing:
+            preview = ", ".join(missing[:8])
+            raise KeyError(f"MiniMax-H3 text encoder checkpoint is missing {len(missing)} required tensors: {preview}")
+
+        by_shard = defaultdict(list)
+        for name in modules:
+            by_shard[weight_map[name]].append(name)
+
+        # Header-only preflight avoids allocating tens of GiB before discovering
+        # a malformed or incompatible tensor near the end of the checkpoint.
+        checkpoint_dtypes = set()
+        for shard_name in sorted(by_shard):
+            shard_path = root / shard_name
+            if not shard_path.is_file():
+                raise FileNotFoundError(f"Safetensors shard from checkpoint index was not found: {shard_path}")
+            with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
+                shard_keys = set(checkpoint.keys())
+                for name in by_shard[shard_name]:
+                    if name not in shard_keys:
+                        raise KeyError(f"Checkpoint index maps {name} to {shard_path}, but the tensor is absent")
+                    tensor_slice = checkpoint.get_slice(name)
+                    actual_shape = tuple(tensor_slice.get_shape())
+                    if actual_shape != expected_shapes[name]:
+                        raise ValueError(f"Unexpected checkpoint shape for {name}: {actual_shape}, expected {expected_shapes[name]}")
+                    checkpoint_dtypes.add(tensor_slice.get_dtype())
+        if len(checkpoint_dtypes) != 1:
+            raise ValueError(f"MiniMax-H3 Qwen3-VL weights must use one floating dtype, got {sorted(checkpoint_dtypes)}")
+
+        return weight_map, checkpoint_dtypes.pop()
+
+    @classmethod
     def _load_native_weights(cls, backbone, text_encoder_path, text_config):
         text_encoder_host_pinned = backbone.config.get("text_encoder_host_pinned", True)
         modules = dict(backbone.named_weight_modules())
@@ -998,52 +928,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
         # Activate those copies so the object is usable before/after offload.
         backbone.to_cpu()
         return checkpoint_dtype
-
-    @classmethod
-    def _preflight_native_checkpoint(cls, backbone, text_encoder_path, text_config):
-        # Check all headers before allocating host weights or device buffers.
-        modules = dict(backbone.named_weight_modules())
-        expected_shapes = cls._expected_weight_shapes(text_config)
-        if modules.keys() != expected_shapes.keys():
-            missing_native = sorted(expected_shapes.keys() - modules.keys())
-            unexpected_native = sorted(modules.keys() - expected_shapes.keys())
-            raise RuntimeError(f"Native Qwen3-VL weight declaration disagrees with its shape schema: missing={missing_native}, unexpected={unexpected_native}")
-
-        root = Path(text_encoder_path)
-        weight_map = cls._checkpoint_weight_map(root, modules)
-        missing = sorted(modules.keys() - weight_map.keys())
-        if missing:
-            preview = ", ".join(missing[:8])
-            raise KeyError(f"MiniMax-H3 text encoder checkpoint is missing {len(missing)} required tensors: {preview}")
-
-        by_shard = defaultdict(list)
-        for name in modules:
-            by_shard[weight_map[name]].append(name)
-
-        checkpoint_dtypes = set()
-        for shard_name in sorted(by_shard):
-            shard_path = root / shard_name
-            if not shard_path.is_file():
-                raise FileNotFoundError(f"Safetensors shard from checkpoint index was not found: {shard_path}")
-            with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
-                shard_keys = set(checkpoint.keys())
-                for name in by_shard[shard_name]:
-                    if name not in shard_keys:
-                        raise KeyError(f"Checkpoint index maps {name} to {shard_path}, but the tensor is absent")
-                    tensor_slice = checkpoint.get_slice(name)
-                    actual_shape = tuple(tensor_slice.get_shape())
-                    if actual_shape != expected_shapes[name]:
-                        raise ValueError(f"Unexpected checkpoint shape for {name}: {actual_shape}, expected {expected_shapes[name]}")
-                    checkpoint_dtypes.add(tensor_slice.get_dtype())
-        if len(checkpoint_dtypes) != 1:
-            raise ValueError(f"MiniMax-H3 Qwen3-VL weights must use one floating dtype, got {sorted(checkpoint_dtypes)}")
-        logger.info(
-            "Preflighted {} native Qwen3-VL tensors (embedding + layers 0..{}) from {} shards",
-            len(modules),
-            MINIMAX_H3_TEXT_ENCODER_LAYER - 1,
-            len(by_shard),
-        )
-        return weight_map, checkpoint_dtypes.pop()
 
     @staticmethod
     def _load_quantized_weights(backbone, checkpoint_path):
@@ -1136,12 +1020,8 @@ class MiniMaxH3Qwen3VLTextEncoder:
             attn_type=attn_type,
             block_offload=self.block_offload,
             tp_group=self.tp_group,
-            disk_streaming=self.disk_streaming,
         )
-        if self.disk_streaming:
-            weight_map, _ = self._preflight_native_checkpoint(text_encoder, checkpoint_path, text_config)
-            text_encoder.init_disk_streaming(checkpoint_path, weight_map)
-        elif self.config.get("text_encoder_shared_cpu_weights", False):
+        if self.config.get("text_encoder_shared_cpu_weights", False):
             from lightx2v.models.input_encoders.hf.minimax_h3.shared_weights import load_shared_text_weights
 
             load_shared_text_weights(self, text_encoder, text_encoder_path, text_config)
@@ -1151,7 +1031,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
             self._load_native_weights(text_encoder, checkpoint_path, text_config)
         if self.block_offload:
             text_encoder.init_block_offload()
-        elif not self.cpu_offload and not self.disk_streaming:
+        elif not self.cpu_offload:
             text_encoder.to_cuda()
         self.text_encoder = text_encoder
         return self.text_encoder
@@ -1202,11 +1082,9 @@ class MiniMaxH3Qwen3VLTextEncoder:
 
     def load(self):
         self.load_tokenizer()
-        if not self.disk_streaming:
-            self.load_processor()
+        self.load_processor()
         self.load_text_encoder()
-        if not self.disk_streaming:
-            self.load_vision_encoder()
+        self.load_vision_encoder()
         return self
 
     def unload(self):
@@ -1358,8 +1236,6 @@ class MiniMaxH3Qwen3VLTextEncoder:
     @torch.inference_mode()
     def infer(self, prompt, image_list=None, references=None):
         """Return unbatched ``[tokens, 5120]`` conditioning and text tags."""
-        if self.disk_streaming and (image_list or references is not None):
-            raise NotImplementedError("MiniMax-H3 Qwen3-VL text_encoder_disk_streaming currently supports text-only t2av prompts.")
         self._ensure_loaded()
         try:
             # Input encoding happens before DefaultRunner enters its main-model
@@ -1389,15 +1265,14 @@ class MiniMaxH3Qwen3VLTextEncoder:
                     video_grid_thw,
                 )
                 vision_mask, vision_embeds, deepstack = self._encode_vision(input_ids, pixel_values, image_grid_thw, pixel_values_videos, video_grid_thw)
-            if self.cpu_offload and not self.block_offload and not self.disk_streaming:
+            if self.cpu_offload and not self.block_offload:
                 self.text_encoder.to_cuda()
             elif self.block_offload:
                 # Recreate transient device slots if the previous request was
                 # configured to release them after text encoding.
                 self.text_encoder.init_block_offload()
             device = self.text_encoder.device
-            if not self.disk_streaming:
-                input_ids = input_ids.to(device)
+            input_ids = input_ids.to(device)
             prompt_embeds = self.text_encoder.forward(
                 input_ids,
                 None if position_ids is None else position_ids.to(device),
@@ -1415,10 +1290,7 @@ class MiniMaxH3Qwen3VLTextEncoder:
                 "text_token_tags": token_tags.to(prompt_embeds.device),
             }
         finally:
-            if self.disk_streaming:
-                if self.release_block_offload_buffers and self.text_encoder is not None:
-                    self.text_encoder.release_disk_streaming_buffer()
-            elif self.block_offload:
+            if self.block_offload:
                 if self.release_block_offload_buffers and self.text_encoder is not None:
                     self.text_encoder.release_block_offload_buffers()
             elif self.cpu_offload and self.text_encoder is not None:

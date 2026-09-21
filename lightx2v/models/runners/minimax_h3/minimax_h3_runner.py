@@ -8,7 +8,7 @@ from PIL import Image, ImageOps
 from loguru import logger
 
 from lightx2v.models.audio_encoders.hf.minimax_h3 import MiniMaxH3AudioVAE
-from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3Qwen3VLTextEncoder
+from lightx2v.models.input_encoders.hf.minimax_h3 import MiniMaxH3MpsQwen3VLTextEncoder, MiniMaxH3Qwen3VLTextEncoder
 from lightx2v.models.networks.minimax_h3.lora import MiniMaxH3LoraAdapter
 from lightx2v.models.networks.minimax_h3.model import MiniMaxH3Model
 from lightx2v.models.networks.minimax_h3.packing import (
@@ -244,6 +244,8 @@ class MiniMaxH3Runner(DefaultRunner):
         return MiniMaxH3Model(**model_kwargs)
 
     def load_text_encoder(self):
+        if self.config.get("text_encoder_disk_streaming", False):
+            return [MiniMaxH3MpsQwen3VLTextEncoder(self.config)]
         return [MiniMaxH3Qwen3VLTextEncoder(self.config)]
 
     @staticmethod
