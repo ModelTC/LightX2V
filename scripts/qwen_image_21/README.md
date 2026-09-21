@@ -10,10 +10,19 @@ hf download Qwen/Qwen-Image-2.1 --local-dir Qwen/Qwen-Image-2.1
 
 ## 2. Environment Setup
 
-Use the [LightX2V Docker image](https://hub.docker.com/r/lightx2v/lightx2v/tags). Run these commands in a working directory on the host:
+Choose the [LightX2V Docker image](https://hub.docker.com/r/lightx2v/lightx2v/tags) for your GPU. Pull the corresponding image in a working directory on the host:
 
 ```bash
+# H100
 docker pull lightx2v/lightx2v:26062001
+
+# RTX 5090
+docker pull lightx2v/lightx2v:26062001-cu130-5090-fix-260921
+```
+
+Start a container using the selected image:
+
+```bash
 docker run --gpus all -itd --ipc=host --name [container_name] -v [mount_settings] --entrypoint /bin/bash [image_id]
 ```
 
